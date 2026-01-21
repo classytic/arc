@@ -21,7 +21,7 @@ Arc Factory makes security plugins **opt-out instead of opt-in**:
 // ✅ Secure by default
 const app = await createApp({
   preset: 'production',
-  jwtSecret: process.env.JWT_SECRET,
+  auth: { jwt: { secret: process.env.JWT_SECRET } },
   cors: { origin: ['https://example.com'] }, // Only override what you need
   // helmet, rateLimit, underPressure all enabled automatically!
 });
@@ -49,7 +49,7 @@ await mongoose.connect(process.env.MONGO_URI);
 // 2. Create Arc app
 const app = await createApp({
   preset: 'production',
-  jwtSecret: process.env.JWT_SECRET,
+  auth: { jwt: { secret: process.env.JWT_SECRET } },
   cors: { origin: [process.env.FRONTEND_URL] },
 });
 
@@ -69,7 +69,7 @@ Arc provides three environment presets with sensible defaults:
 ```javascript
 const app = await createApp({
   preset: 'production',
-  jwtSecret: process.env.JWT_SECRET,
+  auth: { jwt: { secret: process.env.JWT_SECRET } },
   cors: { origin: ['https://example.com'] }, // Must explicitly configure
 });
 ```
@@ -90,7 +90,7 @@ const app = await createApp({
 ```javascript
 const app = await createApp({
   preset: 'development',
-  jwtSecret: 'dev-secret',
+  auth: { jwt: { secret: 'dev-secret-32-chars-minimum-length' } },
 });
 ```
 
@@ -107,7 +107,7 @@ const app = await createApp({
 ```javascript
 const app = await createApp({
   preset: 'testing',
-  jwtSecret: 'test-secret',
+  auth: { jwt: { secret: 'test-secret-32-chars-minimum-len' } },
 });
 ```
 
@@ -127,18 +127,18 @@ import { ArcFactory } from '@classytic/arc/factory';
 
 // Production
 const app = await ArcFactory.production({
-  jwtSecret: process.env.JWT_SECRET,
+  auth: { jwt: { secret: process.env.JWT_SECRET } },
   cors: { origin: [process.env.FRONTEND_URL] },
 });
 
 // Development
 const app = await ArcFactory.development({
-  jwtSecret: 'dev-secret',
+  auth: { jwt: { secret: 'dev-secret-32-chars-minimum-length' } },
 });
 
 // Testing
 const app = await ArcFactory.testing({
-  jwtSecret: 'test-secret',
+  auth: { jwt: { secret: 'test-secret-32-chars-minimum-len' } },
 });
 ```
 
@@ -146,16 +146,18 @@ const app = await ArcFactory.testing({
 
 ## Configuration Options
 
-### Required Options
+### Auth Configuration
 
 ```typescript
 interface CreateAppOptions {
-  // Required when using Arc auth
-  jwtSecret: string;          // JWT secret for authentication
+  // Required when using Arc auth (32+ characters recommended)
+  auth?: {
+    jwt: { secret: string; expiresIn?: string };  // JWT configuration
+    authenticate?: (request, helpers) => User | null;  // Custom authenticator
+  } | false;  // Set to false to disable auth
 
   // Optional
   preset?: 'production' | 'development' | 'testing';
-  jwtExpiresIn?: string;      // Default: '7d'
 }
 ```
 
@@ -288,7 +290,7 @@ await mongoose.connect(process.env.MONGO_URI);
 
 const app = await createApp({
   preset: 'production',
-  jwtSecret: process.env.JWT_SECRET,
+  auth: { jwt: { secret: process.env.JWT_SECRET } },
 
   // Security
   cors: {
@@ -333,7 +335,7 @@ import myRoutes from './routes/index.js';
 await mongoose.connect('mongodb://localhost:27017/myapp_dev');
 
 const app = await ArcFactory.development({
-  jwtSecret: 'dev-secret-change-in-production',
+  auth: { jwt: { secret: 'dev-secret-change-in-production-32chars' } },
 
   plugins: async (fastify) => {
     await fastify.register(myRoutes, { prefix: '/api/v1' });
@@ -353,7 +355,7 @@ import myRoutes from '../../routes/index.js';
 
 export async function createTestApp() {
   const app = await ArcFactory.testing({
-    jwtSecret: 'test-secret',
+    auth: { jwt: { secret: 'test-secret-32-chars-minimum-len' } },
 
     plugins: async (fastify) => {
       await fastify.register(myRoutes, { prefix: '/api/v1' });
@@ -434,7 +436,7 @@ import { createApp } from '@classytic/arc/factory';
 
 const app = await createApp({
   preset: 'production',
-  jwtSecret: process.env.JWT_SECRET,
+  auth: { jwt: { secret: process.env.JWT_SECRET } },
   cors: { origin: [process.env.FRONTEND_URL] },
 });
 
@@ -458,7 +460,7 @@ await fastify.register(myRoutes, { prefix: '/api/v1' });
 // AFTER
 const app = await createApp({
   preset: 'production',
-  jwtSecret: process.env.JWT_SECRET,
+  auth: { jwt: { secret: process.env.JWT_SECRET } },
   plugins: async (fastify) => {
     await fastify.register(myRoutes, { prefix: '/api/v1' });
   },
@@ -476,7 +478,7 @@ import { createApp } from '@classytic/arc/factory';
 // New service using factory
 const newService = await createApp({
   preset: 'production',
-  jwtSecret: process.env.JWT_SECRET,
+  auth: { jwt: { secret: process.env.JWT_SECRET } },
 });
 
 // Step 2: Migrate routes one by one
@@ -498,8 +500,7 @@ const app = await createApp({
 
 // ❌ Bad - missing security defaults
 const app = await createApp({
-  jwtSecret: '...',
-  mongoUri: '...',
+  auth: { jwt: { secret: '...' } },
   // No preset = no defaults!
 });
 ```
@@ -548,7 +549,7 @@ const app = await createApp({
 // ✅ Good - configuration from environment
 const app = await createApp({
   preset: process.env.NODE_ENV === 'production' ? 'production' : 'development',
-  jwtSecret: process.env.JWT_SECRET,
+  auth: { jwt: { secret: process.env.JWT_SECRET } },
   cors: {
     origin: process.env.CORS_ORIGINS?.split(',') || [],
   },
@@ -567,9 +568,9 @@ Some plugins are optional dependencies. Install them if needed:
 npm install @fastify/helmet @fastify/cors @fastify/rate-limit @fastify/under-pressure
 ```
 
-### "jwtSecret is required"
+### "JWT secret required when Arc auth is enabled"
 
-The factory requires `jwtSecret` when using Arc's built-in auth:
+The factory requires `auth.jwt.secret` when using Arc's built-in auth:
 
 ```javascript
 // If you don't need auth, disable it
@@ -580,7 +581,7 @@ const app = await createApp({
 
 // Or provide a secret if using auth
 const app = await createApp({
-  jwtSecret: process.env.JWT_SECRET,
+  auth: { jwt: { secret: process.env.JWT_SECRET } },
   // ...
 });
 ```

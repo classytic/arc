@@ -50,7 +50,10 @@ import type {
  * ```
  */
 export function allowPublic(): PermissionCheck {
-  return () => true;
+  const check: PermissionCheck = () => true;
+  // Mark as public for OpenAPI documentation
+  (check as PermissionCheck & { _isPublic?: boolean })._isPublic = true;
+  return check;
 }
 
 /**

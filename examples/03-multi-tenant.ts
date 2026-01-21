@@ -267,7 +267,7 @@ await mongoose.connect(process.env.MONGO_URI);
 
 const app = await createApp({
   preset: 'production',
-  jwtSecret: process.env.JWT_SECRET,
+  auth: { jwt: { secret: process.env.JWT_SECRET! } },
   plugins: async (fastify) => {
     // Register the multi-tenant invoice resource
     await fastify.register(invoiceResource.toPlugin());

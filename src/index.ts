@@ -4,49 +4,69 @@
  * Resource-oriented backend framework for Fastify.
  * Supports MongoDB (Mongoose) and PostgreSQL/MySQL/SQLite (Prisma).
  *
- * @example MongoDB with Mongoose
+ * ## Import Strategy (Tree-Shaking)
+ *
+ * This main entry exports commonly-used items. For better tree-shaking,
+ * import from specific subpaths when needed:
+ *
  * ```typescript
- * import {
- *   defineResource,
- *   createMongooseAdapter,
- *   allowPublic,
- *   requireRoles,
- * } from '@classytic/arc';
+ * // Main entry - common items
+ * import { defineResource, createMongooseAdapter, allowPublic } from '@classytic/arc';
+ *
+ * // Subpath imports - specialized modules
+ * import { createTestApp } from '@classytic/arc/testing';
+ * import { createApp } from '@classytic/arc/factory';
+ * import { PrismaQueryParser } from '@classytic/arc/adapters';
+ * import { beforeCreate, afterUpdate } from '@classytic/arc/hooks';
+ * import { MemoryEventTransport } from '@classytic/arc/events';
+ * import { createStateMachine } from '@classytic/arc/utils';
+ * ```
+ *
+ * ## Subpath Exports
+ *
+ * | Subpath | Purpose |
+ * |---------|---------|
+ * | `@classytic/arc/testing` | Test utilities, mocks, TestHarness |
+ * | `@classytic/arc/factory` | App creation (createApp, ArcFactory) |
+ * | `@classytic/arc/adapters` | Database adapters + PrismaQueryParser |
+ * | `@classytic/arc/permissions` | Permission functions |
+ * | `@classytic/arc/presets` | Preset functions |
+ * | `@classytic/arc/hooks` | Hook helpers (beforeCreate, etc.) |
+ * | `@classytic/arc/events` | Event transports |
+ * | `@classytic/arc/plugins` | Fastify plugins |
+ * | `@classytic/arc/utils` | Utilities (state machine, etc.) |
+ * | `@classytic/arc/org` | Organization utilities |
+ * | `@classytic/arc/audit` | Audit trail |
+ * | `@classytic/arc/idempotency` | Idempotency stores |
+ * | `@classytic/arc/types` | TypeScript types |
+ *
+ * @example Basic Resource
+ * ```typescript
+ * import { defineResource, createMongooseAdapter, allowPublic, requireRoles } from '@classytic/arc';
  *
  * const productResource = defineResource({
  *   name: 'product',
- *   adapter: createMongooseAdapter({
- *     model: ProductModel,
- *     repository: productRepository,
- *   }),
- *   presets: ['softDelete', 'slugLookup'],
+ *   adapter: createMongooseAdapter({ model: ProductModel, repository: productRepo }),
  *   permissions: {
  *     list: allowPublic(),
- *     get: allowPublic(),
  *     create: requireRoles(['admin']),
- *     update: requireRoles(['admin']),
- *     delete: requireRoles(['admin']),
  *   },
  * });
- *
- * await fastify.register(productResource.toPlugin());
  * ```
  *
- * @example PostgreSQL with Prisma
- * import { PrismaClient, Prisma } from '@prisma/client';
- * import { defineResource, createPrismaAdapter } from '@classytic/arc';
+ * @example Full Application
+ * ```typescript
+ * import { createApp } from '@classytic/arc/factory';
+ * import { productResource } from './modules/product.resource.js';
  *
- * const prisma = new PrismaClient();
- *
- * const userResource = defineResource({
- *   name: 'user',
- *   adapter: createPrismaAdapter({
- *     client: prisma,
- *     modelName: 'user',
- *     repository: userRepository,
- *     dmmf: Prisma.dmmf,
- *   }),
+ * const app = await createApp({
+ *   preset: 'production',
+ *   auth: { jwt: { secret: process.env.JWT_SECRET } },
+ *   plugins: async (fastify) => {
+ *     await fastify.register(productResource.toPlugin());
+ *   },
  * });
+ * ```
  */
 
 // Adapters (database abstraction)
@@ -67,26 +87,15 @@ export type {
   RepositoryLike,
 } from './adapters/index.js';
 
-// Core
+// Core - Essential exports only
+// For internal/advanced APIs, use: import { ... } from '@classytic/arc/core'
 export {
   BaseController,
-  createCrudRouter,
-  createActionRouter,
-  createOrgScopedMiddleware,
-  createPermissionMiddleware,
   defineResource,
   ResourceDefinition,
-  // Fastify adapter for framework-agnostic controllers
-  createRequestContext,
-  sendControllerResponse,
-  createFastifyHandler,
-  createCrudHandlers,
 } from './core/index.js';
 export type {
   BaseControllerOptions,
-  ActionHandler,
-  ActionRouterConfig,
-  IdempotencyService,
 } from './core/index.js';
 
 /**
@@ -94,10 +103,11 @@ export type {
  *
  * Import Repository directly from your database kit:
  * - MongoDB: `import { Repository } from '@classytic/mongokit'`
- * - Prisma: `import { Repository } from '@classytic/prismakit'` (coming soon)
  *
  * Arc provides adapters (createMongooseAdapter, createPrismaAdapter) that work
  * with any repository implementing the CrudRepository interface.
+ *
+ * Note: PrismaAdapter is experimental - schema generation only.
  */
 
 // Types - Re-export all types for convenience
@@ -139,7 +149,6 @@ export type {
   // Routes
   AdditionalRoute,
   MiddlewareConfig,
-  AuthConfig,
   // Presets
   PresetResult,
   PresetFunction,
@@ -167,16 +176,15 @@ export type {
 // Re-export commonly used modules for convenience
 // (Users can also import directly from subpaths)
 
-// Utils (commonly needed)
+// Utils - Error classes (commonly needed)
+// For additional utilities, use: import { ... } from '@classytic/arc/utils'
 export {
   ArcError,
   NotFoundError,
   ValidationError,
   UnauthorizedError,
   ForbiddenError,
-  createStateMachine,
 } from './utils/index.js';
-export type { StateMachine, TransitionConfig } from './utils/index.js';
 
 // Registry (commonly needed)
 export { resourceRegistry } from './registry/index.js';
@@ -204,25 +212,15 @@ export {
   gracefulShutdownPlugin,
 } from './plugins/index.js';
 
-// Hooks System
-export {
-  hookSystem,
-  beforeCreate,
-  afterCreate,
-  beforeUpdate,
-  afterUpdate,
-  beforeDelete,
-  afterDelete,
-} from './hooks/index.js';
+// Hooks System - Essential exports only
+// For hook helpers (beforeCreate, afterUpdate, etc.), use: import { ... } from '@classytic/arc/hooks'
+export { hookSystem } from './hooks/index.js';
+export type { HookContext, HookHandler, HookSystem } from './hooks/index.js';
 
-export type {
-  HookPhase,
-  HookOperation,
-  HookContext,
-  HookHandler,
-  HookRegistration,
-  HookSystem,
-} from './hooks/index.js';
+// Event System - Essential exports only
+// For additional event utilities, use: import { ... } from '@classytic/arc/events'
+export { eventPlugin } from './events/index.js';
+export type { DomainEvent, EventHandler } from './events/index.js';
 
 // Permission System - Clean function-based permissions
 export {

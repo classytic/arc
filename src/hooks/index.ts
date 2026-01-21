@@ -21,6 +21,7 @@
 export {
   HookSystem,
   hookSystem,
+  createHookSystem,
   beforeCreate,
   afterCreate,
   beforeUpdate,
@@ -35,4 +36,5 @@ export type {
   HookContext,
   HookHandler,
   HookRegistration,
+  HookSystemOptions,
 } from './HookSystem.js';

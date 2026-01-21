@@ -65,8 +65,10 @@ export class ResourceRegistry {
             ? r.handler
             : (r.handler as Function).name || 'anonymous',
         summary: r.summary,
+        description: r.description,
         permissions: r.permissions,
         wrapHandler: r.wrapHandler,
+        schema: r.schema, // Include schema for OpenAPI docs
       })),
       events: Object.keys(resource.events ?? {}),
       registeredAt: new Date().toISOString(),

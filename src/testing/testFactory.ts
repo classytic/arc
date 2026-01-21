@@ -9,9 +9,6 @@ import type { CreateAppOptions } from '../factory/types.js';
 import { InMemoryDatabase } from './dbHelpers.js';
 
 export interface CreateTestAppOptions extends Partial<CreateAppOptions> {
-  /** JWT secret for authentication (required) */
-  jwtSecret: string;
-
   /**
    * Use in-memory MongoDB for faster tests (default: true)
    * Requires: mongodb-memory-server
@@ -54,7 +51,7 @@ export interface TestAppResult {
  *
  *   beforeAll(async () => {
  *     testApp = await createTestApp({
- *       jwtSecret: 'test-secret',
+ *       auth: { jwt: { secret: 'test-secret' } },
  *     });
  *   });
  *
@@ -75,7 +72,7 @@ export interface TestAppResult {
  * @example Using external MongoDB
  * ```typescript
  * const testApp = await createTestApp({
- *   jwtSecret: 'test-secret',
+ *   auth: { jwt: { secret: 'test-secret' } },
  *   useInMemoryDb: false,
  *   mongoUri: 'mongodb://localhost:27017/test-db',
  * });
@@ -83,15 +80,20 @@ export interface TestAppResult {
  *
  * @example Accessing MongoDB URI for model connections
  * ```typescript
- * const testApp = await createTestApp({ jwtSecret: 'test-secret' });
+ * const testApp = await createTestApp({
+ *   auth: { jwt: { secret: 'test-secret' } },
+ * });
  * await mongoose.connect(testApp.mongoUri); // Connect your models
  * ```
  */
 export async function createTestApp(
-  options: CreateTestAppOptions = { jwtSecret: 'test-secret' }
+  options: CreateTestAppOptions = {}
 ): Promise<TestAppResult> {
   const { createApp } = await import('../factory/createApp.js');
   const { useInMemoryDb = true, mongoUri: providedMongoUri, ...appOptions } = options;
+
+  // Default auth config for tests
+  const defaultAuth = { jwt: { secret: 'test-secret-32-chars-minimum-len' } };
 
   let inMemoryDb: InMemoryDatabase | null = null;
   let mongoUri: string | undefined = providedMongoUri;
@@ -117,11 +119,12 @@ export async function createTestApp(
     cors: false,
     rateLimit: false,
     underPressure: false,
+    auth: defaultAuth,
   };
 
   const app = await createApp({
     ...testDefaults,
-    ...appOptions,
+    ...appOptions, // User options override defaults (including auth)
   });
 
   // Return app with cleanup function

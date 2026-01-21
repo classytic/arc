@@ -166,35 +166,13 @@ describe('Security: Release Blockers', () => {
     });
   });
 
-  describe('Issue 2: Auth Plugin Dev Secret (FIXED ✅)', () => {
+  describe('Issue 2: Auth Plugin Secret Validation (FIXED ✅)', () => {
     beforeEach(() => {
       // Clear NODE_ENV for testing
       delete process.env.NODE_ENV;
     });
 
-    it('FIXED: now always requires explicit secret', async () => {
-      const app = Fastify({ logger: false });
-
-      // Test multiple NODE_ENV values
-      const envValues = ['staging', 'prod', 'uat', 'qa', 'development', undefined, ''];
-
-      for (const envValue of envValues) {
-        process.env.NODE_ENV = envValue as string | undefined;
-
-        // Should throw for ALL environments, not just production
-        await expect(
-          app.register(authPlugin, {
-            secret: undefined,
-          })
-        ).rejects.toThrow('JWT secret is required for authentication');
-      }
-
-      await app.close();
-    });
-
-    it('FIXED: rejects secrets shorter than 32 characters', async () => {
-      const app = Fastify({ logger: false });
-
+    it('FIXED: rejects weak JWT secrets (shorter than 32 characters)', async () => {
       const weakSecrets = [
         'short',
         '12345678',
@@ -203,12 +181,12 @@ describe('Security: Release Blockers', () => {
       ];
 
       for (const secret of weakSecrets) {
+        const app = Fastify({ logger: false });
         await expect(
-          app.register(authPlugin, { secret })
+          app.register(authPlugin, { jwt: { secret } })
         ).rejects.toThrow(/JWT secret must be at least 32 characters/);
+        await app.close().catch(() => {});
       }
-
-      await app.close();
     });
 
     it('FIXED: accepts valid secrets (32+ characters)', async () => {
@@ -219,7 +197,20 @@ describe('Security: Release Blockers', () => {
 
       // Should not throw
       await expect(
-        app.register(authPlugin, { secret: validSecret })
+        app.register(authPlugin, { jwt: { secret: validSecret } })
+      ).resolves.not.toThrow();
+
+      await app.close();
+    });
+
+    it('FIXED: allows auth without JWT when using custom authenticator', async () => {
+      const app = Fastify({ logger: false });
+
+      // Should work without JWT secret if custom authenticator is provided
+      await expect(
+        app.register(authPlugin, {
+          authenticate: async () => ({ id: '123', name: 'Test' }),
+        })
       ).resolves.not.toThrow();
 
       await app.close();

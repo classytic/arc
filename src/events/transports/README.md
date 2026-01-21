@@ -8,13 +8,7 @@ Arc uses pluggable event transports for domain events. The core package includes
 |-----------|---------|----------|
 | `MemoryEventTransport` | `@classytic/arc` | Development, testing, single-instance |
 
-## Official Adapters (Coming Soon)
-
-| Transport | Package | Use Case |
-|-----------|---------|----------|
-| `RedisEventTransport` | `@classytic/arc-redis` | Multi-instance, pub/sub |
-| `SQSEventTransport` | `@classytic/arc-sqs` | AWS serverless, durable |
-| `KafkaEventTransport` | `@classytic/arc-kafka` | High-throughput streaming |
+For production multi-instance deployments, implement your own transport (see below).
 
 ## Implementing Your Own Transport
 

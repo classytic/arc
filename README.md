@@ -96,7 +96,7 @@ await mongoose.connect(config.db.uri);
 // 2. Create Arc app
 const app = await createApp({
   preset: 'production', // or 'development', 'testing'
-  jwtSecret: config.app.jwtSecret,
+  auth: { jwt: { secret: config.app.jwtSecret } },
   cors: { origin: config.cors.origin },
 
   // Opt-out security (all enabled by default)
@@ -188,7 +188,7 @@ import { createApp } from '@classytic/arc';
 
 // Disable Arc's JWT auth
 const app = await createApp({
-  jwt: false, // Use your own auth strategy
+  auth: false, // Use your own auth strategy
 });
 
 // Use @fastify/oauth2 for Google login
@@ -398,10 +398,6 @@ class ProductRepository extends Repository {
     super(ProductModel, [softDeletePlugin()]);
   }
 
-  async findActive() {
-    return this.findAll({ filter: { isActive: true } });
-  }
-
   async getBySlug(slug) {
     return this.Model.findOne({ slug }).lean();
   }
@@ -505,7 +501,7 @@ describe('API Tests', () => {
   beforeAll(async () => {
     // Creates app + starts in-memory MongoDB automatically
     testApp = await createTestApp({
-      jwtSecret: 'test-secret',
+      auth: { jwt: { secret: 'test-secret-32-chars-minimum-len' } },
     });
 
     // Connect your models to the in-memory DB
@@ -537,7 +533,7 @@ npm install -D mongodb-memory-server
 
 ```typescript
 const testApp = await createTestApp({
-  jwtSecret: 'test-secret',
+  auth: { jwt: { secret: 'test-secret-32-chars-minimum-len' } },
   useInMemoryDb: false,
   mongoUri: 'mongodb://localhost:27017/test-db',
 });

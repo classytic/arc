@@ -12,14 +12,14 @@
  *
  * // Using factory helper
  * const app = await ArcFactory.production({
- *   jwtSecret: process.env.JWT_SECRET,
+ *   auth: { jwt: { secret: process.env.JWT_SECRET } },
  *   cors: { origin: ['https://example.com'] },
  * });
  *
  * // Using createApp directly
  * const app = await createApp({
  *   preset: 'production',
- *   jwtSecret: process.env.JWT_SECRET,
+ *   auth: { jwt: { secret: process.env.JWT_SECRET } },
  * });
  */
 

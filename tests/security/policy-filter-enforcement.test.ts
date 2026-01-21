@@ -5,11 +5,32 @@
  * not just list(). Critical for multi-tenant isolation and ownership.
  *
  * CRITICAL: Prevents cross-tenant data access.
+ *
+ * NOTE: Policy filters are set by permission middleware via context.context._policyFilters
+ * (NOT context.query._policyFilters which can be user-supplied and is stripped out)
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { BaseController } from '../../src/core/BaseController.js';
 import type { IRequestContext, CrudRepository, AnyRecord } from '../../src/types/index.js';
+
+/**
+ * Helper to create context with policy filters in the correct location
+ * Policy filters are set by permission middleware, not query params
+ */
+function createContextWithPolicyFilters(
+  base: Omit<IRequestContext, 'context'>,
+  policyFilters?: AnyRecord,
+  arcContext?: AnyRecord
+): IRequestContext {
+  return {
+    ...base,
+    context: {
+      ...arcContext,
+      _policyFilters: policyFilters,
+    },
+  };
+}
 
 // Mock repository
 class MockRepository implements CrudRepository {
@@ -68,14 +89,17 @@ describe('Security: Policy Filter Enforcement', () => {
 
   describe('get() operation', () => {
     it('should enforce policy filters - return 404 if policy mismatch', async () => {
-      const context: IRequestContext = {
-        params: { id: '3' }, // tenant-b item
-        query: {
-          _policyFilters: { tenantId: 'tenant-a' }, // tenant-a policy
+      // Policy filters set via context.context._policyFilters (as permission middleware does)
+      const context = createContextWithPolicyFilters(
+        {
+          params: { id: '3' }, // tenant-b item
+          query: {},
+          body: {},
+          user: { id: 'user-1' },
+          headers: {},
         },
-        body: {},
-        user: { id: 'user-1' },
-      };
+        { tenantId: 'tenant-a' } // tenant-a policy
+      );
 
       const result = await controller.get(context);
 
@@ -85,14 +109,16 @@ describe('Security: Policy Filter Enforcement', () => {
     });
 
     it('should allow get when policy filters match', async () => {
-      const context: IRequestContext = {
-        params: { id: '1' }, // tenant-a item
-        query: {
-          _policyFilters: { tenantId: 'tenant-a' }, // tenant-a policy
+      const context = createContextWithPolicyFilters(
+        {
+          params: { id: '1' }, // tenant-a item
+          query: {},
+          body: {},
+          user: { id: 'user-1' },
+          headers: {},
         },
-        body: {},
-        user: { id: 'user-1' },
-      };
+        { tenantId: 'tenant-a' } // tenant-a policy
+      );
 
       const result = await controller.get(context);
 
@@ -107,6 +133,7 @@ describe('Security: Policy Filter Enforcement', () => {
         query: {},
         body: {},
         user: { id: 'user-1' },
+        headers: {},
       };
 
       const result = await controller.get(context);
@@ -114,18 +141,40 @@ describe('Security: Policy Filter Enforcement', () => {
       expect(result.success).toBe(true);
       expect(result.status).toBe(200);
     });
+
+    it('should IGNORE policy filters in query params (security: prevent injection)', async () => {
+      // Attacker tries to inject policy filters via query string - should be ignored
+      const context: IRequestContext = {
+        params: { id: '3' }, // tenant-b item
+        query: {
+          _policyFilters: { tenantId: 'tenant-a' }, // INJECTED - should be ignored
+        },
+        body: {},
+        user: { id: 'user-1' },
+        headers: {},
+        // No context._policyFilters = no enforcement
+      };
+
+      const result = await controller.get(context);
+
+      // Should succeed because query._policyFilters is not trusted
+      expect(result.success).toBe(true);
+      expect(result.status).toBe(200);
+    });
   });
 
   describe('update() operation', () => {
     it('should enforce policy filters - return 404 if policy mismatch', async () => {
-      const context: IRequestContext = {
-        params: { id: '3' }, // tenant-b item
-        query: {
-          _policyFilters: { tenantId: 'tenant-a' }, // tenant-a policy
+      const context = createContextWithPolicyFilters(
+        {
+          params: { id: '3' }, // tenant-b item
+          query: {},
+          body: { name: 'Updated' },
+          user: { id: 'user-1' },
+          headers: {},
         },
-        body: { name: 'Updated' },
-        user: { id: 'user-1' },
-      };
+        { tenantId: 'tenant-a' } // tenant-a policy
+      );
 
       const result = await controller.update(context);
 
@@ -139,14 +188,16 @@ describe('Security: Policy Filter Enforcement', () => {
     });
 
     it('should allow update when policy filters match', async () => {
-      const context: IRequestContext = {
-        params: { id: '1' },
-        query: {
-          _policyFilters: { tenantId: 'tenant-a' },
+      const context = createContextWithPolicyFilters(
+        {
+          params: { id: '1' },
+          query: {},
+          body: { name: 'Updated Item 1' },
+          user: { id: 'user-1' },
+          headers: {},
         },
-        body: { name: 'Updated Item 1' },
-        user: { id: 'user-1' },
-      };
+        { tenantId: 'tenant-a' }
+      );
 
       const result = await controller.update(context);
 
@@ -156,17 +207,19 @@ describe('Security: Policy Filter Enforcement', () => {
     });
 
     it('should enforce multiple policy filters', async () => {
-      const context: IRequestContext = {
-        params: { id: '1' },
-        query: {
-          _policyFilters: {
-            tenantId: 'tenant-a',
-            ownerId: 'user-2', // Wrong owner
-          },
+      const context = createContextWithPolicyFilters(
+        {
+          params: { id: '1' },
+          query: {},
+          body: { name: 'Hacked' },
+          user: { id: 'user-1' },
+          headers: {},
         },
-        body: { name: 'Hacked' },
-        user: { id: 'user-1' },
-      };
+        {
+          tenantId: 'tenant-a',
+          ownerId: 'user-2', // Wrong owner
+        }
+      );
 
       const result = await controller.update(context);
 
@@ -177,14 +230,16 @@ describe('Security: Policy Filter Enforcement', () => {
 
   describe('delete() operation', () => {
     it('should enforce policy filters - return 404 if policy mismatch', async () => {
-      const context: IRequestContext = {
-        params: { id: '3' }, // tenant-b item
-        query: {
-          _policyFilters: { tenantId: 'tenant-a' }, // tenant-a policy
+      const context = createContextWithPolicyFilters(
+        {
+          params: { id: '3' }, // tenant-b item
+          query: {},
+          body: {},
+          user: { id: 'user-1' },
+          headers: {},
         },
-        body: {},
-        user: { id: 'user-1' },
-      };
+        { tenantId: 'tenant-a' } // tenant-a policy
+      );
 
       const result = await controller.delete(context);
 
@@ -197,14 +252,16 @@ describe('Security: Policy Filter Enforcement', () => {
     });
 
     it('should allow delete when policy filters match', async () => {
-      const context: IRequestContext = {
-        params: { id: '1' },
-        query: {
-          _policyFilters: { tenantId: 'tenant-a' },
+      const context = createContextWithPolicyFilters(
+        {
+          params: { id: '1' },
+          query: {},
+          body: {},
+          user: { id: 'user-1' },
+          headers: {},
         },
-        body: {},
-        user: { id: 'user-1' },
-      };
+        { tenantId: 'tenant-a' }
+      );
 
       const result = await controller.delete(context);
 
@@ -217,14 +274,16 @@ describe('Security: Policy Filter Enforcement', () => {
     });
 
     it('should block cross-tenant deletion', async () => {
-      const context: IRequestContext = {
-        params: { id: '3' }, // tenant-b item
-        query: {
-          _policyFilters: { tenantId: 'tenant-a' }, // tenant-a user trying to delete
+      const context = createContextWithPolicyFilters(
+        {
+          params: { id: '3' }, // tenant-b item
+          query: {},
+          body: {},
+          user: { id: 'user-1' },
+          headers: {},
         },
-        body: {},
-        user: { id: 'user-1' },
-      };
+        { tenantId: 'tenant-a' } // tenant-a user trying to delete
+      );
 
       const result = await controller.delete(context);
 
@@ -240,17 +299,17 @@ describe('Security: Policy Filter Enforcement', () => {
 
   describe('org scope + policy filters combined', () => {
     it('should enforce both org scope AND policy filters', async () => {
-      const context: IRequestContext = {
-        params: { id: '1' },
-        query: {
-          _policyFilters: { ownerId: 'user-2' }, // Wrong owner
+      const context = createContextWithPolicyFilters(
+        {
+          params: { id: '1' },
+          query: {},
+          body: {},
+          user: { id: 'user-1' },
+          headers: {},
         },
-        body: {},
-        user: { id: 'user-1' },
-        context: {
-          organizationId: 'org-xyz', // Org scope
-        },
-      };
+        { ownerId: 'user-2' }, // Wrong owner
+        { organizationId: 'org-xyz' } // Org scope in context
+      );
 
       const result = await controller.get(context);
 
@@ -262,14 +321,16 @@ describe('Security: Policy Filter Enforcement', () => {
 
   describe('Policy filter edge cases', () => {
     it('should handle null policy filters', async () => {
-      const context: IRequestContext = {
-        params: { id: '1' },
-        query: {
-          _policyFilters: null,
+      const context = createContextWithPolicyFilters(
+        {
+          params: { id: '1' },
+          query: {},
+          body: {},
+          user: { id: 'user-1' },
+          headers: {},
         },
-        body: {},
-        user: { id: 'user-1' },
-      };
+        null as any
+      );
 
       const result = await controller.get(context);
 
@@ -282,6 +343,7 @@ describe('Security: Policy Filter Enforcement', () => {
         query: {},
         body: {},
         user: { id: 'user-1' },
+        headers: {},
       };
 
       const result = await controller.get(context);
@@ -290,14 +352,16 @@ describe('Security: Policy Filter Enforcement', () => {
     });
 
     it('should handle empty object policy filters', async () => {
-      const context: IRequestContext = {
-        params: { id: '1' },
-        query: {
-          _policyFilters: {},
+      const context = createContextWithPolicyFilters(
+        {
+          params: { id: '1' },
+          query: {},
+          body: {},
+          user: { id: 'user-1' },
+          headers: {},
         },
-        body: {},
-        user: { id: 'user-1' },
-      };
+        {}
+      );
 
       const result = await controller.get(context);
 

@@ -1,138 +1,307 @@
 /**
- * Auth Plugin
+ * Auth Plugin - Flexible, Database-Agnostic Authentication
  *
- * JWT authentication with role-based authorization.
+ * Arc provides JWT infrastructure and calls your authenticator.
+ * You control ALL authentication logic.
+ *
+ * Design principles:
+ * - Arc handles plumbing (JWT sign/verify utilities)
+ * - App handles business logic (how to authenticate, where users live)
+ * - Works with any database (Prisma, MongoDB, Postgres, none)
+ * - Supports multiple auth strategies (JWT, API keys, sessions, etc.)
+ *
+ * @example
+ * ```typescript
+ * // In createApp
+ * auth: {
+ *   jwt: { secret: process.env.JWT_SECRET },
+ *   authenticate: async (request, { jwt }) => {
+ *     // Your auth logic - Arc never touches your database
+ *     const token = request.headers.authorization?.split(' ')[1];
+ *     if (!token) return null;
+ *     const decoded = jwt.verify(token);
+ *     return userRepo.findById(decoded.id);
+ *   },
+ * }
+ * ```
  */
 
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
-import type { AuthPluginOptions, UserBase } from '../types/index.js';
+import type {
+  AuthPluginOptions,
+  AuthHelpers,
+  JwtContext,
+  AuthenticatorContext,
+  TokenPair,
+} from '../types/index.js';
+
+// ============================================================================
+// Fastify Type Extensions
+// ============================================================================
 
 declare module 'fastify' {
   interface FastifyInstance {
+    /** Authenticate middleware - use in preHandler for protected routes */
     authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    /** Authorize middleware factory - checks if user has required roles */
     authorize: (...roles: string[]) => (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
-    auth: {
-      authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
-      authorize: (...roles: string[]) => (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
-      issueTokens: (
-        payload: Record<string, unknown>,
-        options?: {
-          refreshPayload?: Record<string, unknown>;
-          expiresIn?: string;
-          refreshExpiresIn?: string;
-        }
-      ) => {
-        token: string;
-        refreshToken?: string;
-        expiresIn?: number;
-        refreshExpiresIn?: number;
-      };
-    };
+    /** Auth helpers - issueTokens, jwt utilities */
+    auth: AuthHelpers;
   }
 }
 
-// Note: user property on FastifyRequest is extended by @fastify/jwt
+// ============================================================================
+// Helpers
+// ============================================================================
 
-function resolveExpiresInSeconds(input: string | undefined): number | undefined {
-  if (!input) return undefined;
+/**
+ * Parse expiration string to seconds
+ */
+function parseExpiresIn(input: string | undefined, defaultValue: number): number {
+  if (!input) return defaultValue;
   if (/^\d+$/.test(input)) return parseInt(input, 10);
 
   const match = /^(\d+)\s*([smhd])$/i.exec(input);
-  if (!match) return undefined;
+  if (!match) return defaultValue;
 
-  const valueText = match[1];
-  const unitText = match[2];
-  if (!valueText || !unitText) return undefined;
+  const value = parseInt(match[1]!, 10);
+  const unit = match[2]!.toLowerCase();
 
-  const value = parseInt(valueText, 10);
-  const unit = unitText.toLowerCase();
-  switch (unit) {
-    case 's':
-      return value;
-    case 'm':
-      return value * 60;
-    case 'h':
-      return value * 60 * 60;
-    case 'd':
-      return value * 60 * 60 * 24;
-    default:
-      return undefined;
-  }
+  const multipliers: Record<string, number> = { s: 1, m: 60, h: 3600, d: 86400 };
+  return value * (multipliers[unit] ?? 1);
 }
+
+/**
+ * Extract Bearer token from Authorization header
+ */
+function extractBearerToken(request: FastifyRequest): string | null {
+  const auth = request.headers.authorization;
+  if (!auth?.startsWith('Bearer ')) return null;
+  return auth.slice(7);
+}
+
+// ============================================================================
+// Auth Plugin
+// ============================================================================
 
 const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
   fastify: FastifyInstance,
   opts: AuthPluginOptions = {}
 ) => {
-  const {
-    secret = process.env.JWT_SECRET,
-    expiresIn = '7d',
-    refreshSecret,
-    refreshExpiresIn = '7d',
-    userProperty = 'user',
-    superadminRoles = ['superadmin'],
-    decorate = true,
-    jwt,
-  } = opts;
+  const { jwt: jwtConfig, authenticate: appAuthenticator, onFailure, userProperty = 'user' } = opts;
 
-  // Always require explicit secret
-  if (!secret) {
-    throw new Error(
-      'JWT secret is required for authentication.\n' +
-      'Set JWT_SECRET environment variable or pass secret in options.\n' +
-      'For testing, use an explicit secret like "test-secret-min-32-chars-long".\n' +
-      'Docs: https://github.com/classytic/arc#security'
-    );
-  }
+  // ========================================
+  // 1. Setup JWT Infrastructure (Optional)
+  // ========================================
 
-  // Validate secret strength (minimum 32 characters)
-  if (secret.length < 32) {
-    throw new Error(
-      `JWT secret must be at least 32 characters (current: ${secret.length}).\n` +
-      'Use a strong random secret for production.\n' +
-      'Docs: https://github.com/classytic/arc#security'
-    );
-  }
+  let jwtContext: JwtContext | null = null;
 
-  // Register JWT plugin if not already registered
-  const fastifyWithJwt = fastify as FastifyInstance & { jwt?: unknown };
-  if (!fastifyWithJwt.jwt) {
+  if (jwtConfig?.secret) {
+    // Validate secret strength
+    if (jwtConfig.secret.length < 32) {
+      throw new Error(
+        `JWT secret must be at least 32 characters (current: ${jwtConfig.secret.length}).\n` +
+        'Use a strong random secret for production.'
+      );
+    }
+
+    // Register @fastify/jwt
     const jwtPlugin = await import('@fastify/jwt');
     await fastify.register(jwtPlugin.default ?? jwtPlugin, {
-      secret,
-      sign: { expiresIn, ...(jwt?.sign ?? {}) },
-      verify: { ...(jwt?.verify ?? {}) },
+      secret: jwtConfig.secret,
+      sign: {
+        expiresIn: jwtConfig.expiresIn ?? '15m',
+        ...(jwtConfig.sign ?? {}),
+      },
+      verify: { ...(jwtConfig.verify ?? {}) },
     });
+
+    // Create JWT context for authenticator
+    const fastifyWithJwt = fastify as FastifyInstance & {
+      jwt: {
+        sign: (payload: Record<string, unknown>, options?: { expiresIn?: string }) => string;
+        verify: <T>(token: string) => T;
+        decode: <T>(token: string) => T | null;
+      };
+    };
+
+    jwtContext = {
+      verify: <T = Record<string, unknown>>(token: string): T => {
+        return fastifyWithJwt.jwt.verify<T>(token);
+      },
+      sign: (payload: Record<string, unknown>, options?: { expiresIn?: string }): string => {
+        return fastifyWithJwt.jwt.sign(payload, options);
+      },
+      decode: <T = Record<string, unknown>>(token: string): T | null => {
+        try {
+          return fastifyWithJwt.jwt.decode<T>(token);
+        } catch {
+          return null;
+        }
+      },
+    };
+
+    fastify.log.info('Auth: JWT infrastructure enabled');
   }
 
-  const authenticate = async function (
-    request: FastifyRequest,
-    reply: FastifyReply
-  ): Promise<void> {
+  // ========================================
+  // 2. Create Authenticator Context
+  // ========================================
+
+  const authContext: AuthenticatorContext = {
+    jwt: jwtContext,
+    fastify,
+  };
+
+  // ========================================
+  // 3. Create Authenticate Middleware
+  // ========================================
+
+  /**
+   * Authenticate middleware
+   *
+   * Arc adds this to preHandler for non-public routes.
+   * Calls app's authenticator or falls back to default JWT verify.
+   */
+  const authenticate = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     try {
-      await (request as FastifyRequest & { jwtVerify: () => Promise<void> }).jwtVerify();
+      let user: unknown = null;
+
+      if (appAuthenticator) {
+        // App-provided authenticator - full control
+        user = await appAuthenticator(request, authContext);
+      } else if (jwtContext) {
+        // Default: JWT Bearer token verification
+        const token = extractBearerToken(request);
+        if (token) {
+          const decoded = jwtContext.verify(token);
+          user = decoded;
+        }
+      } else {
+        // No authenticator and no JWT - configuration error
+        throw new Error(
+          'No authenticator configured. Provide auth.authenticate function or auth.jwt.secret.'
+        );
+      }
+
+      if (!user) {
+        throw new Error('Authentication required');
+      }
+
+      // Set user on request
+      (request as unknown as Record<string, unknown>)[userProperty] = user;
+
     } catch (err) {
-      // Security: Don't expose JWT error details in production
+      const error = err instanceof Error ? err : new Error(String(err));
+
+      // Custom failure handler
+      if (onFailure) {
+        await onFailure(request, reply, error);
+        return;
+      }
+
+      // Default 401 response
       const message = process.env.NODE_ENV === 'production'
-        ? 'Invalid or expired token'
-        : (err as Error).message;
+        ? 'Authentication required'
+        : error.message;
 
       reply.code(401).send({
         success: false,
         error: 'Unauthorized',
         message,
       });
-      return;
     }
   };
 
-  const authorize = function (...allowedRoles: string[]) {
-    return async function (
-      request: FastifyRequest,
-      reply: FastifyReply
-    ): Promise<void> {
-      const user = (request as FastifyRequest & { [key: string]: unknown })[userProperty] as UserBase | undefined;
+  // ========================================
+  // 4. Create Auth Helpers
+  // ========================================
+
+  const refreshSecret = jwtConfig?.refreshSecret ?? jwtConfig?.secret;
+  const accessExpiresIn = jwtConfig?.expiresIn ?? '15m';
+  const refreshExpiresIn = jwtConfig?.refreshExpiresIn ?? '7d';
+
+  /**
+   * Issue access + refresh tokens
+   * App calls this after validating credentials (login, OAuth, etc.)
+   */
+  const issueTokens = (
+    payload: Record<string, unknown>,
+    options?: { expiresIn?: string; refreshExpiresIn?: string }
+  ): TokenPair => {
+    if (!jwtContext) {
+      throw new Error('JWT not configured. Provide auth.jwt.secret to use issueTokens.');
+    }
+
+    const accessTtl = options?.expiresIn ?? accessExpiresIn;
+    const refreshTtl = options?.refreshExpiresIn ?? refreshExpiresIn;
+
+    // Access token with full payload
+    const accessToken = jwtContext.sign(payload, { expiresIn: accessTtl });
+
+    // Refresh token with minimal payload (just id)
+    const refreshPayload = payload.id
+      ? { id: payload.id, type: 'refresh' }
+      : payload._id
+        ? { id: payload._id, type: 'refresh' }
+        : { ...payload, type: 'refresh' };
+
+    let refreshToken: string | undefined;
+    if (refreshSecret) {
+      const fastifyWithJwt = fastify as FastifyInstance & {
+        jwt: { sign: (payload: Record<string, unknown>, options?: Record<string, unknown>) => string };
+      };
+      refreshToken = fastifyWithJwt.jwt.sign(refreshPayload, {
+        expiresIn: refreshTtl,
+        // Use refresh secret if different from main secret
+        ...(refreshSecret !== jwtConfig?.secret ? { secret: refreshSecret } : {}),
+      });
+    }
+
+    return {
+      accessToken,
+      refreshToken,
+      expiresIn: parseExpiresIn(accessTtl, 900),
+      refreshExpiresIn: refreshToken ? parseExpiresIn(refreshTtl, 604800) : undefined,
+      tokenType: 'Bearer',
+    };
+  };
+
+  /**
+   * Verify refresh token
+   * App calls this in refresh endpoint
+   */
+  const verifyRefreshToken = <T = Record<string, unknown>>(token: string): T => {
+    if (!jwtContext) {
+      throw new Error('JWT not configured. Provide auth.jwt.secret to use verifyRefreshToken.');
+    }
+
+    const fastifyWithJwt = fastify as FastifyInstance & {
+      jwt: { verify: <T>(token: string, options?: Record<string, unknown>) => T };
+    };
+
+    return fastifyWithJwt.jwt.verify<T>(token, {
+      ...(refreshSecret !== jwtConfig?.secret ? { secret: refreshSecret } : {}),
+    });
+  };
+
+  // ========================================
+  // 5. Create Authorize Middleware Factory
+  // ========================================
+
+  /**
+   * Authorize middleware factory
+   * Creates a middleware that checks if user has required roles
+   *
+   * @example
+   * preHandler: [fastify.authenticate, fastify.authorize('admin', 'superadmin')]
+   */
+  const authorize = (...allowedRoles: string[]) => {
+    return async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+      const user = (request as unknown as Record<string, unknown>)[userProperty] as
+        | { roles?: string[] }
+        | undefined;
 
       if (!user) {
         reply.code(401).send({
@@ -143,19 +312,14 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
         return;
       }
 
-      // Superadmin bypasses all role checks
-      const userWithRoles = user as { roles?: string[] };
-      if (superadminRoles.some((role: string) => userWithRoles.roles?.includes(role))) {
-        return;
-      }
+      const userRoles = user.roles ?? [];
 
-      // Special case: ['*'] means authenticated only, any role is ok
+      // Special case: ['*'] means any authenticated user
       if (allowedRoles.length === 1 && allowedRoles[0] === '*') {
         return;
       }
 
       // Check if user has one of the required roles
-      const userRoles = userWithRoles.roles ?? [];
       const hasRole = allowedRoles.some((role) => userRoles.includes(role));
 
       if (!hasRole) {
@@ -163,57 +327,34 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
           success: false,
           error: 'Forbidden',
           message: `Requires one of: ${allowedRoles.join(', ')}`,
-          required: allowedRoles,
-          current: userRoles,
         });
         return;
       }
     };
   };
 
-  const issueTokens = (
-    payload: Record<string, unknown>,
-    options?: {
-      refreshPayload?: Record<string, unknown>;
-      expiresIn?: string;
-      refreshExpiresIn?: string;
-    }
-  ) => {
-    const accessExpiresIn = options?.expiresIn ?? expiresIn;
-    const refreshTtl = options?.refreshExpiresIn ?? refreshExpiresIn;
-    const accessTtlSeconds = resolveExpiresInSeconds(accessExpiresIn);
-    const refreshTtlSeconds = resolveExpiresInSeconds(refreshTtl);
-    const refreshPayload =
-      options?.refreshPayload ??
-      (payload.id ? { id: payload.id } : payload._id ? { id: payload._id } : payload);
+  // ========================================
+  // 6. Decorate Fastify Instance
+  // ========================================
 
-    const token = (fastify as any).jwt.sign(payload, {
-      expiresIn: accessExpiresIn,
-    });
-
-    const refreshToken = refreshTtl
-      ? (fastify as any).jwt.sign(refreshPayload, {
-          expiresIn: refreshTtl,
-          secret: refreshSecret ?? secret,
-        })
-      : undefined;
-
-    return {
-      token,
-      refreshToken,
-      expiresIn: accessTtlSeconds,
-      refreshExpiresIn: refreshToken ? refreshTtlSeconds : undefined,
-    };
+  const authHelpers: AuthHelpers = {
+    jwt: jwtContext,
+    issueTokens,
+    verifyRefreshToken,
   };
 
-  if (decorate) {
-    fastify.decorate('authenticate', authenticate);
-    fastify.decorate('authorize', authorize);
-    fastify.decorate('auth', { authenticate, authorize, issueTokens });
-  }
+  fastify.decorate('authenticate', authenticate);
+  fastify.decorate('authorize', authorize);
+  fastify.decorate('auth', authHelpers);
 
-  fastify.log?.info?.('Auth plugin registered');
+  fastify.log.info(
+    `Auth: Plugin registered (jwt=${!!jwtContext}, customAuth=${!!appAuthenticator})`
+  );
 };
+
+// ============================================================================
+// Export
+// ============================================================================
 
 export default fp(authPlugin, {
   name: 'arc-auth',

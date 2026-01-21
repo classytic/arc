@@ -174,11 +174,8 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
           properties,
         },
       };
-    } catch (error) {
-      console.warn(
-        `[MongooseAdapter] Failed to generate schemas for ${this.model.modelName}:`,
-        error
-      );
+    } catch {
+      // Schema generation is optional - fail silently
       return null;
     }
   }

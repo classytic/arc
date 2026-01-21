@@ -8,6 +8,45 @@ import type { FastifyHelmetOptions } from '@fastify/helmet';
 import type { RateLimitOptions } from '@fastify/rate-limit';
 import type { AuthPluginOptions } from '../types/index.js';
 
+/**
+ * CreateApp Options
+ *
+ * Configuration for creating an Arc application.
+ *
+ * @example
+ * ```typescript
+ * // Minimal setup
+ * const app = await createApp({
+ *   preset: 'development',
+ *   auth: {
+ *     jwt: { secret: process.env.JWT_SECRET },
+ *   },
+ * });
+ *
+ * // With custom authenticator
+ * const app = await createApp({
+ *   preset: 'production',
+ *   auth: {
+ *     jwt: { secret: process.env.JWT_SECRET },
+ *     authenticate: async (request, { jwt }) => {
+ *       // Check API key first
+ *       const apiKey = request.headers['x-api-key'];
+ *       if (apiKey) {
+ *         const result = await apiKeyService.verify(apiKey);
+ *         if (result) return { _id: result.userId, isApiKey: true };
+ *       }
+ *       // Then check JWT
+ *       const token = request.headers.authorization?.split(' ')[1];
+ *       if (token) {
+ *         const decoded = jwt.verify(token);
+ *         return userRepo.findById(decoded.id);
+ *       }
+ *       return null;
+ *     },
+ *   },
+ * });
+ * ```
+ */
 export interface CreateAppOptions {
   // ============================================
   // Environment & Logging
@@ -23,14 +62,48 @@ export interface CreateAppOptions {
   trustProxy?: boolean;
 
   // ============================================
-  // Authentication
+  // Authentication (New Clean API)
   // ============================================
 
-  /** JWT secret for Arc auth (required when Arc auth is enabled) */
-  jwtSecret?: string;
-
-  /** JWT expiration time (e.g., '7d', '24h') */
-  jwtExpiresIn?: string;
+  /**
+   * Auth configuration
+   *
+   * Set to false to disable authentication entirely.
+   * Provide AuthPluginOptions for full control.
+   *
+   * @example
+   * ```typescript
+   * // Disable auth
+   * auth: false,
+   *
+   * // Simple JWT (uses default jwtVerify)
+   * auth: {
+   *   jwt: { secret: process.env.JWT_SECRET },
+   * },
+   *
+   * // Custom authenticator
+   * auth: {
+   *   jwt: { secret: process.env.JWT_SECRET },
+   *   authenticate: async (request, { jwt }) => {
+   *     const token = request.headers.authorization?.split(' ')[1];
+   *     if (!token) return null;
+   *     const decoded = jwt.verify(token);
+   *     return userRepo.findById(decoded.id);
+   *   },
+   * },
+   *
+   * // Completely custom auth plugin
+   * auth: {
+   *   plugin: async (fastify) => {
+   *     // Your custom auth setup
+   *   },
+   * },
+   * ```
+   */
+  auth?: false | AuthPluginOptions | {
+    /** Replace Arc auth with your own plugin */
+    plugin?: (fastify: any) => Promise<void>;
+  };
 
   // ============================================
   // Security Plugins (opt-out)
@@ -74,19 +147,18 @@ export interface CreateAppOptions {
 
   /** Enable Arc plugins (requestId, health, gracefulShutdown) */
   arcPlugins?: {
+    /** Request ID tracking (default: true) */
     requestId?: boolean;
+    /** Health endpoints (default: true) */
     health?: boolean;
+    /** Graceful shutdown handling (default: true) */
     gracefulShutdown?: boolean;
+    /** Emit events for CRUD operations (default: true) */
+    emitEvents?: boolean;
   };
 
   /** Custom plugin registration function */
   plugins?: (fastify: any) => Promise<void>;
-
-  /** Auth configuration (Arc auth or custom auth plugin) */
-  auth?: false | {
-    plugin?: (fastify: any) => Promise<void>;
-    options?: AuthPluginOptions;
-  };
 }
 
 // Plugin-specific options

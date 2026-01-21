@@ -25,7 +25,6 @@
 import type {
   AdditionalRoute,
   AnyRecord,
-  AuthConfig,
   MiddlewareConfig,
   PresetResult,
   ResourceConfig,
@@ -44,6 +43,14 @@ export type { OwnedByUserOptions } from './ownedByUser.js';
 
 export { multiTenantPreset } from './multiTenant.js';
 export type { MultiTenantOptions } from './multiTenant.js';
+
+/**
+ * Convenience alias for multiTenantPreset with public list/get routes
+ * Equivalent to: multiTenantPreset({ allowPublic: ['list', 'get'] })
+ */
+export const flexibleMultiTenantPreset = (
+  options: Omit<import('./multiTenant.js').MultiTenantOptions, 'allowPublic'> = {}
+) => multiTenantPreset({ ...options, allowPublic: ['list', 'get'] });
 
 export { treePreset } from './tree.js';
 export type { TreeOptions } from './tree.js';

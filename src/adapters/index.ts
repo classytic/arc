@@ -17,5 +17,9 @@ export type {
 export { MongooseAdapter, createMongooseAdapter } from './mongoose.js';
 export type { MongooseAdapterOptions } from './mongoose.js';
 
-export { PrismaAdapter, createPrismaAdapter } from './prisma.js';
-export type { PrismaAdapterOptions } from './prisma.js';
+export { PrismaAdapter, createPrismaAdapter, PrismaQueryParser } from './prisma.js';
+export type {
+  PrismaAdapterOptions,
+  PrismaQueryParserOptions,
+  PrismaQueryOptions,
+} from './prisma.js';
