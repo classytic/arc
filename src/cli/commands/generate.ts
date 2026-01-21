@@ -158,7 +158,7 @@ describe('${name} API', () => {
 
   beforeAll(async () => {
     app = await createTestApp({
-      jwtSecret: 'test-secret',
+      auth: { jwt: { secret: 'test-secret-32-chars-minimum-len' } },
       mongoUri: 'mongodb://localhost:27017/test',
     });
   });

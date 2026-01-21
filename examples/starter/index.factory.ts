@@ -69,7 +69,7 @@ async function startServer() {
     // Create app with factory pattern
     const app = await createApp({
       preset: process.env.NODE_ENV === 'production' ? 'production' : 'development',
-      jwtSecret: JWT_SECRET,
+      auth: { jwt: { secret: JWT_SECRET } },
 
       // Override preset defaults
       cors: {

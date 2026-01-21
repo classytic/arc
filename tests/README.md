@@ -154,8 +154,7 @@ describe('Feature E2E', () => {
     const mongoUri = await setupTestDatabase();
     app = await createApp({
       preset: 'development',
-      jwtSecret: 'test-jwt-secret-must-be-at-least-32-chars-long',
-      mongoUri,
+      auth: { jwt: { secret: 'test-jwt-secret-must-be-at-least-32-chars-long' } },
       logger: false,
     });
     await app.listen({ port: 3001 });

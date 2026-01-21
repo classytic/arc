@@ -11,7 +11,6 @@ import { createApp } from '../../src/factory/createApp.js';
 import { defineResource } from '../../src/core/defineResource.js';
 import { BaseController } from '../../src/core/BaseController.js';
 import { createMongooseAdapter } from '../../src/adapters/mongoose.js';
-import { hookSystem } from '../../src/hooks/HookSystem.js';
 import { allowPublic } from '../../src/permissions/index.js';
 import { setupTestDatabase, teardownTestDatabase, createMockModel, createMockRepository } from '../setup.js';
 import type { FastifyInstance } from 'fastify';
@@ -49,35 +48,33 @@ describe('Full Application E2E', () => {
       },
     });
 
-    // Register lifecycle hooks
-    hookSystem.before('product', 'create', async (ctx) => {
-      // Auto-generate slug from name
-      if (ctx.data?.name && !ctx.data.slug) {
-        return {
-          ...ctx.data,
-          slug: ctx.data.name.toLowerCase().replace(/\s+/g, '-'),
-        };
-      }
-    });
-
-    let createdProductId: string | null = null;
-
-    hookSystem.after('product', 'create', async (ctx) => {
-      // Track created product for testing
-      createdProductId = ctx.result?._id?.toString() || null;
-      console.log(`[E2E Test] Product created: ${createdProductId}`);
-    });
-
     // Create app with factory
     app = await createApp({
       preset: 'development',
-      jwtSecret: 'test-jwt-secret-must-be-at-least-32-chars-long',
-      mongoUri,
+      auth: { jwt: { secret: 'test-jwt-secret-must-be-at-least-32-chars-long' } },
       logger: false,
       cors: { origin: true },
       helmet: false, // Disable for testing
       rateLimit: false, // Disable for testing
       plugins: async (fastify) => {
+        // Register lifecycle hooks on instance-scoped hook system
+        // (Now scoped per app instance instead of global singleton)
+        fastify.arc.hooks.before('product', 'create', async (ctx) => {
+          // Auto-generate slug from name
+          if (ctx.data?.name && !ctx.data.slug) {
+            return {
+              ...ctx.data,
+              slug: ctx.data.name.toLowerCase().replace(/\s+/g, '-'),
+            };
+          }
+        });
+
+        fastify.arc.hooks.after('product', 'create', async (ctx) => {
+          // Track created product for testing
+          const createdId = ctx.result?._id?.toString() || null;
+          console.log(`[E2E Test] Product created: ${createdId}`);
+        });
+
         // Register product resource
         await fastify.register(productResource.toPlugin());
       },

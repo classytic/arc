@@ -11,9 +11,11 @@ import { authPlugin } from '@classytic/arc/auth';
 const fastify = Fastify();
 
 await fastify.register(authPlugin, {
-  secret: process.env.JWT_SECRET,
-  expiresIn: '7d',
-  refreshExpiresIn: '7d',
+  jwt: {
+    secret: process.env.JWT_SECRET,
+    expiresIn: '7d',
+    refreshExpiresIn: '7d',
+  },
 });
 ```
 
@@ -21,13 +23,15 @@ await fastify.register(authPlugin, {
 
 ```typescript
 interface AuthPluginOptions {
-  secret?: string;      // JWT secret (default: env.JWT_SECRET)
-  expiresIn?: string;   // Access token expiration (default: '7d')
-  refreshSecret?: string; // Refresh token secret (default: secret)
-  refreshExpiresIn?: string; // Refresh token expiration (default: '7d')
-  userProperty?: string; // Request property name (default: 'user')
-  superadminRoles?: string[]; // Bypass roles (default: ['superadmin'])
-  decorate?: boolean; // Enable decorators (default: true)
+  jwt?: {
+    secret: string;           // JWT secret (required)
+    expiresIn?: string;       // Access token expiration (default: '7d')
+    refreshSecret?: string;   // Refresh token secret (default: same as secret)
+    refreshExpiresIn?: string; // Refresh token expiration (default: '7d')
+  };
+  authenticate?: (request, helpers) => User | null; // Custom authenticator
+  onFailure?: (request, reply, error) => void;      // Custom error handler
+  userProperty?: string;      // Request property name (default: 'user')
 }
 ```
 

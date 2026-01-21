@@ -128,10 +128,15 @@ export function defineResource<TDoc = AnyRecord>(
   // Extract repository from adapter (if provided)
   const repository = config.adapter?.repository;
 
-  // Create or use provided controller
+  // Check if any CRUD routes will actually be created
+  const crudRoutes = ['list', 'get', 'create', 'update', 'delete'] as const;
+  const disabledRoutes = new Set(config.disabledRoutes ?? []);
+  const hasCrudRoutes = !config.disableDefaultRoutes && crudRoutes.some(route => !disabledRoutes.has(route));
+
+  // Create or use provided controller (only if CRUD routes are enabled)
   let controller = config.controller;
-  if (!controller && !config.disableDefaultRoutes && repository) {
-    // Auto-create BaseController if not provided
+  if (!controller && hasCrudRoutes && repository) {
+    // Auto-create BaseController if CRUD routes exist
     controller = new BaseController(repository, {
       resourceName: config.name,
       schemaOptions: config.schemaOptions,
@@ -231,10 +236,8 @@ export function defineResource<TDoc = AnyRecord>(
         module: config.module,
         openApiSchemas,
       });
-    } catch (err) {
-      if (process.env.NODE_ENV === 'development') {
-        console.warn(`[Arc Registry] ${(err as Error).message}`);
-      }
+    } catch {
+      // Registry errors are non-fatal - fail silently
     }
   }
 
@@ -333,13 +336,19 @@ export class ResourceDefinition<TDoc = AnyRecord> {
   _validateControllerMethods(): void {
     const errors: string[] = [];
 
-    if (!this.disableDefaultRoutes) {
+    // Check if any CRUD routes will actually be created
+    const crudRoutes = ['list', 'get', 'create', 'update', 'delete'] as const;
+    const disabledRoutes = new Set(this.disabledRoutes ?? []);
+    const enabledCrudRoutes = crudRoutes.filter(route => !disabledRoutes.has(route));
+    const hasCrudRoutes = !this.disableDefaultRoutes && enabledCrudRoutes.length > 0;
+
+    if (hasCrudRoutes) {
       if (!this.controller) {
-        errors.push('Controller is required when disableDefaultRoutes is not true');
+        errors.push('Controller is required when CRUD routes are enabled');
       } else {
         const ctrl = this.controller as unknown as AnyRecord;
-        const requiredMethods = ['list', 'get', 'create', 'update', 'delete'] as const;
-        for (const method of requiredMethods) {
+        // Only validate methods for enabled routes
+        for (const method of enabledCrudRoutes) {
           if (typeof ctrl[method] !== 'function') {
             errors.push(`CRUD method '${method}' not found on controller`);
           }

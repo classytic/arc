@@ -107,8 +107,12 @@ export function createRequestContext(req: FastifyRequest): IRequestContext {
       arc: reqWithExtras.arc,
       // Include ownership check for access control
       _ownershipCheck: reqWithExtras._ownershipCheck,
-      // Include policy filters
-      _policyFilters: reqWithExtras._policyFilters,
+      // Merge policy filters - TRUSTED sources override user input
+      // Order matters: query (can be user-injected) FIRST, then trusted middleware LAST
+      _policyFilters: {
+        ...((reqWithExtras.query as AnyRecord)?._policyFilters as AnyRecord ?? {}),
+        ...(reqWithExtras._policyFilters ?? {}),
+      },
       // Include logger for logging
       log: reqWithExtras.log,
     },

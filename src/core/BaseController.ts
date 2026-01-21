@@ -45,9 +45,11 @@ import type {
   RequestContext,
   RouteSchemaOptions,
   ServiceContext,
+  UserLike,
 } from '../types/index.js';
+import { getUserId } from '../types/index.js';
 import type { RepositoryLike } from '../adapters/interface.js';
-import { hookSystem } from '../hooks/HookSystem.js';
+import { hookSystem, type HookSystem } from '../hooks/HookSystem.js';
 import { ArcQueryParser } from '../utils/queryParser.js';
 
 // Re-export ParsedQuery for backwards compatibility
@@ -184,7 +186,7 @@ export class BaseController<TDoc = AnyRecord> implements IController<TDoc> {
     const sanitizedSelect = this._sanitizeSelect(selectString, this.schemaOptions);
 
     return {
-      user: context.user as any,
+      user: context.user as UserLike | undefined,
       organizationId: arcContext?.organizationId ?? undefined,
       select: sanitizedSelect ? sanitizedSelect.split(/\s+/) : undefined,
       populate: this._sanitizePopulate(parsed.populate, this.schemaOptions),
@@ -227,7 +229,7 @@ export class BaseController<TDoc = AnyRecord> implements IController<TDoc> {
       // MongoKit features
       search: parsed.search,
       after: parsed.after,
-      user: context.user as any,
+      user: context.user as UserLike | undefined,
       organizationId: arcContext?.organizationId,
       context: arcContext,
     };
@@ -240,9 +242,10 @@ export class BaseController<TDoc = AnyRecord> implements IController<TDoc> {
     const filters = { ...(options.filters as AnyRecord) };
     const arcContext = context.context as RequestContext | undefined;
 
-    // Policy filters
-    if (context.query?._policyFilters) {
-      Object.assign(filters, context.query._policyFilters);
+    // Policy filters (set by permission middleware via context.context._policyFilters)
+    const policyFilters = (arcContext as AnyRecord | undefined)?._policyFilters as AnyRecord | undefined;
+    if (policyFilters) {
+      Object.assign(filters, policyFilters);
     }
 
     // Org scope
@@ -261,9 +264,10 @@ export class BaseController<TDoc = AnyRecord> implements IController<TDoc> {
     const filter: AnyRecord = { _id: id };
     const arcContext = context.context as RequestContext | undefined;
 
-    // Apply policy filters
-    if (context.query?._policyFilters) {
-      Object.assign(filter, context.query._policyFilters);
+    // Apply policy filters (set by permission middleware via context.context._policyFilters)
+    const policyFilters = (arcContext as AnyRecord | undefined)?._policyFilters as AnyRecord | undefined;
+    if (policyFilters) {
+      Object.assign(filter, policyFilters);
     }
 
     // Apply org scope filter
@@ -370,7 +374,9 @@ export class BaseController<TDoc = AnyRecord> implements IController<TDoc> {
    * Supports MongoDB query operators: $eq, $ne, $gt, $gte, $lt, $lte, $in, $nin, $exists, $regex, $and, $or
    */
   protected _checkPolicyFilters(item: AnyRecord, context: IRequestContext): boolean {
-    const policyFilters = context.query?._policyFilters as AnyRecord | undefined;
+    // Policy filters are set by permission middleware via context.context._policyFilters
+    const arcContext = context.context as AnyRecord | undefined;
+    const policyFilters = arcContext?._policyFilters as AnyRecord | undefined;
     if (!policyFilters) return true;
 
     // Handle $and operator
@@ -506,6 +512,15 @@ export class BaseController<TDoc = AnyRecord> implements IController<TDoc> {
     return String(itemOwnerId) === String(userId);
   }
 
+  /**
+   * Get hook system from context (instance-scoped) or fall back to global singleton
+   * This allows proper isolation when running multiple app instances (e.g., in tests)
+   */
+  protected _getHooks(context: IRequestContext): HookSystem {
+    const arcMeta = (context.context as AnyRecord | undefined)?.arc as AnyRecord | undefined;
+    return (arcMeta?.hooks as HookSystem | undefined) ?? hookSystem;
+  }
+
   // ============================================================================
   // IController Implementation - CRUD Operations
   // ============================================================================
@@ -606,30 +621,31 @@ export class BaseController<TDoc = AnyRecord> implements IController<TDoc> {
     }
 
     // Inject user reference
-    const userAny = context.user as any;
-    const userId = userAny?.id ?? userAny?._id;
+    const userId = getUserId(context.user as UserLike | undefined);
     if (userId) {
       data.createdBy = userId;
     }
 
-    // Execute beforeCreate hooks
+    // Execute beforeCreate hooks (use instance-scoped hooks if available)
+    const hooks = this._getHooks(context);
+    const user = context.user as UserLike | undefined;
     let processedData = data;
     if (this.resourceName) {
-      processedData = await hookSystem.executeBefore(this.resourceName, 'create', data, {
-        user: context.user as AnyRecord,
+      processedData = await hooks.executeBefore(this.resourceName, 'create', data, {
+        user,
         context: arcContext,
       });
     }
 
     const item = await this.repository.create(processedData as Partial<TDoc>, {
-      user: context.user as AnyRecord,
+      user,
       context: arcContext,
     });
 
     // Execute afterCreate hooks
     if (this.resourceName) {
-      await hookSystem.executeAfter(this.resourceName, 'create', item as AnyRecord, {
-        user: context.user as AnyRecord,
+      await hooks.executeAfter(this.resourceName, 'create', item as AnyRecord, {
+        user,
         context: arcContext,
       });
     }
@@ -658,10 +674,10 @@ export class BaseController<TDoc = AnyRecord> implements IController<TDoc> {
 
     const data: AnyRecord = { ...(context.body as AnyRecord) };
     const arcContext = context.context as RequestContext | undefined;
+    const user = context.user as UserLike | undefined;
 
     // Inject updater reference
-    const userAny = context.user as any;
-    const userId = userAny?.id ?? userAny?._id;
+    const userId = getUserId(user);
     if (userId) {
       data.updatedBy = userId;
     }
@@ -695,18 +711,19 @@ export class BaseController<TDoc = AnyRecord> implements IController<TDoc> {
       };
     }
 
-    // Execute beforeUpdate hooks
+    // Execute beforeUpdate hooks (use instance-scoped hooks if available)
+    const hooks = this._getHooks(context);
     let processedData = data;
     if (this.resourceName) {
-      processedData = await hookSystem.executeBefore(this.resourceName, 'update', data, {
-        user: context.user as AnyRecord,
+      processedData = await hooks.executeBefore(this.resourceName, 'update', data, {
+        user,
         context: arcContext,
         meta: { id, existing },
       });
     }
 
     const item = await this.repository.update(id, processedData as Partial<TDoc>, {
-      user: context.user as AnyRecord,
+      user,
       context: arcContext,
     });
 
@@ -720,8 +737,8 @@ export class BaseController<TDoc = AnyRecord> implements IController<TDoc> {
 
     // Execute afterUpdate hooks
     if (this.resourceName) {
-      await hookSystem.executeAfter(this.resourceName, 'update', item as AnyRecord, {
-        user: context.user as AnyRecord,
+      await hooks.executeAfter(this.resourceName, 'update', item as AnyRecord, {
+        user,
         context: arcContext,
         meta: { id, existing },
       });
@@ -750,6 +767,7 @@ export class BaseController<TDoc = AnyRecord> implements IController<TDoc> {
     }
 
     const arcContext = context.context as RequestContext | undefined;
+    const user = context.user as UserLike | undefined;
 
     const existing = await this.repository.getById(id);
     if (!existing) {
@@ -779,17 +797,18 @@ export class BaseController<TDoc = AnyRecord> implements IController<TDoc> {
       };
     }
 
-    // Execute beforeDelete hooks
+    // Execute beforeDelete hooks (use instance-scoped hooks if available)
+    const hooks = this._getHooks(context);
     if (this.resourceName) {
-      await hookSystem.executeBefore(this.resourceName, 'delete', existing as AnyRecord, {
-        user: context.user as AnyRecord,
+      await hooks.executeBefore(this.resourceName, 'delete', existing as AnyRecord, {
+        user,
         context: arcContext,
         meta: { id },
       });
     }
 
     const result = await this.repository.delete(id, {
-      user: context.user as AnyRecord,
+      user,
       context: arcContext,
     });
 
@@ -805,8 +824,8 @@ export class BaseController<TDoc = AnyRecord> implements IController<TDoc> {
 
     // Execute afterDelete hooks
     if (this.resourceName) {
-      await hookSystem.executeAfter(this.resourceName, 'delete', existing as AnyRecord, {
-        user: context.user as AnyRecord,
+      await hooks.executeAfter(this.resourceName, 'delete', existing as AnyRecord, {
+        user,
         context: arcContext,
         meta: { id },
       });

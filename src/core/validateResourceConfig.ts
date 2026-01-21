@@ -13,7 +13,6 @@
 
 import type {
   AdditionalRoute,
-  AuthConfig,
   IController,
   PresetResult,
   ResourceConfig,
@@ -77,12 +76,18 @@ export function validateResourceConfig(
     });
   }
 
-  // Adapter is required when default CRUD routes are enabled
-  if (!config.disableDefaultRoutes) {
+  // Check if any CRUD routes will actually be created
+  const crudRoutes = ['list', 'get', 'create', 'update', 'delete'] as const;
+  const disabledRoutes = new Set(config.disabledRoutes ?? []);
+  const enabledCrudRoutes = crudRoutes.filter(route => !disabledRoutes.has(route));
+  const hasCrudRoutes = !config.disableDefaultRoutes && enabledCrudRoutes.length > 0;
+
+  // Adapter is required when CRUD routes are enabled
+  if (hasCrudRoutes) {
     if (!config.adapter) {
       errors.push({
         field: 'adapter',
-        message: 'Data adapter is required when disableDefaultRoutes is false',
+        message: 'Data adapter is required when CRUD routes are enabled',
         suggestion: 'Provide an adapter: createMongooseAdapter({ model, repository })',
       });
     } else if (!config.adapter.repository) {
@@ -93,7 +98,7 @@ export function validateResourceConfig(
       });
     }
 
-    // Controller validation
+    // Controller validation - only warn if CRUD routes will be used
     if (!config.controller) {
       warnings.push({
         field: 'controller',
@@ -101,7 +106,7 @@ export function validateResourceConfig(
       });
     }
   } else {
-    // Service resources (disableDefaultRoutes: true) don't need adapter
+    // Service resources (no CRUD routes) don't need adapter or controller
     if (!config.adapter && !config.additionalRoutes?.length) {
       warnings.push({
         field: 'config',

@@ -53,3 +53,10 @@ export {
   errorHandlerPlugin as errorHandlerPluginFn,
 } from './errorHandler.js';
 export type { ErrorHandlerOptions } from './errorHandler.js';
+
+// Arc core (instance-scoped hooks & registry)
+export {
+  default as arcCorePlugin,
+  arcCorePlugin as arcCorePluginFn,
+} from '../core/arcCorePlugin.js';
+export type { ArcCorePluginOptions, ArcCore } from '../core/arcCorePlugin.js';

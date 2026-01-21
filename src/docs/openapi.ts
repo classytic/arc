@@ -17,7 +17,7 @@
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import { resourceRegistry } from '../registry/index.js';
-import type { AuthConfig, RegistryEntry } from '../types/index.js';
+import type { RegistryEntry } from '../types/index.js';
 
 export interface OpenApiOptions {
   /** API title */
@@ -409,19 +409,58 @@ function generateResourcePaths(resource: RegistryEntry, apiPrefix = ''): Record<
       paths[fullPath] = {};
     }
 
-    // If permissions is a function, assume auth is required
+    // Check if route requires auth (not public)
     const handlerName = typeof route.handler === 'string' ? route.handler : 'handler';
-    const requiresAuthForRoute = !!route.permissions;
+    const isPublicRoute = (route.permissions as { _isPublic?: boolean })?._isPublic === true;
+    const requiresAuthForRoute = !!route.permissions && !isPublicRoute;
+
+    // Build extras from route schema
+    const extras: Partial<Operation> = {
+      parameters: extractPathParams(route.path),
+      responses: {
+        '200': { description: route.description || 'Success' },
+      },
+    };
+
+    // Add request body from route.schema.body (for POST, PUT, PATCH)
+    const routeSchema = route.schema as Record<string, unknown> | undefined;
+    if (routeSchema?.body && ['post', 'put', 'patch'].includes(method)) {
+      extras.requestBody = {
+        required: true,
+        content: {
+          'application/json': {
+            schema: routeSchema.body as SchemaObject,
+          },
+        },
+      };
+    }
+
+    // Add query parameters from route.schema.querystring
+    if (routeSchema?.querystring) {
+      const queryParams = convertSchemaToParameters(routeSchema.querystring as Record<string, unknown>);
+      extras.parameters = [...(extras.parameters || []), ...queryParams];
+    }
+
+    // Add custom response schema if provided
+    if (routeSchema?.response) {
+      const responseSchemas = routeSchema.response as Record<string, unknown>;
+      for (const [statusCode, schema] of Object.entries(responseSchemas)) {
+        extras.responses![statusCode] = {
+          description: (schema as Record<string, unknown>).description as string || `Response ${statusCode}`,
+          content: {
+            'application/json': {
+              schema: schema as SchemaObject,
+            },
+          },
+        };
+      }
+    }
+
     paths[fullPath][method] = createOperation(
       resource,
       handlerName,
       route.summary ?? handlerName,
-      {
-        parameters: extractPathParams(route.path),
-        responses: {
-          '200': { description: 'Success' },
-        },
-      },
+      extras,
       requiresAuthForRoute
     );
   }
@@ -443,10 +482,12 @@ function createOperation(
   const permissions = resource.permissions || {};
   // Check if permission check is defined for this operation
   const operationPermission = (permissions as Record<string, unknown>)[operation];
-  // If override is provided, use it; otherwise check if operation has a permission check
+  // Check if it's marked as public (allowPublic())
+  const isPublic = (operationPermission as { _isPublic?: boolean })?._isPublic === true;
+  // If override is provided, use it; otherwise check if operation has a permission check that isn't public
   const requiresAuth = requiresAuthOverride !== undefined
     ? requiresAuthOverride
-    : typeof operationPermission === 'function';
+    : typeof operationPermission === 'function' && !isPublic;
 
   return {
     tags: [resource.tag || 'Resource'],

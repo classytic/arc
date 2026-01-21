@@ -38,14 +38,30 @@ export interface HookRegistration {
 }
 
 // ============================================================================
+// Hook System Types
+// ============================================================================
+
+export interface HookSystemOptions {
+  /** Custom logger for error reporting. Defaults to console.error */
+  logger?: {
+    error: (message: string, ...args: unknown[]) => void;
+  };
+}
+
+// ============================================================================
 // Hook System Class
 // ============================================================================
 
 export class HookSystem {
   private hooks: Map<string, HookRegistration[]>;
+  private logger: { error: (message: string, ...args: unknown[]) => void };
 
-  constructor() {
+  constructor(options?: HookSystemOptions) {
     this.hooks = new Map();
+    // Default to console.error so developers see hook errors during development
+    // Pass custom logger to redirect to fastify.log or silence in tests
+    // Use arrow function wrapper to allow spying in tests
+    this.logger = options?.logger ?? { error: (...args: unknown[]) => console.error(...args) };
   }
 
   /**
@@ -237,8 +253,7 @@ export class HookSystem {
       });
     } catch (error) {
       // Log error but don't fail the request
-      // TODO: Make logger configurable via constructor
-      console.error(
+      this.logger.error(
         `[HookSystem] Error in after hook for ${resource}:${operation}:`,
         error
       );
@@ -289,7 +304,29 @@ export class HookSystem {
 }
 
 // ============================================================================
-// Singleton Instance
+// Factory Function
+// ============================================================================
+
+/**
+ * Create a new isolated HookSystem instance
+ *
+ * Use this for:
+ * - Test isolation (parallel test suites)
+ * - Multiple app instances with independent hooks
+ *
+ * @example
+ * const hooks = createHookSystem();
+ * await app.register(arcCorePlugin, { hookSystem: hooks });
+ *
+ * @example With custom logger
+ * const hooks = createHookSystem({ logger: fastify.log });
+ */
+export function createHookSystem(options?: HookSystemOptions): HookSystem {
+  return new HookSystem(options);
+}
+
+// ============================================================================
+// Singleton Instance (for backward compatibility)
 // ============================================================================
 
 export const hookSystem = new HookSystem();

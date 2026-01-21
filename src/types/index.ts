@@ -1,0 +1,917 @@
+/**
+ * Arc Framework Types
+ *
+ * Clean, type-safe interfaces for the Arc framework.
+ * Modern TypeScript patterns - no `any`, proper generics.
+ */
+
+import type { FastifyInstance, FastifyReply, FastifyRequest, RouteHandlerMethod } from 'fastify';
+import type { Model, Document, Types } from 'mongoose';
+import type { DataAdapter } from '../adapters/interface.js';
+import type { PermissionCheck, UserBase } from '../permissions/types.js';
+
+// Re-export core types
+export type { RouteHandlerMethod } from 'fastify';
+export type { Model, Document } from 'mongoose';
+
+// Re-export from dedicated type modules
+export type {
+  CrudRepository,
+  PaginatedResult,
+  QueryOptions,
+  PaginationParams,
+  InferDoc,
+} from './repository.js';
+
+export type {
+  IRequestContext,
+  IControllerResponse,
+  ControllerHandler,
+  FastifyHandler,
+  RouteHandler,
+  IController,
+  ControllerLike,
+} from './handlers.js';
+
+export type {
+  PermissionCheck,
+  PermissionContext,
+  PermissionResult,
+  UserBase,
+} from '../permissions/types.js';
+
+// ============================================================================
+// Base Types
+// ============================================================================
+
+export type AnyRecord = Record<string, unknown>;
+export type ObjectId = Types.ObjectId | string;
+
+/**
+ * Flexible user type that accepts any object with id/ID properties.
+ * Use this instead of `any` when dealing with user objects.
+ * Re-exports UserBase from permissions module for convenience.
+ * The actual user structure is defined by your app's auth system.
+ */
+export type UserLike = UserBase & {
+  /** User email (optional) */
+  email?: string;
+};
+
+/**
+ * Extract user ID from a user object (supports both id and _id)
+ */
+export function getUserId(user: UserLike | null | undefined): string | undefined {
+  if (!user) return undefined;
+  const id = user.id ?? user._id;
+  return id ? String(id) : undefined;
+}
+
+
+// ============================================================================
+// Controller Types
+// ============================================================================
+
+// CrudController alias for backwards compatibility
+import type { IController } from './handlers.js';
+export type CrudController<TDoc> = IController<TDoc>;
+
+export interface ApiResponse<T = unknown> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  message?: string;
+  meta?: Record<string, unknown>;
+}
+
+// ============================================================================
+// User Types
+// ============================================================================
+
+// UserBase is re-exported from permissions/types.ts
+
+export interface UserOrganization {
+  userId: string;
+  organizationId: string;
+  [key: string]: unknown;
+}
+
+export interface JWTPayload {
+  sub: string;
+  [key: string]: unknown;
+}
+
+// ============================================================================
+// Request Types - Flexible
+// ============================================================================
+
+export interface RequestContext {
+  operation?: string;
+  user?: unknown; // YOUR user object
+  organizationId?: string;
+  filters?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+/**
+ * Controller-level query options - parsed from request query string
+ * Includes pagination, filtering, and context data
+ */
+export interface ControllerQueryOptions {
+  page?: number;
+  limit?: number;
+  sort?: string | Record<string, 1 | -1>;
+  populate?: string | string[] | Record<string, unknown>;
+  select?: string | string[] | Record<string, 0 | 1>; // String, array, or MongoDB projection
+  filters?: Record<string, unknown>;
+  search?: string;
+  lean?: boolean;
+  after?: string; // Cursor-based pagination
+  user?: unknown; // Current user context
+  organizationId?: string; // Organization context (for multi-tenant)
+  context?: Record<string, unknown>; // Additional context
+  /** Allow additional options */
+  [key: string]: unknown;
+}
+
+/**
+ * Parsed query result from QueryParser
+ * Includes pagination, sorting, filtering, etc.
+ */
+export interface ParsedQuery {
+  filters?: Record<string, unknown>;
+  limit?: number;
+  sort?: string | Record<string, 1 | -1>;
+  populate?: string | string[] | Record<string, unknown>;
+  search?: string;
+  page?: number;
+  after?: string; // Cursor for cursor-based pagination
+  select?: string | string[] | Record<string, 0 | 1>; // MongoDB projection format
+}
+
+/**
+ * Query Parser Interface
+ * Implement this to create custom query parsers
+ *
+ * @example MongoKit QueryParser
+ * ```typescript
+ * import { QueryParser } from '@classytic/mongokit';
+ * const queryParser = new QueryParser();
+ * ```
+ */
+export interface QueryParserInterface {
+  parse(query: Record<string, unknown> | null | undefined): ParsedQuery;
+
+  /**
+   * Optional: Export OpenAPI schema for query parameters
+   * Use this to document query parameters in OpenAPI/Swagger
+   */
+  getQuerySchema?(): {
+    type: 'object';
+    properties: Record<string, unknown>;
+    required?: string[];
+  };
+}
+
+export interface FastifyRequestExtras {
+  user?: unknown;
+  organizationId?: string;
+}
+
+export interface RequestWithExtras extends Omit<FastifyRequest, 'user'> {
+  /**
+   * Arc metadata - set by createCrudRouter
+   * Contains resource configuration and schema options
+   */
+  arc?: {
+    resourceName?: string;
+    schemaOptions?: RouteSchemaOptions;
+    permissions?: ResourcePermissions;
+  };
+  user?: unknown; // YOUR user object
+  organizationId?: string;
+  context?: Record<string, unknown>; // Additional context data
+  _policyFilters?: Record<string, unknown>; // Policy filters from middleware
+  fieldMask?: string[]; // Field projection for responses
+  _ownershipCheck?: Record<string, unknown>; // Ownership validation context
+}
+
+export type FastifyWithAuth = FastifyInstance & {
+  authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+};
+
+/**
+ * Arc core decorator interface
+ * Added by arcCorePlugin to provide instance-scoped hooks and registry
+ */
+export interface ArcDecorator {
+  /** Instance-scoped hook system */
+  hooks: import('../hooks/HookSystem.js').HookSystem;
+  /** Instance-scoped resource registry */
+  registry: import('../registry/ResourceRegistry.js').ResourceRegistry;
+  /** Whether event emission is enabled */
+  emitEvents: boolean;
+}
+
+/**
+ * Events decorator interface
+ * Added by eventPlugin to provide event pub/sub
+ */
+export interface EventsDecorator {
+  /** Publish an event */
+  publish: <T>(type: string, payload: T, meta?: Partial<{ id: string; timestamp: Date }>) => Promise<void>;
+  /** Subscribe to events */
+  subscribe: (pattern: string, handler: (event: unknown) => void | Promise<void>) => Promise<() => void>;
+  /** Get transport name */
+  transportName: string;
+}
+
+/**
+ * Fastify instance with Arc decorators
+ * Arc adds these decorators via plugins/presets
+ */
+export type FastifyWithDecorators = FastifyInstance & {
+  // Arc core decorator (from arcCorePlugin)
+  arc?: ArcDecorator;
+
+  // Events decorator (from eventPlugin)
+  events?: EventsDecorator;
+
+  // Auth decorator (from auth plugin)
+  authenticate?: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+
+  // Organization-scoped filtering (from multiTenant preset)
+  organizationScoped?: (options?: { required?: boolean }) => RouteHandlerMethod;
+
+  // Custom decorators from your app
+  [key: string]: unknown;
+};
+
+export interface OwnershipCheck {
+  field: string;
+  userField?: string;
+}
+
+// ============================================================================
+// Resource & Route Types
+// ============================================================================
+
+import type { ControllerLike } from './handlers.js';
+
+export interface ResourceConfig<TDoc = AnyRecord> {
+  name: string;
+  displayName?: string;
+  tag?: string;
+  prefix?: string; // Defaults to `/${name}s` if not provided
+  adapter?: DataAdapter<TDoc>; // Optional for service-pattern resources
+  /** Controller instance - accepts any object with CRUD methods */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  controller?: IController<TDoc> | ControllerLike | Record<string, any> | object;
+  queryParser?: unknown;
+  permissions?: ResourcePermissions;
+  schemaOptions?: RouteSchemaOptions;
+  openApiSchemas?: OpenApiSchemas;
+  customSchemas?: Partial<CrudSchemas>; // Custom JSON schemas
+  presets?: Array<string | PresetResult | { name: string; [key: string]: unknown }>; // Preset names, objects, or PresetResult
+  hooks?: ResourceHooks;
+  middlewares?: MiddlewareConfig;
+  additionalRoutes?: AdditionalRoute[];
+  disableCrud?: boolean;
+  disableDefaultRoutes?: boolean;
+  disabledRoutes?: CrudRouteKey[]; // Specific routes to disable
+  organizationScoped?: boolean; // Multi-tenant filtering
+  module?: string; // For grouping in registry
+  events?: Record<string, EventDefinition>; // Domain events
+  skipValidation?: boolean; // Skip schema validation
+  skipRegistry?: boolean; // Don't register in introspection
+  _appliedPresets?: string[]; // Internal: track applied presets
+}
+
+/**
+ * Resource-level permissions
+ * ONLY PermissionCheck functions allowed - no string arrays
+ */
+export interface ResourcePermissions {
+  list?: PermissionCheck;
+  get?: PermissionCheck;
+  create?: PermissionCheck;
+  update?: PermissionCheck;
+  delete?: PermissionCheck;
+}
+
+export interface ResourceHooks {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  beforeCreate?: (data: AnyRecord) => Promise<AnyRecord> | AnyRecord;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  afterCreate?: (doc: AnyRecord) => Promise<void> | void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  beforeUpdate?: (id: string, data: AnyRecord) => Promise<AnyRecord> | AnyRecord;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  afterUpdate?: (doc: AnyRecord) => Promise<void> | void;
+  beforeDelete?: (id: string) => Promise<void> | void;
+  afterDelete?: (id: string) => Promise<void> | void;
+}
+
+/**
+ * Additional route definition for custom endpoints
+ */
+export interface AdditionalRoute {
+  /** HTTP method */
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  /** Route path (relative to resource prefix) */
+  path: string;
+  /**
+   * Handler - string (controller method name) or function
+   * Function can be Fastify handler or any (request, reply) => Promise<any>
+   */
+  handler: string | RouteHandlerMethod | ((request: any, reply: any) => any);
+
+  /** Permission check - REQUIRED */
+  permissions: PermissionCheck;
+
+  /**
+   * Handler type - REQUIRED, no auto-detection
+   * true = ControllerHandler (receives context object)
+   * false = FastifyHandler (receives request, reply)
+   */
+  wrapHandler: boolean;
+
+  /** OpenAPI summary */
+  summary?: string;
+  /** OpenAPI description */
+  description?: string;
+  /** OpenAPI tags */
+  tags?: string[];
+
+  /**
+   * Custom route-level middleware
+   * Can be an array of handlers or a function that receives fastify and returns handlers
+   * @example
+   * // Direct array
+   * preHandler: [myMiddleware]
+   * // Function that receives fastify (for accessing decorators)
+   * preHandler: (fastify) => [fastify.customerContext({ required: true })]
+   */
+  preHandler?: RouteHandlerMethod[] | ((fastify: any) => RouteHandlerMethod[]);
+
+  /** Fastify route schema */
+  schema?: Record<string, unknown>;
+}
+
+export interface RouteSchemaOptions {
+  hiddenFields?: string[];
+  readonlyFields?: string[];
+  requiredFields?: string[];
+  optionalFields?: string[];
+  excludeFields?: string[];
+  fieldRules?: Record<string, { systemManaged?: boolean; [key: string]: unknown }>;
+  query?: Record<string, unknown>; // Query parameter schema for OpenAPI
+}
+
+export interface FieldRule {
+  field: string;
+  required?: boolean;
+  readonly?: boolean;
+  hidden?: boolean;
+}
+
+/**
+ * CRUD Route Schemas (Fastify Native Format)
+ *
+ * @example
+ * {
+ *   list: {
+ *     querystring: { type: 'object', properties: { page: { type: 'number' } } },
+ *     response: { 200: { type: 'object', properties: { docs: { type: 'array' } } } }
+ *   },
+ *   create: {
+ *     body: { type: 'object', properties: { name: { type: 'string' } } },
+ *     response: { 201: { type: 'object' } }
+ *   }
+ * }
+ */
+export interface CrudSchemas {
+  /** GET / - List all resources */
+  list?: {
+    querystring?: Record<string, unknown>;
+    response?: Record<number, unknown>;
+    [key: string]: unknown;
+  };
+
+  /** GET /:id - Get single resource */
+  get?: {
+    params?: Record<string, unknown>;
+    response?: Record<number, unknown>;
+    [key: string]: unknown;
+  };
+
+  /** POST / - Create resource */
+  create?: {
+    body?: Record<string, unknown>;
+    response?: Record<number, unknown>;
+    [key: string]: unknown;
+  };
+
+  /** PATCH /:id - Update resource */
+  update?: {
+    params?: Record<string, unknown>;
+    body?: Record<string, unknown>;
+    response?: Record<number, unknown>;
+    [key: string]: unknown;
+  };
+
+  /** DELETE /:id - Delete resource */
+  delete?: {
+    params?: Record<string, unknown>;
+    response?: Record<number, unknown>;
+    [key: string]: unknown;
+  };
+
+  // Allow custom operation schemas
+  [key: string]: unknown;
+}
+
+export interface OpenApiSchemas {
+  entity?: unknown;
+  createBody?: unknown;
+  updateBody?: unknown;
+  params?: unknown;
+  listQuery?: unknown;
+  [key: string]: unknown;
+}
+
+/** Handler for middleware functions */
+export type MiddlewareHandler = (request: RequestWithExtras, reply: FastifyReply) => Promise<unknown>;
+export type CrudRouteKey = 'list' | 'get' | 'create' | 'update' | 'delete';
+
+// ============================================================================
+// Middleware & Config Types
+// ============================================================================
+
+export interface MiddlewareConfig {
+  list?: MiddlewareHandler[];
+  get?: MiddlewareHandler[];
+  create?: MiddlewareHandler[];
+  update?: MiddlewareHandler[];
+  delete?: MiddlewareHandler[];
+  [key: string]: MiddlewareHandler[] | undefined;
+}
+
+// ============================================================================
+// Auth Types - Flexible, Database-Agnostic
+// ============================================================================
+
+/**
+ * JWT utilities provided to authenticator
+ * Arc provides these helpers, app uses them as needed
+ */
+export interface JwtContext {
+  /** Verify a JWT token and return decoded payload */
+  verify: <T = Record<string, unknown>>(token: string) => T;
+  /** Sign a payload and return JWT token */
+  sign: (payload: Record<string, unknown>, options?: { expiresIn?: string }) => string;
+  /** Decode without verification (for inspection) */
+  decode: <T = Record<string, unknown>>(token: string) => T | null;
+}
+
+/**
+ * Context passed to app's authenticator function
+ */
+export interface AuthenticatorContext {
+  /** JWT utilities (available if jwt.secret provided) */
+  jwt: JwtContext | null;
+  /** Fastify instance for advanced use cases */
+  fastify: FastifyInstance;
+}
+
+/**
+ * App-provided authenticator function
+ *
+ * Arc calls this for every non-public route.
+ * App has FULL control over authentication logic.
+ *
+ * @example
+ * ```typescript
+ * // Simple JWT auth
+ * authenticate: async (request, { jwt }) => {
+ *   const token = request.headers.authorization?.split(' ')[1];
+ *   if (!token || !jwt) return null;
+ *   const decoded = jwt.verify(token);
+ *   return userRepo.findById(decoded.id);
+ * }
+ *
+ * // Multi-strategy (JWT + API Key)
+ * authenticate: async (request, { jwt }) => {
+ *   const apiKey = request.headers['x-api-key'];
+ *   if (apiKey) {
+ *     const result = await apiKeyService.verify(apiKey);
+ *     if (result) return { _id: result.userId, isApiKey: true };
+ *   }
+ *   const token = request.headers.authorization?.split(' ')[1];
+ *   if (token && jwt) {
+ *     const decoded = jwt.verify(token);
+ *     return userRepo.findById(decoded.id);
+ *   }
+ *   return null;
+ * }
+ * ```
+ */
+export type Authenticator = (
+  request: FastifyRequest,
+  context: AuthenticatorContext
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+) => Promise<any | null> | any | null;
+
+/**
+ * Token pair returned by issueTokens helper
+ */
+export interface TokenPair {
+  /** Access token (JWT) */
+  accessToken: string;
+  /** Refresh token (JWT with longer expiry) */
+  refreshToken?: string;
+  /** Access token expiry in seconds */
+  expiresIn: number;
+  /** Refresh token expiry in seconds */
+  refreshExpiresIn?: number;
+  /** Token type (always 'Bearer') */
+  tokenType: 'Bearer';
+}
+
+/**
+ * Auth helpers available on fastify.auth
+ *
+ * @example
+ * ```typescript
+ * // In login handler
+ * const user = await userRepo.findByEmail(email);
+ * if (!user || !await bcrypt.compare(password, user.password)) {
+ *   return reply.code(401).send({ error: 'Invalid credentials' });
+ * }
+ *
+ * const tokens = fastify.auth.issueTokens({
+ *   id: user._id,
+ *   email: user.email,
+ *   roles: user.roles,
+ * });
+ *
+ * return { success: true, ...tokens, user };
+ * ```
+ */
+export interface AuthHelpers {
+  /** JWT utilities (if configured) */
+  jwt: JwtContext | null;
+
+  /**
+   * Issue access + refresh tokens for a user
+   * App calls this after validating credentials
+   */
+  issueTokens: (
+    payload: Record<string, unknown>,
+    options?: { expiresIn?: string; refreshExpiresIn?: string }
+  ) => TokenPair;
+
+  /**
+   * Verify a refresh token and return decoded payload
+   */
+  verifyRefreshToken: <T = Record<string, unknown>>(token: string) => T;
+}
+
+export interface ServiceContext {
+  user?: unknown;
+  organizationId?: string;
+  requestId?: string;
+  select?: string[] | Record<string, 0 | 1>; // Field projection for responses
+  populate?: string | string[]; // Relations to populate
+  lean?: boolean; // Return plain objects
+}
+
+// ============================================================================
+// Preset Types
+// ============================================================================
+
+export interface PresetHook {
+  operation: 'create' | 'update' | 'delete' | 'read' | 'list';
+  phase: 'before' | 'after';
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  handler: (ctx: any) => void | Promise<void> | AnyRecord | Promise<AnyRecord>;
+  priority?: number;
+}
+
+export interface PresetResult {
+  name: string;
+  additionalRoutes?: AdditionalRoute[] | ((permissions: ResourcePermissions) => AdditionalRoute[]);
+  middlewares?: MiddlewareConfig;
+  schemaOptions?: RouteSchemaOptions;
+  controllerOptions?: Record<string, unknown>;
+  hooks?: PresetHook[];
+}
+
+export type PresetFunction = (config: ResourceConfig) => PresetResult;
+
+// ============================================================================
+// Plugin Types
+// ============================================================================
+
+export interface GracefulShutdownOptions {
+  timeout?: number;
+  onShutdown?: () => Promise<void> | void;
+  signals?: NodeJS.Signals[];
+  logEvents?: boolean;
+}
+
+export interface RequestIdOptions {
+  headerName?: string;
+  generator?: () => string;
+}
+
+export interface HealthOptions {
+  path?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  check?: () => Promise<any>;
+}
+
+export interface HealthCheck {
+  healthy: boolean;
+  timestamp: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Auth Plugin Options - Clean, Minimal Configuration
+ *
+ * Arc provides JWT infrastructure and calls your authenticator.
+ * You control ALL authentication logic.
+ *
+ * @example
+ * ```typescript
+ * // Minimal: just JWT (uses default jwtVerify)
+ * auth: {
+ *   jwt: { secret: process.env.JWT_SECRET },
+ * }
+ *
+ * // With custom authenticator (recommended)
+ * auth: {
+ *   jwt: { secret: process.env.JWT_SECRET },
+ *   authenticate: async (request, { jwt }) => {
+ *     const token = request.headers.authorization?.split(' ')[1];
+ *     if (!token) return null;
+ *     const decoded = jwt.verify(token);
+ *     return userRepo.findById(decoded.id);
+ *   },
+ * }
+ *
+ * // Multi-strategy (JWT + API Key)
+ * auth: {
+ *   jwt: { secret: process.env.JWT_SECRET },
+ *   authenticate: async (request, { jwt }) => {
+ *     // Try API key first (faster)
+ *     const apiKey = request.headers['x-api-key'];
+ *     if (apiKey) {
+ *       const result = await apiKeyService.verify(apiKey);
+ *       if (result) return { _id: result.userId, isApiKey: true };
+ *     }
+ *     // Try JWT
+ *     const token = request.headers.authorization?.split(' ')[1];
+ *     if (token) {
+ *       const decoded = jwt.verify(token);
+ *       return userRepo.findById(decoded.id);
+ *     }
+ *     return null;
+ *   },
+ *   onFailure: (request, reply) => {
+ *     reply.code(401).send({
+ *       success: false,
+ *       error: 'Authentication required',
+ *       message: 'Use Bearer token or X-API-Key header',
+ *     });
+ *   },
+ * }
+ * ```
+ */
+export interface AuthPluginOptions {
+  /**
+   * JWT configuration (optional but recommended)
+   * If provided, jwt utilities are available in authenticator context
+   */
+  jwt?: {
+    /** JWT secret (required for JWT features) */
+    secret: string;
+    /** Access token expiry (default: '15m') */
+    expiresIn?: string;
+    /** Refresh token secret (defaults to main secret) */
+    refreshSecret?: string;
+    /** Refresh token expiry (default: '7d') */
+    refreshExpiresIn?: string;
+    /** Additional @fastify/jwt sign options */
+    sign?: Record<string, unknown>;
+    /** Additional @fastify/jwt verify options */
+    verify?: Record<string, unknown>;
+  };
+
+  /**
+   * Custom authenticator function (recommended)
+   *
+   * Arc calls this for non-public routes.
+   * Return user object to authenticate, null/undefined to reject.
+   *
+   * If not provided and jwt.secret is set, uses default jwtVerify.
+   */
+  authenticate?: Authenticator;
+
+  /**
+   * Custom auth failure handler
+   * Customize the 401 response when authentication fails
+   */
+  onFailure?: (
+    request: FastifyRequest,
+    reply: FastifyReply,
+    error?: Error
+  ) => void | Promise<void>;
+
+  /**
+   * Property name to store user on request (default: 'user')
+   */
+  userProperty?: string;
+}
+
+export interface OrgScopeOptions {
+  enabled?: boolean;
+  header?: string;
+  headerName?: string; // Alias for backwards compatibility
+  queryParam?: string;
+  bypassRoles?: string[];
+  userOrgsPath?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  validateMembership?: (user: unknown, orgId: string) => Promise<boolean> | boolean;
+}
+
+export interface IntrospectionPluginOptions {
+  path?: string;
+  prefix?: string;
+  enabled?: boolean;
+  authRoles?: string[];
+}
+
+export interface CrudRouterOptions {
+  /** Route prefix */
+  prefix?: string;
+
+  /** Permission checks for CRUD operations */
+  permissions?: ResourcePermissions;
+
+  /** OpenAPI tag for grouping routes */
+  tag?: string;
+
+  /** JSON schemas for CRUD operations */
+  schemas?: Partial<CrudSchemas>;
+
+  /** Middlewares for each CRUD operation */
+  middlewares?: MiddlewareConfig;
+
+  /** Additional custom routes (from presets or user-defined) */
+  additionalRoutes?: AdditionalRoute[];
+
+  /** Disable all default CRUD routes */
+  disableDefaultRoutes?: boolean;
+
+  /** Disable specific CRUD routes */
+  disabledRoutes?: CrudRouteKey[];
+
+  /** Enable organization-scoped filtering */
+  organizationScoped?: boolean;
+
+  /** Resource name for lifecycle hooks */
+  resourceName?: string;
+
+  /** Schema generation options */
+  schemaOptions?: RouteSchemaOptions;
+}
+
+// ============================================================================
+// Registry & Metadata Types
+// ============================================================================
+
+export interface ResourceMetadata {
+  name: string;
+  displayName?: string;
+  tag?: string;
+  prefix: string;
+  module?: string;
+  permissions?: ResourcePermissions;
+  presets: string[];
+  additionalRoutes?: AdditionalRoute[];
+  routes: Array<{
+    method: string;
+    path: string;
+    handler?: string;
+    operation?: string;
+    summary?: string;
+  }>;
+  events?: string[];
+}
+
+export interface RegistryEntry extends ResourceMetadata {
+  plugin: unknown;
+  adapter?: { type: string; name: string } | null;
+  events?: string[];
+  disableDefaultRoutes?: boolean;
+  openApiSchemas?: OpenApiSchemas;
+  registeredAt?: string;
+}
+
+export interface RegistryStats {
+  total?: number;
+  totalResources: number;
+  byTag?: Record<string, number>;
+  byModule?: Record<string, number>;
+  presetUsage?: Record<string, number>;
+  totalRoutes?: number;
+  totalEvents?: number;
+}
+
+export interface IntrospectionData {
+  resources: ResourceMetadata[];
+  stats: RegistryStats;
+  generatedAt?: string;
+}
+
+export interface EventDefinition {
+  name: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  handler: (data: unknown) => Promise<void> | void;
+  schema?: Record<string, unknown>; // JSON schema for event payload
+  description?: string; // Event documentation
+}
+
+// ============================================================================
+// Validation Types
+// ============================================================================
+
+export interface ConfigError {
+  field: string;
+  message: string;
+  code?: string;
+}
+
+export interface ValidationResult {
+  valid: boolean;
+  errors: ConfigError[];
+}
+
+export interface ValidateOptions {
+  strict?: boolean;
+}
+
+// ============================================================================
+// Utility Types
+// ============================================================================
+
+/**
+ * Infer document type from DataAdapter, Repository, or ResourceConfig.
+ * Smart inference that works with multiple sources.
+ *
+ * @example
+ * ```typescript
+ * type Doc1 = InferDocType<typeof adapter>;     // From DataAdapter
+ * type Doc2 = InferDocType<typeof repository>;  // From Repository
+ * type Doc3 = InferDocType<typeof resource>;    // From ResourceConfig
+ * ```
+ */
+import type { CrudRepository } from './repository.js';
+
+/**
+ * Infer document type from DataAdapter or ResourceConfig
+ */
+export type InferDocType<T> =
+  T extends DataAdapter<infer D>
+    ? D
+    : T extends ResourceConfig<infer D>
+      ? D
+      : never;
+
+export type InferResourceDoc<T> = T extends ResourceConfig<infer D> ? D : never;
+export type TypedResourceConfig<TDoc> = ResourceConfig<TDoc>;
+export type TypedController<TDoc> = IController<TDoc>;
+export type TypedRepository<TDoc> = CrudRepository<TDoc>;
+
+// ============================================================================
+// Base Controller Options
+// ============================================================================
+
+export interface BaseControllerOptions {
+  /** Query parser instance */
+  queryParser: QueryParserInterface;
+  /** Schema generation options */
+  schemaOptions?: RouteSchemaOptions;
+  /** Maximum items per page */
+  maxLimit?: number;
+  /** Default items per page */
+  defaultLimit?: number;
+  /** Default sort field */
+  defaultSort?: string;
+  /** Resource name for hooks */
+  resourceName?: string;
+  /** Disable event emission */
+  disableEvents?: boolean;
+}

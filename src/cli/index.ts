@@ -517,7 +517,7 @@ describe('${pascal} API', () => {
 
   beforeAll(async () => {
     app = await createTestApp({
-      jwtSecret: 'test-secret-32-chars-minimum-length',
+      auth: { jwt: { secret: 'test-secret-32-chars-minimum-len' } },
     });
   });
 
