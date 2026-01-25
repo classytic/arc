@@ -116,6 +116,7 @@ export const productRepository = new ProductRepository();
 import { defineResource, createMongooseAdapter, allowPublic, requireRoles } from '@classytic/arc';
 import { Product } from './product.model.js';
 import { productRepository } from './product.repository.js';
+import { productController } from './product.controller.js';
 
 export const productResource = defineResource({
   name: 'product',
@@ -126,6 +127,7 @@ export const productResource = defineResource({
     model: Product,
     repository: productRepository,
   }),
+  controller: productController,
 
   presets: ['softDelete', 'slugLookup'],
 
@@ -135,6 +137,9 @@ export const productResource = defineResource({
     create: requireRoles(['admin']),
     update: requireRoles(['admin']),
     delete: requireRoles(['admin']),
+    deleted: requireRoles(['admin']),  // softDelete preset
+    restore: requireRoles(['admin']),  // softDelete preset
+    getBySlug: allowPublic(),          // slugLookup preset
   },
 });
 ```
@@ -375,14 +380,16 @@ export const productResource = defineResource({
       path: '/featured',
       handler: 'getFeatured',
       summary: 'Get featured products',
-      authRoles: [], // Public
+      permissions: allowPublic(),
+      wrapHandler: true,  // Arc context pattern
     },
     {
       method: 'POST',
       path: '/:id/publish',
       handler: 'publish',
       summary: 'Publish a product',
-      authRoles: ['admin'],
+      permissions: requireRoles(['admin']),
+      wrapHandler: true,  // Arc context pattern
     },
   ],
 });
@@ -391,22 +398,25 @@ export const productResource = defineResource({
 Implement handlers in your controller:
 
 ```typescript
+import { BaseController } from '@classytic/arc';
+import type { IRequestContext, IControllerResponse } from '@classytic/arc';
+
 class ProductController extends BaseController {
-  async getFeatured(ctx: IRequestContext) {
+  async getFeatured(req: IRequestContext): Promise<IControllerResponse> {
     const products = await this.repository.Model.find({
       isFeatured: true,
       isActive: true
     }).limit(10);
-    return { success: true, data: products, status: 200 };
+    return { success: true, data: products };
   }
 
-  async publish(ctx: IRequestContext) {
-    const { id } = ctx.params;
+  async publish(req: IRequestContext): Promise<IControllerResponse> {
+    const { id } = req.params;
     const product = await this.repository.update(id, {
       status: 'published',
       publishedAt: new Date(),
     });
-    return { success: true, data: product, status: 200 };
+    return { success: true, data: product };
   }
 }
 ```

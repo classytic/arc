@@ -137,10 +137,11 @@ export function defineResource<TDoc = AnyRecord>(
   let controller = config.controller;
   if (!controller && hasCrudRoutes && repository) {
     // Auto-create BaseController if CRUD routes exist
-    controller = new BaseController(repository, {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    controller = new BaseController(repository as any, {
       resourceName: config.name,
       schemaOptions: config.schemaOptions,
-      queryParser: config.queryParser as any,
+      queryParser: config.queryParser as QueryParserInterface | undefined,
     }) as IController<TDoc>;
   }
 

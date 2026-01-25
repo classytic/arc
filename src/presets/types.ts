@@ -49,13 +49,13 @@ export interface ISoftDeleteController<TDoc = unknown> {
    * Get all soft-deleted items
    * Called by: GET /deleted
    */
-  getDeleted(context: IRequestContext): Promise<IControllerResponse<PaginatedResult<TDoc>>>;
+  getDeleted(req: IRequestContext): Promise<IControllerResponse<PaginatedResult<TDoc>>>;
 
   /**
    * Restore a soft-deleted item by ID
    * Called by: POST /:id/restore
    */
-  restore(context: IRequestContext): Promise<IControllerResponse<TDoc>>;
+  restore(req: IRequestContext): Promise<IControllerResponse<TDoc>>;
 }
 
 /**
@@ -88,7 +88,7 @@ export interface ISlugLookupController<TDoc = unknown> {
    * Get a resource by its slug
    * Called by: GET /slug/:slug
    */
-  getBySlug(context: IRequestContext): Promise<IControllerResponse<TDoc>>;
+  getBySlug(req: IRequestContext): Promise<IControllerResponse<TDoc>>;
 }
 
 /**
@@ -123,13 +123,13 @@ export interface ITreeController<TDoc = unknown> {
    * Get the full hierarchical tree
    * Called by: GET /tree
    */
-  getTree(context: IRequestContext): Promise<IControllerResponse<TDoc[]>>;
+  getTree(req: IRequestContext): Promise<IControllerResponse<TDoc[]>>;
 
   /**
    * Get direct children of a parent node
    * Called by: GET /:parent/children
    */
-  getChildren(context: IRequestContext): Promise<IControllerResponse<TDoc[]>>;
+  getChildren(req: IRequestContext): Promise<IControllerResponse<TDoc[]>>;
 }
 
 /**

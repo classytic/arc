@@ -90,18 +90,16 @@ export function createRequestContext(req: FastifyRequest): IRequestContext {
           const user = reqWithExtras.user as any;
           return {
             ...user,
+            // Normalize ID for MongoDB compatibility
             id: String(user._id ?? user.id),
             _id: user._id ?? user.id,
-            // Normalize role: handle both string and array formats
-            role: Array.isArray(user.roles)
-              ? user.roles[0]
-              : typeof user.roles === 'string'
-              ? user.roles
-              : undefined,
+            // Preserve original role/roles/permissions as-is
+            // Devs can define their own authorization structure
           };
         })()
       : undefined,
-    context: {
+    organizationId: reqWithExtras.organizationId,
+    metadata: {
       ...reqWithExtras.context,
       // Include Arc metadata for hook execution
       arc: reqWithExtras.arc,
@@ -189,11 +187,11 @@ export function sendControllerResponse<T>(
  * ```
  */
 export function createFastifyHandler<T>(
-  controllerMethod: (context: IRequestContext) => Promise<IControllerResponse<T>>
+  controllerMethod: (req: IRequestContext) => Promise<IControllerResponse<T>>
 ) {
   return async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
-    const context = createRequestContext(req);
-    const response = await controllerMethod(context);
+    const requestContext = createRequestContext(req);
+    const response = await controllerMethod(requestContext);
     sendControllerResponse(reply, response, req);
   };
 }

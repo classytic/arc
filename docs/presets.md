@@ -1,16 +1,19 @@
 # Presets
 
-Reusable resource configurations. Add routes, middlewares, and schema options.
+Reusable resource configurations. Add routes, middleware, and behaviors with a single line.
 
 ## Usage
 
 ```typescript
+import { defineResource } from '@classytic/arc';
+
 defineResource({
   name: 'post',
   presets: [
     'softDelete',                              // String form
     { name: 'ownedByUser', ownerField: 'authorId' },  // Object form with options
-    'tree',
+    'slugLookup',
+    'multiTenant',
   ],
 });
 ```
@@ -19,21 +22,44 @@ defineResource({
 
 ### softDelete
 
-Soft-delete instead of hard-delete. Adds routes to view/restore deleted items.
+Soft-delete instead of hard-delete. Adds `deletedAt` field and restoration routes.
 
 ```typescript
 presets: ['softDelete']
 // Or with custom field:
-presets: [{ name: 'softDelete', deletedField: 'isArchived' }]
+presets: [{ name: 'softDelete', deletedField: 'archivedAt' }]
 ```
 
 **Added Routes:**
-| Route | Permission Key | Description |
-|-------|----------------|-------------|
-| GET /deleted | `deleted` | List soft-deleted items |
-| POST /:id/restore | `restore` | Restore deleted item |
 
-**Controller Methods Required:** `getDeleted`, `restore`
+| Route | Permission Key | Handler Method |
+|-------|----------------|----------------|
+| GET /deleted | `deleted` | `getDeleted` |
+| POST /:id/restore | `restore` | `restore` |
+
+**Controller Implementation:**
+
+```typescript
+import { BaseController } from '@classytic/arc';
+import type { IRequestContext, IControllerResponse } from '@classytic/arc';
+import type { ISoftDeleteController } from '@classytic/arc/presets';
+
+class ProductController
+  extends BaseController
+  implements ISoftDeleteController {
+
+  async getDeleted(req: IRequestContext): Promise<IControllerResponse> {
+    const products = await this.repository.findDeleted();
+    return { success: true, data: products };
+  }
+
+  async restore(req: IRequestContext): Promise<IControllerResponse> {
+    const { id } = req.params;
+    const product = await this.repository.restore(id);
+    return { success: true, data: product };
+  }
+}
+```
 
 ---
 
@@ -48,17 +74,38 @@ presets: [{ name: 'slugLookup', slugField: 'urlSlug' }]
 ```
 
 **Added Routes:**
-| Route | Permission Key | Description |
-|-------|----------------|-------------|
-| GET /slug/:slug | `getBySlug` | Get by slug |
 
-**Controller Methods Required:** `getBySlug`
+| Route | Permission Key | Handler Method |
+|-------|----------------|----------------|
+| GET /slug/:slug | `getBySlug` | `getBySlug` |
+
+**Controller Implementation:**
+
+```typescript
+import type { ISlugLookupController } from '@classytic/arc/presets';
+
+class ProductController
+  extends BaseController
+  implements ISlugLookupController {
+
+  async getBySlug(req: IRequestContext): Promise<IControllerResponse> {
+    const { slug } = req.params;
+    const product = await this.repository.getBySlug(slug);
+
+    if (!product) {
+      return { success: false, error: 'Not found', status: 404 };
+    }
+
+    return { success: true, data: product };
+  }
+}
+```
 
 ---
 
 ### tree
 
-Hierarchical tree structures (categories, folders, etc.).
+Hierarchical tree structures (categories, folders, org charts).
 
 ```typescript
 presets: ['tree']
@@ -67,12 +114,33 @@ presets: [{ name: 'tree', parentField: 'parentCategory' }]
 ```
 
 **Added Routes:**
-| Route | Permission Key | Description |
-|-------|----------------|-------------|
-| GET /tree | `tree` or `getTree` | Full hierarchical tree |
-| GET /:parent/children | `children` or `getChildren` | Direct children |
 
-**Controller Methods Required:** `getTree`, `getChildren`
+| Route | Permission Key | Handler Method |
+|-------|----------------|----------------|
+| GET /tree | `tree` or `getTree` | `getTree` |
+| GET /:parent/children | `children` or `getChildren` | `getChildren` |
+
+**Controller Implementation:**
+
+```typescript
+import type { ITreeController } from '@classytic/arc/presets';
+
+class CategoryController
+  extends BaseController
+  implements ITreeController {
+
+  async getTree(req: IRequestContext): Promise<IControllerResponse> {
+    const tree = await this.repository.getTree();
+    return { success: true, data: tree };
+  }
+
+  async getChildren(req: IRequestContext): Promise<IControllerResponse> {
+    const { parent } = req.params;
+    const children = await this.repository.getChildren(parent);
+    return { success: true, data: children };
+  }
+}
+```
 
 ---
 
@@ -91,26 +159,66 @@ presets: [{
 ```
 
 **Behavior:**
-- On update/delete, checks if `item[ownerField] === user.id`
+- On update/delete, checks if `item[ownerField] === user._id`
 - Returns 403 if ownership check fails
 - Users with `bypassRoles` skip the check (default: `['admin', 'superadmin']`)
 
 **No Additional Routes** - Adds middleware to update/delete operations.
 
+**Example:**
+
+```typescript
+// Resource definition
+defineResource({
+  name: 'post',
+  presets: [{ name: 'ownedByUser', ownerField: 'authorId' }],
+  permissions: {
+    list: allowPublic(),
+    get: allowPublic(),
+    create: requireAuth(),
+    update: requireAuth(), // Only author can update
+    delete: requireAuth(), // Only author can delete
+  },
+});
+
+// Automatic ownership check on update/delete
+// User A can only update/delete posts where post.authorId === userA._id
+```
+
 ---
 
 ### multiTenant
 
-Multi-tenant data isolation by tenant/organization.
+Multi-tenant data isolation by organization.
 
 ```typescript
 presets: [{ name: 'multiTenant', tenantField: 'organizationId' }]
 ```
 
 **Behavior:**
-- Automatically filters queries by tenant
-- Injects tenant ID on create
+- Automatically filters queries by `organizationId`
+- Injects `organizationId` on create
 - Users with `bypassRoles` can access all tenants
+
+**Requires:** `organizationScoped: true` on resource definition
+
+**Example:**
+
+```typescript
+defineResource({
+  name: 'order',
+  presets: [{ name: 'multiTenant', tenantField: 'organizationId' }],
+  organizationScoped: true,
+  permissions: {
+    list: requireAuth(),
+    create: requireAuth(),
+  },
+});
+
+// Requests require x-organization-id header
+// GET /orders with x-organization-id: org-123
+// Automatically filters: { organizationId: 'org-123' }
+```
 
 ---
 
@@ -123,14 +231,31 @@ presets: ['audited']
 ```
 
 **Behavior:**
-- Sets `createdBy`, `updatedBy` fields from `request.user`
+- Sets `createdBy`, `updatedBy` fields from `req.user`
 - Requires auth middleware to be active
+
+**Example:**
+
+```typescript
+defineResource({
+  name: 'document',
+  presets: ['audited'],
+  permissions: {
+    create: requireAuth(),
+    update: requireAuth(),
+  },
+});
+
+// Automatic tracking
+// On create: sets createdBy = req.user._id
+// On update: sets updatedBy = req.user._id
+```
 
 ---
 
 ## Permission Keys
 
-Presets add permission keys to the `permissions` object:
+Presets add permission keys that you must define:
 
 ```typescript
 defineResource({
@@ -138,18 +263,47 @@ defineResource({
   presets: ['softDelete', 'tree'],
   permissions: {
     // CRUD
-    list: [],
-    create: ['admin'],
-    update: ['admin'],
-    delete: ['admin'],
+    list: allowPublic(),
+    get: allowPublic(),
+    create: requireRoles(['admin']),
+    update: requireRoles(['admin']),
+    delete: requireRoles(['admin']),
 
     // softDelete preset
-    deleted: ['admin'],
-    restore: ['admin'],
+    deleted: requireRoles(['admin']),
+    restore: requireRoles(['admin']),
 
-    // tree preset (use semantic or handler name)
-    tree: [],          // or getTree: []
-    children: [],      // or getChildren: []
+    // tree preset
+    tree: allowPublic(),
+    children: allowPublic(),
+  },
+});
+```
+
+## Combining Presets
+
+Presets work together:
+
+```typescript
+defineResource({
+  name: 'document',
+  presets: [
+    'softDelete',           // Soft delete with restore
+    'slugLookup',           // Lookup by slug
+    { name: 'ownedByUser', ownerField: 'userId' }, // Ownership
+    'multiTenant',          // Org isolation
+    'audited',              // Created/updated tracking
+  ],
+  organizationScoped: true, // Required for multiTenant
+  permissions: {
+    list: requireAuth(),
+    get: requireAuth(),
+    create: requireAuth(),
+    update: requireAuth(),  // Only owner can update
+    delete: requireAuth(),  // Only owner can delete
+    deleted: requireRoles(['admin']),
+    restore: requireRoles(['admin']),
+    getBySlug: allowPublic(),
   },
 });
 ```
@@ -175,7 +329,7 @@ defineResource({
 });
 ```
 
-## Preset Result Shape
+### Preset Result Shape
 
 ```typescript
 interface PresetResult {
@@ -192,3 +346,42 @@ interface PresetResult {
   controllerOptions?: { slugField?: string; parentField?: string };
 }
 ```
+
+## TypeScript Interfaces
+
+Use preset interfaces for type safety:
+
+```typescript
+import { BaseController } from '@classytic/arc';
+import type {
+  ISoftDeleteController,
+  ISlugLookupController,
+  ITreeController
+} from '@classytic/arc/presets';
+
+class CategoryController
+  extends BaseController
+  implements ISoftDeleteController, ISlugLookupController, ITreeController {
+
+  // TypeScript enforces these methods exist
+  async getDeleted(req: IRequestContext): Promise<IControllerResponse> { ... }
+  async restore(req: IRequestContext): Promise<IControllerResponse> { ... }
+  async getBySlug(req: IRequestContext): Promise<IControllerResponse> { ... }
+  async getTree(req: IRequestContext): Promise<IControllerResponse> { ... }
+  async getChildren(req: IRequestContext): Promise<IControllerResponse> { ... }
+}
+```
+
+## Best Practices
+
+1. **Use presets for common patterns** - Don't reinvent softDelete, multiTenant
+2. **Implement required controller methods** - Use TypeScript interfaces for type safety
+3. **Define all permission keys** - Presets add routes that need permissions
+4. **Combine presets thoughtfully** - multiTenant + ownedByUser work well together
+5. **Test preset combinations** - Ensure middlewares don't conflict
+
+## See Also
+
+- [Core Module](./core.md) - Resource definition
+- [Auth Module](./auth.md) - Permissions and authorization
+- [Org Module](./org.md) - Multi-tenant setup

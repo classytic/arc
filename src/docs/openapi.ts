@@ -533,6 +533,12 @@ function extractPathParams(path: string): Parameter[] {
 /**
  * Generate schema definitions from pre-stored registry schemas.
  * Schemas are generated at resource definition time and stored in the registry.
+ *
+ * Response schema priority:
+ * 1. If resource provides explicit `openApiSchemas.response`, use it as-is
+ * 2. Otherwise, auto-generate from `createBody` + _id + timestamps
+ *
+ * Note: This is for OpenAPI documentation only - does NOT affect Fastify serialization.
  */
 function generateSchemas(resources: RegistryEntry[]): Record<string, SchemaObject> {
   const schemas: Record<string, SchemaObject> = {
@@ -561,15 +567,22 @@ function generateSchemas(resources: RegistryEntry[]): Record<string, SchemaObjec
   };
 
   for (const resource of resources) {
-    // Use pre-generated schemas from registry (stored at defineResource time)
     const storedSchemas = resource.openApiSchemas;
 
-    if (storedSchemas?.createBody) {
-      // Use real schemas from registry
+    // === RESPONSE SCHEMA (for GET responses) ===
+    // Priority 1: Explicit response schema provided by user
+    if (storedSchemas?.response) {
       schemas[resource.name] = {
         type: 'object',
         description: resource.displayName,
-        ...(storedSchemas.createBody as SchemaObject),
+        ...(storedSchemas.response as SchemaObject),
+      };
+    }
+    // Priority 2: Auto-generate from createBody
+    else if (storedSchemas?.createBody) {
+      schemas[resource.name] = {
+        type: 'object',
+        description: resource.displayName,
         properties: {
           _id: { type: 'string', description: 'Unique identifier' },
           ...((storedSchemas.createBody as SchemaObject).properties ?? {}),
@@ -577,7 +590,22 @@ function generateSchemas(resources: RegistryEntry[]): Record<string, SchemaObjec
           updatedAt: { type: 'string', format: 'date-time', description: 'Last update timestamp' },
         },
       };
+    }
+    // Fallback: Placeholder schema
+    else {
+      schemas[resource.name] = {
+        type: 'object',
+        description: resource.displayName,
+        properties: {
+          _id: { type: 'string', description: 'Unique identifier' },
+          createdAt: { type: 'string', format: 'date-time', description: 'Creation timestamp' },
+          updatedAt: { type: 'string', format: 'date-time', description: 'Last update timestamp' },
+        },
+      };
+    }
 
+    // === INPUT SCHEMAS (for POST/PATCH requests) ===
+    if (storedSchemas?.createBody) {
       schemas[`${resource.name}Input`] = {
         type: 'object',
         description: `${resource.displayName} create input`,
@@ -592,17 +620,6 @@ function generateSchemas(resources: RegistryEntry[]): Record<string, SchemaObjec
         };
       }
     } else {
-      // Placeholder schemas (no pre-generated schemas available)
-      schemas[resource.name] = {
-        type: 'object',
-        description: resource.displayName,
-        properties: {
-          _id: { type: 'string', description: 'Unique identifier' },
-          createdAt: { type: 'string', format: 'date-time', description: 'Creation timestamp' },
-          updatedAt: { type: 'string', format: 'date-time', description: 'Last update timestamp' },
-        },
-      };
-
       schemas[`${resource.name}Input`] = {
         type: 'object',
         description: `${resource.displayName} input`,

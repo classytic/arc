@@ -1,20 +1,18 @@
 # Core Module
 
-The foundation: resource definition and CRUD routing.
+Resources, controllers, and routing fundamentals.
 
 ## defineResource
 
 Single entry point for defining resources.
 
 ```typescript
-import { defineResource } from '@classytic/arc';
+import { defineResource, createMongooseAdapter, allowPublic, requireRoles } from '@classytic/arc';
 
-import { allowPublic, requireRoles } from '@classytic/arc';
-
-const resource = defineResource({
+const productResource = defineResource({
   // Required
   name: 'product',
-  adapter: createMongooseAdapter({ model: Product, repository: productRepository }),
+  adapter: createMongooseAdapter({ model: Product, repository: productRepo }),
   controller: productController,
 
   // Optional
@@ -22,8 +20,10 @@ const resource = defineResource({
   displayName: 'Products',     // UI/docs name
   tag: 'Products',             // OpenAPI tag
 
-  // Features
+  // Presets
   presets: ['softDelete', 'slugLookup'],
+
+  // Permissions (functions, not arrays)
   permissions: {
     list: allowPublic(),
     get: allowPublic(),
@@ -31,6 +31,8 @@ const resource = defineResource({
     update: requireRoles(['admin']),
     delete: requireRoles(['admin']),
   },
+
+  // Multi-tenant
   organizationScoped: true,
 
   // Advanced
@@ -39,7 +41,7 @@ const resource = defineResource({
 });
 
 // Register with Fastify
-fastify.register(resource.toPlugin());
+await fastify.register(productResource.toPlugin());
 ```
 
 ## BaseController
@@ -48,102 +50,207 @@ Standard CRUD with built-in features.
 
 ```typescript
 import { BaseController } from '@classytic/arc';
-import { Repository } from '@classytic/mongokit'; // Or your chosen database kit
+import type { IRequestContext, IControllerResponse } from '@classytic/arc';
 
 class ProductController extends BaseController {
-  constructor(repository: Repository) {
+  constructor(repository) {
     super(repository);
   }
 
-  // Override for custom logic
-  async create(context) {
-    if (!context.body.sku) {
+  // Override CRUD methods
+  async create(req: IRequestContext): Promise<IControllerResponse> {
+    // Custom validation
+    if (!req.body.sku) {
       return { success: false, error: 'SKU required', status: 400 };
     }
-    return super.create(context);
+
+    // Call parent implementation
+    return super.create(req);
+  }
+
+  // Custom methods
+  async getFeatured(req: IRequestContext): Promise<IControllerResponse> {
+    const { organizationId, user } = req;
+
+    const products = await this.repository.findAll({
+      filter: { isFeatured: true, organizationId },
+    });
+
+    return { success: true, data: products };
   }
 }
 ```
 
-### Built-in Methods
+### Built-in CRUD Methods
 
-| Method | Route | Description |
-|--------|-------|-------------|
-| `getAll` | GET / | List with pagination, filtering, sorting |
-| `getById` | GET /:id | Get single item |
-| `create` | POST / | Create new item |
-| `update` | PATCH /:id | Partial update |
-| `delete` | DELETE /:id | Delete item |
+| Method | Route | Signature |
+|--------|-------|-----------|
+| `list` | GET / | `async list(req: IRequestContext): Promise<IControllerResponse>` |
+| `get` | GET /:id | `async get(req: IRequestContext): Promise<IControllerResponse>` |
+| `create` | POST / | `async create(req: IRequestContext): Promise<IControllerResponse>` |
+| `update` | PATCH /:id | `async update(req: IRequestContext): Promise<IControllerResponse>` |
+| `delete` | DELETE /:id | `async delete(req: IRequestContext): Promise<IControllerResponse>` |
+
+### Request Context API
+
+```typescript
+interface IRequestContext {
+  params: Record<string, string>;           // Route params: /users/:id
+  query: Record<string, unknown>;           // Query string: ?page=1&limit=10
+  body: unknown;                            // Request body (POST/PATCH/PUT)
+  user: UserBase | null;                    // Authenticated user (or null)
+  headers: Record<string, string | undefined>; // Request headers
+  organizationId?: string;                  // Multi-tenant org ID
+  metadata?: Record<string, unknown>;       // Custom data from hooks/policies
+}
+```
+
+**Key Fields:**
+
+- `req.metadata` - Populated by hooks, policies, or middleware. Use for passing custom data between layers.
+- `req.organizationId` - Set automatically by `multiTenant` preset or org scope plugin.
+- `req.user` - Set by auth plugin. Preserves original auth structure (no role normalization).
+
+### Response Format
+
+```typescript
+interface IControllerResponse<T> {
+  success: boolean;                      // true/false
+  data?: T;                              // Response payload
+  error?: string;                        // Error message
+  status?: number;                       // HTTP status (default: 200/400)
+  meta?: Record<string, unknown>;        // Pagination, counts, etc.
+  details?: Record<string, unknown>;     // Debug info
+}
+```
 
 ### Query Features
 
 Arc parses query parameters automatically:
 
-```
-GET /products?price[gte]=100&price[lte]=500   # Operators
-GET /products?sort=-createdAt,name            # Sorting
-GET /products?search=keyword                  # Search
-GET /products?page=2&limit=20                 # Pagination
-GET /products?populate=category,brand         # Relations
-```
+```bash
+# Operators
+GET /products?price[gte]=100&price[lte]=500
 
-> **Tip:** QueryParser comes from your database kit (MongoKit, PrismaKit, etc.)
+# Sorting
+GET /products?sort=-createdAt,name
 
-### Custom Query Parser
+# Search
+GET /products?search=keyword
 
-```typescript
-import { QueryParser } from '@classytic/mongokit'; // Or your database kit
+# Pagination
+GET /products?page=2&limit=20
 
-// Option 1: In controller
-class ProductController extends BaseController {
-  constructor(repository) {
-    super(repository, { queryParser: new QueryParser() });
-  }
-}
-
-// Option 2: In defineResource
-defineResource({
-  name: 'product',
-  queryParser: new QueryParser(),
-});
+# Relations
+GET /products?populate=category,brand
 ```
 
-### Built-in Features
-
-- **Ownership enforcement** - `ownedByUser` preset blocks unauthorized access
-- **Organization scoping** - Automatic tenant filtering
-- **Pagination** - `{ data, pagination }` response format
-- **Consistent errors** - Standard error response format
+Query parsing comes from your database kit (MongoKit, PrismaKit, etc.).
 
 ## Additional Routes
 
-Add custom routes beyond CRUD:
+Add custom routes beyond CRUD.
 
 ```typescript
 import { requireRoles, allowPublic } from '@classytic/arc';
+import type { FastifyRequest, FastifyReply } from 'fastify';
 
 defineResource({
   name: 'product',
+  controller: productController,
   additionalRoutes: [
     {
-      method: 'POST',
-      path: '/import',
-      handler: 'importProducts',       // Controller method name
-      permissions: requireRoles(['admin']),
-      wrapHandler: true,               // Required: true=controller handler
-      summary: 'Bulk import',
+      method: 'GET',
+      path: '/featured',
+      handler: 'getFeatured',       // Controller method (Arc context)
+      permissions: allowPublic(),
+      wrapHandler: true,             // IRequestContext pattern
+      summary: 'Get featured products',
     },
     {
       method: 'GET',
-      path: '/stats',
-      handler: async (req, reply) => { // Fastify handler
-        return reply.send({ success: true, data: await getStats() });
+      path: '/:id/download',
+      handler: 'downloadFile',       // Fastify native handler
+      permissions: requireAuth(),
+      wrapHandler: false,            // Fastify request/reply
+      summary: 'Download product file',
+    },
+    {
+      method: 'POST',
+      path: '/import',
+      handler: async (req: IRequestContext) => {
+        // Inline handler (Arc context)
+        const result = await importProducts(req.body);
+        return { success: true, data: result };
       },
-      permissions: allowPublic(),
-      wrapHandler: false,              // Required: false=Fastify handler
+      permissions: requireRoles(['admin']),
+      wrapHandler: true,
     },
   ],
 });
+```
+
+### Handler Patterns
+
+**Arc Context Pattern** (`wrapHandler: true`):
+
+```typescript
+class ProductController extends BaseController {
+  async getFeatured(req: IRequestContext): Promise<IControllerResponse> {
+    const { organizationId, metadata, user } = req;
+
+    const products = await this.repository.findAll({
+      filter: { isFeatured: true, organizationId },
+    });
+
+    return { success: true, data: products };
+  }
+}
+```
+
+**Fastify Native Pattern** (`wrapHandler: false`):
+
+```typescript
+class ProductController extends BaseController {
+  async downloadFile(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = request.params as { id: string };
+    const file = await this.repository.getFile(id);
+
+    reply.header('Content-Type', file.mimeType);
+    reply.header('Content-Disposition', `attachment; filename="${file.name}"`);
+
+    return reply.send(file.buffer);
+  }
+}
+```
+
+**When to use which:**
+- Arc context: Standard CRUD, business logic, JSON responses
+- Fastify native: File downloads, streaming, custom headers, redirects
+
+See [Handler Patterns Guide](./ARC_HANDLER_PATTERNS.md) for detailed comparison.
+
+## Using Metadata
+
+Pass custom data between hooks, policies, and controllers:
+
+```typescript
+// In a hook
+beforeCreate('product', async (context) => {
+  context.metadata = { calculatedPrice: calculatePrice(context.data) };
+});
+
+// In controller
+async create(req: IRequestContext): Promise<IControllerResponse> {
+  const calculatedPrice = req.metadata?.calculatedPrice;
+
+  const product = await this.repository.create({
+    ...req.body,
+    price: calculatedPrice,
+  });
+
+  return { success: true, data: product };
+}
 ```
 
 ## Validation
@@ -153,43 +260,89 @@ Arc validates configs at definition time (fail-fast):
 ```typescript
 defineResource({
   name: 'product',
-  repository: null,  // ← Throws immediately
+  adapter: null,  // Throws immediately
   controller: productController,
 });
 
 // Error:
 // Resource "product" validation failed:
 // ERRORS:
-//   ✗ repository: Repository is required
+//   ✗ adapter: Adapter is required
 ```
 
 **Validated:**
-- Required fields (name, repository, controller)
+- Required fields (name, adapter, controller)
 - Controller methods exist
 - Preset names are valid
 - Permission keys match routes
+- wrapHandler matches handler signature
 
 ## createCrudRouter (Advanced)
 
 Low-level route creation. Used internally by defineResource.
 
-> **Warning:** When using `createCrudRouter` directly (instead of `defineResource`), you MUST provide the `resourceName` option, otherwise lifecycle hooks will not execute. If you need hooks, use `defineResource()` instead.
-
 ```typescript
 import { createCrudRouter } from '@classytic/arc';
 
 createCrudRouter(fastify, controller, {
-  resourceName: 'product',  // ⚠️ Required for hooks to work!
+  resourceName: 'product',  // Required for hooks!
   tag: 'Products',
   schemas: crudSchemas,
-  auth: { create: ['admin'] },
-  middlewares: { create: [validateProduct] },
+  permissions: {
+    list: allowPublic(),
+    create: requireRoles(['admin']),
+  },
   additionalRoutes: [...],
 });
 ```
 
-**Why `defineResource` is recommended:**
-- Automatically sets `resourceName` for hook execution
-- Provides validation of config at definition time
-- Centralized resource registration
-- Better TypeScript integration
+**Warning:** When using `createCrudRouter` directly, you MUST provide `resourceName` for hooks to work. Use `defineResource()` instead for automatic resource registration.
+
+## TypeScript Interfaces
+
+```typescript
+import type {
+  IRequestContext,
+  IControllerResponse,
+  IController,
+} from '@classytic/arc';
+
+// Strict controller interface
+class ProductController implements IController<Product> {
+  async list(req: IRequestContext): Promise<IControllerResponse<{ docs: Product[]; total: number }>> {
+    // Implementation
+  }
+
+  async get(req: IRequestContext): Promise<IControllerResponse<Product>> {
+    // Implementation
+  }
+
+  async create(req: IRequestContext): Promise<IControllerResponse<Product>> {
+    // Implementation
+  }
+
+  async update(req: IRequestContext): Promise<IControllerResponse<Product>> {
+    // Implementation
+  }
+
+  async delete(req: IRequestContext): Promise<IControllerResponse<{ message: string }>> {
+    // Implementation
+  }
+}
+```
+
+## Best Practices
+
+1. **Use Arc context by default** - Only use Fastify native for special cases
+2. **Pass data via metadata** - Use `req.metadata` for hook/policy data
+3. **Validate early** - Return errors with proper status codes
+4. **Type your responses** - Use `IControllerResponse<T>` generics
+5. **Keep controllers thin** - Business logic in services/repositories
+6. **Use presets** - Don't reinvent softDelete, multiTenant, etc.
+
+## See Also
+
+- [Handler Patterns Guide](./ARC_HANDLER_PATTERNS.md) - Detailed comparison of patterns
+- [Presets](./presets.md) - Reusable behaviors
+- [Hooks](./hooks.md) - Lifecycle callbacks
+- [Permissions](./permissions.md) - Access control

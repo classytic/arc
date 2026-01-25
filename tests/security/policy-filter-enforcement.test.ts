@@ -6,8 +6,8 @@
  *
  * CRITICAL: Prevents cross-tenant data access.
  *
- * NOTE: Policy filters are set by permission middleware via context.context._policyFilters
- * (NOT context.query._policyFilters which can be user-supplied and is stripped out)
+ * NOTE: Policy filters are set by permission middleware via req.metadata._policyFilters
+ * (NOT req.query._policyFilters which can be user-supplied and is stripped out)
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -19,13 +19,13 @@ import type { IRequestContext, CrudRepository, AnyRecord } from '../../src/types
  * Policy filters are set by permission middleware, not query params
  */
 function createContextWithPolicyFilters(
-  base: Omit<IRequestContext, 'context'>,
+  base: Omit<IRequestContext, 'metadata'>,
   policyFilters?: AnyRecord,
   arcContext?: AnyRecord
 ): IRequestContext {
   return {
     ...base,
-    context: {
+    metadata: {
       ...arcContext,
       _policyFilters: policyFilters,
     },
