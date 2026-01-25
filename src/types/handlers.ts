@@ -27,8 +27,8 @@ export interface IRequestContext {
   headers: Record<string, string | undefined>;
   /** Organization ID (for multi-tenant apps) */
   organizationId?: string;
-  /** Additional context data */
-  context?: Record<string, unknown>;
+  /** Additional metadata and custom fields */
+  metadata?: Record<string, unknown>;
 }
 
 /**
@@ -52,13 +52,13 @@ export interface IControllerResponse<T = unknown> {
 /**
  * Controller handler - Arc's standard pattern
  *
- * Receives a context object, returns IControllerResponse.
+ * Receives a request context object, returns IControllerResponse.
  * Use with `wrapHandler: true` in additionalRoutes.
  *
  * @example
  * ```typescript
- * const createProduct: ControllerHandler<Product> = async (ctx) => {
- *   const product = await productRepo.create(ctx.body);
+ * const createProduct: ControllerHandler<Product> = async (req) => {
+ *   const product = await productRepo.create(req.body);
  *   return { success: true, data: product, status: 201 };
  * };
  *
@@ -72,7 +72,7 @@ export interface IControllerResponse<T = unknown> {
  * ```
  */
 export type ControllerHandler<T = unknown> = (
-  context: IRequestContext
+  req: IRequestContext
 ) => Promise<IControllerResponse<T>>;
 
 /**
@@ -112,11 +112,11 @@ export type RouteHandler = ControllerHandler | FastifyHandler;
  * Controller interface for CRUD operations (strict)
  */
 export interface IController<TDoc = unknown> {
-  list(context: IRequestContext): Promise<IControllerResponse<{ docs: TDoc[]; total: number }>>;
-  get(context: IRequestContext): Promise<IControllerResponse<TDoc>>;
-  create(context: IRequestContext): Promise<IControllerResponse<TDoc>>;
-  update(context: IRequestContext): Promise<IControllerResponse<TDoc>>;
-  delete(context: IRequestContext): Promise<IControllerResponse<{ message: string }>>;
+  list(req: IRequestContext): Promise<IControllerResponse<{ docs: TDoc[]; total: number }>>;
+  get(req: IRequestContext): Promise<IControllerResponse<TDoc>>;
+  create(req: IRequestContext): Promise<IControllerResponse<TDoc>>;
+  update(req: IRequestContext): Promise<IControllerResponse<TDoc>>;
+  delete(req: IRequestContext): Promise<IControllerResponse<{ message: string }>>;
 }
 
 /**

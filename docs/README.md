@@ -1,157 +1,140 @@
-# Arc Framework
+# Arc Documentation
 
-Resource-oriented backend framework for Fastify + MongoDB.
+Resource-oriented framework for Fastify + MongoDB. Define once, get routes, validation, permissions, and docs.
 
-**Define once → Routes, validation, permissions, docs generated.**
+## Quick Links
 
-## Install
+| Guide | Purpose |
+|-------|---------|
+| [Setup](./setup.md) | Installation and quick start |
+| [Core](./core.md) | Resources, controllers, adapters |
+| [Auth](./auth.md) | JWT authentication and permissions |
+| [Presets](./presets.md) | Reusable behaviors (softDelete, multiTenant, etc.) |
+| [Factory](./factory.md) | Production-ready app creation |
+| [Hooks](./hooks.md) | Lifecycle callbacks |
+| [Handler Patterns](./ARC_HANDLER_PATTERNS.md) | Arc context vs Fastify native handlers |
+| [Org/Multi-tenant](./org.md) | Organization scoping |
+| [Events](./events.md) | Domain events |
+| [OpenAPI](./openapi.md) | Auto-generated API docs |
 
-```bash
-npm install @classytic/arc
-# Recommended: Add MongoKit for rich query parsing and schema generation
-npm install @classytic/mongokit
-```
-
-## 5-Minute Quick Start
+## Quick Example
 
 ```typescript
-import Fastify from 'fastify';
-import { defineResource, BaseController, BaseRepository } from '@classytic/arc';
-import Product from './models/Product.js';
+import { defineResource, BaseController } from '@classytic/arc';
+import type { IRequestContext, IControllerResponse } from '@classytic/arc';
 
-// 1. Create repository and controller
-const productRepo = new BaseRepository(Product);
-const productController = new BaseController(productRepo);
+// Controller
+class ProductController extends BaseController {
+  async getFeatured(req: IRequestContext): Promise<IControllerResponse> {
+    const products = await this.repository.findAll({
+      filter: { isFeatured: true },
+    });
+    return { success: true, data: products };
+  }
+}
 
-// 2. Define resource
+// Resource
 const productResource = defineResource({
   name: 'product',
-  model: Product,
-  repository: productRepo,
-  controller: productController,
-  presets: ['softDelete'],
+  adapter: createMongooseAdapter({ model: Product, repository: productRepo }),
+  controller: new ProductController(productRepo),
+  presets: ['softDelete', 'slugLookup'],
   permissions: {
-    list: [],           // Public
-    get: [],            // Public
-    create: ['admin'],  // Admin only
-    update: ['admin'],
-    delete: ['admin'],
+    list: allowPublic(),
+    get: allowPublic(),
+    create: requireRoles(['admin']),
+    update: requireRoles(['admin']),
+    delete: requireRoles(['admin']),
   },
-});
-
-// 3. Register with Fastify
-const fastify = Fastify({ logger: true });
-await fastify.register(productResource.toPlugin());
-await fastify.listen({ port: 3000 });
-```
-
-**Result:** Full REST API at `/products` with validation, auth, soft-delete.
-
-## What You Get
-
-| Feature | Description |
-|---------|-------------|
-| **CRUD Routes** | `GET /`, `GET /:id`, `POST /`, `PATCH /:id`, `DELETE /:id` |
-| **Query Parsing** | `?price[gte]=100&sort=-createdAt&page=2&populate=category` |
-| **Role-Based Auth** | Per-route permissions via `permissions` config |
-| **Presets** | `softDelete`, `slugLookup`, `tree`, `ownedByUser`, `multiTenant` |
-| **Validation** | Fail-fast config validation with clear error messages |
-| **OpenAPI** | Auto-generated spec + Scalar UI |
-
-## Documentation
-
-| Module | Purpose |
-|--------|---------|
-| [Core](./core.md) | `defineResource`, `BaseController`, `BaseRepository` |
-| [Presets](./presets.md) | Reusable behaviors: softDelete, tree, ownedByUser |
-| [Auth](./auth.md) | JWT + role-based authorization |
-| [Org](./org.md) | Multi-tenant organization scoping |
-| [Hooks](./hooks.md) | Lifecycle callbacks (before/after CRUD) |
-| [Events](./events.md) | Domain events with pluggable transports |
-| [Plugins](./plugins.md) | Health checks, request ID, graceful shutdown |
-| [Audit](./audit.md) | Audit trail with pluggable stores |
-| [OpenAPI](./openapi.md) | API documentation with Scalar UI |
-| [Idempotency](./idempotency.md) | Safe request retries |
-
-## Architecture
-
-```
-defineResource(config)
-       ↓
-  Apply Presets → Add routes, middlewares, schema options
-       ↓
-  Validate Config → Fail-fast with clear errors
-       ↓
-  ResourceDefinition
-       ↓
-  toPlugin() → Fastify plugin with all routes
-```
-
-## MongoKit Integration
-
-Arc auto-detects `@classytic/mongokit` when installed:
-
-```typescript
-// Rich query parsing (automatic)
-// GET /products?price[gte]=100&sort=-createdAt&populate=category
-
-// OpenAPI schemas from Mongoose models (automatic)
-await fastify.register(openApiPlugin);
-// → Real schemas instead of placeholders
-```
-
-No configuration needed - just install MongoKit.
-
-## Production Checklist
-
-| Concern | Development | Production |
-|---------|-------------|------------|
-| Idempotency | MemoryStore | RedisStore / MongoStore |
-| Audit | MemoryStore | MongoAuditStore |
-| Events | MemoryTransport | Redis / RabbitMQ / Kafka |
-| Sessions | JWT (stateless) | JWT (stateless) |
-
-In-memory stores are dev-friendly. Swap to durable stores for production.
-
-## Example: Full Resource
-
-```typescript
-import { defineResource, BaseController, BaseRepository } from '@classytic/arc';
-
-const orderResource = defineResource({
-  name: 'order',
-  model: Order,
-  repository: new BaseRepository(Order),
-  controller: new OrderController(),
-
-  // Behaviors
-  presets: [
-    'softDelete',
-    { name: 'ownedByUser', ownerField: 'customerId' },
-  ],
-
-  // Auth
-  permissions: {
-    list: ['admin'],
-    get: ['admin', 'customer'],
-    create: ['customer'],
-    update: ['admin'],
-    delete: ['admin'],
-    deleted: ['admin'],
-    restore: ['admin'],
-  },
-
-  // Multi-tenant
-  organizationScoped: true,
-
-  // Custom routes
   additionalRoutes: [
     {
-      method: 'POST',
-      path: '/:id/cancel',
-      handler: 'cancelOrder',
-      authRoles: ['admin', 'customer'],
+      method: 'GET',
+      path: '/featured',
+      handler: 'getFeatured',
+      permissions: allowPublic(),
+      wrapHandler: true, // Arc context pattern
     },
   ],
 });
+
+// Register
+await app.register(productResource.toPlugin());
 ```
+
+## Handler Patterns
+
+Arc supports two patterns:
+
+### 1. Arc Context (Recommended)
+
+Use for standard API endpoints:
+
+```typescript
+async getProducts(req: IRequestContext): Promise<IControllerResponse> {
+  const { organizationId, user } = req;
+  const products = await this.repository.findAll({ filter: { organizationId } });
+  return { success: true, data: products };
+}
+
+// additionalRoutes: [{ handler: 'getProducts', wrapHandler: true }]
+```
+
+### 2. Fastify Native
+
+Use for files, streaming, custom headers:
+
+```typescript
+async downloadFile(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  const file = await getFile(request.params.id);
+  reply.header('Content-Type', file.mimeType);
+  return reply.send(file.buffer);
+}
+
+// additionalRoutes: [{ handler: 'downloadFile', wrapHandler: false }]
+```
+
+## Core Concepts
+
+### Request Context
+
+```typescript
+interface IRequestContext {
+  params: Record<string, string>;        // Route params
+  query: Record<string, unknown>;        // Query string
+  body: unknown;                         // Request body
+  user: UserBase | null;                 // Authenticated user
+  headers: Record<string, string | undefined>; // Headers
+  organizationId?: string;               // Multi-tenant org ID
+  metadata?: Record<string, unknown>;    // Custom data from hooks/policies
+}
+```
+
+### Response Format
+
+```typescript
+interface IControllerResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  status?: number;       // Default: 200 for success, 400 for error
+  meta?: Record<string, unknown>;
+  details?: Record<string, unknown>;
+}
+```
+
+## Key Features
+
+- **Arc Context Pattern** - Framework-agnostic, clean API
+- **Native Fastify Support** - Full control when needed
+- **Auto-generated Routes** - CRUD + custom routes
+- **Presets** - Reusable behaviors (softDelete, multiTenant, tree, etc.)
+- **Type-Safe** - Full TypeScript support
+- **Multi-tenant** - Built-in organization scoping
+- **OpenAPI** - Auto-generated documentation
+
+## Next Steps
+
+1. [Quick Start Guide](./setup.md) - Get up and running in 5 minutes
+2. [Handler Patterns](./ARC_HANDLER_PATTERNS.md) - Choose the right pattern
+3. [Core Concepts](./core.md) - Understand resources and adapters
+4. [Production Deployment](./factory.md) - Secure by default configuration

@@ -437,6 +437,26 @@ export interface OpenApiSchemas {
   updateBody?: unknown;
   params?: unknown;
   listQuery?: unknown;
+  /**
+   * Explicit response schema for OpenAPI documentation.
+   * If provided, this will be used as-is for the response schema.
+   * If not provided, response schema is auto-generated from createBody.
+   *
+   * Note: This is for OpenAPI docs only - does NOT affect Fastify serialization.
+   *
+   * @example
+   * response: {
+   *   type: 'object',
+   *   properties: {
+   *     _id: { type: 'string' },
+   *     name: { type: 'string' },
+   *     email: { type: 'string' },
+   *     // Exclude password, include virtuals
+   *     fullName: { type: 'string' },
+   *   }
+   * }
+   */
+  response?: unknown;
   [key: string]: unknown;
 }
 

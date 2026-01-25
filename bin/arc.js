@@ -4,15 +4,18 @@
  * Arc CLI - Smart Backend Framework
  *
  * Commands:
- *   arc generate resource <name> [options]   Generate a new resource
- *   arc generate controller <name>           Generate a controller only
- *   arc generate model <name>                Generate a model only
- *   arc introspect                           Show all registered resources
- *   arc docs [output-path]                   Export OpenAPI specification
+ *   arc init [name]                   Initialize a new Arc project
+ *   arc generate resource <name>      Generate a new resource
+ *   arc generate controller <name>    Generate a controller only
+ *   arc generate model <name>         Generate a model only
+ *   arc introspect                    Show all registered resources
+ *   arc docs [output-path]            Export OpenAPI specification
  *
  * Examples:
- *   arc generate resource product --module catalog
- *   arc generate resource invoice --presets softDelete,multiTenant
+ *   arc init my-api
+ *   arc init my-api --mongokit --single --ts
+ *   arc generate resource product
+ *   arc g r invoice
  *   arc introspect
  *   arc docs ./openapi.json
  */
@@ -60,6 +63,11 @@ const [command, subcommand, ...rest] = args;
 async function main() {
   try {
     switch (command) {
+      case 'init':
+      case 'new':
+        await handleInit(subcommand ? [subcommand, ...rest] : rest);
+        break;
+
       case 'generate':
       case 'g':
         await handleGenerate(subcommand, rest);
@@ -76,12 +84,12 @@ async function main() {
         break;
 
       default:
-        console.error(`❌ Unknown command: ${command}`);
+        console.error(`Unknown command: ${command}`);
         console.error('Run "arc --help" for usage');
         process.exit(1);
     }
   } catch (err) {
-    console.error(`❌ Error: ${err.message}`);
+    console.error(`Error: ${err.message}`);
     if (process.env.DEBUG) {
       console.error(err.stack);
     }
@@ -93,13 +101,19 @@ async function main() {
 // Command Handlers
 // ============================================================================
 
+async function handleInit(args) {
+  const options = parseInitOptions(args);
+  const { init } = await import('../dist/cli/commands/init.js');
+  await init(options);
+}
+
 async function handleGenerate(type, args) {
   if (!type) {
-    console.error('❌ Missing type argument');
-    console.log('\nUsage: arc generate <resource|controller|model> <name> [options]');
+    console.error('Missing type argument');
+    console.log('\nUsage: arc generate <resource|controller|model|repository|schemas> <name>');
     console.log('\nExamples:');
-    console.log('  arc generate resource product --module catalog');
-    console.log('  arc g r invoice --presets softDelete,multiTenant');
+    console.log('  arc generate resource product');
+    console.log('  arc g r invoice');
     process.exit(1);
   }
 
@@ -108,30 +122,32 @@ async function handleGenerate(type, args) {
     r: 'resource',
     c: 'controller',
     m: 'model',
+    repo: 'repository',
+    s: 'schemas',
     resource: 'resource',
     controller: 'controller',
     model: 'model',
+    repository: 'repository',
+    schemas: 'schemas',
   };
 
   const normalizedType = typeMap[type.toLowerCase()];
   if (!normalizedType) {
-    console.error(`❌ Unknown type: ${type}`);
-    console.log('Available types: resource (r), controller (c), model (m)');
+    console.error(`Unknown type: ${type}`);
+    console.log('Available types: resource (r), controller (c), model (m), repository (repo), schemas (s)');
     process.exit(1);
   }
 
   const name = args[0];
   if (!name) {
-    console.error('❌ Missing name argument');
-    console.log(`\nUsage: arc generate ${normalizedType} <name> [options]`);
+    console.error('Missing name argument');
+    console.log(`\nUsage: arc generate ${normalizedType} <name>`);
     process.exit(1);
   }
 
-  const options = parseGenerateOptions(args.slice(1));
-
   // Import and run
-  const { generate } = await import('../dist/cli/index.js');
-  await generate(normalizedType, name, options);
+  const { generate } = await import('../dist/cli/commands/generate.js');
+  await generate(normalizedType, args);
 }
 
 async function handleIntrospect(args) {
@@ -143,11 +159,11 @@ async function handleIntrospect(args) {
     const absolutePath = resolve(process.cwd(), entryPath);
     const fileUrl = pathToFileURL(absolutePath).href;
 
-    console.log(`📦 Loading resources from: ${entryPath}\n`);
+    console.log(`Loading resources from: ${entryPath}\n`);
     try {
       await import(fileUrl);
     } catch (err) {
-      console.error(`❌ Failed to load entry file: ${err.message}`);
+      console.error(`Failed to load entry file: ${err.message}`);
       if (process.env.DEBUG) {
         console.error(err.stack);
       }
@@ -168,11 +184,11 @@ async function handleDocs(args) {
     const absolutePath = resolve(process.cwd(), entryPath);
     const fileUrl = pathToFileURL(absolutePath).href;
 
-    console.log(`📦 Loading resources from: ${entryPath}\n`);
+    console.log(`Loading resources from: ${entryPath}\n`);
     try {
       await import(fileUrl);
     } catch (err) {
-      console.error(`❌ Failed to load entry file: ${err.message}`);
+      console.error(`Failed to load entry file: ${err.message}`);
       if (process.env.DEBUG) {
         console.error(err.stack);
       }
@@ -190,57 +206,54 @@ async function handleDocs(args) {
 // Option Parsing
 // ============================================================================
 
-function parseGenerateOptions(args) {
+function parseInitOptions(args) {
   const opts = {
-    module: undefined,
-    presets: [],
-    parentField: 'parent',
-    withTests: true,
-    dryRun: false,
+    name: undefined,
+    adapter: undefined,
+    tenant: undefined,
+    typescript: undefined,
+    skipInstall: false,
     force: false,
-    typescript: true, // Default to TypeScript
-    outputDir: process.cwd(),
   };
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     const next = args[i + 1];
 
+    // First non-flag argument is the project name
+    if (!arg.startsWith('-') && !opts.name) {
+      opts.name = arg;
+      continue;
+    }
+
     switch (arg) {
-      case '--module':
-      case '-m':
-        opts.module = next;
+      case '--name':
+      case '-n':
+        opts.name = next;
         i++;
         break;
 
-      case '--presets':
-      case '-p':
-        opts.presets = next?.split(',').map((p) => p.trim()).filter(Boolean) || [];
-        i++;
+      case '--mongokit':
+        opts.adapter = 'mongokit';
         break;
 
-      case '--parent-field':
-        opts.parentField = next;
-        i++;
+      case '--custom':
+        opts.adapter = 'custom';
         break;
 
-      case '--output':
-      case '-o':
-        opts.outputDir = next;
-        i++;
+      case '--multi-tenant':
+      case '--multi':
+        opts.tenant = 'multi';
         break;
 
-      case '--no-tests':
-        opts.withTests = false;
+      case '--single-tenant':
+      case '--single':
+        opts.tenant = 'single';
         break;
 
-      case '--dry-run':
-        opts.dryRun = true;
-        break;
-
-      case '--force':
-      case '-f':
-        opts.force = true;
+      case '--ts':
+      case '--typescript':
+        opts.typescript = true;
         break;
 
       case '--js':
@@ -248,9 +261,13 @@ function parseGenerateOptions(args) {
         opts.typescript = false;
         break;
 
-      case '--ts':
-      case '--typescript':
-        opts.typescript = true;
+      case '--skip-install':
+        opts.skipInstall = true;
+        break;
+
+      case '--force':
+      case '-f':
+        opts.force = true;
         break;
     }
   }
@@ -264,15 +281,14 @@ function parseGenerateOptions(args) {
 
 function printHelp() {
   console.log(`
-╔═══════════════════════════════════════════════════════════════╗
-║                    🔥 Arc CLI v${VERSION}                         ║
-║         Resource-Oriented Backend Framework                   ║
-╚═══════════════════════════════════════════════════════════════╝
+Arc CLI v${VERSION}
+Resource-Oriented Backend Framework
 
 USAGE
   arc <command> [options]
 
 COMMANDS
+  init, new       Initialize a new Arc project
   generate, g     Generate resources, controllers, or models
   introspect, i   Show all registered resources
   docs, d         Export OpenAPI specification
@@ -283,56 +299,55 @@ GLOBAL OPTIONS
   --version, -v            Show version
   --help, -h               Show this help
 
-GENERATE SUBCOMMANDS
-  resource, r     Generate full resource (model, repo, controller, routes)
-  controller, c   Generate controller only
-  model, m        Generate model only
+INIT OPTIONS
+  --mongokit               Use MongoKit adapter (default, recommended)
+  --custom                 Use custom adapter (empty template)
+  --multi-tenant, --multi  Multi-tenant mode (adds org scoping)
+  --single-tenant, --single Single-tenant mode (default)
+  --ts, --typescript       Generate TypeScript (default)
+  --js, --javascript       Generate JavaScript
+  --force, -f              Overwrite existing directory
+  --skip-install           Skip npm install after scaffolding
 
-GENERATE OPTIONS
-  --module, -m <name>      Parent module (e.g., catalog, sales)
-  --presets, -p <list>     Comma-separated presets:
-                           • softDelete   - Soft delete with restore
-                           • slugLookup   - GET by slug endpoint
-                           • ownedByUser  - User ownership checks
-                           • multiTenant  - Organization scoping
-                           • tree         - Hierarchical data support
-                           • audited      - Audit logging
-  --parent-field <name>    Custom parent field for tree preset
-  --output, -o <path>      Output directory (default: cwd)
-  --no-tests               Skip test file generation
-  --dry-run                Preview without creating files
-  --force, -f              Overwrite existing files
-  --js, --javascript       Generate JavaScript (default: TypeScript)
+GENERATE SUBCOMMANDS
+  resource, r       Generate full resource (model, repo, controller, schemas, resource)
+  controller, c     Generate controller only
+  model, m          Generate model only
+  repository, repo  Generate repository only
+  schemas, s        Generate schemas only
+
+GENERATE NOTES
+  - Auto-detects TypeScript/JavaScript from tsconfig.json
+  - Files are created in src/resources/<name>/ directory
+  - Uses prefixed filenames: <name>.model.ts, <name>.repository.ts, etc.
 
 EXAMPLES
-  # Generate a product resource in catalog module
-  arc generate resource product --module catalog
+  # Initialize a new project (interactive prompts)
+  arc init my-api
 
-  # Generate with presets (shorthand)
-  arc g r invoice -m finance -p softDelete,multiTenant
+  # Initialize with all options (non-interactive)
+  arc init my-api --mongokit --single --ts
 
-  # Generate controller only
+  # Initialize a JavaScript single-tenant app
+  arc init my-api --mongokit --single --js
+
+  # Generate a product resource
+  arc generate resource product
+
+  # Shorthand for generating a resource
+  arc g r invoice
+
+  # Generate only a controller
   arc g controller auth
 
-  # Preview what would be generated
-  arc g r order --dry-run
+  # Generate only a model
+  arc g model order
 
   # Export OpenAPI spec (load resources first)
-  arc docs ./docs/openapi.json --entry ./index.js
+  arc docs ./docs/openapi.json --entry ./dist/index.js
 
-  # Show registered resources (load resources first)
-  arc introspect --entry ./index.js
-
-  # Quick introspect (if resources already loaded)
-  arc introspect
-
-PRESETS EXPLAINED
-  softDelete     Adds: deletedAt field, GET /deleted, POST /:id/restore
-  slugLookup     Adds: slug field, GET /slug/:slug endpoint
-  ownedByUser    Adds: createdBy field, ownership validation
-  multiTenant    Adds: organizationId field, org scoping middleware
-  tree           Adds: parent field, GET /tree, GET /:id/children
-  audited        Adds: audit log entries for all mutations
+  # Show registered resources
+  arc introspect --entry ./dist/index.js
 
 MORE INFO
   Documentation: https://github.com/classytic/arc

@@ -281,7 +281,14 @@ export default defineResource({
       path: '/featured',
       handler: 'getFeatured',        // Controller method name
       permissions: allowPublic(),    // Permission function
-      wrapHandler: true,             // Required: true=controller, false=fastify
+      wrapHandler: true,             // Arc context pattern (IRequestContext)
+    },
+    {
+      method: 'GET',
+      path: '/:id/download',
+      handler: 'downloadFile',       // Fastify native handler
+      permissions: requireAuth(),
+      wrapHandler: false,            // Native Fastify (request, reply)
     },
   ],
 });
@@ -293,6 +300,7 @@ Extend BaseController for built-in security and CRUD:
 
 ```typescript
 import { BaseController } from '@classytic/arc';
+import type { IRequestContext, IControllerResponse } from '@classytic/arc';
 import type { ISoftDeleteController, ISlugLookupController } from '@classytic/arc/presets';
 
 // Type-safe controller with preset interfaces
@@ -302,21 +310,29 @@ class ProductController
 {
   constructor() {
     super(productRepository);
-
-    // TypeScript ensures these methods exist (required by presets)
-    this.getBySlug = this.getBySlug.bind(this);
-    this.getDeleted = this.getDeleted.bind(this);
-    this.restore = this.restore.bind(this);
   }
 
-  // Custom method
-  async getFeatured(req, reply) {
-    // Security checks applied automatically
+  // Custom method - Arc context pattern
+  async getFeatured(req: IRequestContext): Promise<IControllerResponse> {
+    const { organizationId } = req;
+
     const products = await this.repository.findAll({
-      filter: { isFeatured: true },
-      ...this._applyFilters(req),
+      filter: { isFeatured: true, organizationId },
     });
-    return reply.send({ success: true, data: products });
+
+    return { success: true, data: products };
+  }
+
+  // Preset methods
+  async getBySlug(req: IRequestContext): Promise<IControllerResponse> {
+    const { slug } = req.params;
+    const product = await this.repository.getBySlug(slug);
+
+    if (!product) {
+      return { success: false, error: 'Product not found', status: 404 };
+    }
+
+    return { success: true, data: product };
   }
 }
 ```
@@ -329,17 +345,36 @@ class ProductController
 
 **Note:** Presets like `multiTenant`, `ownedByUser`, and `audited` don't require controller methods—they work via middleware.
 
-### TypeScript Strict Mode
+### Request Context API
 
-For maximum type safety, use strict controller typing:
+Controller methods receive `req: IRequestContext`:
 
 ```typescript
-import { BaseController } from '@classytic/arc';
-import type { Document } from 'mongoose';
+interface IRequestContext {
+  params: Record<string, string>;           // Route params: /users/:id
+  query: Record<string, unknown>;           // Query string: ?page=1
+  body: unknown;                            // Request body
+  user: UserBase | null;                    // Authenticated user
+  headers: Record<string, string | undefined>; // Request headers
+  organizationId?: string;                  // Multi-tenant org ID
+  metadata?: Record<string, unknown>;       // Custom data, _policyFilters, middleware context
+}
+```
+
+**Key Fields:**
+- `req.metadata` - Custom data from hooks, policies, or middleware
+- `req.organizationId` - Set by `multiTenant` preset or org scope plugin
+- `req.user` - Set by auth plugin, preserves original auth structure
+
+### TypeScript Strict Mode
+
+For maximum type safety:
+
+```typescript
+import { BaseController, IRequestContext, IControllerResponse } from '@classytic/arc';
 import type { ISoftDeleteController, ISlugLookupController } from '@classytic/arc/presets';
 
-// Define your document type
-interface ProductDocument extends Document {
+interface Product {
   _id: string;
   name: string;
   slug: string;
@@ -347,43 +382,38 @@ interface ProductDocument extends Document {
   deletedAt?: Date;
 }
 
-// Strict controller with generics
 class ProductController
-  extends BaseController<ProductDocument>
-  implements
-    ISoftDeleteController<ProductDocument>,
-    ISlugLookupController<ProductDocument>
+  extends BaseController<Product>
+  implements ISoftDeleteController<Product>, ISlugLookupController<Product>
 {
-  // TypeScript enforces these method signatures
-  async getBySlug(req, reply): Promise<void> {
+  async getBySlug(req: IRequestContext): Promise<IControllerResponse<Product>> {
     const { slug } = req.params;
     const product = await this.repository.getBySlug(slug);
 
     if (!product) {
-      return reply.code(404).send({ error: 'Product not found' });
+      return { success: false, error: 'Product not found', status: 404 };
     }
 
-    return reply.send({ success: true, data: product });
+    return { success: true, data: product };
   }
 
-  async getDeleted(req, reply): Promise<void> {
+  async getDeleted(req: IRequestContext): Promise<IControllerResponse<Product[]>> {
     const products = await this.repository.findDeleted();
-    return reply.send({ success: true, data: products });
+    return { success: true, data: products };
   }
 
-  async restore(req, reply): Promise<void> {
+  async restore(req: IRequestContext): Promise<IControllerResponse<Product>> {
     const { id } = req.params;
     const product = await this.repository.restore(id);
-    return reply.send({ success: true, data: product });
+    return { success: true, data: product };
   }
 }
 ```
 
-**Benefits of strict typing:**
-- Compile-time checks for preset requirements
-- IntelliSense autocomplete for controller methods
-- Catch type mismatches before runtime
-- Refactoring safety across large codebases
+**Benefits:**
+- Compile-time type checking
+- IntelliSense autocomplete
+- Safe refactoring
 
 ### Repositories
 
