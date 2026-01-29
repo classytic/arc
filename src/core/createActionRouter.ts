@@ -14,6 +14,7 @@
  *
  * @example
  * import { createActionRouter } from '@classytic/arc';
+ * import { requireRoles } from '@classytic/arc/permissions';
  *
  * createActionRouter(fastify, {
  *   tag: 'Inventory - Transfers',
@@ -24,10 +25,10 @@
  *     cancel: async (id, data, req) => transferService.cancel(id, data.reason, req.user),
  *   },
  *   actionPermissions: {
- *     approve: ['admin', 'warehouse-manager'],
- *     dispatch: ['admin', 'warehouse-staff'],
- *     receive: ['admin', 'store-manager'],
- *     cancel: ['admin'],
+ *     approve: requireRoles(['admin', 'warehouse-manager']),
+ *     dispatch: requireRoles(['admin', 'warehouse-staff']),
+ *     receive: requireRoles(['admin', 'store-manager']),
+ *     cancel: requireRoles(['admin']),
  *   },
  *   actionSchemas: {
  *     dispatch: {
@@ -41,7 +42,7 @@
  */
 
 import type { FastifyInstance, FastifyRequest, FastifyReply, RouteOptions } from 'fastify';
-import type { RequestWithExtras } from '../types/index.js';
+import type { RequestWithExtras, PermissionCheck, PermissionContext, PermissionResult } from '../types/index.js';
 
 /**
  * Action handler function
@@ -72,10 +73,10 @@ export interface ActionRouterConfig {
   actions: Record<string, ActionHandler>;
 
   /**
-   * Per-action role requirements
-   * @example { approve: ['admin', 'manager'], cancel: ['admin'] }
+   * Per-action permission checks (PermissionCheck functions)
+   * @example { approve: requireRoles(['admin', 'manager']), cancel: requireRoles(['admin']) }
    */
-  actionPermissions?: Record<string, string[]>;
+  actionPermissions?: Record<string, PermissionCheck>;
 
   /**
    * Per-action JSON schema for body validation
@@ -84,9 +85,9 @@ export interface ActionRouterConfig {
   actionSchemas?: Record<string, Record<string, any>>;
 
   /**
-   * Global auth roles applied to all actions (if action-specific not defined)
+   * Global permission check applied to all actions (if action-specific not defined)
    */
-  globalAuth?: string[];
+  globalAuth?: PermissionCheck;
 
   /**
    * Optional idempotency service
@@ -133,7 +134,7 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
     actions,
     actionPermissions = {},
     actionSchemas = {},
-    globalAuth = [],
+    globalAuth,
     idempotencyService,
     onError,
   } = config;
@@ -210,15 +211,13 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
   // Build preHandlers
   const preHandler = [];
 
-  // Add global authentication if any roles specified
-  const allRequiredRoles = new Set(globalAuth);
-  Object.values(actionPermissions).forEach((roles) => {
-    if (Array.isArray(roles)) {
-      roles.forEach((r) => allRequiredRoles.add(r));
-    }
-  });
+  // Add authentication if any action permission requires it (not public)
+  const allPermissions = Object.values(actionPermissions);
+  const needsAuth = allPermissions.some(
+    (p) => !(p as PermissionCheck & { _isPublic?: boolean })?._isPublic
+  ) || (globalAuth && !(globalAuth as PermissionCheck & { _isPublic?: boolean })?._isPublic);
 
-  if (allRequiredRoles.size > 0 && (fastify as any).authenticate) {
+  if (needsAuth && (fastify as any).authenticate) {
     preHandler.push((fastify as any).authenticate);
   }
 
@@ -248,23 +247,36 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
       }
 
       // Check permissions: action-specific first, then fallback to globalAuth
-      const requiredRoles = actionPermissions[action]?.length
-        ? actionPermissions[action]
-        : globalAuth;
+      const permissionCheck = actionPermissions[action] ?? globalAuth;
 
-      if (requiredRoles?.length) {
-        const user = (req as RequestWithExtras).user;
-        if (!user) {
-          return reply.code(401).send({
-            success: false,
-            error: 'Authentication required',
-          });
-        }
-        if (!checkUserRoles(user, requiredRoles)) {
-          return reply.code(403).send({
-            success: false,
-            error: `Insufficient permissions for '${action}'. Required: ${requiredRoles.join(' or ')}`,
-          });
+      if (permissionCheck) {
+        const reqWithExtras = req as RequestWithExtras;
+        const context: PermissionContext = {
+          user: (reqWithExtras.user as any) ?? null,
+          request: req,
+          resource: tag ?? 'action',
+          action,
+          resourceId: id,
+          data,
+        };
+
+        const result = await permissionCheck(context);
+
+        if (typeof result === 'boolean') {
+          if (!result) {
+            return reply.code(context.user ? 403 : 401).send({
+              success: false,
+              error: context.user ? `Permission denied for '${action}'` : 'Authentication required',
+            });
+          }
+        } else {
+          const permResult = result as PermissionResult;
+          if (!permResult.granted) {
+            return reply.code(context.user ? 403 : 401).send({
+              success: false,
+              error: permResult.reason ?? (context.user ? `Permission denied for '${action}'` : 'Authentication required'),
+            });
+          }
         }
       }
 
@@ -343,40 +355,18 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
 }
 
 /**
- * Check if user has any of the required roles
- */
-function checkUserRoles(user: any, requiredRoles: string[]): boolean {
-  if (!user || !requiredRoles?.length) return true;
-
-  // Check single role field
-  if (user.role && requiredRoles.includes(user.role)) {
-    return true;
-  }
-
-  // Check roles array
-  if (Array.isArray(user.roles)) {
-    return user.roles.some((r: string) => requiredRoles.includes(r));
-  }
-
-  // Check via method if available
-  if (typeof user.hasAnyRole === 'function') {
-    return user.hasAnyRole(requiredRoles);
-  }
-
-  return false;
-}
-
-/**
  * Build description with action details
+ * Uses _roles metadata from PermissionCheck functions for OpenAPI docs
  */
 function buildActionDescription(
   actions: Record<string, ActionHandler>,
-  actionPermissions: Record<string, string[]>
+  actionPermissions: Record<string, PermissionCheck>
 ): string {
   const lines = ['Unified action endpoint for state transitions.\n\n**Available actions:**'];
 
   Object.keys(actions).forEach((action) => {
-    const roles = actionPermissions[action];
+    const perm = actionPermissions[action];
+    const roles = (perm as PermissionCheck & { _roles?: readonly string[] })?._roles;
     const roleStr = roles?.length ? ` (requires: ${roles.join(' or ')})` : '';
     lines.push(`- \`${action}\`${roleStr}`);
   });
