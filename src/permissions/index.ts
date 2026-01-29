@@ -51,8 +51,8 @@ import type {
  */
 export function allowPublic(): PermissionCheck {
   const check: PermissionCheck = () => true;
-  // Mark as public for OpenAPI documentation
-  (check as PermissionCheck & { _isPublic?: boolean })._isPublic = true;
+  // Mark as public for OpenAPI documentation and introspection
+  (check as any)._isPublic = true;
   return check;
 }
 
@@ -68,12 +68,13 @@ export function allowPublic(): PermissionCheck {
  * ```
  */
 export function requireAuth(): PermissionCheck {
-  return (ctx) => {
+  const check: PermissionCheck = (ctx) => {
     if (!ctx.user) {
       return { granted: false, reason: 'Authentication required' };
     }
     return true;
   };
+  return check;
 }
 
 /**
@@ -99,7 +100,7 @@ export function requireRoles(
   roles: readonly string[],
   options?: { bypassRoles?: readonly string[] }
 ): PermissionCheck {
-  return (ctx) => {
+  const check: PermissionCheck = (ctx) => {
     if (!ctx.user) {
       return { granted: false, reason: 'Authentication required' };
     }
@@ -121,6 +122,8 @@ export function requireRoles(
       reason: `Required roles: ${roles.join(', ')}`,
     };
   };
+  (check as any)._roles = roles;
+  return check;
 }
 
 /**

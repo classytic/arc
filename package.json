@@ -1,6 +1,6 @@
 {
   "name": "@classytic/arc",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Resource-oriented backend framework for Fastify + MongoDB",
   "type": "module",
   "exports": {
