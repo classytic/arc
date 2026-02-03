@@ -264,6 +264,8 @@ export class BaseController<
       sort: sortString,
       select: this._sanitizeSelect(selectString, this.schemaOptions),
       populate: this._sanitizePopulate(parsed.populate, this.schemaOptions),
+      // Advanced populate options from MongoKit QueryParser (takes precedence over simple populate)
+      populateOptions: parsed.populateOptions,
       filters: parsed.filters as AnyRecord,
       // MongoKit features
       search: parsed.search,
