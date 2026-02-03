@@ -141,11 +141,87 @@ GET /products?search=keyword
 # Pagination
 GET /products?page=2&limit=20
 
-# Relations
+# Relations (simple)
 GET /products?populate=category,brand
+
+# Relations with field selection (advanced)
+GET /products?populate[author][select]=name,email
 ```
 
-Query parsing comes from your database kit (MongoKit, PrismaKit, etc.).
+### Query Parsers
+
+Arc includes a built-in query parser but supports pluggable parsers from database kits:
+
+```typescript
+import { defineResource } from '@classytic/arc';
+import { QueryParser } from '@classytic/mongokit';
+
+// Use MongoKit's QueryParser for advanced MongoDB features
+const productResource = defineResource({
+  name: 'product',
+  adapter: createMongooseAdapter({ model: ProductModel, repository: productRepo }),
+  queryParser: new QueryParser(),  // MongoKit parser
+  // ...
+});
+```
+
+**Built-in Arc Parser:**
+- Basic filtering, sorting, pagination
+- Simple populate (comma-separated)
+- Works with any database adapter
+
+**MongoKit QueryParser:**
+- Advanced MongoDB operators ($lookup, $regex, etc.)
+- Nested populate with field selection
+- Search across multiple fields
+- Cursor-based pagination
+
+### Advanced Populate (populateOptions)
+
+When using MongoKit's QueryParser, you can select specific fields from populated documents:
+
+```bash
+# Select only name and email from the author relation
+GET /posts?populate[author][select]=name,email
+
+# Multiple populations with different selections
+GET /orders?populate[customer][select]=name,phone&populate[items][select]=name,price
+```
+
+This generates Mongoose-compatible populate options:
+
+```typescript
+// URL: ?populate[author][select]=name,email
+// Generates: { path: 'author', select: 'name email' }
+```
+
+**Supported populate options:**
+- `select` - Fields to include (space or comma separated)
+- `match` - Filter conditions for populated docs
+- Nested `populate` - Up to 5 levels deep
+
+### Custom Query Parsers
+
+Create custom parsers for other databases:
+
+```typescript
+import type { QueryParserInterface, ParsedQuery } from '@classytic/arc';
+
+class PgQueryParser implements QueryParserInterface {
+  parse(query: Record<string, unknown> | null | undefined): ParsedQuery {
+    // Parse URL query into database-specific format
+    return {
+      filters: this.parseFilters(query),
+      sort: this.parseSort(query?.sort),
+      page: Number(query?.page) || 1,
+      limit: Number(query?.limit) || 20,
+      // Add custom fields - ParsedQuery accepts [key: string]: unknown
+    };
+  }
+}
+```
+
+The `ParsedQuery` interface is flexible and accepts additional fields via index signature, allowing custom parsers to add database-specific options without breaking Arc's type system.
 
 ## Additional Routes
 

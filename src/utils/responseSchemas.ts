@@ -51,7 +51,10 @@ export const errorResponseSchema: JsonSchema = {
 };
 
 /**
- * Pagination schema
+ * Pagination schema - matches MongoKit/Arc runtime format
+ *
+ * Runtime format (flat fields):
+ * { page, limit, total, pages, hasNext, hasPrev }
  */
 export const paginationSchema: JsonSchema = {
   type: 'object',
@@ -59,11 +62,11 @@ export const paginationSchema: JsonSchema = {
     page: { type: 'integer', example: 1 },
     limit: { type: 'integer', example: 20 },
     total: { type: 'integer', example: 100 },
-    totalPages: { type: 'integer', example: 5 },
-    hasNextPage: { type: 'boolean', example: true },
-    hasPrevPage: { type: 'boolean', example: false },
+    pages: { type: 'integer', example: 5 },
+    hasNext: { type: 'boolean', example: true },
+    hasPrev: { type: 'boolean', example: false },
   },
-  required: ['page', 'limit', 'total', 'totalPages', 'hasNextPage', 'hasPrevPage'],
+  required: ['page', 'limit', 'total', 'pages', 'hasNext', 'hasPrev'],
 };
 
 // ============================================================================
@@ -85,29 +88,52 @@ export function wrapResponse(dataSchema: JsonSchema): JsonSchema {
 }
 
 /**
- * Create a list response schema with pagination
+ * Create a list response schema with pagination - matches MongoKit/Arc runtime format
+ *
+ * Runtime format:
+ * { success, docs: [...], page, limit, total, pages, hasNext, hasPrev }
+ *
+ * Note: Uses 'docs' array (not 'data') with flat pagination fields
  */
 export function listResponse(itemSchema: JsonSchema): JsonSchema {
   return {
     type: 'object',
     properties: {
       success: { type: 'boolean', example: true },
-      data: {
+      docs: {
         type: 'array',
         items: itemSchema,
       },
-      pagination: paginationSchema,
+      // Flat pagination fields (not nested)
+      page: { type: 'integer', example: 1 },
+      limit: { type: 'integer', example: 20 },
+      total: { type: 'integer', example: 100 },
+      pages: { type: 'integer', example: 5 },
+      hasNext: { type: 'boolean', example: false },
+      hasPrev: { type: 'boolean', example: false },
     },
-    required: ['success', 'data'],
+    required: ['success', 'docs'],
   };
 }
 
 /**
+ * Alias for listResponse - matches local responseSchemas.js naming
+ */
+export const paginateWrapper = listResponse;
+
+/**
  * Create a single item response schema
+ *
+ * Runtime format: { success, data: {...} }
  */
 export function itemResponse(itemSchema: JsonSchema): JsonSchema {
   return wrapResponse(itemSchema);
 }
+
+/**
+ * Alias for itemResponse - matches local responseSchemas.js naming
+ */
+export const itemWrapper = itemResponse;
 
 /**
  * Create a create/update response schema
@@ -126,6 +152,8 @@ export function mutationResponse(itemSchema: JsonSchema): JsonSchema {
 
 /**
  * Create a delete response schema
+ *
+ * Runtime format: { success, message }
  */
 export function deleteResponse(): JsonSchema {
   return {
@@ -137,6 +165,11 @@ export function deleteResponse(): JsonSchema {
     required: ['success'],
   };
 }
+
+/**
+ * Alias for deleteResponse - matches local responseSchemas.js naming
+ */
+export const messageWrapper = deleteResponse;
 
 // ============================================================================
 // HTTP Status Response Schemas

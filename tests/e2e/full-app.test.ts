@@ -150,13 +150,12 @@ describe('Full Application E2E', () => {
       const payload = JSON.parse(response.payload);
 
       expect(payload.success).toBe(true);
-      // Check if data exists before assertions
-      if (payload && payload.data) {
-        expect(payload.data.length).toBeGreaterThanOrEqual(1);
-        expect(payload.data[0].name).toBe('Test Product');
-        // MongoKit returns pagination at top level
-        expect(payload.total).toBeGreaterThanOrEqual(1);
-      }
+      // Arc/MongoKit uses 'docs' array (not 'data') with flat pagination
+      expect(payload.docs).toBeDefined();
+      expect(payload.docs.length).toBeGreaterThanOrEqual(1);
+      expect(payload.docs[0].name).toBe('Test Product');
+      // Pagination fields are flat (not nested)
+      expect(payload.total).toBeGreaterThanOrEqual(1);
     });
 
     it('should get product by ID', async () => {
@@ -243,11 +242,10 @@ describe('Full Application E2E', () => {
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
 
-      // MongoKit filters should work
-      if (payload && payload.data) {
-        const filteredProducts = payload.data.filter((p: any) => p.price >= 40 && p.price <= 100);
-        expect(filteredProducts.length).toBeGreaterThanOrEqual(1);
-      }
+      // Arc/MongoKit uses 'docs' for list responses
+      expect(payload.docs).toBeDefined();
+      const filteredProducts = payload.docs.filter((p: any) => p.price >= 40 && p.price <= 100);
+      expect(filteredProducts.length).toBeGreaterThanOrEqual(1);
     });
 
     it('should filter by exact match', async () => {
@@ -259,12 +257,12 @@ describe('Full Application E2E', () => {
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
 
-      if (payload && payload.data) {
-        expect(payload.data.length).toBeGreaterThanOrEqual(1);
-        // All returned products should be active
-        const allActive = payload.data.every((p: any) => p.isActive === true);
-        expect(allActive).toBe(true);
-      }
+      // Arc/MongoKit uses 'docs' for list responses
+      expect(payload.docs).toBeDefined();
+      expect(payload.docs.length).toBeGreaterThanOrEqual(1);
+      // All returned products should be active
+      const allActive = payload.docs.every((p: any) => p.isActive === true);
+      expect(allActive).toBe(true);
     });
 
     it('should sort products', async () => {
@@ -276,8 +274,10 @@ describe('Full Application E2E', () => {
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
 
-      if (payload && payload.data && payload.data.length >= 2) {
-        const prices = payload.data.map((p: any) => p.price);
+      // Arc/MongoKit uses 'docs' for list responses
+      expect(payload.docs).toBeDefined();
+      if (payload.docs.length >= 2) {
+        const prices = payload.docs.map((p: any) => p.price);
         // Should be sorted descending by price
         expect(prices[0]).toBeGreaterThanOrEqual(prices[1]);
       }
@@ -292,13 +292,12 @@ describe('Full Application E2E', () => {
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
 
-      // MongoKit pagination at top level
-      if (payload && payload.data) {
-        expect(payload.data.length).toBeLessThanOrEqual(2);
-        expect(payload.page).toBe(1);
-        expect(payload.limit).toBe(2);
-        expect(payload.total).toBeGreaterThanOrEqual(4);
-      }
+      // Arc/MongoKit uses 'docs' with flat pagination fields
+      expect(payload.docs).toBeDefined();
+      expect(payload.docs.length).toBeLessThanOrEqual(2);
+      expect(payload.page).toBe(1);
+      expect(payload.limit).toBe(2);
+      expect(payload.total).toBeGreaterThanOrEqual(4);
     });
   });
 

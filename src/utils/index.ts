@@ -34,6 +34,10 @@ export {
   responses,
   queryParams,
   getListQueryParams,
+  // Aliases for backwards compatibility with local responseSchemas.js
+  itemWrapper,
+  paginateWrapper,
+  messageWrapper,
 } from './responseSchemas.js';
 export type { JsonSchema } from './responseSchemas.js';
 

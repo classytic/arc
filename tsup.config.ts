@@ -8,6 +8,7 @@ export default defineConfig({
     'permissions/index': 'src/permissions/index.ts',
     'types/index': 'src/types/index.ts',
     'adapters/index': 'src/adapters/index.ts',
+    'core/index': 'src/core/index.ts',
     'presets/index': 'src/presets/index.ts',
     'presets/multiTenant': 'src/presets/multiTenant.ts',
     'auth/index': 'src/auth/index.ts',

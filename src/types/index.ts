@@ -121,7 +121,13 @@ export interface ControllerQueryOptions {
   page?: number;
   limit?: number;
   sort?: string | Record<string, 1 | -1>;
+  /** Simple populate (comma-separated string or array) */
   populate?: string | string[] | Record<string, unknown>;
+  /**
+   * Advanced populate options (Mongoose-compatible)
+   * When set, takes precedence over simple `populate`
+   */
+  populateOptions?: PopulateOption[];
   select?: string | string[] | Record<string, 0 | 1>; // String, array, or MongoDB projection
   filters?: Record<string, unknown>;
   search?: string;
@@ -135,18 +141,57 @@ export interface ControllerQueryOptions {
 }
 
 /**
+ * Mongoose-compatible populate option for advanced field selection
+ * Used when you need to select specific fields from populated documents
+ *
+ * @example
+ * ```typescript
+ * // URL: ?populate[author][select]=name,email
+ * // Generates: { path: 'author', select: 'name email' }
+ * ```
+ */
+export interface PopulateOption {
+  /** Field path to populate */
+  path: string;
+  /** Fields to select (space-separated) */
+  select?: string;
+  /** Filter conditions for populated documents */
+  match?: Record<string, unknown>;
+  /** Query options (limit, sort, skip) */
+  options?: {
+    limit?: number;
+    sort?: Record<string, 1 | -1>;
+    skip?: number;
+  };
+  /** Nested populate configuration */
+  populate?: PopulateOption;
+}
+
+/**
  * Parsed query result from QueryParser
  * Includes pagination, sorting, filtering, etc.
+ *
+ * The index signature allows custom query parsers (like MongoKit's QueryParser)
+ * to add additional fields without breaking Arc's type system.
  */
 export interface ParsedQuery {
   filters?: Record<string, unknown>;
   limit?: number;
   sort?: string | Record<string, 1 | -1>;
+  /** Simple populate (comma-separated string or array) */
   populate?: string | string[] | Record<string, unknown>;
+  /**
+   * Advanced populate options (Mongoose-compatible)
+   * When set, takes precedence over simple `populate`
+   * @example [{ path: 'author', select: 'name email' }]
+   */
+  populateOptions?: PopulateOption[];
   search?: string;
   page?: number;
   after?: string; // Cursor for cursor-based pagination
   select?: string | string[] | Record<string, 0 | 1>; // MongoDB projection format
+  /** Allow additional fields from custom query parsers */
+  [key: string]: unknown;
 }
 
 /**
