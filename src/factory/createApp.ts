@@ -38,6 +38,7 @@
  */
 
 import Fastify, { type FastifyInstance } from 'fastify';
+import qs from 'qs';
 import type { CreateAppOptions } from './types.js';
 import { getPreset } from './presets.js';
 
@@ -156,6 +157,10 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   const fastify = Fastify({
     logger: config.logger ?? true,
     trustProxy: config.trustProxy ?? false,
+    // Use qs parser to support nested bracket notation in query strings
+    // e.g., ?populate[author][select]=name,email → { populate: { author: { select: 'name,email' } } }
+    // This is required for MongoKit's advanced populate options to work
+    querystringParser: (str) => qs.parse(str),
     ajv: {
       customOptions: {
         coerceTypes: true,
