@@ -407,8 +407,10 @@ export class BaseController<
       }
     }
 
-    // Simple equality check
-    return itemValue === filterValue;
+    // Simple equality check - convert to strings for ObjectId compatibility
+    // ObjectId instances are only === if they're the same reference,
+    // so we need to compare string representations for value equality
+    return String(itemValue) === String(filterValue);
   }
 
   /**
@@ -624,7 +626,11 @@ export class BaseController<
       const item = await this.repository.getById(id, options);
 
       // Security checks - all must pass or return 404 (don't leak existence)
-      if (!item || !this._checkOrgScope(item as AnyRecord, arcContext) || !this._checkPolicyFilters(item as AnyRecord, req)) {
+      const hasItem = !!item;
+      const orgScopeOk = this._checkOrgScope(item as AnyRecord, arcContext);
+      const policyFiltersOk = this._checkPolicyFilters(item as AnyRecord, req);
+
+      if (!hasItem || !orgScopeOk || !policyFiltersOk) {
         return {
           success: false,
           error: 'Resource not found',
