@@ -9,6 +9,7 @@
  *   arc generate controller <name>    Generate a controller only
  *   arc generate model <name>         Generate a model only
  *   arc introspect                    Show all registered resources
+ *   arc describe <entry-file>        Output JSON metadata for AI agents
  *   arc docs [output-path]            Export OpenAPI specification
  *
  * Examples:
@@ -21,8 +22,6 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 function getPackageVersion() {
   try {
@@ -78,6 +77,11 @@ async function main() {
         await handleIntrospect(rest);
         break;
 
+      case 'describe':
+      case 'desc':
+        await handleDescribe(subcommand ? [subcommand, ...rest] : rest);
+        break;
+
       case 'docs':
       case 'd':
         await handleDocs(subcommand ? [subcommand, ...rest] : rest);
@@ -103,7 +107,7 @@ async function main() {
 
 async function handleInit(args) {
   const options = parseInitOptions(args);
-  const { init } = await import('../dist/cli/commands/init.js');
+  const { init } = await import('../dist/cli/commands/init.mjs');
   await init(options);
 }
 
@@ -146,72 +150,70 @@ async function handleGenerate(type, args) {
   }
 
   // Import and run
-  const { generate } = await import('../dist/cli/commands/generate.js');
+  const { generate } = await import('../dist/cli/commands/generate.mjs');
   await generate(normalizedType, args);
 }
 
-async function handleIntrospect(args) {
-  // Check for --entry flag
-  const entryIndex = args.findIndex(arg => arg === '--entry' || arg === '-e');
-  if (entryIndex !== -1 && args[entryIndex + 1]) {
-    const entryPath = args[entryIndex + 1];
-    // Resolve path relative to CWD and convert to file URL for ESM import
-    const absolutePath = resolve(process.cwd(), entryPath);
-    const fileUrl = pathToFileURL(absolutePath).href;
+async function handleIntrospect(rawArgs) {
+  const args = normalizeArgs(rawArgs);
+  const { entryPath, filteredArgs } = extractEntryArg(args);
 
-    console.log(`Loading resources from: ${entryPath}\n`);
-    try {
-      await import(fileUrl);
-    } catch (err) {
-      console.error(`Failed to load entry file: ${err.message}`);
-      if (process.env.DEBUG) {
-        console.error(err.stack);
-      }
-      process.exit(1);
-    }
-  }
-
-  const { introspect } = await import('../dist/cli/commands/introspect.js');
-  await introspect(args.filter((arg, i) => arg !== '--entry' && arg !== '-e' && i !== entryIndex + 1));
+  const { introspect } = await import('../dist/cli/commands/introspect.mjs');
+  await introspect(entryPath ? [entryPath, ...filteredArgs] : filteredArgs);
 }
 
-async function handleDocs(args) {
-  // Check for --entry flag
-  const entryIndex = args.findIndex(arg => arg === '--entry' || arg === '-e');
-  if (entryIndex !== -1 && args[entryIndex + 1]) {
-    const entryPath = args[entryIndex + 1];
-    // Resolve path relative to CWD and convert to file URL for ESM import
-    const absolutePath = resolve(process.cwd(), entryPath);
-    const fileUrl = pathToFileURL(absolutePath).href;
+async function handleDescribe(rawArgs) {
+  const args = normalizeArgs(rawArgs);
+  const { describe } = await import('../dist/cli/commands/describe.mjs');
+  await describe(args);
+}
 
-    console.log(`Loading resources from: ${entryPath}\n`);
-    try {
-      await import(fileUrl);
-    } catch (err) {
-      console.error(`Failed to load entry file: ${err.message}`);
-      if (process.env.DEBUG) {
-        console.error(err.stack);
-      }
-      process.exit(1);
-    }
-  }
-
-  const filteredArgs = args.filter((arg, i) => arg !== '--entry' && arg !== '-e' && i !== entryIndex + 1);
-  const outputPath = filteredArgs[0] || './openapi.json';
-  const { exportDocs } = await import('../dist/cli/commands/docs.js');
-  await exportDocs([outputPath]);
+async function handleDocs(rawArgs) {
+  const args = normalizeArgs(rawArgs);
+  const { entryPath, filteredArgs } = extractEntryArg(args);
+  const { exportDocs } = await import('../dist/cli/commands/docs.mjs');
+  await exportDocs(entryPath ? [entryPath, ...filteredArgs] : filteredArgs);
 }
 
 // ============================================================================
 // Option Parsing
 // ============================================================================
 
-function parseInitOptions(args) {
+// Mirrors src/cli/utils/normalizeArgs.ts — keep in sync
+// (bin/arc.js is unbundled, can't import tree-shaken dist internals)
+function normalizeArgs(raw) {
+  const out = [];
+  for (const arg of raw) {
+    if (arg.startsWith('--') && arg.includes('=')) {
+      const eqIdx = arg.indexOf('=');
+      out.push(arg.slice(0, eqIdx), arg.slice(eqIdx + 1));
+    } else {
+      out.push(arg);
+    }
+  }
+  return out;
+}
+
+function extractEntryArg(args) {
+  const entryIndex = args.findIndex(arg => arg === '--entry' || arg === '-e');
+  const hasEntry = entryIndex !== -1 && !!args[entryIndex + 1];
+  const entryPath = hasEntry ? args[entryIndex + 1] : undefined;
+  const filteredArgs = hasEntry
+    ? args.filter((arg, i) => i !== entryIndex && i !== entryIndex + 1)
+    : args;
+
+  return { entryPath, filteredArgs };
+}
+
+function parseInitOptions(rawArgs) {
+  const args = normalizeArgs(rawArgs);
+
   const opts = {
     name: undefined,
     adapter: undefined,
     tenant: undefined,
     typescript: undefined,
+    edge: undefined,
     skipInstall: false,
     force: false,
   };
@@ -261,6 +263,19 @@ function parseInitOptions(args) {
         opts.typescript = false;
         break;
 
+      case '--better-auth':
+        opts.auth = 'better-auth';
+        break;
+
+      case '--jwt':
+        opts.auth = 'jwt';
+        break;
+
+      case '--edge':
+      case '--serverless':
+        opts.edge = true;
+        break;
+
       case '--skip-install':
         opts.skipInstall = true;
         break;
@@ -291,6 +306,7 @@ COMMANDS
   init, new       Initialize a new Arc project
   generate, g     Generate resources, controllers, or models
   introspect, i   Show all registered resources
+  describe, desc  Output JSON metadata for AI agents
   docs, d         Export OpenAPI specification
 
 GLOBAL OPTIONS
@@ -302,10 +318,13 @@ GLOBAL OPTIONS
 INIT OPTIONS
   --mongokit               Use MongoKit adapter (default, recommended)
   --custom                 Use custom adapter (empty template)
+  --better-auth            Use Better Auth (default, recommended)
+  --jwt                    Use Arc built-in JWT auth
   --multi-tenant, --multi  Multi-tenant mode (adds org scoping)
   --single-tenant, --single Single-tenant mode (default)
   --ts, --typescript       Generate TypeScript (default)
   --js, --javascript       Generate JavaScript
+  --edge, --serverless     Target Edge/Serverless environments
   --force, -f              Overwrite existing directory
   --skip-install           Skip npm install after scaffolding
 
@@ -326,7 +345,10 @@ EXAMPLES
   arc init my-api
 
   # Initialize with all options (non-interactive)
-  arc init my-api --mongokit --single --ts
+  arc init my-api --mongokit --better-auth --single --ts
+
+  # Initialize with JWT auth instead of Better Auth
+  arc init my-api --mongokit --jwt --single --ts
 
   # Initialize a JavaScript single-tenant app
   arc init my-api --mongokit --single --js
@@ -348,6 +370,12 @@ EXAMPLES
 
   # Show registered resources
   arc introspect --entry ./dist/index.js
+
+  # Output JSON metadata for AI agents
+  arc describe ./dist/resources.js --json
+
+  # Describe a single resource
+  arc describe ./dist/resources.js product
 
 MORE INFO
   Documentation: https://github.com/classytic/arc

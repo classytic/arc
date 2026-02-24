@@ -23,8 +23,11 @@
 
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
-import { HookSystem, hookSystem as globalHookSystem } from '../hooks/HookSystem.js';
-import { ResourceRegistry, resourceRegistry as globalRegistry } from '../registry/ResourceRegistry.js';
+import { HookSystem } from '../hooks/HookSystem.js';
+import { ResourceRegistry } from '../registry/ResourceRegistry.js';
+import { requestContext } from '../context/requestContext.js';
+import type { RequestStore } from '../context/requestContext.js';
+import type { ExternalOpenApiPaths } from '../docs/externalPaths.js';
 
 /**
  * Interface for fastify.events (from eventPlugin)
@@ -49,9 +52,8 @@ export interface ArcCorePluginOptions {
   /** Resource registry instance (for testing/custom setup) */
   registry?: ResourceRegistry;
   /**
-   * Use global singletons for backward compatibility with presets
-   * When false (default), creates new isolated instances for better test isolation
-   * When true, uses global hookSystem/registry (for preset compatibility)
+   * @deprecated No longer used — global singletons have been removed.
+   * Hook systems are always instance-scoped. This option is ignored.
    */
   useGlobalSingletons?: boolean;
 }
@@ -63,6 +65,8 @@ export interface ArcCore {
   registry: ResourceRegistry;
   /** Whether event emission is enabled */
   emitEvents: boolean;
+  /** External OpenAPI paths contributed by auth adapters or third-party integrations */
+  externalOpenApiPaths: ExternalOpenApiPaths[];
 }
 
 declare module 'fastify' {
@@ -79,24 +83,40 @@ const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
     emitEvents = true,
     hookSystem,
     registry,
-    useGlobalSingletons = false,
   } = opts;
 
-  // Determine which instances to use
-  // When useGlobalSingletons is true, use global singletons (for preset compatibility)
-  // Otherwise, create new isolated instances (better for testing)
-  const actualHookSystem = useGlobalSingletons
-    ? globalHookSystem
-    : (hookSystem ?? new HookSystem());
-  const actualRegistry = useGlobalSingletons
-    ? globalRegistry
-    : (registry ?? new ResourceRegistry());
+  // Always use instance-scoped systems — no global singletons
+  const actualHookSystem = hookSystem ?? new HookSystem();
+  const actualRegistry = registry ?? new ResourceRegistry();
 
   // Decorate with instance-scoped Arc core
   fastify.decorate('arc', {
     hooks: actualHookSystem,
     registry: actualRegistry,
     emitEvents,
+    externalOpenApiPaths: [],
+  });
+
+  // Request context via AsyncLocalStorage — zero-cost per request.
+  // storage.run(store, done) wraps the ENTIRE remaining request lifecycle
+  // so any code in the call stack can access user/org/requestId.
+  fastify.addHook('onRequest', (request, _reply, done) => {
+    const store: RequestStore = {
+      requestId: request.id,
+      startTime: performance.now(),
+    };
+    requestContext.storage.run(store, done);
+  });
+
+  // Populate user/org after auth middleware runs (user isn't set during onRequest)
+  fastify.addHook('preHandler', (request, _reply, done) => {
+    const store = requestContext.get();
+    if (store) {
+      const req = request as unknown as Record<string, unknown>;
+      store.user = req.user as RequestStore['user'] ?? null;
+      store.organizationId = req.organizationId as string | undefined;
+    }
+    done();
   });
 
   // Wire events into hooks if event plugin is available and events enabled
@@ -138,7 +158,7 @@ const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
     actualRegistry._clear();
   });
 
-  fastify.log?.info?.('✅ Arc core plugin enabled (instance-scoped hooks & registry)');
+  fastify.log?.debug?.('Arc core plugin enabled (instance-scoped hooks & registry)');
 };
 
 export default fp(arcCorePlugin, {

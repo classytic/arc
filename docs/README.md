@@ -6,11 +6,11 @@ Resource-oriented framework for Fastify + MongoDB. Define once, get routes, vali
 
 | Guide | Purpose |
 |-------|---------|
-| [Setup](./setup.md) | Installation and quick start |
-| [Core](./core.md) | Resources, controllers, adapters |
-| [Auth](./auth.md) | JWT authentication and permissions |
+| [Setup](./setup.md) | Installation, dependencies, and quick start |
+| [Core](./core.md) | Resources, controllers, adapters, query parsing, response schemas |
+| [Auth](./auth.md) | JWT authentication (fast-jwt) and permissions |
 | [Presets](./presets.md) | Reusable behaviors (softDelete, multiTenant, etc.) |
-| [Factory](./factory.md) | Production-ready app creation |
+| [Factory](./factory.md) | Production-ready app creation, TypeBox type provider |
 | [Hooks](./hooks.md) | Lifecycle callbacks |
 | [Handler Patterns](./ARC_HANDLER_PATTERNS.md) | Arc context vs Fastify native handlers |
 | [Org/Multi-tenant](./org.md) | Organization scoping |
@@ -126,15 +126,18 @@ interface IControllerResponse<T> {
 
 - **Arc Context Pattern** - Framework-agnostic, clean API
 - **Native Fastify Support** - Full control when needed
-- **Auto-generated Routes** - CRUD + custom routes
+- **Auto-generated Routes** - CRUD + custom routes with default response schemas
 - **Presets** - Reusable behaviors (softDelete, multiTenant, tree, etc.)
-- **Type-Safe** - Full TypeScript support
+- **Type-Safe** - Full TypeScript support with optional TypeBox integration
+- **Pluggable Query Parsing** - Built-in ArcQueryParser or MongoKit's advanced parser
+- **fast-json-stringify** - Default response schemas enable 2-3x faster serialization
 - **Multi-tenant** - Built-in organization scoping
 - **OpenAPI** - Auto-generated documentation
 
 ## Next Steps
 
 1. [Quick Start Guide](./setup.md) - Get up and running in 5 minutes
-2. [Handler Patterns](./ARC_HANDLER_PATTERNS.md) - Choose the right pattern
-3. [Core Concepts](./core.md) - Understand resources and adapters
-4. [Production Deployment](./factory.md) - Secure by default configuration
+2. [Core Concepts](./core.md) - Resources, adapters, query parsing, response schemas
+3. [Handler Patterns](./ARC_HANDLER_PATTERNS.md) - Choose the right pattern
+4. [Factory & TypeBox](./factory.md) - Production config with optional TypeBox type provider
+5. [Auth (JWT v10)](./auth.md) - fast-jwt powered authentication

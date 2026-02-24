@@ -24,3 +24,11 @@ export {
   type DomainEvent,
   type EventHandler,
 } from '../EventTransport.js';
+
+// Redis Pub/Sub transport (fire-and-forget, low latency)
+export { RedisEventTransport } from './redis.js';
+export type { RedisLike, RedisEventTransportOptions } from './redis.js';
+
+// Redis Stream transport (durable, exactly-once, DLQ)
+export { RedisStreamTransport } from './redis-stream.js';
+export type { RedisStreamLike, RedisStreamTransportOptions } from './redis-stream.js';

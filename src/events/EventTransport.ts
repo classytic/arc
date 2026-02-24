@@ -43,6 +43,27 @@ export interface DomainEvent<T = unknown> {
 
 export type EventHandler<T = unknown> = (event: DomainEvent<T>) => void | Promise<void>;
 
+/**
+ * Minimal logger interface for event transports.
+ * Compatible with `console`, `pino`, `fastify.log`, and any custom logger.
+ *
+ * @example
+ * ```typescript
+ * // Use Fastify's logger
+ * new MemoryEventTransport({ logger: fastify.log });
+ *
+ * // Use a custom logger
+ * new MemoryEventTransport({ logger: { warn: myWarn, error: myError } });
+ *
+ * // Default: console (no logger option needed)
+ * new MemoryEventTransport();
+ * ```
+ */
+export interface EventLogger {
+  warn(message: string, ...args: unknown[]): void;
+  error(message: string, ...args: unknown[]): void;
+}
+
 export interface EventTransport {
   /** Transport name for logging */
   readonly name: string;
@@ -66,6 +87,11 @@ export interface EventTransport {
   close?(): Promise<void>;
 }
 
+export interface MemoryEventTransportOptions {
+  /** Logger for error/warning messages (default: console) */
+  logger?: EventLogger;
+}
+
 /**
  * In-memory event transport (default)
  * Events are delivered synchronously within the process.
@@ -74,6 +100,11 @@ export interface EventTransport {
 export class MemoryEventTransport implements EventTransport {
   readonly name = 'memory';
   private handlers = new Map<string, Set<EventHandler>>();
+  private logger: EventLogger;
+
+  constructor(options?: MemoryEventTransportOptions) {
+    this.logger = options?.logger ?? console;
+  }
 
   async publish(event: DomainEvent): Promise<void> {
     // Exact match handlers
@@ -100,7 +131,7 @@ export class MemoryEventTransport implements EventTransport {
       try {
         await handler(event);
       } catch (err) {
-        console.error(`[EventTransport] Handler error for ${event.type}:`, err);
+        this.logger.error(`[EventTransport] Handler error for ${event.type}:`, err);
       }
     }
   }

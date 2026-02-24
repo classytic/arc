@@ -27,8 +27,12 @@
 export {
   default as openApiPlugin,
   openApiPlugin as openApiPluginFn,
+  buildOpenApiSpec,
 } from './openapi.js';
-export type { OpenApiOptions, OpenApiSpec } from './openapi.js';
+export type { OpenApiOptions, OpenApiSpec, OpenApiBuildOptions } from './openapi.js';
+
+// External paths (for Better Auth, custom integrations, etc.)
+export type { ExternalOpenApiPaths } from './externalPaths.js';
 
 // Scalar UI
 export {

@@ -74,13 +74,11 @@ permissions: {
 ```
 
 **Options:**
-- `rolesField`: Field containing user roles (default: `'roles'`)
-- `bypassRoles`: Roles that bypass this check (default: `['superadmin']`)
+- `bypassRoles`: Roles that bypass this check (no default — must be explicit)
 
 ```typescript
 permissions: {
   update: requireRoles(['manager'], {
-    rolesField: 'userRoles',
     bypassRoles: ['superadmin', 'owner'],
   }),
 }
@@ -98,13 +96,11 @@ permissions: {
 ```
 
 **Options:**
-- `userIdField`: User ID field (default: `'_id'` or `'id'`)
-- `bypassRoles`: Roles that bypass ownership check (default: `['admin', 'superadmin']`)
+- `bypassRoles`: Roles that bypass ownership check (no default — must be explicit)
 
 ```typescript
 permissions: {
   update: requireOwnership('authorId', {
-    userIdField: 'id',
     bypassRoles: ['admin', 'moderator'],
   }),
 }
@@ -141,15 +137,15 @@ permissions: {
 
 ## Combining Permissions
 
-### `combinePermissions(...checks)`
+### `allOf(...checks)`
 
 Combine multiple checks with AND logic (all must pass).
 
 ```typescript
-import { combinePermissions, requireAuth, requireRoles, requireOwnership } from '@classytic/arc/permissions';
+import { allOf, requireAuth, requireRoles, requireOwnership } from '@classytic/arc/permissions';
 
 permissions: {
-  update: combinePermissions(
+  update: allOf(
     requireAuth(),                // Must be authenticated
     requireRoles(['editor']),     // AND be an editor
     requireOwnership('authorId')  // AND own the resource
@@ -178,122 +174,111 @@ permissions: {
 
 ### Data-Based Permissions
 
-Check permissions based on resource data.
+Check permissions based on resource data. Any `PermissionCheck` function works:
 
 ```typescript
-import { dynamicPermission } from '@classytic/arc/permissions';
+import type { PermissionCheck } from '@classytic/arc/permissions';
 
 permissions: {
-  update: dynamicPermission((context) => {
+  update: (async (context) => {
     // Only allow updates if status is 'draft'
     return context.data?.status === 'draft';
-  }),
+  }) as PermissionCheck,
 }
 ```
 
 ### Complex Business Logic
 
 ```typescript
+const requireQuota = (): PermissionCheck => async (context) => {
+  const count = await getPublishedCount(context.user.id);
+  return count < context.user.maxPosts;
+};
+
 permissions: {
-  publish: combinePermissions(
+  publish: allOf(
     requireRoles(['editor', 'admin']),
-    dynamicPermission(async (context) => {
-      // Check if user has published posts quota
-      const count = await getPublishedCount(context.user.id);
-      return count < context.user.maxPosts;
-    })
+    requireQuota(),
   ),
 }
 ```
 
 ---
 
-## Custom Permission Providers
+## Custom Permission Patterns
 
-Arc supports plugging in your own RBAC/ABAC system.
+Arc's permission system is function-based — any `PermissionCheck` works. For complex RBAC/ABAC, write custom permission functions.
 
 ### Using Casbin
 
 ```typescript
-import { createPermissionProvider } from '@classytic/arc/permissions';
+import type { PermissionCheck } from '@classytic/arc/permissions';
 import { newEnforcer } from 'casbin';
 
 const enforcer = await newEnforcer('model.conf', 'policy.csv');
 
-const casbinProvider = createPermissionProvider({
-  name: 'casbin',
-  check: async (context) => {
-    const allowed = await enforcer.enforce(
-      context.user?.id ?? 'anonymous',
-      context.resource,
-      context.action
-    );
-    return { granted: allowed };
-  }
-});
+const requireCasbinAccess = (): PermissionCheck => async (context) => {
+  const allowed = await enforcer.enforce(
+    context.user?.id ?? 'anonymous',
+    context.resource,
+    context.action
+  );
+  return { granted: allowed };
+};
 
-const app = await createApp({
-  permissionProvider: casbinProvider,
+defineResource({
+  name: 'document',
+  permissions: {
+    list: requireCasbinAccess(),
+    create: requireCasbinAccess(),
+    update: requireCasbinAccess(),
+    delete: requireCasbinAccess(),
+  },
 });
 ```
 
 ### Custom RBAC Service
 
 ```typescript
-import { createPermissionProvider } from '@classytic/arc/permissions';
+import type { PermissionCheck } from '@classytic/arc/permissions';
 import { rbacService } from './services/rbac';
 
-const customProvider = createPermissionProvider({
-  name: 'custom-rbac',
-  check: async (context) => {
-    const { user, resource, action } = context;
-    
-    // Check your RBAC service
-    const allowed = await rbacService.can(user, action, resource);
-    
-    // Return result with optional filters
-    return {
-      granted: allowed,
-      filters: allowed ? undefined : {},
-      reason: allowed ? undefined : 'Access denied by RBAC',
-    };
-  },
-  init: async (app) => {
-    // Initialize your RBAC service
-    await rbacService.connect();
-  }
-});
+const requireRbac = (): PermissionCheck => async (context) => {
+  const { user, resource, action } = context;
+  const allowed = await rbacService.can(user, action, resource);
 
-const app = await createApp({
-  permissionProvider: customProvider,
+  return {
+    granted: allowed,
+    filters: allowed ? undefined : {},
+    reason: allowed ? undefined : 'Access denied by RBAC',
+  };
+};
+
+defineResource({
+  name: 'invoice',
+  permissions: {
+    list: requireRbac(),
+    create: requireRbac(),
+  },
 });
 ```
 
 ### Attribute-Based Access Control (ABAC)
 
 ```typescript
-const abacProvider = createPermissionProvider({
-  name: 'abac',
-  check: async (context) => {
-    const { user, resource, action, data } = context;
-    
-    // ABAC rules
-    const rules = [
-      // Users can read their own department's data
-      user?.department === data?.department,
-      
-      // Managers can read all data in their region
-      user?.role === 'manager' && user?.region === data?.region,
-      
-      // Admins can do anything
-      user?.role === 'admin',
-    ];
-    
-    const granted = rules.some(rule => rule === true);
-    
-    return { granted };
-  }
-});
+import type { PermissionCheck } from '@classytic/arc/permissions';
+
+const requireAbac = (): PermissionCheck => async (context) => {
+  const { user, data } = context;
+
+  const rules = [
+    user?.department === data?.department,
+    user?.role === 'manager' && user?.region === data?.region,
+    user?.role === 'admin',
+  ];
+
+  return { granted: rules.some(rule => rule === true) };
+};
 ```
 
 ---
@@ -304,21 +289,24 @@ Every permission check receives a `PermissionContext` object:
 
 ```typescript
 interface PermissionContext {
-  /** Authenticated user (if any) */
-  user?: UserBase | AnyRecord;
-  
+  /** Authenticated user or null if unauthenticated */
+  user: UserBase | null;
+
   /** Request object for additional context */
   request: FastifyRequest;
-  
+
   /** Resource being accessed (e.g., 'post', 'user') */
   resource: string;
-  
+
   /** Action being performed (e.g., 'list', 'create', 'update') */
   action: string;
-  
+
+  /** Resource ID (for get/update/delete) */
+  resourceId?: string;
+
   /** Optional: The data being accessed/modified */
-  data?: AnyRecord;
-  
+  data?: Record<string, unknown>;
+
   /** Organization context (for multi-tenant) */
   organizationId?: string;
 }
@@ -327,20 +315,22 @@ interface PermissionContext {
 **Example using context:**
 
 ```typescript
-dynamicPermission(async (context) => {
+import type { PermissionCheck } from '@classytic/arc/permissions';
+
+const requireBusinessHours = (): PermissionCheck => async (context) => {
   // Access request headers
   const apiKey = context.request.headers['x-api-key'];
-  
+
   // Check time-based rules
   const hour = new Date().getHours();
   const isDuringBusinessHours = hour >= 9 && hour <= 17;
-  
+
   // Check IP whitelist
   const clientIp = context.request.ip;
   const isWhitelisted = await ipWhitelist.check(clientIp);
-  
+
   return isDuringBusinessHours && isWhitelisted;
-})
+};
 ```
 
 ---
@@ -466,7 +456,7 @@ permissions: {
 
 ```typescript
 permissions: {
-  update: combinePermissions(
+  update: allOf(
     requireAuth(),
     anyOf(
       requireRoles(['admin']),
@@ -479,21 +469,23 @@ permissions: {
 ### 3. Document Custom Permissions
 
 ```typescript
+const requireQuota = (): PermissionCheck => async (ctx) => {
+  const quota = await getQuota(ctx.user.id);
+  return quota.remaining > 0;
+};
+
 permissions: {
   // Only allow publishing if user has available quota
-  publish: combinePermissions(
+  publish: allOf(
     requireRoles(['editor']),
-    dynamicPermission(async (ctx) => {
-      const quota = await getQuota(ctx.user.id);
-      return quota.remaining > 0;
-    })
+    requireQuota(),
   ),
 }
 ```
 
-### 4. Use Permission Providers for Complex Logic
+### 4. Extract Custom Checks into Named Functions
 
-For complex RBAC/ABAC systems, use a custom permission provider instead of inline logic.
+For complex RBAC/ABAC logic, write reusable `PermissionCheck` functions instead of inline logic.
 
 ### 5. Test Permissions Thoroughly
 
@@ -530,21 +522,22 @@ describe('Post permissions', () => {
 
 | Helper | Description |
 |--------|-------------|
-| `requireAuth()` | Require authentication |
-| `requireRoles(roles, options?)` | Require specific roles |
-| `requireOwnership(field, options?)` | Require resource ownership |
 | `allowPublic()` | Allow public access |
+| `requireAuth()` | Require authentication |
+| `requireRoles(roles, options?)` | At least one role matches |
+| `requireOwnership(field, options?)` | Require resource ownership |
 | `denyAll(reason?)` | Deny all access |
-| `combinePermissions(...checks)` | AND logic |
-| `anyOf(...checks)` | OR logic |
-| `dynamicPermission(fn)` | Custom logic |
+| `allOf(...checks)` | AND — all must pass |
+| `anyOf(...checks)` | OR — any can pass |
+| `when(condition)` | Conditional — returns PermissionCheck |
 
-### Provider
+### Org Permissions
 
-| Method | Description |
+| Helper | Description |
 |--------|-------------|
-| `createPermissionProvider(config)` | Create custom provider |
-| `RoleBasedPermissionProvider` | Built-in role provider |
+| `requireOrgMembership(options?)` | Require org membership |
+| `requireOrgRole(...roles)` | Require org-level roles |
+| `createOrgPermissions(config)` | Create org permission helpers |
 
 ---
 

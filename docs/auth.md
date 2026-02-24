@@ -1,8 +1,12 @@
 # Auth Module
 
-JWT authentication with role-based permissions.
+JWT authentication with role-based permissions, powered by `@fastify/jwt` v10 (uses `fast-jwt` internally for high-performance token operations).
 
 ## Quick Start
+
+```bash
+npm install @fastify/jwt@^10.0.0
+```
 
 ```typescript
 import { createApp } from '@classytic/arc/factory';
@@ -19,6 +23,8 @@ const app = await createApp({
 
 // Auth is now available: app.jwt, app.authenticate
 ```
+
+> **Note:** Arc uses `@fastify/jwt` v10 which replaces `jsonwebtoken` with `fast-jwt`. The `secret` and `expiresIn` options are unchanged. If you pass sign/verify options directly, see the [migration notes](#migrating-from-fastifyjwt-v9-to-v10) below.
 
 ## Configuration
 
@@ -101,29 +107,30 @@ defineResource({
 |----------|-------------|
 | `allowPublic()` | No authentication required |
 | `requireAuth()` | Requires any authenticated user |
-| `requireRoles(['admin'])` | Requires specific roles |
-| `requireAnyRole(['admin', 'editor'])` | Requires at least one role |
-| `requireAllRoles(['admin', 'manager'])` | Requires all roles |
+| `requireRoles(['admin', 'editor'])` | At least one role matches |
+| `requireOwnership('userId', { bypassRoles })` | Only resource owner (or bypass) |
+| `denyAll(reason?)` | Always deny |
+| `allOf(check1, check2)` | AND — all must pass |
+| `anyOf(check1, check2)` | OR — at least one must pass |
+| `when(condition)` | Conditional — returns PermissionCheck |
 
 ### Custom Permission Functions
 
+A `PermissionCheck` is any function `(ctx: PermissionContext) => boolean | { granted, reason?, filters? }`:
+
 ```typescript
-import { definePermission } from '@classytic/arc';
+import type { PermissionCheck } from '@classytic/arc/permissions';
 
-const requirePremium = definePermission({
-  name: 'requirePremium',
-  handler: async (request) => {
-    const user = request.user;
-    if (!user) return { allowed: false, reason: 'Unauthorized' };
-    if (!user.isPremium) return { allowed: false, reason: 'Premium required' };
-    return { allowed: true };
-  },
-});
+const requirePremium = (): PermissionCheck => async (ctx) => {
+  if (!ctx.user) return { granted: false, reason: 'Unauthorized' };
+  if (!ctx.user.isPremium) return { granted: false, reason: 'Premium required' };
+  return { granted: true };
+};
 
-// Use it
+// Use like built-ins
 defineResource({
   permissions: {
-    create: requirePremium,
+    create: requirePremium(),
   },
 });
 ```
@@ -340,6 +347,34 @@ defineResource({
 4. **Validate on every request** - Don't cache auth checks
 5. **Use HTTPS in production** - Required for secure token transmission
 6. **Rotate secrets periodically** - Update JWT secrets regularly
+
+## Migrating from @fastify/jwt v9 to v10
+
+Arc v2.0 requires `@fastify/jwt` v10, which replaces `jsonwebtoken` with `fast-jwt` internally.
+
+**What changed:**
+- Library switch: `jsonwebtoken` → `fast-jwt` (faster, maintained)
+- Some sign/verify option names were renamed:
+
+| v9 (jsonwebtoken) | v10 (fast-jwt) |
+|---|---|
+| `audience` | `aud` (sign) / `allowedAud` (verify) |
+| `issuer` | `iss` (sign) / `allowedIss` (verify) |
+| `subject` | `sub` (sign) / `allowedSub` (verify) |
+| `jwtid` | `jti` (sign) / `allowedJti` (verify) |
+
+**What didn't change:**
+- `secret` — unchanged
+- `expiresIn` — unchanged
+- `sign()` / `verify()` / `decode()` API — same interface
+- Token format — same JWT output, fully compatible
+
+**Impact on most Arc apps: None.** If you only use `secret` + `expiresIn` (the standard pattern), no code changes are needed.
+
+```bash
+# Upgrade
+npm install @fastify/jwt@^10.0.0
+```
 
 ## See Also
 

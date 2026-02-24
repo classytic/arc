@@ -4,7 +4,7 @@ Resources, controllers, and routing fundamentals.
 
 ## defineResource
 
-Single entry point for defining resources.
+The primary API for defining resources.
 
 ```typescript
 import { defineResource, createMongooseAdapter, allowPublic, requireRoles } from '@classytic/arc';
@@ -34,6 +34,7 @@ const productResource = defineResource({
 
   // Multi-tenant
   organizationScoped: true,
+  tenantField: 'organizationId',  // Default; change to 'workspaceId', 'tenantId', etc.
 
   // Advanced
   skipValidation: false,       // Bypass config validation
@@ -150,13 +151,42 @@ GET /products?populate[author][select]=name,email
 
 ### Query Parsers
 
-Arc includes a built-in query parser but supports pluggable parsers from database kits:
+Arc includes a built-in `ArcQueryParser` and supports pluggable parsers from database kits.
+
+#### Built-in ArcQueryParser
+
+The default parser handles standard REST patterns with security built-in:
+
+**Supported filter operators:** `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `nin`, `like`, `contains`, `regex`, `exists`
+
+**Security features:**
+- ReDoS protection — dangerous regex patterns (nested quantifiers, backreferences) are auto-escaped
+- Field name validation — rejects `$`-prefixed keys to prevent MongoDB injection
+- Configurable limits — max regex length (500), max search length (200), max filter depth (10)
+
+```typescript
+import { createQueryParser } from '@classytic/arc/utils';
+
+// Custom configuration
+const parser = createQueryParser({
+  maxLimit: 100,        // Max items per page (default: 1000)
+  defaultLimit: 20,     // Default items per page
+  maxRegexLength: 500,  // Max regex pattern length
+  maxSearchLength: 200, // Max search query length
+  maxFilterDepth: 10,   // Max nesting depth for filters
+});
+```
+
+**Value coercion:** String values are automatically coerced — `"true"` → `true`, `"false"` → `false`, `"null"` → `null`, numeric strings → numbers.
+
+#### MongoKit QueryParser (Advanced)
+
+For advanced MongoDB features, swap in MongoKit's QueryParser:
 
 ```typescript
 import { defineResource } from '@classytic/arc';
 import { QueryParser } from '@classytic/mongokit';
 
-// Use MongoKit's QueryParser for advanced MongoDB features
 const productResource = defineResource({
   name: 'product',
   adapter: createMongooseAdapter({ model: ProductModel, repository: productRepo }),
@@ -165,14 +195,9 @@ const productResource = defineResource({
 });
 ```
 
-**Built-in Arc Parser:**
-- Basic filtering, sorting, pagination
-- Simple populate (comma-separated)
-- Works with any database adapter
-
-**MongoKit QueryParser:**
+**MongoKit QueryParser additions:**
 - Advanced MongoDB operators ($lookup, $regex, etc.)
-- Nested populate with field selection
+- Nested populate with field selection (`populateOptions`)
 - Search across multiple fields
 - Cursor-based pagination
 
@@ -222,6 +247,73 @@ class PgQueryParser implements QueryParserInterface {
 ```
 
 The `ParsedQuery` interface is flexible and accepts additional fields via index signature, allowing custom parsers to add database-specific options without breaking Arc's type system.
+
+## Default Response Schemas
+
+CRUD routes automatically include response schemas, enabling Fastify's `fast-json-stringify` for 2-3x faster serialization. This also prevents accidental field disclosure — only declared fields are serialized.
+
+**Default schemas per route:**
+
+| Route | Status | Response Schema |
+|-------|--------|----------------|
+| `GET /` | 200 | `listResponse` — `{ success, docs: [...], page, limit, total, pages, hasNext, hasPrev }` |
+| `GET /:id` | 200 | `itemResponse` — `{ success, data: {...} }` |
+| `POST /` | 201 | `mutationResponse` — `{ success, data: {...}, message? }` |
+| `PATCH /:id` | 200 | `itemResponse` — `{ success, data: {...} }` |
+| `DELETE /:id` | 200 | `deleteResponse` — `{ success, message? }` |
+
+Default schemas use `additionalProperties: true` so all fields pass through. Override with specific schemas for maximum performance:
+
+```typescript
+import { listResponse, itemResponse, mutationResponse, deleteResponse } from '@classytic/arc/utils';
+
+const productSchema = {
+  type: 'object',
+  properties: {
+    _id: { type: 'string' },
+    name: { type: 'string' },
+    price: { type: 'number' },
+    createdAt: { type: 'string' },
+  },
+};
+
+const productResource = defineResource({
+  name: 'product',
+  schemas: {
+    list: { response: { 200: listResponse(productSchema) } },
+    get: { response: { 200: itemResponse(productSchema) } },
+    create: { response: { 201: mutationResponse(productSchema) } },
+    delete: { response: { 200: deleteResponse() } },
+  },
+  // ...
+});
+```
+
+### TypeBox Schemas
+
+For type-safe schemas with TypeScript inference, use the `@classytic/arc/schemas` subpath:
+
+```typescript
+import { Type, ArcListResponse, ArcItemResponse, ArcPaginationQuery } from '@classytic/arc/schemas';
+
+const ProductSchema = Type.Object({
+  _id: Type.String(),
+  name: Type.String(),
+  price: Type.Number(),
+});
+
+// Route schemas provide full TS inference
+fastify.get('/products', {
+  schema: {
+    querystring: ArcPaginationQuery(),
+    response: { 200: ArcListResponse(ProductSchema) },
+  },
+}, handler);
+```
+
+**Requires:** `npm install @sinclair/typebox @fastify/type-provider-typebox`
+
+See [Factory](./factory.md) for `typeProvider: 'typebox'` configuration.
 
 ## Additional Routes
 
@@ -329,6 +421,38 @@ async create(req: IRequestContext): Promise<IControllerResponse> {
 }
 ```
 
+## Configurable Tenant Field
+
+By default, Arc uses `organizationId` as the field name for multi-tenant scoping. If your schema uses a different field name (e.g., `workspaceId`, `tenantId`, `teamId`), configure it via `tenantField`:
+
+```typescript
+// In defineResource
+const invoiceResource = defineResource({
+  name: 'invoice',
+  adapter: createMongooseAdapter({ model: InvoiceModel, repository: invoiceRepo }),
+  organizationScoped: true,
+  tenantField: 'workspaceId',  // Uses 'workspaceId' instead of 'organizationId'
+  // ...
+});
+
+// Or in BaseController directly
+class InvoiceController extends BaseController {
+  constructor(repository) {
+    super(repository, {
+      tenantField: 'workspaceId',
+    });
+  }
+}
+```
+
+**What changes:** The `tenantField` option controls which field BaseController uses for:
+- **Filtering** — `_resolveRequest()` adds `{ [tenantField]: orgId }` to query filters
+- **ID lookups** — `_buildIdFilter()` includes tenant field in compound filters
+- **Scope checks** — `_checkOrgScope()` reads `item[tenantField]` for validation
+- **Creation** — `create()` injects `data[tenantField] = organizationId` on new documents
+
+**Note:** The org scope plugin (`orgScopePlugin`) still reads the organization ID from the `x-organization-id` header and sets `req.organizationId` / `req.context.organizationId`. The `tenantField` only controls which *document field* that value maps to.
+
 ## Validation
 
 Arc validates configs at definition time (fail-fast):
@@ -419,6 +543,8 @@ class ProductController implements IController<Product> {
 ## See Also
 
 - [Handler Patterns Guide](./ARC_HANDLER_PATTERNS.md) - Detailed comparison of patterns
+- [Factory](./factory.md) - App configuration, TypeBox type provider
+- [Auth](./auth.md) - JWT authentication (fast-jwt v10)
 - [Presets](./presets.md) - Reusable behaviors
 - [Hooks](./hooks.md) - Lifecycle callbacks
 - [Permissions](./permissions.md) - Access control

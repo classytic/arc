@@ -55,11 +55,16 @@ async function errorHandlerPluginFn(
   fastify: FastifyInstance,
   options: ErrorHandlerOptions = {}
 ): Promise<void> {
+  const isProduction = process.env.NODE_ENV === 'production';
   const {
-    includeStack = process.env.NODE_ENV !== 'production',
+    includeStack = !isProduction,
     onError,
     errorMap = {},
   } = options;
+
+  // Use includeStack as the single source of truth for detail exposure.
+  // When includeStack is false (production default), hide internal details.
+  const exposeDetails = includeStack;
 
   fastify.setErrorHandler(async (error: FastifyError | Error, request: FastifyRequest, reply: FastifyReply) => {
     // Call custom error handler if provided
@@ -129,16 +134,16 @@ async function errorHandlerPluginFn(
       response.code = 'VALIDATION_ERROR';
       const mongooseErrors = (error as { errors: Record<string, { message: string; path: string }> }).errors;
 
-      // Security: Don't expose schema field names in production
-      if (process.env.NODE_ENV === 'production') {
-        response.details = { errorCount: Object.keys(mongooseErrors).length };
-      } else {
+      // Security: Don't expose schema field names when details are hidden
+      if (exposeDetails) {
         response.details = {
           errors: Object.entries(mongooseErrors).map(([field, err]) => ({
             field: err.path || field,
             message: err.message,
           })),
         };
+      } else {
+        response.details = { errorCount: Object.keys(mongooseErrors).length };
       }
     }
     // Handle Mongoose CastError (invalid ObjectId, etc.)
@@ -154,8 +159,8 @@ async function errorHandlerPluginFn(
       response.error = 'Resource already exists';
       const keyValue = (error as { keyValue?: Record<string, unknown> }).keyValue;
 
-      // Security: Don't expose schema field names in production
-      if (keyValue && process.env.NODE_ENV !== 'production') {
+      // Security: Don't expose schema field names when details are hidden
+      if (keyValue && exposeDetails) {
         response.details = { duplicateFields: Object.keys(keyValue) };
       }
     }

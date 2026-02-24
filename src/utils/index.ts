@@ -34,6 +34,7 @@ export {
   responses,
   queryParams,
   getListQueryParams,
+  getDefaultCrudSchemas,
   // Aliases for backwards compatibility with local responseSchemas.js
   itemWrapper,
   paginateWrapper,

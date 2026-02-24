@@ -109,6 +109,9 @@ export interface RequestContext {
   operation?: string;
   user?: unknown; // YOUR user object
   organizationId?: string;
+  teamId?: string;
+  orgRoles?: string[];
+  orgScope?: string;
   filters?: Record<string, unknown>;
   [key: string]: unknown;
 }
@@ -135,6 +138,7 @@ export interface ControllerQueryOptions {
   after?: string; // Cursor-based pagination
   user?: unknown; // Current user context
   organizationId?: string; // Organization context (for multi-tenant)
+  teamId?: string; // Team context (for team-scoped resources)
   context?: Record<string, unknown>; // Additional context
   /** Allow additional options */
   [key: string]: unknown;
@@ -282,8 +286,9 @@ export type FastifyWithDecorators = FastifyInstance & {
   // Events decorator (from eventPlugin)
   events?: EventsDecorator;
 
-  // Auth decorator (from auth plugin)
+  // Auth decorators (from auth plugin)
   authenticate?: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  optionalAuthenticate?: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
   // Organization-scoped filtering (from multiTenant preset)
   organizationScoped?: (options?: { required?: boolean }) => RouteHandlerMethod;
@@ -303,6 +308,28 @@ export interface OwnershipCheck {
 
 import type { ControllerLike } from './handlers.js';
 
+/**
+ * Per-resource rate limit configuration.
+ *
+ * Applied to all routes of the resource when `@fastify/rate-limit` is registered
+ * on the Fastify instance. Set to `false` to explicitly disable rate limiting
+ * for a resource even when a global rate limit is configured.
+ *
+ * @example
+ * ```typescript
+ * defineResource({
+ *   name: 'product',
+ *   rateLimit: { max: 100, timeWindow: '1 minute' },
+ * });
+ * ```
+ */
+export interface RateLimitConfig {
+  /** Maximum number of requests allowed within the time window */
+  max: number;
+  /** Time window for rate limiting (e.g., '1 minute', '15 seconds', '1 hour') */
+  timeWindow: string;
+}
+
 export interface ResourceConfig<TDoc = AnyRecord> {
   name: string;
   displayName?: string;
@@ -310,8 +337,7 @@ export interface ResourceConfig<TDoc = AnyRecord> {
   prefix?: string; // Defaults to `/${name}s` if not provided
   adapter?: DataAdapter<TDoc>; // Optional for service-pattern resources
   /** Controller instance - accepts any object with CRUD methods */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  controller?: IController<TDoc> | ControllerLike | Record<string, any> | object;
+  controller?: IController<TDoc> | ControllerLike;
   queryParser?: unknown;
   permissions?: ResourcePermissions;
   schemaOptions?: RouteSchemaOptions;
@@ -319,17 +345,58 @@ export interface ResourceConfig<TDoc = AnyRecord> {
   customSchemas?: Partial<CrudSchemas>; // Custom JSON schemas
   presets?: Array<string | PresetResult | { name: string; [key: string]: unknown }>; // Preset names, objects, or PresetResult
   hooks?: ResourceHooks;
+  /**
+   * Functional pipeline — guards, transforms, and interceptors.
+   * Can be a flat array (all operations) or per-operation map.
+   *
+   * @example
+   * ```typescript
+   * import { pipe, guard, transform, intercept } from '@classytic/arc';
+   *
+   * resource('product', {
+   *   pipe: pipe(isActive, slugify, timing),
+   *   // OR per-operation:
+   *   pipe: { create: pipe(isActive, slugify), list: pipe(timing) },
+   * });
+   * ```
+   */
+  pipe?: import('../pipeline/types.js').PipelineConfig;
+  /**
+   * Field-level permissions — control visibility and writability per role.
+   *
+   * @example
+   * ```typescript
+   * import { fields } from '@classytic/arc';
+   * fields: {
+   *   salary: fields.visibleTo(['admin', 'hr']),
+   *   password: fields.hidden(),
+   * }
+   * ```
+   */
+  fields?: import('../permissions/fields.js').FieldPermissionMap;
   middlewares?: MiddlewareConfig;
   additionalRoutes?: AdditionalRoute[];
   disableCrud?: boolean;
   disableDefaultRoutes?: boolean;
   disabledRoutes?: CrudRouteKey[]; // Specific routes to disable
   organizationScoped?: boolean; // Multi-tenant filtering
+  /**
+   * Field name used for multi-tenant scoping (default: 'organizationId').
+   * Override to match your schema: 'workspaceId', 'tenantId', 'teamId', etc.
+   * Only takes effect when `organizationScoped` is enabled or org context is present.
+   */
+  tenantField?: string;
   module?: string; // For grouping in registry
   events?: Record<string, EventDefinition>; // Domain events
   skipValidation?: boolean; // Skip schema validation
   skipRegistry?: boolean; // Don't register in introspection
   _appliedPresets?: string[]; // Internal: track applied presets
+  /**
+   * Per-resource rate limiting.
+   * Requires `@fastify/rate-limit` to be registered on the Fastify instance.
+   * Set to `false` to disable rate limiting for this resource.
+   */
+  rateLimit?: RateLimitConfig | false;
 }
 
 /**
@@ -345,13 +412,9 @@ export interface ResourcePermissions {
 }
 
 export interface ResourceHooks {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   beforeCreate?: (data: AnyRecord) => Promise<AnyRecord> | AnyRecord;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   afterCreate?: (doc: AnyRecord) => Promise<void> | void;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   beforeUpdate?: (id: string, data: AnyRecord) => Promise<AnyRecord> | AnyRecord;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   afterUpdate?: (doc: AnyRecord) => Promise<void> | void;
   beforeDelete?: (id: string) => Promise<void> | void;
   afterDelete?: (id: string) => Promise<void> | void;
@@ -367,9 +430,9 @@ export interface AdditionalRoute {
   path: string;
   /**
    * Handler - string (controller method name) or function
-   * Function can be Fastify handler or any (request, reply) => Promise<any>
+   * Function can be Fastify handler or (request, reply) => Promise<unknown>
    */
-  handler: string | RouteHandlerMethod | ((request: any, reply: any) => any);
+  handler: string | RouteHandlerMethod | ((request: FastifyRequest, reply: FastifyReply) => unknown);
 
   /** Permission check - REQUIRED */
   permissions: PermissionCheck;
@@ -397,7 +460,7 @@ export interface AdditionalRoute {
    * // Function that receives fastify (for accessing decorators)
    * preHandler: (fastify) => [fastify.customerContext({ required: true })]
    */
-  preHandler?: RouteHandlerMethod[] | ((fastify: any) => RouteHandlerMethod[]);
+  preHandler?: RouteHandlerMethod[] | ((fastify: FastifyInstance) => RouteHandlerMethod[]);
 
   /** Fastify route schema */
   schema?: Record<string, unknown>;
@@ -584,8 +647,7 @@ export interface AuthenticatorContext {
 export type Authenticator = (
   request: FastifyRequest,
   context: AuthenticatorContext
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-) => Promise<any | null> | any | null;
+) => Promise<unknown | null> | unknown | null;
 
 /**
  * Token pair returned by issueTokens helper
@@ -658,8 +720,7 @@ export interface ServiceContext {
 export interface PresetHook {
   operation: 'create' | 'update' | 'delete' | 'read' | 'list';
   phase: 'before' | 'after';
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  handler: (ctx: any) => void | Promise<void> | AnyRecord | Promise<AnyRecord>;
+  handler: (ctx: AnyRecord) => void | Promise<void> | AnyRecord | Promise<AnyRecord>;
   priority?: number;
 }
 
@@ -692,8 +753,7 @@ export interface RequestIdOptions {
 
 export interface HealthOptions {
   path?: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  check?: () => Promise<any>;
+  check?: () => Promise<unknown>;
 }
 
 export interface HealthCheck {
@@ -807,7 +867,6 @@ export interface OrgScopeOptions {
   queryParam?: string;
   bypassRoles?: string[];
   userOrgsPath?: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   validateMembership?: (user: unknown, orgId: string) => Promise<boolean> | boolean;
 }
 
@@ -843,6 +902,9 @@ export interface CrudRouterOptions {
   /** Disable specific CRUD routes */
   disabledRoutes?: CrudRouteKey[];
 
+  /** Functional pipeline (guard/transform/intercept) */
+  pipe?: import('../pipeline/types.js').PipelineConfig;
+
   /** Enable organization-scoped filtering */
   organizationScoped?: boolean;
 
@@ -851,6 +913,16 @@ export interface CrudRouterOptions {
 
   /** Schema generation options */
   schemaOptions?: RouteSchemaOptions;
+
+  /** Field-level permissions (visibility, writability per role) */
+  fields?: import('../permissions/fields.js').FieldPermissionMap;
+
+  /**
+   * Per-resource rate limiting.
+   * Requires `@fastify/rate-limit` to be registered on the Fastify instance.
+   * Set to `false` to disable rate limiting for this resource.
+   */
+  rateLimit?: RateLimitConfig | false;
 }
 
 // ============================================================================
@@ -883,6 +955,14 @@ export interface RegistryEntry extends ResourceMetadata {
   disableDefaultRoutes?: boolean;
   openApiSchemas?: OpenApiSchemas;
   registeredAt?: string;
+  /** Field-level permissions metadata (for OpenAPI docs) */
+  fieldPermissions?: Record<string, { type: string; roles?: readonly string[]; redactValue?: unknown }>;
+  /** Pipeline step names (for OpenAPI docs) */
+  pipelineSteps?: Array<{ type: string; name: string; operations?: string[] }>;
+  /** Organization scoped flag */
+  organizationScoped?: boolean;
+  /** Rate limit config */
+  rateLimit?: RateLimitConfig | false;
 }
 
 export interface RegistryStats {
@@ -903,7 +983,6 @@ export interface IntrospectionData {
 
 export interface EventDefinition {
   name: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   handler: (data: unknown) => Promise<void> | void;
   schema?: Record<string, unknown>; // JSON schema for event payload
   description?: string; // Event documentation
@@ -955,6 +1034,19 @@ export type InferDocType<T> =
       ? D
       : never;
 
+/**
+ * Infer document type from a DataAdapter.
+ * Falls back to `unknown` (not `never`) — safe for generic constraints.
+ *
+ * @example
+ * ```typescript
+ * const adapter = createMongooseAdapter({ model: ProductModel, repository: productRepo });
+ * type ProductDoc = InferAdapterDoc<typeof adapter>;
+ * // ProductDoc = the document type inferred from the adapter
+ * ```
+ */
+export type InferAdapterDoc<A> = A extends DataAdapter<infer D> ? D : unknown;
+
 export type InferResourceDoc<T> = T extends ResourceConfig<infer D> ? D : never;
 export type TypedResourceConfig<TDoc> = ResourceConfig<TDoc>;
 export type TypedController<TDoc> = IController<TDoc>;
@@ -979,4 +1071,9 @@ export interface BaseControllerOptions {
   resourceName?: string;
   /** Disable event emission */
   disableEvents?: boolean;
+  /**
+   * Field name used for multi-tenant scoping (default: 'organizationId').
+   * Override to match your schema: 'workspaceId', 'tenantId', 'teamId', etc.
+   */
+  tenantField?: string;
 }

@@ -20,3 +20,26 @@
 
 export { default as authPlugin, authPlugin as authPluginFn } from './authPlugin.js';
 export type { AuthPluginOptions } from './authPlugin.js';
+
+// Better Auth adapter
+export { createBetterAuthAdapter } from './betterAuth.js';
+export type {
+  BetterAuthAdapterOptions,
+  BetterAuthAdapterResult,
+  BetterAuthHandler,
+} from './betterAuth.js';
+
+// Better Auth OpenAPI extractor
+export { extractBetterAuthOpenApi, zodLikeToJsonSchema } from './betterAuthOpenApi.js';
+export type { BetterAuthOpenApiOptions } from './betterAuthOpenApi.js';
+
+// Session Manager
+export { createSessionManager, MemorySessionStore } from './sessionManager.js';
+export type {
+  SessionData,
+  SessionStore,
+  SessionCookieOptions,
+  SessionManagerOptions,
+  SessionManagerResult,
+  MemorySessionStoreOptions,
+} from './sessionManager.js';

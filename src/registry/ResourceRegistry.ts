@@ -12,6 +12,8 @@ import type {
   ResourcePermissions,
 } from '../types/index.js';
 import type { ResourceDefinition } from '../core/defineResource.js';
+import type { FieldPermissionMap } from '../permissions/fields.js';
+import type { PipelineConfig, PipelineStep } from '../pipeline/types.js';
 
 export interface RegisterOptions {
   module?: string;
@@ -74,6 +76,10 @@ export class ResourceRegistry {
       registeredAt: new Date().toISOString(),
       disableDefaultRoutes: resource.disableDefaultRoutes,
       openApiSchemas: options.openApiSchemas,
+      fieldPermissions: extractFieldPermissions(resource.fields),
+      pipelineSteps: extractPipelineSteps(resource.pipe),
+      organizationScoped: resource.organizationScoped,
+      rateLimit: resource.rateLimit,
       plugin: resource.toPlugin(), // Store plugin factory
     };
 
@@ -228,14 +234,57 @@ export class ResourceRegistry {
   }
 }
 
-// Singleton instance (use global to avoid duplicate bundles creating separate registries)
-const registryKey = Symbol.for('arc.resourceRegistry');
-const globalScope = globalThis as typeof globalThis & {
-  [registryKey]?: ResourceRegistry;
-};
-export const resourceRegistry = globalScope[registryKey] ?? new ResourceRegistry();
-if (!globalScope[registryKey]) {
-  globalScope[registryKey] = resourceRegistry;
+export default ResourceRegistry;
+
+// ---------------------------------------------------------------------------
+// Helpers for extracting v2.0 metadata
+// ---------------------------------------------------------------------------
+
+function extractFieldPermissions(
+  fields?: FieldPermissionMap,
+): RegistryEntry['fieldPermissions'] {
+  if (!fields || Object.keys(fields).length === 0) return undefined;
+
+  const result: NonNullable<RegistryEntry['fieldPermissions']> = {};
+  for (const [field, perm] of Object.entries(fields)) {
+    const entry: { type: string; roles?: readonly string[]; redactValue?: unknown } = {
+      type: perm._type,
+    };
+    if (perm.roles?.length) entry.roles = perm.roles;
+    if (perm.redactValue !== undefined) entry.redactValue = perm.redactValue;
+    result[field] = entry;
+  }
+  return result;
 }
 
-export default resourceRegistry;
+function extractPipelineSteps(
+  pipe?: PipelineConfig,
+): RegistryEntry['pipelineSteps'] {
+  if (!pipe) return undefined;
+
+  const steps: PipelineStep[] = [];
+  if (Array.isArray(pipe)) {
+    steps.push(...pipe);
+  } else {
+    const seen = new Set<string>();
+    for (const opSteps of Object.values(pipe)) {
+      if (Array.isArray(opSteps)) {
+        for (const step of opSteps) {
+          const key = `${step._type}:${step.name}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            steps.push(step);
+          }
+        }
+      }
+    }
+  }
+
+  if (steps.length === 0) return undefined;
+
+  return steps.map((s) => ({
+    type: s._type,
+    name: s.name,
+    operations: s.operations ? [...s.operations] : undefined,
+  }));
+}

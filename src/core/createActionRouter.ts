@@ -348,7 +348,7 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
     }
   );
 
-  fastify.log.info(
+  fastify.log.debug(
     { actions: actionEnum, tag },
     '[createActionRouter] Registered action endpoint: POST /:id/action'
   );

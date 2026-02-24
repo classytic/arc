@@ -1,11 +1,11 @@
 /**
  * Example: Basic CRUD Resource with Mongoose
  *
- * Demonstrates the new adapter-based architecture.
+ * Demonstrates the adapter-based architecture with defineResource().
  */
 
 import mongoose from 'mongoose';
-import { defineResource, createMongooseAdapter } from '../src/index.js';
+import { defineResource, createMongooseAdapter, permissions, allowPublic, requireRoles } from '../src/index.js';
 import { Repository } from '@classytic/mongokit';
 
 // ============================================================================
@@ -62,30 +62,22 @@ export const productResource = defineResource({
   displayName: 'Products',
   module: 'catalog',
 
-  // ADAPTER PATTERN: Decouples Arc from database
-  // MongooseAdapter bridges Mongoose → Arc's CrudRepository interface
-  adapter: createMongooseAdapter({
-    model: Product as any,
-    repository: productRepository as any,
-  }),
+  adapter: createMongooseAdapter(Product, productRepository),
 
   // Presets add functionality without code
   presets: ['softDelete', 'slugLookup'],
 
-  // Permissions
-  permissions: {
-    list: [],              // Public
-    get: [],               // Public
-    create: ['admin'],     // Protected
-    update: ['admin'],     // Protected
-    delete: ['admin'],     // Protected
-  },
+  // Permissions — public read, admin write
+  permissions: permissions.publicReadAdminWrite(),
 
   // Custom routes
   additionalRoutes: [
     {
       method: 'GET',
       path: '/search',
+      wrapHandler: false,
+      permissions: allowPublic(),
+      summary: 'Search products by name',
       handler: async (req, reply) => {
         const { q } = req.query as { q: string };
         const results = await Product.find({
@@ -94,8 +86,6 @@ export const productResource = defineResource({
         }).lean();
         return reply.send({ success: true, data: results });
       },
-      authRoles: [],
-      summary: 'Search products by name',
     },
   ],
 

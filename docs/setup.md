@@ -14,13 +14,20 @@ Get started with Arc in under 5 minutes.
 
 ```bash
 # Core packages
-npm install @classytic/arc @classytic/mongokit fastify mongoose
+npm install @classytic/arc @classytic/mongokit fastify@^5.7.4 mongoose@^9.2.1
+
+# Authentication (choose one)
+npm install @fastify/jwt@^10.0.0    # Arc JWT auth (uses fast-jwt internally)
+# npm install better-auth            # Better Auth adapter
 
 # Optional: Security & performance plugins
-npm install @fastify/cors @fastify/helmet @fastify/rate-limit @fastify/jwt
+npm install @fastify/cors @fastify/helmet @fastify/rate-limit @fastify/under-pressure
+
+# Optional: Type-safe schemas
+npm install @sinclair/typebox @fastify/type-provider-typebox
 
 # Dev dependencies
-npm install -D typescript @types/node vitest
+npm install -D typescript @types/node vitest pino-pretty
 ```
 
 ### 2. Initialize TypeScript
@@ -477,11 +484,12 @@ npm test
 
 ## Next Steps
 
-- [Core Concepts](./core.md) - Understanding resources, adapters, controllers
-- [Permissions](./permissions.md) - Fine-grained access control
+- [Core Concepts](./core.md) - Resources, adapters, controllers, query parsing, response schemas
+- [Factory](./factory.md) - App configuration options, TypeBox type provider
+- [Auth](./auth.md) - JWT authentication (fast-jwt), permissions
 - [Presets](./presets.md) - Reusable behaviors (softDelete, multiTenant, etc.)
+- [Permissions](./permissions.md) - Fine-grained access control
 - [Hooks](./hooks.md) - Lifecycle callbacks
-- [Factory](./factory.md) - App configuration options
 - [Tree-Shaking](./tree-shaking.md) - Optimizing bundle size
 
 ---

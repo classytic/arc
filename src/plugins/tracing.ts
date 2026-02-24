@@ -78,18 +78,6 @@ export interface TracingOptions {
   autoInstrumentation?: boolean;
 
   /**
-   * Trace all repository operations
-   * @default true
-   */
-  traceRepository?: boolean;
-
-  /**
-   * Trace all controller operations
-   * @default true
-   */
-  traceController?: boolean;
-
-  /**
    * Sample rate (0.0 to 1.0)
    * @default 1.0 (trace everything)
    */
@@ -144,8 +132,6 @@ async function tracingPlugin(fastify: FastifyInstance, options: TracingOptions =
   const {
     serviceName = '@classytic/arc',
     autoInstrumentation = true,
-    traceRepository = true,
-    traceController = true,
     sampleRate = 1.0,
   } = options;
 
@@ -162,7 +148,7 @@ async function tracingPlugin(fastify: FastifyInstance, options: TracingOptions =
     return;
   }
 
-  // Auto-instrumentation
+  // Auto-instrumentation — enable HTTP + MongoDB tracing
   if (autoInstrumentation && getNodeAutoInstrumentations) {
     const instrumentations = getNodeAutoInstrumentations({
       '@opentelemetry/instrumentation-http': {
@@ -172,6 +158,10 @@ async function tracingPlugin(fastify: FastifyInstance, options: TracingOptions =
         enabled: true,
       },
     });
+    for (const instrumentation of instrumentations) {
+      instrumentation.enable();
+    }
+    fastify.log.debug('OpenTelemetry auto-instrumentation enabled');
   }
 
   const tracer = trace.getTracer(serviceName);
@@ -251,7 +241,7 @@ async function tracingPlugin(fastify: FastifyInstance, options: TracingOptions =
     });
   });
 
-  fastify.log.info({ serviceName }, 'OpenTelemetry tracing enabled');
+  fastify.log.debug({ serviceName }, 'OpenTelemetry tracing enabled');
 }
 
 /**

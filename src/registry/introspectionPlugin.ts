@@ -6,8 +6,7 @@
 
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
-import type { IntrospectionPluginOptions, FastifyWithAuth } from '../types/index.js';
-import { resourceRegistry } from './ResourceRegistry.js';
+import type { IntrospectionPluginOptions, FastifyWithAuth, FastifyWithDecorators } from '../types/index.js';
 
 const introspectionPlugin: FastifyPluginAsync<IntrospectionPluginOptions> = async (
   fastify: FastifyInstance,
@@ -16,12 +15,11 @@ const introspectionPlugin: FastifyPluginAsync<IntrospectionPluginOptions> = asyn
   const {
     prefix = '/_resources',
     authRoles = ['superadmin'],
-    enabled = process.env.NODE_ENV !== 'production' ||
-      process.env.ENABLE_INTROSPECTION === 'true',
+    enabled = true,
   } = opts;
 
   if (!enabled) {
-    fastify.log?.info?.('Introspection plugin disabled');
+    fastify.log?.debug?.('Introspection plugin disabled');
     return;
   }
 
@@ -36,6 +34,9 @@ const introspectionPlugin: FastifyPluginAsync<IntrospectionPluginOptions> = asyn
         ].filter(Boolean)
       : [];
 
+  // Instance-scoped registry access
+  const getRegistry = () => (fastify as unknown as FastifyWithDecorators).arc?.registry;
+
   await fastify.register(async (instance) => {
     // GET / - Get all registered resources
     instance.get(
@@ -44,7 +45,7 @@ const introspectionPlugin: FastifyPluginAsync<IntrospectionPluginOptions> = asyn
         preHandler: authMiddleware as never,
       },
       async (_req: FastifyRequest, _reply: FastifyReply) => {
-        return resourceRegistry.getIntrospection();
+        return getRegistry()?.getIntrospection() ?? { resources: [], stats: {}, generatedAt: new Date().toISOString() };
       }
     );
 
@@ -55,7 +56,7 @@ const introspectionPlugin: FastifyPluginAsync<IntrospectionPluginOptions> = asyn
         preHandler: authMiddleware as never,
       },
       async (_req: FastifyRequest, _reply: FastifyReply) => {
-        return resourceRegistry.getStats();
+        return getRegistry()?.getStats() ?? { totalResources: 0, byModule: {}, presetUsage: {}, totalRoutes: 0, totalEvents: 0 };
       }
     );
 
@@ -75,7 +76,7 @@ const introspectionPlugin: FastifyPluginAsync<IntrospectionPluginOptions> = asyn
         preHandler: authMiddleware as never,
       },
       async (req, reply: FastifyReply) => {
-        const resource = resourceRegistry.get(req.params.name);
+        const resource = getRegistry()?.get(req.params.name);
         if (!resource) {
           return reply.code(404).send({
             error: `Resource '${req.params.name}' not found`,
@@ -86,7 +87,7 @@ const introspectionPlugin: FastifyPluginAsync<IntrospectionPluginOptions> = asyn
     );
   }, { prefix });
 
-  fastify.log?.info?.(`Introspection API at ${prefix}`);
+  fastify.log?.debug?.(`Introspection API at ${prefix}`);
 };
 
 export default fp(introspectionPlugin, { name: 'arc-introspection' });

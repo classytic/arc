@@ -13,14 +13,12 @@
  * ```
  */
 
-import type { ClientSession } from 'mongoose';
-
 /**
  * Query options for read operations
  */
 export interface QueryOptions {
-  /** MongoDB session for transactions */
-  session?: ClientSession;
+  /** Transaction session — adapters handle the actual type (e.g., Mongoose ClientSession) */
+  session?: unknown;
   /** Field selection - include or exclude fields */
   select?: string | string[] | Record<string, 0 | 1>;
   /** Relations to populate - string, array, or Mongoose populate options */
@@ -97,7 +95,7 @@ export interface CrudRepository<TDoc> {
    */
   create(
     data: Partial<TDoc>,
-    options?: { session?: ClientSession; [key: string]: unknown }
+    options?: { session?: unknown; [key: string]: unknown }
   ): Promise<TDoc>;
 
   /**
@@ -114,8 +112,11 @@ export interface CrudRepository<TDoc> {
    */
   delete(
     id: string,
-    options?: { session?: ClientSession; [key: string]: unknown }
+    options?: { session?: unknown; [key: string]: unknown }
   ): Promise<{ success: boolean; message: string }>;
+
+  /** Allow custom methods (getBySlug, getTree, restore, etc.) */
+  [key: string]: unknown;
 }
 
 /**

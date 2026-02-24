@@ -44,6 +44,7 @@ declare module 'fastify' {
   interface FastifyRequest {
     context?: RequestContext;
     organizationId?: string;
+    teamId?: string;
   }
 
   interface FastifyInstance {
@@ -218,7 +219,7 @@ const orgScopePlugin: FastifyPluginAsync<OrgScopeOptions> = async (
         const memberOrgId = o.organizationId?.toString() ?? String(o);
         return memberOrgId === orgIdFromHeader;
       });
-      req.context.orgRoles = orgMembership?.roles ?? [];
+      req.context.orgRoles = (orgMembership?.roles as string[] | undefined) ?? [];
 
       request.log?.debug?.({
         msg: 'Organization context set',
@@ -232,7 +233,7 @@ const orgScopePlugin: FastifyPluginAsync<OrgScopeOptions> = async (
   // Decorator for creating org context manually
   fastify.decorate('createOrgContext', createOrgContext);
 
-  fastify.log?.info?.('Organization scope plugin registered');
+  fastify.log?.debug?.('Organization scope plugin registered');
 };
 
 export default fp(orgScopePlugin, {

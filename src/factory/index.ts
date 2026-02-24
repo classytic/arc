@@ -25,4 +25,13 @@
 
 export { createApp, ArcFactory } from './createApp.js';
 export { getPreset, productionPreset, developmentPreset, testingPreset } from './presets.js';
-export type { CreateAppOptions, UnderPressureOptions, MultipartOptions, RawBodyOptions } from './types.js';
+export type {
+  CreateAppOptions,
+  AuthOption,
+  BetterAuthOption,
+  CustomPluginAuthOption,
+  CustomAuthenticatorOption,
+  UnderPressureOptions,
+  MultipartOptions,
+  RawBodyOptions,
+} from './types.js';

@@ -9,12 +9,13 @@
  * Automatically installs dependencies using detected package manager.
  */
 
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
-import * as readline from 'node:readline';
-import { execSync, spawn } from 'node:child_process';
+import * as fs from "node:fs/promises";
+import { accessSync } from "node:fs";
+import * as path from "node:path";
+import * as readline from "node:readline";
+import { execSync, spawn } from "node:child_process";
 
-type PackageManager = 'npm' | 'pnpm' | 'yarn' | 'bun';
+type PackageManager = "npm" | "pnpm" | "yarn" | "bun";
 
 // ============================================================================
 // Types
@@ -22,18 +23,22 @@ type PackageManager = 'npm' | 'pnpm' | 'yarn' | 'bun';
 
 export interface InitOptions {
   name?: string;
-  adapter?: 'mongokit' | 'custom';
-  tenant?: 'multi' | 'single';
+  adapter?: "mongokit" | "custom";
+  auth?: "jwt" | "better-auth";
+  tenant?: "multi" | "single";
   typescript?: boolean;
+  edge?: boolean;
   skipInstall?: boolean;
   force?: boolean;
 }
 
 interface ProjectConfig {
   name: string;
-  adapter: 'mongokit' | 'custom';
-  tenant: 'multi' | 'single';
+  adapter: "mongokit" | "custom";
+  auth: "jwt" | "better-auth";
+  tenant: "multi" | "single";
   typescript: boolean;
+  edge: boolean;
 }
 
 // ============================================================================
@@ -55,21 +60,38 @@ export async function init(options: InitOptions = {}): Promise<void> {
   const config = await gatherConfig(options);
 
   console.log(`\n📦 Creating project: ${config.name}`);
-  console.log(`   Adapter: ${config.adapter === 'mongokit' ? 'MongoKit (MongoDB)' : 'Custom'}`);
-  console.log(`   Tenant: ${config.tenant === 'multi' ? 'Multi-tenant' : 'Single-tenant'}`);
-  console.log(`   Language: ${config.typescript ? 'TypeScript' : 'JavaScript'}\n`);
+  console.log(
+    `   Adapter: ${config.adapter === "mongokit" ? "MongoKit (MongoDB)" : "Custom"}`,
+  );
+  console.log(
+    `   Auth: ${config.auth === "better-auth" ? "Better Auth (recommended)" : "Arc JWT"}`,
+  );
+  console.log(
+    `   Tenant: ${config.tenant === "multi" ? "Multi-tenant" : "Single-tenant"}`,
+  );
+  console.log(
+    `   Language: ${config.typescript ? "TypeScript" : "JavaScript"}`,
+  );
+  console.log(
+    `   Target: ${config.edge ? "Edge/Serverless" : "Node.js Server"}\n`,
+  );
 
   const projectPath = path.join(process.cwd(), config.name);
 
   // Check if directory exists
   try {
     await fs.access(projectPath);
+    // If we reach here, the directory EXISTS
     if (!options.force) {
-      console.error(`❌ Directory "${config.name}" already exists. Use --force to overwrite.`);
-      process.exit(1);
+      throw new Error(
+        `Directory "${config.name}" already exists. Use --force to overwrite.`,
+      );
     }
-  } catch {
-    // Directory doesn't exist - good
+  } catch (err) {
+    // ENOENT = directory doesn't exist = good, fall through to scaffolding
+    const isNotFound = err && typeof err === 'object' && 'code' in err && err.code === 'ENOENT';
+    if (!isNotFound) throw err;
+    // else: directory doesn't exist, continue normally
   }
 
   // Detect package manager
@@ -81,7 +103,7 @@ export async function init(options: InitOptions = {}): Promise<void> {
 
   // Install dependencies unless --skip-install
   if (!options.skipInstall) {
-    console.log('\n📥 Installing dependencies...\n');
+    console.log("\n📥 Installing dependencies...\n");
     await installDependencies(projectPath, config, packageManager);
   }
 
@@ -101,21 +123,21 @@ function detectPackageManager(): PackageManager {
   // Check for lockfiles in current directory (user preference)
   try {
     const cwd = process.cwd();
-    if (existsSync(path.join(cwd, 'pnpm-lock.yaml'))) return 'pnpm';
-    if (existsSync(path.join(cwd, 'yarn.lock'))) return 'yarn';
-    if (existsSync(path.join(cwd, 'bun.lockb'))) return 'bun';
-    if (existsSync(path.join(cwd, 'package-lock.json'))) return 'npm';
+    if (existsSync(path.join(cwd, "pnpm-lock.yaml"))) return "pnpm";
+    if (existsSync(path.join(cwd, "yarn.lock"))) return "yarn";
+    if (existsSync(path.join(cwd, "bun.lockb"))) return "bun";
+    if (existsSync(path.join(cwd, "package-lock.json"))) return "npm";
   } catch {
     // Ignore errors
   }
 
   // Check which package managers are available
-  if (isCommandAvailable('pnpm')) return 'pnpm';
-  if (isCommandAvailable('yarn')) return 'yarn';
-  if (isCommandAvailable('bun')) return 'bun';
+  if (isCommandAvailable("pnpm")) return "pnpm";
+  if (isCommandAvailable("yarn")) return "yarn";
+  if (isCommandAvailable("bun")) return "bun";
 
   // Default to npm
-  return 'npm';
+  return "npm";
 }
 
 /**
@@ -123,7 +145,7 @@ function detectPackageManager(): PackageManager {
  */
 function isCommandAvailable(command: string): boolean {
   try {
-    execSync(`${command} --version`, { stdio: 'ignore' });
+    execSync(`${command} --version`, { stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -131,11 +153,11 @@ function isCommandAvailable(command: string): boolean {
 }
 
 /**
- * Sync check if file exists
+ * Sync check if file exists (ESM-compatible — no require())
  */
 function existsSync(filePath: string): boolean {
   try {
-    require('fs').accessSync(filePath);
+    accessSync(filePath);
     return true;
   } catch {
     return false;
@@ -148,39 +170,34 @@ function existsSync(filePath: string): boolean {
 async function installDependencies(
   projectPath: string,
   config: ProjectConfig,
-  pm: PackageManager
+  pm: PackageManager,
 ): Promise<void> {
   // Build dependency lists
   const deps = [
-    '@classytic/arc@latest',
-    'fastify@latest',
-    '@fastify/cors@latest',
-    '@fastify/helmet@latest',
-    '@fastify/jwt@latest',
-    '@fastify/rate-limit@latest',
-    '@fastify/sensible@latest',
-    '@fastify/under-pressure@latest',
-    'bcryptjs@latest',
-    'dotenv@latest',
-    'jsonwebtoken@latest',
+    "@classytic/arc@latest",
+    "fastify@latest",
+    "@fastify/cors@latest",
+    "@fastify/helmet@latest",
+    "@fastify/rate-limit@latest",
+    "@fastify/sensible@latest",
+    "@fastify/under-pressure@latest",
+    "dotenv@latest",
   ];
 
-  if (config.adapter === 'mongokit') {
-    deps.push('@classytic/mongokit@latest', 'mongoose@latest');
+  if (config.auth === "better-auth") {
+    deps.push("better-auth@latest", "mongodb@latest");
+  } else {
+    deps.push("@fastify/jwt@latest", "bcryptjs@latest");
   }
 
-  const devDeps = [
-    'vitest@latest',
-    'pino-pretty@latest',
-  ];
+  if (config.adapter === "mongokit") {
+    deps.push("@classytic/mongokit@latest", "mongoose@latest");
+  }
+
+  const devDeps = ["vitest@latest", "pino-pretty@latest"];
 
   if (config.typescript) {
-    devDeps.push(
-      'typescript@latest',
-      '@types/node@latest',
-      '@types/jsonwebtoken@latest',
-      'tsx@latest'
-    );
+    devDeps.push("typescript@latest", "@types/node@latest", "tsx@latest");
   }
 
   // Build install commands based on package manager
@@ -200,19 +217,23 @@ async function installDependencies(
 /**
  * Get the install command for a package manager
  */
-function getInstallCommand(pm: PackageManager, packages: string[], isDev: boolean): string {
-  const pkgList = packages.join(' ');
+function getInstallCommand(
+  pm: PackageManager,
+  packages: string[],
+  isDev: boolean,
+): string {
+  const pkgList = packages.join(" ");
 
   switch (pm) {
-    case 'pnpm':
-      return `pnpm add ${isDev ? '-D' : ''} ${pkgList}`;
-    case 'yarn':
-      return `yarn add ${isDev ? '-D' : ''} ${pkgList}`;
-    case 'bun':
-      return `bun add ${isDev ? '-d' : ''} ${pkgList}`;
-    case 'npm':
+    case "pnpm":
+      return `pnpm add ${isDev ? "-D" : ""} ${pkgList}`;
+    case "yarn":
+      return `yarn add ${isDev ? "-D" : ""} ${pkgList}`;
+    case "bun":
+      return `bun add ${isDev ? "-d" : ""} ${pkgList}`;
+    case "npm":
     default:
-      return `npm install ${isDev ? '--save-dev' : ''} ${pkgList}`;
+      return `npm install ${isDev ? "--save-dev" : ""} ${pkgList}`;
   }
 }
 
@@ -221,17 +242,17 @@ function getInstallCommand(pm: PackageManager, packages: string[], isDev: boolea
  */
 function runCommand(command: string, cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const isWindows = process.platform === 'win32';
-    const shell = isWindows ? 'cmd' : '/bin/sh';
-    const shellFlag = isWindows ? '/c' : '-c';
+    const isWindows = process.platform === "win32";
+    const shell = isWindows ? "cmd" : "/bin/sh";
+    const shellFlag = isWindows ? "/c" : "-c";
 
     const child = spawn(shell, [shellFlag, command], {
       cwd,
-      stdio: 'inherit',
-      env: { ...process.env, FORCE_COLOR: '1' },
+      stdio: "inherit",
+      env: { ...process.env, FORCE_COLOR: "1" },
     });
 
-    child.on('close', (code) => {
+    child.on("close", (code) => {
       if (code === 0) {
         resolve();
       } else {
@@ -239,7 +260,7 @@ function runCommand(command: string, cwd: string): Promise<void> {
       }
     });
 
-    child.on('error', reject);
+    child.on("error", reject);
   });
 }
 
@@ -256,32 +277,61 @@ async function gatherConfig(options: InitOptions): Promise<ProjectConfig> {
   const question = (prompt: string): Promise<string> =>
     new Promise((resolve) => rl.question(prompt, resolve));
 
+  // Non-interactive mode: if a project name was provided via args, skip prompts
+  // and use defaults for any unspecified options
+  const nonInteractive = !!options.name;
+
   try {
     // Project name
-    const name = options.name || (await question('📁 Project name: ')) || 'my-arc-app';
+    const name =
+      options.name || (await question("📁 Project name: ")) || "my-arc-app";
 
     // Adapter choice
-    let adapter: 'mongokit' | 'custom' = options.adapter || 'mongokit';
-    if (!options.adapter) {
-      const adapterChoice = await question('🗄️  Database adapter [1=MongoKit (recommended), 2=Custom]: ');
-      adapter = adapterChoice === '2' ? 'custom' : 'mongokit';
+    let adapter: "mongokit" | "custom" = options.adapter || "mongokit";
+    if (!options.adapter && !nonInteractive) {
+      const adapterChoice = await question(
+        "🗄️  Database adapter [1=MongoKit (recommended), 2=Custom]: ",
+      );
+      adapter = adapterChoice === "2" ? "custom" : "mongokit";
+    }
+
+    // Auth strategy
+    let auth: "jwt" | "better-auth" = options.auth || "better-auth";
+    if (!options.auth && !nonInteractive) {
+      const authChoice = await question(
+        "🔐 Auth strategy [1=Better Auth (recommended), 2=Arc JWT]: ",
+      );
+      auth = authChoice === "2" ? "jwt" : "better-auth";
     }
 
     // Tenant mode
-    let tenant: 'multi' | 'single' = options.tenant || 'single';
-    if (!options.tenant) {
-      const tenantChoice = await question('🏢 Tenant mode [1=Single-tenant, 2=Multi-tenant]: ');
-      tenant = tenantChoice === '2' ? 'multi' : 'single';
+    let tenant: "multi" | "single" = options.tenant || "single";
+    if (!options.tenant && !nonInteractive) {
+      const tenantChoice = await question(
+        "🏢 Tenant mode [1=Single-tenant, 2=Multi-tenant]: ",
+      );
+      tenant = tenantChoice === "2" ? "multi" : "single";
     }
 
     // TypeScript or JavaScript
     let typescript = options.typescript ?? true;
-    if (options.typescript === undefined) {
-      const tsChoice = await question('�� Language [1=TypeScript (recommended), 2=JavaScript]: ');
-      typescript = tsChoice !== '2';
+    if (options.typescript === undefined && !nonInteractive) {
+      const tsChoice = await question(
+        "📝 Language [1=TypeScript (recommended), 2=JavaScript]: ",
+      );
+      typescript = tsChoice !== "2";
     }
 
-    return { name, adapter, tenant, typescript };
+    // Environment/Target choice
+    let edge = options.edge ?? false;
+    if (options.edge === undefined && !nonInteractive) {
+      const edgeChoice = await question(
+        "☁️  Deployment target [1=Node.js Server (default), 2=Edge/Serverless]: ",
+      );
+      edge = edgeChoice === "2";
+    }
+
+    return { name, adapter, auth, tenant, typescript, edge };
   } finally {
     rl.close();
   }
@@ -291,45 +341,52 @@ async function gatherConfig(options: InitOptions): Promise<ProjectConfig> {
 // Project Structure Creation
 // ============================================================================
 
-async function createProjectStructure(projectPath: string, config: ProjectConfig): Promise<void> {
-  const ext = config.typescript ? 'ts' : 'js';
+async function createProjectStructure(
+  projectPath: string,
+  config: ProjectConfig,
+): Promise<void> {
+  const ext = config.typescript ? "ts" : "js";
 
   // Create directories - Clean architecture (organized by resource, no barrels)
   const dirs = [
-    '',
-    'src',
-    'src/config',              // Config & env loading (import first!)
-    'src/shared',              // Shared utilities (adapters, presets, permissions)
-    'src/shared/presets',      // Preset definitions
-    'src/plugins',             // App-specific plugins
-    'src/resources',           // Resource definitions
-    'src/resources/user',      // User resource (user.model, user.repository, etc.)
-    'src/resources/auth',      // Auth resource (auth.resource, auth.handlers, etc.)
-    'src/resources/example',   // Example resource
-    'tests',
+    "",
+    "src",
+    "src/config", // Config & env loading (import first!)
+    "src/shared", // Shared utilities (adapters, presets, permissions)
+    "src/shared/presets", // Preset definitions
+    "src/plugins", // App-specific plugins
+    "src/resources", // Resource definitions
+    ...(config.auth === "jwt"
+      ? [
+          "src/resources/user", // User resource (user.model, user.repository, etc.)
+          "src/resources/auth", // Auth resource (auth.resource, auth.handlers, etc.)
+        ]
+      : []),
+    "src/resources/example", // Example resource
+    "tests",
   ];
 
   for (const dir of dirs) {
     await fs.mkdir(path.join(projectPath, dir), { recursive: true });
-    console.log(`  📁 Created: ${dir || '/'}`);
+    console.log(`  📁 Created: ${dir || "/"}`);
   }
 
   // Generate and write files
   const files: Record<string, string> = {
-    'package.json': packageJsonTemplate(config),
-    '.gitignore': gitignoreTemplate(),
-    '.env.example': envExampleTemplate(config),
-    '.env.dev': envDevTemplate(config),
-    'README.md': readmeTemplate(config),
+    "package.json": packageJsonTemplate(config),
+    ".gitignore": gitignoreTemplate(),
+    ".env.example": envExampleTemplate(config),
+    ".env.dev": envDevTemplate(config),
+    "README.md": readmeTemplate(config),
   };
 
   // TypeScript config
   if (config.typescript) {
-    files['tsconfig.json'] = tsconfigTemplate();
+    files["tsconfig.json"] = tsconfigTemplate();
   }
 
   // Vitest config (always needed for path alias resolution)
-  files['vitest.config.ts'] = vitestConfigTemplate(config);
+  files["vitest.config.ts"] = vitestConfigTemplate(config);
 
   // Config files (env loader FIRST - imported before everything)
   files[`src/config/env.${ext}`] = envLoaderTemplate(config);
@@ -341,17 +398,21 @@ async function createProjectStructure(projectPath: string, config: ProjectConfig
 
   // Shared utilities
   files[`src/shared/index.${ext}`] = sharedIndexTemplate(config);
-  files[`src/shared/adapter.${ext}`] = config.adapter === 'mongokit'
-    ? createAdapterTemplate(config)
-    : customAdapterTemplate(config);
+  files[`src/shared/adapter.${ext}`] =
+    config.adapter === "mongokit"
+      ? createAdapterTemplate(config)
+      : customAdapterTemplate(config);
   files[`src/shared/permissions.${ext}`] = permissionsTemplate(config);
 
   // Presets
-  if (config.tenant === 'multi') {
-    files[`src/shared/presets/index.${ext}`] = presetsMultiTenantTemplate(config);
-    files[`src/shared/presets/flexible-multi-tenant.${ext}`] = flexibleMultiTenantPresetTemplate(config);
+  if (config.tenant === "multi") {
+    files[`src/shared/presets/index.${ext}`] =
+      presetsMultiTenantTemplate(config);
+    files[`src/shared/presets/flexible-multi-tenant.${ext}`] =
+      flexibleMultiTenantPresetTemplate(config);
   } else {
-    files[`src/shared/presets/index.${ext}`] = presetsSingleTenantTemplate(config);
+    files[`src/shared/presets/index.${ext}`] =
+      presetsSingleTenantTemplate(config);
   }
 
   // Plugins (app-specific, easy to extend)
@@ -360,26 +421,42 @@ async function createProjectStructure(projectPath: string, config: ProjectConfig
   // Resources (organized by folder, no barrels - prefixed filenames)
   files[`src/resources/index.${ext}`] = resourcesIndexTemplate(config);
 
-  // User resource (src/resources/user/)
-  files[`src/resources/user/user.model.${ext}`] = userModelTemplate(config);
-  files[`src/resources/user/user.repository.${ext}`] = userRepositoryTemplate(config);
-  files[`src/resources/user/user.controller.${ext}`] = userControllerTemplate(config);
-
-  // Auth resource (src/resources/auth/)
-  files[`src/resources/auth/auth.resource.${ext}`] = authResourceTemplate(config);
-  files[`src/resources/auth/auth.handlers.${ext}`] = authHandlersTemplate(config);
-  files[`src/resources/auth/auth.schemas.${ext}`] = authSchemasTemplate(config);
+  // Auth setup — depends on strategy
+  if (config.auth === "better-auth") {
+    // Better Auth: single config file, no manual auth handlers
+    files[`src/auth.${ext}`] = betterAuthSetupTemplate(config);
+  } else {
+    // JWT: manual user model + auth handlers
+    files[`src/resources/user/user.model.${ext}`] = userModelTemplate(config);
+    files[`src/resources/user/user.repository.${ext}`] =
+      userRepositoryTemplate(config);
+    files[`src/resources/user/user.controller.${ext}`] =
+      userControllerTemplate(config);
+    files[`src/resources/auth/auth.resource.${ext}`] =
+      authResourceTemplate(config);
+    files[`src/resources/auth/auth.handlers.${ext}`] =
+      authHandlersTemplate(config);
+    files[`src/resources/auth/auth.schemas.${ext}`] =
+      authSchemasTemplate(config);
+  }
 
   // Example resource (src/resources/example/)
-  files[`src/resources/example/example.model.${ext}`] = exampleModelTemplate(config);
-  files[`src/resources/example/example.repository.${ext}`] = exampleRepositoryTemplate(config);
-  files[`src/resources/example/example.resource.${ext}`] = exampleResourceTemplate(config);
-  files[`src/resources/example/example.controller.${ext}`] = exampleControllerTemplate(config);
-  files[`src/resources/example/example.schemas.${ext}`] = exampleSchemasTemplate(config);
+  files[`src/resources/example/example.model.${ext}`] =
+    exampleModelTemplate(config);
+  files[`src/resources/example/example.repository.${ext}`] =
+    exampleRepositoryTemplate(config);
+  files[`src/resources/example/example.resource.${ext}`] =
+    exampleResourceTemplate(config);
+  files[`src/resources/example/example.controller.${ext}`] =
+    exampleControllerTemplate(config);
+  files[`src/resources/example/example.schemas.${ext}`] =
+    exampleSchemasTemplate(config);
 
   // Tests
   files[`tests/example.test.${ext}`] = exampleTestTemplate(config);
-  files[`tests/auth.test.${ext}`] = authTestTemplate(config);
+  if (config.auth === "jwt") {
+    files[`tests/auth.test.${ext}`] = authTestTemplate(config);
+  }
 
   // Write all files
   for (const [filePath, content] of Object.entries(files)) {
@@ -398,48 +475,48 @@ function packageJsonTemplate(config: ProjectConfig): string {
   // Minimal package.json - dependencies are installed via package manager
   const scripts: Record<string, string> = config.typescript
     ? {
-        dev: 'tsx watch src/index.ts',
-        build: 'tsc',
-        start: 'node dist/index.js',
-        test: 'vitest run',
-        'test:watch': 'vitest',
+        dev: "tsx watch src/index.ts",
+        build: "tsc",
+        start: "node dist/index.js",
+        test: "vitest run",
+        "test:watch": "vitest",
       }
     : {
-        dev: 'node --watch src/index.js',
-        start: 'node src/index.js',
-        test: 'vitest run',
-        'test:watch': 'vitest',
+        dev: "node --watch src/index.js",
+        start: "node src/index.js",
+        test: "vitest run",
+        "test:watch": "vitest",
       };
 
   // Subpath imports for clean DX
   const imports: Record<string, string> = config.typescript
     ? {
-        '#config/*': './dist/config/*',
-        '#shared/*': './dist/shared/*',
-        '#resources/*': './dist/resources/*',
-        '#plugins/*': './dist/plugins/*',
+        "#config/*": "./dist/config/*",
+        "#shared/*": "./dist/shared/*",
+        "#resources/*": "./dist/resources/*",
+        "#plugins/*": "./dist/plugins/*",
       }
     : {
-        '#config/*': './src/config/*',
-        '#shared/*': './src/shared/*',
-        '#resources/*': './src/resources/*',
-        '#plugins/*': './src/plugins/*',
+        "#config/*": "./src/config/*",
+        "#shared/*": "./src/shared/*",
+        "#resources/*": "./src/resources/*",
+        "#plugins/*": "./src/plugins/*",
       };
 
   return JSON.stringify(
     {
       name: config.name,
-      version: '1.0.0',
-      type: 'module',
-      main: config.typescript ? 'dist/index.js' : 'src/index.js',
+      version: "1.0.0",
+      type: "module",
+      main: config.typescript ? "dist/index.js" : "src/index.js",
       imports,
       scripts,
       engines: {
-        node: '>=20',
+        node: ">=20",
       },
     },
     null,
-    2
+    2,
   );
 }
 
@@ -447,12 +524,12 @@ function tsconfigTemplate(): string {
   return JSON.stringify(
     {
       compilerOptions: {
-        target: 'ES2022',
-        module: 'NodeNext',
-        moduleResolution: 'NodeNext',
-        lib: ['ES2022'],
-        outDir: './dist',
-        rootDir: './src',
+        target: "ES2022",
+        module: "NodeNext",
+        moduleResolution: "NodeNext",
+        lib: ["ES2022"],
+        outDir: "./dist",
+        rootDir: "./src",
         strict: true,
         esModuleInterop: true,
         skipLibCheck: true,
@@ -462,22 +539,22 @@ function tsconfigTemplate(): string {
         sourceMap: true,
         resolveJsonModule: true,
         paths: {
-          '#shared/*': ['./src/shared/*'],
-          '#resources/*': ['./src/resources/*'],
-          '#config/*': ['./src/config/*'],
-          '#plugins/*': ['./src/plugins/*'],
+          "#shared/*": ["./src/shared/*"],
+          "#resources/*": ["./src/resources/*"],
+          "#config/*": ["./src/config/*"],
+          "#plugins/*": ["./src/plugins/*"],
         },
       },
-      include: ['src/**/*'],
-      exclude: ['node_modules', 'dist'],
+      include: ["src/**/*"],
+      exclude: ["node_modules", "dist"],
     },
     null,
-    2
+    2,
   );
 }
 
 function vitestConfigTemplate(config: ProjectConfig): string {
-  const srcDir = config.typescript ? './src' : './src';
+  const srcDir = config.typescript ? "./src" : "./src";
 
   return `import { defineConfig } from 'vitest/config';
 import { resolve } from 'path';
@@ -536,19 +613,33 @@ function envExampleTemplate(config: ProjectConfig): string {
 PORT=8040
 HOST=0.0.0.0
 NODE_ENV=development
+`;
 
+  if (config.auth === "better-auth") {
+    content += `
+# Better Auth
+BETTER_AUTH_SECRET=your-32-character-minimum-secret-here
+FRONTEND_URL=http://localhost:3000
+
+# Google OAuth (optional)
+# GOOGLE_CLIENT_ID=
+# GOOGLE_CLIENT_SECRET=
+`;
+  } else {
+    content += `
 # JWT
 JWT_SECRET=your-32-character-minimum-secret-here
 `;
+  }
 
-  if (config.adapter === 'mongokit') {
+  if (config.adapter === "mongokit") {
     content += `
 # MongoDB
 MONGODB_URI=mongodb://localhost:27017/${config.name}
 `;
   }
 
-  if (config.tenant === 'multi') {
+  if (config.tenant === "multi") {
     content += `
 # Multi-tenant
 DEFAULT_ORG_ID=
@@ -559,7 +650,7 @@ DEFAULT_ORG_ID=
 }
 
 function readmeTemplate(config: ProjectConfig): string {
-  const ext = config.typescript ? 'ts' : 'js';
+  const ext = config.typescript ? "ts" : "js";
 
   return `# ${config.name}
 
@@ -586,9 +677,9 @@ src/
 │   ├── env.${ext}              # Env loader (import first!)
 │   └── index.${ext}            # App config
 ├── shared/                  # Shared utilities
-│   ├── adapter.${ext}          # ${config.adapter === 'mongokit' ? 'MongoKit adapter factory' : 'Custom adapter'}
+│   ├── adapter.${ext}          # ${config.adapter === "mongokit" ? "MongoKit adapter factory" : "Custom adapter"}
 │   ├── permissions.${ext}      # Permission helpers
-│   └── presets/             # ${config.tenant === 'multi' ? 'Multi-tenant presets' : 'Standard presets'}
+│   └── presets/             # ${config.tenant === "multi" ? "Multi-tenant presets" : "Standard presets"}
 ├── plugins/                 # App-specific plugins
 │   └── index.${ext}            # Plugin registry
 ├── resources/               # API Resources
@@ -610,7 +701,7 @@ tests/
 - **\`src/index.${ext}\`** - HTTP server entry point
 - **\`src/app.${ext}\`** - App factory (import for workers/tests)
 
-\`\`\`${config.typescript ? 'typescript' : 'javascript'}
+\`\`\`${config.typescript ? "typescript" : "javascript"}
 // For workers or custom entry points:
 import { createAppInstance } from './app.js';
 
@@ -631,7 +722,7 @@ src/resources/product/
 
 2. Register in \`src/resources/index.${ext}\`:
 
-\`\`\`${config.typescript ? 'typescript' : 'javascript'}
+\`\`\`${config.typescript ? "typescript" : "javascript"}
 import productResource from './product/index.js';
 
 export const resources = [
@@ -644,7 +735,7 @@ export const resources = [
 
 Add custom plugins in \`src/plugins/index.${ext}\`:
 
-\`\`\`${config.typescript ? 'typescript' : 'javascript'}
+\`\`\`${config.typescript ? "typescript" : "javascript"}
 export async function registerPlugins(app, deps) {
   const { config } = deps;  // Explicit dependency injection
 
@@ -708,16 +799,20 @@ function indexTemplate(config: ProjectConfig): string {
 import '#config/env.js';
 
 import config from '#config/index.js';
-${config.adapter === 'mongokit' ? "import mongoose from 'mongoose';" : ''}
+${config.adapter === "mongokit" ? "import mongoose from 'mongoose';" : ""}
 import { createAppInstance } from './app.js';
 
-async function main()${ts ? ': Promise<void>' : ''} {
+async function main()${ts ? ": Promise<void>" : ""} {
   console.log(\`🔧 Environment: \${config.env}\`);
-${config.adapter === 'mongokit' ? `
+${
+  config.adapter === "mongokit"
+    ? `
   // Connect to MongoDB
   await mongoose.connect(config.database.uri);
   console.log('📦 Connected to MongoDB');
-` : ''}
+`
+    : ""
+}
   // Create and configure app
   const app = await createAppInstance();
 
@@ -735,7 +830,25 @@ main().catch((err) => {
 
 function appTemplate(config: ProjectConfig): string {
   const ts = config.typescript;
-  const typeImport = ts ? "import type { FastifyInstance } from 'fastify';\n" : '';
+  const typeImport = ts
+    ? "import type { FastifyInstance } from 'fastify';\n"
+    : "";
+
+  const betterAuthImport =
+    config.auth === "better-auth"
+      ? `import { createBetterAuthAdapter } from '@classytic/arc/auth';
+import { getAuth } from './auth.js';
+`
+      : "";
+
+  const authConfig =
+    config.auth === "better-auth"
+      ? config.tenant === "multi"
+        ? `auth: { betterAuth: createBetterAuthAdapter({ auth: getAuth(), orgContext: true }) },`
+        : `auth: { betterAuth: createBetterAuthAdapter({ auth: getAuth() }) },`
+      : `auth: {
+      jwt: { secret: config.jwt.secret },
+    },`;
 
   return `/**
  * ${config.name} - App Factory
@@ -750,7 +863,7 @@ function appTemplate(config: ProjectConfig): string {
 
 ${typeImport}import config from '#config/index.js';
 import { createApp } from '@classytic/arc/factory';
-
+${betterAuthImport}
 // App-specific plugins
 import { registerPlugins } from '#plugins/index.js';
 
@@ -762,19 +875,18 @@ import { registerResources } from '#resources/index.js';
  *
  * @returns Configured Fastify instance ready to use
  */
-export async function createAppInstance()${ts ? ': Promise<FastifyInstance>' : ''} {
+export async function createAppInstance()${ts ? ": Promise<FastifyInstance>" : ""} {
   // Create Arc app with base configuration
   const app = await createApp({
-    preset: config.env === 'production' ? 'production' : 'development',
-    auth: {
-      jwt: { secret: config.jwt.secret },
-    },
+    preset: config.env === 'production' ? (${config.edge ? "'edge'" : "'production'"}) : 'development',
+    ${authConfig}
     cors: {
       origin: config.cors.origins,
       methods: config.cors.methods,
       allowedHeaders: config.cors.allowedHeaders,
       credentials: config.cors.credentials,
     },
+    trustProxy: true,
   });
 
   // Register app-specific plugins (explicit dependency injection)
@@ -810,7 +922,7 @@ import { resolve } from 'node:path';
 /**
  * Normalize environment string to short form
  */
-function normalizeEnv(env${ts ? ': string | undefined' : ''})${ts ? ': string' : ''} {
+function normalizeEnv(env${ts ? ": string | undefined" : ""})${ts ? ": string" : ""} {
   const normalized = (env || '').toLowerCase();
   if (normalized === 'production' || normalized === 'prod') return 'prod';
   if (normalized === 'test' || normalized === 'qa') return 'test';
@@ -846,11 +958,27 @@ NODE_ENV=development
 # Server
 PORT=8040
 HOST=0.0.0.0
+`;
 
+  if (config.auth === "better-auth") {
+    content += `
+# Better Auth
+BETTER_AUTH_SECRET=dev-secret-change-in-production-min-32-chars
+FRONTEND_URL=http://localhost:3000
+
+# Google OAuth (optional — leave empty to disable)
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+`;
+  } else {
+    content += `
 # JWT
 JWT_SECRET=dev-secret-change-in-production-min-32-chars
 JWT_EXPIRES_IN=7d
+`;
+  }
 
+  content += `
 # CORS - Allowed origins
 # Options:
 #   * = allow all origins (not recommended for production)
@@ -858,14 +986,14 @@ JWT_EXPIRES_IN=7d
 CORS_ORIGINS=http://localhost:3000,http://localhost:5173
 `;
 
-  if (config.adapter === 'mongokit') {
+  if (config.adapter === "mongokit") {
     content += `
 # MongoDB
 MONGODB_URI=mongodb://localhost:27017/${config.name}
 `;
   }
 
-  if (config.tenant === 'multi') {
+  if (config.tenant === "multi") {
     content += `
 # Multi-tenant
 ORG_HEADER=x-organization-id
@@ -877,9 +1005,11 @@ ORG_HEADER=x-organization-id
 
 function pluginsIndexTemplate(config: ProjectConfig): string {
   const ts = config.typescript;
-  const typeImport = ts ? "import type { FastifyInstance } from 'fastify';\n" : '';
-  const configType = ts ? ': { config: AppConfig }' : '';
-  const appType = ts ? ': FastifyInstance' : '';
+  const typeImport = ts
+    ? "import type { FastifyInstance } from 'fastify';\n"
+    : "";
+  const configType = ts ? ": { config: AppConfig }" : "";
+  const appType = ts ? ": FastifyInstance" : "";
 
   let content = `/**
  * App Plugins Registry
@@ -888,10 +1018,11 @@ function pluginsIndexTemplate(config: ProjectConfig): string {
  * Dependencies are passed explicitly (no shims, no magic).
  */
 
-${typeImport}${ts ? "import type { AppConfig } from '../config/index.js';\n" : ''}import { openApiPlugin, scalarPlugin } from '@classytic/arc/docs';
+${typeImport}${ts ? "import type { AppConfig } from '../config/index.js';\n" : ""}import { openApiPlugin, scalarPlugin } from '@classytic/arc/docs';
+import { errorHandlerPlugin } from '@classytic/arc/plugins';
 `;
 
-  if (config.tenant === 'multi') {
+  if (config.tenant === "multi") {
     content += `import { orgScopePlugin } from '@classytic/arc/org';\n`;
   }
 
@@ -905,8 +1036,14 @@ ${typeImport}${ts ? "import type { AppConfig } from '../config/index.js';\n" : '
 export async function registerPlugins(
   app${appType},
   deps${configType}
-)${ts ? ': Promise<void>' : ''} {
+)${ts ? ": Promise<void>" : ""} {
   const { config } = deps;
+
+  // Error handling (CastError → 400, validation → 422, duplicate → 409)
+  await app.register(errorHandlerPlugin, {
+    exposeDetails: !config.isProd,
+    includeStack: config.isDev,
+  });
 
   // API Documentation (Scalar UI)
   // OpenAPI spec: /_docs/openapi.json
@@ -922,7 +1059,7 @@ export async function registerPlugins(
   });
 `;
 
-  if (config.tenant === 'multi') {
+  if (config.tenant === "multi") {
     content += `
   // Multi-tenant org scope
   await app.register(orgScopePlugin, {
@@ -943,8 +1080,28 @@ export async function registerPlugins(
 
 function resourcesIndexTemplate(config: ProjectConfig): string {
   const ts = config.typescript;
-  const typeImport = ts ? "import type { FastifyInstance } from 'fastify';\n" : '';
-  const appType = ts ? ': FastifyInstance' : '';
+  const typeImport = ts
+    ? "import type { FastifyInstance } from 'fastify';\n"
+    : "";
+  const appType = ts ? ": FastifyInstance" : "";
+
+  const authImports =
+    config.auth === "jwt"
+      ? `
+// Auth resources (register, login, /users/me)
+import { authResource, userProfileResource } from './auth/auth.resource.js';
+`
+      : `
+// Auth is handled by Better Auth — routes at /api/auth/*
+// No manual auth resource needed.
+`;
+
+  const authResources =
+    config.auth === "jwt"
+      ? `  authResource,
+  userProfileResource,
+  `
+      : `  `;
 
   return `/**
  * Resources Registry
@@ -953,10 +1110,7 @@ function resourcesIndexTemplate(config: ProjectConfig): string {
  * Flat structure - no barrels, direct imports.
  */
 
-${typeImport}
-// Auth resources (register, login, /users/me)
-import { authResource, userProfileResource } from './auth/auth.resource.js';
-
+${typeImport}${authImports}
 // App resources
 import exampleResource from './example/example.resource.js';
 
@@ -967,15 +1121,13 @@ import exampleResource from './example/example.resource.js';
  * All registered resources
  */
 export const resources = [
-  authResource,
-  userProfileResource,
-  exampleResource,
-]${ts ? ' as const' : ''};
+${authResources}exampleResource,
+]${ts ? " as const" : ""};
 
 /**
  * Register all resources with the app
  */
-export async function registerResources(app${appType})${ts ? ': Promise<void>' : ''} {
+export async function registerResources(app${appType})${ts ? ": Promise<void>" : ""} {
   for (const resource of resources) {
     await app.register(resource.toPlugin());
   }
@@ -1008,7 +1160,7 @@ export {
   allOf,
   anyOf,
   denyAll,
-  when,${ts ? '\n  type PermissionCheck,' : ''}
+  when,${ts ? "\n  type PermissionCheck," : ""}
 } from '@classytic/arc/permissions';
 
 // Application permissions
@@ -1030,7 +1182,7 @@ function createAdapterTemplate(config: ProjectConfig): string {
  */
 
 import { createMongooseAdapter } from '@classytic/arc';
-${ts ? "import type { Model } from 'mongoose';\nimport type { Repository } from '@classytic/mongokit';" : ''}
+${ts ? "import type { Model } from 'mongoose';\nimport type { Repository } from '@classytic/mongokit';" : ""}
 
 /**
  * Create a MongoKit-powered adapter for a resource
@@ -1038,10 +1190,10 @@ ${ts ? "import type { Model } from 'mongoose';\nimport type { Repository } from 
  * Note: Query parsing is handled by MongoKit's Repository class.
  * Just pass the model and repository - Arc handles the rest.
  */
-export function createAdapter${ts ? '<TDoc, TRepo extends Repository<TDoc>>' : ''}(
-  model${ts ? ': Model<TDoc>' : ''},
-  repository${ts ? ': TRepo' : ''}
-)${ts ? ': ReturnType<typeof createMongooseAdapter>' : ''} {
+export function createAdapter(
+  model${ts ? ": Model<any>" : ""},
+  repository${ts ? ": Repository<any>" : ""}
+) {
   return createMongooseAdapter({
     model,
     repository,
@@ -1060,7 +1212,7 @@ function customAdapterTemplate(config: ProjectConfig): string {
  */
 
 import { createMongooseAdapter } from '@classytic/arc';
-${ts ? "import type { Model } from 'mongoose';" : ''}
+${ts ? "import type { Model } from 'mongoose';" : ""}
 
 /**
  * Create a custom adapter for a resource
@@ -1070,10 +1222,10 @@ ${ts ? "import type { Model } from 'mongoose';" : ''}
  * - Drizzle: Create custom adapter
  * - Raw SQL: Create custom adapter
  */
-export function createAdapter${ts ? '<TDoc>' : ''}(
-  model${ts ? ': Model<TDoc>' : ''},
-  repository${ts ? ': any' : ''}
-)${ts ? ': ReturnType<typeof createMongooseAdapter>' : ''} {
+export function createAdapter${ts ? "<TDoc>" : ""}(
+  model${ts ? ": Model<TDoc>" : ""},
+  repository${ts ? ": any" : ""}
+)${ts ? ": ReturnType<typeof createMongooseAdapter>" : ""} {
   // TODO: Implement your custom adapter
   return createMongooseAdapter({
     model,
@@ -1148,7 +1300,7 @@ export const presets = {
   ownedByUser,
   softDelete,
   slugLookup,
-}${ts ? ' as const' : ''};
+}${ts ? " as const" : ""};
 
 export default presets;
 `;
@@ -1203,7 +1355,7 @@ export const presets = {
   ownedByUser,
   softDelete,
   slugLookup,
-}${ts ? ' as const' : ''};
+}${ts ? " as const" : ""};
 
 export default presets;
 `;
@@ -1211,7 +1363,8 @@ export default presets;
 
 function flexibleMultiTenantPresetTemplate(config: ProjectConfig): string {
   const ts = config.typescript;
-  const typeAnnotations = ts ? `
+  const typeAnnotations = ts
+    ? `
 interface FlexibleMultiTenantOptions {
   tenantField?: string;
   bypassRoles?: string[];
@@ -1231,7 +1384,8 @@ interface Preset {
   name: string;
   middlewares: PresetMiddlewares;
 }
-` : '';
+`
+    : "";
 
   return `/**
  * Flexible Multi-Tenant Preset
@@ -1249,7 +1403,7 @@ ${typeAnnotations}
  * Default organization ID extractor
  * Tries multiple sources in order of priority
  */
-function defaultExtractOrganizationId(request${ts ? ': any' : ''})${ts ? ': string | null' : ''} {
+function defaultExtractOrganizationId(request${ts ? ": any" : ""})${ts ? ": string | null" : ""} {
   // Priority 1: Explicit context (set by org-scope plugin)
   if (request.context?.organizationId) {
     return String(request.context.organizationId);
@@ -1274,11 +1428,11 @@ function defaultExtractOrganizationId(request${ts ? ': any' : ''})${ts ? ': stri
  * Only filters when org context is present
  */
 function createFlexibleTenantFilter(
-  tenantField${ts ? ': string' : ''},
-  bypassRoles${ts ? ': string[]' : ''},
-  extractOrganizationId${ts ? ': (request: any) => string | null' : ''}
+  tenantField${ts ? ": string" : ""},
+  bypassRoles${ts ? ": string[]" : ""},
+  extractOrganizationId${ts ? ": (request: any) => string | null" : ""}
 ) {
-  return async (request${ts ? ': any' : ''}, reply${ts ? ': any' : ''}) => {
+  return async (request${ts ? ": any" : ""}, reply${ts ? ": any" : ""}) => {
     const user = request.user;
     const orgId = extractOrganizationId(request);
 
@@ -1301,7 +1455,7 @@ function createFlexibleTenantFilter(
 
     // Bypass roles skip filter (superadmin sees all)
     const userRoles = Array.isArray(user.roles) ? user.roles : [];
-    if (bypassRoles.some((r${ts ? ': string' : ''}) => userRoles.includes(r))) {
+    if (bypassRoles.some((r${ts ? ": string" : ""}) => userRoles.includes(r))) {
       request.log?.debug?.({ msg: 'Bypass role - no tenant filter' });
       return;
     }
@@ -1322,10 +1476,10 @@ function createFlexibleTenantFilter(
  * Injects tenant ID into request body on create
  */
 function createTenantInjection(
-  tenantField${ts ? ': string' : ''},
-  extractOrganizationId${ts ? ': (request: any) => string | null' : ''}
+  tenantField${ts ? ": string" : ""},
+  extractOrganizationId${ts ? ": (request: any) => string | null" : ""}
 ) {
-  return async (request${ts ? ': any' : ''}, reply${ts ? ': any' : ''}) => {
+  return async (request${ts ? ": any" : ""}, reply${ts ? ": any" : ""}) => {
     const orgId = extractOrganizationId(request);
 
     // Fail-closed: Require orgId for create operations
@@ -1350,7 +1504,7 @@ function createTenantInjection(
  * @param options.bypassRoles - Roles that bypass tenant isolation (default: ['superadmin'])
  * @param options.extractOrganizationId - Custom org ID extractor function
  */
-export function flexibleMultiTenantPreset(options${ts ? ': FlexibleMultiTenantOptions = {}' : ' = {}'})${ts ? ': Preset' : ''} {
+export function flexibleMultiTenantPreset(options${ts ? ": FlexibleMultiTenantOptions = {}" : " = {}"})${ts ? ": Preset" : ""} {
   const {
     tenantField = 'organizationId',
     bypassRoles = ['superadmin'],
@@ -1378,8 +1532,8 @@ export default flexibleMultiTenantPreset;
 
 function permissionsTemplate(config: ProjectConfig): string {
   const ts = config.typescript;
-  const typeImport = ts ? ",\n  type PermissionCheck," : '';
-  const returnType = ts ? ': PermissionCheck' : '';
+  const typeImport = ts ? ",\n  type PermissionCheck," : "";
+  const returnType = ts ? ": PermissionCheck" : "";
 
   let content = `/**
  * Permission Helpers
@@ -1433,8 +1587,59 @@ export const requireSuperadmin = ()${returnType} =>
   requireRoles(['superadmin']);
 `;
 
-  if (config.tenant === 'multi') {
-    content += `
+  if (config.tenant === "multi") {
+    if (config.auth === "better-auth") {
+      // Better Auth: use requireOrgRole() which checks per-org member.role
+      content += `
+// ============================================================================
+// Better Auth Organization & Team Permission Helpers
+// ============================================================================
+
+/**
+ * Organization-level guards (per-org member.role):
+ *
+ * - requireOrgRole(['admin','owner'])  — checks member.role in active org
+ * - requireOrgMembership()             — just checks if user is in the org (any role)
+ * - requireTeamMembership()            — checks if user is in the active team
+ *
+ * These are DIFFERENT from platform-level helpers above (requireRoles checks user.roles).
+ * Platform superadmin automatically bypasses all org role checks.
+ *
+ * IMPORTANT: When using Better Auth's Access Control (ac) with custom roles,
+ * you MUST define ALL roles (owner, admin, member, + any custom) using the
+ * same AC instance. BA's built-in defaults won't cover custom statements.
+ * Omitting any role causes BA's hasPermission to fail silently for that role.
+ *
+ * @see multi-org-betterauth boilerplate (src/shared/access-control.ts) for the recommended pattern.
+ */
+import {
+  requireOrgMembership,
+  requireOrgRole,
+  requireTeamMembership,
+} from '@classytic/arc/permissions';
+export { requireOrgMembership, requireOrgRole, requireTeamMembership };
+
+/**
+ * Require organization owner (checks member.role, not user.roles)
+ */
+export const requireOrgOwner = ()${returnType} =>
+  requireOrgRole(['owner']);
+
+/**
+ * Require organization manager or higher (checks member.role, not user.roles)
+ */
+export const requireOrgManager = ()${returnType} =>
+  requireOrgRole(['manager', 'admin', 'owner']);
+
+/**
+ * Require any organization member (any role)
+ */
+export const requireOrgStaff = ()${returnType} =>
+  requireOrgMembership();
+`;
+    } else {
+      // JWT: no BA org plugin — use requireRoles() with user.roles
+      content += `
 /**
  * Require organization owner
  */
@@ -1453,6 +1658,7 @@ export const requireOrgManager = ()${returnType} =>
 export const requireOrgStaff = ()${returnType} =>
   requireRoles(['owner', 'manager', 'staff'], { bypassRoles: ['admin', 'superadmin'] });
 `;
+    }
   }
 
   content += `
@@ -1494,7 +1700,7 @@ export const adminPermissions = {
 };
 `;
 
-  if (config.tenant === 'multi') {
+  if (config.tenant === "multi") {
     content += `
 /**
  * Organization staff permissions
@@ -1507,6 +1713,22 @@ export const orgStaffPermissions = {
   delete: requireOrgOwner(),
 };
 `;
+
+    if (config.auth === "better-auth") {
+      content += `
+/**
+ * Team-scoped permissions (requires active team)
+ * Uses Better Auth's team membership — flat groups, no team-level roles.
+ */
+export const teamScopedPermissions = {
+  list: requireTeamMembership(),
+  get: requireTeamMembership(),
+  create: requireTeamMembership(),
+  update: requireTeamMembership(),
+  delete: requireOrgOwner(),
+};
+`;
+    }
   }
 
   return content;
@@ -1515,34 +1737,71 @@ export const orgStaffPermissions = {
 function configTemplate(config: ProjectConfig): string {
   const ts = config.typescript;
 
-  let typeDefinition = '';
+  const authTypeBlock =
+    config.auth === "better-auth"
+      ? `
+  betterAuth: {
+    secret: string;
+  };
+  frontend: {
+    url: string;
+  };`
+      : `
+  jwt: {
+    secret: string;
+    expiresIn: string;
+  };`;
+
+  let typeDefinition = "";
   if (ts) {
     typeDefinition = `
 export interface AppConfig {
   env: string;
+  isDev: boolean;
+  isProd: boolean;
   server: {
     port: number;
     host: string;
-  };
-  jwt: {
-    secret: string;
-    expiresIn: string;
-  };
+  };${authTypeBlock}
   cors: {
     origins: string[] | boolean;  // true = allow all ('*')
     methods: string[];
     allowedHeaders: string[];
     credentials: boolean;
-  };${config.adapter === 'mongokit' ? `
+  };${
+    config.adapter === "mongokit"
+      ? `
   database: {
     uri: string;
-  };` : ''}${config.tenant === 'multi' ? `
+  };`
+      : ""
+  }${
+    config.tenant === "multi"
+      ? `
   org?: {
     header: string;
-  };` : ''}
+  };`
+      : ""
+  }
 }
 `;
   }
+
+  const authConfigBlock =
+    config.auth === "better-auth"
+      ? `
+  betterAuth: {
+    secret: process.env.BETTER_AUTH_SECRET || 'dev-secret-change-in-production-min-32-chars',
+  },
+
+  frontend: {
+    url: process.env.FRONTEND_URL || 'http://localhost:3000',
+  },`
+      : `
+  jwt: {
+    secret: process.env.JWT_SECRET || 'dev-secret-change-in-production-min-32',
+    expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+  },`;
 
   return `/**
  * Application Configuration
@@ -1551,18 +1810,16 @@ export interface AppConfig {
  * ENV file is loaded by config/env.ts (imported first in entry points).
  */
 ${typeDefinition}
-const config${ts ? ': AppConfig' : ''} = {
+const config${ts ? ": AppConfig" : ""} = {
   env: process.env.NODE_ENV || 'development',
+  isDev: (process.env.NODE_ENV || 'development') !== 'production',
+  isProd: process.env.NODE_ENV === 'production',
 
   server: {
     port: parseInt(process.env.PORT || '8040', 10),
     host: process.env.HOST || '0.0.0.0',
   },
-
-  jwt: {
-    secret: process.env.JWT_SECRET || 'dev-secret-change-in-production-min-32',
-    expiresIn: process.env.JWT_EXPIRES_IN || '7d',
-  },
+${authConfigBlock}
 
   cors: {
     // '*' = allow all origins (true), otherwise comma-separated list
@@ -1574,22 +1831,30 @@ const config${ts ? ': AppConfig' : ''} = {
     allowedHeaders: ['Content-Type', 'Authorization', 'x-organization-id', 'x-request-id'],
     credentials: true,
   },
-${config.adapter === 'mongokit' ? `
+${
+  config.adapter === "mongokit"
+    ? `
   database: {
     uri: process.env.MONGODB_URI || 'mongodb://localhost:27017/${config.name}',
   },
-` : ''}${config.tenant === 'multi' ? `
+`
+    : ""
+}${
+    config.tenant === "multi"
+      ? `
   org: {
     header: process.env.ORG_HEADER || 'x-organization-id',
   },
-` : ''}};
+`
+      : ""
+  }};
 
 export default config;
 `;
 }
 
 function databaseConfigTemplate(config: ProjectConfig): string {
-  if (config.adapter === 'mongokit') {
+  if (config.adapter === "mongokit") {
     return `/**
  * Database Configuration
  */
@@ -1618,10 +1883,12 @@ export default databaseConfig;
 
 function exampleModelTemplate(config: ProjectConfig): string {
   const ts = config.typescript;
-  const typeExport = ts ? `
+  const typeExport = ts
+    ? `
 export type ExampleDocument = mongoose.InferSchemaType<typeof exampleSchema>;
 export type ExampleModel = mongoose.Model<ExampleDocument>;
-` : '';
+`
+    : "";
 
   return `/**
  * Example Model
@@ -1635,7 +1902,7 @@ const exampleSchema = new mongoose.Schema(
     name: { type: String, required: true, trim: true },
     description: { type: String, trim: true },
     isActive: { type: Boolean, default: true, index: true },
-${config.tenant === 'multi' ? "    organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', required: true, index: true },\n" : ''}    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
+${config.tenant === "multi" ? "    organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', required: true, index: true },\n" : ""}    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
     deletedAt: { type: Date, default: null, index: true },
   },
   {
@@ -1648,8 +1915,8 @@ ${config.tenant === 'multi' ? "    organizationId: { type: mongoose.Schema.Types
 // Indexes for common queries
 exampleSchema.index({ name: 1 });
 exampleSchema.index({ deletedAt: 1, isActive: 1 });
-${config.tenant === 'multi' ? "exampleSchema.index({ organizationId: 1, deletedAt: 1 });\n" : ''}${typeExport}
-const Example = mongoose.model${ts ? '<ExampleDocument>' : ''}('Example', exampleSchema);
+${config.tenant === "multi" ? "exampleSchema.index({ organizationId: 1, deletedAt: 1 });\n" : ""}${typeExport}
+const Example = mongoose.model${ts ? "<ExampleDocument>" : ""}('Example', exampleSchema);
 
 export default Example;
 `;
@@ -1657,8 +1924,10 @@ export default Example;
 
 function exampleRepositoryTemplate(config: ProjectConfig): string {
   const ts = config.typescript;
-  const typeImport = ts ? "import type { ExampleDocument } from './example.model.js';\n" : '';
-  const generic = ts ? '<ExampleDocument>' : '';
+  const typeImport = ts
+    ? "import type { ExampleDocument } from './example.model.js';\n"
+    : "";
+  const generic = ts ? "<ExampleDocument>" : "";
 
   return `/**
  * Example Repository
@@ -1690,18 +1959,22 @@ class ExampleRepository extends Repository${generic} {
   async findActive() {
     return this.Model.find({ isActive: true, deletedAt: null }).lean();
   }
-${config.tenant === 'multi' ? `
+${
+  config.tenant === "multi"
+    ? `
   /**
    * Find active records for an organization
    */
-  async findActiveByOrg(organizationId${ts ? ': string' : ''}) {
+  async findActiveByOrg(organizationId${ts ? ": string" : ""}) {
     return this.Model.find({
       organizationId,
       isActive: true,
       deletedAt: null,
     }).lean();
   }
-` : ''}
+`
+    : ""
+}
   // Note: softDeletePlugin provides restore() and getDeleted() methods automatically
 }
 
@@ -1714,9 +1987,10 @@ export { ExampleRepository };
 
 function exampleResourceTemplate(config: ProjectConfig): string {
   const ts = config.typescript;
-  const presets = config.tenant === 'multi'
-    ? "['softDelete', 'flexibleMultiTenant']"
-    : "['softDelete']";
+  const presets =
+    config.tenant === "multi"
+      ? "['softDelete', 'flexibleMultiTenant']"
+      : "['softDelete']";
 
   return `/**
  * Example Resource
@@ -1726,13 +2000,13 @@ function exampleResourceTemplate(config: ProjectConfig): string {
  * - Model (Mongoose schema)
  * - Repository (MongoKit with plugins)
  * - Permissions (role-based access)
- * - Presets (soft delete${config.tenant === 'multi' ? ', multi-tenant' : ''})
+ * - Presets (soft delete${config.tenant === "multi" ? ", multi-tenant" : ""})
  */
 
 import { defineResource } from '@classytic/arc';
 import { createAdapter } from '#shared/adapter.js';
 import { publicReadPermissions } from '#shared/permissions.js';
-${config.tenant === 'multi' ? "import { flexibleMultiTenantPreset } from '#shared/presets/flexible-multi-tenant.js';\n" : ''}import Example from './example.model.js';
+${config.tenant === "multi" ? "import { flexibleMultiTenantPreset } from '#shared/presets/flexible-multi-tenant.js';\n" : ""}import Example from './example.model.js';
 import exampleRepository from './example.repository.js';
 import exampleController from './example.controller.js';
 
@@ -1745,8 +2019,12 @@ const exampleResource = defineResource({
   controller: exampleController,
 
   presets: [
-    'softDelete',${config.tenant === 'multi' ? `
-    flexibleMultiTenantPreset({ tenantField: 'organizationId' }),` : ''}
+    'softDelete',${
+      config.tenant === "multi"
+        ? `
+    flexibleMultiTenantPreset({ tenantField: 'organizationId' }),`
+        : ""
+    }
   ],
 
   permissions: publicReadPermissions,
@@ -1785,7 +2063,15 @@ import { exampleSchemaOptions } from './example.schemas.js';
 
 class ExampleController extends BaseController {
   constructor() {
-    super(exampleRepository${ts ? ' as any' : ''}, { schemaOptions: exampleSchemaOptions });
+    super(exampleRepository${ts ? " as any" : ""}, {
+      schemaOptions: exampleSchemaOptions,${
+        config.tenant === "multi"
+          ? `
+      tenantField: 'organizationId', // Configurable tenant field for multi-tenant`
+          : `
+      // tenantField: 'organizationId', // For multi-tenant apps`
+      }
+    });
   }
 
   // Add custom controller methods here:
@@ -1801,7 +2087,7 @@ export default exampleController;
 
 function exampleSchemasTemplate(config: ProjectConfig): string {
   const ts = config.typescript;
-  const multiTenantFields = config.tenant === 'multi';
+  const multiTenantFields = config.tenant === "multi";
 
   return `/**
  * Example Schemas
@@ -1825,20 +2111,32 @@ const crudSchemas = buildCrudSchemasFromModel(Example, {
   },
   query: {
     filterableFields: {
-      isActive: 'boolean',${multiTenantFields ? `
-      organizationId: 'ObjectId',` : ''}
+      isActive: 'boolean',${
+        multiTenantFields
+          ? `
+      organizationId: 'ObjectId',`
+          : ""
+      }
       createdAt: 'date',
     },
   },
 });
 
 // Schema options for controller
-export const exampleSchemaOptions${ts ? ': any' : ''} = {
-  query: {${multiTenantFields ? `
-    allowedPopulate: ['organizationId'],` : ''}
+export const exampleSchemaOptions${ts ? ": any" : ""} = {
+  query: {${
+    multiTenantFields
+      ? `
+    allowedPopulate: ['organizationId'],`
+      : ""
+  }
     filterableFields: {
-      isActive: 'boolean',${multiTenantFields ? `
-      organizationId: 'ObjectId',` : ''}
+      isActive: 'boolean',${
+        multiTenantFields
+          ? `
+      organizationId: 'ObjectId',`
+          : ""
+      }
       createdAt: 'date',
     },
   },
@@ -1860,16 +2158,20 @@ function exampleTestTemplate(config: ProjectConfig): string {
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-${config.adapter === 'mongokit' ? "import mongoose from 'mongoose';\n" : ''}import { createAppInstance } from '../src/app.js';
-${ts ? "import type { FastifyInstance } from 'fastify';\n" : ''}
+${config.adapter === "mongokit" ? "import mongoose from 'mongoose';\n" : ""}import { createAppInstance } from '../src/app.js';
+${ts ? "import type { FastifyInstance } from 'fastify';\n" : ""}
 describe('Example Resource', () => {
-  let app${ts ? ': FastifyInstance' : ''};
+  let app${ts ? ": FastifyInstance" : ""};
 
   beforeAll(async () => {
-${config.adapter === 'mongokit' ? `    // Connect to test database
+${
+  config.adapter === "mongokit"
+    ? `    // Connect to test database
     const testDbUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/${config.name}-test';
     await mongoose.connect(testDbUri);
-` : ''}
+`
+    : ""
+}
     // Create app instance
     app = await createAppInstance();
     await app.ready();
@@ -1877,7 +2179,7 @@ ${config.adapter === 'mongokit' ? `    // Connect to test database
 
   afterAll(async () => {
     await app.close();
-${config.adapter === 'mongokit' ? '    await mongoose.connection.close();' : ''}
+${config.adapter === "mongokit" ? "    await mongoose.connection.close();" : ""}
   });
 
   describe('GET /examples', () => {
@@ -1923,22 +2225,30 @@ ${config.adapter === 'mongokit' ? '    await mongoose.connection.close();' : ''}
 function userModelTemplate(config: ProjectConfig): string {
   const ts = config.typescript;
 
-  const orgRoles = config.tenant === 'multi' ? `
+  const orgRoles =
+    config.tenant === "multi"
+      ? `
 // Organization roles (for multi-tenant)
 const ORG_ROLES = ['owner', 'manager', 'hr', 'staff', 'contractor'] as const;
 type OrgRole = typeof ORG_ROLES[number];
-` : '';
+`
+      : "";
 
-  const orgInterface = config.tenant === 'multi' ? `
+  const orgInterface =
+    config.tenant === "multi"
+      ? `
 type UserOrganization = {
   organizationId: Types.ObjectId;
   organizationName: string;
   roles: OrgRole[];
   joinedAt: Date;
 };
-` : '';
+`
+      : "";
 
-  const orgSchema = config.tenant === 'multi' ? `
+  const orgSchema =
+    config.tenant === "multi"
+      ? `
     // Multi-org support
     organizations: [{
       organizationId: { type: Schema.Types.ObjectId, ref: 'Organization', required: true },
@@ -1946,23 +2256,26 @@ type UserOrganization = {
       roles: { type: [String], enum: ORG_ROLES, default: [] },
       joinedAt: { type: Date, default: () => new Date() },
     }],
-` : '';
+`
+      : "";
 
-  const orgMethods = config.tenant === 'multi' ? `
+  const orgMethods =
+    config.tenant === "multi"
+      ? `
 // Organization methods
-userSchema.methods.getOrgRoles = function(orgId${ts ? ': Types.ObjectId | string' : ''}) {
+userSchema.methods.getOrgRoles = function(orgId${ts ? ": Types.ObjectId | string" : ""}) {
   const org = this.organizations.find(o => o.organizationId.toString() === orgId.toString());
   return org?.roles || [];
 };
 
-userSchema.methods.hasOrgAccess = function(orgId${ts ? ': Types.ObjectId | string' : ''}) {
+userSchema.methods.hasOrgAccess = function(orgId${ts ? ": Types.ObjectId | string" : ""}) {
   return this.organizations.some(o => o.organizationId.toString() === orgId.toString());
 };
 
 userSchema.methods.addOrganization = function(
-  organizationId${ts ? ': Types.ObjectId' : ''},
-  organizationName${ts ? ': string' : ''},
-  roles${ts ? ': OrgRole[]' : ''} = []
+  organizationId${ts ? ": Types.ObjectId" : ""},
+  organizationName${ts ? ": string" : ""},
+  roles${ts ? ": OrgRole[]" : ""} = []
 ) {
   const existing = this.organizations.find(o => o.organizationId.toString() === organizationId.toString());
   if (existing) {
@@ -1974,39 +2287,50 @@ userSchema.methods.addOrganization = function(
   return this;
 };
 
-userSchema.methods.removeOrganization = function(organizationId${ts ? ': Types.ObjectId' : ''}) {
+userSchema.methods.removeOrganization = function(organizationId${ts ? ": Types.ObjectId" : ""}) {
   this.organizations = this.organizations.filter(o => o.organizationId.toString() !== organizationId.toString());
   return this;
 };
 
 // Index for org queries
 userSchema.index({ 'organizations.organizationId': 1 });
-` : '';
+`
+      : "";
 
-  const userType = ts ? `
+  const userType = ts
+    ? `
 type PlatformRole = 'user' | 'admin' | 'superadmin';
 
 type User = {
   name: string;
   email: string;
   password: string;
-  roles: PlatformRole[];${config.tenant === 'multi' ? `
-  organizations: UserOrganization[];` : ''}
+  roles: PlatformRole[];${
+    config.tenant === "multi"
+      ? `
+  organizations: UserOrganization[];`
+      : ""
+  }
   resetPasswordToken?: string;
   resetPasswordExpires?: Date;
 };
 
 type UserMethods = {
-  matchPassword: (enteredPassword: string) => Promise<boolean>;${config.tenant === 'multi' ? `
+  matchPassword: (enteredPassword: string) => Promise<boolean>;${
+    config.tenant === "multi"
+      ? `
   getOrgRoles: (orgId: Types.ObjectId | string) => OrgRole[];
   hasOrgAccess: (orgId: Types.ObjectId | string) => boolean;
   addOrganization: (orgId: Types.ObjectId, name: string, roles?: OrgRole[]) => UserDocument;
-  removeOrganization: (orgId: Types.ObjectId) => UserDocument;` : ''}
+  removeOrganization: (orgId: Types.ObjectId) => UserDocument;`
+      : ""
+  }
 };
 
 export type UserDocument = HydratedDocument<User, UserMethods>;
 export type UserModel = Model<User, {}, UserMethods>;
-` : '';
+`
+    : "";
 
   return `/**
  * User Model
@@ -2014,11 +2338,11 @@ export type UserModel = Model<User, {}, UserMethods>;
  */
 
 import bcrypt from 'bcryptjs';
-import mongoose${ts ? ', { type HydratedDocument, type Model, type Types }' : ''} from 'mongoose';
+import mongoose${ts ? ", { type HydratedDocument, type Model, type Types }" : ""} from 'mongoose';
 ${orgRoles}
 const { Schema } = mongoose;
 ${orgInterface}${userType}
-const userSchema = new Schema${ts ? '<User, UserModel, UserMethods>' : ''}(
+const userSchema = new Schema${ts ? "<User, UserModel, UserMethods>" : ""}(
   {
     name: { type: String, required: true, trim: true },
     email: {
@@ -2052,13 +2376,13 @@ userSchema.pre('save', async function() {
 });
 
 // Password comparison
-userSchema.methods.matchPassword = async function(enteredPassword${ts ? ': string' : ''}) {
+userSchema.methods.matchPassword = async function(enteredPassword${ts ? ": string" : ""}) {
   return bcrypt.compare(enteredPassword, this.password);
 };
 ${orgMethods}
 // Exclude password in JSON
 userSchema.set('toJSON', {
-  transform: (_doc, ret${ts ? ': any' : ''}) => {
+  transform: (_doc, ret${ts ? ": any" : ""}) => {
     delete ret.password;
     delete ret.resetPasswordToken;
     delete ret.resetPasswordExpires;
@@ -2066,14 +2390,16 @@ userSchema.set('toJSON', {
   },
 });
 
-const User = mongoose.models.User${ts ? ' as UserModel' : ''} || mongoose.model${ts ? '<User, UserModel>' : ''}('User', userSchema);
+const User = mongoose.models.User${ts ? " as UserModel" : ""} || mongoose.model${ts ? "<User, UserModel>" : ""}('User', userSchema);
 export default User;
 `;
 }
 
 function userRepositoryTemplate(config: ProjectConfig): string {
   const ts = config.typescript;
-  const typeImport = ts ? "import type { UserDocument } from './user.model.js';\nimport type { ClientSession, Types } from 'mongoose';\n" : '';
+  const typeImport = ts
+    ? "import type { UserDocument } from './user.model.js';\nimport type { ClientSession, Types } from 'mongoose';\n"
+    : "";
 
   return `/**
  * User Repository
@@ -2089,10 +2415,10 @@ import {
 } from '@classytic/mongokit';
 ${typeImport}import User from './user.model.js';
 
-${ts ? 'type ID = string | Types.ObjectId;\n' : ''}
-class UserRepository extends Repository${ts ? '<UserDocument>' : ''} {
+${ts ? "type ID = string | Types.ObjectId;\n" : ""}
+class UserRepository extends Repository${ts ? "<UserDocument>" : ""} {
   constructor() {
-    super(User${ts ? ' as any' : ''}, [
+    super(User${ts ? " as any" : ""}, [
       methodRegistryPlugin(),
       mongoOperationsPlugin(),
     ]);
@@ -2101,14 +2427,14 @@ class UserRepository extends Repository${ts ? '<UserDocument>' : ''} {
   /**
    * Find user by email
    */
-  async findByEmail(email${ts ? ': string' : ''}) {
+  async findByEmail(email${ts ? ": string" : ""}) {
     return this.Model.findOne({ email: email.toLowerCase().trim() });
   }
 
   /**
    * Find user by reset token
    */
-  async findByResetToken(token${ts ? ': string' : ''}) {
+  async findByResetToken(token${ts ? ": string" : ""}) {
     return this.Model.findOne({
       resetPasswordToken: token,
       resetPasswordExpires: { $gt: Date.now() },
@@ -2118,7 +2444,7 @@ class UserRepository extends Repository${ts ? '<UserDocument>' : ''} {
   /**
    * Check if email exists
    */
-  async emailExists(email${ts ? ': string' : ''})${ts ? ': Promise<boolean>' : ''} {
+  async emailExists(email${ts ? ": string" : ""})${ts ? ": Promise<boolean>" : ""} {
     const result = await this.Model.exists({ email: email.toLowerCase().trim() });
     return !!result;
   }
@@ -2126,7 +2452,7 @@ class UserRepository extends Repository${ts ? '<UserDocument>' : ''} {
   /**
    * Update user password (triggers hash middleware)
    */
-  async updatePassword(userId${ts ? ': ID' : ''}, newPassword${ts ? ': string' : ''}, options${ts ? ': { session?: ClientSession }' : ''} = {}) {
+  async updatePassword(userId${ts ? ": ID" : ""}, newPassword${ts ? ": string" : ""}, options${ts ? ": { session?: ClientSession }" : ""} = {}) {
     const user = await this.Model.findById(userId).session(options.session ?? null);
     if (!user) throw new Error('User not found');
 
@@ -2140,23 +2466,27 @@ class UserRepository extends Repository${ts ? '<UserDocument>' : ''} {
   /**
    * Set reset token
    */
-  async setResetToken(userId${ts ? ': ID' : ''}, token${ts ? ': string' : ''}, expiresAt${ts ? ': Date' : ''}) {
+  async setResetToken(userId${ts ? ": ID" : ""}, token${ts ? ": string" : ""}, expiresAt${ts ? ": Date" : ""}) {
     return this.Model.findByIdAndUpdate(
       userId,
       { resetPasswordToken: token, resetPasswordExpires: expiresAt },
       { new: true }
     );
   }
-${config.tenant === 'multi' ? `
+${
+  config.tenant === "multi"
+    ? `
   /**
    * Find users by organization
    */
-  async findByOrganization(organizationId${ts ? ': ID' : ''}) {
+  async findByOrganization(organizationId${ts ? ": ID" : ""}) {
     return this.Model.find({ 'organizations.organizationId': organizationId })
       .select('-password -resetPasswordToken -resetPasswordExpires')
       .lean();
   }
-` : ''}
+`
+    : ""
+}
 }
 
 const userRepository = new UserRepository();
@@ -2181,7 +2511,7 @@ import userRepository from './user.repository.js';
 
 class UserController extends BaseController {
   constructor() {
-    super(userRepository${ts ? ' as any' : ''});
+    super(userRepository${ts ? " as any" : ""});
   }
 
   // Custom user operations can be added here
@@ -2226,7 +2556,7 @@ export const authResource = defineResource({
   tag: 'Authentication',
   prefix: '/auth',
 
-  adapter: createAdapter(User${ts ? ' as any' : ''}, userRepository${ts ? ' as any' : ''}),
+  adapter: createAdapter(User${ts ? " as any" : ""}, userRepository${ts ? " as any" : ""}),
   disableDefaultRoutes: true,
 
   additionalRoutes: [
@@ -2237,7 +2567,7 @@ export const authResource = defineResource({
       permissions: allowPublic(),
       handler: handlers.register,
       wrapHandler: false,
-      schema: { body: schemas.registerBody },
+      schema: { body: schemas.registerBody, response: { 201: schemas.successResponse } },
     },
     {
       method: 'POST',
@@ -2246,7 +2576,7 @@ export const authResource = defineResource({
       permissions: allowPublic(),
       handler: handlers.login,
       wrapHandler: false,
-      schema: { body: schemas.loginBody },
+      schema: { body: schemas.loginBody, response: { 200: schemas.loginResponse } },
     },
     {
       method: 'POST',
@@ -2255,7 +2585,7 @@ export const authResource = defineResource({
       permissions: allowPublic(),
       handler: handlers.refreshToken,
       wrapHandler: false,
-      schema: { body: schemas.refreshBody },
+      schema: { body: schemas.refreshBody, response: { 200: schemas.tokenResponse } },
     },
     {
       method: 'POST',
@@ -2264,7 +2594,7 @@ export const authResource = defineResource({
       permissions: allowPublic(),
       handler: handlers.forgotPassword,
       wrapHandler: false,
-      schema: { body: schemas.forgotBody },
+      schema: { body: schemas.forgotBody, response: { 200: schemas.successResponse } },
     },
     {
       method: 'POST',
@@ -2273,7 +2603,7 @@ export const authResource = defineResource({
       permissions: allowPublic(),
       handler: handlers.resetPassword,
       wrapHandler: false,
-      schema: { body: schemas.resetBody },
+      schema: { body: schemas.resetBody, response: { 200: schemas.successResponse } },
     },
   ],
 });
@@ -2287,7 +2617,7 @@ export const userProfileResource = defineResource({
   tag: 'User Profile',
   prefix: '/users',
 
-  adapter: createAdapter(User${ts ? ' as any' : ''}, userRepository${ts ? ' as any' : ''}),
+  adapter: createAdapter(User${ts ? " as any" : ""}, userRepository${ts ? " as any" : ""}),
   disableDefaultRoutes: true,
 
   additionalRoutes: [
@@ -2298,6 +2628,7 @@ export const userProfileResource = defineResource({
       permissions: requireAuth(),
       handler: handlers.getUserProfile,
       wrapHandler: false,
+      schema: { response: { 200: schemas.userProfileResponse } },
     },
     {
       method: 'PATCH',
@@ -2306,7 +2637,7 @@ export const userProfileResource = defineResource({
       permissions: requireAuth(),
       handler: handlers.updateUserProfile,
       wrapHandler: false,
-      schema: { body: schemas.updateUserBody },
+      schema: { body: schemas.updateUserBody, response: { 200: schemas.userProfileResponse } },
     },
   ],
 });
@@ -2315,34 +2646,158 @@ export default authResource;
 `;
 }
 
+function betterAuthSetupTemplate(config: ProjectConfig): string {
+  const ts = config.typescript;
+  const mongoImport =
+    config.adapter === "mongokit"
+      ? `import mongoose from 'mongoose';
+import { mongodbAdapter } from 'better-auth/adapters/mongodb';`
+      : "";
+
+  const dbAdapter =
+    config.adapter === "mongokit"
+      ? `database: mongodbAdapter(mongoose.connection.getClient().db()),`
+      : `// Configure your database adapter here
+    // See: https://www.better-auth.com/docs/concepts/database`;
+
+  const orgPlugin =
+    config.tenant === "multi"
+      ? `
+import { organization } from 'better-auth/plugins/organization';
+import { bearer } from 'better-auth/plugins/bearer';`
+      : "";
+
+  const orgPluginUsage =
+    config.tenant === "multi"
+      ? `
+      plugins: [
+        bearer(),
+        organization({
+          allowUserToCreateOrganization: true,
+          creatorRole: 'owner',
+          teams: {
+            enabled: true,
+          },
+        }),
+      ],`
+      : "";
+
+  const googleProvider = `
+      // Google OAuth (enabled when env vars are set)
+      ...(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
+        ? {
+            socialProviders: {
+              google: {
+                clientId: process.env.GOOGLE_CLIENT_ID,
+                clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+              },
+            },
+          }
+        : {}),`;
+
+  return `/**
+ * Better Auth Configuration
+ * Generated by Arc CLI
+ *
+ * Authentication is handled entirely by Better Auth.
+ * Routes are registered automatically at /api/auth/*
+ *
+ * Better Auth manages these collections:
+ * - user, session, account${config.tenant === "multi" ? ", organization, member, invitation, team, teamMember" : ""}
+ *
+ * @see https://www.better-auth.com/docs
+ */
+
+import { betterAuth } from 'better-auth';
+${mongoImport}${orgPlugin}
+import config from '#config/index.js';
+
+let _auth${ts ? ": ReturnType<typeof betterAuth> | null" : ""} = null;
+
+/**
+ * Get the Better Auth instance (lazy singleton)
+ *
+ * Must be called AFTER database connection is established.
+ */
+export function getAuth()${ts ? ": ReturnType<typeof betterAuth>" : ""} {
+  if (process.env.NODE_ENV === 'production' && !process.env.BETTER_AUTH_SECRET) {
+    throw new Error('BETTER_AUTH_SECRET is required in production (min 32 chars)');
+  }
+
+  if (!_auth) {
+    _auth = betterAuth({
+      secret: config.betterAuth.secret,
+      baseURL: process.env.BETTER_AUTH_URL || \`http://localhost:\${config.server.port}\`,
+      basePath: '/api/auth',
+
+      ${dbAdapter}
+${config.tenant === "multi" ? `
+      user: {
+        additionalFields: {
+          roles: {
+            type: 'string[]',
+            defaultValue: ['user'],
+            required: false,
+            input: false, // Cannot be set during signup
+          },
+        },
+      },
+` : ""}
+      emailAndPassword: {
+        enabled: true,
+        minPasswordLength: 6,
+      },
+${googleProvider}
+${orgPluginUsage}
+      session: {
+        cookieCache: {
+          enabled: true,
+          maxAge: 5 * 60, // 5 minutes
+        },
+      },
+
+      trustedOrigins: [config.frontend.url],
+
+      rateLimit: {
+        enabled: process.env.NODE_ENV === 'production',
+      },
+    });
+  }
+
+  return _auth;
+}
+
+export default getAuth;
+`;
+}
+
 function authHandlersTemplate(config: ProjectConfig): string {
   const ts = config.typescript;
-  const typeAnnotations = ts ? `
+  const typeAnnotations = ts
+    ? `
 import type { FastifyRequest, FastifyReply } from 'fastify';
-` : '';
+// Load Arc auth type augmentations (adds request.server.auth typings)
+import '@classytic/arc/auth';
+`
+    : "";
 
   return `/**
  * Auth Handlers
  * Generated by Arc CLI
+ *
+ * Uses Arc's built-in JWT utilities via fastify.auth (provided by @fastify/jwt v10).
+ * No standalone jsonwebtoken dependency needed.
  */
 
-import jwt from 'jsonwebtoken';
-import config from '#config/index.js';
 import userRepository from '../user/user.repository.js';
 ${typeAnnotations}
-// Token helpers
-function generateTokens(userId${ts ? ': string' : ''}) {
-  const accessToken = jwt.sign({ id: userId }, config.jwt.secret, { expiresIn: '15m' });
-  const refreshToken = jwt.sign({ id: userId }, config.jwt.secret, { expiresIn: '7d' });
-  return { accessToken, refreshToken };
-}
 
 /**
  * Register new user
  */
-export async function register(request${ts ? ': FastifyRequest' : ''}, reply${ts ? ': FastifyReply' : ''}) {
+export async function register(request${ts ? ": FastifyRequest" : ""}, reply${ts ? ": FastifyReply" : ""}) {
   try {
-    const { name, email, password } = request.body${ts ? ' as any' : ''};
+    const { name, email, password } = request.body${ts ? " as any" : ""};
 
     // Check if email exists
     if (await userRepository.emailExists(email)) {
@@ -2362,16 +2817,16 @@ export async function register(request${ts ? ': FastifyRequest' : ''}, reply${ts
 /**
  * Login user
  */
-export async function login(request${ts ? ': FastifyRequest' : ''}, reply${ts ? ': FastifyReply' : ''}) {
+export async function login(request${ts ? ": FastifyRequest" : ""}, reply${ts ? ": FastifyReply" : ""}) {
   try {
-    const { email, password } = request.body${ts ? ' as any' : ''};
+    const { email, password } = request.body${ts ? " as any" : ""};
 
     const user = await userRepository.findByEmail(email);
     if (!user || !(await user.matchPassword(password))) {
       return reply.code(401).send({ success: false, message: 'Invalid credentials' });
     }
 
-    const tokens = generateTokens(user._id.toString());
+    const tokens = request.server.auth.issueTokens({ id: user._id.toString(), roles: user.roles });
 
     return reply.send({
       success: true,
@@ -2387,15 +2842,15 @@ export async function login(request${ts ? ': FastifyRequest' : ''}, reply${ts ? 
 /**
  * Refresh access token
  */
-export async function refreshToken(request${ts ? ': FastifyRequest' : ''}, reply${ts ? ': FastifyReply' : ''}) {
+export async function refreshToken(request${ts ? ": FastifyRequest" : ""}, reply${ts ? ": FastifyReply" : ""}) {
   try {
-    const { token } = request.body${ts ? ' as any' : ''};
+    const { token } = request.body${ts ? " as any" : ""};
     if (!token) {
       return reply.code(401).send({ success: false, message: 'Refresh token required' });
     }
 
-    const decoded = jwt.verify(token, config.jwt.secret)${ts ? ' as { id: string }' : ''};
-    const tokens = generateTokens(decoded.id);
+    const decoded = request.server.auth.verifyRefreshToken(token)${ts ? " as { id: string }" : ""};
+    const tokens = request.server.auth.issueTokens({ id: decoded.id });
 
     return reply.send({ success: true, ...tokens });
   } catch {
@@ -2406,9 +2861,9 @@ export async function refreshToken(request${ts ? ': FastifyRequest' : ''}, reply
 /**
  * Forgot password
  */
-export async function forgotPassword(request${ts ? ': FastifyRequest' : ''}, reply${ts ? ': FastifyReply' : ''}) {
+export async function forgotPassword(request${ts ? ": FastifyRequest" : ""}, reply${ts ? ": FastifyReply" : ""}) {
   try {
-    const { email } = request.body${ts ? ' as any' : ''};
+    const { email } = request.body${ts ? " as any" : ""};
     const user = await userRepository.findByEmail(email);
 
     if (user) {
@@ -2430,9 +2885,9 @@ export async function forgotPassword(request${ts ? ': FastifyRequest' : ''}, rep
 /**
  * Reset password
  */
-export async function resetPassword(request${ts ? ': FastifyRequest' : ''}, reply${ts ? ': FastifyReply' : ''}) {
+export async function resetPassword(request${ts ? ": FastifyRequest" : ""}, reply${ts ? ": FastifyReply" : ""}) {
   try {
-    const { token, newPassword } = request.body${ts ? ' as any' : ''};
+    const { token, newPassword } = request.body${ts ? " as any" : ""};
     const user = await userRepository.findByResetToken(token);
 
     if (!user) {
@@ -2450,9 +2905,9 @@ export async function resetPassword(request${ts ? ': FastifyRequest' : ''}, repl
 /**
  * Get current user profile
  */
-export async function getUserProfile(request${ts ? ': FastifyRequest' : ''}, reply${ts ? ': FastifyReply' : ''}) {
+export async function getUserProfile(request${ts ? ": FastifyRequest" : ""}, reply${ts ? ": FastifyReply" : ""}) {
   try {
-    const userId = (request${ts ? ' as any' : ''}).user?._id || (request${ts ? ' as any' : ''}).user?.id;
+    const userId = (request${ts ? " as any" : ""}).user?._id || (request${ts ? " as any" : ""}).user?.id;
     const user = await userRepository.getById(userId);
 
     if (!user) {
@@ -2469,10 +2924,10 @@ export async function getUserProfile(request${ts ? ': FastifyRequest' : ''}, rep
 /**
  * Update current user profile
  */
-export async function updateUserProfile(request${ts ? ': FastifyRequest' : ''}, reply${ts ? ': FastifyReply' : ''}) {
+export async function updateUserProfile(request${ts ? ": FastifyRequest" : ""}, reply${ts ? ": FastifyReply" : ""}) {
   try {
-    const userId = (request${ts ? ' as any' : ''}).user?._id || (request${ts ? ' as any' : ''}).user?.id;
-    const updates = { ...request.body${ts ? ' as any' : ''} };
+    const userId = (request${ts ? " as any" : ""}).user?._id || (request${ts ? " as any" : ""}).user?.id;
+    const updates = { ...request.body${ts ? " as any" : ""} };
 
     // Prevent updating protected fields
     if ('password' in updates) delete updates.password;
@@ -2546,6 +3001,51 @@ export const updateUserBody = {
     email: { type: 'string', format: 'email' },
   },
 };
+
+// Response schemas (enables fast-json-stringify serialization)
+
+export const successResponse = {
+  type: 'object',
+  properties: {
+    success: { type: 'boolean' },
+    message: { type: 'string' },
+  },
+};
+
+export const loginResponse = {
+  type: 'object',
+  properties: {
+    success: { type: 'boolean' },
+    user: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string' },
+        email: { type: 'string' },
+        roles: { type: 'array', items: { type: 'string' } },
+      },
+    },
+    accessToken: { type: 'string' },
+    refreshToken: { type: 'string' },
+  },
+};
+
+export const tokenResponse = {
+  type: 'object',
+  properties: {
+    success: { type: 'boolean' },
+    accessToken: { type: 'string' },
+    refreshToken: { type: 'string' },
+  },
+};
+
+export const userProfileResponse = {
+  type: 'object',
+  properties: {
+    success: { type: 'boolean' },
+    data: { type: 'object', additionalProperties: true },
+  },
+};
 `;
 }
 
@@ -2558,10 +3058,10 @@ function authTestTemplate(config: ProjectConfig): string {
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-${config.adapter === 'mongokit' ? "import mongoose from 'mongoose';\n" : ''}import { createAppInstance } from '../src/app.js';
-${ts ? "import type { FastifyInstance } from 'fastify';\n" : ''}
+${config.adapter === "mongokit" ? "import mongoose from 'mongoose';\n" : ""}import { createAppInstance } from '../src/app.js';
+${ts ? "import type { FastifyInstance } from 'fastify';\n" : ""}
 describe('Auth', () => {
-  let app${ts ? ': FastifyInstance' : ''};
+  let app${ts ? ": FastifyInstance" : ""};
   const testUser = {
     name: 'Test User',
     email: 'test@example.com',
@@ -2569,19 +3069,27 @@ describe('Auth', () => {
   };
 
   beforeAll(async () => {
-${config.adapter === 'mongokit' ? `    const testDbUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/${config.name}-test';
+${
+  config.adapter === "mongokit"
+    ? `    const testDbUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/${config.name}-test';
     await mongoose.connect(testDbUri);
     // Clean up test data
     await mongoose.connection.collection('users').deleteMany({ email: testUser.email });
-` : ''}
+`
+    : ""
+}
     app = await createAppInstance();
     await app.ready();
   });
 
   afterAll(async () => {
-${config.adapter === 'mongokit' ? `    await mongoose.connection.collection('users').deleteMany({ email: testUser.email });
+${
+  config.adapter === "mongokit"
+    ? `    await mongoose.connection.collection('users').deleteMany({ email: testUser.email });
     await mongoose.connection.close();
-` : ''}    await app.close();
+`
+    : ""
+}    await app.close();
   });
 
   describe('POST /auth/register', () => {
@@ -2652,8 +3160,30 @@ ${config.adapter === 'mongokit' ? `    await mongoose.connection.collection('use
 // Success Message
 // ============================================================================
 
-function printSuccessMessage(config: ProjectConfig, skipInstall?: boolean): void {
-  const installStep = skipInstall ? `  npm install\n` : '';
+function printSuccessMessage(
+  config: ProjectConfig,
+  skipInstall?: boolean,
+): void {
+  const installStep = skipInstall ? `  npm install\n` : "";
+  const ext = config.typescript ? "ts" : "js";
+
+  const authInfo =
+    config.auth === "better-auth"
+      ? `
+Auth (Better Auth):
+
+  Auth routes:  http://localhost:8040/api/auth/*
+  Better Auth handles: registration, login, sessions, OAuth
+  Config file:  src/auth.${ext}
+`
+      : `
+Auth (JWT):
+
+  POST /auth/register      # Register
+  POST /auth/login         # Login (returns JWT)
+  POST /auth/refresh       # Refresh token
+  GET  /users/me           # Current user profile
+`;
 
   console.log(`
 ╔═══════════════════════════════════════════════════════════════╗
@@ -2664,7 +3194,7 @@ Next steps:
 
   cd ${config.name}
 ${installStep}  npm run dev         # Uses .env.dev automatically
-
+${authInfo}
 API Documentation:
 
   http://localhost:8040/docs           # Scalar UI
@@ -2677,15 +3207,13 @@ Run tests:
 
 Add resources:
 
-  1. Create folder: src/resources/product/
-  2. Add: index.${config.typescript ? 'ts' : 'js'}, model.${config.typescript ? 'ts' : 'js'}, repository.${config.typescript ? 'ts' : 'js'}
-  3. Register in src/resources/index.${config.typescript ? 'ts' : 'js'}
+  arc generate resource product
 
 Project structure:
 
   src/
-  ├── app.${config.typescript ? 'ts' : 'js'}        # App factory (for workers/tests)
-  ├── index.${config.typescript ? 'ts' : 'js'}      # Server entry
+  ├── app.${ext}        # App factory (for workers/tests)
+  ├── index.${ext}      # Server entry${config.auth === "better-auth" ? `\n  ├── auth.${ext}       # Better Auth config` : ""}
   ├── config/       # Configuration
   ├── shared/       # Adapters, presets, permissions
   ├── plugins/      # App plugins (DI pattern)

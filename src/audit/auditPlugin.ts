@@ -229,7 +229,7 @@ const auditPlugin: FastifyPluginAsync<AuditPluginOptions> = async (
     await Promise.all(stores.map((store) => store.close?.()));
   });
 
-  fastify.log?.info?.({ stores: storeTypes }, 'Audit plugin enabled');
+  fastify.log?.debug?.({ stores: storeTypes }, 'Audit plugin enabled');
 };
 
 /**

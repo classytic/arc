@@ -4,7 +4,7 @@
  * Resource registry and introspection.
  *
  * @example
- * import { resourceRegistry, introspectionPlugin } from '@classytic/arc/registry';
+ * import { ResourceRegistry, introspectionPlugin } from '@classytic/arc/registry';
  *
  * // Register introspection endpoints
  * await fastify.register(introspectionPlugin, {
@@ -12,14 +12,13 @@
  *   authRoles: ['superadmin'],
  * });
  *
- * // Access registry programmatically
- * const allResources = resourceRegistry.getAll();
- * const stats = resourceRegistry.getStats();
+ * // Access registry programmatically (instance-scoped via fastify.arc.registry)
+ * const allResources = fastify.arc.registry.getAll();
+ * const stats = fastify.arc.registry.getStats();
  */
 
 export {
   ResourceRegistry,
-  resourceRegistry,
 } from './ResourceRegistry.js';
 export type { RegisterOptions } from './ResourceRegistry.js';
 

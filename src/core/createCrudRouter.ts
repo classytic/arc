@@ -18,11 +18,58 @@ import type {
   CrudRouterOptions,
   FastifyWithDecorators,
   IController,
+  RateLimitConfig,
   RequestWithExtras,
   UserLike,
 } from '../types/index.js';
+import type { ControllerHandler } from '../types/handlers.js';
+import type { IControllerResponse, IRequestContext } from '../types/index.js';
 import type { PermissionCheck, PermissionContext, PermissionResult } from '../permissions/types.js';
-import { createCrudHandlers, createFastifyHandler } from './fastifyAdapter.js';
+import type { PipelineConfig, PipelineStep, PipelineContext } from '../pipeline/types.js';
+import { createCrudHandlers, createFastifyHandler, createRequestContext, sendControllerResponse } from './fastifyAdapter.js';
+import { executePipeline } from '../pipeline/pipe.js';
+import { getDefaultCrudSchemas } from '../utils/responseSchemas.js';
+
+// ============================================================================
+// Rate Limit Helpers
+// ============================================================================
+
+/**
+ * Route-level config shape for @fastify/rate-limit.
+ *
+ * When the plugin is registered on the instance, it reads `config.rateLimit`
+ * from each route to apply per-route overrides.
+ */
+interface RouteRateLimitConfig {
+  rateLimit: { max: number; timeWindow: string } | false;
+}
+
+/**
+ * Build per-route rate limit config object.
+ *
+ * Returns a `config` object suitable for Fastify's `route()` options,
+ * or `undefined` if no rate limit is configured for this resource.
+ *
+ * - `RateLimitConfig` object  -> apply that limit to the route
+ * - `false`                   -> explicitly disable rate limiting for the route
+ * - `undefined`               -> no override (inherits instance-level config)
+ */
+function buildRateLimitConfig(
+  rateLimit: RateLimitConfig | false | undefined
+): RouteRateLimitConfig | undefined {
+  if (rateLimit === undefined) return undefined;
+
+  if (rateLimit === false) {
+    return { rateLimit: false };
+  }
+
+  return {
+    rateLimit: {
+      max: rateLimit.max,
+      timeWindow: rateLimit.timeWindow,
+    },
+  };
+}
 
 // ============================================================================
 // Permission Helpers
@@ -44,19 +91,24 @@ function requiresAuthentication(permission: PermissionCheck | undefined): boolea
 }
 
 /**
- * Build authentication middleware if needed
+ * Build authentication middleware
  *
- * Returns fastify.authenticate if:
- * - Permission requires authentication (not public)
- * - fastify.authenticate is available
+ * - Protected routes (requireAuth, requireRoles, etc.): uses fastify.authenticate (fails without token)
+ * - Public routes (allowPublic): uses fastify.optionalAuthenticate (parses token if present, doesn't fail)
+ *
+ * This ensures request.user is populated on public routes when a Bearer token is sent,
+ * enabling downstream middleware (e.g. multiTenant flexible filter) to apply org-scoped queries.
  */
 function buildAuthMiddleware(
   fastify: FastifyWithDecorators,
   permission: PermissionCheck | undefined
 ): RouteHandlerMethod | null {
-  if (!requiresAuthentication(permission)) return null;
-  if (!fastify.authenticate) return null;
-  return fastify.authenticate as RouteHandlerMethod;
+  if (requiresAuthentication(permission)) {
+    // Protected route: require auth (401 if no token)
+    return (fastify.authenticate as RouteHandlerMethod) ?? null;
+  }
+  // Public route: optionally parse auth to populate request.user
+  return (fastify.optionalAuthenticate as RouteHandlerMethod) ?? null;
 }
 
 /**
@@ -163,9 +215,10 @@ function createAdditionalRoutes<TDoc = unknown>(
     resourceName: string;
     orgMw: (orgScoped?: boolean) => RouteHandlerMethod[];
     arcDecorator: RouteHandlerMethod;
+    rateLimitConfig?: RouteRateLimitConfig;
   }
 ): void {
-  const { tag, resourceName, orgMw, arcDecorator } = options;
+  const { tag, resourceName, orgMw, arcDecorator, rateLimitConfig } = options;
 
   for (const route of routes) {
     // Resolve handler - wrapHandler is REQUIRED (no auto-detection)
@@ -189,12 +242,12 @@ function createAdditionalRoutes<TDoc = unknown>(
 
       // Explicit wrapHandler - no auto-detection
       handler = route.wrapHandler
-        ? createFastifyHandler(boundMethod as any)
+        ? createFastifyHandler(boundMethod as ControllerHandler)
         : (boundMethod as RouteHandlerMethod);
     } else {
       // Function handler - use explicit wrapHandler
       handler = route.wrapHandler
-        ? createFastifyHandler(route.handler as any)
+        ? createFastifyHandler(route.handler as ControllerHandler)
         : (route.handler as RouteHandlerMethod);
     }
 
@@ -227,11 +280,57 @@ function createAdditionalRoutes<TDoc = unknown>(
     fastify.route({
       method: route.method,
       url: route.path,
-      schema: schema as any, // Fastify schema is flexible - allow any valid JSON schema
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      schema: schema as Record<string, any>, // Fastify RouteOptions.schema requires this shape
       preHandler: preHandler.length > 0 ? preHandler : undefined,
       handler,
+      ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
     });
   }
+}
+
+// ============================================================================
+// Pipeline Helpers
+// ============================================================================
+
+/**
+ * Resolve pipeline steps for a specific operation.
+ * If pipeline is a flat array, all steps are returned.
+ * If it's a per-operation map, only matching steps are returned.
+ */
+function resolvePipelineSteps(
+  pipeline: PipelineConfig | undefined,
+  operation: string,
+): PipelineStep[] {
+  if (!pipeline) return [];
+  if (Array.isArray(pipeline)) return pipeline;
+  return pipeline[operation] ?? [];
+}
+
+/**
+ * Create a Fastify handler that wraps a controller method with pipeline execution.
+ */
+function createPipelineHandler<T>(
+  controllerMethod: (ctx: IRequestContext) => Promise<IControllerResponse<T>>,
+  steps: PipelineStep[],
+  operation: string,
+  resourceName: string,
+) {
+  return async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    const reqCtx = createRequestContext(req);
+    const pipeCtx: PipelineContext = {
+      ...reqCtx,
+      resource: resourceName,
+      operation,
+    };
+    const response = await executePipeline(
+      steps,
+      pipeCtx,
+      (ctx) => controllerMethod(ctx) as Promise<IControllerResponse<unknown>>,
+      operation,
+    );
+    sendControllerResponse(reply, response as IControllerResponse<T>, req);
+  };
 }
 
 /**
@@ -257,7 +356,13 @@ export function createCrudRouter<TDoc = unknown>(
     organizationScoped = false,
     resourceName = 'unknown',
     schemaOptions,
+    rateLimit,
+    pipe: pipeline,
+    fields: fieldPermissions,
   } = options;
+
+  // Build per-route rate limit config (applied to every route in this resource)
+  const rateLimitConfig = buildRateLimitConfig(rateLimit);
 
   // Build org scope middleware helper
   const orgMw = (orgScoped?: boolean): RouteHandlerMethod[] => {
@@ -274,6 +379,8 @@ export function createCrudRouter<TDoc = unknown>(
       hooks: fastify.arc?.hooks,
       // Include events emitter if available
       events: fastify.events,
+      // Field-level permissions for response filtering
+      fields: fieldPermissions,
     };
   };
 
@@ -293,6 +400,23 @@ export function createCrudRouter<TDoc = unknown>(
     required: ['id' as const],
   };
 
+  // Default response/querystring schemas for fast-json-stringify serialization
+  const defaultSchemas = getDefaultCrudSchemas();
+
+  /**
+   * Build route schema by merging: base (tags/summary) → defaults (response/querystring) → user overrides.
+   * User-provided schemas always take precedence. Defaults enable fast-json-stringify when no user schema is set.
+   */
+  const buildSchema = (
+    base: Record<string, unknown>,
+    defaults: Record<string, unknown> | undefined,
+    userSchema?: Record<string, unknown>,
+  ): Record<string, unknown> => ({
+    ...defaults,
+    ...base,
+    ...(userSchema ?? {}),
+  });
+
   // Only validate and create handlers when default routes are enabled
   let handlers: ReturnType<typeof createCrudHandlers> | undefined;
 
@@ -305,8 +429,33 @@ export function createCrudRouter<TDoc = unknown>(
       );
     }
 
-    // Create adapted handlers for IController
-    handlers = createCrudHandlers(controller as IController<TDoc>);
+    const ctrl = controller as IController<TDoc>;
+
+    // If pipeline is configured, wrap handlers with pipeline execution
+    if (pipeline) {
+      const ops = ['list', 'get', 'create', 'update', 'delete'] as const;
+      const wrapped: Record<string, RouteHandlerMethod> = {};
+      for (const op of ops) {
+        const steps = resolvePipelineSteps(pipeline, op);
+        if (steps.length > 0) {
+          const method = ctrl[op].bind(ctrl) as (ctx: IRequestContext) => Promise<IControllerResponse<unknown>>;
+          wrapped[op] = createPipelineHandler(
+            method,
+            steps,
+            op,
+            resourceName,
+          );
+        }
+      }
+      // Create standard handlers first, then override with pipeline-wrapped ones
+      const standardHandlers = createCrudHandlers(ctrl);
+      handlers = {
+        ...standardHandlers,
+        ...wrapped,
+      };
+    } else {
+      handlers = createCrudHandlers(ctrl);
+    }
   }
 
   // Standard CRUD routes
@@ -319,13 +468,10 @@ export function createCrudRouter<TDoc = unknown>(
       fastify.route({
         method: 'GET',
         url: '/',
-        schema: {
-          tags: [tag],
-          summary: `List ${tag}`,
-          ...(schemas.list ?? {}),
-        } as any,
+        schema: buildSchema({ tags: [tag], summary: `List ${tag}` }, defaultSchemas.list, schemas.list as Record<string, unknown> | undefined),
         preHandler: listPreHandler.length > 0 ? listPreHandler : undefined,
         handler: handlers.list,
+        ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
       });
     }
 
@@ -337,14 +483,10 @@ export function createCrudRouter<TDoc = unknown>(
       fastify.route({
         method: 'GET',
         url: '/:id',
-        schema: {
-          tags: [tag],
-          summary: `Get ${tag} by ID`,
-          params: idParamsSchema,
-          ...(schemas.get ?? {}),
-        } as any,
+        schema: buildSchema({ tags: [tag], summary: `Get ${tag} by ID`, params: idParamsSchema }, defaultSchemas.get, schemas.get as Record<string, unknown> | undefined),
         preHandler: getPreHandler.length > 0 ? getPreHandler : undefined,
         handler: handlers.get,
+        ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
       });
     }
 
@@ -356,13 +498,10 @@ export function createCrudRouter<TDoc = unknown>(
       fastify.route({
         method: 'POST',
         url: '/',
-        schema: {
-          tags: [tag],
-          summary: `Create ${tag}`,
-          ...(schemas.create ?? {}),
-        } as any,
+        schema: buildSchema({ tags: [tag], summary: `Create ${tag}` }, defaultSchemas.create, schemas.create as Record<string, unknown> | undefined),
         preHandler: createPreHandler.length > 0 ? createPreHandler : undefined,
         handler: handlers.create,
+        ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
       });
     }
 
@@ -374,14 +513,10 @@ export function createCrudRouter<TDoc = unknown>(
       fastify.route({
         method: 'PATCH',
         url: '/:id',
-        schema: {
-          tags: [tag],
-          summary: `Update ${tag}`,
-          params: idParamsSchema,
-          ...(schemas.update ?? {}),
-        } as any,
+        schema: buildSchema({ tags: [tag], summary: `Update ${tag}`, params: idParamsSchema }, defaultSchemas.update, schemas.update as Record<string, unknown> | undefined),
         preHandler: updatePreHandler.length > 0 ? updatePreHandler : undefined,
         handler: handlers.update,
+        ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
       });
     }
 
@@ -393,21 +528,17 @@ export function createCrudRouter<TDoc = unknown>(
       fastify.route({
         method: 'DELETE',
         url: '/:id',
-        schema: {
-          tags: [tag],
-          summary: `Delete ${tag}`,
-          params: idParamsSchema,
-          ...(schemas.delete ?? {}),
-        } as any,
+        schema: buildSchema({ tags: [tag], summary: `Delete ${tag}`, params: idParamsSchema }, defaultSchemas.delete, schemas.delete as Record<string, unknown> | undefined),
         preHandler: deletePreHandler.length > 0 ? deletePreHandler : undefined,
         handler: handlers.delete,
+        ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
       });
     }
   }
 
   // Additional routes from presets and custom
   if (additionalRoutes.length > 0) {
-    createAdditionalRoutes(fastify, additionalRoutes, controller, { tag, resourceName, orgMw, arcDecorator });
+    createAdditionalRoutes(fastify, additionalRoutes, controller, { tag, resourceName, orgMw, arcDecorator, rateLimitConfig });
   }
 }
 

@@ -14,6 +14,8 @@ import type {
   PaginatedResult,
   AnyRecord,
 } from '../types/index.js';
+import type { FieldPermissionMap } from '../permissions/fields.js';
+import { applyFieldReadPermissions } from '../permissions/fields.js';
 
 /**
  * Apply field mask to a single object
@@ -87,18 +89,21 @@ export function createRequestContext(req: FastifyRequest): IRequestContext {
     headers: reqWithExtras.headers as Record<string, string | undefined>,
     user: reqWithExtras.user
       ? (() => {
-          const user = reqWithExtras.user as any;
+          const user = reqWithExtras.user as AnyRecord;
+          const rawId = user._id ?? user.id;
+          const normalizedId = rawId ? String(rawId) : undefined;
           return {
             ...user,
             // Normalize ID for MongoDB compatibility
-            id: String(user._id ?? user.id),
-            _id: user._id ?? user.id,
+            id: normalizedId,
+            _id: normalizedId,
             // Preserve original role/roles/permissions as-is
             // Devs can define their own authorization structure
-          };
+          } as import('../permissions/types.js').UserBase;
         })()
-      : undefined,
+      : null,
     organizationId: reqWithExtras.organizationId,
+    teamId: reqWithExtras.teamId,
     metadata: {
       ...reqWithExtras.context,
       // Include Arc metadata for hook execution
@@ -133,14 +138,30 @@ export function sendControllerResponse<T>(
   const fieldMask = reqWithExtras?.fieldMask;
   const fieldMaskConfig = fieldMask ? { include: fieldMask } : undefined;
 
+  // Extract field-level permissions from arc metadata (set by arcDecorator)
+  const arcMeta = (reqWithExtras as unknown as AnyRecord | undefined)?.arc as AnyRecord | undefined;
+  const fieldPerms = arcMeta?.fields as FieldPermissionMap | undefined;
+  const userRoles = (reqWithExtras?.user as AnyRecord | undefined)?.roles as string[] | undefined;
+
+  /** Apply both field mask and field-level permissions to a data item */
+  const applyPermissions = <D>(data: D): D => {
+    let result = fieldMaskConfig ? applyFieldMask(data, fieldMaskConfig) : data;
+    if (fieldPerms && result && typeof result === 'object') {
+      if (Array.isArray(result)) {
+        result = result.map((item) =>
+          applyFieldReadPermissions(item as AnyRecord, fieldPerms, userRoles ?? []),
+        ) as D;
+      } else {
+        result = applyFieldReadPermissions(result as AnyRecord, fieldPerms, userRoles ?? []) as D;
+      }
+    }
+    return result;
+  };
+
   // Handle paginated responses specially (flatten to Arc's ApiResponse format)
   if (response.success && response.data && typeof response.data === 'object' && 'docs' in response.data) {
-    const paginatedData = response.data as unknown as PaginatedResult<any>;
-
-    // Apply field mask to docs array
-    const filteredDocs = fieldMaskConfig
-      ? applyFieldMask(paginatedData.docs, fieldMaskConfig)
-      : paginatedData.docs;
+    const paginatedData = response.data as unknown as PaginatedResult<unknown>;
+    const filteredDocs = applyPermissions(paginatedData.docs);
 
     reply.code(response.status ?? 200).send({
       success: true,
@@ -156,10 +177,8 @@ export function sendControllerResponse<T>(
     return;
   }
 
-  // Handle standard responses - apply field mask to data
-  const filteredData = fieldMaskConfig
-    ? applyFieldMask(response.data, fieldMaskConfig)
-    : response.data;
+  // Handle standard responses
+  const filteredData = applyPermissions(response.data);
 
   reply.code(response.status ?? (response.success ? 200 : 400)).send({
     success: response.success,

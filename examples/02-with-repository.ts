@@ -7,7 +7,7 @@
 
 import Fastify from 'fastify';
 import mongoose from 'mongoose';
-import { defineResource, createMongooseAdapter, BaseController } from '@classytic/arc';
+import { defineResource, createMongooseAdapter, permissions, allowPublic } from '@classytic/arc';
 import { Repository } from '@classytic/mongokit';
 
 // Model
@@ -38,25 +38,19 @@ class TodoRepository extends Repository {
 
 const todoRepository = new TodoRepository();
 
-// Resource with custom repository
+// Resource with custom repository + additional routes
 const todoResource = defineResource({
   name: 'todo',
-  prefix: '/todos',
-
-  adapter: createMongooseAdapter({
-    model: Todo,
-    repository: todoRepository as any,
-  }),
-
-  controller: new BaseController(todoRepository as any),
-
-  permissions: { list: [], get: [], create: [], update: [], delete: [] },
+  adapter: createMongooseAdapter(Todo, todoRepository),
+  permissions: permissions.fullPublic(),
 
   // Add custom routes
   additionalRoutes: [
     {
       method: 'GET',
       path: '/high-priority',
+      wrapHandler: false,
+      permissions: allowPublic(),
       handler: async () => {
         const todos = await todoRepository.getHighPriority();
         return { success: true, data: todos };
@@ -65,6 +59,8 @@ const todoResource = defineResource({
     {
       method: 'POST',
       path: '/complete-all',
+      wrapHandler: false,
+      permissions: allowPublic(),
       handler: async () => {
         await todoRepository.completeAll();
         return { success: true, message: 'All todos completed' };
@@ -81,5 +77,5 @@ await app.register(todoResource.toPlugin());
 await mongoose.connect('mongodb://localhost:27017/arc-custom-repo');
 await app.listen({ port: 3000, host: '0.0.0.0' });
 
-console.log('✅ API: http://localhost:3000/todos');
-console.log('✅ Custom: http://localhost:3000/todos/high-priority');
+console.log('API: http://localhost:3000/todos');
+console.log('Custom: http://localhost:3000/todos/high-priority');

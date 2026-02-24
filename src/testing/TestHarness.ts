@@ -26,6 +26,9 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose, { Model, Document } from 'mongoose';
 import type { ResourceDefinition } from '../core/defineResource.js';
+import { applyFieldReadPermissions, applyFieldWritePermissions } from '../permissions/fields.js';
+import type { FieldPermissionMap } from '../permissions/fields.js';
+import type { PipelineConfig, PipelineStep } from '../pipeline/types.js';
 
 /**
  * Test fixtures for a resource
@@ -103,6 +106,9 @@ export class TestHarness<T = unknown> {
     this.runCrud();
     this.runValidation();
     this.runPresets();
+    this.runFieldPermissions();
+    this.runPipeline();
+    this.runEvents();
   }
 
   /**
@@ -338,6 +344,203 @@ export class TestHarness<T = unknown> {
       }
     });
   }
+
+  /**
+   * Run field-level permission tests
+   *
+   * Auto-generates tests for each field permission:
+   * - hidden: field is stripped from responses
+   * - visibleTo: field only shown to specified roles
+   * - writableBy: field stripped from writes by non-privileged users
+   * - redactFor: field shows redacted value for specified roles
+   */
+  runFieldPermissions(): void {
+    const { resource } = this;
+    const fieldPerms = resource.fields;
+
+    if (!fieldPerms || Object.keys(fieldPerms).length === 0) return;
+
+    describe(`${resource.displayName} Field Permissions`, () => {
+      for (const [field, perm] of Object.entries(fieldPerms)) {
+        switch (perm._type) {
+          case 'hidden':
+            it(`should always hide field '${field}'`, () => {
+              const data = { [field]: 'secret', otherField: 'visible' } as Record<string, unknown>;
+              const result = applyFieldReadPermissions(data, fieldPerms, []);
+              expect(result[field]).toBeUndefined();
+              expect(result.otherField).toBe('visible');
+            });
+
+            it(`should strip hidden field '${field}' from writes`, () => {
+              const body = { [field]: 'attempt', name: 'test' } as Record<string, unknown>;
+              const result = applyFieldWritePermissions(body, fieldPerms, []);
+              expect(result[field]).toBeUndefined();
+              expect(result.name).toBe('test');
+            });
+            break;
+
+          case 'visibleTo':
+            it(`should hide field '${field}' from non-privileged users`, () => {
+              const data = { [field]: 'sensitive' } as Record<string, unknown>;
+              const result = applyFieldReadPermissions(data, fieldPerms, ['viewer']);
+              expect(result[field]).toBeUndefined();
+            });
+
+            if (perm.roles && perm.roles.length > 0) {
+              const allowedRole = perm.roles[0]!;
+              it(`should show field '${field}' to roles: ${[...perm.roles].join(', ')}`, () => {
+                const data = { [field]: 'sensitive' } as Record<string, unknown>;
+                const result = applyFieldReadPermissions(data, fieldPerms, [allowedRole]);
+                expect(result[field]).toBe('sensitive');
+              });
+            }
+            break;
+
+          case 'writableBy':
+            it(`should strip field '${field}' from writes by non-privileged users`, () => {
+              const body = { [field]: 'new-value', name: 'test' } as Record<string, unknown>;
+              const result = applyFieldWritePermissions(body, fieldPerms, ['viewer']);
+              expect(result[field]).toBeUndefined();
+              expect(result.name).toBe('test');
+            });
+
+            if (perm.roles && perm.roles.length > 0) {
+              const writeRole = perm.roles[0]!;
+              it(`should allow writing field '${field}' by roles: ${[...perm.roles].join(', ')}`, () => {
+                const body = { [field]: 'new-value' } as Record<string, unknown>;
+                const result = applyFieldWritePermissions(body, fieldPerms, [writeRole]);
+                expect(result[field]).toBe('new-value');
+              });
+            }
+            break;
+
+          case 'redactFor':
+            if (perm.roles && perm.roles.length > 0) {
+              const redactRole = perm.roles[0]!;
+              it(`should redact field '${field}' for roles: ${[...perm.roles].join(', ')}`, () => {
+                const data = { [field]: 'real-value' } as Record<string, unknown>;
+                const result = applyFieldReadPermissions(data, fieldPerms, [redactRole]);
+                expect(result[field]).toBe(perm.redactValue ?? '***');
+              });
+            }
+
+            it(`should show real value of field '${field}' to non-redacted roles`, () => {
+              const data = { [field]: 'real-value' } as Record<string, unknown>;
+              const result = applyFieldReadPermissions(data, fieldPerms, ['unrelated-role']);
+              expect(result[field]).toBe('real-value');
+            });
+            break;
+        }
+      }
+    });
+  }
+
+  /**
+   * Run pipeline configuration tests
+   *
+   * Validates that pipeline steps are properly configured:
+   * - All steps have names
+   * - All steps have valid _type discriminants
+   * - Operation filters (if set) use valid CRUD operation names
+   */
+  runPipeline(): void {
+    const { resource } = this;
+    const pipe = resource.pipe;
+
+    if (!pipe) return;
+
+    const validOps = new Set(['list', 'get', 'create', 'update', 'delete']);
+
+    describe(`${resource.displayName} Pipeline`, () => {
+      const steps = collectPipelineSteps(pipe);
+
+      it('should have at least one pipeline step', () => {
+        expect(steps.length).toBeGreaterThan(0);
+      });
+
+      for (const step of steps) {
+        it(`${step._type} '${step.name}' should have a valid type`, () => {
+          expect(['guard', 'transform', 'interceptor']).toContain(step._type);
+        });
+
+        it(`${step._type} '${step.name}' should have a name`, () => {
+          expect(step.name).toBeTruthy();
+          expect(typeof step.name).toBe('string');
+        });
+
+        it(`${step._type} '${step.name}' should have a handler function`, () => {
+          expect(typeof step.handler).toBe('function');
+        });
+
+        if (step.operations?.length) {
+          it(`${step._type} '${step.name}' should target valid operations`, () => {
+            for (const op of step.operations!) {
+              expect(validOps.has(op)).toBe(true);
+            }
+          });
+        }
+      }
+    });
+  }
+
+  /**
+   * Run event definition tests
+   *
+   * Validates that events are properly defined:
+   * - All events have handler functions
+   * - Event names follow resource:action convention
+   * - Schema definitions (if present) are valid objects
+   */
+  runEvents(): void {
+    const { resource } = this;
+    const events = resource.events;
+
+    if (!events || Object.keys(events).length === 0) return;
+
+    describe(`${resource.displayName} Events`, () => {
+      for (const [action, def] of Object.entries(events)) {
+        it(`event '${resource.name}:${action}' should have a handler function`, () => {
+          expect(typeof def.handler).toBe('function');
+        });
+
+        it(`event '${resource.name}:${action}' should have a name`, () => {
+          expect(def.name).toBeTruthy();
+          expect(typeof def.name).toBe('string');
+        });
+
+        if (def.schema) {
+          it(`event '${resource.name}:${action}' schema should be an object`, () => {
+            expect(typeof def.schema).toBe('object');
+            expect(def.schema).not.toBeNull();
+          });
+        }
+      }
+    });
+  }
+}
+
+/**
+ * Collect all pipeline steps from a PipelineConfig (flat array or per-operation map)
+ */
+function collectPipelineSteps(pipe: PipelineConfig): PipelineStep[] {
+  if (Array.isArray(pipe)) return pipe;
+
+  const seen = new Set<string>();
+  const steps: PipelineStep[] = [];
+
+  for (const opSteps of Object.values(pipe)) {
+    if (Array.isArray(opSteps)) {
+      for (const step of opSteps) {
+        const key = `${step._type}:${step.name}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          steps.push(step);
+        }
+      }
+    }
+  }
+
+  return steps;
 }
 
 /**
@@ -464,4 +667,186 @@ describe('${className} Custom Tests', () => {
   });
 });
 `;
+}
+
+/**
+ * Run config-level tests for a resource (no DB required)
+ *
+ * Tests field permissions, pipeline configuration, and event definitions.
+ * Works with any adapter — no Mongoose dependency.
+ *
+ * @param resource - The Arc resource definition to test
+ *
+ * @example
+ * ```typescript
+ * import { createConfigTestSuite } from '@classytic/arc/testing';
+ * import productResource from './product.resource.js';
+ *
+ * // Generates field permission, pipeline, and event tests
+ * createConfigTestSuite(productResource);
+ * ```
+ */
+export function createConfigTestSuite(resource: ResourceDefinition<unknown>): void {
+  const fieldPerms = resource.fields;
+  const pipe = resource.pipe;
+  const events = resource.events;
+
+  // Field permissions
+  if (fieldPerms && Object.keys(fieldPerms).length > 0) {
+    runFieldPermissionTests(resource.displayName, fieldPerms);
+  }
+
+  // Pipeline
+  if (pipe) {
+    runPipelineTests(resource.displayName, pipe);
+  }
+
+  // Events
+  if (events && Object.keys(events).length > 0) {
+    runEventTests(resource.name, resource.displayName, events);
+  }
+
+  // Permissions configuration
+  if (resource.permissions && Object.keys(resource.permissions).length > 0) {
+    describe(`${resource.displayName} Permission Config`, () => {
+      const ops = ['list', 'get', 'create', 'update', 'delete'] as const;
+      for (const op of ops) {
+        const check = resource.permissions[op];
+        if (check) {
+          it(`${op} permission should be a function`, () => {
+            expect(typeof check).toBe('function');
+          });
+        }
+      }
+    });
+  }
+}
+
+function runFieldPermissionTests(displayName: string, fieldPerms: FieldPermissionMap): void {
+  describe(`${displayName} Field Permissions`, () => {
+    for (const [field, perm] of Object.entries(fieldPerms)) {
+      switch (perm._type) {
+        case 'hidden':
+          it(`should always hide field '${field}'`, () => {
+            const data = { [field]: 'secret', other: 'visible' } as Record<string, unknown>;
+            const result = applyFieldReadPermissions(data, fieldPerms, []);
+            expect(result[field]).toBeUndefined();
+          });
+
+          it(`should strip hidden field '${field}' from writes`, () => {
+            const body = { [field]: 'attempt', name: 'test' } as Record<string, unknown>;
+            const result = applyFieldWritePermissions(body, fieldPerms, []);
+            expect(result[field]).toBeUndefined();
+          });
+          break;
+
+        case 'visibleTo':
+          it(`should hide field '${field}' from non-privileged users`, () => {
+            const data = { [field]: 'sensitive' } as Record<string, unknown>;
+            const result = applyFieldReadPermissions(data, fieldPerms, ['_no_role_']);
+            expect(result[field]).toBeUndefined();
+          });
+
+          if (perm.roles && perm.roles.length > 0) {
+            const allowedRole = perm.roles[0]!;
+            it(`should show field '${field}' to roles: ${[...perm.roles].join(', ')}`, () => {
+              const data = { [field]: 'sensitive' } as Record<string, unknown>;
+              const result = applyFieldReadPermissions(data, fieldPerms, [allowedRole]);
+              expect(result[field]).toBe('sensitive');
+            });
+          }
+          break;
+
+        case 'writableBy':
+          it(`should strip field '${field}' from writes by non-privileged users`, () => {
+            const body = { [field]: 'v', name: 'test' } as Record<string, unknown>;
+            const result = applyFieldWritePermissions(body, fieldPerms, ['_no_role_']);
+            expect(result[field]).toBeUndefined();
+          });
+
+          if (perm.roles && perm.roles.length > 0) {
+            const writeRole = perm.roles[0]!;
+            it(`should allow writing field '${field}' by roles: ${[...perm.roles].join(', ')}`, () => {
+              const body = { [field]: 'v' } as Record<string, unknown>;
+              const result = applyFieldWritePermissions(body, fieldPerms, [writeRole]);
+              expect(result[field]).toBe('v');
+            });
+          }
+          break;
+
+        case 'redactFor':
+          if (perm.roles && perm.roles.length > 0) {
+            const redactRole = perm.roles[0]!;
+            it(`should redact field '${field}' for roles: ${[...perm.roles].join(', ')}`, () => {
+              const data = { [field]: 'real' } as Record<string, unknown>;
+              const result = applyFieldReadPermissions(data, fieldPerms, [redactRole]);
+              expect(result[field]).toBe(perm.redactValue ?? '***');
+            });
+          }
+
+          it(`should show real value of field '${field}' to non-redacted roles`, () => {
+            const data = { [field]: 'real' } as Record<string, unknown>;
+            const result = applyFieldReadPermissions(data, fieldPerms, ['_other_']);
+            expect(result[field]).toBe('real');
+          });
+          break;
+      }
+    }
+  });
+}
+
+function runPipelineTests(displayName: string, pipe: PipelineConfig): void {
+  const steps = collectPipelineSteps(pipe);
+  if (steps.length === 0) return;
+
+  const validOps = new Set(['list', 'get', 'create', 'update', 'delete']);
+
+  describe(`${displayName} Pipeline`, () => {
+    it('should have at least one pipeline step', () => {
+      expect(steps.length).toBeGreaterThan(0);
+    });
+
+    for (const step of steps) {
+      it(`${step._type} '${step.name}' should have a valid type`, () => {
+        expect(['guard', 'transform', 'interceptor']).toContain(step._type);
+      });
+
+      it(`${step._type} '${step.name}' should have a handler function`, () => {
+        expect(typeof step.handler).toBe('function');
+      });
+
+      if (step.operations?.length) {
+        it(`${step._type} '${step.name}' should target valid operations`, () => {
+          for (const op of step.operations!) {
+            expect(validOps.has(op)).toBe(true);
+          }
+        });
+      }
+    }
+  });
+}
+
+function runEventTests(
+  resourceName: string,
+  displayName: string,
+  events: Record<string, import('../types/index.js').EventDefinition>,
+): void {
+  describe(`${displayName} Events`, () => {
+    for (const [action, def] of Object.entries(events)) {
+      it(`event '${resourceName}:${action}' should have a handler function`, () => {
+        expect(typeof def.handler).toBe('function');
+      });
+
+      it(`event '${resourceName}:${action}' should have a name`, () => {
+        expect(def.name).toBeTruthy();
+      });
+
+      if (def.schema) {
+        it(`event '${resourceName}:${action}' schema should be an object`, () => {
+          expect(typeof def.schema).toBe('object');
+          expect(def.schema).not.toBeNull();
+        });
+      }
+    }
+  });
 }

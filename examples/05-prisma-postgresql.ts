@@ -326,14 +326,11 @@ export const productResource = defineResource({
 
   // Permission configuration
   permissions: {
-    list: allowPublic(), // Anyone can browse products
-    get: allowPublic(), // Anyone can view product details
-    create: requireRoles(['admin', 'inventory']), // Only admins/inventory can create
-    update: requireRoles(['admin', 'inventory']), // Only admins/inventory can update
-    delete: requireRoles(['admin']), // Only admins can delete
-    // Preset permissions
-    deleted: requireRoles(['admin']), // Only admins can see deleted
-    restore: requireRoles(['admin']), // Only admins can restore
+    list: allowPublic(),                           // Anyone can browse products
+    get: allowPublic(),                            // Anyone can view product details
+    create: requireRoles(['admin', 'inventory']),  // Only admins/inventory can create
+    update: requireRoles(['admin', 'inventory']),  // Only admins/inventory can update
+    delete: requireRoles(['admin']),               // Only admins can delete
   },
 
   // Custom routes for business logic
@@ -342,22 +339,25 @@ export const productResource = defineResource({
       method: 'GET',
       path: '/low-stock',
       handler: 'getLowStock',
+      wrapHandler: true,
+      permissions: requireRoles(['admin', 'inventory']),
       summary: 'Get products with low stock',
-      authRoles: ['admin', 'inventory'],
     },
     {
       method: 'POST',
       path: '/bulk-stock',
       handler: 'bulkUpdateStock',
+      wrapHandler: true,
+      permissions: requireRoles(['admin', 'inventory']),
       summary: 'Bulk update stock levels',
-      authRoles: ['admin', 'inventory'],
     },
     {
       method: 'GET',
       path: '/search',
       handler: 'search',
+      wrapHandler: true,
+      permissions: allowPublic(),
       summary: 'Search products by name/description',
-      authRoles: [], // Public search
     },
   ],
 

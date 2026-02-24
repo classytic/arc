@@ -48,6 +48,9 @@ const gracefulShutdownPlugin: FastifyPluginAsync<GracefulShutdownOptions> = asyn
 
   let isShuttingDown = false;
 
+  // Keep references to signal handlers so we can remove them on close
+  const signalHandlers = new Map<string, () => void>();
+
   const shutdown = async (signal: string): Promise<void> => {
     // Prevent multiple shutdown attempts
     if (isShuttingDown) {
@@ -62,7 +65,7 @@ const gracefulShutdownPlugin: FastifyPluginAsync<GracefulShutdownOptions> = asyn
       fastify.log?.info?.({ signal, timeout }, 'Shutdown signal received, starting graceful shutdown');
     }
 
-    // Set a hard timeout
+    // Set a hard timeout — force-exit only as last resort
     const forceExitTimer = setTimeout(() => {
       if (logEvents) {
         fastify.log?.error?.('Graceful shutdown timeout exceeded, forcing exit');
@@ -74,13 +77,13 @@ const gracefulShutdownPlugin: FastifyPluginAsync<GracefulShutdownOptions> = asyn
     forceExitTimer.unref();
 
     try {
-      // 1. Stop accepting new connections
+      // 1. Stop accepting new connections and wait for in-flight requests
       if (logEvents) {
         fastify.log?.info?.('Closing server to new connections');
       }
       await fastify.close();
 
-      // 2. Run custom cleanup
+      // 2. Run custom cleanup (database connections, Redis, etc.)
       if (onShutdown) {
         if (logEvents) {
           fastify.log?.info?.('Running custom shutdown handler');
@@ -93,7 +96,8 @@ const gracefulShutdownPlugin: FastifyPluginAsync<GracefulShutdownOptions> = asyn
       }
 
       clearTimeout(forceExitTimer);
-      process.exit(0);
+      // Let Node.js exit naturally when the event loop drains
+      // instead of calling process.exit(0) which skips cleanup
     } catch (err) {
       if (logEvents) {
         fastify.log?.error?.({ error: (err as Error).message }, 'Error during shutdown');
@@ -103,12 +107,20 @@ const gracefulShutdownPlugin: FastifyPluginAsync<GracefulShutdownOptions> = asyn
     }
   };
 
-  // Register signal handlers
+  // Register signal handlers (with references for cleanup)
   for (const signal of signals) {
-    process.on(signal, () => {
-      void shutdown(signal);
-    });
+    const handler = () => { void shutdown(signal); };
+    signalHandlers.set(signal, handler);
+    process.on(signal, handler);
   }
+
+  // Cleanup signal handlers on close to prevent test pollution
+  fastify.addHook('onClose', async () => {
+    for (const [signal, handler] of signalHandlers) {
+      process.removeListener(signal, handler);
+    }
+    signalHandlers.clear();
+  });
 
   // Decorate fastify with manual shutdown trigger
   fastify.decorate('shutdown', async () => {

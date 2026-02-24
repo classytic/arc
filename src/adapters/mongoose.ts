@@ -5,10 +5,29 @@
  * Proper generics eliminate the need for 'as any' casts.
  */
 
-import type { Model, Document } from 'mongoose';
+import type { Model } from 'mongoose';
 import type { DataAdapter, SchemaMetadata, RepositoryLike } from './interface.js';
 import type { CrudRepository, RouteSchemaOptions, OpenApiSchemas, AnyRecord } from '../types/index.js';
 import { isMongooseModel, isRepository } from './types.js';
+
+/**
+ * Mongoose SchemaType internal shape (not fully exposed by @types/mongoose)
+ * Used to extract field metadata from schema paths
+ */
+interface MongooseSchemaType {
+  instance: string;
+  isRequired?: boolean;
+  options?: {
+    ref?: string;
+    enum?: Array<string | number>;
+    minlength?: number;
+    maxlength?: number;
+    min?: number;
+    max?: number;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
 
 // ============================================================================
 // Mongoose Adapter Options
@@ -19,9 +38,13 @@ import { isMongooseModel, isRepository } from './types.js';
  *
  * @typeParam TDoc - The document type (inferred or explicit)
  */
+/**
+ * Options for creating a Mongoose adapter
+ *
+ * @typeParam TDoc - The document type (inferred or explicit)
+ */
 export interface MongooseAdapterOptions<TDoc = unknown> {
-  /** Mongoose model instance */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  /** Mongoose model instance — accepts any Mongoose model without Document constraint */
   model: Model<any>;
   /** Repository implementing CRUD operations - accepts any repository-like object */
   repository: CrudRepository<TDoc> | RepositoryLike;
@@ -39,7 +62,6 @@ export interface MongooseAdapterOptions<TDoc = unknown> {
 export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
   readonly type = 'mongoose' as const;
   readonly name: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   readonly model: Model<any>;
   readonly repository: CrudRepository<TDoc> | RepositoryLike;
 
@@ -76,7 +98,7 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
       // Skip internal fields
       if (fieldName.startsWith('_') && fieldName !== '_id') continue;
 
-      const typeInfo = schemaType as any;
+      const typeInfo = schemaType as MongooseSchemaType;
       const mongooseType = typeInfo.instance || 'Mixed';
 
       // Map Mongoose types to our FieldMetadata types
@@ -129,7 +151,7 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
         if (fieldName.startsWith('__')) continue;
         if (blockedFields.has(fieldName)) continue;
 
-        const typeInfo = schemaType as any;
+        const typeInfo = schemaType as MongooseSchemaType;
         properties[fieldName] = this.mongooseTypeToOpenApi(typeInfo);
 
         if (typeInfo.isRequired) {
@@ -183,11 +205,11 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
   /**
    * Extract relation metadata
    */
-  private extractRelations(paths: Record<string, any>): SchemaMetadata['relations'] {
+  private extractRelations(paths: Record<string, unknown>): SchemaMetadata['relations'] {
     const relations: Record<string, { type: 'one-to-one' | 'one-to-many' | 'many-to-many'; target: string; foreignKey?: string }> = {};
 
     for (const [fieldName, schemaType] of Object.entries(paths)) {
-      const ref = (schemaType as any).options?.ref;
+      const ref = (schemaType as MongooseSchemaType).options?.ref;
       if (ref) {
         relations[fieldName] = {
           type: 'one-to-one', // Mongoose refs are typically one-to-one
@@ -203,7 +225,7 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
   /**
    * Convert Mongoose type to OpenAPI type
    */
-  private mongooseTypeToOpenApi(typeInfo: any): AnyRecord {
+  private mongooseTypeToOpenApi(typeInfo: MongooseSchemaType): AnyRecord {
     const instance = typeInfo.instance;
     const options = typeInfo.options || {};
 
@@ -249,23 +271,42 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
 // ============================================================================
 
 /**
- * Create Mongoose adapter with flexible type acceptance
- *
- * Accepts any repository with CRUD methods - no 'as any' needed.
+ * Create Mongoose adapter with flexible type acceptance.
+ * Accepts any repository with CRUD methods — no `as any` needed.
  *
  * @example
  * ```typescript
- * // Works with any MongoKit repository - no cast needed
+ * // Object form (explicit)
  * const adapter = createMongooseAdapter({
  *   model: ProductModel,
  *   repository: productRepository,
  * });
+ *
+ * // Shorthand form (2-arg) — most common path
+ * const adapter = createMongooseAdapter(ProductModel, productRepository);
  * ```
  */
 export function createMongooseAdapter<TDoc = unknown>(
-  options: MongooseAdapterOptions<TDoc>
+  model: Model<any>,
+  repository: CrudRepository<TDoc> | RepositoryLike,
+): DataAdapter<TDoc>;
+export function createMongooseAdapter<TDoc = unknown>(
+  options: MongooseAdapterOptions<TDoc>,
+): DataAdapter<TDoc>;
+export function createMongooseAdapter<TDoc = unknown>(
+  modelOrOptions: Model<any> | MongooseAdapterOptions<TDoc>,
+  repository?: CrudRepository<TDoc> | RepositoryLike,
 ): DataAdapter<TDoc> {
-  return new MongooseAdapter<TDoc>(options);
+  if (isMongooseModel(modelOrOptions)) {
+    if (!repository) {
+      throw new TypeError(
+        'createMongooseAdapter: repository is required when using 2-arg form.\n' +
+        'Usage: createMongooseAdapter(Model, repository)'
+      );
+    }
+    return new MongooseAdapter<TDoc>({ model: modelOrOptions, repository });
+  }
+  return new MongooseAdapter<TDoc>(modelOrOptions as MongooseAdapterOptions<TDoc>);
 }
 
 // ============================================================================

@@ -9,7 +9,7 @@
  * - generating baseline resource tests
  */
 
-export { TestHarness, createTestHarness, generateTestFile } from './TestHarness.js';
+export { TestHarness, createTestHarness, createConfigTestSuite, generateTestFile } from './TestHarness.js';
 export type { TestFixtures, TestHarnessOptions, GenerateTestFileOptions } from './TestHarness.js';
 
 // App factory + request helpers

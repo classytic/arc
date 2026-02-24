@@ -8,15 +8,17 @@
 import type { CrudRepository, OpenApiSchemas, RouteSchemaOptions } from '../types/index.js';
 
 /**
- * Minimal repository interface for flexible adapter compatibility
- * Accepts any object with CRUD method names
+ * Minimal repository interface for flexible adapter compatibility.
+ * Any repository with these method signatures is accepted — no `as any` needed.
+ *
+ * CrudRepository<TDoc> and MongoKit Repository both satisfy this interface.
  */
 export interface RepositoryLike {
-  getAll: unknown;
-  getById: unknown;
-  create: unknown;
-  update: unknown;
-  delete: unknown;
+  getAll(params?: unknown): Promise<unknown>;
+  getById(id: string, options?: unknown): Promise<unknown>;
+  create(data: unknown, options?: unknown): Promise<unknown>;
+  update(id: string, data: unknown, options?: unknown): Promise<unknown>;
+  delete(id: string, options?: unknown): Promise<unknown>;
   [key: string]: unknown;
 }
 
