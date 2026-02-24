@@ -237,39 +237,14 @@ describe('Security: Release Blockers', () => {
     });
   });
 
-  describe('Issue 3: Prisma Adapter Incomplete (High)', () => {
-    it('FACT: Prisma adapter has zero tests', () => {
-      // No tests exist for Prisma adapter in tests/ directory
-      // This can be verified with: find packages/arc/tests -name "*prisma*"
+  describe('Issue 3: Prisma Adapter — Experimental (Needs Integration Tests)', () => {
+    // The Prisma adapter is implemented (query parser, schema gen, soft delete, health checks)
+    // but has no integration tests. Marked @experimental in source.
+    // These TODOs track the missing test coverage.
 
-      // The adapter is just a thin wrapper:
-      // - No preset integration tests (softDelete, multiTenant, etc.)
-      // - No query parser integration tests
-      // - No policy filter tests
-      // - No CRUD operation tests
-
-      expect(true).toBe(true);
-    });
-
-    it('FACT: Prisma adapter delegates all CRUD to repository', () => {
-      // The PrismaAdapter class only implements schema generation
-      // All actual CRUD operations go through the provided repository
-      // This means:
-      // 1. Users must implement their own Prisma repositories
-      // 2. No Arc-specific behaviors (presets, policies) are tested with Prisma
-      // 3. Query parsing for Prisma filters is not implemented
-
-      expect(true).toBe(true);
-    });
-
-    it('FACT: No documentation on Prisma repository requirements', () => {
-      // There are no examples showing:
-      // - How to implement a Prisma repository compatible with Arc
-      // - How presets work with Prisma (e.g., softDelete adding WHERE clause)
-      // - How policy filters translate to Prisma where clauses
-      // - How to handle pagination with Prisma
-
-      expect(true).toBe(true);
-    });
+    it.todo('integration: CRUD operations with Prisma + Arc presets');
+    it.todo('integration: softDelete preset adds WHERE deletedAt IS NULL');
+    it.todo('integration: PrismaQueryParser translates URL params to Prisma where/orderBy');
+    it.todo('integration: policy filters merge correctly into Prisma queries');
   });
 });

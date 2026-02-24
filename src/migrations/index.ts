@@ -174,7 +174,7 @@ export class MigrationRunner {
   async getAppliedMigrations(): Promise<MigrationRecord[]> {
     const collection = this.db.collection(this.collectionName);
     const records = await collection.find({}).sort({ appliedAt: 1 }).toArray();
-    return records as any as MigrationRecord[];
+    return records as unknown as MigrationRecord[];
   }
 
   /**
@@ -383,7 +383,7 @@ export const migrationHelpers = {
   /**
    * Add a new field with default value
    */
-  addField: (collection: string, fieldName: string, defaultValue: any) =>
+  addField: (collection: string, fieldName: string, defaultValue: unknown) =>
     defineMigration({
       version: 0,
       resource: collection,
@@ -418,7 +418,7 @@ export const migrationHelpers = {
   /**
    * Create an index
    */
-  createIndex: (collection: string, fields: Record<string, 1 | -1>, options?: any) =>
+  createIndex: (collection: string, fields: Record<string, 1 | -1>, options?: Record<string, unknown>) =>
     defineMigration({
       version: 0,
       resource: collection,
@@ -427,7 +427,7 @@ export const migrationHelpers = {
         await db.collection(collection).createIndex(fields, options);
       },
       down: async (db) => {
-        const indexName = options?.name || Object.keys(fields).join('_');
+        const indexName = typeof options?.name === 'string' ? options.name : Object.keys(fields).join('_');
         await db.collection(collection).dropIndex(indexName);
       },
     }),

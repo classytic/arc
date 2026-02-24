@@ -27,6 +27,8 @@ export interface IRequestContext {
   headers: Record<string, string | undefined>;
   /** Organization ID (for multi-tenant apps) */
   organizationId?: string;
+  /** Team ID (for team-scoped resources) */
+  teamId?: string;
   /** Additional metadata and custom fields */
   metadata?: Record<string, unknown>;
 }

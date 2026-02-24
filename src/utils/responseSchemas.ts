@@ -327,13 +327,11 @@ export const queryParams = {
 
   filtering: {
     select: {
-      type: 'string',
-      description: 'Fields to include (space-separated)',
+      description: 'Fields to include (space-separated or object)',
       example: 'name email createdAt',
     },
     populate: {
-      type: 'string',
-      description: 'Relations to populate (comma-separated)',
+      description: 'Relations to populate (comma-separated string or bracket-notation object)',
       example: 'author,category',
     },
   },
@@ -350,5 +348,74 @@ export function getListQueryParams(): AnyRecord {
       ...queryParams.sorting,
       ...queryParams.filtering,
     },
+    // Allow additional/complex query params (e.g., bracket-notation populate, filters)
+    // Without this, qs-parsed nested objects like ?populate[author][select]=name would be rejected
+    additionalProperties: true,
   };
+}
+
+// ============================================================================
+// Default CRUD Schemas
+// ============================================================================
+
+/**
+ * Generic item schema that allows any properties.
+ * Used as default when no user schema is provided.
+ * Enables fast-json-stringify while still passing through all fields.
+ */
+const genericItemSchema: JsonSchema = {
+  type: 'object',
+  additionalProperties: true,
+};
+
+/**
+ * Recursively strip `example` keys from a schema object.
+ * The `example` keyword is OpenAPI metadata — not standard JSON Schema —
+ * and triggers Ajv strict mode errors when used on routes without the
+ * `keywords: ['example']` AJV config (e.g., raw Fastify without createApp).
+ */
+function stripExamples<T>(schema: T): T {
+  if (schema === null || typeof schema !== 'object') return schema;
+  if (Array.isArray(schema)) return schema.map(stripExamples) as T;
+
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
+    if (key === 'example') continue;
+    result[key] = stripExamples(value);
+  }
+  return result as T;
+}
+
+/**
+ * Get default response schemas for all CRUD operations.
+ *
+ * When routes have response schemas, Fastify compiles them with
+ * fast-json-stringify for 2-3x faster serialization and prevents
+ * accidental field disclosure.
+ *
+ * These defaults use `additionalProperties: true` so all fields pass through.
+ * Override with specific schemas for full serialization performance + safety.
+ *
+ * Note: `example` properties are stripped from defaults so they work with
+ * any Fastify instance (not just createApp which adds `keywords: ['example']`).
+ */
+export function getDefaultCrudSchemas(): Record<string, Record<string, unknown>> {
+  return stripExamples({
+    list: {
+      querystring: getListQueryParams(),
+      response: { 200: listResponse(genericItemSchema) },
+    },
+    get: {
+      response: { 200: itemResponse(genericItemSchema) },
+    },
+    create: {
+      response: { 201: mutationResponse(genericItemSchema) },
+    },
+    update: {
+      response: { 200: itemResponse(genericItemSchema) },
+    },
+    delete: {
+      response: { 200: deleteResponse() },
+    },
+  });
 }

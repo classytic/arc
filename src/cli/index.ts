@@ -16,4 +16,5 @@
 export { generate } from './commands/generate.js';
 export { init } from './commands/init.js';
 export { introspect } from './commands/introspect.js';
+export { describe } from './commands/describe.js';
 export { exportDocs } from './commands/docs.js';

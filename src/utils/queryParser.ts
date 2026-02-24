@@ -242,7 +242,33 @@ export class ArcQueryParser implements QueryParserInterface {
       if (reservedKeys.has(key)) continue;
       if (value === undefined || value === null) continue;
 
-      // Handle nested operators: price[gte]=100
+      // Validate field name (prevent injection)
+      if (!/^[a-zA-Z_][a-zA-Z0-9_.]*$/.test(key)) continue;
+
+      // Handle nested object format from qs parser: { price: { gte: '40', lte: '100' } }
+      // This happens when URL is ?price[gte]=40&price[lte]=100 and qs parses it
+      if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+        const operatorObj = value as Record<string, unknown>;
+        const operatorKeys = Object.keys(operatorObj);
+
+        // Check if all keys are known operators
+        const allOperators = operatorKeys.every(op => this.operators[op]);
+
+        if (allOperators && operatorKeys.length > 0) {
+          // Convert operator object: { gte: '40', lte: '100' } → { $gte: 40, $lte: 100 }
+          const mongoFilters: Record<string, unknown> = {};
+          for (const [op, opValue] of Object.entries(operatorObj)) {
+            const mongoOp = this.operators[op];
+            if (mongoOp) {
+              mongoFilters[mongoOp] = this.parseFilterValue(opValue, op);
+            }
+          }
+          filters[key] = mongoFilters;
+          continue;
+        }
+      }
+
+      // Handle key-based bracket notation: price[gte]=100 (when not parsed by qs)
       const match = key.match(/^([a-zA-Z_][a-zA-Z0-9_.]*)(?:\[([a-z]+)\])?$/);
       if (!match) continue;
 

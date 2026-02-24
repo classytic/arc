@@ -1,25 +1,43 @@
 /**
  * BaseController E2E Tests
  *
- * Tests CRUD operations, hook execution, and error handling
+ * Tests CRUD operations, hook execution, and error handling.
+ * Uses instance-scoped HookSystem (no global singleton).
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { BaseController } from '../../src/core/BaseController.js';
-import { hookSystem } from '../../src/hooks/HookSystem.js';
+import { HookSystem } from '../../src/hooks/HookSystem.js';
 import { createMockModel, createMockRepository, mockUser, mockContext, setupGlobalHooks } from '../setup.js';
 import type { IRequestContext } from '../../src/types/index.js';
 
 setupGlobalHooks();
 
+/** Create a request context with instance-scoped hooks */
+function createReq(
+  hooks: HookSystem,
+  overrides: Partial<IRequestContext> = {}
+): IRequestContext {
+  return {
+    query: {},
+    body: {},
+    params: {},
+    user: mockUser,
+    headers: {},
+    metadata: { arc: { hooks } },
+    ...overrides,
+  };
+}
+
 describe('BaseController', () => {
   let controller: BaseController;
   let repository: any;
   let Model: any;
+  let hooks: HookSystem;
 
   beforeEach(() => {
-    // Clear all hooks before each test
-    hookSystem.clear();
+    // Create fresh isolated hook system per test
+    hooks = new HookSystem();
 
     // Create fresh model and repository
     Model = createMockModel('TestProduct');
@@ -29,15 +47,11 @@ describe('BaseController', () => {
 
   describe('create()', () => {
     it('should create a new item', async () => {
-      const requestContext: IRequestContext = {
-        query: {},
+      const req = createReq(hooks, {
         body: { name: 'Test Product', price: 100 },
-        params: {},
-        user: mockUser,
-        context: mockContext,
-      };
+      });
 
-      const response = await controller.create(requestContext);
+      const response = await controller.create(req);
 
       expect(response.status).toBe(201);
       expect(response.success).toBe(true);
@@ -52,17 +66,13 @@ describe('BaseController', () => {
         return { ...ctx.data, price: ctx.data.price * 2 };
       });
 
-      hookSystem.before('product', 'create', beforeHook);
+      hooks.before('product', 'create', beforeHook);
 
-      const requestContext: IRequestContext = {
-        query: {},
+      const req = createReq(hooks, {
         body: { name: 'Test Product', price: 100 },
-        params: {},
-        user: mockUser,
-        context: mockContext,
-      };
+      });
 
-      const response = await controller.create(requestContext);
+      const response = await controller.create(req);
 
       expect(beforeHook).toHaveBeenCalled();
       expect(response.success).toBe(true);
@@ -72,17 +82,13 @@ describe('BaseController', () => {
     it('should execute afterCreate hooks', async () => {
       const afterHook = vi.fn();
 
-      hookSystem.after('product', 'create', afterHook);
+      hooks.after('product', 'create', afterHook);
 
-      const requestContext: IRequestContext = {
-        query: {},
+      const req = createReq(hooks, {
         body: { name: 'Test Product', price: 100 },
-        params: {},
-        user: mockUser,
-        context: mockContext,
-      };
+      });
 
-      await controller.create(requestContext);
+      await controller.create(req);
 
       expect(afterHook).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -96,18 +102,14 @@ describe('BaseController', () => {
       const beforeHook = vi.fn();
       const afterHook = vi.fn();
 
-      hookSystem.before('product', 'create', beforeHook);
-      hookSystem.after('product', 'create', afterHook);
+      hooks.before('product', 'create', beforeHook);
+      hooks.after('product', 'create', afterHook);
 
-      const requestContext: IRequestContext = {
-        query: {},
+      const req = createReq(hooks, {
         body: { name: 'Test Product', price: 100 },
-        params: {},
-        user: mockUser,
-        context: mockContext,
-      };
+      });
 
-      await controllerWithoutResource.create(requestContext);
+      await controllerWithoutResource.create(req);
 
       expect(beforeHook).not.toHaveBeenCalled();
       expect(afterHook).not.toHaveBeenCalled();
@@ -122,15 +124,12 @@ describe('BaseController', () => {
         price: 100,
       });
 
-      const requestContext: IRequestContext = {
-        query: {},
+      const req = createReq(hooks, {
         body: { name: 'Updated Product', price: 150 },
         params: { id: item._id.toString() },
-        user: mockUser,
-        context: mockContext,
-      };
+      });
 
-      const response = await controller.update(requestContext);
+      const response = await controller.update(req);
 
       expect(response.success).toBe(true);
       expect(response.data).toMatchObject({
@@ -147,18 +146,15 @@ describe('BaseController', () => {
       });
       const afterHook = vi.fn();
 
-      hookSystem.before('product', 'update', beforeHook);
-      hookSystem.after('product', 'update', afterHook);
+      hooks.before('product', 'update', beforeHook);
+      hooks.after('product', 'update', afterHook);
 
-      const requestContext: IRequestContext = {
-        query: {},
+      const req = createReq(hooks, {
         body: { name: 'Updated', price: 150 },
         params: { id: item._id.toString() },
-        user: mockUser,
-        context: mockContext,
-      };
+      });
 
-      const response = await controller.update(requestContext);
+      const response = await controller.update(req);
 
       expect(beforeHook).toHaveBeenCalled();
       expect(afterHook).toHaveBeenCalled();
@@ -170,15 +166,11 @@ describe('BaseController', () => {
     it('should delete an item', async () => {
       const item = await Model.create({ name: 'Product', price: 100 });
 
-      const requestContext: IRequestContext = {
-        query: {},
-        body: {},
+      const req = createReq(hooks, {
         params: { id: item._id.toString() },
-        user: mockUser,
-        context: mockContext,
-      };
+      });
 
-      const response = await controller.delete(requestContext);
+      const response = await controller.delete(req);
 
       expect(response.success).toBe(true);
       expect(response.data).toMatchObject({ message: 'Deleted successfully' });
@@ -194,18 +186,14 @@ describe('BaseController', () => {
       const beforeHook = vi.fn();
       const afterHook = vi.fn();
 
-      hookSystem.before('product', 'delete', beforeHook);
-      hookSystem.after('product', 'delete', afterHook);
+      hooks.before('product', 'delete', beforeHook);
+      hooks.after('product', 'delete', afterHook);
 
-      const requestContext: IRequestContext = {
-        query: {},
-        body: {},
+      const req = createReq(hooks, {
         params: { id: item._id.toString() },
-        user: mockUser,
-        context: mockContext,
-      };
+      });
 
-      await controller.delete(requestContext);
+      await controller.delete(req);
 
       expect(beforeHook).toHaveBeenCalled();
       expect(afterHook).toHaveBeenCalled();
@@ -216,30 +204,22 @@ describe('BaseController', () => {
     it('should retrieve a single item by ID', async () => {
       const item = await Model.create({ name: 'Product', price: 100 });
 
-      const requestContext: IRequestContext = {
-        query: {},
-        body: {},
+      const req = createReq(hooks, {
         params: { id: item._id.toString() },
-        user: mockUser,
-        context: mockContext,
-      };
+      });
 
-      const response = await controller.get(requestContext);
+      const response = await controller.get(req);
 
       expect(response.success).toBe(true);
       expect(response.data).toMatchObject({ name: 'Product' });
     });
 
     it('should return 404 for non-existent item', async () => {
-      const requestContext: IRequestContext = {
-        query: {},
-        body: {},
+      const req = createReq(hooks, {
         params: { id: '507f1f77bcf86cd799439011' }, // Valid ObjectId that doesn't exist
-        user: mockUser,
-        context: mockContext,
-      };
+      });
 
-      const response = await controller.get(requestContext);
+      const response = await controller.get(req);
 
       expect(response.success).toBe(false);
       expect(response.status).toBe(404);
@@ -255,15 +235,11 @@ describe('BaseController', () => {
         { name: 'Product 3', price: 300 },
       ]);
 
-      const requestContext: IRequestContext = {
+      const req = createReq(hooks, {
         query: { page: 1, limit: 10 },
-        body: {},
-        params: {},
-        user: mockUser,
-        context: mockContext,
-      };
+      });
 
-      const response = await controller.list(requestContext);
+      const response = await controller.list(req);
 
       expect(response.success).toBe(true);
       expect(response.data?.docs.length).toBeGreaterThanOrEqual(3);
@@ -278,15 +254,11 @@ describe('BaseController', () => {
         { name: 'Cheap Product', price: 10 },
       ]);
 
-      const requestContext: IRequestContext = {
+      const req = createReq(hooks, {
         query: { 'price[gte]': '500' },
-        body: {},
-        params: {},
-        user: mockUser,
-        context: mockContext,
-      };
+      });
 
-      const response = await controller.list(requestContext);
+      const response = await controller.list(req);
 
       expect(response.success).toBe(true);
       expect(response.data?.docs.length).toBeGreaterThanOrEqual(1);
@@ -299,27 +271,23 @@ describe('BaseController', () => {
     it('should execute hooks in priority order', async () => {
       const executionOrder: number[] = [];
 
-      hookSystem.before('product', 'create', async () => {
+      hooks.before('product', 'create', async () => {
         executionOrder.push(1);
       }, 1);
 
-      hookSystem.before('product', 'create', async () => {
+      hooks.before('product', 'create', async () => {
         executionOrder.push(3);
       }, 3);
 
-      hookSystem.before('product', 'create', async () => {
+      hooks.before('product', 'create', async () => {
         executionOrder.push(2);
       }, 2);
 
-      const requestContext: IRequestContext = {
-        query: {},
+      const req = createReq(hooks, {
         body: { name: 'Test', price: 100 },
-        params: {},
-        user: mockUser,
-        context: mockContext,
-      };
+      });
 
-      await controller.create(requestContext);
+      await controller.create(req);
 
       expect(executionOrder).toEqual([1, 2, 3]);
     });
@@ -327,38 +295,30 @@ describe('BaseController', () => {
 
   describe('Error Handling', () => {
     it('should propagate errors from beforeCreate hooks', async () => {
-      hookSystem.before('product', 'create', async () => {
+      hooks.before('product', 'create', async () => {
         throw new Error('Validation failed');
       });
 
-      const requestContext: IRequestContext = {
-        query: {},
+      const req = createReq(hooks, {
         body: { name: 'Test', price: 100 },
-        params: {},
-        user: mockUser,
-        context: mockContext,
-      };
+      });
 
-      await expect(controller.create(requestContext)).rejects.toThrow('Validation failed');
+      await expect(controller.create(req)).rejects.toThrow('Validation failed');
     });
 
     it('should log but not fail on afterCreate hook errors', async () => {
       const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-      hookSystem.after('product', 'create', async () => {
+      hooks.after('product', 'create', async () => {
         throw new Error('After hook failed');
       });
 
-      const requestContext: IRequestContext = {
-        query: {},
+      const req = createReq(hooks, {
         body: { name: 'Test', price: 100 },
-        params: {},
-        user: mockUser,
-        context: mockContext,
-      };
+      });
 
       // Should not throw
-      const response = await controller.create(requestContext);
+      const response = await controller.create(req);
 
       expect(response.success).toBe(true);
       expect(response.status).toBe(201);

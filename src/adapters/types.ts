@@ -58,7 +58,7 @@ export type CleanDoc<T> = T extends Document
 /**
  * Ensures type is a valid Mongoose document
  */
-export type MongooseDocument = Document & Record<string, any>;
+export type MongooseDocument = Document & Record<string, unknown>;
 
 /**
  * Ensures type is a valid repository
@@ -83,7 +83,7 @@ export type MatchingModel<TDoc> = Model<TDoc & Document>;
 /**
  * Check if value is a Mongoose model
  */
-export function isMongooseModel(value: unknown): value is Model<any> {
+export function isMongooseModel(value: unknown): value is Model<Document> {
   return (
     typeof value === 'function' &&
     value.prototype &&
@@ -95,7 +95,7 @@ export function isMongooseModel(value: unknown): value is Model<any> {
 /**
  * Check if value is a repository
  */
-export function isRepository(value: unknown): value is CrudRepository<any> {
+export function isRepository(value: unknown): value is CrudRepository<unknown> {
   return (
     typeof value === 'object' &&
     value !== null &&

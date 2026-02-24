@@ -109,7 +109,7 @@ const scalarPlugin: FastifyPluginAsync<ScalarOptions> = async (
     });
   }
 
-  fastify.log?.info?.(`Scalar API docs available at ${routePrefix}`);
+  fastify.log?.debug?.(`Scalar API docs available at ${routePrefix}`);
 };
 
 export default fp(scalarPlugin, {

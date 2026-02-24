@@ -1,16 +1,23 @@
 /**
  * Prisma Adapter - PostgreSQL/MySQL/SQLite Implementation
  *
+ * @experimental This adapter is implemented but has no integration tests yet.
+ * Use in production at your own risk. The Mongoose adapter is the recommended
+ * and battle-tested path.
+ *
  * Bridges Prisma Client with Arc's DataAdapter interface.
  * Supports Prisma 5+ with all database providers.
  *
- * Features:
- * ✅ Schema generation (OpenAPI docs from DMMF)
- * ✅ Health checks (database connectivity)
- * ✅ Query parsing (URL params → Prisma where/orderBy)
- * ✅ Policy filter translation
- * ✅ Soft delete preset support
- * ✅ Multi-tenant preset support
+ * Implemented features:
+ * - Schema generation (OpenAPI docs from DMMF)
+ * - Health checks (database connectivity)
+ * - Query parsing (URL params → Prisma where/orderBy)
+ * - Policy filter translation
+ * - Soft delete preset support
+ *
+ * Known gaps:
+ * - No integration test coverage
+ * - Multi-tenant isolation relies on caller-provided policyFilters (no auto-enforcement)
  *
  * @example
  * ```typescript
@@ -30,7 +37,67 @@
  */
 
 import type { DataAdapter, SchemaMetadata, FieldMetadata, ValidationResult } from './interface.js';
-import type { CrudRepository, OpenApiSchemas, RouteSchemaOptions, ParsedQuery, QueryParserInterface } from '../types/index.js';
+import type { CrudRepository, OpenApiSchemas, RouteSchemaOptions, ParsedQuery, QueryParserInterface, AnyRecord } from '../types/index.js';
+
+// ============================================================================
+// Prisma DMMF Types (runtime shapes from @prisma/client)
+// ============================================================================
+
+/** Prisma DMMF field shape */
+interface DmmfField {
+  name: string;
+  type: string;
+  kind: string;
+  isList: boolean;
+  isRequired: boolean;
+  isUnique?: boolean;
+  isId?: boolean;
+  isGenerated?: boolean;
+  hasDefaultValue?: boolean;
+  default?: unknown;
+  documentation?: string;
+  relationName?: string;
+}
+
+/** Prisma DMMF enum value */
+interface DmmfEnumValue {
+  name: string;
+}
+
+/** Prisma DMMF enum */
+interface DmmfEnum {
+  name: string;
+  values: DmmfEnumValue[];
+}
+
+/** Prisma DMMF model shape */
+interface DmmfModel {
+  name: string;
+  fields: DmmfField[];
+  uniqueIndexes?: Array<{ fields: string[] }>;
+}
+
+/** Prisma DMMF datamodel */
+interface DmmfDatamodel {
+  models: DmmfModel[];
+  enums?: DmmfEnum[];
+}
+
+/** Prisma DMMF root shape */
+interface PrismaDmmf {
+  datamodel?: DmmfDatamodel;
+}
+
+/** Prisma client delegate (model accessor) */
+interface PrismaDelegate {
+  findMany(args?: unknown): Promise<unknown[]>;
+}
+
+/** Prisma client shape */
+interface PrismaClientLike {
+  $disconnect(): Promise<void>;
+  [key: string]: unknown;
+}
 
 // ============================================================================
 // Prisma Query Parser
@@ -87,7 +154,7 @@ export class PrismaQueryParser implements QueryParserInterface {
     $in: 'in',
     $nin: 'notIn',
     $regex: 'contains',
-    $exists: undefined as any, // Handled specially
+    $exists: undefined as unknown as string, // Handled specially in translateFilters
   };
 
   constructor(options: PrismaQueryParserOptions = {}) {
@@ -319,13 +386,13 @@ export interface PrismaQueryOptions {
 
 export interface PrismaAdapterOptions<TModel> {
   /** Prisma client instance */
-  client: any;
+  client: PrismaClientLike;
   /** Model name (e.g., 'user', 'product') */
   modelName: string;
   /** Repository instance implementing CRUD operations */
   repository: CrudRepository<TModel>;
   /** Optional: Prisma DMMF (Data Model Meta Format) for schema extraction */
-  dmmf?: any;
+  dmmf?: PrismaDmmf;
   /** Optional: Custom query parser (default: PrismaQueryParser) */
   queryParser?: PrismaQueryParser;
   /** Enable soft delete filtering (default: true) */
@@ -334,15 +401,15 @@ export interface PrismaAdapterOptions<TModel> {
   softDeleteField?: string;
 }
 
-export class PrismaAdapter<TModel = any> implements DataAdapter<TModel> {
+export class PrismaAdapter<TModel = unknown> implements DataAdapter<TModel> {
   readonly type = 'prisma' as const;
   readonly name: string;
   readonly repository: CrudRepository<TModel>;
   readonly queryParser: PrismaQueryParser;
 
-  private client: any;
+  private client: PrismaClientLike;
   private modelName: string;
-  private dmmf?: any;
+  private dmmf?: PrismaDmmf;
   private softDeleteEnabled: boolean;
   private softDeleteField: string;
 
@@ -387,7 +454,7 @@ export class PrismaAdapter<TModel = any> implements DataAdapter<TModel> {
 
     try {
       const model = this.dmmf.datamodel?.models?.find(
-        (m: any) => m.name.toLowerCase() === this.modelName.toLowerCase()
+        (m: DmmfModel) => m.name.toLowerCase() === this.modelName.toLowerCase()
       );
 
       if (!model) return null;
@@ -429,7 +496,7 @@ export class PrismaAdapter<TModel = any> implements DataAdapter<TModel> {
 
     try {
       const model = this.dmmf.datamodel?.models?.find(
-        (m: any) => m.name.toLowerCase() === this.modelName.toLowerCase()
+        (m: DmmfModel) => m.name.toLowerCase() === this.modelName.toLowerCase()
       );
 
       if (!model) return null;
@@ -443,7 +510,7 @@ export class PrismaAdapter<TModel = any> implements DataAdapter<TModel> {
       return {
         name: model.name,
         fields,
-        indexes: model.uniqueIndexes?.map((idx: any) => ({
+        indexes: model.uniqueIndexes?.map((idx: { fields: string[] }) => ({
           fields: idx.fields,
           unique: true,
         })),
@@ -466,12 +533,12 @@ export class PrismaAdapter<TModel = any> implements DataAdapter<TModel> {
     if (this.dmmf) {
       try {
         const model = this.dmmf.datamodel?.models?.find(
-          (m: any) => m.name.toLowerCase() === this.modelName.toLowerCase()
+          (m: DmmfModel) => m.name.toLowerCase() === this.modelName.toLowerCase()
         );
 
         if (model) {
           const requiredFields = model.fields.filter(
-            (f: any) => f.isRequired && !f.hasDefaultValue && !f.isGenerated
+            (f: DmmfField) => f.isRequired && !f.hasDefaultValue && !f.isGenerated
           );
 
           const errors: Array<{ field: string; message: string }> = [];
@@ -503,7 +570,7 @@ export class PrismaAdapter<TModel = any> implements DataAdapter<TModel> {
       // This works across all Prisma providers (SQL, MongoDB, etc.)
       // Prisma client delegates use camelCase (e.g., prisma.userProfile, not prisma.UserProfile)
       const delegateName = this.modelName.charAt(0).toLowerCase() + this.modelName.slice(1);
-      const delegate = (this.client as any)[delegateName];
+      const delegate = this.client[delegateName] as PrismaDelegate | undefined;
       if (!delegate) {
         return false;
       }
@@ -526,8 +593,8 @@ export class PrismaAdapter<TModel = any> implements DataAdapter<TModel> {
   // Private Helper Methods
   // ============================================================================
 
-  private buildEntitySchema(model: any, options?: RouteSchemaOptions): any {
-    const properties: Record<string, any> = {};
+  private buildEntitySchema(model: DmmfModel, options?: RouteSchemaOptions): AnyRecord {
+    const properties: Record<string, AnyRecord> = {};
     const required: string[] = [];
 
     for (const field of model.fields) {
@@ -548,8 +615,8 @@ export class PrismaAdapter<TModel = any> implements DataAdapter<TModel> {
     };
   }
 
-  private buildCreateSchema(model: any, options?: RouteSchemaOptions): any {
-    const properties: Record<string, any> = {};
+  private buildCreateSchema(model: DmmfModel, options?: RouteSchemaOptions): AnyRecord {
+    const properties: Record<string, AnyRecord> = {};
     const required: string[] = [];
 
     for (const field of model.fields) {
@@ -571,8 +638,8 @@ export class PrismaAdapter<TModel = any> implements DataAdapter<TModel> {
     };
   }
 
-  private buildUpdateSchema(model: any, options?: RouteSchemaOptions): any {
-    const properties: Record<string, any> = {};
+  private buildUpdateSchema(model: DmmfModel, options?: RouteSchemaOptions): AnyRecord {
+    const properties: Record<string, AnyRecord> = {};
 
     for (const field of model.fields) {
       // Skip auto-generated, ID, and relation fields for update
@@ -588,7 +655,7 @@ export class PrismaAdapter<TModel = any> implements DataAdapter<TModel> {
     };
   }
 
-  private shouldSkipField(field: any, options?: RouteSchemaOptions): boolean {
+  private shouldSkipField(field: DmmfField, options?: RouteSchemaOptions): boolean {
     // Check if field is in excludeFields
     if (options?.excludeFields?.includes(field.name)) {
       return true;
@@ -602,8 +669,8 @@ export class PrismaAdapter<TModel = any> implements DataAdapter<TModel> {
     return false;
   }
 
-  private convertPrismaFieldToJsonSchema(field: any): any {
-    const schema: any = {};
+  private convertPrismaFieldToJsonSchema(field: DmmfField): AnyRecord {
+    const schema: AnyRecord = {};
 
     // Map Prisma types to JSON Schema types
     switch (field.type) {
@@ -634,9 +701,9 @@ export class PrismaAdapter<TModel = any> implements DataAdapter<TModel> {
           schema.type = 'string';
           // Extract enum values from DMMF if available
           if (this.dmmf?.datamodel?.enums) {
-            const enumDef = this.dmmf.datamodel.enums.find((e: any) => e.name === field.type);
+            const enumDef = this.dmmf.datamodel.enums.find((e: DmmfEnum) => e.name === field.type);
             if (enumDef) {
-              schema.enum = enumDef.values.map((v: any) => v.name);
+              schema.enum = enumDef.values.map((v: DmmfEnumValue) => v.name);
             }
           }
         } else {
@@ -660,7 +727,7 @@ export class PrismaAdapter<TModel = any> implements DataAdapter<TModel> {
     return schema;
   }
 
-  private convertPrismaFieldToMetadata(field: any): FieldMetadata {
+  private convertPrismaFieldToMetadata(field: DmmfField): FieldMetadata {
     const metadata: FieldMetadata = {
       type: this.mapPrismaTypeToMetadataType(field.type, field.kind),
       required: field.isRequired,

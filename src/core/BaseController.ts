@@ -46,8 +46,10 @@ import type {
   UserLike,
 } from '../types/index.js';
 import { getUserId } from '../types/index.js';
-import { hookSystem, type HookSystem } from '../hooks/HookSystem.js';
+import { HookSystem } from '../hooks/HookSystem.js';
 import { ArcQueryParser } from '../utils/queryParser.js';
+import type { FieldPermissionMap } from '../permissions/fields.js';
+import { applyFieldWritePermissions } from '../permissions/fields.js';
 
 // Re-export ParsedQuery for backwards compatibility
 export type { ParsedQuery } from '../types/index.js';
@@ -69,15 +71,15 @@ export type { ParsedQuery } from '../types/index.js';
  * }
  */
 export interface FlexibleRepository {
-  // Core CRUD methods with flexible signatures
-  getAll(...args: any[]): Promise<any>;
-  getById(...args: any[]): Promise<any>;
-  create(...args: any[]): Promise<any>;
-  update(...args: any[]): Promise<any>;
-  delete(...args: any[]): Promise<any>;
+  // Core CRUD methods with proper signatures
+  getAll(params?: unknown): Promise<unknown>;
+  getById(id: string, options?: unknown): Promise<unknown>;
+  create(data: unknown, options?: unknown): Promise<unknown>;
+  update(id: string, data: unknown, options?: unknown): Promise<unknown>;
+  delete(id: string, options?: unknown): Promise<unknown>;
 
-  // Allow any custom methods
-  [key: string]: any;
+  // Allow custom methods
+  [key: string]: unknown;
 }
 
 // ============================================================================
@@ -113,6 +115,11 @@ export interface BaseControllerOptions {
   resourceName?: string;
   /** Disable automatic event emission (default: false) */
   disableEvents?: boolean;
+  /**
+   * Field name used for multi-tenant scoping (default: 'organizationId').
+   * Override to match your schema: 'workspaceId', 'tenantId', 'teamId', etc.
+   */
+  tenantField?: string;
 }
 
 // ============================================================================
@@ -160,6 +167,8 @@ export class BaseController<
   protected defaultSort: string;
   protected resourceName?: string;
   protected disableEvents: boolean;
+  /** Field name for multi-tenant scoping (default: 'organizationId') */
+  protected tenantField: string;
 
   /** Preset field names for dynamic param reading */
   protected _presetFields: {
@@ -177,6 +186,7 @@ export class BaseController<
     this.defaultSort = options.defaultSort ?? '-createdAt';
     this.resourceName = options.resourceName;
     this.disableEvents = options.disableEvents ?? false;
+    this.tenantField = options.tenantField ?? 'organizationId';
 
     // Bind CRUD methods
     this.list = this.list.bind(this);
@@ -194,6 +204,7 @@ export class BaseController<
     presetFields?: { slugField?: string; parentField?: string };
     resourceName?: string;
     queryParser?: QueryParserInterface;
+    tenantField?: string;
   }): void {
     if (options.schemaOptions) {
       this.schemaOptions = { ...this.schemaOptions, ...options.schemaOptions };
@@ -207,36 +218,20 @@ export class BaseController<
     if (options.queryParser) {
       this.queryParser = options.queryParser;
     }
+    if (options.tenantField) {
+      this.tenantField = options.tenantField;
+    }
   }
 
   // ============================================================================
-  // Context & Query Parsing
+  // Context & Query Parsing (Single Parse)
   // ============================================================================
 
   /**
-   * Build service context from IRequestContext
+   * Resolve a request into parsed query options — ONE parse per request.
+   * Combines what was previously _buildContext + _parseQueryOptions + _applyFilters.
    */
-  protected _buildContext(req: IRequestContext): ServiceContext {
-    const parsed = this.queryParser.parse(req.query);
-    const arcContext = req.metadata as RequestContext | undefined;
-
-    // Use parsed.select if available, otherwise fall back to raw query string
-    const selectString = this._selectToString(parsed.select) ?? (req.query?.select as string);
-    const sanitizedSelect = this._sanitizeSelect(selectString, this.schemaOptions);
-
-    return {
-      user: req.user as UserLike | undefined,
-      organizationId: arcContext?.organizationId ?? req.organizationId ?? undefined,
-      select: sanitizedSelect ? sanitizedSelect.split(/\s+/) : undefined,
-      populate: this._sanitizePopulate(parsed.populate, this.schemaOptions),
-      lean: this._parseLean(req.query?.lean),
-    };
-  }
-
-  /**
-   * Parse query into QueryOptions using queryParser
-   */
-  protected _parseQueryOptions(req: IRequestContext): ControllerQueryOptions {
+  protected _resolveRequest(req: IRequestContext): ControllerQueryOptions {
     const parsed = this.queryParser.parse(req.query);
     const arcContext = req.metadata as RequestContext | undefined;
 
@@ -258,6 +253,21 @@ export class BaseController<
     // Use parsed.select if available, otherwise fall back to raw query string
     const selectString = this._selectToString(parsed.select) ?? (req.query?.select as string);
 
+    // Build filters with org + policy scope applied
+    const filters = { ...(parsed.filters as AnyRecord) };
+
+    // Policy filters (set by permission middleware via req.metadata._policyFilters)
+    const policyFilters = (arcContext as AnyRecord | undefined)?._policyFilters as AnyRecord | undefined;
+    if (policyFilters) {
+      Object.assign(filters, policyFilters);
+    }
+
+    // Org/tenant scope — uses configurable tenantField (default: 'organizationId')
+    const orgId = arcContext?.organizationId ?? req.organizationId;
+    if (orgId) {
+      filters[this.tenantField] = orgId;
+    }
+
     return {
       page,
       limit,
@@ -266,36 +276,28 @@ export class BaseController<
       populate: this._sanitizePopulate(parsed.populate, this.schemaOptions),
       // Advanced populate options from MongoKit QueryParser (takes precedence over simple populate)
       populateOptions: parsed.populateOptions,
-      filters: parsed.filters as AnyRecord,
+      filters,
       // MongoKit features
       search: parsed.search,
       after: parsed.after,
       user: req.user as UserLike | undefined,
-      organizationId: arcContext?.organizationId ?? req.organizationId,
+      organizationId: orgId,
       context: arcContext,
     };
   }
 
   /**
-   * Apply org and policy filters
+   * @deprecated Use _resolveRequest() instead. Kept for subclass compatibility.
    */
-  protected _applyFilters(options: ControllerQueryOptions, req: IRequestContext): ControllerQueryOptions {
-    const filters = { ...(options.filters as AnyRecord) };
-    const arcContext = req.metadata as RequestContext | undefined;
+  protected _parseQueryOptions(req: IRequestContext): ControllerQueryOptions {
+    return this._resolveRequest(req);
+  }
 
-    // Policy filters (set by permission middleware via req.metadata._policyFilters)
-    const policyFilters = (arcContext as AnyRecord | undefined)?._policyFilters as AnyRecord | undefined;
-    if (policyFilters) {
-      Object.assign(filters, policyFilters);
-    }
-
-    // Org scope
-    const orgId = arcContext?.organizationId ?? req.organizationId;
-    if (orgId) {
-      filters.organizationId = orgId;
-    }
-
-    return { ...options, filters };
+  /**
+   * @deprecated Filters are now applied inside _resolveRequest(). Kept for subclass compatibility.
+   */
+  protected _applyFilters(options: ControllerQueryOptions, _req: IRequestContext): ControllerQueryOptions {
+    return options;
   }
 
   /**
@@ -312,10 +314,10 @@ export class BaseController<
       Object.assign(filter, policyFilters);
     }
 
-    // Apply org scope filter
+    // Apply org/tenant scope filter — uses configurable tenantField
     const orgId = arcContext?.organizationId ?? req.organizationId;
     if (orgId) {
-      filter.organizationId = orgId;
+      filter[this.tenantField] = orgId;
     }
 
     return filter;
@@ -371,7 +373,7 @@ export class BaseController<
     }
 
     const keys = path.split('.');
-    let value: any = obj;
+    let value: unknown = obj;
 
     for (const key of keys) {
       if (value == null) return undefined;
@@ -379,7 +381,7 @@ export class BaseController<
       if (BaseController.FORBIDDEN_PATHS.includes(key.toLowerCase())) {
         return undefined;
       }
-      value = value[key];
+      value = (value as AnyRecord)[key];
     }
 
     return value;
@@ -474,6 +476,42 @@ export class BaseController<
       .map(([field]) => field);
   }
 
+  /** System fields that should never be set via request body */
+  private static readonly SYSTEM_FIELDS = ['_id', '__v', 'createdAt', 'updatedAt', 'deletedAt'];
+
+  /**
+   * Strip readonly and system-managed fields from request body.
+   * Prevents clients from overwriting _id, timestamps, __v, etc.
+   */
+  protected _sanitizeBody(body: AnyRecord, _operation: 'create' | 'update', req?: IRequestContext): AnyRecord {
+    let sanitized = { ...body };
+
+    // Strip universal system fields
+    for (const field of BaseController.SYSTEM_FIELDS) {
+      delete sanitized[field];
+    }
+
+    // Strip fields marked as systemManaged or readonly in fieldRules
+    const fieldRules = this.schemaOptions.fieldRules ?? {};
+    for (const [field, rules] of Object.entries(fieldRules)) {
+      if (rules.systemManaged || rules.readonly) {
+        delete sanitized[field];
+      }
+    }
+
+    // Apply field-level write permissions (strip fields user can't write)
+    if (req) {
+      const arcMeta = (req.metadata as AnyRecord | undefined)?.arc as AnyRecord | undefined;
+      const fieldPerms = arcMeta?.fields as FieldPermissionMap | undefined;
+      if (fieldPerms) {
+        const userRoles = ((req.user as AnyRecord | undefined)?.roles ?? []) as string[];
+        sanitized = applyFieldWritePermissions(sanitized, fieldPerms, userRoles);
+      }
+    }
+
+    return sanitized;
+  }
+
   /**
    * Convert parsed select object to string format
    * Converts { name: 1, email: 1, password: 0 } → 'name email -password'
@@ -520,7 +558,7 @@ export class BaseController<
   ): string[] | undefined {
     if (!populate) return undefined;
 
-    const allowedPopulate = (schemaOptions.query as any)?.allowedPopulate as string[] | undefined;
+    const allowedPopulate = (schemaOptions.query as AnyRecord | undefined)?.allowedPopulate as string[] | undefined;
     const requested = typeof populate === 'string'
       ? populate.split(',').map((p) => p.trim())
       : Array.isArray(populate) ? populate.map(String) : [];
@@ -538,18 +576,50 @@ export class BaseController<
   // Access Control Helpers
   // ============================================================================
 
-  /** Check org scope for a document */
+  /** Check org/tenant scope for a document — uses configurable tenantField */
   protected _checkOrgScope(item: AnyRecord | null, arcContext: RequestContext | undefined): boolean {
     if (!item || !arcContext?.organizationId) return true;
-    const itemOrgId = (item as { organizationId?: unknown }).organizationId;
+    const itemOrgId = item[this.tenantField];
     if (!itemOrgId) return true;
     return String(itemOrgId) === String(arcContext.organizationId);
+  }
+
+  /**
+   * Fetch a single document with full access control enforcement.
+   * Combines compound DB filter (ID + org + policy) with post-hoc fallback.
+   *
+   * Replaces the duplicated pattern in get/update/delete:
+   *   buildIdFilter → getOne (or getById + checkOrgScope + checkPolicyFilters)
+   */
+  protected async _fetchWithAccessControl(
+    id: string,
+    req: IRequestContext,
+    queryOptions?: unknown,
+  ): Promise<TDoc | null> {
+    const compoundFilter = this._buildIdFilter(id, req);
+    const hasCompoundFilters = Object.keys(compoundFilter).length > 1;
+    const repoWithGetOne = this.repository as TRepository & { getOne?: (filter: AnyRecord, options?: unknown) => Promise<TDoc | null> };
+
+    if (hasCompoundFilters && typeof repoWithGetOne.getOne === 'function') {
+      return repoWithGetOne.getOne(compoundFilter, queryOptions);
+    }
+
+    // Fallback: getById + post-hoc security checks
+    const item = await this.repository.getById(id, queryOptions) as TDoc | null;
+    if (!item) return null;
+
+    const arcContext = req.metadata as RequestContext | undefined;
+    if (!this._checkOrgScope(item as AnyRecord, arcContext) || !this._checkPolicyFilters(item as AnyRecord, req)) {
+      return null;
+    }
+
+    return item;
   }
 
   /** Check ownership for update/delete (ownedByUser preset) */
   protected _checkOwnership(item: AnyRecord | null, req: IRequestContext): boolean {
     // Ownership check would need to be passed via req.metadata
-    const ownershipCheck = (req.metadata as any)?._ownershipCheck;
+    const ownershipCheck = (req.metadata as AnyRecord | undefined)?._ownershipCheck as { field: string; userId: string } | undefined;
     if (!item || !ownershipCheck) return true;
     const { field, userId } = ownershipCheck;
     const itemOwnerId = item[field];
@@ -558,12 +628,12 @@ export class BaseController<
   }
 
   /**
-   * Get hook system from context (instance-scoped) or fall back to global singleton
-   * This allows proper isolation when running multiple app instances (e.g., in tests)
+   * Get hook system from request context (instance-scoped)
+   * Hooks are always instance-scoped via fastify.arc.hooks — no global fallback
    */
-  protected _getHooks(req: IRequestContext): HookSystem {
+  protected _getHooks(req: IRequestContext): HookSystem | null {
     const arcMeta = (req.metadata as AnyRecord | undefined)?.arc as AnyRecord | undefined;
-    return (arcMeta?.hooks as HookSystem | undefined) ?? hookSystem;
+    return (arcMeta?.hooks as HookSystem | undefined) ?? null;
   }
 
   // ============================================================================
@@ -575,10 +645,9 @@ export class BaseController<
    * Implements IController.list()
    */
   async list(req: IRequestContext): Promise<IControllerResponse<PaginatedResult<TDoc>>> {
-    const options = this._parseQueryOptions(req);
-    const filteredOptions = this._applyFilters(options, req);
+    const options = this._resolveRequest(req);
 
-    const result = await this.repository.getAll(filteredOptions as PaginationParams<TDoc>);
+    const result = await this.repository.getAll(options as PaginationParams<TDoc>);
 
     // Handle array result (non-paginated) - convert to paginated format
     if (Array.isArray(result)) {
@@ -619,18 +688,12 @@ export class BaseController<
       };
     }
 
-    const options = this._parseQueryOptions(req);
-    const arcContext = req.metadata as RequestContext | undefined;
+    const options = this._resolveRequest(req);
 
     try {
-      const item = await this.repository.getById(id, options);
+      const item = await this._fetchWithAccessControl(id, req, options);
 
-      // Security checks - all must pass or return 404 (don't leak existence)
-      const hasItem = !!item;
-      const orgScopeOk = this._checkOrgScope(item as AnyRecord, arcContext);
-      const policyFiltersOk = this._checkPolicyFilters(item as AnyRecord, req);
-
-      if (!hasItem || !orgScopeOk || !policyFiltersOk) {
+      if (!item) {
         return {
           success: false,
           error: 'Resource not found',
@@ -640,7 +703,7 @@ export class BaseController<
 
       return {
         success: true,
-        data: item as TDoc,
+        data: item,
         status: 200,
       };
     } catch (error: unknown) {
@@ -661,12 +724,12 @@ export class BaseController<
    * Implements IController.create()
    */
   async create(req: IRequestContext): Promise<IControllerResponse<TDoc>> {
-    const data: AnyRecord = { ...(req.body as AnyRecord) };
+    const data: AnyRecord = this._sanitizeBody(req.body as AnyRecord, 'create', req);
     const arcContext = req.metadata as RequestContext | undefined;
 
-    // Inject org scope
+    // Inject org/tenant scope — uses configurable tenantField
     if (arcContext?.organizationId) {
-      data.organizationId = arcContext.organizationId;
+      data[this.tenantField] = arcContext.organizationId;
     }
 
     // Inject user reference
@@ -675,11 +738,11 @@ export class BaseController<
       data.createdBy = userId;
     }
 
-    // Execute beforeCreate hooks (use instance-scoped hooks if available)
+    // Execute beforeCreate hooks (instance-scoped only)
     const hooks = this._getHooks(req);
     const user = req.user as UserLike | undefined;
     let processedData = data;
-    if (this.resourceName) {
+    if (hooks && this.resourceName) {
       processedData = await hooks.executeBefore(this.resourceName, 'create', data, {
         user,
         context: arcContext,
@@ -692,7 +755,7 @@ export class BaseController<
     });
 
     // Execute afterCreate hooks
-    if (this.resourceName) {
+    if (hooks && this.resourceName) {
       await hooks.executeAfter(this.resourceName, 'create', item as AnyRecord, {
         user,
         context: arcContext,
@@ -721,7 +784,7 @@ export class BaseController<
       };
     }
 
-    const data: AnyRecord = { ...(req.body as AnyRecord) };
+    const data: AnyRecord = this._sanitizeBody(req.body as AnyRecord, 'update', req);
     const arcContext = req.metadata as RequestContext | undefined;
     const user = req.user as UserLike | undefined;
 
@@ -731,18 +794,9 @@ export class BaseController<
       data.updatedBy = userId;
     }
 
-    // Fetch existing for scope/ownership/policy checks
-    const existing = await this.repository.getById(id);
-    if (!existing) {
-      return {
-        success: false,
-        error: 'Resource not found',
-        status: 404,
-      };
-    }
+    const existing = await this._fetchWithAccessControl(id, req);
 
-    // Security checks - org and policy filters return 404 (don't leak existence)
-    if (!this._checkOrgScope(existing as AnyRecord, arcContext) || !this._checkPolicyFilters(existing as AnyRecord, req)) {
+    if (!existing) {
       return {
         success: false,
         error: 'Resource not found',
@@ -760,10 +814,10 @@ export class BaseController<
       };
     }
 
-    // Execute beforeUpdate hooks (use instance-scoped hooks if available)
+    // Execute beforeUpdate hooks (instance-scoped only)
     const hooks = this._getHooks(req);
     let processedData = data;
-    if (this.resourceName) {
+    if (hooks && this.resourceName) {
       processedData = await hooks.executeBefore(this.resourceName, 'update', data, {
         user,
         context: arcContext,
@@ -785,7 +839,7 @@ export class BaseController<
     }
 
     // Execute afterUpdate hooks
-    if (this.resourceName) {
+    if (hooks && this.resourceName) {
       await hooks.executeAfter(this.resourceName, 'update', item as AnyRecord, {
         user,
         context: arcContext,
@@ -818,17 +872,9 @@ export class BaseController<
     const arcContext = req.metadata as RequestContext | undefined;
     const user = req.user as UserLike | undefined;
 
-    const existing = await this.repository.getById(id);
-    if (!existing) {
-      return {
-        success: false,
-        error: 'Resource not found',
-        status: 404,
-      };
-    }
+    const existing = await this._fetchWithAccessControl(id, req);
 
-    // Security checks - org and policy filters return 404 (don't leak existence)
-    if (!this._checkOrgScope(existing as AnyRecord, arcContext) || !this._checkPolicyFilters(existing as AnyRecord, req)) {
+    if (!existing) {
       return {
         success: false,
         error: 'Resource not found',
@@ -846,9 +892,9 @@ export class BaseController<
       };
     }
 
-    // Execute beforeDelete hooks (use instance-scoped hooks if available)
+    // Execute beforeDelete hooks (instance-scoped only)
     const hooks = this._getHooks(req);
-    if (this.resourceName) {
+    if (hooks && this.resourceName) {
       await hooks.executeBefore(this.resourceName, 'delete', existing as AnyRecord, {
         user,
         context: arcContext,
@@ -862,7 +908,9 @@ export class BaseController<
     });
 
     // Handle both MongoKit's { success, message } and simple boolean returns
-    const deleteSuccess = typeof result === 'object' ? result?.success : result;
+    const deleteSuccess = typeof result === 'object' && result !== null
+      ? (result as { success?: boolean }).success
+      : result;
     if (!deleteSuccess) {
       return {
         success: false,
@@ -872,7 +920,7 @@ export class BaseController<
     }
 
     // Execute afterDelete hooks
-    if (this.resourceName) {
+    if (hooks && this.resourceName) {
       await hooks.executeAfter(this.resourceName, 'delete', existing as AnyRecord, {
         user,
         context: arcContext,
@@ -893,7 +941,7 @@ export class BaseController<
 
   /** Get resource by slug (slugLookup preset) */
   async getBySlug(req: IRequestContext): Promise<IControllerResponse<TDoc>> {
-    const repo = this.repository as any;
+    const repo = this.repository as TRepository & { getBySlug?: (slug: string, options?: unknown) => Promise<TDoc | null> };
     if (!repo.getBySlug) {
       return {
         success: false,
@@ -904,7 +952,7 @@ export class BaseController<
 
     const slugField = this._presetFields.slugField ?? 'slug';
     const slug = (req.params[slugField] ?? req.params.slug) as string;
-    const options = this._parseQueryOptions(req);
+    const options = this._resolveRequest(req);
     const arcContext = req.metadata as RequestContext | undefined;
     const item = await repo.getBySlug(slug, options);
 
@@ -925,7 +973,7 @@ export class BaseController<
 
   /** Get soft-deleted resources (softDelete preset) */
   async getDeleted(req: IRequestContext): Promise<IControllerResponse<PaginatedResult<TDoc>>> {
-    const repo = this.repository as any;
+    const repo = this.repository as TRepository & { getDeleted?: (options?: unknown) => Promise<TDoc[] | PaginatedResult<TDoc>> };
     if (!repo.getDeleted) {
       return {
         success: false,
@@ -934,9 +982,8 @@ export class BaseController<
       };
     }
 
-    const options = this._parseQueryOptions(req);
-    const filteredOptions = this._applyFilters(options, req);
-    const result = await repo.getDeleted(filteredOptions);
+    const options = this._resolveRequest(req);
+    const result = await repo.getDeleted(options);
 
     // Handle array result (non-paginated)
     if (Array.isArray(result)) {
@@ -965,7 +1012,7 @@ export class BaseController<
 
   /** Restore soft-deleted resource (softDelete preset) */
   async restore(req: IRequestContext): Promise<IControllerResponse<TDoc>> {
-    const repo = this.repository as any;
+    const repo = this.repository as TRepository & { restore?: (id: string) => Promise<TDoc | null> };
     if (!repo.restore) {
       return {
         success: false,
@@ -1003,7 +1050,7 @@ export class BaseController<
 
   /** Get hierarchical tree (tree preset) */
   async getTree(req: IRequestContext): Promise<IControllerResponse<TDoc[]>> {
-    const repo = this.repository as any;
+    const repo = this.repository as TRepository & { getTree?: (options?: unknown) => Promise<TDoc[]> };
     if (!repo.getTree) {
       return {
         success: false,
@@ -1012,9 +1059,8 @@ export class BaseController<
       };
     }
 
-    const options = this._parseQueryOptions(req);
-    const filteredOptions = this._applyFilters(options, req);
-    const tree = await repo.getTree(filteredOptions);
+    const options = this._resolveRequest(req);
+    const tree = await repo.getTree(options);
 
     return {
       success: true,
@@ -1025,7 +1071,7 @@ export class BaseController<
 
   /** Get children of parent (tree preset) */
   async getChildren(req: IRequestContext): Promise<IControllerResponse<TDoc[]>> {
-    const repo = this.repository as any;
+    const repo = this.repository as TRepository & { getChildren?: (parentId: string, options?: unknown) => Promise<TDoc[]> };
     if (!repo.getChildren) {
       return {
         success: false,
@@ -1036,9 +1082,8 @@ export class BaseController<
 
     const parentField = this._presetFields.parentField ?? 'parent';
     const parentId = (req.params[parentField] ?? req.params.parent ?? req.params.id) as string;
-    const options = this._parseQueryOptions(req);
-    const filteredOptions = this._applyFilters(options, req);
-    const children = await repo.getChildren(parentId, filteredOptions);
+    const options = this._resolveRequest(req);
+    const children = await repo.getChildren(parentId, options);
 
     return {
       success: true,

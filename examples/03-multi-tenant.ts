@@ -21,7 +21,7 @@
  */
 
 import mongoose from 'mongoose';
-import { defineResource, createMongooseAdapter } from '@classytic/arc';
+import { defineResource, createMongooseAdapter, requireRoles } from '@classytic/arc';
 import { Repository } from '@classytic/mongokit';
 
 // ============================================================================
@@ -171,15 +171,12 @@ export const invoiceResource = defineResource({
   prefix: '/invoices',
 
   // Database adapter
-  adapter: createMongooseAdapter({
-    model: Invoice,
-    repository: invoiceRepository,
-  }),
+  adapter: createMongooseAdapter(Invoice, invoiceRepository),
 
   // Apply presets: multi-tenant isolation + soft delete
   presets: [
     'multiTenant', // Auto-filter by organizationId
-    'softDelete', // Soft delete support
+    'softDelete',  // Soft delete support
   ],
 
   // Enable organization scoping on all routes
@@ -188,14 +185,11 @@ export const invoiceResource = defineResource({
   // Permission configuration
   // Members can view, admins can modify
   permissions: {
-    list: ['member', 'admin', 'finance'],
-    get: ['member', 'admin', 'finance'],
-    create: ['admin', 'finance'],
-    update: ['admin', 'finance'],
-    delete: ['admin'],
-    // Soft delete preset permissions
-    deleted: ['admin'],
-    restore: ['admin'],
+    list: requireRoles(['member', 'admin', 'finance']),
+    get: requireRoles(['member', 'admin', 'finance']),
+    create: requireRoles(['admin', 'finance']),
+    update: requireRoles(['admin', 'finance']),
+    delete: requireRoles(['admin']),
   },
 
   // Custom routes for business logic
@@ -204,29 +198,33 @@ export const invoiceResource = defineResource({
       method: 'GET',
       path: '/overdue',
       handler: 'getOverdue',
+      wrapHandler: true,
+      permissions: requireRoles(['admin', 'finance']),
       summary: 'Get overdue invoices',
-      authRoles: ['admin', 'finance'],
     },
     {
       method: 'GET',
       path: '/stats',
       handler: 'getStats',
+      wrapHandler: true,
+      permissions: requireRoles(['admin', 'finance']),
       summary: 'Get invoice statistics',
-      authRoles: ['admin', 'finance'],
     },
     {
       method: 'POST',
       path: '/:id/send',
       handler: 'sendInvoice',
+      wrapHandler: true,
+      permissions: requireRoles(['admin', 'finance']),
       summary: 'Send invoice to customer',
-      authRoles: ['admin', 'finance'],
     },
     {
       method: 'POST',
       path: '/:id/mark-paid',
       handler: 'markPaid',
+      wrapHandler: true,
+      permissions: requireRoles(['admin', 'finance']),
       summary: 'Mark invoice as paid',
-      authRoles: ['admin', 'finance'],
     },
   ],
 

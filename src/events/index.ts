@@ -23,6 +23,18 @@ export {
   type EventTransport,
   type DomainEvent,
   type EventHandler,
+  type EventLogger,
+  type MemoryEventTransportOptions,
 } from './EventTransport.js';
 
 export { eventPlugin, type EventPluginOptions } from './eventPlugin.js';
+
+// Retry & Dead Letter Queue (transport-agnostic)
+export { withRetry, createDeadLetterPublisher } from './retry.js';
+export type { RetryOptions } from './retry.js';
+
+// Redis transports — use dedicated subpaths to avoid pulling ioredis:
+//   import { RedisEventTransport } from '@classytic/arc/events/redis';
+//   import { RedisStreamTransport } from '@classytic/arc/events/redis-stream';
+export type { RedisLike, RedisEventTransportOptions } from './transports/redis.js';
+export type { RedisStreamLike, RedisStreamTransportOptions } from './transports/redis-stream.js';

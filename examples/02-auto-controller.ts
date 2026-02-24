@@ -1,12 +1,12 @@
 /**
  * Example: Auto-Generated Controller
  *
- * Arc automatically creates BaseController if you don't provide one.
+ * defineResource() automatically creates BaseController from the adapter.
  * This reduces boilerplate for standard CRUD resources.
  */
 
 import mongoose from 'mongoose';
-import { defineResource, createMongooseAdapter } from '../src/index.js';
+import { defineResource, createMongooseAdapter, permissions } from '../src/index.js';
 import { Repository } from '@classytic/mongokit';
 
 // ============================================================================
@@ -60,29 +60,17 @@ class CategoryRepository extends Repository {
 }
 
 // ============================================================================
-// Resource with Auto-Controller
+// Resource — defineResource() auto-creates BaseController
 // ============================================================================
 
 export const categoryResource = defineResource({
   name: 'category',
-
-  adapter: createMongooseAdapter({
-    model: Category,
-    repository: new CategoryRepository(),
-  }),
-
-  // NO CONTROLLER PROVIDED - Arc creates BaseController automatically!
-  // controller: undefined,
+  adapter: createMongooseAdapter(Category, new CategoryRepository()),
 
   presets: ['tree', 'slugLookup'],
 
-  permissions: {
-    list: [],
-    get: [],
-    create: ['admin'],
-    update: ['admin'],
-    delete: ['admin'],
-  },
+  // Public read, admin write
+  permissions: permissions.publicReadAdminWrite(),
 });
 
 // Auto-generated controller provides:

@@ -31,13 +31,9 @@ export {
 } from './health.js';
 export type { HealthOptions, HealthCheck } from './health.js';
 
-// OpenTelemetry distributed tracing
-export {
-  default as tracingPlugin,
-  createSpan,
-  traced,
-  isTracingAvailable,
-} from './tracing.js';
+// OpenTelemetry distributed tracing — use dedicated subpath to avoid
+// pulling @opentelemetry/* into your bundle:
+//   import { tracingPlugin } from '@classytic/arc/plugins/tracing';
 export type { TracingOptions } from './tracing.js';
 
 // Graceful shutdown handling
@@ -53,6 +49,24 @@ export {
   errorHandlerPlugin as errorHandlerPluginFn,
 } from './errorHandler.js';
 export type { ErrorHandlerOptions } from './errorHandler.js';
+
+// Caching headers (ETag + Cache-Control)
+export {
+  default as cachingPlugin,
+  cachingPlugin as cachingPluginFn,
+} from './caching.js';
+export type { CachingOptions, CachingRule } from './caching.js';
+
+// Server-Sent Events
+export {
+  default as ssePlugin,
+  ssePlugin as ssePluginFn,
+} from './sse.js';
+export type { SSEOptions } from './sse.js';
+
+// Plugin factory (forRoot/forFeature pattern)
+export { createPlugin } from './createPlugin.js';
+export type { ArcPlugin, PluginResourceResult, CreatePluginDefinition } from './createPlugin.js';
 
 // Arc core (instance-scoped hooks & registry)
 export {

@@ -37,10 +37,37 @@
  * });
  */
 
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import qs from 'qs';
-import type { CreateAppOptions } from './types.js';
+import type { CreateAppOptions, BetterAuthOption, CustomPluginAuthOption, CustomAuthenticatorOption } from './types.js';
+import type { AuthPluginOptions } from '../types/index.js';
 import { getPreset } from './presets.js';
+
+// ============================================================================
+// Auth option type guards
+// ============================================================================
+
+function isBetterAuth(auth: NonNullable<CreateAppOptions['auth']>): auth is BetterAuthOption {
+  return typeof auth === 'object' && 'betterAuth' in auth;
+}
+
+function isCustomPlugin(auth: NonNullable<CreateAppOptions['auth']>): auth is CustomPluginAuthOption {
+  return typeof auth === 'object' && 'plugin' in auth && !('betterAuth' in auth);
+}
+
+function isCustomAuthenticator(auth: NonNullable<CreateAppOptions['auth']>): auth is CustomAuthenticatorOption {
+  return (
+    typeof auth === 'object' &&
+    'authenticate' in auth &&
+    !('jwt' in auth) &&
+    !('betterAuth' in auth) &&
+    !('plugin' in auth)
+  );
+}
+
+function isArcJwt(auth: NonNullable<CreateAppOptions['auth']>): auth is AuthPluginOptions {
+  return typeof auth === 'object' && 'jwt' in auth;
+}
 
 // Plugin name to package name mapping
 const PLUGIN_PACKAGES: Record<string, string> = {
@@ -91,7 +118,7 @@ async function loadPlugin(name: string, logger?: { warn: (msg: string) => void }
 
     // For optional plugins, return null instead of throwing
     if (isModuleNotFound && OPTIONAL_PLUGINS.has(name)) {
-      logger?.warn(`ℹ️  Optional plugin '${name}' skipped (${packageName} not installed)`);
+      logger?.warn(`Optional plugin '${name}' skipped (${packageName} not installed)`);
       return null;
     }
 
@@ -130,19 +157,43 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   // ============================================
   const authConfig = options.auth;
   const isAuthDisabled = authConfig === false;
-  const hasCustomPlugin = typeof authConfig === 'object' && 'plugin' in authConfig && authConfig.plugin;
-  const hasCustomAuthenticator = typeof authConfig === 'object' && 'authenticate' in authConfig;
-  const jwtSecret = typeof authConfig === 'object' && 'jwt' in authConfig
-    ? authConfig.jwt?.secret
-    : undefined;
 
-  // Validate: if Arc auth is enabled (not disabled, no custom plugin), need JWT secret or custom authenticator
-  if (!isAuthDisabled && !hasCustomPlugin && !jwtSecret && !hasCustomAuthenticator) {
+  // Determine which auth strategy is in use
+  const useBetterAuth = !isAuthDisabled && authConfig && isBetterAuth(authConfig);
+  const useCustomPlugin = !isAuthDisabled && authConfig && isCustomPlugin(authConfig);
+  const useCustomAuthenticator = !isAuthDisabled && authConfig && isCustomAuthenticator(authConfig);
+  const useArcJwt = !isAuthDisabled && authConfig && isArcJwt(authConfig);
+
+  // Validate: if none of the recognized strategies match, require JWT secret
+  if (
+    !isAuthDisabled &&
+    !useBetterAuth &&
+    !useCustomPlugin &&
+    !useCustomAuthenticator &&
+    !useArcJwt
+  ) {
     throw new Error(
-      'createApp: JWT secret required when Arc auth is enabled.\n' +
-      'Provide auth.jwt.secret, auth.authenticate, or set auth: false to disable.\n' +
+      'createApp: Invalid auth configuration.\n' +
+      'Provide one of:\n' +
+      '  - auth: { jwt: { secret } }              (Arc JWT)\n' +
+      '  - auth: { betterAuth: adapter }           (Better Auth)\n' +
+      '  - auth: { plugin: fastifyPlugin }         (Custom plugin)\n' +
+      '  - auth: { authenticate: fn }              (Custom authenticator)\n' +
+      '  - auth: false                             (Disabled)\n' +
       'Example: auth: { jwt: { secret: process.env.JWT_SECRET } }'
     );
+  }
+
+  // Arc JWT requires a secret (unless a custom authenticator is provided within AuthPluginOptions)
+  if (useArcJwt) {
+    const arcAuth = authConfig as AuthPluginOptions;
+    if (!arcAuth.jwt?.secret && !arcAuth.authenticate) {
+      throw new Error(
+        'createApp: JWT secret required when Arc auth is enabled.\n' +
+        'Provide auth.jwt.secret, auth.authenticate, or set auth: false to disable.\n' +
+        'Example: auth: { jwt: { secret: process.env.JWT_SECRET } }'
+      );
+    }
   }
 
   // ============================================
@@ -154,21 +205,64 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   // ============================================
   // 3. CREATE FASTIFY INSTANCE
   // ============================================
-  const fastify = Fastify({
+  let fastify: FastifyInstance = Fastify({
     logger: config.logger ?? true,
     trustProxy: config.trustProxy ?? false,
     // Use qs parser to support nested bracket notation in query strings
     // e.g., ?populate[author][select]=name,email → { populate: { author: { select: 'name,email' } } }
     // This is required for MongoKit's advanced populate options to work
-    querystringParser: (str) => qs.parse(str),
+    // Placed under routerOptions to avoid FSTDEP022 deprecation warning in Fastify 5
+    routerOptions: {
+      querystringParser: (str: string) => qs.parse(str),
+    },
     ajv: {
       customOptions: {
         coerceTypes: true,
         useDefaults: true,
         removeAdditional: false,
+        // Allow OpenAPI keywords (example, description, etc.) in schemas
+        // These are used by response schemas for documentation but aren't standard JSON Schema
+        keywords: ['example'],
       },
     },
   });
+
+  // Apply TypeBox type provider if requested
+  // This enables TypeScript type inference from TypeBox route schemas
+  if (config.typeProvider === 'typebox') {
+    try {
+      const { TypeBoxValidatorCompiler } = await import('@fastify/type-provider-typebox');
+      fastify.setValidatorCompiler(TypeBoxValidatorCompiler);
+      fastify.log.debug('TypeBox type provider enabled');
+    } catch {
+      fastify.log.warn(
+        'typeProvider: "typebox" requested but @fastify/type-provider-typebox is not installed. ' +
+        'Install it with: npm install @sinclair/typebox @fastify/type-provider-typebox'
+      );
+    }
+  }
+
+  // ============================================
+  // 3b. FIX EMPTY JSON BODY ON DELETE/GET REQUESTS
+  // ============================================
+  // Some clients (browsers, fetch wrappers) send Content-Type: application/json
+  // on DELETE/GET requests with no body. Fastify's default JSON parser rejects
+  // empty bodies with FST_ERR_CTP_EMPTY_JSON_BODY. Override to treat them as undefined.
+  fastify.removeContentTypeParser('application/json');
+  fastify.addContentTypeParser(
+    'application/json',
+    { parseAs: 'string' },
+    (_req: FastifyRequest, body: string, done: (err: Error | null, body?: unknown) => void) => {
+      if (!body || body.length === 0) {
+        return done(null, undefined);
+      }
+      try {
+        done(null, JSON.parse(body));
+      } catch (err) {
+        done(err as Error);
+      }
+    }
+  );
 
   // ============================================
   // 4. REGISTER SECURITY PLUGINS (opt-out)
@@ -179,9 +273,9 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     const helmet = await loadPlugin('helmet');
     // Use type assertion to handle complex helmet options
     await fastify.register(helmet, (config.helmet ?? {}) as Record<string, unknown>);
-    fastify.log.info('✅ Helmet (security headers) enabled');
+    fastify.log.debug('Helmet (security headers) enabled');
   } else {
-    fastify.log.warn('⚠️  Helmet disabled - security headers not applied');
+    fastify.log.warn('Helmet disabled - security headers not applied');
   }
 
   // CORS - Cross-origin requests
@@ -200,18 +294,32 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     }
 
     await fastify.register(cors, corsOptions);
-    fastify.log.info('✅ CORS enabled');
+    fastify.log.debug('CORS enabled');
   } else {
-    fastify.log.warn('⚠️  CORS disabled');
+    fastify.log.warn('CORS disabled');
   }
 
   // Rate limiting - DDoS protection
   if (config.rateLimit !== false) {
     const rateLimit = await loadPlugin('rateLimit');
-    await fastify.register(rateLimit, config.rateLimit ?? { max: 100, timeWindow: '1 minute' });
-    fastify.log.info('✅ Rate limiting enabled');
+    const rateLimitOpts = config.rateLimit ?? { max: 100, timeWindow: '1 minute' };
+    await fastify.register(rateLimit, rateLimitOpts);
+
+    // Warn if production without Redis store (in-memory = per-instance counters)
+    if (config.preset === 'production') {
+      const hasStore = typeof rateLimitOpts === 'object' && 'store' in rateLimitOpts;
+      if (!hasStore) {
+        fastify.log.warn(
+          'Rate limiting is using in-memory store. In multi-instance deployments, ' +
+          'each instance tracks limits independently. Configure a Redis store for distributed rate limiting: ' +
+          'rateLimit: { store: new RedisStore({ ... }) }'
+        );
+      }
+    }
+
+    fastify.log.debug('Rate limiting enabled');
   } else {
-    fastify.log.warn('⚠️  Rate limiting disabled');
+    fastify.log.warn('Rate limiting disabled');
   }
 
   // ============================================
@@ -221,14 +329,20 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   // Note: Compression is NOT included due to known Fastify 5 stream issues.
   // Use a reverse proxy (Nginx, Caddy) or CDN for response compression.
   // See: https://github.com/fastify/fastify/issues/6017
+  if (config.preset === 'production') {
+    fastify.log.warn(
+      'Response compression is not enabled (Fastify 5 stream issues). ' +
+      'Use a reverse proxy (Nginx, Caddy, Cloudflare) for gzip/brotli in production.'
+    );
+  }
 
   // Under Pressure - Health monitoring
   if (config.underPressure !== false) {
     const underPressure = await loadPlugin('underPressure');
     await fastify.register(underPressure, config.underPressure ?? { exposeStatusRoute: true });
-    fastify.log.info('✅ Health monitoring (under-pressure) enabled');
+    fastify.log.debug('Health monitoring (under-pressure) enabled');
   } else {
-    fastify.log.info('ℹ️  Health monitoring disabled');
+    fastify.log.debug('Health monitoring disabled');
   }
 
   // ============================================
@@ -239,7 +353,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   if (config.sensible !== false) {
     const sensible = await loadPlugin('sensible');
     await fastify.register(sensible);
-    fastify.log.info('✅ Sensible (HTTP helpers) enabled');
+    fastify.log.debug('Sensible (HTTP helpers) enabled');
   }
 
   // Multipart - File uploads (optional)
@@ -251,9 +365,11 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
           fileSize: 10 * 1024 * 1024, // 10MB
           files: 10,
         },
+        // CRITICAL: Throw on file size exceeded instead of silently truncating
+        throwFileSizeLimit: true,
       };
       await fastify.register(multipart, { ...multipartDefaults, ...config.multipart });
-      fastify.log.info('✅ Multipart (file uploads) enabled');
+      fastify.log.debug('Multipart (file uploads) enabled');
     }
   }
 
@@ -268,17 +384,24 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         runFirst: true,
       };
       await fastify.register(rawBody, { ...rawBodyDefaults, ...config.rawBody });
-      fastify.log.info('✅ Raw body parsing enabled');
+      fastify.log.debug('Raw body parsing enabled');
     }
   }
 
   // ============================================
-  // 7. REGISTER ARC CORE (instance-scoped hooks & registry)
+  // 7. REGISTER ARC CORE & PLUGINS
   // ============================================
+
+  // Single dynamic import for all Arc plugins
+  const {
+    arcCorePlugin,
+    requestIdPlugin,
+    healthPlugin,
+    gracefulShutdownPlugin,
+  } = await import('../plugins/index.js');
 
   // Always register arc core first - provides fastify.arc with hooks & registry
   // This prevents global singleton leaks between app instances (e.g., in tests)
-  const { arcCorePlugin } = await import('../plugins/index.js');
   await fastify.register(arcCorePlugin, {
     emitEvents: config.arcPlugins?.emitEvents !== false,
   });
@@ -288,44 +411,73 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   // ============================================
 
   if (config.arcPlugins?.requestId !== false) {
-    const { requestIdPlugin } = await import('../plugins/index.js');
     await fastify.register(requestIdPlugin);
-    fastify.log.info('✅ Arc requestId plugin enabled');
+    fastify.log.debug('Arc requestId plugin enabled');
   }
 
   if (config.arcPlugins?.health !== false) {
-    const { healthPlugin } = await import('../plugins/index.js');
     await fastify.register(healthPlugin);
-    fastify.log.info('✅ Arc health plugin enabled');
+    fastify.log.debug('Arc health plugin enabled');
   }
 
   if (config.arcPlugins?.gracefulShutdown !== false) {
-    const { gracefulShutdownPlugin } = await import('../plugins/index.js');
     await fastify.register(gracefulShutdownPlugin);
-    fastify.log.info('✅ Arc gracefulShutdown plugin enabled');
+    fastify.log.debug('Arc gracefulShutdown plugin enabled');
+  }
+
+  // Caching plugin (opt-in)
+  if (config.arcPlugins?.caching) {
+    const { default: cachingPlugin } = await import('../plugins/caching.js');
+    const cachingOpts = config.arcPlugins.caching === true ? {} : config.arcPlugins.caching;
+    await fastify.register(cachingPlugin, cachingOpts);
+    fastify.log.debug('Arc caching plugin enabled');
+  }
+
+  // SSE plugin (opt-in, requires events)
+  if (config.arcPlugins?.sse) {
+    if (config.arcPlugins?.emitEvents === false) {
+      fastify.log.warn('SSE plugin requires events (arcPlugins.emitEvents). SSE disabled.');
+    } else {
+      const { default: ssePlugin } = await import('../plugins/sse.js');
+      const sseOpts = config.arcPlugins.sse === true ? {} : config.arcPlugins.sse;
+      await fastify.register(ssePlugin, sseOpts);
+      fastify.log.debug('Arc SSE plugin enabled');
+    }
   }
 
   // ============================================
-  // 9. REGISTER AUTHENTICATION (Arc or custom)
+  // 9. REGISTER AUTHENTICATION (Arc, Better Auth, or custom)
   // ============================================
 
-  if (!isAuthDisabled) {
-    if (hasCustomPlugin) {
-      // Custom auth plugin - user has full control
-      const pluginFn = (authConfig as { plugin: (fastify: any) => Promise<void> }).plugin;
-      await pluginFn(fastify);
-      fastify.log.info('✅ Custom authentication plugin enabled');
-    } else {
-      // Arc auth plugin
-      const { authPlugin } = await import('../auth/index.js');
-      // Extract auth options, excluding the plugin property
-      const { plugin: _, ...authOpts } = typeof authConfig === 'object' ? authConfig as Record<string, unknown> : {};
-
-      await fastify.register(authPlugin, authOpts);
-      fastify.log.info('✅ Arc authentication plugin enabled');
+  if (isAuthDisabled) {
+    fastify.log.debug('Authentication disabled');
+  } else if (useBetterAuth) {
+    // Better Auth adapter — registers auth routes + fastify.authenticate
+    const { plugin, openapi } = (authConfig as BetterAuthOption).betterAuth;
+    await fastify.register(plugin);
+    // Push OpenAPI paths if the adapter extracted them (and plugin didn't already)
+    if (openapi && !fastify.arc.externalOpenApiPaths.includes(openapi)) {
+      fastify.arc.externalOpenApiPaths.push(openapi);
     }
-  } else {
-    fastify.log.info('ℹ️  Authentication disabled');
+    fastify.log.debug('Better Auth authentication enabled');
+  } else if (useCustomPlugin) {
+    // Custom auth plugin — user has full control
+    const { plugin } = authConfig as CustomPluginAuthOption;
+    await fastify.register(plugin);
+    fastify.log.debug('Custom authentication plugin enabled');
+  } else if (useCustomAuthenticator) {
+    // Custom authenticator function — decorate directly
+    const { authenticate } = authConfig as CustomAuthenticatorOption;
+    fastify.decorate('authenticate', async function (request: FastifyRequest, reply: FastifyReply) {
+      await authenticate(request, reply);
+    });
+    fastify.log.debug('Custom authenticator enabled');
+  } else if (useArcJwt) {
+    // Arc's built-in JWT auth plugin
+    const { authPlugin } = await import('../auth/index.js');
+    const arcAuth = authConfig as AuthPluginOptions;
+    await fastify.register(authPlugin, arcAuth);
+    fastify.log.debug('Arc authentication plugin enabled');
   }
 
   // ============================================
@@ -334,16 +486,17 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
   if (config.plugins) {
     await config.plugins(fastify);
-    fastify.log.info('✅ Custom plugins registered');
+    fastify.log.debug('Custom plugins registered');
   }
 
   // ============================================
   // 11. LOG SUMMARY
   // ============================================
 
+  const authMode = isAuthDisabled ? 'none' : useBetterAuth ? 'better-auth' : useCustomPlugin ? 'custom-plugin' : useCustomAuthenticator ? 'custom' : useArcJwt ? 'jwt' : 'none';
   fastify.log.info(
-    `🚀 Arc application created successfully (preset: ${config.preset ?? 'custom'}, ` +
-    `security: helmet=${config.helmet !== false}, cors=${config.cors !== false}, rateLimit=${config.rateLimit !== false})`
+    { preset: config.preset ?? 'custom', auth: authMode, helmet: config.helmet !== false, cors: config.cors !== false, rateLimit: config.rateLimit !== false },
+    'Arc application created'
   );
 
   return fastify;

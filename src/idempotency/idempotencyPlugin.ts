@@ -316,7 +316,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     await store.close?.();
   });
 
-  fastify.log?.info?.({ headerName, ttlMs, methods }, 'Idempotency plugin enabled');
+  fastify.log?.debug?.({ headerName, ttlMs, methods }, 'Idempotency plugin enabled');
 };
 
 export default fp(idempotencyPlugin, {

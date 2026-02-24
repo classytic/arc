@@ -22,9 +22,17 @@
 
 export interface StateMachine {
   /**
-   * Check if action can be performed from current status
+   * Synchronously check if action can be performed from current status.
+   * Only checks the transition map — does NOT evaluate guards.
+   * Use `canAsync()` when guards need to be evaluated.
    */
-  can(action: string, status: string | null | undefined, context?: any): boolean;
+  can(action: string, status: string | null | undefined): boolean;
+
+  /**
+   * Asynchronously check if action can be performed, including guard evaluation.
+   * Falls back to simple transition check when no guard is defined.
+   */
+  canAsync(action: string, status: string | null | undefined, context?: any): Promise<boolean>;
 
   /**
    * Assert action can be performed, throw error if invalid
@@ -138,7 +146,7 @@ export function createStateMachine(
       after?: TransitionAction;
     }
   >();
-  const history: TransitionHistoryEntry[] = options.trackHistory ? [] : undefined as any;
+  const history: TransitionHistoryEntry[] | undefined = options.trackHistory ? [] : undefined;
 
   // Normalize transition config (support both array and object formats)
   Object.entries(transitions).forEach(([action, allowed]) => {
@@ -157,7 +165,13 @@ export function createStateMachine(
     }
   });
 
-  const can = async (
+  const can = (action: string, status: string | null | undefined): boolean => {
+    const transition = normalized.get(action);
+    if (!transition || !status) return false;
+    return transition.from.has(status);
+  };
+
+  const canAsync = async (
     action: string,
     status: string | null | undefined,
     context?: any
@@ -186,20 +200,13 @@ export function createStateMachine(
     return true;
   };
 
-  // Synchronous version for backward compatibility
-  const canSync = (action: string, status: string | null | undefined): boolean => {
-    const transition = normalized.get(action);
-    if (!transition || !status) return false;
-    return transition.from.has(status);
-  };
-
   const assert = (
     action: string,
     status: string | null | undefined,
     errorFactory?: (msg: string) => Error,
     message?: string
   ): void => {
-    if (canSync(action, status)) return;
+    if (can(action, status)) return;
 
     const errorMessage =
       message || `${name} cannot '${action}' when status is '${status || 'unknown'}'`;
@@ -243,7 +250,8 @@ export function createStateMachine(
   };
 
   return {
-    can: canSync as any, // Return sync version for backward compatibility
+    can,
+    canAsync,
     assert,
     recordTransition,
     getHistory,
@@ -278,8 +286,8 @@ export async function executeTransition(
   context?: any
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    // Check if transition is allowed
-    const canTransition = await stateMachine.can(action, from, context);
+    // Check if transition is allowed (use canAsync for guard evaluation)
+    const canTransition = await stateMachine.canAsync(action, from, context);
     if (!canTransition) {
       return {
         success: false,

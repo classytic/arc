@@ -2,26 +2,27 @@
  * Hooks Module
  *
  * Lifecycle hooks for resource operations.
+ * All hooks are instance-scoped — no global singletons.
  *
  * @example
- * import { hookSystem, beforeCreate, afterUpdate } from '@classytic/arc/hooks';
+ * import { createHookSystem, beforeCreate, afterUpdate } from '@classytic/arc/hooks';
  *
- * // Register hooks
- * beforeCreate('product', async (ctx) => {
- *   // Modify data before create
+ * const hooks = createHookSystem();
+ *
+ * // Register hooks on a specific instance
+ * beforeCreate(hooks, 'product', async (ctx) => {
  *   return { ...ctx.data, slug: generateSlug(ctx.data.name) };
  * });
  *
- * afterUpdate('product', async (ctx) => {
- *   // Log after update
+ * afterUpdate(hooks, 'product', async (ctx) => {
  *   console.log('Product updated:', ctx.result);
  * });
  */
 
 export {
   HookSystem,
-  hookSystem,
   createHookSystem,
+  defineHook,
   beforeCreate,
   afterCreate,
   beforeUpdate,
@@ -37,4 +38,5 @@ export type {
   HookHandler,
   HookRegistration,
   HookSystemOptions,
+  DefineHookOptions,
 } from './HookSystem.js';

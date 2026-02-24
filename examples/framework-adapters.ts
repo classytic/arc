@@ -4,7 +4,7 @@
  * Using Arc resources with Express, Next.js, and other frameworks.
  */
 
-import { defineResource, createMongooseAdapter } from '@classytic/arc';
+import { defineResource, createMongooseAdapter, permissions } from '@classytic/arc';
 import Fastify from 'fastify';
 
 // ============================================================================
@@ -28,11 +28,9 @@ export async function mountArcInExpress() {
   // Register Arc resources
   const productResource = defineResource({
     name: 'product',
-    adapter: createMongooseAdapter({
-      model: ProductModel,
-      repository: productRepository,
-    }),
+    adapter: createMongooseAdapter(ProductModel, productRepository),
     presets: ['softDelete'],
+    permissions: permissions.publicRead(),
   });
 
   await fastify.register(productResource.toPlugin(), { prefix: '/api' });
@@ -45,7 +43,7 @@ export async function mountArcInExpress() {
   app.use('/api', fastify.express);
 
   // Traditional Express routes still work
-  app.get('/', (req, res) => {
+  app.get('/', (req: any, res: any) => {
     res.json({ message: 'Express + Arc' });
   });
 
@@ -69,10 +67,8 @@ export async function createNextjsApiRoute() {
   // Register Arc resources
   const productResource = defineResource({
     name: 'product',
-    adapter: createMongooseAdapter({
-      model: ProductModel,
-      repository: productRepository,
-    }),
+    adapter: createMongooseAdapter(ProductModel, productRepository),
+    permissions: permissions.publicRead(),
   });
 
   await fastify.register(productResource.toPlugin());

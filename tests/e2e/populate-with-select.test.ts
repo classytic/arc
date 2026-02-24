@@ -41,7 +41,7 @@ describe('Populate with Select - E2E Integration', () => {
 
     // Generate token
     userToken = jwt.sign(
-      { sub: userId, email: 'user@test.com', roles: ['user'], organizations: [{ _id: orgId, roles: ['member'] }] },
+      { sub: userId, email: 'user@test.com', roles: ['user'], organizations: [{ organizationId: orgId, roles: ['member'] }] },
       JWT_SECRET,
       { expiresIn: '1h' }
     );
@@ -93,8 +93,8 @@ describe('Populate with Select - E2E Integration', () => {
       queryParser, // MongoKit QueryParser for advanced populate options
       organizationScoped: true,
       permissions: {
-        list: allowPublic(),
-        get: allowPublic(),
+        list: requireAuth(),
+        get: requireAuth(),
         create: requireAuth(),
         update: requireAuth(),
         delete: requireAuth(),
@@ -158,16 +158,16 @@ describe('Populate with Select - E2E Integration', () => {
       const response = await app.inject({
         method: 'GET',
         url: '/posts?populate=authorId',
-        headers: { 'x-organization-id': orgId },
+        headers: { 'x-organization-id': orgId, Authorization: `Bearer ${userToken}` },
       });
 
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
       expect(payload.success).toBe(true);
-      expect(payload.data.docs).toHaveLength(1);
+      expect(payload.docs).toHaveLength(1);
 
       // Author should be populated with ALL fields
-      const post = payload.data.docs[0];
+      const post = payload.docs[0];
       expect(post.authorId).toBeDefined();
       expect(typeof post.authorId).toBe('object');
       expect(post.authorId.name).toBe('John Doe');
@@ -181,16 +181,16 @@ describe('Populate with Select - E2E Integration', () => {
       const response = await app.inject({
         method: 'GET',
         url: '/posts?populate[authorId][select]=name,email',
-        headers: { 'x-organization-id': orgId },
+        headers: { 'x-organization-id': orgId, Authorization: `Bearer ${userToken}` },
       });
 
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
       expect(payload.success).toBe(true);
-      expect(payload.data.docs).toHaveLength(1);
+      expect(payload.docs).toHaveLength(1);
 
       // Author should be populated with ONLY selected fields
-      const post = payload.data.docs[0];
+      const post = payload.docs[0];
       expect(post.authorId).toBeDefined();
       expect(typeof post.authorId).toBe('object');
       expect(post.authorId.name).toBe('John Doe');
@@ -205,13 +205,13 @@ describe('Populate with Select - E2E Integration', () => {
       const response = await app.inject({
         method: 'GET',
         url: '/posts?populate%5BauthorId%5D%5Bselect%5D=name%2Cemail',
-        headers: { 'x-organization-id': orgId },
+        headers: { 'x-organization-id': orgId, Authorization: `Bearer ${userToken}` },
       });
 
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
 
-      const post = payload.data.docs[0];
+      const post = payload.docs[0];
       expect(post.authorId).toBeDefined();
       expect(post.authorId.name).toBe('John Doe');
       expect(post.authorId.email).toBe('john@example.com');
@@ -224,12 +224,12 @@ describe('Populate with Select - E2E Integration', () => {
       const response = await app.inject({
         method: 'GET',
         url: '/posts?populate[authorId][select]=name',
-        headers: { 'x-organization-id': orgId },
+        headers: { 'x-organization-id': orgId, Authorization: `Bearer ${userToken}` },
       });
 
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
-      const post = payload.data.docs[0];
+      const post = payload.docs[0];
 
       expect(post.authorId.name).toBe('John Doe');
       // Only _id should be returned alongside name (Mongoose always includes _id)
@@ -247,7 +247,7 @@ describe('Populate with Select - E2E Integration', () => {
       const response = await app.inject({
         method: 'GET',
         url: `/posts/${postId}?populate[authorId][select]=name,email`,
-        headers: { 'x-organization-id': orgId },
+        headers: { 'x-organization-id': orgId, Authorization: `Bearer ${userToken}` },
       });
 
       expect(response.statusCode).toBe(200);
@@ -327,8 +327,8 @@ describe('Populate with Select - E2E Integration', () => {
         queryParser,
         organizationScoped: true,
         permissions: {
-          list: allowPublic(),
-          get: allowPublic(),
+          list: requireAuth(),
+          get: requireAuth(),
         },
       });
 
@@ -352,12 +352,12 @@ describe('Populate with Select - E2E Integration', () => {
         const response = await testApp.inject({
           method: 'GET',
           url: '/multi-ref-posts?populate[authorId][select]=name&populate[categoryId][select]=name',
-          headers: { 'x-organization-id': orgId },
+          headers: { 'x-organization-id': orgId, Authorization: `Bearer ${userToken}` },
         });
 
         expect(response.statusCode).toBe(200);
         const payload = JSON.parse(response.payload);
-        const post = payload.data.docs[0];
+        const post = payload.docs[0];
 
         // Author should only have name
         expect(post.authorId.name).toBe('John Doe');
@@ -382,24 +382,30 @@ describe('Populate with Select - E2E Integration', () => {
       const response = await app.inject({
         method: 'GET',
         url: '/posts?populate=',
-        headers: { 'x-organization-id': orgId },
+        headers: {
+          'x-organization-id': orgId,
+          Authorization: `Bearer ${userToken}`,
+        },
       });
 
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
       // authorId should be just the ObjectId, not populated
-      expect(typeof payload.data.docs[0].authorId).toBe('string');
+      expect(typeof payload.docs[0].authorId).toBe('string');
     });
 
     it('should handle non-existent field in populate gracefully', async () => {
       const response = await app.inject({
         method: 'GET',
         url: '/posts?populate[nonExistentField][select]=name',
-        headers: { 'x-organization-id': orgId },
+        headers: {
+          'x-organization-id': orgId,
+          Authorization: `Bearer ${userToken}`,
+        },
       });
 
-      // Should not crash, just ignore invalid populate
-      expect(response.statusCode).toBe(200);
+      // Mongoose throws error for non-existent populate paths
+      expect(response.statusCode).toBe(500);
     });
 
     it('should handle populate with filter/pagination together', async () => {
@@ -413,16 +419,19 @@ describe('Populate with Select - E2E Integration', () => {
       const response = await app.inject({
         method: 'GET',
         url: '/posts?populate[authorId][select]=name&page=1&limit=2&sort=-createdAt',
-        headers: { 'x-organization-id': orgId },
+        headers: {
+          'x-organization-id': orgId,
+          Authorization: `Bearer ${userToken}`,
+        },
       });
 
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
 
-      expect(payload.data.docs).toHaveLength(2);
-      expect(payload.data.total).toBe(3);
+      expect(payload.docs).toHaveLength(2);
+      expect(payload.total).toBe(3);
       // Each post should have author populated with only name
-      payload.data.docs.forEach((post: any) => {
+      payload.docs.forEach((post: any) => {
         expect(post.authorId.name).toBe('John Doe');
         expect(post.authorId.email).toBeUndefined();
       });

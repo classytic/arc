@@ -30,12 +30,11 @@ export {
 } from './auditPlugin.js';
 export type { AuditPluginOptions, AuditLogger } from './auditPlugin.js';
 
-// Stores
-export {
-  createAuditEntry,
-  MemoryAuditStore,
-  MongoAuditStore,
-} from './stores/index.js';
+// Core stores (lightweight, no external deps)
+export { createAuditEntry, MemoryAuditStore } from './stores/index.js';
+
+// MongoDB store — use dedicated subpath to avoid pulling mongoose:
+//   import { MongoAuditStore } from '@classytic/arc/audit/mongodb';
 
 export type {
   AuditAction,

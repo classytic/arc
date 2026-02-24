@@ -91,7 +91,7 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
       'For production, configure a durable transport (Redis, RabbitMQ, etc.)'
     );
   } else {
-    fastify.log?.info?.(`[Arc Events] Using ${transport.name} transport`);
+    fastify.log?.debug?.(`[Arc Events] Using ${transport.name} transport`);
   }
 };
 

@@ -7,7 +7,7 @@
  * 3. Create custom authentication strategies
  */
 
-import { createApp, defineResource, createMongooseAdapter } from '@classytic/arc';
+import { createApp, defineResource, createMongooseAdapter, permissions, allowPublic, requireRoles } from '@classytic/arc';
 import type { FastifyInstance } from 'fastify';
 
 // ============================================================================
@@ -188,15 +188,17 @@ export async function createHybridAuthApp() {
   });
 
   // Example: Resource with hybrid auth
-  const productResource = defineResource({
-    name: 'product',
-    adapter: createMongooseAdapter({ model: ProductModel, repository: productRepo }),
+  const productResource = defineResource({ name: 'product',
+    adapter: createMongooseAdapter(ProductModel, productRepo),
+    permissions: permissions.publicRead(),
 
     additionalRoutes: [
       {
         method: 'GET',
         path: '/featured',
         handler: 'getFeatured',
+        wrapHandler: true,
+        permissions: allowPublic(),
         // Accept JWT OR API key
         preHandler: [app.authenticateAny],
       },
@@ -250,7 +252,7 @@ export async function createCustomAuthApp() {
   });
 
   // Custom authorization decorator
-  app.decorate('requireRoles', (...roles: string[]) => {
+  app.decorate('requireCustomRoles', (...roles: string[]) => {
     return async (request: any, reply: any) => {
       if (!request.user) {
         return reply.code(401).send({ error: 'Not authenticated' });
@@ -265,24 +267,28 @@ export async function createCustomAuthApp() {
   });
 
   // Use custom auth in resources
-  const orderResource = defineResource({
-    name: 'order',
-    adapter: createMongooseAdapter({ model: OrderModel, repository: orderRepo }),
+  const orderResource = defineResource({ name: 'order',
+    adapter: createMongooseAdapter(OrderModel, orderRepo),
+    permissions: permissions.authenticated(),
 
     additionalRoutes: [
       {
         method: 'GET',
         path: '/my-orders',
         handler: 'getMyOrders',
+        wrapHandler: true,
+        permissions: allowPublic(), // Auth handled by preHandler
         preHandler: [app.authenticateCustom],
       },
       {
         method: 'POST',
         path: '/',
         handler: 'create',
+        wrapHandler: true,
+        permissions: allowPublic(), // Auth handled by preHandler
         preHandler: [
           app.authenticateCustom,
-          app.requireRoles('admin', 'customer'),
+          app.requireCustomRoles('admin', 'customer'),
         ],
       },
     ],
@@ -368,15 +374,17 @@ export async function createPassportApp() {
   );
 
   // Use Passport's isAuthenticated in resources
-  const profileResource = defineResource({
-    name: 'profile',
-    adapter: createMongooseAdapter({ model: ProfileModel, repository: profileRepo }),
+  const profileResource = defineResource({ name: 'profile',
+    adapter: createMongooseAdapter(ProfileModel, profileRepo),
+    permissions: permissions.authenticated(),
 
     additionalRoutes: [
       {
         method: 'GET',
         path: '/me',
         handler: 'getMe',
+        wrapHandler: true,
+        permissions: allowPublic(), // Auth handled by preHandler
         preHandler: [(req: any, reply: any) => {
           if (!req.isAuthenticated()) {
             return reply.code(401).send({ error: 'Not authenticated' });
@@ -539,13 +547,9 @@ export async function createRecommendedAuthApp() {
   });
 
   // All API routes use JWT authentication
-  const productResource = defineResource({
-    name: 'product',
-    adapter: createMongooseAdapter({ model: ProductModel, repository: productRepo }),
-    permissions: {
-      list: [], // Public
-      create: ['admin'], // JWT required + admin role
-    },
+  const productResource = defineResource({ name: 'product',
+    adapter: createMongooseAdapter(ProductModel, productRepo),
+    permissions: permissions.publicReadAdminWrite(),
   });
 
   await app.register(productResource.toPlugin());

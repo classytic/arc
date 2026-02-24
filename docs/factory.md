@@ -34,7 +34,7 @@ const app = await createApp({
 ### Installation
 
 ```bash
-npm install @classytic/arc
+npm install @classytic/arc fastify@^5.7.4
 ```
 
 ### Basic Usage
@@ -116,6 +116,30 @@ const app = await createApp({
 - ✅ Security plugins disabled (faster tests)
 - ✅ Core utilities still enabled (sensible, multipart)
 
+### Edge/Serverless Preset
+
+**Minimal cold-start overhead for serverless environments**
+
+```javascript
+const app = await createApp({
+  preset: 'edge',
+  auth: { jwt: { secret: process.env.JWT_SECRET } },
+});
+```
+
+Optimized for AWS Lambda, Vercel, Cloudflare Workers, and similar environments. Disables all plugins that add cold-start latency since the API Gateway or CDN layer handles them:
+
+- ✅ No helmet (security headers handled by API Gateway)
+- ✅ No CORS (handled by API Gateway / CDN)
+- ✅ No rate limiting (handled by API Gateway / CDN)
+- ✅ No health monitoring (Lambda has its own health checks)
+- ✅ No multipart/rawBody (use pre-signed URLs for file uploads)
+- ✅ No requestId plugin (API Gateway provides request IDs)
+- ✅ No health endpoint (Lambda has its own)
+- ✅ No graceful shutdown (runtime manages lifecycle)
+- ✅ Minimal logging (warn level only)
+- ✅ Events still enabled for business logic
+
 ---
 
 ## Factory Shortcuts
@@ -157,7 +181,7 @@ interface CreateAppOptions {
   } | false;  // Set to false to disable auth
 
   // Optional
-  preset?: 'production' | 'development' | 'testing';
+  preset?: 'production' | 'development' | 'testing' | 'edge';
 }
 ```
 
@@ -243,6 +267,56 @@ const app = await createApp({
   // Or disable: rawBody: false
 });
 ```
+
+### TypeBox Type Provider
+
+Enable TypeBox for type-safe route schemas with full TypeScript inference:
+
+```javascript
+const app = await createApp({
+  // ... required options
+  typeProvider: 'typebox',  // Enables TypeBox validator compiler
+});
+```
+
+When enabled, route schemas built with `Type.*` from `@sinclair/typebox` provide full TypeScript inference on request params, body, and response.
+
+**Requires:** `npm install @sinclair/typebox @fastify/type-provider-typebox`
+
+```typescript
+import { Type, ArcListResponse, ArcPaginationQuery } from '@classytic/arc/schemas';
+
+const ProductSchema = Type.Object({
+  _id: Type.String(),
+  name: Type.String(),
+  price: Type.Number(),
+});
+
+// Full TypeScript inference on handler params
+fastify.get('/products', {
+  schema: {
+    querystring: ArcPaginationQuery(),
+    response: { 200: ArcListResponse(ProductSchema) },
+  },
+}, async (request, reply) => {
+  // request.query is typed: { page?, limit?, sort?, select?, populate? }
+});
+```
+
+**Available helpers from `@classytic/arc/schemas`:**
+
+| Helper | Description |
+|--------|-------------|
+| `ArcListResponse(schema)` | Paginated list: `{ success, docs, page, limit, total, ... }` |
+| `ArcItemResponse(schema)` | Single item: `{ success, data }` |
+| `ArcMutationResponse(schema)` | Create/update: `{ success, data, message? }` |
+| `ArcDeleteResponse()` | Delete: `{ success, message? }` |
+| `ArcErrorResponse()` | Error: `{ success: false, error, code?, message? }` |
+| `ArcPaginationQuery()` | Query params: `{ page?, limit?, sort?, select?, populate? }` |
+
+### Default Response Schemas
+
+CRUD routes automatically include response schemas for `fast-json-stringify` serialization (2-3x faster than `JSON.stringify`). Default schemas use `additionalProperties: true` so all fields pass through. Override with specific schemas for full serialization performance and field disclosure prevention.
 
 ### Arc Plugins
 
@@ -562,10 +636,10 @@ const app = await createApp({
 
 ### "Failed to load plugin 'xyz'"
 
-Some plugins are optional dependencies. Install them if needed:
+Some plugins are optional peer dependencies. Install them if needed:
 
 ```bash
-npm install @fastify/helmet @fastify/cors @fastify/rate-limit @fastify/under-pressure
+npm install @fastify/helmet @fastify/cors @fastify/rate-limit @fastify/under-pressure @fastify/jwt@^10.0.0
 ```
 
 ### "JWT secret required when Arc auth is enabled"
@@ -608,10 +682,9 @@ See [TypeScript definitions](../src/factory/types.ts) for complete API documenta
 
 ## Related Documentation
 
-- [Core API](./core.md) - BaseController, createCrudRouter, defineResource
-- [Authentication](./auth.md) - JWT, permissions, role-based access
+- [Core API](./core.md) - BaseController, createCrudRouter, defineResource, query parsing
+- [Authentication](./auth.md) - JWT (fast-jwt v10), permissions, role-based access
 - [Presets](./presets.md) - Reusable resource configurations
-- [Production Deployment](./deployment.md) - Docker, Kubernetes, scaling
 
 ---
 

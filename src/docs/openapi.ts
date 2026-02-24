@@ -16,8 +16,8 @@
 
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
-import { resourceRegistry } from '../registry/index.js';
-import type { RegistryEntry } from '../types/index.js';
+import type { RegistryEntry, FastifyWithDecorators } from '../types/index.js';
+import type { ExternalOpenApiPaths } from './externalPaths.js';
 
 export interface OpenApiOptions {
   /** API title */
@@ -57,6 +57,14 @@ export interface OpenApiSpec {
   security?: Array<Record<string, string[]>>;
 }
 
+export interface OpenApiBuildOptions {
+  title?: string;
+  version?: string;
+  description?: string;
+  serverUrl?: string;
+  apiPrefix?: string;
+}
+
 interface PathItem {
   get?: Operation;
   post?: Operation;
@@ -76,6 +84,10 @@ interface Operation {
   requestBody?: RequestBody;
   responses: Record<string, Response>;
   security?: Array<Record<string, string[]>>;
+  /** Arc permission metadata (OpenAPI extension) */
+  'x-arc-permission'?: { type: string; roles?: readonly string[] };
+  /** Arc pipeline steps (OpenAPI extension) */
+  'x-arc-pipeline'?: Array<{ type: string; name: string }>;
 }
 
 interface Parameter {
@@ -136,54 +148,18 @@ const openApiPlugin: FastifyPluginAsync<OpenApiOptions> = async (
     authRoles = [],
   } = opts;
 
-  // Build spec from registry (schemas are pre-generated at resource definition time)
+  // Build spec from instance-scoped registry
   const buildSpec = (): OpenApiSpec => {
-    const resources = resourceRegistry.getAll();
-    const paths: Record<string, PathItem> = {};
-    const tags: Array<{ name: string; description?: string }> = [];
-
-    for (const resource of resources) {
-      // Add tag for resource
-      tags.push({
-        name: resource.tag || resource.name,
-        description: `${resource.displayName || resource.name} operations`,
-      });
-
-      // Generate paths for this resource (with API prefix)
-      const resourcePaths = generateResourcePaths(resource, apiPrefix);
-      Object.assign(paths, resourcePaths);
-    }
-
-    return {
-      openapi: '3.0.3',
-      info: {
-        title,
-        version,
-        ...(description && { description }),
-      },
-      ...(serverUrl && {
-        servers: [{ url: serverUrl }],
-      }),
-      paths,
-      components: {
-        schemas: generateSchemas(resources),
-        securitySchemes: {
-          bearerAuth: {
-            type: 'http',
-            scheme: 'bearer',
-            bearerFormat: 'JWT',
-          },
-          orgHeader: {
-            type: 'apiKey',
-            in: 'header',
-            name: 'x-organization-id',
-          },
-        },
-      },
-      tags,
-      // Note: Security is defined per-operation, not globally
-      // This allows public routes to have no security requirement
-    };
+    const arc = (fastify as unknown as FastifyWithDecorators).arc;
+    const resources = arc?.registry?.getAll() ?? [];
+    const externalPaths = arc?.externalOpenApiPaths ?? [];
+    return buildOpenApiSpec(resources, {
+      title,
+      version,
+      description,
+      serverUrl,
+      apiPrefix,
+    }, externalPaths.length > 0 ? externalPaths : undefined);
   };
 
   // Serve OpenAPI spec
@@ -203,8 +179,109 @@ const openApiPlugin: FastifyPluginAsync<OpenApiOptions> = async (
     return spec;
   });
 
-  fastify.log?.info?.(`OpenAPI spec available at ${prefix}/openapi.json`);
+  fastify.log?.debug?.(`OpenAPI spec available at ${prefix}/openapi.json`);
 };
+
+/**
+ * Build OpenAPI spec from registry resources.
+ * Shared by HTTP docs endpoint and CLI export command.
+ */
+export function buildOpenApiSpec(
+  resources: RegistryEntry[],
+  options: OpenApiBuildOptions = {},
+  externalPaths?: ExternalOpenApiPaths[],
+): OpenApiSpec {
+  const {
+    title = 'Arc API',
+    version = '1.0.0',
+    description,
+    serverUrl,
+    apiPrefix = '',
+  } = options;
+
+  const paths: Record<string, PathItem> = {};
+  const tags: Array<{ name: string; description?: string }> = [];
+
+  for (const resource of resources) {
+    // Build tag description with preset/pipeline info
+    const tagDescParts = [`${resource.displayName || resource.name} operations`];
+    if (resource.presets && resource.presets.length > 0) {
+      tagDescParts.push(`Presets: ${resource.presets.join(', ')}`);
+    }
+    if (resource.pipelineSteps && resource.pipelineSteps.length > 0) {
+      const stepNames = resource.pipelineSteps.map((s) => `${s.type}(${s.name})`);
+      tagDescParts.push(`Pipeline: ${stepNames.join(' → ')}`);
+    }
+    if (resource.events && resource.events.length > 0) {
+      tagDescParts.push(`Events: ${resource.events.join(', ')}`);
+    }
+
+    tags.push({
+      name: resource.tag || resource.name,
+      description: tagDescParts.join('. '),
+    });
+
+    const resourcePaths = generateResourcePaths(resource, apiPrefix);
+    Object.assign(paths, resourcePaths);
+  }
+
+  // Merge external paths (Better Auth, custom integrations, etc.)
+  if (externalPaths) {
+    for (const ext of externalPaths) {
+      for (const [path, methods] of Object.entries(ext.paths)) {
+        paths[path] = paths[path]
+          ? { ...paths[path], ...methods } as PathItem
+          : methods as PathItem;
+      }
+      if (ext.tags) {
+        for (const tag of ext.tags) {
+          if (!tags.find((t) => t.name === tag.name)) {
+            tags.push(tag);
+          }
+        }
+      }
+    }
+  }
+
+  // Merge external security schemes and schemas
+  const externalSecuritySchemes = externalPaths
+    ?.reduce<Record<string, Record<string, unknown>>>((acc, ext) => ({ ...acc, ...ext.securitySchemes }), {}) ?? {};
+  const externalSchemas = externalPaths
+    ?.reduce<Record<string, Record<string, unknown>>>((acc, ext) => ({ ...acc, ...ext.schemas }), {}) ?? {};
+
+  return {
+    openapi: '3.0.3',
+    info: {
+      title,
+      version,
+      ...(description && { description }),
+    },
+    ...(serverUrl && {
+      servers: [{ url: serverUrl }],
+    }),
+    paths,
+    components: {
+      schemas: {
+        ...generateSchemas(resources),
+        ...externalSchemas,
+      } as Record<string, SchemaObject>,
+      securitySchemes: {
+        bearerAuth: {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+        },
+        orgHeader: {
+          type: 'apiKey',
+          in: 'header',
+          name: 'x-organization-id',
+        },
+        ...externalSecuritySchemes,
+      } as Record<string, SecurityScheme>,
+    },
+    tags,
+  };
+}
 
 /**
  * Convert Fastify-style params (/:id) to OpenAPI-style params (/{id})
@@ -284,8 +361,13 @@ function generateResourcePaths(resource: RegistryEntry, apiPrefix = ''): Record<
                   type: 'object',
                   properties: {
                     success: { type: 'boolean' },
-                    data: { type: 'array', items: { $ref: `#/components/schemas/${resource.name}` } },
-                    pagination: { $ref: '#/components/schemas/Pagination' },
+                    docs: { type: 'array', items: { $ref: `#/components/schemas/${resource.name}` } },
+                    page: { type: 'integer' },
+                    limit: { type: 'integer' },
+                    total: { type: 'integer' },
+                    pages: { type: 'integer' },
+                    hasNext: { type: 'boolean' },
+                    hasPrev: { type: 'boolean' },
                   },
                 },
               },
@@ -484,18 +566,48 @@ function createOperation(
   const operationPermission = (permissions as Record<string, unknown>)[operation];
   // Check if it's marked as public (allowPublic())
   const isPublic = (operationPermission as { _isPublic?: boolean })?._isPublic === true;
+  // Check for role requirements
+  const requiredRoles = (operationPermission as { _roles?: readonly string[] })?._roles;
   // If override is provided, use it; otherwise check if operation has a permission check that isn't public
   const requiresAuth = requiresAuthOverride !== undefined
     ? requiresAuthOverride
     : typeof operationPermission === 'function' && !isPublic;
 
-  return {
+  // Build permission annotation
+  const permAnnotation = describePermissionForOpenApi(operationPermission);
+
+  // Build description with permission + preset info
+  const descParts: string[] = [];
+  if (permAnnotation) {
+    descParts.push(`**Permission**: ${permAnnotation.type === 'public' ? 'Public' : permAnnotation.type === 'requireRoles' ? `Requires roles: ${(permAnnotation.roles ?? []).join(', ')}` : 'Requires authentication'}`);
+  }
+  if (resource.presets && resource.presets.length > 0) {
+    descParts.push(`**Presets**: ${resource.presets.join(', ')}`);
+  }
+  if (resource.organizationScoped) {
+    descParts.push('**Scope**: Organization-scoped (requires `x-organization-id` header)');
+  }
+
+  // Find pipeline steps that apply to this operation
+  const applicableSteps = (resource.pipelineSteps ?? []).filter((s) => {
+    if (!s.operations) return true; // applies to all
+    return s.operations.includes(operation);
+  });
+
+  const op: Operation = {
     tags: [resource.tag || 'Resource'],
     summary: `${summary} ${(resource.displayName || resource.name).toLowerCase()}`,
     operationId: `${resource.name}_${operation}`,
+    ...(descParts.length > 0 && { description: descParts.join('\n\n') }),
     // Only add security requirement if route requires auth
     ...(requiresAuth && {
       security: [{ bearerAuth: [] }],
+    }),
+    // Permission metadata extension
+    ...(permAnnotation && { 'x-arc-permission': permAnnotation }),
+    // Pipeline extension
+    ...(applicableSteps.length > 0 && {
+      'x-arc-pipeline': applicableSteps.map((s) => ({ type: s.type, name: s.name })),
     }),
     responses: {
       ...(requiresAuth && {
@@ -506,6 +618,23 @@ function createOperation(
     },
     ...extras,
   };
+
+  return op;
+}
+
+/**
+ * Describe a permission check function for OpenAPI
+ */
+function describePermissionForOpenApi(
+  check: unknown,
+): { type: string; roles?: readonly string[] } | undefined {
+  if (!check || typeof check !== 'function') return undefined;
+
+  const fn = check as unknown as Record<string, unknown>;
+
+  if (fn._isPublic === true) return { type: 'public' };
+  if (Array.isArray(fn._roles)) return { type: 'requireRoles', roles: fn._roles as string[] };
+  return { type: 'requireAuth' };
 }
 
 /**
@@ -542,18 +671,7 @@ function extractPathParams(path: string): Parameter[] {
  */
 function generateSchemas(resources: RegistryEntry[]): Record<string, SchemaObject> {
   const schemas: Record<string, SchemaObject> = {
-    // Common schemas
-    Pagination: {
-      type: 'object',
-      properties: {
-        page: { type: 'integer' },
-        limit: { type: 'integer' },
-        total: { type: 'integer' },
-        totalPages: { type: 'integer' },
-        hasNextPage: { type: 'boolean' },
-        hasPrevPage: { type: 'boolean' },
-      },
-    },
+    // Common schemas (pagination fields are inlined in list responses)
     Error: {
       type: 'object',
       properties: {
@@ -568,6 +686,7 @@ function generateSchemas(resources: RegistryEntry[]): Record<string, SchemaObjec
 
   for (const resource of resources) {
     const storedSchemas = resource.openApiSchemas;
+    const fieldPerms = resource.fieldPermissions;
 
     // === RESPONSE SCHEMA (for GET responses) ===
     // Priority 1: Explicit response schema provided by user
@@ -604,6 +723,21 @@ function generateSchemas(resources: RegistryEntry[]): Record<string, SchemaObjec
       };
     }
 
+    // Annotate fields with permission info
+    if (fieldPerms && schemas[resource.name]?.properties) {
+      const props = schemas[resource.name]!.properties!;
+      for (const [field, perm] of Object.entries(fieldPerms)) {
+        if (props[field]) {
+          // Add permission description to existing field
+          const desc = props[field]!.description ?? '';
+          const permDesc = formatFieldPermDescription(perm);
+          props[field]!.description = desc ? `${desc} (${permDesc})` : permDesc;
+        } else if (perm.type === 'hidden') {
+          // Hidden fields won't appear in schema — note in schema description
+        }
+      }
+    }
+
     // === INPUT SCHEMAS (for POST/PATCH requests) ===
     if (storedSchemas?.createBody) {
       schemas[`${resource.name}Input`] = {
@@ -628,6 +762,26 @@ function generateSchemas(resources: RegistryEntry[]): Record<string, SchemaObjec
   }
 
   return schemas;
+}
+
+/**
+ * Format a field permission description for OpenAPI
+ */
+function formatFieldPermDescription(
+  perm: { type: string; roles?: readonly string[]; redactValue?: unknown },
+): string {
+  switch (perm.type) {
+    case 'hidden':
+      return 'Hidden — never returned in responses';
+    case 'visibleTo':
+      return `Visible to: ${(perm.roles ?? []).join(', ')}`;
+    case 'writableBy':
+      return `Writable by: ${(perm.roles ?? []).join(', ')}`;
+    case 'redactFor':
+      return `Redacted for: ${(perm.roles ?? []).join(', ')}`;
+    default:
+      return perm.type;
+  }
 }
 
 export default fp(openApiPlugin, {

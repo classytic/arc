@@ -1,255 +1,171 @@
 # Tree-Shaking & Import Best Practices
 
-Arc is designed for optimal tree-shaking. This guide explains how to import modules efficiently to minimize bundle size.
+Arc is designed for **zero-surprise dependency loading** in Node.js. Since Node.js ESM evaluates all static imports eagerly (no runtime tree-shaking), Arc uses **dedicated subpath exports** to isolate heavy dependencies.
 
-## Package Configuration
+## The Node.js Reality
 
-Arc is configured for tree-shaking:
+Bundlers (Vite, webpack, esbuild) can tree-shake unused exports. **Node.js cannot.** When you import from a barrel file, Node.js loads every module in that file's import graph — even exports you don't use.
 
-```json
-{
-  "sideEffects": false,
-  "type": "module"
-}
-```
+Arc solves this by:
+1. `"sideEffects": false` — tells bundlers everything is safe to eliminate
+2. **Subpath exports** — each feature is a separate entry point
+3. **No heavy deps in barrels** — Redis, MongoDB, OpenTelemetry, BullMQ are never re-exported from parent barrels
 
-The build uses `tsup` with:
-- ESM-only output
-- `treeshake: true`
-- Subpath exports for granular imports
+## Import Map
 
-## Import Strategies
+### Tier 1: Serverless-Safe (Zero External Deps)
 
-### Recommended: Subpath Imports
-
-For best tree-shaking, import from specific subpaths:
+These imports work everywhere — Lambda, Vercel, Cloud Run, Docker, VPS:
 
 ```typescript
-// BEST - Only loads what you need
-import { defineResource, createMongooseAdapter } from '@classytic/arc';
-import { requireAuth, requireRoles } from '@classytic/arc/permissions';
-import { createTestApp } from '@classytic/arc/testing';
+// Core (defineResource + adapters + permissions + errors)
+import { defineResource, createMongooseAdapter, allowPublic } from '@classytic/arc';
+
+// Permissions (pure functions)
+import { requireRoles, allOf, anyOf } from '@classytic/arc/permissions';
+
+// Presets (pure functions)
+import { softDeletePreset, treePreset } from '@classytic/arc/presets';
+
+// Hooks (pure HookSystem class)
+import { createHookSystem, beforeCreate } from '@classytic/arc/hooks';
+
+// Pipeline (guard/transform/intercept)
+import { guard, transform, pipe } from '@classytic/arc';
+
+// Types only (zero runtime cost)
+import type { ResourceConfig, UserBase } from '@classytic/arc/types';
+```
+
+### Tier 2: Requires Fastify (Still Serverless-Safe)
+
+```typescript
+// Factory (creates Fastify app with security defaults)
 import { createApp } from '@classytic/arc/factory';
-import { PrismaQueryParser } from '@classytic/arc/adapters';
-```
 
-### Acceptable: Main Entry Point
-
-Importing from the main entry works but may include more code:
-
-```typescript
-// OK - Common items are available
-import {
-  defineResource,
-  createMongooseAdapter,
-  allowPublic,
-  requireAuth,
-} from '@classytic/arc';
-```
-
-### Avoid: Wildcard Imports
-
-Never use wildcard imports:
-
-```typescript
-// BAD - Imports everything, defeats tree-shaking
-import * as arc from '@classytic/arc';
-```
-
-## Available Subpaths
-
-| Subpath | Purpose | Example Exports |
-|---------|---------|-----------------|
-| `@classytic/arc` | Core API | `defineResource`, `createMongooseAdapter`, `BaseController` |
-| `@classytic/arc/permissions` | Permission functions | `allowPublic`, `requireAuth`, `requireRoles`, `allOf`, `anyOf` |
-| `@classytic/arc/adapters` | Database adapters | `MongooseAdapter`, `PrismaAdapter`, `PrismaQueryParser` |
-| `@classytic/arc/presets` | Preset functions | `softDeletePreset`, `slugLookupPreset`, `multiTenantPreset` |
-| `@classytic/arc/factory` | App creation | `createApp`, `ArcFactory` |
-| `@classytic/arc/testing` | Test utilities | `createTestApp`, `TestHarness`, mocks |
-| `@classytic/arc/hooks` | Hook system | `hookSystem`, `beforeCreate`, `afterUpdate` |
-| `@classytic/arc/events` | Event system | `eventPlugin`, `MemoryEventTransport` |
-| `@classytic/arc/plugins` | Fastify plugins | `healthPlugin`, `requestIdPlugin` |
-| `@classytic/arc/utils` | Utilities | `ArcError`, `NotFoundError`, `createStateMachine` |
-| `@classytic/arc/org` | Organization utils | `orgScopePlugin`, `orgGuard` |
-| `@classytic/arc/audit` | Audit trail | `auditPlugin`, `MemoryAuditStore` |
-| `@classytic/arc/idempotency` | Idempotency | `idempotencyPlugin`, stores |
-| `@classytic/arc/registry` | Resource registry | `resourceRegistry` |
-| `@classytic/arc/types` | Type definitions | All TypeScript types |
-| `@classytic/arc/cli` | CLI tools | `generate` function |
-| `@classytic/arc/policies` | Policy system | `PolicyInterface` |
-| `@classytic/arc/migrations` | Migrations | Migration utilities |
-| `@classytic/arc/docs` | Documentation | OpenAPI generation |
-
-## Example: Minimal Resource Definition
-
-```typescript
-// Optimal imports for a basic resource
-import { defineResource, createMongooseAdapter } from '@classytic/arc';
-import { allowPublic, requireRoles } from '@classytic/arc/permissions';
-
-// Only imports ~15KB instead of full 100KB+ bundle
-export const productResource = defineResource({
-  name: 'product',
-  adapter: createMongooseAdapter({ model: Product, repository: productRepo }),
-  permissions: {
-    list: allowPublic(),
-    create: requireRoles(['admin']),
-  },
-});
-```
-
-## Example: Full-Featured Resource
-
-```typescript
-// Imports for a feature-rich resource
-import { defineResource, createMongooseAdapter, BaseController } from '@classytic/arc';
-import { allowPublic, requireAuth, requireRoles, requireOwnership } from '@classytic/arc/permissions';
-import { beforeCreate, afterCreate } from '@classytic/arc/hooks';
-import { eventPlugin, createEvent } from '@classytic/arc/events';
-
-// Production app with factory
-import { createApp } from '@classytic/arc/factory';
+// Plugins (health, requestId, error handler, etc.)
 import { healthPlugin, requestIdPlugin } from '@classytic/arc/plugins';
+
+// Events (in-memory transport, no Redis)
+import { eventPlugin, MemoryEventTransport } from '@classytic/arc/events';
+
+// Audit (in-memory store, no MongoDB)
+import { auditPlugin, MemoryAuditStore } from '@classytic/arc/audit';
+
+// Idempotency (in-memory store)
+import { idempotencyPlugin } from '@classytic/arc/idempotency';
+
+// Auth
+import { authPlugin } from '@classytic/arc/auth';
+
+// Org/multi-tenant
+import { orgScopePlugin } from '@classytic/arc/org';
+
+// Auto-discovery
+import { discoveryPlugin } from '@classytic/arc/discovery';
 ```
 
-## Example: Testing Only
+### Tier 3: Requires External Dependencies (Opt-In)
+
+Each of these pulls in a specific external dependency. Only import when you need them:
 
 ```typescript
-// For test files - import only testing utilities
-import { createTestApp, createMockUser, TestHarness } from '@classytic/arc/testing';
+// Redis event transports (requires: ioredis)
+import { RedisEventTransport } from '@classytic/arc/events/redis';
+import { RedisStreamTransport } from '@classytic/arc/events/redis-stream';
+
+// OpenTelemetry tracing (requires: @opentelemetry/*)
+import { tracingPlugin } from '@classytic/arc/plugins/tracing';
+
+// MongoDB audit store (requires: mongoose)
+import { MongoAuditStore } from '@classytic/arc/audit/mongodb';
+
+// Redis/MongoDB idempotency stores
+import { RedisIdempotencyStore } from '@classytic/arc/idempotency/redis';
+import { MongoIdempotencyStore } from '@classytic/arc/idempotency/mongodb';
 ```
 
-## Verifying Tree-Shaking
+### Tier 4: Persistent Runtime Only (NOT Serverless)
 
-### With Bundler Analysis
-
-If using Vite, webpack, or similar:
-
-```bash
-# Vite
-npx vite build --report
-
-# Webpack
-npx webpack-bundle-analyzer stats.json
-```
-
-### With esbuild
-
-```bash
-npx esbuild your-app.ts --bundle --analyze
-```
-
-## Side Effects
-
-Arc has `"sideEffects": false` in package.json, meaning:
-
-1. **No global mutations** on import
-2. **No side effects** from unused exports
-3. **Bundlers can safely eliminate** unused code
-
-### What This Means
+These require persistent TCP connections or background processes:
 
 ```typescript
-// This import does NOTHING if you don't use auditPlugin
-import { auditPlugin } from '@classytic/arc/audit';
+// WebSocket (requires: @fastify/websocket + persistent runtime)
+import { websocketPlugin } from '@classytic/arc/integrations/websocket';
 
-// Bundler will eliminate the import entirely
+// Background jobs (requires: bullmq + Redis + persistent runtime)
+import { jobsPlugin, defineJob } from '@classytic/arc/integrations/jobs';
+
+// Workflow orchestration (requires: @classytic/streamline + MongoDB)
+import { streamlinePlugin } from '@classytic/arc/integrations/streamline';
 ```
 
-## TypeScript Configuration
+## Complete Subpath Reference
 
-For best results, ensure your `tsconfig.json` has:
+| Subpath | External Deps | Serverless? | Purpose |
+|---------|--------------|-------------|---------|
+| `@classytic/arc` | none | Yes | Core: defineResource, permissions, errors |
+| `@classytic/arc/factory` | fastify plugins | Yes | createApp with security defaults |
+| `@classytic/arc/permissions` | none | Yes | Permission functions |
+| `@classytic/arc/presets` | none | Yes | Resource presets |
+| `@classytic/arc/hooks` | none | Yes | Lifecycle hook system |
+| `@classytic/arc/events` | none | Yes | Event bus (memory transport) |
+| `@classytic/arc/events/redis` | ioredis | Yes | Redis Pub/Sub transport |
+| `@classytic/arc/events/redis-stream` | ioredis | Yes | Redis Streams transport |
+| `@classytic/arc/plugins` | none | Yes | Fastify plugins (no tracing) |
+| `@classytic/arc/plugins/tracing` | @opentelemetry/* | Yes | OpenTelemetry tracing |
+| `@classytic/arc/audit` | none | Yes | Audit trail (memory store) |
+| `@classytic/arc/audit/mongodb` | mongoose | Yes | MongoDB audit store |
+| `@classytic/arc/idempotency` | none | Yes | Idempotency (memory store) |
+| `@classytic/arc/idempotency/redis` | ioredis | Yes | Redis idempotency store |
+| `@classytic/arc/idempotency/mongodb` | mongoose | Yes | MongoDB idempotency store |
+| `@classytic/arc/auth` | @fastify/jwt or better-auth | Yes | Authentication |
+| `@classytic/arc/org` | none | Yes | Multi-tenant org scoping |
+| `@classytic/arc/testing` | mongodb-memory-server | N/A | Test utilities |
+| `@classytic/arc/schemas` | @sinclair/typebox | Yes | TypeBox schema helpers |
+| `@classytic/arc/discovery` | none | Yes | Auto-discover resources |
+| `@classytic/arc/integrations/streamline` | @classytic/streamline | **No** | Workflow orchestration |
+| `@classytic/arc/integrations/websocket` | @fastify/websocket | **No** | Real-time WebSocket |
+| `@classytic/arc/integrations/jobs` | bullmq | **No** | Background job queue |
+| `@classytic/arc/types` | none | Yes | TypeScript types only |
+| `@classytic/arc/utils` | none | Yes | Error classes, state machine |
+| `@classytic/arc/policies` | none | Yes | Policy engine |
+| `@classytic/arc/docs` | none | Yes | OpenAPI generation |
+| `@classytic/arc/registry` | none | Yes | Resource registry |
+| `@classytic/arc/cli` | none | N/A | CLI commands |
 
-```json
-{
-  "compilerOptions": {
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "esModuleInterop": true
-  }
-}
-```
-
-## Common Patterns
-
-### Pattern 1: Resource Module
+## Anti-Patterns
 
 ```typescript
-// modules/product/product.resource.ts
-import { defineResource, createMongooseAdapter } from '@classytic/arc';
-import { allowPublic, requireRoles } from '@classytic/arc/permissions';
-import { Product } from './product.model.js';
-import { productRepository } from './product.repository.js';
+// BAD — wildcard imports defeat all isolation
+import * as arc from '@classytic/arc';
 
-export const productResource = defineResource({
-  name: 'product',
-  adapter: createMongooseAdapter({ model: Product, repository: productRepository }),
-  permissions: {
-    list: allowPublic(),
-    get: allowPublic(),
-    create: requireRoles(['admin']),
-    update: requireRoles(['admin']),
-    delete: requireRoles(['admin']),
-  },
-});
-```
+// BAD — old pattern that pulled Redis into events barrel (fixed in v2.1)
+import { RedisEventTransport } from '@classytic/arc/events';
+// Use instead:
+import { RedisEventTransport } from '@classytic/arc/events/redis';
 
-### Pattern 2: Application Bootstrap
-
-```typescript
-// app.ts
-import { createApp } from '@classytic/arc/factory';
-import { productResource } from './modules/product/product.resource.js';
-import { userResource } from './modules/user/user.resource.js';
-
-export async function bootstrap() {
-  return createApp({
-    preset: 'production',
-    auth: { jwt: { secret: process.env.JWT_SECRET! } },
-    plugins: async (fastify) => {
-      await fastify.register(productResource.toPlugin());
-      await fastify.register(userResource.toPlugin());
-    },
-  });
-}
-```
-
-### Pattern 3: Test Setup
-
-```typescript
-// tests/product.test.ts
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { createTestApp } from '@classytic/arc/testing';
-
-describe('Product API', () => {
-  let app;
-
-  beforeAll(async () => {
-    app = await createTestApp({
-      auth: { jwt: { secret: 'test-secret-32-chars-minimum-len' } },
-    });
-  });
-
-  afterAll(() => app?.close());
-
-  // tests...
-});
+// BAD — importing tracing from plugins barrel (pulls @opentelemetry/*)
+import { tracingPlugin } from '@classytic/arc/plugins';
+// Use instead:
+import { tracingPlugin } from '@classytic/arc/plugins/tracing';
 ```
 
 ## Bundle Size Impact
 
 | Import Strategy | Approximate Size |
 |-----------------|------------------|
-| Full barrel (`import * as arc`) | ~150KB |
-| Main entry (common imports) | ~50KB |
-| Subpath imports (minimal) | ~15KB |
+| `import * as arc` | ~150KB (everything) |
+| Main entry (defineResource + permissions) | ~25KB |
+| Subpath imports (minimal) | ~8-15KB per feature |
+| Types only | 0KB (eliminated at compile) |
 
-These are approximate and depend on your specific usage.
+## Verifying
 
-## Summary
+```bash
+# Check what gets loaded with Node.js
+node --experimental-loader=./trace-loader.mjs your-app.js
 
-1. **Use subpath imports** for granular control
-2. **Avoid wildcard imports** (`import *`)
-3. **Group related imports** from the same subpath
-4. **Trust the bundler** - unused code is eliminated
-5. **Use analysis tools** to verify bundle size
+# Check bundle size with esbuild
+npx esbuild your-app.ts --bundle --analyze --external:fastify
+```

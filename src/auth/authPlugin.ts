@@ -44,6 +44,8 @@ declare module 'fastify' {
   interface FastifyInstance {
     /** Authenticate middleware - use in preHandler for protected routes */
     authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    /** Optional authenticate - parses JWT if present, doesn't fail if absent */
+    optionalAuthenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
     /** Authorize middleware factory - checks if user has required roles */
     authorize: (...roles: string[]) => (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
     /** Auth helpers - issueTokens, jwt utilities */
@@ -118,10 +120,11 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
     });
 
     // Create JWT context for authenticator
+    // @fastify/jwt v10 uses fast-jwt under the hood
     const fastifyWithJwt = fastify as FastifyInstance & {
       jwt: {
-        sign: (payload: Record<string, unknown>, options?: { expiresIn?: string }) => string;
-        verify: <T>(token: string) => T;
+        sign: (payload: Record<string, unknown>, options?: { expiresIn?: string | number; key?: string }) => string;
+        verify: <T>(token: string, options?: { key?: string }) => T;
         decode: <T>(token: string) => T | null;
       };
     };
@@ -142,7 +145,7 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
       },
     };
 
-    fastify.log.info('Auth: JWT infrastructure enabled');
+    fastify.log.debug('Auth: JWT infrastructure enabled');
   }
 
   // ========================================
@@ -175,7 +178,11 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
         // Default: JWT Bearer token verification
         const token = extractBearerToken(request);
         if (token) {
-          const decoded = jwtContext.verify(token);
+          const decoded = jwtContext.verify(token) as Record<string, unknown>;
+          // Reject refresh tokens — they must only be used at the refresh endpoint
+          if (decoded.type === 'refresh') {
+            throw new Error('Refresh tokens cannot be used for authentication');
+          }
           user = decoded;
         }
       } else {
@@ -189,8 +196,10 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
         throw new Error('Authentication required');
       }
 
-      // Set user on request
-      (request as unknown as Record<string, unknown>)[userProperty] = user;
+      // Always set canonical `request.user` for Arc internals, plus custom alias.
+      const reqRecord = request as unknown as Record<string, unknown>;
+      reqRecord.user = user;
+      reqRecord[userProperty] = user;
 
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
@@ -201,16 +210,55 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
         return;
       }
 
-      // Default 401 response
-      const message = process.env.NODE_ENV === 'production'
-        ? 'Authentication required'
-        : error.message;
+      // Default 401 response — hide internal details unless debug/trace logging
+      const isDev = request.server?.log?.level === 'debug' || request.server?.log?.level === 'trace';
+      const message = isDev ? error.message : 'Authentication required';
 
       reply.code(401).send({
         success: false,
         error: 'Unauthorized',
         message,
       });
+    }
+  };
+
+  // ========================================
+  // 3b. Optional Authenticate Middleware
+  // ========================================
+
+  /**
+   * Optional authenticate middleware
+   *
+   * Parses JWT if a Bearer token is present and populates request.user.
+   * Does NOT fail if no token or invalid token — treats as unauthenticated.
+   *
+   * Used on allowPublic() routes so that downstream middleware (e.g. multiTenant
+   * flexible filter) can apply org-scoped queries when a user IS authenticated.
+   */
+  const optionalAuthenticate = async (request: FastifyRequest, _reply: FastifyReply): Promise<void> => {
+    try {
+      let user: unknown = null;
+
+      if (appAuthenticator) {
+        user = await appAuthenticator(request, authContext);
+      } else if (jwtContext) {
+        const token = extractBearerToken(request);
+        if (token) {
+          const decoded = jwtContext.verify(token) as Record<string, unknown>;
+          // Silently ignore refresh tokens
+          if (decoded.type === 'refresh') return;
+          user = decoded;
+        }
+      }
+
+      if (user) {
+        const reqRecord = request as unknown as Record<string, unknown>;
+        reqRecord.user = user;
+        reqRecord[userProperty] = user;
+      }
+      // No user = continue as unauthenticated (no error)
+    } catch {
+      // Silently ignore auth errors — invalid/expired token = treat as unauthenticated
     }
   };
 
@@ -237,8 +285,8 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
     const accessTtl = options?.expiresIn ?? accessExpiresIn;
     const refreshTtl = options?.refreshExpiresIn ?? refreshExpiresIn;
 
-    // Access token with full payload
-    const accessToken = jwtContext.sign(payload, { expiresIn: accessTtl });
+    // Access token with full payload + explicit type
+    const accessToken = jwtContext.sign({ ...payload, type: 'access' }, { expiresIn: accessTtl });
 
     // Refresh token with minimal payload (just id)
     const refreshPayload = payload.id
@@ -254,8 +302,8 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
       };
       refreshToken = fastifyWithJwt.jwt.sign(refreshPayload, {
         expiresIn: refreshTtl,
-        // Use refresh secret if different from main secret
-        ...(refreshSecret !== jwtConfig?.secret ? { secret: refreshSecret } : {}),
+        // Use refresh key if different from main secret (@fastify/jwt v10 uses 'key' instead of 'secret')
+        ...(refreshSecret !== jwtConfig?.secret ? { key: refreshSecret } : {}),
       });
     }
 
@@ -281,9 +329,17 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
       jwt: { verify: <T>(token: string, options?: Record<string, unknown>) => T };
     };
 
-    return fastifyWithJwt.jwt.verify<T>(token, {
-      ...(refreshSecret !== jwtConfig?.secret ? { secret: refreshSecret } : {}),
+    const decoded = fastifyWithJwt.jwt.verify<Record<string, unknown>>(token, {
+      // @fastify/jwt v10 uses 'key' instead of 'secret' for per-operation overrides
+      ...(refreshSecret !== jwtConfig?.secret ? { key: refreshSecret } : {}),
     });
+
+    // Enforce token type — reject access tokens used at the refresh endpoint
+    if (decoded.type !== 'refresh') {
+      throw new Error('Invalid token type: expected refresh token');
+    }
+
+    return decoded as T;
   };
 
   // ========================================
@@ -299,7 +355,8 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
    */
   const authorize = (...allowedRoles: string[]) => {
     return async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
-      const user = (request as unknown as Record<string, unknown>)[userProperty] as
+      const reqRecord = request as unknown as Record<string, unknown>;
+      const user = (reqRecord[userProperty] ?? reqRecord.user) as
         | { roles?: string[] }
         | undefined;
 
@@ -344,10 +401,11 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
   };
 
   fastify.decorate('authenticate', authenticate);
+  fastify.decorate('optionalAuthenticate', optionalAuthenticate);
   fastify.decorate('authorize', authorize);
   fastify.decorate('auth', authHelpers);
 
-  fastify.log.info(
+  fastify.log.debug(
     `Auth: Plugin registered (jwt=${!!jwtContext}, customAuth=${!!appAuthenticator})`
   );
 };

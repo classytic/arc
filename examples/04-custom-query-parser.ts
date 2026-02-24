@@ -23,7 +23,7 @@
  */
 
 import mongoose from 'mongoose';
-import { defineResource, createMongooseAdapter } from '@classytic/arc';
+import { defineResource, createMongooseAdapter, permissions, allowPublic, requireRoles } from '@classytic/arc';
 import type { QueryParserInterface, QueryParserSchema } from '@classytic/arc';
 import { Repository, QueryParser } from '@classytic/mongokit';
 
@@ -256,10 +256,7 @@ export const productResource = defineResource({
   tag: 'Catalog',
   prefix: '/products',
 
-  adapter: createMongooseAdapter({
-    model: Product,
-    repository: productRepository,
-  }),
+  adapter: createMongooseAdapter(Product, productRepository),
 
   // Inject custom query parser
   // Arc will use this to parse incoming query parameters
@@ -273,13 +270,8 @@ export const productResource = defineResource({
 
   presets: ['softDelete', 'slugLookup'],
 
-  permissions: {
-    list: [],       // Public
-    get: [],        // Public
-    create: ['admin'],
-    update: ['admin'],
-    delete: ['admin'],
-  },
+  // Public read, admin write
+  permissions: permissions.publicReadAdminWrite(),
 
   // Schema options for field-level control
   schemaOptions: {
@@ -297,15 +289,17 @@ export const productResource = defineResource({
       method: 'GET',
       path: '/featured',
       handler: 'getFeatured',
+      wrapHandler: true,
+      permissions: allowPublic(),
       summary: 'Get featured products',
-      authRoles: [],
     },
     {
       method: 'GET',
       path: '/low-stock',
       handler: 'getLowStock',
+      wrapHandler: true,
+      permissions: requireRoles(['admin']),
       summary: 'Get products with low stock',
-      authRoles: ['admin'],
     },
   ],
 });

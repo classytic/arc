@@ -40,6 +40,7 @@
  */
 
 import type { FastifyRequest, FastifyReply } from 'fastify';
+import type { PermissionCheck } from '../permissions/types.js';
 
 /**
  * Policy result returned by can() method
@@ -297,6 +298,138 @@ export type PolicyFactory<TConfig = any> = (config: TConfig) => PolicyEngine;
 /**
  * Extended Fastify request with policy result
  */
+/**
+ * Access control statement
+ *
+ * Maps to Better Auth's organization permission model
+ * where permissions are defined as resource + action pairs.
+ */
+export interface AccessControlStatement {
+  /** Resource name (e.g., 'product', 'order') */
+  resource: string;
+  /** Allowed actions on this resource */
+  action: string[];
+}
+
+/**
+ * Options for createAccessControlPolicy
+ */
+export interface AccessControlPolicyOptions {
+  /** Permission statements defining resource-action pairs */
+  statements: AccessControlStatement[];
+  /**
+   * Optional async permission check against external source (e.g., org role permissions).
+   * Called when the static statements allow the action — use this for dynamic checks
+   * like verifying the user's org role actually grants the permission.
+   *
+   * @param userId - ID of the user
+   * @param resource - Resource being accessed
+   * @param action - Action being performed
+   * @returns Whether the user has the permission
+   */
+  checkPermission?: (userId: string, resource: string, action: string) => Promise<boolean>;
+}
+
+/**
+ * Create a PermissionCheck from access control statements.
+ *
+ * Maps Better Auth's statement-based access control model to Arc's
+ * PermissionCheck function, which can be used directly in resource permissions.
+ *
+ * The returned PermissionCheck:
+ * 1. Looks up the resource + action in the statements list
+ * 2. If no matching statement exists, denies access
+ * 3. If a matching statement exists and `checkPermission` is provided,
+ *    calls it for dynamic verification (e.g., check org role)
+ * 4. If `checkPermission` is not provided, allows access based on static statements
+ *
+ * @example Static statements only
+ * ```typescript
+ * import { createAccessControlPolicy } from '@classytic/arc/policies';
+ *
+ * const editorPermissions = createAccessControlPolicy({
+ *   statements: [
+ *     { resource: 'product', action: ['create', 'update'] },
+ *     { resource: 'order', action: ['read'] },
+ *   ],
+ * });
+ *
+ * // Use in resource config
+ * defineResource({
+ *   name: 'product',
+ *   permissions: {
+ *     create: editorPermissions,
+ *     update: editorPermissions,
+ *   },
+ * });
+ * ```
+ *
+ * @example With dynamic permission check (Better Auth org roles)
+ * ```typescript
+ * const policy = createAccessControlPolicy({
+ *   statements: [
+ *     { resource: 'product', action: ['create', 'update'] },
+ *     { resource: 'order', action: ['read'] },
+ *   ],
+ *   checkPermission: async (userId, resource, action) => {
+ *     return hasOrgPermission(userId, resource, action);
+ *   },
+ * });
+ * ```
+ */
+export function createAccessControlPolicy(
+  options: AccessControlPolicyOptions
+): PermissionCheck {
+  // Pre-compute a lookup map: resource -> Set<action> for O(1) checks
+  const statementMap = new Map<string, Set<string>>();
+  for (const statement of options.statements) {
+    const existing = statementMap.get(statement.resource);
+    if (existing) {
+      for (const action of statement.action) {
+        existing.add(action);
+      }
+    } else {
+      statementMap.set(statement.resource, new Set(statement.action));
+    }
+  }
+
+  const permissionCheck: PermissionCheck = async (context) => {
+    const { user, resource, action } = context;
+
+    // Check if the action is allowed by any statement
+    const allowedActions = statementMap.get(resource);
+    if (!allowedActions || !allowedActions.has(action)) {
+      return {
+        granted: false,
+        reason: `Action '${action}' is not permitted on resource '${resource}'`,
+      };
+    }
+
+    // If a dynamic permission check is provided, verify against it
+    if (options.checkPermission) {
+      const userId = user?.id ?? user?._id;
+      if (!userId) {
+        return {
+          granted: false,
+          reason: 'Authentication required',
+        };
+      }
+
+      const hasPermission = await options.checkPermission(String(userId), resource, action);
+      if (!hasPermission) {
+        return {
+          granted: false,
+          reason: `User does not have '${action}' permission on '${resource}'`,
+        };
+      }
+    }
+
+    return { granted: true };
+  };
+
+  return permissionCheck;
+}
+
 declare module 'fastify' {
   interface FastifyRequest {
     policyResult?: PolicyResult;

@@ -116,6 +116,12 @@ export type {
   PolicyResult,
   PolicyContext,
   PolicyFactory,
+  AccessControlStatement,
+  AccessControlPolicyOptions,
+} from './PolicyInterface.js';
+
+export {
+  createAccessControlPolicy,
 } from './PolicyInterface.js';
 
 export {

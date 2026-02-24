@@ -1,100 +1,160 @@
 {
   "name": "@classytic/arc",
-  "version": "1.0.9",
-  "description": "Resource-oriented backend framework for Fastify + MongoDB",
+  "version": "2.0.0",
+  "description": "Resource-oriented backend framework for Fastify — clean, minimal, powerful, tree-shakable",
   "type": "module",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
     },
     "./permissions": {
-      "types": "./dist/permissions/index.d.ts",
-      "default": "./dist/permissions/index.js"
+      "types": "./dist/permissions/index.d.mts",
+      "default": "./dist/permissions/index.mjs"
     },
     "./types": {
-      "types": "./dist/types/index.d.ts",
-      "default": "./dist/types/index.js"
+      "types": "./dist/types/index.d.mts",
+      "default": "./dist/types/index.mjs"
     },
     "./adapters": {
-      "types": "./dist/adapters/index.d.ts",
-      "default": "./dist/adapters/index.js"
+      "types": "./dist/adapters/index.d.mts",
+      "default": "./dist/adapters/index.mjs"
     },
     "./core": {
-      "types": "./dist/core/index.d.ts",
-      "default": "./dist/core/index.js"
+      "types": "./dist/core/index.d.mts",
+      "default": "./dist/core/index.mjs"
     },
     "./presets": {
-      "types": "./dist/presets/index.d.ts",
-      "default": "./dist/presets/index.js"
+      "types": "./dist/presets/index.d.mts",
+      "default": "./dist/presets/index.mjs"
     },
     "./presets/tenant": {
-      "types": "./dist/presets/multiTenant.d.ts",
-      "default": "./dist/presets/multiTenant.js"
+      "types": "./dist/presets/multiTenant.d.mts",
+      "default": "./dist/presets/multiTenant.mjs"
     },
     "./auth": {
-      "types": "./dist/auth/index.d.ts",
-      "default": "./dist/auth/index.js"
+      "types": "./dist/auth/index.d.mts",
+      "default": "./dist/auth/index.mjs"
     },
     "./org": {
-      "types": "./dist/org/index.d.ts",
-      "default": "./dist/org/index.js"
+      "types": "./dist/org/index.d.mts",
+      "default": "./dist/org/index.mjs"
+    },
+    "./org/types": {
+      "types": "./dist/org/types.d.mts",
+      "default": "./dist/org/types.mjs"
     },
     "./hooks": {
-      "types": "./dist/hooks/index.d.ts",
-      "default": "./dist/hooks/index.js"
+      "types": "./dist/hooks/index.d.mts",
+      "default": "./dist/hooks/index.mjs"
     },
     "./registry": {
-      "types": "./dist/registry/index.d.ts",
-      "default": "./dist/registry/index.js"
+      "types": "./dist/registry/index.d.mts",
+      "default": "./dist/registry/index.mjs"
     },
     "./utils": {
-      "types": "./dist/utils/index.d.ts",
-      "default": "./dist/utils/index.js"
+      "types": "./dist/utils/index.d.mts",
+      "default": "./dist/utils/index.mjs"
     },
     "./cli": {
-      "types": "./dist/cli/index.d.ts",
-      "default": "./dist/cli/index.js"
+      "types": "./dist/cli/index.d.mts",
+      "default": "./dist/cli/index.mjs"
     },
     "./plugins": {
-      "types": "./dist/plugins/index.d.ts",
-      "default": "./dist/plugins/index.js"
+      "types": "./dist/plugins/index.d.mts",
+      "default": "./dist/plugins/index.mjs"
+    },
+    "./plugins/tracing": {
+      "types": "./dist/plugins/tracing-entry.d.mts",
+      "default": "./dist/plugins/tracing-entry.mjs"
     },
     "./audit": {
-      "types": "./dist/audit/index.d.ts",
-      "default": "./dist/audit/index.js"
+      "types": "./dist/audit/index.d.mts",
+      "default": "./dist/audit/index.mjs"
+    },
+    "./audit/mongodb": {
+      "types": "./dist/audit/mongodb.d.mts",
+      "default": "./dist/audit/mongodb.mjs"
     },
     "./docs": {
-      "types": "./dist/docs/index.d.ts",
-      "default": "./dist/docs/index.js"
+      "types": "./dist/docs/index.d.mts",
+      "default": "./dist/docs/index.mjs"
     },
     "./idempotency": {
-      "types": "./dist/idempotency/index.d.ts",
-      "default": "./dist/idempotency/index.js"
+      "types": "./dist/idempotency/index.d.mts",
+      "default": "./dist/idempotency/index.mjs"
+    },
+    "./idempotency/redis": {
+      "types": "./dist/idempotency/redis.d.mts",
+      "default": "./dist/idempotency/redis.mjs"
+    },
+    "./idempotency/mongodb": {
+      "types": "./dist/idempotency/mongodb.d.mts",
+      "default": "./dist/idempotency/mongodb.mjs"
     },
     "./events": {
-      "types": "./dist/events/index.d.ts",
-      "default": "./dist/events/index.js"
+      "types": "./dist/events/index.d.mts",
+      "default": "./dist/events/index.mjs"
+    },
+    "./events/redis": {
+      "types": "./dist/events/transports/redis.d.mts",
+      "default": "./dist/events/transports/redis.mjs"
+    },
+    "./events/redis-stream": {
+      "types": "./dist/events/transports/redis-stream-entry.d.mts",
+      "default": "./dist/events/transports/redis-stream-entry.mjs"
     },
     "./testing": {
-      "types": "./dist/testing/index.d.ts",
-      "default": "./dist/testing/index.js"
+      "types": "./dist/testing/index.d.mts",
+      "default": "./dist/testing/index.mjs"
     },
     "./policies": {
-      "types": "./dist/policies/index.d.ts",
-      "default": "./dist/policies/index.js"
+      "types": "./dist/policies/index.d.mts",
+      "default": "./dist/policies/index.mjs"
     },
     "./factory": {
-      "types": "./dist/factory/index.d.ts",
-      "default": "./dist/factory/index.js"
+      "types": "./dist/factory/index.d.mts",
+      "default": "./dist/factory/index.mjs"
+    },
+    "./schemas": {
+      "types": "./dist/schemas/index.d.mts",
+      "default": "./dist/schemas/index.mjs"
     },
     "./migrations": {
-      "types": "./dist/migrations/index.d.ts",
-      "default": "./dist/migrations/index.js"
+      "types": "./dist/migrations/index.d.mts",
+      "default": "./dist/migrations/index.mjs"
+    },
+    "./discovery": {
+      "types": "./dist/discovery/index.d.mts",
+      "default": "./dist/discovery/index.mjs"
+    },
+    "./integrations": {
+      "types": "./dist/integrations/index.d.mts",
+      "default": "./dist/integrations/index.mjs"
+    },
+    "./integrations/streamline": {
+      "types": "./dist/integrations/streamline.d.mts",
+      "default": "./dist/integrations/streamline.mjs"
+    },
+    "./integrations/websocket": {
+      "types": "./dist/integrations/websocket.d.mts",
+      "default": "./dist/integrations/websocket.mjs"
+    },
+    "./integrations/jobs": {
+      "types": "./dist/integrations/jobs.d.mts",
+      "default": "./dist/integrations/jobs.mjs"
+    },
+    "./auth/redis": {
+      "types": "./dist/auth/redis-session.d.mts",
+      "default": "./dist/auth/redis-session.mjs"
+    },
+    "./plugins/response-cache": {
+      "types": "./dist/plugins/response-cache.d.mts",
+      "default": "./dist/plugins/response-cache.mjs"
     }
   },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
   "bin": {
     "arc": "./bin/arc.js"
   },
@@ -104,8 +164,8 @@
     "bin"
   ],
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
+    "build": "tsdown",
+    "dev": "tsdown --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -119,26 +179,53 @@
     "node": ">=20"
   },
   "peerDependencies": {
-    "@classytic/mongokit": "^3.0.0",
+    "@classytic/mongokit": "^3.2.2",
+    "@classytic/streamline": ">=1.0.0",
     "@fastify/cors": "^11.0.0",
     "@fastify/helmet": "^13.0.0",
+    "@fastify/jwt": "^10.0.0",
     "@fastify/multipart": "^9.0.0",
     "@fastify/rate-limit": "^10.0.0",
     "@fastify/sensible": "^6.0.0",
+    "@fastify/type-provider-typebox": "^6.0.0",
     "@fastify/under-pressure": "^9.0.0",
-    "fastify": "^5.0.0",
+    "@fastify/websocket": "^11.0.0",
+    "@opentelemetry/api": "^1.0.0",
+    "@opentelemetry/auto-instrumentations-node": ">=0.40.0",
+    "@opentelemetry/exporter-trace-otlp-http": ">=0.50.0",
+    "@opentelemetry/instrumentation-http": ">=0.50.0",
+    "@opentelemetry/instrumentation-mongodb": ">=0.40.0",
+    "@opentelemetry/sdk-node": ">=0.50.0",
+    "@sinclair/typebox": "^0.34.0",
+    "better-auth": ">=1.0.0",
+    "bullmq": "^5.0.0",
+    "fastify": "^5.7.4",
     "fastify-raw-body": "^5.0.0",
+    "ioredis": "^5.0.0",
+    "mongodb": "^6.0.0 || ^7.0.0",
     "mongoose": "^8.0.0 || ^9.0.0",
     "pino-pretty": "^13.0.0"
   },
   "peerDependenciesMeta": {
-    "@fastify/compress": {
+    "@classytic/mongokit": {
+      "optional": true
+    },
+    "mongodb": {
+      "optional": true
+    },
+    "mongoose": {
+      "optional": true
+    },
+    "better-auth": {
       "optional": true
     },
     "@fastify/cors": {
       "optional": true
     },
     "@fastify/helmet": {
+      "optional": true
+    },
+    "@fastify/jwt": {
       "optional": true
     },
     "@fastify/rate-limit": {
@@ -153,16 +240,13 @@
     "@fastify/multipart": {
       "optional": true
     },
+    "@fastify/websocket": {
+      "optional": true
+    },
     "fastify-raw-body": {
       "optional": true
     },
     "pino-pretty": {
-      "optional": true
-    },
-    "mongodb-memory-server": {
-      "optional": true
-    },
-    "@fastify/aws-lambda": {
       "optional": true
     },
     "@opentelemetry/api": {
@@ -182,6 +266,21 @@
     },
     "@opentelemetry/auto-instrumentations-node": {
       "optional": true
+    },
+    "ioredis": {
+      "optional": true
+    },
+    "@sinclair/typebox": {
+      "optional": true
+    },
+    "@fastify/type-provider-typebox": {
+      "optional": true
+    },
+    "bullmq": {
+      "optional": true
+    },
+    "@classytic/streamline": {
+      "optional": true
     }
   },
   "dependencies": {
@@ -189,16 +288,18 @@
     "qs": "^6.14.1"
   },
   "devDependencies": {
-    "@classytic/mongokit": "^3.1.0",
-    "@fastify/jwt": "^9.0.0",
+    "@classytic/mongokit": "^3.2.2",
+    "mongodb": "^7.1.0",
+    "@fastify/jwt": "^10.0.0",
     "@fastify/multipart": "^9.0.0",
-    "@types/jsonwebtoken": "^9.0.0",
+    "@fastify/type-provider-typebox": "^6.0.0",
+    "@sinclair/typebox": "^0.34.0",
     "@types/node": "^22.10.0",
     "@types/qs": "^6.14.0",
     "fastify-raw-body": "^5.0.0",
     "jsonwebtoken": "^9.0.0",
     "mongodb-memory-server": "^11.0.1",
-    "tsup": "^8.3.5",
+    "tsdown": "^0.20.3",
     "typescript": "^5.7.2",
     "vitest": "^3.0.0"
   },
@@ -212,7 +313,12 @@
     "framework",
     "resource",
     "multi-tenant",
-    "typescript"
+    "typescript",
+    "tree-shakable",
+    "serverless",
+    "websocket",
+    "jobs",
+    "workflow"
   ],
   "author": "Classytic",
   "license": "MIT",

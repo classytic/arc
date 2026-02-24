@@ -56,3 +56,21 @@ export {
   hasOrgRole,
 } from './orgMembership.js';
 export type { OrgMembershipOptions, OrgRolesOptions } from './orgMembership.js';
+
+// Organization Plugin (adapter-based REST endpoints)
+export {
+  default as organizationPlugin,
+  organizationPlugin as organizationPluginFn,
+} from './organizationPlugin.js';
+
+// Organization Types (adapter interfaces)
+export type {
+  OrgDoc,
+  MemberDoc,
+  InvitationDoc,
+  OrgAdapter,
+  InvitationAdapter,
+  OrgPermissionStatement,
+  OrgRole,
+  OrganizationPluginOptions,
+} from './types.js';

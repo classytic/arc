@@ -54,18 +54,20 @@ interface CheckResult {
   error?: string;
 }
 
-// Metrics storage
+// Metrics storage (instance-scoped to avoid contamination between app instances)
 interface HttpMetrics {
   requestsTotal: Record<string, number>;
   requestDurations: number[];
   startTime: number;
 }
 
-const httpMetrics: HttpMetrics = {
-  requestsTotal: {},
-  requestDurations: [],
-  startTime: Date.now(),
-};
+function createHttpMetrics(): HttpMetrics {
+  return {
+    requestsTotal: {},
+    requestDurations: [],
+    startTime: Date.now(),
+  };
+}
 
 const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
   fastify: FastifyInstance,
@@ -79,6 +81,9 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
     version,
     collectHttpMetrics = metrics,
   } = opts;
+
+  // Instance-scoped metrics — each Fastify instance gets its own counters
+  const httpMetrics = createHttpMetrics();
 
   // ========================================
   // Liveness Probe
@@ -268,7 +273,7 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
     });
   }
 
-  fastify.log?.info?.(`Health plugin registered at ${prefix}`);
+  fastify.log?.debug?.(`Health plugin registered at ${prefix}`);
 };
 
 /**

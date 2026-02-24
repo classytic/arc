@@ -2,11 +2,99 @@
  * Types for createApp factory
  */
 
-import type { FastifyServerOptions } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest, FastifyServerOptions } from 'fastify';
 import type { FastifyCorsOptions } from '@fastify/cors';
 import type { FastifyHelmetOptions } from '@fastify/helmet';
 import type { RateLimitOptions } from '@fastify/rate-limit';
 import type { AuthPluginOptions } from '../types/index.js';
+import type { ExternalOpenApiPaths } from '../docs/externalPaths.js';
+
+// ============================================================================
+// Auth Strategy Types (Discriminated Union)
+// ============================================================================
+
+/**
+ * Better Auth adapter integration
+ *
+ * When provided, Arc registers the Better Auth plugin (which sets up
+ * auth routes and decorates fastify.authenticate) and skips Arc's
+ * built-in JWT auth setup entirely.
+ *
+ * @example
+ * ```typescript
+ * import { createBetterAuthAdapter } from '@classytic/arc-better-auth';
+ *
+ * const app = await createApp({
+ *   auth: { betterAuth: createBetterAuthAdapter({ auth: myBetterAuth }) },
+ * });
+ * ```
+ */
+export interface BetterAuthOption {
+  /** Better Auth adapter — pass the result of createBetterAuthAdapter() */
+  betterAuth: { plugin: FastifyPluginAsync; openapi?: ExternalOpenApiPaths };
+}
+
+/**
+ * Custom auth plugin — full control over authentication setup
+ *
+ * The plugin is registered directly on the Fastify instance.
+ * It must decorate `fastify.authenticate` for protected routes to work.
+ *
+ * @example
+ * ```typescript
+ * const app = await createApp({
+ *   auth: {
+ *     plugin: async (fastify) => {
+ *       fastify.decorate('authenticate', async (request, reply) => { ... });
+ *     },
+ *   },
+ * });
+ * ```
+ */
+export interface CustomPluginAuthOption {
+  /** Custom Fastify plugin that sets up authentication */
+  plugin: FastifyPluginAsync;
+}
+
+/**
+ * Custom authenticator function — lightweight alternative to a full plugin
+ *
+ * Arc decorates `fastify.authenticate` with this function directly.
+ * No JWT setup, no Arc auth plugin — just your function.
+ *
+ * @example
+ * ```typescript
+ * const app = await createApp({
+ *   auth: {
+ *     authenticate: async (request, reply) => {
+ *       const session = await validateSession(request);
+ *       if (!session) reply.code(401).send({ error: 'Unauthorized' });
+ *       request.user = session.user;
+ *     },
+ *   },
+ * });
+ * ```
+ */
+export interface CustomAuthenticatorOption {
+  /** Authenticate function — decorates fastify.authenticate directly */
+  authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+}
+
+/**
+ * All supported auth configuration shapes
+ *
+ * - `false` — Disable authentication entirely
+ * - `AuthPluginOptions` — Arc's built-in JWT auth (existing behavior)
+ * - `BetterAuthOption` — Better Auth adapter integration
+ * - `CustomPluginAuthOption` — Your own Fastify auth plugin
+ * - `CustomAuthenticatorOption` — A bare authenticate function
+ */
+export type AuthOption =
+  | false
+  | AuthPluginOptions
+  | BetterAuthOption
+  | CustomPluginAuthOption
+  | CustomAuthenticatorOption;
 
 /**
  * CreateApp Options
@@ -52,8 +140,8 @@ export interface CreateAppOptions {
   // Environment & Logging
   // ============================================
 
-  /** Environment preset: 'production', 'development', or 'testing' */
-  preset?: 'production' | 'development' | 'testing';
+  /** Environment preset: 'production', 'development', 'testing', or 'edge' */
+  preset?: 'production' | 'development' | 'testing' | 'edge';
 
   /** Fastify logger configuration */
   logger?: FastifyServerOptions['logger'];
@@ -69,19 +157,20 @@ export interface CreateAppOptions {
    * Auth configuration
    *
    * Set to false to disable authentication entirely.
-   * Provide AuthPluginOptions for full control.
+   * Provide AuthPluginOptions for Arc's built-in JWT auth.
+   * Or use one of the alternative auth strategies.
    *
    * @example
    * ```typescript
    * // Disable auth
    * auth: false,
    *
-   * // Simple JWT (uses default jwtVerify)
+   * // Arc JWT (existing behavior)
    * auth: {
    *   jwt: { secret: process.env.JWT_SECRET },
    * },
    *
-   * // Custom authenticator
+   * // Arc JWT + custom authenticator
    * auth: {
    *   jwt: { secret: process.env.JWT_SECRET },
    *   authenticate: async (request, { jwt }) => {
@@ -92,18 +181,27 @@ export interface CreateAppOptions {
    *   },
    * },
    *
-   * // Completely custom auth plugin
+   * // Better Auth adapter
+   * auth: { betterAuth: createBetterAuthAdapter({ auth: myBetterAuth }) },
+   *
+   * // Custom auth plugin
    * auth: {
    *   plugin: async (fastify) => {
-   *     // Your custom auth setup
+   *     fastify.decorate('authenticate', async (req, reply) => { ... });
+   *   },
+   * },
+   *
+   * // Custom authenticator function
+   * auth: {
+   *   authenticate: async (request, reply) => {
+   *     const session = await validateSession(request);
+   *     if (!session) reply.code(401).send({ error: 'Unauthorized' });
+   *     request.user = session.user;
    *   },
    * },
    * ```
    */
-  auth?: false | AuthPluginOptions | {
-    /** Replace Arc auth with your own plugin */
-    plugin?: (fastify: any) => Promise<void>;
-  };
+  auth?: AuthOption;
 
   // ============================================
   // Security Plugins (opt-out)
@@ -145,7 +243,7 @@ export interface CreateAppOptions {
   // Arc-specific Options
   // ============================================
 
-  /** Enable Arc plugins (requestId, health, gracefulShutdown) */
+  /** Enable Arc plugins (requestId, health, gracefulShutdown, caching, sse) */
   arcPlugins?: {
     /** Request ID tracking (default: true) */
     requestId?: boolean;
@@ -155,10 +253,42 @@ export interface CreateAppOptions {
     gracefulShutdown?: boolean;
     /** Emit events for CRUD operations (default: true) */
     emitEvents?: boolean;
+    /**
+     * Caching headers (ETag + Cache-Control). Default: false (opt-in).
+     * Set to true for defaults, or pass CachingOptions for fine control.
+     */
+    caching?: import('../plugins/caching.js').CachingOptions | boolean;
+    /**
+     * SSE event streaming. Default: false (opt-in).
+     * Set to true for defaults, or pass SSEOptions for fine control.
+     * Requires emitEvents to be enabled (or events plugin registered).
+     */
+    sse?: import('../plugins/sse.js').SSEOptions | boolean;
   };
 
+  /**
+   * Type provider for schema inference.
+   *
+   * When set to `'typebox'`, enables TypeBox type provider for
+   * automatic TypeScript inference from route schemas.
+   *
+   * Requires `@sinclair/typebox` and `@fastify/type-provider-typebox` installed.
+   *
+   * @example
+   * ```typescript
+   * import { Type } from '@classytic/arc/schemas';
+   *
+   * const app = await createApp({
+   *   typeProvider: 'typebox',
+   * });
+   *
+   * // Now route schemas built with Type.* give full TS inference
+   * ```
+   */
+  typeProvider?: 'typebox';
+
   /** Custom plugin registration function */
-  plugins?: (fastify: any) => Promise<void>;
+  plugins?: (fastify: FastifyInstance) => Promise<void>;
 }
 
 // Plugin-specific options

@@ -98,13 +98,8 @@ export function validateResourceConfig(
       });
     }
 
-    // Controller validation - only warn if CRUD routes will be used
-    if (!config.controller) {
-      warnings.push({
-        field: 'controller',
-        message: 'No controller provided, will auto-create BaseController',
-      });
-    }
+    // Controller is auto-created (BaseController) when not provided — this is
+    // the intended default. No warning needed; it's not a misconfiguration.
   } else {
     // Service resources (no CRUD routes) don't need adapter or controller
     if (!config.adapter && !config.additionalRoutes?.length) {

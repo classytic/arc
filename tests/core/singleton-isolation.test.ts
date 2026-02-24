@@ -1,11 +1,10 @@
 /**
  * Singleton Isolation Tests
  *
- * Tests that HookSystem and ResourceRegistry can be isolated per app instance
- * when custom instances are provided. This is important for test parallelization.
+ * Tests that HookSystem and ResourceRegistry are always isolated per app instance.
+ * This is critical for test parallelization and multi-instance deployments.
  *
- * NOTE: By default, arcCorePlugin uses global singletons so preset hooks work.
- * For isolation, pass custom instances via options.
+ * arcCorePlugin always creates fresh instances (no global singletons).
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
@@ -182,7 +181,7 @@ describe('Singleton Isolation', () => {
   });
 
   describe('Default behavior (isolated instances)', () => {
-    it('should create isolated hookSystem by default for test safety', async () => {
+    it('should always create isolated hookSystem (no global singletons)', async () => {
       const app1 = Fastify({ logger: false });
       const app2 = Fastify({ logger: false });
       apps.push(app1, app2);
@@ -190,22 +189,29 @@ describe('Singleton Isolation', () => {
       await app1.register(arcCorePlugin);
       await app2.register(arcCorePlugin);
 
-      // By default, apps have isolated hook systems
+      // Apps always have isolated hook systems — no global singleton
       expect(app1.arc.hooks).not.toBe(app2.arc.hooks);
     });
-  });
 
-  describe('Global singletons (opt-in)', () => {
-    it('should use global hookSystem when useGlobalSingletons is true', async () => {
+    it('should always create isolated registry (no global singletons)', async () => {
       const app1 = Fastify({ logger: false });
       const app2 = Fastify({ logger: false });
       apps.push(app1, app2);
 
-      await app1.register(arcCorePlugin, { useGlobalSingletons: true });
-      await app2.register(arcCorePlugin, { useGlobalSingletons: true });
+      await app1.register(arcCorePlugin);
+      await app2.register(arcCorePlugin);
 
-      // Both apps share the same global hookSystem
-      expect(app1.arc.hooks).toBe(app2.arc.hooks);
+      // Apps always have isolated registries — no global singleton
+      expect(app1.arc.registry).not.toBe(app2.arc.registry);
+      expect(app1.arc.registry).toBeInstanceOf(ResourceRegistry);
+      expect(app2.arc.registry).toBeInstanceOf(ResourceRegistry);
+    });
+
+    it('should not export a global resourceRegistry singleton', async () => {
+      // The registry module should only export the class, not a singleton instance
+      const registryModule = await import('../../src/registry/index.js');
+      expect(registryModule.ResourceRegistry).toBeDefined();
+      expect((registryModule as any).resourceRegistry).toBeUndefined();
     });
   });
 });

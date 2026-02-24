@@ -10,14 +10,14 @@
  * await fastify.register(idempotencyPlugin, { enabled: true });
  *
  * // Production with Redis (multi-instance)
- * import { RedisIdempotencyStore } from '@classytic/arc/idempotency';
+ * import { RedisIdempotencyStore } from '@classytic/arc/idempotency/redis';
  * await fastify.register(idempotencyPlugin, {
  *   enabled: true,
  *   store: new RedisIdempotencyStore({ client: redis }),
  * });
  *
  * // Production with MongoDB (multi-instance)
- * import { MongoIdempotencyStore } from '@classytic/arc/idempotency';
+ * import { MongoIdempotencyStore } from '@classytic/arc/idempotency/mongodb';
  * await fastify.register(idempotencyPlugin, {
  *   enabled: true,
  *   store: new MongoIdempotencyStore({ connection: mongoose.connection }),
@@ -33,19 +33,16 @@ export {
 } from './idempotencyPlugin.js';
 export type { IdempotencyPluginOptions } from './idempotencyPlugin.js';
 
-// Stores - In-memory (development)
-export {
-  MemoryIdempotencyStore,
-  createIdempotencyResult,
-} from './stores/index.js';
+// Core store (lightweight, no external deps)
+export { MemoryIdempotencyStore, createIdempotencyResult } from './stores/index.js';
 
-// Stores - Redis (production)
-export { RedisIdempotencyStore } from './stores/index.js';
-export type { RedisIdempotencyStoreOptions, RedisClient } from './stores/index.js';
+// Redis store — use dedicated subpath to avoid pulling ioredis:
+//   import { RedisIdempotencyStore } from '@classytic/arc/idempotency/redis';
+export type { RedisIdempotencyStoreOptions, RedisClient } from './stores/redis.js';
 
-// Stores - MongoDB (production)
-export { MongoIdempotencyStore } from './stores/index.js';
-export type { MongoIdempotencyStoreOptions } from './stores/index.js';
+// MongoDB store — use dedicated subpath to avoid pulling mongoose:
+//   import { MongoIdempotencyStore } from '@classytic/arc/idempotency/mongodb';
+export type { MongoIdempotencyStoreOptions } from './stores/mongodb.js';
 
 // Types
 export type {

@@ -52,6 +52,7 @@ import type {
   MiddlewareConfig,
   OpenApiSchemas,
   QueryParserInterface,
+  RateLimitConfig,
   ResourceConfig,
   ResourceMetadata,
   ResourcePermissions,
@@ -61,9 +62,8 @@ import type { DataAdapter } from '../adapters/interface.js';
 import { BaseController } from './BaseController.js';
 import { createCrudRouter } from './createCrudRouter.js';
 import { applyPresets } from '../presets/index.js';
-import { resourceRegistry } from '../registry/index.js';
+import type { RegisterOptions } from '../registry/ResourceRegistry.js';
 import { assertValidConfig } from './validateResourceConfig.js';
-import { hookSystem } from '../hooks/index.js';
 
 interface ExtendedResourceConfig<TDoc = AnyRecord> extends ResourceConfig<TDoc> {
   _appliedPresets?: string[];
@@ -137,17 +137,17 @@ export function defineResource<TDoc = AnyRecord>(
   let controller = config.controller;
   if (!controller && hasCrudRoutes && repository) {
     // Auto-create BaseController if CRUD routes exist
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    controller = new BaseController(repository as any, {
+    controller = new BaseController<TDoc>(repository, {
       resourceName: config.name,
       schemaOptions: config.schemaOptions,
       queryParser: config.queryParser as QueryParserInterface | undefined,
+      tenantField: config.tenantField,
     }) as IController<TDoc>;
   }
 
   // Track presets
   const originalPresets = (config.presets ?? []).map((p) =>
-    typeof p === 'string' ? p : (p as any).name
+    typeof p === 'string' ? p : (p as { name: string }).name
   );
 
   // Apply presets
@@ -165,6 +165,7 @@ export function defineResource<TDoc = AnyRecord>(
         presetFields?: { slugField?: string; parentField?: string };
         resourceName?: string;
         queryParser?: QueryParserInterface;
+        tenantField?: string;
       }) => void;
     };
 
@@ -178,7 +179,8 @@ export function defineResource<TDoc = AnyRecord>(
             }
           : undefined,
         resourceName: resolvedConfig.name,
-        queryParser: resolvedConfig.queryParser as any,
+        queryParser: resolvedConfig.queryParser as QueryParserInterface | undefined,
+        tenantField: resolvedConfig.tenantField,
       });
     }
   }
@@ -194,17 +196,16 @@ export function defineResource<TDoc = AnyRecord>(
     resource._validateControllerMethods();
   }
 
-  // Register hooks from presets
+  // Collect hooks from presets — stored on resource, registered at plugin time via fastify.arc.hooks
   if (resolvedConfig._hooks?.length) {
-    for (const hook of resolvedConfig._hooks) {
-      hookSystem.register({
-        resource: resolvedConfig.name,
+    resource._pendingHooks.push(
+      ...resolvedConfig._hooks.map(hook => ({
         operation: hook.operation,
         phase: hook.phase,
-        handler: hook.handler as unknown as (ctx: { resource: string; operation: string; phase: string; data?: AnyRecord }) => AnyRecord | Promise<AnyRecord>,
+        handler: hook.handler,
         priority: hook.priority ?? 10,
-      });
-    }
+      }))
+    );
   }
 
   // Auto-register with OpenAPI schemas
@@ -222,7 +223,7 @@ export function defineResource<TDoc = AnyRecord>(
       }
 
       // Auto-detect listQuery schema from queryParser (if not already provided)
-      const queryParser = config.queryParser as any;
+      const queryParser = config.queryParser as QueryParserInterface | undefined;
       if (!openApiSchemas?.listQuery && queryParser?.getQuerySchema) {
         const querySchema = queryParser.getQuerySchema();
         if (querySchema) {
@@ -233,12 +234,13 @@ export function defineResource<TDoc = AnyRecord>(
         }
       }
 
-      resourceRegistry.register(resource as unknown as ResourceDefinition<AnyRecord>, {
+      // Store registry metadata for lazy registration when toPlugin() is called
+      resource._registryMeta = {
         module: config.module,
         openApiSchemas,
-      });
+      };
     } catch {
-      // Registry errors are non-fatal - fail silently
+      // Schema generation errors are non-fatal — resource still works without OpenAPI metadata
     }
   }
 
@@ -252,6 +254,12 @@ interface ResolvedResourceConfig<TDoc = AnyRecord> extends ResourceConfig<TDoc> 
     parentField?: string;
     [key: string]: unknown;
   };
+  _pendingHooks?: Array<{
+    operation: 'create' | 'update' | 'delete' | 'read' | 'list';
+    phase: 'before' | 'after';
+    handler: (ctx: AnyRecord) => unknown;
+    priority: number;
+  }>;
 }
 
 export class ResourceDefinition<TDoc = AnyRecord> {
@@ -284,8 +292,28 @@ export class ResourceDefinition<TDoc = AnyRecord> {
   // Events
   readonly events: Record<string, EventDefinition>;
 
+  // Rate limiting
+  readonly rateLimit?: RateLimitConfig | false;
+
+  // Pipeline
+  readonly pipe?: import('../pipeline/types.js').PipelineConfig;
+
+  // Field-level permissions
+  readonly fields?: import('../permissions/fields.js').FieldPermissionMap;
+
   // Presets tracking
   readonly _appliedPresets: string[];
+
+  // Pending hooks from presets (registered at plugin time via fastify.arc.hooks)
+  _pendingHooks: Array<{
+    operation: 'create' | 'update' | 'delete' | 'read' | 'list';
+    phase: 'before' | 'after';
+    handler: (ctx: AnyRecord) => unknown;
+    priority: number;
+  }>;
+
+  // Registry metadata for lazy registration (populated by defineResource, consumed by toPlugin)
+  _registryMeta?: RegisterOptions;
 
   constructor(config: ResolvedResourceConfig<TDoc>) {
     // Identity
@@ -317,8 +345,20 @@ export class ResourceDefinition<TDoc = AnyRecord> {
     // Events
     this.events = config.events ?? {};
 
+    // Rate limiting
+    this.rateLimit = config.rateLimit;
+
+    // Pipeline
+    this.pipe = config.pipe;
+
+    // Field-level permissions
+    this.fields = config.fields;
+
     // Presets tracking
     this._appliedPresets = config._appliedPresets ?? [];
+
+    // Pending hooks from presets
+    this._pendingHooks = config._pendingHooks ?? [];
   }
 
   /** Get repository from adapter (if available) */
@@ -391,6 +431,32 @@ export class ResourceDefinition<TDoc = AnyRecord> {
     const self = this;
 
     return async function resourcePlugin(fastify, _opts): Promise<void> {
+      // Register with instance-scoped registry (if arc core plugin is loaded)
+      const arc = (fastify as FastifyWithDecorators).arc;
+      if (arc?.registry && self._registryMeta) {
+        try {
+          arc.registry.register(self as unknown as ResourceDefinition<AnyRecord>, self._registryMeta);
+        } catch (err) {
+          fastify.log?.warn?.(`Failed to register resource '${self.name}' in registry: ${err instanceof Error ? err.message : err}`);
+        }
+      }
+
+      // Register pending hooks from presets with instance-scoped hook system
+      if (self._pendingHooks.length > 0) {
+        const arc = (fastify as FastifyWithDecorators).arc;
+        if (arc?.hooks) {
+          for (const hook of self._pendingHooks) {
+            arc.hooks.register({
+              resource: self.name,
+              operation: hook.operation,
+              phase: hook.phase,
+              handler: hook.handler as (ctx: { resource: string; operation: string; phase: string; data?: AnyRecord }) => AnyRecord | Promise<AnyRecord>,
+              priority: hook.priority,
+            });
+          }
+        }
+      }
+
       await fastify.register(async (instance) => {
         const typedInstance = instance as FastifyWithDecorators;
 
@@ -402,8 +468,9 @@ export class ResourceDefinition<TDoc = AnyRecord> {
           if (metadata && typedInstance.generateSchemas) {
             // Try to generate from model if available (Mongoose)
             const model = (self.adapter as { model?: Model<Document> }).model;
-            if (model && typeof (typedInstance as any).generateSchemas === 'function') {
-              schemas = (typedInstance as any).generateSchemas(model, self.schemaOptions);
+            const instanceWithSchemas = typedInstance as FastifyWithDecorators & { generateSchemas?: (model: Model<Document>, options?: RouteSchemaOptions) => CrudSchemas };
+            if (model && typeof instanceWithSchemas.generateSchemas === 'function') {
+              schemas = instanceWithSchemas.generateSchemas(model, self.schemaOptions);
             }
           }
         }
@@ -435,10 +502,13 @@ export class ResourceDefinition<TDoc = AnyRecord> {
           organizationScoped: self.organizationScoped,
           resourceName: self.name,
           schemaOptions: self.schemaOptions,
+          rateLimit: self.rateLimit,
+          pipe: self.pipe,
+          fields: self.fields,
         });
 
         if (self.events && Object.keys(self.events).length > 0) {
-          typedInstance.log?.info?.(
+          typedInstance.log?.debug?.(
             `Resource '${self.name}' defined ${Object.keys(self.events).length} events`
           );
         }

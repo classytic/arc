@@ -30,11 +30,15 @@ export type HookHandler<T = AnyRecord> = (
 ) => void | Promise<void> | T | Promise<T>;
 
 export interface HookRegistration {
+  /** Hook name for dependency resolution and debugging */
+  name?: string;
   resource: string;
   operation: HookOperation;
   phase: HookPhase;
   handler: HookHandler;
   priority: number;
+  /** Names of hooks that must execute before this one */
+  dependsOn?: string[];
 }
 
 // ============================================================================
@@ -77,11 +81,13 @@ export class HookSystem {
    */
   register<T = AnyRecord>(
     resourceOrOptions: string | {
+      name?: string;
       resource: string;
       operation: HookOperation;
       phase: HookPhase;
       handler: HookHandler<T>;
       priority?: number;
+      dependsOn?: string[];
     },
     operation?: HookOperation,
     phase?: HookPhase,
@@ -89,19 +95,23 @@ export class HookSystem {
     priority = 10
   ): () => void {
     // Handle object parameter
+    let hookName: string | undefined;
     let resource: string;
     let finalOperation: HookOperation;
     let finalPhase: HookPhase;
     let finalHandler: HookHandler<T>;
     let finalPriority: number;
+    let dependsOn: string[] | undefined;
 
     if (typeof resourceOrOptions === 'object') {
-      // Object syntax: register({ resource, operation, phase, handler, priority })
+      // Object syntax: register({ name, resource, operation, phase, handler, priority, dependsOn })
+      hookName = resourceOrOptions.name;
       resource = resourceOrOptions.resource;
       finalOperation = resourceOrOptions.operation;
       finalPhase = resourceOrOptions.phase;
       finalHandler = resourceOrOptions.handler;
       finalPriority = resourceOrOptions.priority ?? 10;
+      dependsOn = resourceOrOptions.dependsOn;
     } else {
       // Positional syntax: register(resource, operation, phase, handler, priority)
       resource = resourceOrOptions;
@@ -118,17 +128,19 @@ export class HookSystem {
     }
 
     const registration: HookRegistration = {
+      name: hookName,
       resource,
       operation: finalOperation,
       phase: finalPhase,
       handler: finalHandler as HookHandler,
       priority: finalPriority,
+      dependsOn,
     };
 
     const hooks = this.hooks.get(key)!;
     hooks.push(registration);
 
-    // Sort by priority (lower runs first)
+    // Sort by priority (lower runs first) — topological sort done at execution time
     hooks.sort((a, b) => a.priority - b.priority);
 
     // Return unregister function
@@ -175,8 +187,13 @@ export class HookSystem {
     const wildcardKey = this.getKey('*', ctx.operation, ctx.phase);
     const wildcardHooks = this.hooks.get(wildcardKey) ?? [];
 
-    const allHooks = [...wildcardHooks, ...hooks];
+    let allHooks = [...wildcardHooks, ...hooks];
     allHooks.sort((a, b) => a.priority - b.priority);
+
+    // Apply topological sort if any hook has dependsOn
+    if (allHooks.some((h) => h.dependsOn?.length)) {
+      allHooks = this.topologicalSort(allHooks);
+    }
 
     let result: T | undefined = ctx.data as T | undefined;
 
@@ -261,6 +278,91 @@ export class HookSystem {
   }
 
   /**
+   * Topological sort with Kahn's algorithm.
+   * Hooks with `dependsOn` are ordered after their dependencies.
+   * Within the same dependency level, priority ordering is preserved.
+   * Hooks without names or dependencies pass through in their original order.
+   */
+  private topologicalSort(hooks: HookRegistration[]): HookRegistration[] {
+    // Build adjacency list and in-degree map
+    const byName = new Map<string, HookRegistration>();
+    const inDegree = new Map<HookRegistration, number>();
+    const dependents = new Map<string, HookRegistration[]>();
+
+    for (const hook of hooks) {
+      inDegree.set(hook, 0);
+      if (hook.name) {
+        byName.set(hook.name, hook);
+      }
+    }
+
+    for (const hook of hooks) {
+      if (hook.dependsOn) {
+        let resolvedDeps = 0;
+        for (const dep of hook.dependsOn) {
+          if (byName.has(dep)) {
+            resolvedDeps++;
+            if (!dependents.has(dep)) dependents.set(dep, []);
+            dependents.get(dep)!.push(hook);
+          }
+          // Unresolved deps are silently skipped (dependency may be in a different phase/resource)
+        }
+        inDegree.set(hook, resolvedDeps);
+      }
+    }
+
+    // Kahn's algorithm: start with hooks that have no dependencies
+    const queue: HookRegistration[] = [];
+    const result: HookRegistration[] = [];
+
+    for (const hook of hooks) {
+      if (inDegree.get(hook)! === 0) {
+        queue.push(hook);
+      }
+    }
+
+    // Sort queue by priority within each level
+    queue.sort((a, b) => a.priority - b.priority);
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      result.push(current);
+
+      if (current.name && dependents.has(current.name)) {
+        const deps = dependents.get(current.name)!;
+        for (const dep of deps) {
+          const newDegree = inDegree.get(dep)! - 1;
+          inDegree.set(dep, newDegree);
+          if (newDegree === 0) {
+            // Insert sorted by priority
+            const insertIdx = queue.findIndex((q) => q.priority > dep.priority);
+            if (insertIdx === -1) {
+              queue.push(dep);
+            } else {
+              queue.splice(insertIdx, 0, dep);
+            }
+          }
+        }
+      }
+    }
+
+    // Detect cycles: if result doesn't contain all hooks, there's a cycle
+    if (result.length < hooks.length) {
+      const missing = hooks.filter((h) => !result.includes(h));
+      const names = missing.map((h) => h.name ?? '<unnamed>').join(', ');
+      this.logger.error(
+        `[HookSystem] Circular dependency detected in hooks: ${names}. ` +
+        'These hooks will be appended in priority order.',
+      );
+      // Append cycled hooks in priority order (best effort)
+      missing.sort((a, b) => a.priority - b.priority);
+      result.push(...missing);
+    }
+
+    return result;
+  }
+
+  /**
    * Get all registered hooks
    */
   getAll(): HookRegistration[] {
@@ -326,79 +428,141 @@ export function createHookSystem(options?: HookSystemOptions): HookSystem {
 }
 
 // ============================================================================
-// Singleton Instance (for backward compatibility)
+// defineHook — Declarative hook with name + dependency support
 // ============================================================================
 
-export const hookSystem = new HookSystem();
+export interface DefineHookOptions<T = AnyRecord> {
+  /** Unique hook name (required for dependency resolution) */
+  name: string;
+  /** Target resource */
+  resource: string;
+  /** CRUD operation */
+  operation: HookOperation;
+  /** before or after */
+  phase: HookPhase;
+  /** Hook handler */
+  handler: HookHandler<T>;
+  /** Priority (lower = earlier, default: 10) */
+  priority?: number;
+  /** Names of hooks that must execute before this one */
+  dependsOn?: string[];
+}
+
+/**
+ * Define a named hook with optional dependencies.
+ * Returns a registration object — call `register(hookSystem)` to activate.
+ *
+ * @example
+ * ```typescript
+ * const generateSlug = defineHook({
+ *   name: 'generateSlug',
+ *   resource: 'product', operation: 'create', phase: 'before',
+ *   handler: (ctx) => ({ ...ctx.data, slug: slugify(ctx.data.name) }),
+ * });
+ *
+ * const validateUniqueSlug = defineHook({
+ *   name: 'validateUniqueSlug',
+ *   resource: 'product', operation: 'create', phase: 'before',
+ *   dependsOn: ['generateSlug'],
+ *   handler: async (ctx) => { // check uniqueness },
+ * });
+ *
+ * // Register on a hook system
+ * generateSlug.register(hooks);
+ * validateUniqueSlug.register(hooks);
+ * ```
+ */
+export function defineHook<T = AnyRecord>(
+  options: DefineHookOptions<T>,
+): DefineHookOptions<T> & { register: (hooks: HookSystem) => () => void } {
+  return {
+    ...options,
+    register(hooks: HookSystem): () => void {
+      return hooks.register({
+        name: options.name,
+        resource: options.resource,
+        operation: options.operation,
+        phase: options.phase,
+        handler: options.handler,
+        priority: options.priority,
+        dependsOn: options.dependsOn,
+      });
+    },
+  };
+}
 
 // ============================================================================
-// Convenience Functions
+// Convenience Functions (operate on a provided HookSystem instance)
 // ============================================================================
 
 /**
- * Register a before create hook
+ * Create a before-create hook registration for a given hook system
  */
 export function beforeCreate<T = AnyRecord>(
+  hooks: HookSystem,
   resource: string,
   handler: HookHandler<T>,
   priority = 10
 ): () => void {
-  return hookSystem.before(resource, 'create', handler, priority);
+  return hooks.before(resource, 'create', handler, priority);
 }
 
 /**
- * Register an after create hook
+ * Create an after-create hook registration for a given hook system
  */
 export function afterCreate<T = AnyRecord>(
+  hooks: HookSystem,
   resource: string,
   handler: HookHandler<T>,
   priority = 10
 ): () => void {
-  return hookSystem.after(resource, 'create', handler, priority);
+  return hooks.after(resource, 'create', handler, priority);
 }
 
 /**
- * Register a before update hook
+ * Create a before-update hook registration for a given hook system
  */
 export function beforeUpdate<T = AnyRecord>(
+  hooks: HookSystem,
   resource: string,
   handler: HookHandler<T>,
   priority = 10
 ): () => void {
-  return hookSystem.before(resource, 'update', handler, priority);
+  return hooks.before(resource, 'update', handler, priority);
 }
 
 /**
- * Register an after update hook
+ * Create an after-update hook registration for a given hook system
  */
 export function afterUpdate<T = AnyRecord>(
+  hooks: HookSystem,
   resource: string,
   handler: HookHandler<T>,
   priority = 10
 ): () => void {
-  return hookSystem.after(resource, 'update', handler, priority);
+  return hooks.after(resource, 'update', handler, priority);
 }
 
 /**
- * Register a before delete hook
+ * Create a before-delete hook registration for a given hook system
  */
 export function beforeDelete<T = AnyRecord>(
+  hooks: HookSystem,
   resource: string,
   handler: HookHandler<T>,
   priority = 10
 ): () => void {
-  return hookSystem.before(resource, 'delete', handler, priority);
+  return hooks.before(resource, 'delete', handler, priority);
 }
 
 /**
- * Register an after delete hook
+ * Create an after-delete hook registration for a given hook system
  */
 export function afterDelete<T = AnyRecord>(
+  hooks: HookSystem,
   resource: string,
   handler: HookHandler<T>,
   priority = 10
 ): () => void {
-  return hookSystem.after(resource, 'delete', handler, priority);
+  return hooks.after(resource, 'delete', handler, priority);
 }
-
-export default hookSystem;
