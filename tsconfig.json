@@ -1,10 +1,10 @@
 {
   "compilerOptions": {
-    "target": "ES2022",
+    "target": "ES2023",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "moduleDetection": "force", // Force ES modules detection
-    "lib": ["ES2022"],
+    "lib": ["ES2023"],
     "outDir": "./dist",
     "rootDir": "./src",
 
@@ -20,6 +20,7 @@
     "verbatimModuleSyntax": true, // Better tree-shaking (TS 5.0+)
     "resolveJsonModule": true,
     "isolatedModules": true,
+    "erasableSyntaxOnly": true, // Compatible with Node.js native TS execution
 
     // Emit options
     "declaration": true,

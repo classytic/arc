@@ -1,149 +1,154 @@
-import { defineConfig } from 'tsdown';
-import { readFileSync } from 'node:fs';
+import { defineConfig } from "tsdown";
+import { readFileSync } from "node:fs";
 
-const { version } = JSON.parse(readFileSync('./package.json', 'utf-8'));
+const { version } = JSON.parse(readFileSync("./package.json", "utf-8"));
 
 export default defineConfig({
   entry: [
     // Core
-    'src/index.ts',
-    'src/core/index.ts',
-    'src/types/index.ts',
-    'src/adapters/index.ts',
-    'src/permissions/index.ts',
-    'src/presets/index.ts',
-    'src/presets/multiTenant.ts',
+    "src/index.ts",
+    "src/core/index.ts",
+    "src/types/index.ts",
+    "src/adapters/index.ts",
+    "src/permissions/index.ts",
+    "src/cache/index.ts",
+    "src/presets/index.ts",
+    "src/presets/multiTenant.ts",
+
+    // Scope
+    "src/scope/index.ts",
 
     // Auth & Org
-    'src/auth/index.ts',
-    'src/org/index.ts',
-    'src/org/types.ts',
+    "src/auth/index.ts",
+    "src/org/index.ts",
+    "src/org/types.ts",
 
     // Hooks, Registry, Utils
-    'src/hooks/index.ts',
-    'src/registry/index.ts',
-    'src/utils/index.ts',
+    "src/hooks/index.ts",
+    "src/registry/index.ts",
+    "src/utils/index.ts",
 
     // Factory
-    'src/factory/index.ts',
+    "src/factory/index.ts",
 
     // Auth — dedicated Redis session store subpath
-    'src/auth/redis-session.ts',
+    "src/auth/redis-session.ts",
 
     // Plugins — barrel + dedicated heavy-dep subpaths
-    'src/plugins/index.ts',
-    'src/plugins/tracing-entry.ts',
-    'src/plugins/response-cache.ts',
+    "src/plugins/index.ts",
+    "src/plugins/tracing-entry.ts",
+    "src/plugins/response-cache.ts",
 
     // Events — barrel (memory-only) + dedicated transport subpaths
-    'src/events/index.ts',
-    'src/events/transports/redis.ts',
-    'src/events/transports/redis-stream-entry.ts',
+    "src/events/index.ts",
+    "src/events/transports/redis.ts",
+    "src/events/transports/redis-stream-entry.ts",
 
     // Audit — barrel (memory-only) + dedicated MongoDB subpath
-    'src/audit/index.ts',
-    'src/audit/mongodb.ts',
+    "src/audit/index.ts",
+    "src/audit/mongodb.ts",
 
     // Idempotency — barrel (memory-only) + dedicated Redis/MongoDB subpaths
-    'src/idempotency/index.ts',
-    'src/idempotency/redis.ts',
-    'src/idempotency/mongodb.ts',
+    "src/idempotency/index.ts",
+    "src/idempotency/redis.ts",
+    "src/idempotency/mongodb.ts",
 
     // Docs
-    'src/docs/index.ts',
+    "src/docs/index.ts",
 
     // Testing
-    'src/testing/index.ts',
+    "src/testing/index.ts",
 
     // Policies
-    'src/policies/index.ts',
+    "src/policies/index.ts",
 
     // Schemas (TypeBox)
-    'src/schemas/index.ts',
+    "src/schemas/index.ts",
 
     // Migrations
-    'src/migrations/index.ts',
+    "src/migrations/index.ts",
 
     // CLI
-    'src/cli/index.ts',
-    'src/cli/commands/describe.ts',
-    'src/cli/commands/docs.ts',
-    'src/cli/commands/generate.ts',
-    'src/cli/commands/introspect.ts',
-    'src/cli/commands/init.ts',
+    "src/cli/index.ts",
+    "src/cli/commands/describe.ts",
+    "src/cli/commands/docs.ts",
+    "src/cli/commands/generate.ts",
+    "src/cli/commands/introspect.ts",
+    "src/cli/commands/init.ts",
 
     // Integrations — each is opt-in, separate entry point
-    'src/integrations/index.ts',
-    'src/integrations/streamline.ts',
-    'src/integrations/websocket.ts',
-    'src/integrations/jobs.ts',
+    "src/integrations/index.ts",
+    "src/integrations/streamline.ts",
+    "src/integrations/websocket.ts",
+    "src/integrations/jobs.ts",
+    "src/integrations/event-gateway.ts",
 
     // Discovery — auto-discovery plugin
-    'src/discovery/index.ts',
+    "src/discovery/index.ts",
   ],
-  format: 'esm',
+  format: ["esm"],
   dts: true,
   sourcemap: true,
   clean: true,
-  splitting: true,
+
   treeshake: true,
-  target: 'node20',
-  outDir: 'dist',
+  target: "node22",
+  outDir: "dist",
   define: {
     __ARC_VERSION__: JSON.stringify(version),
   },
   external: [
     // Core
-    'fastify',
-    'fastify-plugin',
+    "fastify",
+    "fastify-plugin",
 
     // Database
-    'mongoose',
-    '@classytic/mongokit',
+    "mongoose",
+    "@classytic/mongokit",
 
     // Fastify plugins (all optional peer deps)
-    '@fastify/jwt',
-    '@fastify/cors',
-    '@fastify/helmet',
-    '@fastify/rate-limit',
-    '@fastify/compress',
-    '@fastify/type-provider-typebox',
-    '@fastify/under-pressure',
-    '@fastify/sensible',
-    '@fastify/multipart',
-    '@fastify/websocket',
-    'fastify-raw-body',
+    "@fastify/jwt",
+    "@fastify/cors",
+    "@fastify/helmet",
+    "@fastify/rate-limit",
+    "@fastify/compress",
+    "@fastify/type-provider-typebox",
+    "@fastify/under-pressure",
+    "@fastify/sensible",
+    "@fastify/multipart",
+    "@fastify/websocket",
+    "fastify-raw-body",
 
     // Schema
-    '@sinclair/typebox',
+    "@sinclair/typebox",
 
     // Auth
-    'better-auth',
+    "better-auth",
 
     // Redis
-    'ioredis',
+    "ioredis",
 
     // Observability
-    '@opentelemetry/api',
-    '@opentelemetry/sdk-node',
-    '@opentelemetry/exporter-trace-otlp-http',
-    '@opentelemetry/instrumentation-http',
-    '@opentelemetry/instrumentation-mongodb',
-    '@opentelemetry/auto-instrumentations-node',
-    'pino-pretty',
+    "@opentelemetry/api",
+    "@opentelemetry/sdk-node",
+    "@opentelemetry/exporter-trace-otlp-http",
+    "@opentelemetry/instrumentation-http",
+    "@opentelemetry/instrumentation-mongodb",
+    "@opentelemetry/auto-instrumentations-node",
+    "pino-pretty",
 
     // Job queue
-    'bullmq',
+    "bullmq",
 
     // Workflow
-    '@classytic/streamline',
+    "@classytic/streamline",
 
     // Testing (dev only)
-    'vitest',
-    'mongodb-memory-server',
-    'mongodb-memory-server-core',
+    "vitest",
+    "mongodb-memory-server",
+    "mongodb-memory-server-core",
 
     // Serverless
-    '@fastify/aws-lambda',
+    "@fastify/aws-lambda",
   ],
 });

@@ -19,7 +19,7 @@ describe('API Tests', () => {
 
   beforeAll(async () => {
     testApp = await createTestApp({
-      auth: { jwt: { secret: 'test-secret-32-chars-minimum-len' } },
+      auth: { type: 'jwt', jwt: { secret: 'test-secret-32-chars-minimum-len' } },
       // All security plugins disabled by default in testing preset
     });
 
@@ -58,7 +58,7 @@ describe('API Tests', () => {
 
 ```typescript
 const testApp = await createTestApp({
-  auth: { jwt: { secret: 'test-secret-32-chars-minimum-len' } },
+  auth: { type: 'jwt', jwt: { secret: 'test-secret-32-chars-minimum-len' } },
   useInMemoryDb: false,
   mongoUri: 'mongodb://localhost:27017/test-db',
 });
@@ -72,7 +72,7 @@ Full lifecycle test helper — setup, fixtures, assertions, teardown:
 import { TestHarness } from '@classytic/arc/testing';
 
 const harness = new TestHarness({
-  auth: { jwt: { secret: 'test-secret-32-chars-minimum-len' } },
+  auth: { type: 'jwt', jwt: { secret: 'test-secret-32-chars-minimum-len' } },
 });
 
 describe('Product API', () => {

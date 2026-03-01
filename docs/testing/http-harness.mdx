@@ -1,0 +1,219 @@
+# HTTP Test Harness
+
+Auto-generates HTTP-level CRUD tests for Arc resources using Fastify's `app.inject()`. Tests the full request lifecycle: routing, authentication, permissions, pipeline, field permissions, and the Arc response envelope.
+
+## Setup
+
+```typescript
+import {
+  createHttpTestHarness,
+  createBetterAuthProvider,
+  createJwtAuthProvider,
+} from '@classytic/arc/testing';
+```
+
+## Auth Providers
+
+The harness uses an `AuthProvider` to generate request headers. Choose based on your auth type:
+
+### Better Auth
+
+```typescript
+const auth = createBetterAuthProvider({
+  tokens: {
+    admin: ctx.users.admin.token,
+    member: ctx.users.member.token,
+    viewer: ctx.users.viewer.token,
+  },
+  orgId: ctx.orgId,
+  adminRole: 'admin',
+});
+```
+
+### JWT
+
+```typescript
+const auth = createJwtAuthProvider({
+  app,
+  users: {
+    admin: { payload: { id: '1', roles: ['admin'] }, organizationId: 'org1' },
+    viewer: { payload: { id: '2', roles: ['viewer'] } },
+  },
+  adminRole: 'admin',
+});
+```
+
+### Custom
+
+Implement the `AuthProvider` interface:
+
+```typescript
+interface AuthProvider {
+  getHeaders(role: string): Record<string, string>;
+  availableRoles: string[];
+  adminRole: string;
+}
+```
+
+## Creating the Harness
+
+### Eager (app available at module level)
+
+```typescript
+const harness = createHttpTestHarness(productResource, {
+  app,
+  fixtures: {
+    valid: { name: 'Test Product', price: 100 },
+    update: { name: 'Updated Product' },
+    invalid: {},
+  },
+  auth,
+});
+```
+
+### Deferred (app from async setup)
+
+When `app` comes from `beforeAll()`, pass a getter function. The harness resolves it lazily inside `it()` callbacks:
+
+```typescript
+let ctx;
+beforeAll(async () => { ctx = await setupTestOrg(); }, 60_000);
+afterAll(async () => { await teardownTestOrg(ctx); });
+
+const harness = createHttpTestHarness(productResource, () => ({
+  app: ctx.app,
+  fixtures: {
+    valid: { name: 'Test Product', price: 100 },
+    update: { name: 'Updated Product' },
+  },
+  auth: createBetterAuthProvider({
+    tokens: { admin: ctx.users.admin.token },
+    orgId: ctx.orgId,
+    adminRole: 'admin',
+  }),
+}));
+```
+
+## Running Tests
+
+```typescript
+// All suites (recommended)
+harness.runAll();
+
+// Individual suites
+harness.runCrud();
+harness.runPermissions();
+harness.runValidation();
+```
+
+## Generated Tests
+
+### `runCrud()`
+
+Tests each enabled CRUD operation via HTTP. Automatically reads `resource.prefix`, `resource.disabledRoutes`, and `resource.updateMethod` to determine which routes exist.
+
+| Test | Method | Assertion |
+|------|--------|-----------|
+| POST create | `POST /api/{prefix}` | `< 300`, `success: true`, `data._id` exists |
+| GET list | `GET /api/{prefix}` | `200`, `success: true`, array response (`data` or `docs`) |
+| GET by ID | `GET /api/{prefix}/:id` | `200`, `success: true`, matching `_id` |
+| GET 404 | `GET /api/{prefix}/:fakeId` | `404`, `success: false` |
+| PATCH/PUT update | `PATCH /api/{prefix}/:id` | `200`, `success: true` |
+| PATCH/PUT 404 | `PATCH /api/{prefix}/:fakeId` | `404` |
+| DELETE | `DELETE /api/{prefix}/:id` | `200`, then verify `GET` returns 404 |
+| DELETE 404 | `DELETE /api/{prefix}/:fakeId` | `404` |
+
+### `runPermissions()`
+
+Tests authentication enforcement for each enabled route:
+
+| Test | Assertion |
+|------|-----------|
+| Each CRUD operation without auth | `401` |
+| Admin list access | `< 400` |
+| Admin create access | `< 400` (with cleanup) |
+
+### `runValidation()`
+
+Tests that invalid payloads are rejected:
+
+| Test | Assertion |
+|------|-----------|
+| POST with `fixtures.invalid` | `>= 400`, `success: false` |
+
+## Options Reference
+
+```typescript
+interface HttpTestHarnessOptions<T> {
+  app: FastifyInstance;       // Fastify app (must be ready)
+  fixtures: {
+    valid: Partial<T>;        // Valid create payload
+    update?: Partial<T>;      // Update payload (defaults to valid)
+    invalid?: Partial<T>;     // Should trigger validation error
+  };
+  auth: AuthProvider;         // Auth header generator
+  apiPrefix?: string;         // Default: '/api'
+}
+```
+
+## Resource Auto-Detection
+
+The harness reads resource configuration to adapt its tests:
+
+| Field | Effect |
+|-------|--------|
+| `prefix` | Base URL (e.g. `/jobs` → `GET /api/jobs`) |
+| `disabledRoutes` | Skips tests for disabled operations |
+| `disableDefaultRoutes` | Skips all CRUD tests |
+| `updateMethod` | Uses `PUT` or `PATCH` (default: `PATCH`) |
+| `displayName` | Used in `describe()` block names |
+
+## Example: Full Test File
+
+```typescript
+import { beforeAll, afterAll } from 'vitest';
+import {
+  createHttpTestHarness,
+  createBetterAuthProvider,
+} from '@classytic/arc/testing';
+import { setupTestOrg, teardownTestOrg, type TestContext } from './helpers/setup.js';
+import jobResource from '../src/resources/job/job.resource.js';
+
+let ctx: TestContext;
+beforeAll(async () => { ctx = await setupTestOrg(); }, 60_000);
+afterAll(async () => { await teardownTestOrg(ctx); });
+
+// Auto-generate CRUD + permission + validation tests
+createHttpTestHarness(jobResource, () => ({
+  app: ctx.app,
+  fixtures: {
+    valid: { title: 'Test Job', description: 'Auto-generated' },
+    update: { title: 'Updated Job' },
+    invalid: {},
+  },
+  auth: createBetterAuthProvider({
+    tokens: {
+      admin: ctx.users.admin.token,
+      dm: ctx.users.dm.token,
+      recruiter: ctx.users.recruiter.token,
+    },
+    orgId: ctx.orgId,
+    adminRole: 'admin',
+  }),
+})).runAll();
+```
+
+## vs TestHarness (Model-Level)
+
+| Feature | HttpTestHarness | TestHarness |
+|---------|----------------|-------------|
+| Tests HTTP routes | Yes | No |
+| Tests auth/permissions | Yes | No |
+| Tests pipeline guards | Yes | No |
+| Tests response envelope | Yes | No |
+| Tests field permissions | via HTTP | Pure function |
+| Tests schema validation | Yes (model-level) | Yes |
+| Tests presets | No | Yes |
+| Requires running app | Yes | No (model only) |
+
+**Recommendation**: Use `HttpTestHarness` for integration tests. Use `TestHarness` or `createConfigTestSuite()` for unit-testing field permissions, pipeline config, and event definitions without a running app.

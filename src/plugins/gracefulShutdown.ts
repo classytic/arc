@@ -12,12 +12,18 @@
  * @example
  * import { gracefulShutdownPlugin } from '@classytic/arc';
  *
+ * // Production
  * await fastify.register(gracefulShutdownPlugin, {
  *   timeout: 30000, // 30 seconds max
  *   onShutdown: async () => {
  *     await mongoose.disconnect();
  *     await redis.quit();
  *   },
+ * });
+ *
+ * // Tests — prevent process.exit from killing the runner
+ * await fastify.register(gracefulShutdownPlugin, {
+ *   onForceExit: () => {},
  * });
  */
 
@@ -33,6 +39,16 @@ export interface GracefulShutdownOptions {
   signals?: NodeJS.Signals[];
   /** Whether to log shutdown events (default: true) */
   logEvents?: boolean;
+  /**
+   * Called when shutdown times out or encounters an error.
+   * Defaults to `process.exit(1)` — appropriate for production but dangerous in:
+   * - **Tests**: kills the test runner. Pass `() => {}` or `() => { throw … }`.
+   * - **Shared runtimes** (e.g., serverless): may kill unrelated handlers.
+   *
+   * @param reason - `'timeout'` if shutdown exceeded `timeout` ms,
+   *                 `'error'` if `onShutdown` or `fastify.close()` threw.
+   */
+  onForceExit?: (reason: 'timeout' | 'error') => void;
 }
 
 const gracefulShutdownPlugin: FastifyPluginAsync<GracefulShutdownOptions> = async (
@@ -44,6 +60,7 @@ const gracefulShutdownPlugin: FastifyPluginAsync<GracefulShutdownOptions> = asyn
     onShutdown,
     signals = ['SIGTERM', 'SIGINT'],
     logEvents = true,
+    onForceExit = () => process.exit(1),
   } = opts;
 
   let isShuttingDown = false;
@@ -70,7 +87,7 @@ const gracefulShutdownPlugin: FastifyPluginAsync<GracefulShutdownOptions> = asyn
       if (logEvents) {
         fastify.log?.error?.('Graceful shutdown timeout exceeded, forcing exit');
       }
-      process.exit(1);
+      onForceExit('timeout');
     }, timeout);
 
     // Don't keep the process alive just for this timer
@@ -103,7 +120,7 @@ const gracefulShutdownPlugin: FastifyPluginAsync<GracefulShutdownOptions> = asyn
         fastify.log?.error?.({ error: (err as Error).message }, 'Error during shutdown');
       }
       clearTimeout(forceExitTimer);
-      process.exit(1);
+      onForceExit('error');
     }
   };
 

@@ -68,7 +68,7 @@ describe('Query Operators E2E', () => {
 
     app = await createApp({
       preset: 'development',
-      auth: { jwt: { secret: 'test-jwt-secret-must-be-at-least-32-chars-long' } },
+      auth: { type: 'jwt', jwt: { secret: 'test-jwt-secret-must-be-at-least-32-chars-long' } },
       logger: false,
       helmet: false,
       rateLimit: false,

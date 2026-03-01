@@ -43,6 +43,8 @@ export interface RequestStore {
   organizationId?: string;
   /** Active team ID (team-scoped resources) */
   teamId?: string;
+  /** Current resource name (set by arcDecorator in CRUD routes) */
+  resourceName?: string;
   /** Request start time (for timing) */
   startTime: number;
   /** Additional context — extensible by app */

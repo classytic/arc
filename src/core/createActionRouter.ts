@@ -42,7 +42,7 @@
  */
 
 import type { FastifyInstance, FastifyRequest, FastifyReply, RouteOptions } from 'fastify';
-import type { RequestWithExtras, PermissionCheck, PermissionContext, PermissionResult } from '../types/index.js';
+import type { RequestWithExtras, PermissionCheck, PermissionContext, PermissionResult, UserBase } from '../types/index.js';
 
 /**
  * Action handler function
@@ -211,14 +211,19 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
   // Build preHandlers
   const preHandler = [];
 
-  // Add authentication if any action permission requires it (not public)
-  const allPermissions = Object.values(actionPermissions);
-  const needsAuth = allPermissions.some(
-    (p) => !(p as PermissionCheck & { _isPublic?: boolean })?._isPublic
-  ) || (globalAuth && !(globalAuth as PermissionCheck & { _isPublic?: boolean })?._isPublic);
+  // Determine which actions require authentication
+  const hasPublicActions = Object.entries(actionPermissions).some(
+    ([, p]) => (p as PermissionCheck)?._isPublic
+  ) || (globalAuth && (globalAuth as PermissionCheck)?._isPublic);
+  const hasProtectedActions = Object.entries(actionPermissions).some(
+    ([, p]) => !(p as PermissionCheck)?._isPublic
+  ) || (globalAuth && !(globalAuth as PermissionCheck)?._isPublic);
 
-  if (needsAuth && (fastify as any).authenticate) {
-    preHandler.push((fastify as any).authenticate);
+  // If ALL actions are protected, use global auth preHandler.
+  // If mixed (some public, some protected), defer auth to per-action check
+  // to avoid rejecting unauthenticated requests for public actions.
+  if (hasProtectedActions && !hasPublicActions && fastify.authenticate) {
+    preHandler.push(fastify.authenticate);
   }
 
   // Register the unified action endpoint
@@ -249,18 +254,51 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
       // Check permissions: action-specific first, then fallback to globalAuth
       const permissionCheck = actionPermissions[action] ?? globalAuth;
 
+      // If mixed public/protected actions, authenticate per-action for protected ones
+      if (hasPublicActions && hasProtectedActions && permissionCheck) {
+        const isPublicAction = (permissionCheck as PermissionCheck)?._isPublic;
+        if (!isPublicAction && fastify.authenticate) {
+          try {
+            await fastify.authenticate(req, reply);
+          } catch {
+            // Avoid double-send: authenticate may have already sent a 401
+            if (!reply.sent) {
+              return reply.code(401).send({
+                success: false,
+                error: 'Authentication required',
+              });
+            }
+            return;
+          }
+          // authenticate may send reply without throwing (some implementations)
+          if (reply.sent) return;
+        }
+      }
+
       if (permissionCheck) {
         const reqWithExtras = req as RequestWithExtras;
         const context: PermissionContext = {
-          user: (reqWithExtras.user as any) ?? null,
+          user: (reqWithExtras.user as UserBase | null) ?? null,
           request: req,
           resource: tag ?? 'action',
           action,
           resourceId: id,
+          params: req.params as Record<string, string> | undefined,
           data,
         };
 
-        const result = await permissionCheck(context);
+        // Wrap in try/catch so authz bugs don't produce 500s
+        // (consistent with CRUD router's buildPermissionMiddleware)
+        let result: boolean | PermissionResult;
+        try {
+          result = await permissionCheck(context);
+        } catch (err) {
+          req.log?.warn?.({ err, resource: tag ?? 'action', action }, 'Permission check threw');
+          return reply.code(403).send({
+            success: false,
+            error: 'Permission denied',
+          });
+        }
 
         if (typeof result === 'boolean') {
           if (!result) {
@@ -283,22 +321,24 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
       try {
         // Idempotency check (optional)
         if (idempotencyKey && idempotencyService) {
-          const user = (req as RequestWithExtras).user as any;
+          const user = (req as RequestWithExtras).user as UserBase | undefined;
           const payloadForHash = {
             action,
             id,
             data,
-            userId: user?._id?.toString?.() || user?.id || null,
+            userId: (user?._id as string | undefined)?.toString?.() || user?.id || null,
           };
 
-          const { isNew, existingResult } = await idempotencyService.check(
+          const idempotencyResult = await idempotencyService.check(
             idempotencyKey,
             payloadForHash
           );
-          if (!isNew && existingResult) {
+          // Use 'in' to check presence, not truthiness — existingResult may be
+          // a valid falsy value (0, false, '', null) from a previous execution.
+          if (!idempotencyResult.isNew && 'existingResult' in idempotencyResult) {
             return reply.send({
               success: true,
-              data: existingResult,
+              data: idempotencyResult.existingResult,
               cached: true,
             });
           }
@@ -331,9 +371,9 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
         }
 
         // Default error handling
-        const err = error as any;
-        const statusCode = err.statusCode || err.status || 500;
-        const errorCode = err.code || 'ACTION_FAILED';
+        const err = error as Record<string, unknown>;
+        const statusCode = (err.statusCode as number) || (err.status as number) || 500;
+        const errorCode = (err.code as string) || 'ACTION_FAILED';
 
         if (statusCode >= 500) {
           req.log.error({ err: error, action, id }, 'Action handler error');
@@ -366,7 +406,7 @@ function buildActionDescription(
 
   Object.keys(actions).forEach((action) => {
     const perm = actionPermissions[action];
-    const roles = (perm as PermissionCheck & { _roles?: readonly string[] })?._roles;
+    const roles = (perm as PermissionCheck)?._roles;
     const roleStr = roles?.length ? ` (requires: ${roles.join(' or ')})` : '';
     lines.push(`- \`${action}\`${roleStr}`);
   });

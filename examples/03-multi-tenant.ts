@@ -106,7 +106,7 @@ class InvoiceRepository extends Repository<typeof Invoice> {
    * Note: organizationId filter is automatically applied by middleware
    */
   async getByStatus(status: string, orgFilters?: Record<string, unknown>) {
-    return this.model.find({
+    return this.Model.find({
       status,
       deletedAt: null,
       ...orgFilters,
@@ -117,7 +117,7 @@ class InvoiceRepository extends Repository<typeof Invoice> {
    * Get overdue invoices
    */
   async getOverdue(orgFilters?: Record<string, unknown>) {
-    return this.model.find({
+    return this.Model.find({
       status: { $in: ['sent', 'overdue'] },
       dueDate: { $lt: new Date() },
       deletedAt: null,
@@ -129,7 +129,7 @@ class InvoiceRepository extends Repository<typeof Invoice> {
    * Calculate total revenue for organization
    */
   async getTotalRevenue(orgFilters?: Record<string, unknown>) {
-    const result = await this.model.aggregate([
+    const result = await this.Model.aggregate([
       {
         $match: {
           status: 'paid',
@@ -178,9 +178,6 @@ export const invoiceResource = defineResource({
     'multiTenant', // Auto-filter by organizationId
     'softDelete',  // Soft delete support
   ],
-
-  // Enable organization scoping on all routes
-  organizationScoped: true,
 
   // Permission configuration
   // Members can view, admins can modify
@@ -257,7 +254,7 @@ export const invoiceResource = defineResource({
 /*
 // In your main application:
 
-import { createApp } from '@classytic/arc';
+import { createApp } from '@classytic/arc/factory';
 import mongoose from 'mongoose';
 import { invoiceResource } from './modules/finance/invoice.resource';
 

@@ -5,6 +5,7 @@
  * Uses instance-scoped HookSystem (no global singleton).
  */
 
+import mongoose from 'mongoose';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { BaseController } from '../../src/core/BaseController.js';
 import { HookSystem } from '../../src/hooks/HookSystem.js';
@@ -294,7 +295,7 @@ describe('BaseController', () => {
   });
 
   describe('Error Handling', () => {
-    it('should propagate errors from beforeCreate hooks', async () => {
+    it('should return error response from beforeCreate hook failures', async () => {
       hooks.before('product', 'create', async () => {
         throw new Error('Validation failed');
       });
@@ -303,7 +304,12 @@ describe('BaseController', () => {
         body: { name: 'Test', price: 100 },
       });
 
-      await expect(controller.create(req)).rejects.toThrow('Validation failed');
+      const result = await controller.create(req);
+      expect(result.success).toBe(false);
+      expect(result.status).toBe(400);
+      expect(result.error).toBe('Hook execution failed');
+      expect((result as any).details.code).toBe('BEFORE_CREATE_HOOK_ERROR');
+      expect((result as any).details.message).toBe('Validation failed');
     });
 
     it('should log but not fail on afterCreate hook errors', async () => {
@@ -325,6 +331,111 @@ describe('BaseController', () => {
       expect(consoleErrorSpy).toHaveBeenCalled();
 
       consoleErrorSpy.mockRestore();
+    });
+  });
+
+  // ========================================================================
+  // Field Permissions with Bypass Scope
+  //
+  // Tests that _sanitizeBody skips field-level write permissions for
+  // bypass-scoped users (e.g. superadmin). This mirrors how requireOrgRole()
+  // bypasses role checks for orgScope='bypass'.
+  //
+  // Bug scenario: superadmin user creates a job with assignedDeliveryManagers.
+  // Without bypass check, effectiveRoles=['superadmin'] doesn't match
+  // writableBy(['admin','delivery_manager']), so the field gets stripped.
+  // ========================================================================
+
+  describe('Field permissions with bypass-scoped users', () => {
+    const fieldPermissions = {
+      assignedDeliveryManagers: { _type: 'writableBy' as const, roles: ['admin', 'delivery_manager'] },
+      assignedRecruiters: { _type: 'writableBy' as const, roles: ['admin', 'delivery_manager', 'account_manager'] },
+    };
+
+    // Custom model with assignment fields (TestProduct doesn't have them)
+    let jobController: BaseController;
+    let jobRepository: any;
+    beforeEach(() => {
+      const modelName = 'TestJob_FieldPerm';
+      let JobModel: any;
+      if (mongoose.models[modelName]) {
+        JobModel = mongoose.models[modelName];
+      } else {
+        const schema = new mongoose.Schema({
+          name: String,
+          assignedDeliveryManagers: { type: [String], default: [] },
+          assignedRecruiters: { type: [String], default: [] },
+          createdBy: { type: mongoose.Schema.Types.ObjectId, required: false },
+          organizationId: { type: mongoose.Schema.Types.ObjectId, required: false },
+        }, { timestamps: true });
+        JobModel = mongoose.model(modelName, schema);
+      }
+      const { Repository } = require('@classytic/mongokit');
+      jobRepository = new Repository(JobModel);
+      jobController = new BaseController(jobRepository, { resourceName: 'job' });
+    });
+
+    it('should preserve writableBy fields for bypass-scoped users (superadmin)', async () => {
+      const req = createReq(hooks, {
+        body: {
+          name: 'React Dev',
+          assignedDeliveryManagers: ['user-id-1'],
+          assignedRecruiters: ['recruiter-id-1'],
+        },
+        user: { ...mockUser, roles: ['superadmin'] },
+        metadata: { arc: { hooks, fields: fieldPermissions }, _scope: { kind: 'elevated', elevatedBy: 'admin' } },
+      });
+
+      const response = await jobController.create(req);
+
+      expect(response.success).toBe(true);
+      expect(response.data).toMatchObject({
+        name: 'React Dev',
+        // Fields should NOT be stripped — bypass users skip field permissions
+        assignedDeliveryManagers: ['user-id-1'],
+        assignedRecruiters: ['recruiter-id-1'],
+      });
+    });
+
+    it('should strip writableBy fields for non-matching roles (member scope)', async () => {
+      const req = createReq(hooks, {
+        body: {
+          name: 'React Dev',
+          assignedDeliveryManagers: ['user-id-1'],
+          assignedRecruiters: ['recruiter-id-1'],
+        },
+        user: { ...mockUser, roles: ['user'] },
+        metadata: { arc: { hooks, fields: fieldPermissions }, _scope: { kind: 'member', organizationId: '507f1f77bcf86cd799439011', orgRoles: ['account_manager'] } },
+      });
+
+      const response = await jobController.create(req);
+
+      expect(response.success).toBe(true);
+      // account_manager can write assignedRecruiters but not assignedDeliveryManagers
+      expect(response.data).toMatchObject({
+        name: 'React Dev',
+        assignedRecruiters: ['recruiter-id-1'],
+      });
+      expect((response.data as any)?.assignedDeliveryManagers).toEqual([]);
+    });
+
+    it('should preserve writableBy fields for matching org roles (member scope)', async () => {
+      const req = createReq(hooks, {
+        body: {
+          name: 'React Dev',
+          assignedDeliveryManagers: ['dm-id'],
+        },
+        user: { ...mockUser, roles: ['user'] },
+        metadata: { arc: { hooks, fields: fieldPermissions }, _scope: { kind: 'member', organizationId: '507f1f77bcf86cd799439011', orgRoles: ['admin'] } },
+      });
+
+      const response = await jobController.create(req);
+
+      expect(response.success).toBe(true);
+      expect(response.data).toMatchObject({
+        name: 'React Dev',
+        assignedDeliveryManagers: ['dm-id'],
+      });
     });
   });
 });

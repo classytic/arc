@@ -16,20 +16,19 @@ describe('Security: Release Blockers', () => {
     it('FIXED: now returns 403 when orgId is null', async () => {
       const preset = multiTenantPreset({
         tenantField: 'organizationId',
-        bypassRoles: ['superadmin'],
       });
 
       const listMiddleware = preset.middlewares?.list?.[0];
       expect(listMiddleware).toBeDefined();
 
-      // Simulate authenticated user with no organizationId
+      // Simulate authenticated user with no organizationId (scope = authenticated, not member)
       const request = {
         user: {
           _id: 'user123',
           email: 'user@example.com',
-          roles: ['user'], // Not a bypass role
-          // organizationId is missing!
+          roles: ['user'],
         },
+        scope: { kind: 'authenticated' },
         query: {},
       } as unknown as RequestWithExtras;
 
@@ -67,13 +66,13 @@ describe('Security: Release Blockers', () => {
       const createMiddleware = preset.middlewares?.create?.[0];
       expect(createMiddleware).toBeDefined();
 
-      // Simulate authenticated user with no organizationId
+      // Simulate authenticated user with no organizationId (scope = authenticated, not member)
       const request = {
         user: {
           _id: 'user123',
           roles: ['user'],
-          // organizationId is missing!
         },
+        scope: { kind: 'authenticated' },
         body: {
           name: 'Sensitive Data',
           price: 1000,
@@ -108,7 +107,6 @@ describe('Security: Release Blockers', () => {
     it('correctly filters when orgId exists', async () => {
       const preset = multiTenantPreset({
         tenantField: 'organizationId',
-        bypassRoles: ['superadmin'],
       });
 
       const listMiddleware = preset.middlewares?.list?.[0];
@@ -117,8 +115,8 @@ describe('Security: Release Blockers', () => {
         user: {
           _id: 'user123',
           roles: ['user'],
-          organizationId: 'org-abc',
         },
+        scope: { kind: 'member', organizationId: 'org-abc', orgRoles: ['user'] },
         query: {},
       } as unknown as RequestWithExtras;
 
@@ -129,17 +127,16 @@ describe('Security: Release Blockers', () => {
 
       await listMiddleware!(request, reply);
 
-      // Should add tenant filter
-      expect((request.query as any)._policyFilters).toEqual({
+      // Should add tenant filter on trusted location (request._policyFilters)
+      expect((request as any)._policyFilters).toEqual({
         organizationId: 'org-abc',
       });
       expect(reply.code).not.toHaveBeenCalled();
     });
 
-    it('bypasses filtering for superadmin roles', async () => {
+    it('bypasses filtering for elevated scope', async () => {
       const preset = multiTenantPreset({
         tenantField: 'organizationId',
-        bypassRoles: ['superadmin'],
       });
 
       const listMiddleware = preset.middlewares?.list?.[0];
@@ -148,8 +145,8 @@ describe('Security: Release Blockers', () => {
         user: {
           _id: 'admin123',
           roles: ['superadmin'],
-          organizationId: 'org-abc',
         },
+        scope: { kind: 'elevated', elevatedBy: 'admin123' },
         query: {},
       } as unknown as RequestWithExtras;
 
@@ -160,8 +157,8 @@ describe('Security: Release Blockers', () => {
 
       await listMiddleware!(request, reply);
 
-      // Bypass roles should not add filters
-      expect((request.query as any)._policyFilters).toBeUndefined();
+      // Elevated scope without org should not add filters
+      expect((request as any)._policyFilters).toBeUndefined();
       expect(reply.code).not.toHaveBeenCalled();
     });
   });

@@ -24,6 +24,7 @@ export function treePreset(options: TreeOptions = {}): PresetResult {
         summary: 'Get hierarchical tree',
         permissions: permissions.list ?? allowPublic(),
         wrapHandler: true,
+        operation: 'getTree',
       },
       {
         method: 'GET',
@@ -32,6 +33,7 @@ export function treePreset(options: TreeOptions = {}): PresetResult {
         summary: 'Get children of parent',
         permissions: permissions.list ?? allowPublic(),
         wrapHandler: true,
+        operation: 'getChildren',
       },
     ],
     // Pass to controller so it knows which param to read

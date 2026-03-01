@@ -10,6 +10,40 @@
 
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import type { UserBase } from '../permissions/types.js';
+import type { RequestContext } from './index.js';
+
+/**
+ * Minimal server accessor — exposes safe, read-only server decorators.
+ * Allows controller handlers to publish events, log, and audit
+ * without switching to `wrapHandler: false`.
+ */
+export interface ServerAccessor {
+  /** Event bus — publish domain events from any handler */
+  events?: {
+    publish: <T>(type: string, payload: T, meta?: Partial<Record<string, unknown>>) => Promise<void>;
+  };
+  /** Audit logger — log custom audit entries */
+  audit?: {
+    create: (resource: string, documentId: string, data: Record<string, unknown>, context?: Record<string, unknown>) => Promise<void>;
+    update: (resource: string, documentId: string, before: Record<string, unknown>, after: Record<string, unknown>, context?: Record<string, unknown>) => Promise<void>;
+    delete: (resource: string, documentId: string, data: Record<string, unknown>, context?: Record<string, unknown>) => Promise<void>;
+    custom: (resource: string, documentId: string, action: string, data?: Record<string, unknown>, context?: Record<string, unknown>) => Promise<void>;
+  };
+  /** Logger — structured logging */
+  log?: {
+    info: (...args: unknown[]) => void;
+    warn: (...args: unknown[]) => void;
+    error: (...args: unknown[]) => void;
+    debug: (...args: unknown[]) => void;
+  };
+  /** QueryCache — stale-while-revalidate data cache */
+  queryCache?: {
+    get: <T>(key: string) => Promise<{ data: T; status: 'fresh' | 'stale' | 'miss' }>;
+    set: <T>(key: string, data: T, config: { staleTime?: number; gcTime?: number; tags?: string[] }) => Promise<void>;
+    getResourceVersion: (resource: string) => Promise<number>;
+    bumpResourceVersion: (resource: string) => Promise<void>;
+  };
+}
 
 /**
  * Request context passed to controller handlers
@@ -29,8 +63,36 @@ export interface IRequestContext {
   organizationId?: string;
   /** Team ID (for team-scoped resources) */
   teamId?: string;
-  /** Additional metadata and custom fields */
+  /**
+   * Organization/auth context from middleware.
+   * Contains orgRoles, orgScope, organizationId, and any custom fields
+   * set by the auth adapter or org-scope plugin.
+   *
+   * @example
+   * ```typescript
+   * async create(req: IRequestContext) {
+   *   const roles = req.context?.orgRoles ?? [];
+   *   if (roles.includes('manager')) { ... }
+   * }
+   * ```
+   */
+  context?: RequestContext;
+  /** Internal metadata (includes context + Arc internals like _policyFilters, log) */
   metadata?: Record<string, unknown>;
+  /**
+   * Fastify server accessor — publish events, log, and audit
+   * from any handler without switching to `wrapHandler: false`.
+   *
+   * @example
+   * ```typescript
+   * async reschedule(req: IRequestContext) {
+   *   const result = await repo.reschedule(req.params.id, req.body);
+   *   await req.server?.events?.publish('interview.rescheduled', { data: result });
+   *   return { success: true, data: result };
+   * }
+   * ```
+   */
+  server?: ServerAccessor;
 }
 
 /**
@@ -49,6 +111,8 @@ export interface IControllerResponse<T = unknown> {
   meta?: Record<string, unknown>;
   /** Error details (for debugging) */
   details?: Record<string, unknown>;
+  /** Custom response headers (e.g., X-Total-Count, Link, ETag) */
+  headers?: Record<string, string>;
 }
 
 /**

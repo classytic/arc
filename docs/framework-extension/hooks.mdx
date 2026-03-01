@@ -1,0 +1,346 @@
+# Hooks Module
+
+Lifecycle hooks for intercepting CRUD operations.
+
+**Use for:** Internal domain logic, validation, data transformation
+**For external integrations:** Use [Events module](../production-ops/events)
+
+## Quick Start
+
+```typescript
+import { beforeCreate, afterCreate, afterUpdate } from '@classytic/arc/hooks';
+
+// Validate before creating
+beforeCreate('product', async (context) => {
+  const { data } = context;
+  if (data.price < 0) {
+    throw new Error('Price cannot be negative');
+  }
+});
+
+// Generate search index after creating
+afterCreate('product', async (context) => {
+  const { result } = context;
+  await generateSearchIndex(result);
+});
+
+// Sync inventory after update
+afterUpdate('product', async (context) => {
+  const { result, metadata } = context;
+  if (result.quantity !== undefined) {
+    await syncInventory(result._id);
+  }
+});
+```
+
+## Available Hooks
+
+| Hook | Phase | Description |
+|------|-------|-------------|
+| `beforeCreate` | before | Before item is created |
+| `afterCreate` | after | After item is created |
+| `beforeUpdate` | before | Before item is updated |
+| `afterUpdate` | after | After item is updated |
+| `beforeDelete` | before | Before item is deleted |
+| `afterDelete` | after | After item is deleted |
+| `hooks.around()` | around | Wraps the operation (middleware-style) |
+
+## Around Hooks
+
+Around hooks wrap the core operation, giving you control before and after execution:
+
+```typescript
+import { createHookSystem } from '@classytic/arc/hooks';
+
+const hooks = createHookSystem();
+
+// Timing wrapper
+hooks.around('product', 'create', async (ctx, next) => {
+  const start = Date.now();
+  const result = await next(); // Execute the actual operation
+  console.log(`product.create took ${Date.now() - start}ms`);
+  return result;
+});
+
+// Transaction wrapper
+hooks.around('order', 'create', async (ctx, next) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  try {
+    const result = await next();
+    await session.commitTransaction();
+    return result;
+  } catch (err) {
+    await session.abortTransaction();
+    throw err;
+  } finally {
+    session.endSession();
+  }
+});
+```
+
+**Execution order:** `before` hooks run first, then the `around` chain wraps the operation, then `after` hooks run on the result.
+
+Multiple around hooks are nested (outermost registered first):
+
+```
+around1 → around2 → actual operation → around2 return → around1 return
+```
+
+## Hook Context
+
+```typescript
+interface HookContext {
+  resource: string;          // Resource name (e.g., 'product')
+  operation: string;         // 'create' | 'update' | 'delete' | 'read' | 'list'
+  phase: string;             // 'before' | 'after' | 'around'
+  data?: unknown;            // Input data (before hooks)
+  result?: unknown;          // Output data (after hooks)
+  user?: UserBase;           // Authenticated user
+  metadata?: Record<string, unknown>; // Custom data, passed to controller
+  organizationId?: string;   // Multi-tenant org ID
+}
+```
+
+**Key Fields:**
+- `context.metadata` - Pass custom data to controllers via `req.metadata`
+- `context.user` - Authenticated user (from `req.user`)
+- `context.data` - Available in before hooks (modify before save)
+- `context.result` - Available in after hooks (read-only)
+
+## Passing Data to Controllers
+
+Use `metadata` to pass calculated data:
+
+```typescript
+// In hook
+beforeCreate('product', async (context) => {
+  const calculatedPrice = calculatePrice(context.data);
+
+  // Pass to controller via metadata
+  context.metadata = {
+    calculatedPrice,
+    taxRate: getTaxRate(context.organizationId),
+  };
+});
+
+// In controller
+async create(req: IRequestContext): Promise<IControllerResponse> {
+  const { calculatedPrice, taxRate } = req.metadata || {};
+
+  const product = await this.repository.create({
+    ...req.body,
+    price: calculatedPrice,
+    tax: calculatedPrice * taxRate,
+  });
+
+  return { success: true, data: product };
+}
+```
+
+## Hook System API
+
+For advanced usage:
+
+```typescript
+import { hookSystem } from '@classytic/arc/hooks';
+
+// Register hook
+const unsubscribe = hookSystem.register({
+  resource: 'product',
+  operation: 'create',
+  phase: 'after',
+  handler: async (context) => { /* ... */ },
+  priority: 5,  // Lower = runs first (default: 10)
+});
+
+// Unregister when done
+unsubscribe();
+
+// Manually execute hooks
+await hookSystem.executeBefore('product', 'create', data, { user, metadata });
+await hookSystem.executeAfter('product', 'create', result, { user, metadata });
+```
+
+## Execution Order
+
+1. Hooks run in priority order (lower priority = runs first)
+2. Same priority = registration order
+3. All hooks run (no short-circuit on error by default)
+4. Errors in `after` hooks are logged but don't fail the request
+5. Errors in `before` hooks fail the request
+
+## Use Cases
+
+### Validation
+
+```typescript
+beforeCreate('order', async ({ data, organizationId }) => {
+  const inventory = await checkInventory(data.items, organizationId);
+  if (!inventory.available) {
+    throw new Error('Items out of stock');
+  }
+});
+```
+
+### Data Transformation
+
+```typescript
+beforeCreate('product', async (context) => {
+  // Auto-generate slug
+  context.data.slug = slugify(context.data.name);
+
+  // Calculate fields
+  context.metadata = {
+    discountPrice: calculateDiscount(context.data.price),
+  };
+});
+```
+
+### Side Effects
+
+```typescript
+afterCreate('order', async ({ result, user }) => {
+  await sendOrderConfirmation(result.customer, result);
+  await reserveInventory(result.items);
+  await auditLog.create({
+    action: 'order.created',
+    userId: user?._id,
+    orderId: result._id,
+  });
+});
+```
+
+### Cache Invalidation
+
+```typescript
+afterUpdate('category', async ({ result }) => {
+  await cache.invalidate(`category:${result._id}`);
+  await cache.invalidate('category:tree');
+});
+```
+
+### Audit Logging
+
+```typescript
+afterUpdate('product', async ({ result, user, metadata }) => {
+  await auditLog.create({
+    action: 'product.updated',
+    resourceId: result._id,
+    updatedFields: metadata?.updatedFields || Object.keys(result),
+    userId: user?._id,
+    timestamp: new Date(),
+  });
+});
+```
+
+### Multi-step Workflows
+
+```typescript
+// Step 1: Validate
+beforeCreate('invoice', async (context) => {
+  const { organizationId, data } = context;
+  const balance = await checkBalance(organizationId);
+
+  if (balance < data.amount) {
+    throw new Error('Insufficient balance');
+  }
+
+  // Pass data to next hook
+  context.metadata = { balance, fee: calculateFee(data.amount) };
+});
+
+// Step 2: Transform
+beforeCreate('invoice', async (context) => {
+  const { fee } = context.metadata || {};
+
+  // Add calculated fee to data
+  context.data.fee = fee;
+  context.data.total = context.data.amount + fee;
+});
+
+// Step 3: Execute
+afterCreate('invoice', async ({ result, metadata }) => {
+  await deductBalance(result.organizationId, result.total);
+  await sendInvoiceEmail(result);
+});
+```
+
+## Accessing Request Context
+
+Hooks receive user and organization data:
+
+```typescript
+afterCreate('document', async (context) => {
+  const { result, user, organizationId, metadata } = context;
+
+  // Access user info
+  console.log('Created by:', user?.email);
+
+  // Access org context
+  console.log('Organization:', organizationId);
+
+  // Access custom data from controller
+  console.log('Custom data:', metadata);
+});
+```
+
+## Error Handling
+
+### Before Hooks
+
+Errors in `before` hooks fail the request:
+
+```typescript
+beforeCreate('product', async ({ data }) => {
+  if (!data.sku) {
+    throw new Error('SKU is required'); // Returns 400 to client
+  }
+});
+```
+
+### After Hooks
+
+Errors in `after` hooks are logged but don't fail the request:
+
+```typescript
+afterCreate('order', async ({ result }) => {
+  try {
+    await sendEmail(result.customer); // If this fails, order still created
+  } catch (error) {
+    console.error('Failed to send email:', error);
+    // Request succeeds, email failure is logged
+  }
+});
+```
+
+## Best Practices
+
+1. **Keep hooks focused** - One concern per hook
+2. **Use before hooks for validation** - Fail fast before saving
+3. **Use after hooks for side effects** - Email, audit, cache invalidation
+4. **Pass data via metadata** - Use for controller communication
+5. **Handle errors gracefully** - Especially in after hooks
+6. **Avoid long-running tasks** - Use event queues for async work
+7. **Test hooks independently** - Mock dependencies for unit tests
+
+## Hooks vs Events
+
+| Use Case | Use Hooks | Use Events |
+|----------|-----------|------------|
+| Validation | ✅ | ❌ |
+| Data transformation | ✅ | ❌ |
+| Audit logging | ✅ | ✅ |
+| Email notifications | ❌ | ✅ |
+| External API calls | ❌ | ✅ |
+| Cross-service communication | ❌ | ✅ |
+
+**Rule of thumb:**
+- **Hooks**: Internal domain logic (same codebase)
+- **Events**: External integrations (different services, async)
+
+## See Also
+
+- [Events Module](../production-ops/events) - Cross-service communication
+- [Core Module](../getting-started/core) - Request context and metadata
+- [Presets](../getting-started/presets) - Reusable hook combinations

@@ -1,0 +1,259 @@
+# Org Module
+
+Multi-tenant organization scoping for SaaS applications.
+
+## Quick Start
+
+```typescript
+import { createApp } from '@classytic/arc/factory';
+import { createBetterAuthAdapter } from '@classytic/arc/auth';
+import { defineResource } from '@classytic/arc';
+import { requireOrgMembership, requireOrgRole } from '@classytic/arc/permissions';
+
+const app = await createApp({
+  preset: 'production',
+  auth: {
+    type: 'betterAuth',
+    betterAuth: createBetterAuthAdapter({
+      auth: getAuth(),
+      orgContext: true, // Auto-resolve org membership into request.scope
+    }),
+  },
+});
+
+const orderResource = defineResource({
+  name: 'order',
+  presets: ['multiTenant'],
+  permissions: {
+    list: requireOrgMembership(),
+    create: requireOrgRole('admin', 'editor'),
+    delete: requireOrgRole('admin'),
+  },
+});
+
+await app.register(orderResource.toPlugin());
+```
+
+## Request Scope
+
+Every request has a `request.scope` field — a discriminated union that replaces scattered org context fields.
+
+```typescript
+import type { RequestScope } from '@classytic/arc/scope';
+
+type RequestScope =
+  | { kind: 'public' }                                          // No auth
+  | { kind: 'authenticated' }                                   // Logged in, no org
+  | { kind: 'member'; organizationId: string; orgRoles: string[]; teamId?: string }
+  | { kind: 'elevated'; organizationId?: string; elevatedBy: string }
+```
+
+| Kind | Meaning | When |
+|------|---------|------|
+| `public` | No authentication | Anonymous request |
+| `authenticated` | Logged in, no org context | No active org selected |
+| `member` | Org member with roles | User has valid org membership |
+| `elevated` | Platform admin override | Explicit elevation header sent |
+
+### Type Guards
+
+```typescript
+import { isMember, isElevated, getOrgId, getOrgRoles, hasOrgAccess } from '@classytic/arc/scope';
+
+// In a controller or permission check
+const scope = request.scope;
+
+if (isElevated(scope)) {
+  // Platform admin — full access
+}
+
+if (isMember(scope)) {
+  const orgId = scope.organizationId;
+  const roles = scope.orgRoles;
+}
+
+// Convenience: works for both member and elevated
+const orgId = getOrgId(scope);     // string | undefined
+const roles = getOrgRoles(scope);  // string[] (empty for non-member)
+```
+
+### Scope in Controllers
+
+Controllers receive scope via `req.metadata._scope`:
+
+```typescript
+import { getOrgId } from '@classytic/arc/scope';
+import { getControllerScope } from '@classytic/arc/core';
+
+class OrderController extends BaseController {
+  async getStats(req: IRequestContext): Promise<IControllerResponse> {
+    const scope = getControllerScope(req);
+
+    if (scope.kind !== 'member') {
+      return { success: false, error: 'Org membership required', status: 403 };
+    }
+
+    const stats = await Order.aggregate([
+      { $match: { organizationId: scope.organizationId } },
+      { $group: { _id: '$status', count: { $sum: 1 } } },
+    ]);
+
+    return { success: true, data: stats };
+  }
+}
+```
+
+## How Scope Gets Set
+
+### Better Auth Adapter
+
+When `orgContext: true`, the adapter:
+1. Resolves the user's session
+2. Looks up active organization membership
+3. Sets `request.scope` based on the result:
+
+```
+No session                   → { kind: 'public' }
+Session, no active org       → { kind: 'authenticated' }
+Session + org membership     → { kind: 'member', organizationId, orgRoles }
+```
+
+### JWT Auth
+
+For JWT apps, scope defaults to `authenticated` for logged-in users. Use the `resolveOrgFromHeader` utility for org header resolution:
+
+```typescript
+import { resolveOrgFromHeader } from '@classytic/arc/scope';
+
+app.addHook('onRequest', resolveOrgFromHeader({
+  resolveMembership: async (userId, orgId) => {
+    const member = await MemberModel.findOne({ userId, orgId });
+    return member ? { roles: member.roles.split(',') } : null;
+  },
+}));
+```
+
+## Automatic Data Filtering
+
+With `multiTenant` preset, queries are automatically filtered by org:
+
+```typescript
+// GET /orders (user in org-123)
+// request.scope = { kind: 'member', organizationId: 'org-123', orgRoles: ['admin'] }
+// Internally: repository.findAll({ filter: { organizationId: 'org-123' } })
+
+// POST /orders (user in org-123)
+// Automatically sets: data.organizationId = 'org-123'
+```
+
+For elevated scope:
+- `elevated` + `organizationId` → filter by that org (admin viewing specific org)
+- `elevated` + no `organizationId` → no filter (admin viewing all orgs)
+
+## Elevation Plugin (Platform Admin)
+
+For apps with platform admins who need cross-org access:
+
+```typescript
+import { createApp } from '@classytic/arc/factory';
+
+const app = await createApp({
+  auth: { type: 'betterAuth', betterAuth: adapter },
+  elevation: {
+    platformRoles: ['superadmin'],
+    onElevation: (event) => auditLog.write({
+      action: 'platform_elevation',
+      userId: event.userId,
+      targetOrg: event.organizationId,
+    }),
+  },
+});
+```
+
+How it works:
+- Without `x-arc-scope: platform` header, a superadmin is a regular user
+- With `x-arc-scope: platform` + valid platform role → `elevated` scope
+- With `x-arc-scope: platform` + wrong role → 403
+
+```bash
+# Regular request (superadmin as normal org member)
+curl -H "Authorization: Bearer <token>" /orders
+# scope = { kind: 'member', organizationId: '...', orgRoles: ['admin'] }
+
+# Elevated request (platform admin mode)
+curl -H "Authorization: Bearer <token>" \
+     -H "x-arc-scope: platform" \
+     -H "x-organization-id: target-org-id" /orders
+# scope = { kind: 'elevated', organizationId: 'target-org-id', elevatedBy: 'user-id' }
+```
+
+## Guards
+
+For route-level org enforcement:
+
+```typescript
+import { orgGuard, requireOrg, requireOrgRole } from '@classytic/arc/org';
+
+// Require org context
+fastify.get('/orders', {
+  preHandler: [fastify.authenticate, requireOrg()],
+  handler: listOrders,
+});
+
+// Require specific org role
+fastify.post('/orders', {
+  preHandler: [fastify.authenticate, requireOrgRole('manager')],
+  handler: createOrder,
+});
+```
+
+## Permission Functions
+
+```typescript
+import {
+  requireOrgMembership,
+  requireOrgRole,
+  createOrgPermissions,
+} from '@classytic/arc/permissions';
+
+// Any org member
+requireOrgMembership()
+
+// Specific org role(s) — ANY-match logic
+requireOrgRole('admin', 'editor')
+
+// Static permission matrix per role
+const perms = createOrgPermissions({
+  statements: {
+    invoice: ['create', 'update', 'delete', 'approve'],
+    order: ['create', 'update'],
+  },
+  roles: {
+    admin: { invoice: ['create', 'update', 'delete', 'approve'], order: ['create', 'update'] },
+    accountant: { invoice: ['create', 'update', 'approve'], order: ['create'] },
+    viewer: { invoice: [], order: [] },
+  },
+});
+
+perms.can({ invoice: ['approve'] })  // PermissionCheck function
+```
+
+All org permission functions:
+- Grant access for `elevated` scope automatically
+- Read org roles from `request.scope.orgRoles`
+- Deny with clear reason for `public`/`authenticated` scope
+
+## Best Practices
+
+1. **Use `request.scope` type guards** — `isMember()`, `isElevated()`, `getOrgId()` instead of raw field access
+2. **Let presets handle filtering** — Use `multiTenant` preset instead of manual org filtering
+3. **Use permission functions** — `requireOrgRole()` instead of manual role checks
+4. **Elevation is opt-in** — Only enable elevation plugin if you need platform admin cross-org access
+5. **Test all scope kinds** — Verify behavior for public, authenticated, member, and elevated
+
+## See Also
+
+- [Auth Module](./auth) — Authentication strategies
+- [Permissions](./permissions) — Permission system reference
+- [Presets](./presets) — multiTenant preset
+- [Core Module](./core) — Request context

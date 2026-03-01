@@ -9,8 +9,6 @@ import type { UserBase, UserOrganization } from '../types/index.js';
 export interface OrgMembershipOptions {
   /** Path to user's organizations array */
   userOrgsPath?: string;
-  /** Roles that bypass membership check */
-  bypassRoles?: string[];
   /** Optional DB lookup function */
   validateFromDb?: (userId: string, orgId: string) => Promise<boolean>;
 }
@@ -21,7 +19,9 @@ export interface OrgRolesOptions {
 }
 
 /**
- * Check if user is member of organization
+ * Check if user is member of organization.
+ * This is a low-level utility for checking membership from user object data.
+ * For request-level checks, use `request.scope` (isMember/isElevated guards).
  */
 export async function orgMembershipCheck(
   user: UserBase | undefined | null,
@@ -30,18 +30,10 @@ export async function orgMembershipCheck(
 ): Promise<boolean> {
   const {
     userOrgsPath = 'organizations',
-    bypassRoles = ['superadmin'],
     validateFromDb,
   } = options;
 
   if (!user || !orgId) return false;
-
-  // Superadmin bypasses
-  const userWithRoles = user as { roles?: string[] };
-  const userRoles = userWithRoles.roles ?? [];
-  if (bypassRoles.some((role) => userRoles.includes(role))) {
-    return true;
-  }
 
   // Check from user object
   const userOrgs = ((user as UserBase & { [key: string]: unknown })[userOrgsPath] ?? []) as UserOrganization[];
@@ -64,9 +56,10 @@ export async function orgMembershipCheck(
 }
 
 /**
- * Get user's role in organization
+ * Get user's role in organization from user object data.
+ * For request-level role checks, use `request.scope.orgRoles` (when scope is 'member').
  */
-export function getOrgRoles(
+export function getUserOrgRoles(
   user: UserBase | undefined | null,
   orgId: string | undefined | null,
   options: OrgRolesOptions = {}
@@ -86,7 +79,8 @@ export function getOrgRoles(
 }
 
 /**
- * Check if user has specific role in organization
+ * Check if user has specific role in organization from user object data.
+ * For request-level role checks, use `requireOrgRole()` permission or `request.scope`.
  */
 export function hasOrgRole(
   user: UserBase | undefined | null,
@@ -94,14 +88,10 @@ export function hasOrgRole(
   roles: string | string[],
   options: OrgRolesOptions = {}
 ): boolean {
-  const userOrgRoles = getOrgRoles(user, orgId, options);
+  const userOrgRoles = getUserOrgRoles(user, orgId, options);
   const requiredRoles = Array.isArray(roles) ? roles : [roles];
-
-  // Superadmin bypasses
-  const userWithRoles = user as { roles?: string[] } | null | undefined;
-  if (userWithRoles?.roles?.includes('superadmin')) return true;
 
   return requiredRoles.some((role) => userOrgRoles.includes(role));
 }
 
-export default { orgMembershipCheck, getOrgRoles, hasOrgRole };
+export default { orgMembershipCheck, getUserOrgRoles, hasOrgRole };

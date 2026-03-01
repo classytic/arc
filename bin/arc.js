@@ -11,6 +11,7 @@
  *   arc introspect                    Show all registered resources
  *   arc describe <entry-file>        Output JSON metadata for AI agents
  *   arc docs [output-path]            Export OpenAPI specification
+ *   arc doctor                        Check environment and dependencies
  *
  * Examples:
  *   arc init my-api
@@ -85,6 +86,10 @@ async function main() {
       case 'docs':
       case 'd':
         await handleDocs(subcommand ? [subcommand, ...rest] : rest);
+        break;
+
+      case 'doctor':
+        await handleDoctor(subcommand ? [subcommand, ...rest] : rest);
         break;
 
       default:
@@ -173,6 +178,11 @@ async function handleDocs(rawArgs) {
   const { entryPath, filteredArgs } = extractEntryArg(args);
   const { exportDocs } = await import('../dist/cli/commands/docs.mjs');
   await exportDocs(entryPath ? [entryPath, ...filteredArgs] : filteredArgs);
+}
+
+async function handleDoctor(rawArgs) {
+  const { doctor } = await import('../dist/cli/commands/doctor.mjs');
+  await doctor(rawArgs);
 }
 
 // ============================================================================
@@ -308,6 +318,7 @@ COMMANDS
   introspect, i   Show all registered resources
   describe, desc  Output JSON metadata for AI agents
   docs, d         Export OpenAPI specification
+  doctor          Check environment and dependencies
 
 GLOBAL OPTIONS
   --entry, -e <path>       Entry file to load before running command

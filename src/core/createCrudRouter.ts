@@ -6,7 +6,7 @@
  *
  * Features:
  * - Permission-based access control via PermissionCheck functions
- * - Organization scoping for multi-tenant routes
+ * - Multi-tenant scoping via multiTenant preset
  * - Consistent route patterns
  * - Framework-agnostic controllers via adapter pattern
  */
@@ -29,6 +29,9 @@ import type { PipelineConfig, PipelineStep, PipelineContext } from '../pipeline/
 import { createCrudHandlers, createFastifyHandler, createRequestContext, sendControllerResponse } from './fastifyAdapter.js';
 import { executePipeline } from '../pipeline/pipe.js';
 import { getDefaultCrudSchemas } from '../utils/responseSchemas.js';
+import { convertRouteSchema } from '../utils/schemaConverter.js';
+import { requestContext } from '../context/requestContext.js';
+import { CRUD_OPERATIONS, DEFAULT_UPDATE_METHOD } from '../constants.js';
 
 // ============================================================================
 // Rate Limit Helpers
@@ -87,7 +90,7 @@ function buildRateLimitConfig(
  */
 function requiresAuthentication(permission: PermissionCheck | undefined): boolean {
   if (!permission) return false; // No permission = public by default
-  return !(permission as PermissionCheck & { _isPublic?: boolean })._isPublic;
+  return !permission._isPublic;
 }
 
 /**
@@ -132,18 +135,26 @@ function buildPermissionMiddleware(
     const reqWithExtras = request as RequestWithExtras;
 
     // Build permission context
+    const params = request.params as Record<string, string> | undefined;
     const context: PermissionContext = {
       user: (reqWithExtras.user as UserLike | undefined) ?? null,
       request,
       resource: resourceName,
       action,
-      resourceId: (request.params as Record<string, string>)?.id,
-      organizationId: reqWithExtras.organizationId,
+      resourceId: params?.id,
+      params,
       data: request.body as Record<string, unknown> | undefined,
     };
 
-    // Execute permission check
-    const result = await permissionCheck(context);
+    // Execute permission check — catch exceptions so authz bugs don't become 500s
+    let result: boolean | PermissionResult;
+    try {
+      result = await permissionCheck(context);
+    } catch (err) {
+      request.log?.warn?.({ err, resource: resourceName, action }, 'Permission check threw');
+      reply.code(403).send({ success: false, error: 'Permission denied' });
+      return;
+    }
 
     // Handle boolean result
     if (typeof result === 'boolean') {
@@ -178,32 +189,6 @@ function buildPermissionMiddleware(
 }
 
 /**
- * Build org scoping middleware
- */
-function buildOrgScopedMiddleware(
-  fastify: FastifyWithDecorators,
-  orgScoped: boolean | undefined,
-  globalOrgScoped: boolean
-): RouteHandlerMethod[] {
-  // Respect route-level override, fall back to global default
-  const shouldApplyOrgScoped = orgScoped ?? globalOrgScoped;
-
-  if (!shouldApplyOrgScoped) return [];
-
-  // Fail loudly if org scoping requested but decorator missing
-  if (!fastify.organizationScoped) {
-    throw new Error(
-      'Organization scoping is enabled but fastify.organizationScoped decorator is not registered.\n' +
-      'Register the org scope plugin before mounting resources:\n' +
-      'await app.register(orgScopePlugin);\n' +
-      'Docs: https://github.com/classytic/arc#multi-tenant'
-    );
-  }
-
-  return [fastify.organizationScoped() as RouteHandlerMethod];
-}
-
-/**
  * Create additional routes from preset/custom definitions
  */
 function createAdditionalRoutes<TDoc = unknown>(
@@ -213,14 +198,21 @@ function createAdditionalRoutes<TDoc = unknown>(
   options: {
     tag: string;
     resourceName: string;
-    orgMw: (orgScoped?: boolean) => RouteHandlerMethod[];
     arcDecorator: RouteHandlerMethod;
     rateLimitConfig?: RouteRateLimitConfig;
+    cacheMw: RouteHandlerMethod | null;
+    idempotencyMw: RouteHandlerMethod | null;
+    pipeline?: PipelineConfig;
   }
 ): void {
-  const { tag, resourceName, orgMw, arcDecorator, rateLimitConfig } = options;
+  const { tag, resourceName, arcDecorator, rateLimitConfig, cacheMw, idempotencyMw, pipeline } = options;
 
   for (const route of routes) {
+    // Derive logical operation name for pipeline keys and permission actions.
+    // Priority: explicit operation > handler name (string) > method+path slug
+    const opName = route.operation
+      ?? (typeof route.handler === 'string' ? route.handler : `${route.method.toLowerCase()}${route.path.replace(/[/:]/g, '_')}`);
+
     // Resolve handler - wrapHandler is REQUIRED (no auto-detection)
     let handler: RouteHandlerMethod;
 
@@ -241,39 +233,69 @@ function createAdditionalRoutes<TDoc = unknown>(
       const boundMethod = (method as Function).bind(controller);
 
       // Explicit wrapHandler - no auto-detection
-      handler = route.wrapHandler
-        ? createFastifyHandler(boundMethod as ControllerHandler)
-        : (boundMethod as RouteHandlerMethod);
+      if (route.wrapHandler) {
+        const steps = pipeline ? resolvePipelineSteps(pipeline, opName) : [];
+        if (steps.length > 0) {
+          handler = createPipelineHandler(
+            boundMethod as (ctx: IRequestContext) => Promise<IControllerResponse<unknown>>,
+            steps,
+            opName,
+            resourceName,
+          );
+        } else {
+          handler = createFastifyHandler(boundMethod as ControllerHandler);
+        }
+      } else {
+        handler = boundMethod as RouteHandlerMethod;
+      }
     } else {
       // Function handler - use explicit wrapHandler
-      handler = route.wrapHandler
-        ? createFastifyHandler(route.handler as ControllerHandler)
-        : (route.handler as RouteHandlerMethod);
+      if (route.wrapHandler) {
+        const steps = pipeline ? resolvePipelineSteps(pipeline, opName) : [];
+        if (steps.length > 0) {
+          handler = createPipelineHandler(
+            route.handler as (ctx: IRequestContext) => Promise<IControllerResponse<unknown>>,
+            steps,
+            opName,
+            resourceName,
+          );
+        } else {
+          handler = createFastifyHandler(route.handler as ControllerHandler);
+        }
+      } else {
+        handler = route.handler as RouteHandlerMethod;
+      }
     }
 
-    // Build schema with tags
+    // Build schema with tags (auto-convert Zod schemas, no-op for JSON Schema)
     const routeTags = route.tags ?? (tag ? [tag] : undefined);
+    const convertedSchema = route.schema ? convertRouteSchema(route.schema) : undefined;
     const schema = {
       ...(routeTags ? { tags: routeTags } : {}),
       ...(route.summary ? { summary: route.summary } : {}),
       ...(route.description ? { description: route.description } : {}),
-      ...(route.schema ?? {}),
+      ...(convertedSchema ?? {}),
     } as Record<string, unknown>;
 
-    // Build preHandler chain: arc decorator → auth → permission check → org scope → custom middlewares
+    // Build preHandler chain: arc decorator → auth → permission check → custom middlewares
     const authMw = buildAuthMiddleware(fastify, route.permissions);
-    const permissionMw = buildPermissionMiddleware(route.permissions, resourceName, route.method.toLowerCase());
+    const permissionMw = buildPermissionMiddleware(route.permissions, resourceName, opName);
 
     // Resolve preHandler - can be array or function that receives fastify
     const customPreHandlers = typeof route.preHandler === 'function'
       ? (route.preHandler as (fastify: FastifyWithDecorators) => RouteHandlerMethod[])(fastify)
       : (route.preHandler ?? []) as RouteHandlerMethod[];
 
+    // Select plugin middleware based on HTTP method
+    const pluginMw = route.method === 'GET'
+      ? cacheMw
+      : ['POST', 'PUT', 'PATCH'].includes(route.method) ? idempotencyMw : null;
+
     const preHandler = [
       arcDecorator,
       authMw,        // Authenticate first (populates request.user)
       permissionMw,  // Then check permissions
-      ...orgMw(),
+      pluginMw,      // Cache (GET) or idempotency (mutations) — after auth
       ...customPreHandlers,
     ].filter(Boolean) as RouteHandlerMethod[];
 
@@ -353,35 +375,56 @@ export function createCrudRouter<TDoc = unknown>(
     additionalRoutes = [],
     disableDefaultRoutes = false,
     disabledRoutes = [],
-    organizationScoped = false,
     resourceName = 'unknown',
     schemaOptions,
     rateLimit,
     pipe: pipeline,
     fields: fieldPermissions,
+    updateMethod = DEFAULT_UPDATE_METHOD,
   } = options;
 
   // Build per-route rate limit config (applied to every route in this resource)
   const rateLimitConfig = buildRateLimitConfig(rateLimit);
 
-  // Build org scope middleware helper
-  const orgMw = (orgScoped?: boolean): RouteHandlerMethod[] => {
-    return buildOrgScopedMiddleware(fastify, orgScoped, organizationScoped);
-  };
+  // Optional plugin middleware — injected AFTER auth+permissions, BEFORE custom middlewares.
+  // These plugins expose route-level middleware that must run after auth populates
+  // request.user, ensuring user-scoped cache keys and idempotency fingerprints.
+  //
+  // Skip response-cache when QueryCache is active for this resource.
+  // QueryCache handles caching at the controller level (data-layer) with SWR,
+  // so the HTTP-level response-cache is unnecessary and would cause double caching.
+  const resourceHasQueryCache = fastify.hasDecorator('queryCache') &&
+    controller && typeof (controller as unknown as Record<string, unknown>)._cacheConfig !== 'undefined' &&
+    (controller as unknown as Record<string, unknown>)._cacheConfig !== undefined;
+  const cacheMw: RouteHandlerMethod | null = (!resourceHasQueryCache && fastify.hasDecorator('responseCache'))
+    ? fastify.responseCache.middleware as RouteHandlerMethod
+    : null;
+  const idempotencyMw: RouteHandlerMethod | null = fastify.hasDecorator('idempotency')
+    ? fastify.idempotency.middleware as RouteHandlerMethod
+    : null;
+
+  // Pre-build frozen arc metadata — allocated once, shared across all requests
+  const arcMeta = Object.freeze({
+    resourceName,
+    schemaOptions,
+    permissions,
+    // Include instance-scoped hooks if available (for proper isolation)
+    hooks: fastify.arc?.hooks,
+    // Include events emitter if available
+    events: fastify.events,
+    // Field-level permissions for response filtering
+    fields: fieldPermissions,
+  });
 
   // Arc metadata decorator - sets req.arc with resource configuration and instance-scoped systems
   const arcDecorator: RouteHandlerMethod = async (req, _reply) => {
-    (req as unknown as { arc?: unknown }).arc = {
-      resourceName,
-      schemaOptions,
-      permissions,
-      // Include instance-scoped hooks if available (for proper isolation)
-      hooks: fastify.arc?.hooks,
-      // Include events emitter if available
-      events: fastify.events,
-      // Field-level permissions for response filtering
-      fields: fieldPermissions,
-    };
+    (req as unknown as { arc?: unknown }).arc = arcMeta;
+
+    // Populate requestContext with resource name for downstream access
+    const store = requestContext.get();
+    if (store) {
+      store.resourceName = resourceName;
+    }
   };
 
   // Get middleware for each operation
@@ -433,7 +476,7 @@ export function createCrudRouter<TDoc = unknown>(
 
     // If pipeline is configured, wrap handlers with pipeline execution
     if (pipeline) {
-      const ops = ['list', 'get', 'create', 'update', 'delete'] as const;
+      const ops = CRUD_OPERATIONS;
       const wrapped: Record<string, RouteHandlerMethod> = {};
       for (const op of ops) {
         const steps = resolvePipelineSteps(pipeline, op);
@@ -464,7 +507,7 @@ export function createCrudRouter<TDoc = unknown>(
     if (!disabledRoutes.includes('list')) {
       const authMw = buildAuthMiddleware(fastify, permissions.list);
       const permMw = buildPermissionMiddleware(permissions.list, resourceName, 'list');
-      const listPreHandler = [arcDecorator, authMw, permMw, ...orgMw(), ...mw.list].filter(Boolean) as RouteHandlerMethod[];
+      const listPreHandler = [arcDecorator, authMw, permMw, cacheMw, ...mw.list].filter(Boolean) as RouteHandlerMethod[];
       fastify.route({
         method: 'GET',
         url: '/',
@@ -479,7 +522,7 @@ export function createCrudRouter<TDoc = unknown>(
     if (!disabledRoutes.includes('get')) {
       const authMw = buildAuthMiddleware(fastify, permissions.get);
       const permMw = buildPermissionMiddleware(permissions.get, resourceName, 'get');
-      const getPreHandler = [arcDecorator, authMw, permMw, ...orgMw(), ...mw.get].filter(Boolean) as RouteHandlerMethod[];
+      const getPreHandler = [arcDecorator, authMw, permMw, cacheMw, ...mw.get].filter(Boolean) as RouteHandlerMethod[];
       fastify.route({
         method: 'GET',
         url: '/:id',
@@ -494,7 +537,7 @@ export function createCrudRouter<TDoc = unknown>(
     if (!disabledRoutes.includes('create')) {
       const authMw = buildAuthMiddleware(fastify, permissions.create);
       const permMw = buildPermissionMiddleware(permissions.create, resourceName, 'create');
-      const createPreHandler = [arcDecorator, authMw, permMw, ...orgMw(), ...mw.create].filter(Boolean) as RouteHandlerMethod[];
+      const createPreHandler = [arcDecorator, authMw, permMw, idempotencyMw, ...mw.create].filter(Boolean) as RouteHandlerMethod[];
       fastify.route({
         method: 'POST',
         url: '/',
@@ -505,26 +548,29 @@ export function createCrudRouter<TDoc = unknown>(
       });
     }
 
-    // PATCH /:id - Update
+    // UPDATE /:id - PATCH, PUT, or both
     if (!disabledRoutes.includes('update')) {
+      const updateMethods = updateMethod === 'both' ? ['PUT', 'PATCH'] as const : [updateMethod] as const;
       const authMw = buildAuthMiddleware(fastify, permissions.update);
       const permMw = buildPermissionMiddleware(permissions.update, resourceName, 'update');
-      const updatePreHandler = [arcDecorator, authMw, permMw, ...orgMw(), ...mw.update].filter(Boolean) as RouteHandlerMethod[];
-      fastify.route({
-        method: 'PATCH',
-        url: '/:id',
-        schema: buildSchema({ tags: [tag], summary: `Update ${tag}`, params: idParamsSchema }, defaultSchemas.update, schemas.update as Record<string, unknown> | undefined),
-        preHandler: updatePreHandler.length > 0 ? updatePreHandler : undefined,
-        handler: handlers.update,
-        ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
-      });
+      const updatePreHandler = [arcDecorator, authMw, permMw, idempotencyMw, ...mw.update].filter(Boolean) as RouteHandlerMethod[];
+      for (const method of updateMethods) {
+        fastify.route({
+          method,
+          url: '/:id',
+          schema: buildSchema({ tags: [tag], summary: `${method === 'PUT' ? 'Replace' : 'Update'} ${tag}`, params: idParamsSchema }, defaultSchemas.update, schemas.update as Record<string, unknown> | undefined),
+          preHandler: updatePreHandler.length > 0 ? updatePreHandler : undefined,
+          handler: handlers.update,
+          ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
+        });
+      }
     }
 
     // DELETE /:id - Delete
     if (!disabledRoutes.includes('delete')) {
       const authMw = buildAuthMiddleware(fastify, permissions.delete);
       const permMw = buildPermissionMiddleware(permissions.delete, resourceName, 'delete');
-      const deletePreHandler = [arcDecorator, authMw, permMw, ...orgMw(), ...mw.delete].filter(Boolean) as RouteHandlerMethod[];
+      const deletePreHandler = [arcDecorator, authMw, permMw, ...mw.delete].filter(Boolean) as RouteHandlerMethod[];
       fastify.route({
         method: 'DELETE',
         url: '/:id',
@@ -538,17 +584,8 @@ export function createCrudRouter<TDoc = unknown>(
 
   // Additional routes from presets and custom
   if (additionalRoutes.length > 0) {
-    createAdditionalRoutes(fastify, additionalRoutes, controller, { tag, resourceName, orgMw, arcDecorator, rateLimitConfig });
+    createAdditionalRoutes(fastify, additionalRoutes, controller, { tag, resourceName, arcDecorator, rateLimitConfig, cacheMw, idempotencyMw, pipeline });
   }
-}
-
-/**
- * Helper to create org scoped middleware
- */
-export function createOrgScopedMiddleware(
-  instance: FastifyWithDecorators
-): RouteHandlerMethod[] {
-  return instance.organizationScoped ? [instance.organizationScoped() as RouteHandlerMethod] : [];
 }
 
 /**

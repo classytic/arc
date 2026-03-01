@@ -4,6 +4,22 @@
  * Duplicate request protection for mutating operations.
  * Uses idempotency keys to ensure safe retries.
  *
+ * ## Auth Safety
+ *
+ * The idempotency check runs as a **route-level middleware**
+ * (`idempotency.middleware`) that must be wired AFTER authentication in the
+ * preHandler chain. This ensures the fingerprint includes the real caller
+ * identity, preventing cross-user replay attacks.
+ *
+ * Arc's `createCrudRouter` does this automatically for mutation routes.
+ * For custom routes, wire it manually:
+ *
+ * ```typescript
+ * fastify.post('/orders', {
+ *   preHandler: [fastify.authenticate, fastify.idempotency.middleware],
+ * }, handler);
+ * ```
+ *
  * @example
  * import { idempotencyPlugin } from '@classytic/arc/idempotency';
  *
@@ -54,6 +70,8 @@ declare module 'fastify' {
     idempotencyKey?: string;
     /** Whether this response was replayed from cache */
     idempotencyReplayed?: boolean;
+    /** @internal Full key with fingerprint for store lookups */
+    _idempotencyFullKey?: string;
   }
 
   interface FastifyInstance {
@@ -63,6 +81,20 @@ declare module 'fastify' {
       invalidate: (key: string) => Promise<void>;
       /** Check if a key has a cached response */
       has: (key: string) => Promise<boolean>;
+      /**
+       * Route-level preHandler for idempotency check + lock.
+       * Wire AFTER authenticate in the preHandler chain so that
+       * `request.user` is populated before the fingerprint is computed.
+       *
+       * `createCrudRouter` injects this automatically for mutation routes.
+       * For custom routes, add it manually:
+       * ```typescript
+       * fastify.post('/orders', {
+       *   preHandler: [fastify.authenticate, fastify.idempotency.middleware],
+       * }, handler);
+       * ```
+       */
+      middleware: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
     };
   }
 }
@@ -92,6 +124,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     fastify.decorate('idempotency', {
       invalidate: async () => {},
       has: async () => false,
+      middleware: async () => {},
     });
     fastify.decorateRequest('idempotencyKey', undefined);
     fastify.decorateRequest('idempotencyReplayed', false);
@@ -100,17 +133,6 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
   }
 
   const methodSet = new Set(methods.map((m) => m.toUpperCase()));
-
-  // Decorate with utilities
-  fastify.decorate('idempotency', {
-    invalidate: async (key: string) => {
-      await store.delete(key);
-    },
-    has: async (key: string) => {
-      const result = await store.get(key);
-      return !!result;
-    },
-  });
 
   fastify.decorateRequest('idempotencyKey', undefined);
   fastify.decorateRequest('idempotencyReplayed', false);
@@ -161,10 +183,15 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
   }
 
   /**
-   * Generate a fingerprint for the request (for key generation)
+   * Generate a fingerprint for the request (for key generation).
+   * Includes caller identity so the same idempotency key from different
+   * users doesn't replay one user's response to another.
+   *
+   * IMPORTANT: This must be called AFTER auth has populated request.user,
+   * otherwise userId falls back to 'anon' and cross-user replay is possible.
    */
   function getRequestFingerprint(request: FastifyRequest): string {
-    // Combine method + URL + body hash for uniqueness
+    // Combine method + URL + body hash + user identity for uniqueness
     let bodyHash = 'nobody';
 
     if (request.body && typeof request.body === 'object') {
@@ -178,13 +205,16 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
       }
     }
 
-    const fingerprint = `${request.method}:${request.url}:${bodyHash}`;
+    // Scope to caller identity to prevent cross-user replay
+    const user = request.user as { id?: string; _id?: string } | undefined;
+    const userId = user?.id ?? user?._id ?? 'anon';
+
+    const fingerprint = `${request.method}:${request.url}:${bodyHash}:u=${userId}`;
     return fingerprint;
   }
 
-  // Handle incoming requests
-  // Use preHandler instead of onRequest to ensure body is parsed
-  fastify.addHook('preHandler', async (request, reply) => {
+  // ---- Route-level middleware: check + lock (AFTER auth) ----
+  const idempotencyMiddleware = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     if (!shouldApplyIdempotency(request)) {
       return;
     }
@@ -201,7 +231,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     // Store key on request for later use
     request.idempotencyKey = idempotencyKey;
 
-    // Create full key with request fingerprint
+    // Create full key with request fingerprint (user is now populated by auth)
     const fullKey = `${idempotencyKey}:${getRequestFingerprint(request)}`;
 
     // Check for cached result
@@ -241,7 +271,21 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     }
 
     // Store full key for onSend hook
-    (request as FastifyRequest & { _idempotencyFullKey: string })._idempotencyFullKey = fullKey;
+    request._idempotencyFullKey = fullKey;
+  };
+
+  // Decorate with utilities + middleware
+  fastify.decorate('idempotency', {
+    invalidate: async (key: string) => {
+      // Delete all entries for this raw idempotency key regardless of fingerprint
+      await store.deleteByPrefix(`${key}:`);
+    },
+    has: async (key: string) => {
+      // Check if any entry exists for this raw idempotency key
+      const result = await store.findByPrefix(`${key}:`);
+      return !!result;
+    },
+    middleware: idempotencyMiddleware,
   });
 
   // Store response after successful request
@@ -251,7 +295,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
       return payload;
     }
 
-    const fullKey = (request as FastifyRequest & { _idempotencyFullKey?: string })._idempotencyFullKey;
+    const fullKey = request._idempotencyFullKey;
     if (!fullKey) {
       return payload;
     }
@@ -305,7 +349,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
 
   // Handle errors - ensure lock is released
   fastify.addHook('onError', async (request) => {
-    const fullKey = (request as FastifyRequest & { _idempotencyFullKey?: string })._idempotencyFullKey;
+    const fullKey = request._idempotencyFullKey;
     if (fullKey) {
       await store.unlock(fullKey, request.id);
     }

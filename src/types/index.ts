@@ -6,13 +6,51 @@
  */
 
 import type { FastifyInstance, FastifyReply, FastifyRequest, RouteHandlerMethod } from 'fastify';
-import type { Model, Document, Types } from 'mongoose';
+import type { Types } from 'mongoose';
 import type { DataAdapter } from '../adapters/interface.js';
 import type { PermissionCheck, UserBase } from '../permissions/types.js';
+import type { RequestScope } from '../scope/types.js';
 
 // Re-export core types
 export type { RouteHandlerMethod } from 'fastify';
-export type { Model, Document } from 'mongoose';
+// Re-export scope types
+export type { RequestScope } from '../scope/types.js';
+export {
+  isMember,
+  isElevated,
+  hasOrgAccess,
+  isAuthenticated,
+  getOrgId,
+  getOrgRoles,
+  getTeamId,
+  PUBLIC_SCOPE,
+  AUTHENTICATED_SCOPE,
+} from '../scope/types.js';
+export type { ElevationOptions, ElevationEvent } from '../scope/elevation.js';
+
+// Fastify declaration merge — request.scope is always defined
+declare module 'fastify' {
+  interface FastifyRequest {
+    /** Request scope — set by auth adapter, read by permissions/presets/guards */
+    scope: RequestScope;
+
+    // ---- Auth / identity ----
+    /** Current user — set by auth adapter (Better Auth, JWT, custom) */
+    user: Record<string, unknown>;
+
+    // ---- Policy middleware ----
+    /** Policy-injected query filters (e.g. ownership, org-scoping) */
+    _policyFilters?: Record<string, unknown>;
+    /** Field mask — fields to include/exclude in responses */
+    fieldMask?: { include?: string[]; exclude?: string[] };
+    /** Arbitrary policy metadata for downstream consumers */
+    policyMetadata?: Record<string, unknown>;
+    /** Document loaded by policy middleware for ownership checks */
+    document?: unknown;
+    /** Ownership check context (field name + user field) */
+    _ownershipCheck?: Record<string, unknown>;
+  }
+}
 
 // Re-export from dedicated type modules
 export type {
@@ -72,7 +110,7 @@ export function getUserId(user: UserLike | null | undefined): string | undefined
 // Controller Types
 // ============================================================================
 
-// CrudController alias for backwards compatibility
+/** Standard controller type alias for CRUD operations */
 import type { IController } from './handlers.js';
 export type CrudController<TDoc> = IController<TDoc>;
 
@@ -108,12 +146,28 @@ export interface JWTPayload {
 export interface RequestContext {
   operation?: string;
   user?: unknown; // YOUR user object
-  organizationId?: string;
-  teamId?: string;
-  orgRoles?: string[];
-  orgScope?: string;
   filters?: Record<string, unknown>;
   [key: string]: unknown;
+}
+
+/**
+ * Internal metadata shape injected by Arc's Fastify adapter.
+ * Extends RequestContext with known internal fields so controllers
+ * can access them without `as AnyRecord` casts.
+ */
+export interface ArcInternalMetadata extends RequestContext {
+  /** Policy filters from permission middleware */
+  _policyFilters?: Record<string, unknown>;
+  /** Request scope from scope resolution */
+  _scope?: import('../scope/types.js').RequestScope;
+  /** Ownership check config from ownedByUser preset */
+  _ownershipCheck?: { field: string; userId: string };
+  /** Arc instance references (hooks, field permissions, etc.) */
+  arc?: {
+    hooks?: import('../hooks/HookSystem.js').HookSystem;
+    fields?: import('../permissions/fields.js').FieldPermissionMap;
+    [key: string]: unknown;
+  };
 }
 
 /**
@@ -137,8 +191,6 @@ export interface ControllerQueryOptions {
   lean?: boolean;
   after?: string; // Cursor-based pagination
   user?: unknown; // Current user context
-  organizationId?: string; // Organization context (for multi-tenant)
-  teamId?: string; // Team context (for team-scoped resources)
   context?: Record<string, unknown>; // Additional context
   /** Allow additional options */
   [key: string]: unknown;
@@ -223,11 +275,10 @@ export interface QueryParserInterface {
 }
 
 export interface FastifyRequestExtras {
-  user?: unknown;
-  organizationId?: string;
+  user?: Record<string, unknown>;
 }
 
-export interface RequestWithExtras extends Omit<FastifyRequest, 'user'> {
+export interface RequestWithExtras extends FastifyRequest {
   /**
    * Arc metadata - set by createCrudRouter
    * Contains resource configuration and schema options
@@ -237,11 +288,9 @@ export interface RequestWithExtras extends Omit<FastifyRequest, 'user'> {
     schemaOptions?: RouteSchemaOptions;
     permissions?: ResourcePermissions;
   };
-  user?: unknown; // YOUR user object
-  organizationId?: string;
   context?: Record<string, unknown>; // Additional context data
   _policyFilters?: Record<string, unknown>; // Policy filters from middleware
-  fieldMask?: string[]; // Field projection for responses
+  fieldMask?: { include?: string[]; exclude?: string[] }; // Field projection for responses
   _ownershipCheck?: Record<string, unknown>; // Ownership validation context
 }
 
@@ -323,6 +372,31 @@ import type { ControllerLike } from './handlers.js';
  * });
  * ```
  */
+/**
+ * Per-resource cache configuration for QueryCache.
+ * Enables stale-while-revalidate, auto-invalidation on mutations,
+ * and cross-resource tag-based invalidation.
+ */
+export interface ResourceCacheConfig {
+  /** Seconds data is "fresh" (no revalidation). Default: 0 */
+  staleTime?: number;
+  /** Seconds stale data stays cached (SWR window). Default: 60 */
+  gcTime?: number;
+  /** Per-operation overrides */
+  list?: { staleTime?: number; gcTime?: number };
+  byId?: { staleTime?: number; gcTime?: number };
+  /** Tags for cross-resource invalidation grouping */
+  tags?: string[];
+  /**
+   * Cross-resource invalidation: event pattern → tag targets.
+   * When matched event fires, all caches with those tags are invalidated.
+   * @example { 'category.*': ['catalog'] }
+   */
+  invalidateOn?: Record<string, string[]>;
+  /** Disable caching for this resource */
+  disabled?: boolean;
+}
+
 export interface RateLimitConfig {
   /** Maximum number of requests allowed within the time window */
   max: number;
@@ -379,24 +453,36 @@ export interface ResourceConfig<TDoc = AnyRecord> {
   disableCrud?: boolean;
   disableDefaultRoutes?: boolean;
   disabledRoutes?: CrudRouteKey[]; // Specific routes to disable
-  organizationScoped?: boolean; // Multi-tenant filtering
   /**
    * Field name used for multi-tenant scoping (default: 'organizationId').
    * Override to match your schema: 'workspaceId', 'tenantId', 'teamId', etc.
-   * Only takes effect when `organizationScoped` is enabled or org context is present.
+   * Takes effect when org context is present (via multiTenant preset).
    */
   tenantField?: string;
+  /**
+   * Primary key field name (default: '_id').
+   * Override for non-MongoDB adapters (e.g., 'id' for SQL databases).
+   */
+  idField?: string;
   module?: string; // For grouping in registry
   events?: Record<string, EventDefinition>; // Domain events
   skipValidation?: boolean; // Skip schema validation
   skipRegistry?: boolean; // Don't register in introspection
   _appliedPresets?: string[]; // Internal: track applied presets
+  /** HTTP method for update routes. Default: 'PATCH' */
+  updateMethod?: 'PUT' | 'PATCH' | 'both';
   /**
    * Per-resource rate limiting.
    * Requires `@fastify/rate-limit` to be registered on the Fastify instance.
    * Set to `false` to disable rate limiting for this resource.
    */
   rateLimit?: RateLimitConfig | false;
+  /**
+   * QueryCache configuration for this resource.
+   * Enables stale-while-revalidate and auto-invalidation.
+   * Requires `queryCachePlugin` to be registered.
+   */
+  cache?: ResourceCacheConfig;
 }
 
 /**
@@ -443,6 +529,17 @@ export interface AdditionalRoute {
    * false = FastifyHandler (receives request, reply)
    */
   wrapHandler: boolean;
+
+  /**
+   * Logical operation name for pipeline keys and permission actions.
+   * Defaults to handler name (string handlers) or method+path slug.
+   * Prevents collisions when multiple routes share the same HTTP method.
+   *
+   * @example
+   * operation: 'listDeleted'  // Used as pipeline key and permission action
+   * operation: 'restore'
+   */
+  operation?: string;
 
   /** OpenAPI summary */
   summary?: string;
@@ -706,7 +803,6 @@ export interface AuthHelpers {
 
 export interface ServiceContext {
   user?: unknown;
-  organizationId?: string;
   requestId?: string;
   select?: string[] | Record<string, 0 | 1>; // Field projection for responses
   populate?: string | string[]; // Relations to populate
@@ -855,20 +951,19 @@ export interface AuthPluginOptions {
   ) => void | Promise<void>;
 
   /**
+   * Expose detailed auth error messages in 401 responses.
+   * When false (default), returns generic "Authentication required".
+   * When true, includes the actual error message for debugging.
+   * Decoupled from log level — set explicitly per environment.
+   */
+  exposeAuthErrors?: boolean;
+
+  /**
    * Property name to store user on request (default: 'user')
    */
   userProperty?: string;
 }
 
-export interface OrgScopeOptions {
-  enabled?: boolean;
-  header?: string;
-  headerName?: string; // Alias for backwards compatibility
-  queryParam?: string;
-  bypassRoles?: string[];
-  userOrgsPath?: string;
-  validateMembership?: (user: unknown, orgId: string) => Promise<boolean> | boolean;
-}
 
 export interface IntrospectionPluginOptions {
   path?: string;
@@ -905,9 +1000,6 @@ export interface CrudRouterOptions {
   /** Functional pipeline (guard/transform/intercept) */
   pipe?: import('../pipeline/types.js').PipelineConfig;
 
-  /** Enable organization-scoped filtering */
-  organizationScoped?: boolean;
-
   /** Resource name for lifecycle hooks */
   resourceName?: string;
 
@@ -916,6 +1008,9 @@ export interface CrudRouterOptions {
 
   /** Field-level permissions (visibility, writability per role) */
   fields?: import('../permissions/fields.js').FieldPermissionMap;
+
+  /** HTTP method for update routes. Default: 'PATCH' */
+  updateMethod?: 'PUT' | 'PATCH' | 'both';
 
   /**
    * Per-resource rate limiting.
@@ -959,8 +1054,10 @@ export interface RegistryEntry extends ResourceMetadata {
   fieldPermissions?: Record<string, { type: string; roles?: readonly string[]; redactValue?: unknown }>;
   /** Pipeline step names (for OpenAPI docs) */
   pipelineSteps?: Array<{ type: string; name: string; operations?: string[] }>;
-  /** Organization scoped flag */
-  organizationScoped?: boolean;
+  /** Update HTTP method(s) used for this resource */
+  updateMethod?: 'PUT' | 'PATCH' | 'both';
+  /** Routes disabled for this resource */
+  disabledRoutes?: string[];
   /** Rate limit config */
   rateLimit?: RateLimitConfig | false;
 }
@@ -1053,27 +1150,7 @@ export type TypedController<TDoc> = IController<TDoc>;
 export type TypedRepository<TDoc> = CrudRepository<TDoc>;
 
 // ============================================================================
-// Base Controller Options
+// Base Controller Options (canonical definition in core/BaseController.ts)
 // ============================================================================
 
-export interface BaseControllerOptions {
-  /** Query parser instance */
-  queryParser: QueryParserInterface;
-  /** Schema generation options */
-  schemaOptions?: RouteSchemaOptions;
-  /** Maximum items per page */
-  maxLimit?: number;
-  /** Default items per page */
-  defaultLimit?: number;
-  /** Default sort field */
-  defaultSort?: string;
-  /** Resource name for hooks */
-  resourceName?: string;
-  /** Disable event emission */
-  disableEvents?: boolean;
-  /**
-   * Field name used for multi-tenant scoping (default: 'organizationId').
-   * Override to match your schema: 'workspaceId', 'tenantId', 'teamId', etc.
-   */
-  tenantField?: string;
-}
+export type { BaseControllerOptions } from '../core/BaseController.js';

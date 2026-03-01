@@ -24,8 +24,10 @@ import type {
   RateLimitConfig,
   MiddlewareConfig,
 } from '../../types/index.js';
+import type { PermissionCheck } from '../../permissions/types.js';
 import type { FieldPermissionMap, FieldPermission } from '../../permissions/fields.js';
 import type { PipelineConfig, PipelineStep } from '../../pipeline/types.js';
+import { CRUD_OPERATIONS } from '../../constants.js';
 
 // ---------------------------------------------------------------------------
 // Output Schema
@@ -56,7 +58,6 @@ interface DescribedResource {
   events: EventDescription[];
 
   schemaOptions?: RouteSchemaOptions;
-  organizationScoped: boolean;
   rateLimit?: RateLimitConfig | false;
   middlewares: string[];
 }
@@ -116,7 +117,7 @@ function describePermission(check: unknown): PermissionDescription {
     return { type: 'custom' };
   }
 
-  const fn = check as unknown as AnyRecord;
+  const fn = check as PermissionCheck;
 
   // allowPublic() sets _isPublic = true
   if (fn._isPublic === true) {
@@ -142,9 +143,7 @@ function describePermissions(perms?: ResourcePermissions): Record<string, Permis
   if (!perms) return {};
 
   const result: Record<string, PermissionDescription> = {};
-  const ops = ['list', 'get', 'create', 'update', 'delete'] as const;
-
-  for (const op of ops) {
+  for (const op of CRUD_OPERATIONS) {
     const check = perms[op];
     if (check) {
       result[op] = describePermission(check);
@@ -329,7 +328,6 @@ function describeResource(
     schemaOptions: Object.keys(resource.schemaOptions ?? {}).length > 0
       ? resource.schemaOptions
       : undefined,
-    organizationScoped: resource.organizationScoped,
     rateLimit: resource.rateLimit,
     middlewares: describeMiddlewares(resource.middlewares),
   };

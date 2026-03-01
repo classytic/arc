@@ -27,8 +27,9 @@ export interface MongoConnection {
 interface MongoCollection {
   findOne(filter: object): Promise<IdempotencyDocument | null>;
   insertOne(doc: object): Promise<{ acknowledged: boolean }>;
-  updateOne(filter: object, update: object, options?: object): Promise<{ acknowledged: boolean }>;
+  updateOne(filter: object, update: object, options?: object): Promise<{ acknowledged: boolean; matchedCount: number; modifiedCount: number }>;
   deleteOne(filter: object): Promise<{ deletedCount: number }>;
+  deleteMany(filter: object): Promise<{ deletedCount: number }>;
   createIndex(spec: object, options?: object): Promise<string>;
 }
 
@@ -139,44 +140,37 @@ export class MongoIdempotencyStore implements IdempotencyStore {
     const expiresAt = new Date(now.getTime() + ttlMs);
 
     try {
-      // Try to insert a new lock document
-      // If document exists, check if lock is expired
-      const existingDoc = await this.collection.findOne({ _id: key });
-
-      if (existingDoc) {
-        // Document exists - check if locked
-        if (existingDoc.lock && new Date(existingDoc.lock.expiresAt) > now) {
-          // Lock is held and not expired
-          return false;
-        }
-        // Lock expired or no lock - update it
-        const updateResult = await this.collection.updateOne(
-          {
-            _id: key,
-            $or: [
-              { lock: { $exists: false } },
-              { 'lock.expiresAt': { $lt: now } },
-            ],
+      // Atomic upsert: acquire lock only when no active lock exists.
+      // Uses a single updateOne with upsert to avoid TOCTOU races —
+      // matchedCount/upsertedCount tells us if WE acquired the lock
+      // (not just that MongoDB acknowledged the command).
+      const result = await this.collection.updateOne(
+        {
+          _id: key,
+          $or: [
+            { lock: { $exists: false } },
+            { 'lock.expiresAt': { $lt: now } },
+          ],
+        },
+        {
+          $set: {
+            lock: { requestId, expiresAt },
           },
-          {
-            $set: {
-              lock: { requestId, expiresAt },
-            },
-          }
-        );
-        return updateResult.acknowledged;
-      }
+          $setOnInsert: {
+            createdAt: now,
+            expiresAt: new Date(now.getTime() + this.ttlMs),
+          },
+        },
+        { upsert: true },
+      );
 
-      // No document - insert new one with lock
-      const insertResult = await this.collection.insertOne({
-        _id: key,
-        lock: { requestId, expiresAt },
-        createdAt: now,
-        expiresAt: new Date(now.getTime() + this.ttlMs),
-      });
-      return insertResult.acknowledged;
+      // matchedCount === 1: existing doc matched (lock was free/expired)
+      // modifiedCount can be 0 if the $set value is identical — use matchedCount
+      // upsertedCount === 1 (implied by acknowledged + matchedCount === 0):
+      //   new doc created with our lock
+      return result.matchedCount === 1 || result.modifiedCount === 1;
     } catch {
-      // Duplicate key or other error means someone else got the lock
+      // Duplicate key on upsert race or other error → someone else got the lock
       return false;
     }
   }
@@ -197,6 +191,33 @@ export class MongoIdempotencyStore implements IdempotencyStore {
 
   async delete(key: string): Promise<void> {
     await this.collection.deleteOne({ _id: key });
+  }
+
+  async deleteByPrefix(prefix: string): Promise<number> {
+    const result = await this.collection.deleteMany({
+      _id: { $regex: `^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}` },
+    });
+    return result.deletedCount;
+  }
+
+  async findByPrefix(prefix: string): Promise<IdempotencyResult | undefined> {
+    // Filter expired docs at the query level so MongoDB doesn't return a stale
+    // entry when a valid one exists further down the index.
+    const doc = await this.collection.findOne({
+      _id: { $regex: `^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}` },
+      result: { $exists: true },
+      expiresAt: { $gt: new Date() },
+    });
+    if (!doc || !doc.result) return undefined;
+
+    return {
+      key: doc._id,
+      statusCode: doc.result.statusCode,
+      headers: doc.result.headers,
+      body: doc.result.body,
+      createdAt: new Date(doc.createdAt),
+      expiresAt: new Date(doc.expiresAt),
+    };
   }
 
   async close(): Promise<void> {

@@ -1,8 +1,8 @@
 /**
  * Better Auth Org Context Tests
  *
- * Tests the orgContext bridge that populates request.organizationId
- * and request.context.orgRoles from Better Auth's organization plugin.
+ * Tests the orgContext bridge that populates request.scope
+ * from Better Auth's organization plugin.
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
@@ -19,6 +19,7 @@ function createOrgAuthHandler(opts: {
   memberRole?: string;
   memberNotFound?: boolean;
   userRoles?: string[];
+  listFallbackRole?: string;
 } = {}): BetterAuthHandler {
   return {
     handler: async (request: Request) => {
@@ -63,6 +64,28 @@ function createOrgAuthHandler(opts: {
         });
       }
 
+      // GET /api/auth/organization/list (fallback resolution)
+      if (url.pathname.endsWith('/organization/list')) {
+        if (!opts.listFallbackRole) {
+          return new Response(JSON.stringify({ organizations: [] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        const role = opts.listFallbackRole;
+        return new Response(JSON.stringify({
+          organizations: [
+            {
+              organizationId: opts.activeOrgId,
+              role,
+            },
+          ],
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
     },
   };
@@ -79,7 +102,7 @@ describe('Better Auth Org Context Bridge', () => {
     if (app) await app.close();
   });
 
-  it('populates request.organizationId and orgRoles for org member', async () => {
+  it('populates request.scope as member for org member', async () => {
     app = Fastify({ logger: false });
     const { plugin } = createBetterAuthAdapter({
       auth: createOrgAuthHandler({ activeOrgId: 'org-123', memberRole: 'admin,member' }),
@@ -87,26 +110,23 @@ describe('Better Auth Org Context Bridge', () => {
     });
     await app.register(plugin);
 
-    let capturedOrgId: unknown;
-    let capturedContext: unknown;
+    let capturedScope: unknown;
     app.get('/test', { preHandler: [app.authenticate] }, async (request) => {
-      capturedOrgId = (request as any).organizationId;
-      capturedContext = (request as any).context;
+      capturedScope = (request as any).scope;
       return { ok: true };
     });
     await app.ready();
 
     const res = await app.inject({ method: 'GET', url: '/test' });
     expect(res.statusCode).toBe(200);
-    expect(capturedOrgId).toBe('org-123');
-    expect(capturedContext).toEqual({
+    expect(capturedScope).toEqual({
+      kind: 'member',
       organizationId: 'org-123',
       orgRoles: ['admin', 'member'],
-      orgScope: 'member',
     });
   });
 
-  it('sets orgScope=public when no active organization', async () => {
+  it('sets scope to authenticated when no active organization', async () => {
     app = Fastify({ logger: false });
     const { plugin } = createBetterAuthAdapter({
       auth: createOrgAuthHandler({ activeOrgId: undefined }),
@@ -114,19 +134,19 @@ describe('Better Auth Org Context Bridge', () => {
     });
     await app.register(plugin);
 
-    let capturedContext: unknown;
+    let capturedScope: unknown;
     app.get('/test', { preHandler: [app.authenticate] }, async (request) => {
-      capturedContext = (request as any).context;
+      capturedScope = (request as any).scope;
       return { ok: true };
     });
     await app.ready();
 
     const res = await app.inject({ method: 'GET', url: '/test' });
     expect(res.statusCode).toBe(200);
-    expect(capturedContext).toEqual({ orgScope: 'public' });
+    expect(capturedScope).toEqual({ kind: 'authenticated' });
   });
 
-  it('sets orgScope=bypass for superadmin users', async () => {
+  it('prefers org member scope for superadmin users when active org membership exists', async () => {
     app = Fastify({ logger: false });
     const { plugin } = createBetterAuthAdapter({
       auth: createOrgAuthHandler({ activeOrgId: 'org-123', userRoles: ['superadmin'] }),
@@ -134,23 +154,45 @@ describe('Better Auth Org Context Bridge', () => {
     });
     await app.register(plugin);
 
-    let capturedContext: unknown;
+    let capturedScope: unknown;
     app.get('/test', { preHandler: [app.authenticate] }, async (request) => {
-      capturedContext = (request as any).context;
+      capturedScope = (request as any).scope;
       return { ok: true };
     });
     await app.ready();
 
     const res = await app.inject({ method: 'GET', url: '/test' });
     expect(res.statusCode).toBe(200);
-    expect(capturedContext).toEqual({
+    // Superadmin with active org = member scope (no implicit bypass)
+    expect(capturedScope).toEqual({
+      kind: 'member',
       organizationId: 'org-123',
-      orgRoles: ['superadmin'],
-      orgScope: 'bypass',
+      orgRoles: ['member'],
     });
   });
 
-  it('sets orgScope=public when user is not a member', async () => {
+  it('sets authenticated scope for superadmin users when no active org is selected', async () => {
+    app = Fastify({ logger: false });
+    const { plugin } = createBetterAuthAdapter({
+      auth: createOrgAuthHandler({ activeOrgId: undefined, userRoles: ['superadmin'] }),
+      orgContext: true,
+    });
+    await app.register(plugin);
+
+    let capturedScope: unknown;
+    app.get('/test', { preHandler: [app.authenticate] }, async (request) => {
+      capturedScope = (request as any).scope;
+      return { ok: true };
+    });
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/test' });
+    expect(res.statusCode).toBe(200);
+    // No implicit bypass — superadmin without org = just authenticated
+    expect(capturedScope).toEqual({ kind: 'authenticated' });
+  });
+
+  it('sets authenticated scope when user is not a member', async () => {
     app = Fastify({ logger: false });
     const { plugin } = createBetterAuthAdapter({
       auth: createOrgAuthHandler({ activeOrgId: 'org-123', memberNotFound: true }),
@@ -158,39 +200,47 @@ describe('Better Auth Org Context Bridge', () => {
     });
     await app.register(plugin);
 
-    let capturedContext: unknown;
+    let capturedScope: unknown;
     app.get('/test', { preHandler: [app.authenticate] }, async (request) => {
-      capturedContext = (request as any).context;
+      capturedScope = (request as any).scope;
       return { ok: true };
     });
     await app.ready();
 
     const res = await app.inject({ method: 'GET', url: '/test' });
     expect(res.statusCode).toBe(200);
-    expect(capturedContext).toEqual({ orgScope: 'public' });
+    expect(capturedScope).toEqual({ kind: 'authenticated' });
   });
 
-  it('supports custom bypassRoles', async () => {
+  it('falls back to organization/list when get-active-member returns null', async () => {
     app = Fastify({ logger: false });
     const { plugin } = createBetterAuthAdapter({
-      auth: createOrgAuthHandler({ activeOrgId: 'org-1', userRoles: ['god'] }),
-      orgContext: { bypassRoles: ['god'] },
+      auth: createOrgAuthHandler({
+        activeOrgId: 'org-123',
+        memberNotFound: true,
+        listFallbackRole: 'admin,recruiter',
+      }),
+      orgContext: true,
     });
     await app.register(plugin);
 
-    let capturedContext: unknown;
+    let capturedScope: unknown;
     app.get('/test', { preHandler: [app.authenticate] }, async (request) => {
-      capturedContext = (request as any).context;
+      capturedScope = (request as any).scope;
       return { ok: true };
     });
     await app.ready();
 
     const res = await app.inject({ method: 'GET', url: '/test' });
     expect(res.statusCode).toBe(200);
-    expect((capturedContext as any).orgScope).toBe('bypass');
+    expect(capturedScope).toEqual({
+      kind: 'member',
+      organizationId: 'org-123',
+      orgRoles: ['admin', 'recruiter'],
+    });
   });
 
-  it('does not set org context when orgContext is disabled', async () => {
+  it('does not set org scope when orgContext is disabled', async () => {
     app = Fastify({ logger: false });
     const { plugin } = createBetterAuthAdapter({
       auth: createOrgAuthHandler({ activeOrgId: 'org-123', memberRole: 'admin' }),
@@ -198,22 +248,156 @@ describe('Better Auth Org Context Bridge', () => {
     });
     await app.register(plugin);
 
-    let capturedContext: unknown;
-    let capturedOrgId: unknown;
+    let capturedScope: unknown;
     app.get('/test', { preHandler: [app.authenticate] }, async (request) => {
-      capturedContext = (request as any).context;
-      capturedOrgId = (request as any).organizationId;
+      capturedScope = (request as any).scope;
       return { ok: true };
     });
     await app.ready();
 
     const res = await app.inject({ method: 'GET', url: '/test' });
     expect(res.statusCode).toBe(200);
-    expect(capturedContext).toBeUndefined();
-    expect(capturedOrgId).toBeUndefined();
+    // Without orgContext, scope should be authenticated (user is logged in)
+    expect((capturedScope as any)?.kind).toBe('authenticated');
   });
 
-  it('returns permissions helper with bound bypass roles', () => {
+  // ──────────────────────────────────────────────────────────────
+  // Multi-role support (Better Auth stores "admin,recruiter")
+  // ──────────────────────────────────────────────────────────────
+
+  it('splits comma-separated roles into array', async () => {
+    app = Fastify({ logger: false });
+    const { plugin } = createBetterAuthAdapter({
+      auth: createOrgAuthHandler({ activeOrgId: 'org-1', memberRole: 'account_manager,recruiter' }),
+      orgContext: true,
+    });
+    await app.register(plugin);
+
+    let capturedScope: unknown;
+    app.get('/test', { preHandler: [app.authenticate] }, async (request) => {
+      capturedScope = (request as any).scope;
+      return { ok: true };
+    });
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/test' });
+    expect(res.statusCode).toBe(200);
+    expect((capturedScope as any)?.orgRoles).toEqual(['account_manager', 'recruiter']);
+  });
+
+  it('trims whitespace in comma-separated roles', async () => {
+    app = Fastify({ logger: false });
+    const { plugin } = createBetterAuthAdapter({
+      auth: createOrgAuthHandler({ activeOrgId: 'org-1', memberRole: ' admin , delivery_manager ' }),
+      orgContext: true,
+    });
+    await app.register(plugin);
+
+    let capturedScope: unknown;
+    app.get('/test', { preHandler: [app.authenticate] }, async (request) => {
+      capturedScope = (request as any).scope;
+      return { ok: true };
+    });
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/test' });
+    expect(res.statusCode).toBe(200);
+    expect((capturedScope as any)?.orgRoles).toEqual(['admin', 'delivery_manager']);
+  });
+
+  it('handles single role string without comma', async () => {
+    app = Fastify({ logger: false });
+    const { plugin } = createBetterAuthAdapter({
+      auth: createOrgAuthHandler({ activeOrgId: 'org-1', memberRole: 'admin' }),
+      orgContext: true,
+    });
+    await app.register(plugin);
+
+    let capturedScope: unknown;
+    app.get('/test', { preHandler: [app.authenticate] }, async (request) => {
+      capturedScope = (request as any).scope;
+      return { ok: true };
+    });
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/test' });
+    expect(res.statusCode).toBe(200);
+    expect((capturedScope as any)?.orgRoles).toEqual(['admin']);
+  });
+
+  it('handles empty role string gracefully', async () => {
+    app = Fastify({ logger: false });
+    const { plugin } = createBetterAuthAdapter({
+      auth: createOrgAuthHandler({ activeOrgId: 'org-1', memberRole: '' }),
+      orgContext: true,
+    });
+    await app.register(plugin);
+
+    let capturedScope: unknown;
+    app.get('/test', { preHandler: [app.authenticate] }, async (request) => {
+      capturedScope = (request as any).scope;
+      return { ok: true };
+    });
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/test' });
+    expect(res.statusCode).toBe(200);
+    expect((capturedScope as any)?.orgRoles).toEqual([]);
+  });
+
+  it('multi-role user passes requireOrgRole for any matching role', async () => {
+    app = Fastify({ logger: false });
+    const { plugin, permissions } = createBetterAuthAdapter({
+      auth: createOrgAuthHandler({ activeOrgId: 'org-1', memberRole: 'account_manager,recruiter' }),
+      orgContext: true,
+    });
+    await app.register(plugin);
+
+    const check = permissions.requireOrgRole('admin', 'recruiter');
+    let capturedResult: unknown;
+    app.get('/test', { preHandler: [app.authenticate] }, async (request) => {
+      capturedResult = check({
+        user: (request as any).user,
+        request: request as any,
+        resource: 'job',
+        action: 'create',
+      });
+      return { ok: true };
+    });
+    await app.ready();
+
+    await app.inject({ method: 'GET', url: '/test' });
+    expect(capturedResult).toBe(true);
+  });
+
+  it('multi-role user fails requireOrgRole when no role matches', async () => {
+    app = Fastify({ logger: false });
+    const { plugin, permissions } = createBetterAuthAdapter({
+      auth: createOrgAuthHandler({ activeOrgId: 'org-1', memberRole: 'account_manager,recruiter' }),
+      orgContext: true,
+    });
+    await app.register(plugin);
+
+    const check = permissions.requireOrgRole('admin', 'delivery_manager');
+    let capturedResult: unknown;
+    app.get('/test', { preHandler: [app.authenticate] }, async (request) => {
+      capturedResult = check({
+        user: (request as any).user,
+        request: request as any,
+        resource: 'job',
+        action: 'create',
+      });
+      return { ok: true };
+    });
+    await app.ready();
+
+    await app.inject({ method: 'GET', url: '/test' });
+    const result = capturedResult as { granted: boolean; reason: string };
+    expect(result.granted).toBe(false);
+    expect(result.reason).toContain('Required org roles');
+  });
+
+  it('returns permissions helper', () => {
     const { permissions } = createBetterAuthAdapter({
       auth: createOrgAuthHandler(),
       orgContext: true,

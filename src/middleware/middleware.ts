@@ -33,6 +33,7 @@
  */
 
 import type { MiddlewareConfig, MiddlewareHandler, RequestWithExtras } from '../types/index.js';
+import { CRUD_OPERATIONS } from '../constants.js';
 
 export interface NamedMiddleware {
   /** Unique name for debugging/introspection */
@@ -77,7 +78,7 @@ export function middleware(
 export function sortMiddlewares(middlewares: NamedMiddleware[]): MiddlewareConfig {
   const sorted = [...middlewares].sort((a, b) => a.priority - b.priority);
 
-  const operations = ['list', 'get', 'create', 'update', 'delete'] as const;
+  const operations = CRUD_OPERATIONS;
   const result: MiddlewareConfig = {};
 
   for (const op of operations) {

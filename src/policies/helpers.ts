@@ -40,14 +40,14 @@ export function createPolicyMiddleware(
   ): Promise<void> {
     // Build context from request
     const context = {
-      document: (request as any).document,
+      document: request.document,
       body: request.body,
       params: request.params,
       query: request.query,
     };
 
     // Check policy
-    const result = await policy.can((request as any).user, operation, context);
+    const result = await policy.can(request.user, operation, context);
 
     if (!result.allowed) {
       return reply.code(403).send({
@@ -60,20 +60,19 @@ export function createPolicyMiddleware(
     // Attach result to request for downstream use
     request.policyResult = result;
 
-    // Apply query filters (for list operations)
+    // Apply policy filters on trusted location (for list operations)
     if (result.filters && Object.keys(result.filters).length > 0) {
-      (request as any).query = (request as any).query || {};
-      (request as any).query._policyFilters = result.filters;
+      request._policyFilters = result.filters;
     }
 
     // Apply field mask (for response serialization)
     if (result.fieldMask) {
-      (request as any).fieldMask = result.fieldMask;
+      request.fieldMask = result.fieldMask;
     }
 
     // Attach metadata (for downstream middleware/logging)
     if (result.metadata) {
-      (request as any).policyMetadata = result.metadata;
+      request.policyMetadata = result.metadata;
     }
   };
 }
@@ -267,10 +266,10 @@ export function anyPolicy(...policies: PolicyEngine[]): PolicyEngine {
 
         for (const policy of policies) {
           const result = await policy.can(
-            (request as any).user,
+            request.user,
             operation,
             {
-              document: (request as any).document,
+              document: request.document,
               body: request.body,
               params: request.params,
               query: request.query,
@@ -282,16 +281,15 @@ export function anyPolicy(...policies: PolicyEngine[]): PolicyEngine {
             request.policyResult = result;
 
             if (result.filters) {
-              (request as any).query = (request as any).query || {};
-              (request as any).query._policyFilters = result.filters;
+              request._policyFilters = result.filters;
             }
 
             if (result.fieldMask) {
-              (request as any).fieldMask = result.fieldMask;
+              request.fieldMask = result.fieldMask;
             }
 
             if (result.metadata) {
-              (request as any).policyMetadata = result.metadata;
+              request.policyMetadata = result.metadata;
             }
 
             return;

@@ -26,6 +26,9 @@ export type {
   WebSocketMessage,
 } from './websocket.js';
 
+// Event Gateway (unified SSE + WebSocket)
+export type { EventGatewayOptions } from './event-gateway.js';
+
 // Jobs (background processing)
 export type {
   JobsPluginOptions,

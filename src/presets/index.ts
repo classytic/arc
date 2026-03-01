@@ -33,7 +33,7 @@ import type {
 
 // Export preset functions
 export { softDeletePreset } from './softDelete.js';
-export type { SoftDeleteOptions } from './softDelete.js';
+
 
 export { slugLookupPreset } from './slugLookup.js';
 export type { SlugLookupOptions } from './slugLookup.js';
@@ -125,9 +125,15 @@ function resolvePreset(name: string, options: AnyRecord = {}): PresetResult {
 /**
  * Register a custom preset
  */
-export function registerPreset(name: string, factory: PresetFactory): void {
-  if (presetRegistry[name]) {
-    throw new Error(`Preset '${name}' already exists`);
+export function registerPreset(
+  name: string,
+  factory: PresetFactory,
+  options?: { override?: boolean },
+): void {
+  if (presetRegistry[name] && !options?.override) {
+    throw new Error(
+      `Preset '${name}' already exists. Pass { override: true } to replace.`,
+    );
   }
   presetRegistry[name] = factory;
 }
@@ -145,8 +151,50 @@ export function getAvailablePresets(): string[] {
 
 type PresetInput = string | PresetResult | { name: string; [key: string]: unknown };
 
+// ============================================================================
+// Preset Conflict Detection
+// ============================================================================
+
+interface PresetConflict {
+  presets: [string, string];
+  message: string;
+  severity: 'error' | 'warning';
+}
+
 /**
- * Apply presets to resource config
+ * Validate that preset combinations don't conflict.
+ * Detects route collisions (same method + path from different presets).
+ */
+function validatePresetCombination(presets: PresetResult[]): PresetConflict[] {
+  const conflicts: PresetConflict[] = [];
+  const routeMap = new Map<string, string>(); // "METHOD /path" -> preset name
+
+  for (const preset of presets) {
+    const name = preset.name ?? 'unknown';
+    const routes: AdditionalRoute[] = typeof preset.additionalRoutes === 'function'
+      ? preset.additionalRoutes({})
+      : (preset.additionalRoutes ?? []);
+
+    for (const route of routes) {
+      const key = `${route.method} ${route.path}`;
+      const existing = routeMap.get(key);
+      if (existing) {
+        conflicts.push({
+          presets: [existing, name],
+          message: `Both '${existing}' and '${name}' define route ${key}`,
+          severity: 'error',
+        });
+      }
+      routeMap.set(key, name);
+    }
+  }
+
+  return conflicts;
+}
+
+/**
+ * Apply presets to resource config.
+ * Validates preset combinations for conflicts before merging.
  */
 export function applyPresets<TDoc = AnyRecord>(
   config: ResourceConfig<TDoc>,
@@ -154,9 +202,21 @@ export function applyPresets<TDoc = AnyRecord>(
 ): ResourceConfig<TDoc> {
   let result = { ...config };
 
-  for (const preset of presets) {
-    const resolved = resolvePresetInput(preset);
-    result = mergePreset(result, resolved) as ResourceConfig<TDoc>;
+  // Resolve all presets first for validation
+  const resolved = presets.map(resolvePresetInput);
+
+  // Validate combinations — fail-fast on route collisions
+  const conflicts = validatePresetCombination(resolved);
+  const errors = conflicts.filter((c) => c.severity === 'error');
+  if (errors.length > 0) {
+    throw new Error(
+      `[Arc] Resource '${config.name}' preset conflicts:\n` +
+      errors.map((c) => `  - ${c.message}`).join('\n'),
+    );
+  }
+
+  for (const preset of resolved) {
+    result = mergePreset(result, preset) as ResourceConfig<TDoc>;
   }
 
   return result;
@@ -240,11 +300,15 @@ function mergePreset<TDoc = AnyRecord>(
     }
   }
 
-  // Merge schema options
+  // Merge schema options (deep-merge fieldRules so presets accumulate rules)
   if (preset.schemaOptions) {
     result.schemaOptions = {
       ...result.schemaOptions,
       ...preset.schemaOptions,
+      fieldRules: {
+        ...result.schemaOptions?.fieldRules,
+        ...preset.schemaOptions?.fieldRules,
+      },
     } as RouteSchemaOptions;
   }
 

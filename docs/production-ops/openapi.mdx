@@ -1,0 +1,232 @@
+# OpenAPI & Scalar Documentation
+
+Auto-generated API documentation from resource definitions.
+
+## Quick Start
+
+```typescript
+import { openApiPlugin, scalarPlugin } from '@classytic/arc/docs';
+
+// Generate OpenAPI spec
+await fastify.register(openApiPlugin, {
+  title: 'My Store API',
+  version: '1.0.0',
+});
+
+// Add interactive UI
+await fastify.register(scalarPlugin, {
+  path: '/docs',
+});
+```
+
+**Endpoints:**
+
+| Endpoint | Description |
+|----------|-------------|
+| `/_docs/openapi.json` | OpenAPI 3.0 specification |
+| `/docs` | Interactive Scalar UI |
+
+## MongoKit Auto-Detection
+
+Arc **automatically detects** `@classytic/mongokit` when installed:
+
+```typescript
+// Just register - no configuration needed
+await fastify.register(openApiPlugin, {
+  title: 'My API',
+});
+
+// If MongoKit is installed:
+// → Real schemas from Mongoose models
+// → Debug log: "OpenAPI: Auto-detected @classytic/mongokit schemaProvider"
+
+// If MongoKit is NOT installed:
+// → Warning log: "OpenAPI: No schemaProvider configured. Schemas will be placeholders."
+// → Placeholder schemas in docs
+```
+
+To override auto-detection:
+
+```typescript
+import { buildCrudSchemasFromModel } from '@classytic/mongokit/utils';
+
+await fastify.register(openApiPlugin, {
+  schemaProvider: buildCrudSchemasFromModel,  // Explicit
+});
+```
+
+## Configuration
+
+```typescript
+interface OpenApiOptions {
+  title?: string;              // API title (default: 'Arc API')
+  version?: string;            // API version (default: '1.0.0')
+  description?: string;        // API description
+  serverUrl?: string;          // Server URL for spec
+  prefix?: string;             // Route prefix (default: '/_docs')
+  authRoles?: string[];        // Roles required to view spec
+  schemaProvider?: Function;   // Custom schema generator
+}
+```
+
+## With vs Without MongoKit
+
+| Aspect | Without MongoKit | With MongoKit |
+|--------|------------------|---------------|
+| Request body | `{ type: 'object' }` | Full field definitions |
+| Response | Generic object | Accurate model schema |
+| Validation | None in docs | Types, required, enums |
+| Client generation | Unusable | Fully functional |
+
+**Recommendation:** Install `@classytic/mongokit` for production APIs.
+
+## Permission-Based Security
+
+Routes show correct auth requirements based on permissions:
+
+```typescript
+defineResource({
+  permissions: {
+    list: [],           // No security in OpenAPI
+    create: ['admin'],  // Shows bearerAuth requirement
+  },
+});
+```
+
+Generated spec (with Better Auth `apiKey()` active):
+```yaml
+/products:
+  get:
+    summary: List products
+    # No security block (public)
+  post:
+    summary: Create products
+    security:
+      - bearerAuth: []              # Option 1: Bearer token
+      - apiKeyAuth: []              # Option 2: API key + org header
+        orgHeader: []
+    responses:
+      401: Unauthorized
+      403: Forbidden
+```
+
+Without `apiKey()` plugin, resource paths only show `bearerAuth`.
+
+## External Paths & Dynamic Security
+
+Auth adapters and custom integrations inject paths into the spec via `ExternalOpenApiPaths`:
+
+```typescript
+import type { ExternalOpenApiPaths } from '@classytic/arc/docs';
+
+const externalPaths: ExternalOpenApiPaths = {
+  paths: { '/api/auth/sign-in': { post: { summary: 'Sign in' } } },
+  schemas: { User: { type: 'object', properties: { ... } } },
+  securitySchemes: {
+    cookieAuth: { type: 'apiKey', in: 'cookie', name: 'session_token' },
+  },
+  tags: [{ name: 'Authentication' }],
+  resourceSecurity: [{ apiKeyAuth: [], orgHeader: [] }],
+};
+```
+
+### `resourceSecurity` — Declarative Auth Alternatives
+
+The `resourceSecurity` field declares additional security alternatives that get applied to **all authenticated Arc resource paths** alongside `bearerAuth`:
+
+- Array items are **OR** alternatives (any one suffices)
+- Keys within the same object are **AND** (all required together)
+
+```yaml
+# Result on resource paths:
+security:
+  - bearerAuth: []                    # Option 1: Bearer token alone
+  - apiKeyAuth: []                    # Option 2: API key + org header (both required)
+    orgHeader: []
+```
+
+Arc's Better Auth adapter (`extractBetterAuthOpenApi`) auto-populates `resourceSecurity` when the `apiKey()` plugin is detected. No manual setup needed — if the plugin is active, the spec includes it; if not, nothing appears.
+
+### Security Schemes
+
+| Scheme | Type | Source | When present |
+|--------|------|--------|--------------|
+| `bearerAuth` | HTTP Bearer | Arc core | Always |
+| `orgHeader` | API Key header (`x-organization-id`) | Arc core | Multi-tenant apps |
+| `cookieAuth` | API Key cookie | Better Auth adapter | When Better Auth active |
+| `apiKeyAuth` | API Key header (`x-api-key`) | Better Auth adapter | When `apiKey()` plugin active |
+
+### Better Auth OpenAPI Extraction
+
+```typescript
+import { extractBetterAuthOpenApi } from '@classytic/arc/auth';
+
+const openapi = extractBetterAuthOpenApi(auth.api, {
+  basePath: '/api/auth',
+  tagName: 'Authentication',
+  userFields: { phone: { type: 'string', description: 'Phone number' } },
+});
+// Returns: { paths, schemas, securitySchemes, tags, resourceSecurity }
+```
+
+Detects active plugins (apiKey, organization) by introspecting endpoint paths — no hardcoded assumptions.
+
+## Scalar Configuration
+
+```typescript
+interface ScalarOptions {
+  path?: string;               // UI path (default: '/docs')
+  specUrl?: string;            // OpenAPI spec URL
+  title?: string;              // Page title
+  theme?: 'light' | 'dark';    // UI theme
+  authRoles?: string[];        // Roles required to view
+}
+```
+
+## Protecting Documentation
+
+```typescript
+// Require admin role to view docs
+await fastify.register(openApiPlugin, {
+  authRoles: ['admin'],
+});
+
+await fastify.register(scalarPlugin, {
+  authRoles: ['admin'],
+});
+```
+
+## Full Example
+
+```typescript
+import Fastify from 'fastify';
+import { openApiPlugin, scalarPlugin } from '@classytic/arc/docs';
+import { authPlugin } from '@classytic/arc/auth';
+
+const fastify = Fastify();
+
+// Auth first (for protected docs)
+await fastify.register(authPlugin);
+
+// OpenAPI spec (auto-detects MongoKit)
+await fastify.register(openApiPlugin, {
+  title: 'BigBoss Store API',
+  version: '2.0.0',
+  description: 'Multi-tenant e-commerce platform',
+  serverUrl: process.env.API_URL,
+});
+
+// Interactive docs
+await fastify.register(scalarPlugin, {
+  path: '/docs',
+  theme: 'dark',
+});
+
+// Register resources...
+await fastify.register(productResource.toPlugin());
+await fastify.register(categoryResource.toPlugin());
+
+await fastify.listen({ port: 3000 });
+// Docs at http://localhost:3000/docs
+// Spec at http://localhost:3000/_docs/openapi.json
+```

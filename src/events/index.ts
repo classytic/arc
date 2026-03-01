@@ -29,6 +29,17 @@ export {
 
 export { eventPlugin, type EventPluginOptions } from './eventPlugin.js';
 
+// Event type constants and helpers
+export {
+  CRUD_EVENT_SUFFIXES,
+  crudEventType,
+  ARC_LIFECYCLE_EVENTS,
+  CACHE_EVENTS,
+  type CrudEventSuffix,
+  type ArcLifecycleEvent,
+  type CacheEvent,
+} from './eventTypes.js';
+
 // Retry & Dead Letter Queue (transport-agnostic)
 export { withRetry, createDeadLetterPublisher } from './retry.js';
 export type { RetryOptions } from './retry.js';

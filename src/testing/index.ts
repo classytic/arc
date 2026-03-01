@@ -37,6 +37,35 @@ export {
   createTestTimer,
 } from './mocks.js';
 
+// Better Auth test helpers
+export {
+  createBetterAuthTestHelpers,
+  setupBetterAuthOrg,
+  safeParseBody,
+} from './authHelpers.js';
+export type {
+  BetterAuthTestHelpers,
+  BetterAuthTestHelpersOptions,
+  TestUserContext,
+  TestOrgContext,
+  SetupBetterAuthOrgOptions,
+  SetupUserConfig,
+  AuthResponse,
+  OrgResponse,
+} from './authHelpers.js';
+
+// HTTP test harness
+export {
+  HttpTestHarness,
+  createHttpTestHarness,
+  createJwtAuthProvider,
+  createBetterAuthProvider,
+} from './HttpTestHarness.js';
+export type {
+  HttpTestHarnessOptions,
+  AuthProvider,
+} from './HttpTestHarness.js';
+
 // DB helpers (MongoDB/Mongoose) - optional
 export {
   TestDatabase,

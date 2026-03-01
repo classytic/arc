@@ -12,14 +12,14 @@
  *
  * // Using factory helper
  * const app = await ArcFactory.production({
- *   auth: { jwt: { secret: process.env.JWT_SECRET } },
+ *   auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
  *   cors: { origin: ['https://example.com'] },
  * });
  *
  * // Using createApp directly
  * const app = await createApp({
  *   preset: 'production',
- *   auth: { jwt: { secret: process.env.JWT_SECRET } },
+ *   auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
  * });
  */
 
@@ -28,6 +28,7 @@ export { getPreset, productionPreset, developmentPreset, testingPreset } from '.
 export type {
   CreateAppOptions,
   AuthOption,
+  JwtAuthOption,
   BetterAuthOption,
   CustomPluginAuthOption,
   CustomAuthenticatorOption,

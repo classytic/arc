@@ -35,7 +35,6 @@ export {
   queryParams,
   getListQueryParams,
   getDefaultCrudSchemas,
-  // Aliases for backwards compatibility with local responseSchemas.js
   itemWrapper,
   paginateWrapper,
   messageWrapper,
@@ -52,7 +51,7 @@ export {
   CircuitBreakerError,
   CircuitBreakerRegistry,
   createCircuitBreaker,
-  circuitBreakerRegistry,
+  createCircuitBreakerRegistry,
   CircuitState,
 } from './circuitBreaker.js';
 export type { CircuitBreakerOptions, CircuitBreakerStats } from './circuitBreaker.js';
@@ -63,3 +62,16 @@ export {
   createQueryParser,
 } from './queryParser.js';
 export type { ArcQueryParserOptions } from './queryParser.js';
+
+// Type Guards
+export { hasEvents } from './typeGuards.js';
+export type { EventsDecorator } from './typeGuards.js';
+
+// Schema Converter
+export {
+  toJsonSchema,
+  isJsonSchema,
+  isZodSchema,
+  convertOpenApiSchemas,
+  convertRouteSchema,
+} from './schemaConverter.js';

@@ -35,11 +35,13 @@ export class ArcError extends Error {
   requestId?: string;
 
   constructor(message: string, options: ErrorDetails = {}) {
-    super(message);
+    // Pass cause to native Error for proper chain support (Node 16.9+)
+    super(message, options.cause ? { cause: options.cause } : undefined);
     this.name = 'ArcError';
     this.code = options.code ?? 'ARC_ERROR';
     this.statusCode = options.statusCode ?? 500;
     this.details = options.details;
+    // cause is now set by super() — keep explicit assignment for TypeScript override
     this.cause = options.cause;
     this.timestamp = new Date().toISOString();
     this.requestId = options.requestId;
@@ -59,7 +61,8 @@ export class ArcError extends Error {
   }
 
   /**
-   * Convert to JSON response
+   * Convert to JSON response.
+   * Includes cause chain when present for debugging visibility.
    */
   toJSON(): Record<string, unknown> {
     return {
@@ -69,6 +72,11 @@ export class ArcError extends Error {
       timestamp: this.timestamp,
       ...(this.requestId && { requestId: this.requestId }),
       ...(this.details && { details: this.details }),
+      ...(this.cause && {
+        cause: this.cause instanceof ArcError
+          ? this.cause.toJSON()
+          : { message: (this.cause as Error).message, name: (this.cause as Error).name },
+      }),
     };
   }
 }

@@ -208,6 +208,10 @@ export class RedisStreamTransport implements EventTransport {
         set.delete(handler);
         if (set.size === 0) this.handlers.delete(pattern);
       }
+      // Stop polling when no handlers remain — prevents CPU/network waste
+      if (this.handlers.size === 0 && this.running) {
+        this.running = false;
+      }
     };
   }
 

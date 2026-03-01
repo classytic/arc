@@ -29,6 +29,7 @@ import type { ResourceDefinition } from '../core/defineResource.js';
 import { applyFieldReadPermissions, applyFieldWritePermissions } from '../permissions/fields.js';
 import type { FieldPermissionMap } from '../permissions/fields.js';
 import type { PipelineConfig, PipelineStep } from '../pipeline/types.js';
+import { CRUD_OPERATIONS } from '../constants.js';
 
 /**
  * Test fixtures for a resource
@@ -112,9 +113,13 @@ export class TestHarness<T = unknown> {
   }
 
   /**
-   * Run CRUD operation tests
+   * Run CRUD operation tests (model-level)
    *
    * Tests: create, read (list + getById), update, delete
+   *
+   * @deprecated Use `HttpTestHarness.runCrud()` for HTTP-level CRUD tests.
+   * This method tests Mongoose models directly and does not exercise
+   * HTTP routes, authentication, permissions, or the Arc pipeline.
    */
   runCrud(): void {
     const { resource, fixtures, Model } = this;
@@ -449,7 +454,7 @@ export class TestHarness<T = unknown> {
 
     if (!pipe) return;
 
-    const validOps = new Set(['list', 'get', 'create', 'update', 'delete']);
+    const validOps: Set<string> = new Set(CRUD_OPERATIONS);
 
     describe(`${resource.displayName} Pipeline`, () => {
       const steps = collectPipelineSteps(pipe);
@@ -709,8 +714,7 @@ export function createConfigTestSuite(resource: ResourceDefinition<unknown>): vo
   // Permissions configuration
   if (resource.permissions && Object.keys(resource.permissions).length > 0) {
     describe(`${resource.displayName} Permission Config`, () => {
-      const ops = ['list', 'get', 'create', 'update', 'delete'] as const;
-      for (const op of ops) {
+      for (const op of CRUD_OPERATIONS) {
         const check = resource.permissions[op];
         if (check) {
           it(`${op} permission should be a function`, () => {
@@ -799,7 +803,7 @@ function runPipelineTests(displayName: string, pipe: PipelineConfig): void {
   const steps = collectPipelineSteps(pipe);
   if (steps.length === 0) return;
 
-  const validOps = new Set(['list', 'get', 'create', 'update', 'delete']);
+  const validOps: Set<string> = new Set(CRUD_OPERATIONS);
 
   describe(`${displayName} Pipeline`, () => {
     it('should have at least one pipeline step', () => {

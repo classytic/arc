@@ -16,42 +16,39 @@
  */
 
 import type { FastifyReply } from 'fastify';
-import type { RequestContext, RequestWithExtras, RouteHandler, UserBase } from '../types/index.js';
+import type { RequestWithExtras, RouteHandler } from '../types/index.js';
+import type { RequestScope } from '../scope/types.js';
+import { isMember, isElevated, hasOrgAccess, getOrgRoles, PUBLIC_SCOPE } from '../scope/types.js';
 
 export interface OrgGuardOptions {
   /** Require organization context (default: true) */
   requireOrgContext?: boolean;
   /** Required org-level roles */
   roles?: string[];
-  /** Allow superadmin without org context */
-  allowGlobal?: boolean;
 }
 
 /**
- * Create org guard middleware
+ * Create org guard middleware.
+ * Reads `request.scope` for org context and roles.
+ * Elevated scope always passes.
  */
 export function orgGuard(options: OrgGuardOptions = {}): RouteHandler {
   const {
     requireOrgContext = true,
     roles = [],
-    allowGlobal = false,
   } = options;
 
   return async function orgGuardMiddleware(
     request: RequestWithExtras,
     reply: FastifyReply
   ): Promise<void> {
-    const context: RequestContext = request.context ?? {};
-    const user = request.user;
-    const userWithRoles = user as { roles?: string[] } | undefined;
+    const scope = request.scope ?? PUBLIC_SCOPE;
 
-    // Check if user is superadmin with global access
-    if (allowGlobal && userWithRoles?.roles?.includes('superadmin')) {
-      return; // Allow through
-    }
+    // Elevated scope always passes
+    if (isElevated(scope)) return;
 
     // Check org context exists
-    if (requireOrgContext && !context.organizationId) {
+    if (requireOrgContext && !hasOrgAccess(scope)) {
       reply.code(403).send({
         success: false,
         error: 'Organization context required',
@@ -64,13 +61,11 @@ export function orgGuard(options: OrgGuardOptions = {}): RouteHandler {
     }
 
     // Check org-level roles if specified
-    if (roles.length > 0 && context.organizationId) {
-      const contextWithRoles = context as { orgRoles?: string[] };
-      const userOrgRoles = contextWithRoles.orgRoles ?? [];
+    if (roles.length > 0 && isMember(scope)) {
+      const userOrgRoles = getOrgRoles(scope);
       const hasRequiredRole = roles.some((role) => userOrgRoles.includes(role));
 
-      // Superadmin bypasses org role check
-      if (!hasRequiredRole && !userWithRoles?.roles?.includes('superadmin')) {
+      if (!hasRequiredRole) {
         reply.code(403).send({
           success: false,
           error: 'Insufficient organization permissions',

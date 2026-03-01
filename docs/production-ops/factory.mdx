@@ -1,0 +1,205 @@
+# Factory — createApp()
+
+Secure, production-ready Fastify app creation with sensible defaults and **opt-out security**.
+
+## Quick Start
+
+```typescript
+import { createApp } from '@classytic/arc/factory';
+import mongoose from 'mongoose';
+
+await mongoose.connect(process.env.MONGO_URI);
+
+const app = await createApp({
+  preset: 'production',
+  auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
+  cors: { origin: [process.env.FRONTEND_URL] },
+});
+
+await app.listen({ port: 3000, host: '0.0.0.0' });
+```
+
+## Presets
+
+| Preset | Logging | Rate Limit | Security | Notes |
+|--------|---------|------------|----------|-------|
+| `production` | info | 100/min | full | Helmet, CORS, rate limit |
+| `development` | debug | 1000/min | relaxed | CORS allows all, pretty logs |
+| `testing` | silent | disabled | minimal | Fast startup |
+| `edge` | warn | disabled | none | API Gateway handles security |
+
+## Auth Configuration
+
+Auth uses a **discriminated union** with `type` field:
+
+```typescript
+const app = await createApp({
+  // JWT
+  auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET, expiresIn: '15m' } },
+
+  // Better Auth (SaaS with orgs)
+  auth: { type: 'betterAuth', betterAuth: createBetterAuthAdapter({ auth, orgContext: true }) },
+
+  // Custom plugin (must decorate fastify.authenticate)
+  auth: { type: 'custom', plugin: myAuthPlugin },
+
+  // Custom function
+  auth: { type: 'authenticator', authenticate: async (req, reply) => { ... } },
+
+  // Disabled
+  auth: false,
+});
+```
+
+## Runtime Modes
+
+```typescript
+const app = await createApp({
+  runtime: 'memory',       // Default — zero config, single instance
+  // runtime: 'distributed',  // Multi-instance — requires Redis stores
+
+  stores: {                // Required when runtime: 'distributed'
+    events: new RedisEventTransport({ client: redis }),
+    cache: new RedisCacheStore({ client: redis }),
+    queryCache: new RedisCacheStore({ client: redis, prefix: 'arc:qc:' }),
+  },
+});
+```
+
+| Mode | Use Case | Requirements |
+|------|----------|--------------|
+| `memory` | Development, single-instance | None |
+| `distributed` | Multi-instance production | Redis stores |
+
+Fail-fast validation: using `distributed` mode without providing required stores throws immediately.
+
+## Arc Plugins
+
+```typescript
+const app = await createApp({
+  arcPlugins: {
+    requestId: true,         // X-Request-Id header
+    health: true,            // GET /health endpoint
+    gracefulShutdown: true,  // Handle SIGTERM/SIGINT
+    queryCache: true,        // Server-side query caching (SWR)
+    emitEvents: true,        // CRUD domain events
+    sse: true,               // Server-sent events
+    caching: true,           // ETag + Cache-Control
+  },
+});
+```
+
+## Security Plugins (opt-out)
+
+All enabled by default in `production` preset. Set to `false` to disable.
+
+```typescript
+const app = await createApp({
+  preset: 'production',
+  auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
+
+  helmet: { contentSecurityPolicy: { directives: { defaultSrc: ["'self'"] } } },
+  // helmet: false,
+
+  cors: { origin: ['https://example.com'], credentials: true },
+  // cors: false,
+
+  rateLimit: { max: 100, timeWindow: '1 minute' },
+  // rateLimit: false,
+});
+```
+
+## Utility Plugins
+
+```typescript
+const app = await createApp({
+  sensible: true,            // fastify.httpErrors helpers
+  multipart: { limits: { fileSize: 10 * 1024 * 1024 } },  // File uploads
+  rawBody: { field: 'rawBody', global: false },            // Webhooks (Stripe, etc.)
+  typeProvider: 'typebox',   // TypeBox type-safe schemas
+
+  // Error handler (auto-registered)
+  errorHandler: { includeStack: true },  // or false to disable
+});
+```
+
+## Lifecycle Hooks
+
+```typescript
+const app = await createApp({
+  onReady: async (fastify) => {
+    await startBackgroundJobs();
+  },
+  onClose: async (fastify) => {
+    await mongoose.disconnect();
+    await redis.quit();
+  },
+  plugins: async (fastify) => {
+    await fastify.register(productResource.toPlugin());
+    await fastify.register(orderResource.toPlugin());
+  },
+});
+```
+
+## Factory Shortcuts
+
+```typescript
+import { ArcFactory } from '@classytic/arc/factory';
+
+const app = await ArcFactory.production({
+  auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
+  cors: { origin: [process.env.FRONTEND_URL] },
+});
+
+const app = await ArcFactory.development({
+  auth: { type: 'jwt', jwt: { secret: 'dev-secret-32-chars-minimum-length' } },
+});
+
+const app = await ArcFactory.testing({
+  auth: { type: 'jwt', jwt: { secret: 'test-secret-32-chars-minimum-len' } },
+});
+```
+
+## Error Normalization
+
+| Source | HTTP Status | Response |
+|--------|------------|----------|
+| AJV validation | 422 | `{ success: false, error: 'Validation failed', details: [...] }` |
+| Mongoose CastError | 400 | `{ success: false, error: 'Invalid ID format' }` |
+| Duplicate key (E11000) | 409 | `{ success: false, error: 'Duplicate entry' }` |
+| ArcError | Custom | `{ success: false, error: message, code: errorCode }` |
+
+## TypeBox Type Provider
+
+```typescript
+const app = await createApp({
+  typeProvider: 'typebox',
+});
+```
+
+**Requires:** `npm install @sinclair/typebox @fastify/type-provider-typebox`
+
+```typescript
+import { Type, ArcListResponse, ArcPaginationQuery } from '@classytic/arc/schemas';
+
+const ProductSchema = Type.Object({ _id: Type.String(), name: Type.String() });
+
+fastify.get('/products', {
+  schema: { querystring: ArcPaginationQuery(), response: { 200: ArcListResponse(ProductSchema) } },
+}, handler);
+```
+
+| Helper | Description |
+|--------|-------------|
+| `ArcListResponse(schema)` | Paginated list: `{ success, docs, page, limit, total }` |
+| `ArcItemResponse(schema)` | Single item: `{ success, data }` |
+| `ArcMutationResponse(schema)` | Create/update: `{ success, data, message? }` |
+| `ArcDeleteResponse()` | Delete: `{ success, message? }` |
+| `ArcErrorResponse()` | Error: `{ success: false, error }` |
+| `ArcPaginationQuery()` | Query params: `{ page?, limit?, sort?, select? }` |
+
+## See Also
+
+- [Auth](../getting-started/auth) — Authentication strategies
+- [Core](../getting-started/core) — Resources, controllers, adapters
+- [Plugins](./plugins) — Health, request ID, graceful shutdown

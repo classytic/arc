@@ -71,7 +71,7 @@ async function setup() {
   // Create app
   app = await createApp({
     preset: 'development',
-    auth: { jwt: { secret: 'bench-secret-must-be-32-chars-long' } },
+    auth: { type: 'jwt', jwt: { secret: 'bench-secret-must-be-32-chars-long' } },
     logger: false,
     helmet: false,
     rateLimit: false,

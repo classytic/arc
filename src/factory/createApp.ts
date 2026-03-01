@@ -16,7 +16,7 @@
  * // 2. Create Arc app (no database config needed)
  * const app = await createApp({
  *   preset: 'production',
- *   auth: { jwt: { secret: process.env.JWT_SECRET } },
+ *   auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
  *   cors: { origin: ['https://example.com'] },
  * });
  *
@@ -39,76 +39,37 @@
 
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import qs from 'qs';
-import type { CreateAppOptions, BetterAuthOption, CustomPluginAuthOption, CustomAuthenticatorOption } from './types.js';
-import type { AuthPluginOptions } from '../types/index.js';
+import type { CreateAppOptions } from './types.js';
 import { getPreset } from './presets.js';
+import { PUBLIC_SCOPE } from '../scope/types.js';
 
-// ============================================================================
-// Auth option type guards
-// ============================================================================
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Fastify plugin types vary per package
+type FastifyPlugin = (...args: any[]) => any;
 
-function isBetterAuth(auth: NonNullable<CreateAppOptions['auth']>): auth is BetterAuthOption {
-  return typeof auth === 'object' && 'betterAuth' in auth;
-}
-
-function isCustomPlugin(auth: NonNullable<CreateAppOptions['auth']>): auth is CustomPluginAuthOption {
-  return typeof auth === 'object' && 'plugin' in auth && !('betterAuth' in auth);
-}
-
-function isCustomAuthenticator(auth: NonNullable<CreateAppOptions['auth']>): auth is CustomAuthenticatorOption {
-  return (
-    typeof auth === 'object' &&
-    'authenticate' in auth &&
-    !('jwt' in auth) &&
-    !('betterAuth' in auth) &&
-    !('plugin' in auth)
-  );
-}
-
-function isArcJwt(auth: NonNullable<CreateAppOptions['auth']>): auth is AuthPluginOptions {
-  return typeof auth === 'object' && 'jwt' in auth;
-}
-
-// Plugin name to package name mapping
-const PLUGIN_PACKAGES: Record<string, string> = {
-  cors: '@fastify/cors',
-  helmet: '@fastify/helmet',
-  rateLimit: '@fastify/rate-limit',
-  underPressure: '@fastify/under-pressure',
-  sensible: '@fastify/sensible',
-  multipart: '@fastify/multipart',
-  rawBody: 'fastify-raw-body',
+// Plugin registry: name → { package, loader, optional }
+const PLUGIN_REGISTRY: Record<string, {
+  package: string;
+  loader: () => Promise<FastifyPlugin>;
+  optional?: boolean;
+}> = {
+  cors:           { package: '@fastify/cors',           loader: () => import('@fastify/cors').then(m => m.default) },
+  helmet:         { package: '@fastify/helmet',         loader: () => import('@fastify/helmet').then(m => m.default) },
+  rateLimit:      { package: '@fastify/rate-limit',     loader: () => import('@fastify/rate-limit').then(m => m.default) },
+  underPressure:  { package: '@fastify/under-pressure', loader: () => import('@fastify/under-pressure').then(m => m.default) },
+  sensible:       { package: '@fastify/sensible',       loader: () => import('@fastify/sensible').then(m => m.default) },
+  multipart:      { package: '@fastify/multipart',      loader: () => import('@fastify/multipart').then(m => m.default), optional: true },
+  rawBody:        { package: 'fastify-raw-body',        loader: () => import('fastify-raw-body').then(m => m.default), optional: true },
 };
 
-// Optional plugins that should not throw if missing
-const OPTIONAL_PLUGINS = new Set(['multipart', 'rawBody']);
-
 // Import plugins (with lazy loading for optional dependencies)
-async function loadPlugin(name: string, logger?: { warn: (msg: string) => void }): Promise<any> {
-  const packageName = PLUGIN_PACKAGES[name];
-  if (!packageName) {
+async function loadPlugin(name: string, logger?: { warn: (msg: string) => void }): Promise<FastifyPlugin | null> {
+  const entry = PLUGIN_REGISTRY[name];
+  if (!entry) {
     throw new Error(`Unknown plugin: ${name}`);
   }
 
   try {
-    switch (name) {
-      case 'cors':
-        return (await import('@fastify/cors')).default;
-      case 'helmet':
-        return (await import('@fastify/helmet')).default;
-      case 'rateLimit':
-        return (await import('@fastify/rate-limit')).default;
-      case 'underPressure':
-        return (await import('@fastify/under-pressure')).default;
-      case 'sensible':
-        return (await import('@fastify/sensible')).default;
-      case 'multipart':
-        return (await import('@fastify/multipart')).default;
-      case 'rawBody':
-        return (await import('fastify-raw-body')).default;
-      default:
-        throw new Error(`Unknown plugin: ${name}`);
-    }
+    return await entry.loader();
   } catch (error) {
     const err = error as Error;
     const isModuleNotFound = err.message.includes('Cannot find module') ||
@@ -117,16 +78,16 @@ async function loadPlugin(name: string, logger?: { warn: (msg: string) => void }
       err.message.includes('Could not resolve');
 
     // For optional plugins, return null instead of throwing
-    if (isModuleNotFound && OPTIONAL_PLUGINS.has(name)) {
-      logger?.warn(`Optional plugin '${name}' skipped (${packageName} not installed)`);
+    if (isModuleNotFound && entry.optional) {
+      logger?.warn(`Optional plugin '${name}' skipped (${entry.package} not installed)`);
       return null;
     }
 
     // For required plugins, throw helpful error
     if (isModuleNotFound) {
       throw new Error(
-        `Plugin '${name}' requires package '${packageName}' which is not installed.\n` +
-        `Install it with: npm install ${packageName}\n` +
+        `Plugin '${name}' requires package '${entry.package}' which is not installed.\n` +
+        `Install it with: npm install ${entry.package}\n` +
         `Or disable this plugin by setting ${name}: false in createApp options.`
       );
     }
@@ -153,45 +114,65 @@ async function loadPlugin(name: string, logger?: { warn: (msg: string) => void }
  */
 export async function createApp(options: CreateAppOptions): Promise<FastifyInstance> {
   // ============================================
+  // 0. CONFIGURE ARC LOGGER
+  // ============================================
+  if (options.debug !== undefined && options.debug !== false) {
+    const { configureArcLogger } = await import('../logger/index.js');
+    configureArcLogger({ debug: options.debug });
+  }
+
+  // ============================================
   // 1. VALIDATE AUTH OPTIONS
   // ============================================
   const authConfig = options.auth;
   const isAuthDisabled = authConfig === false;
 
-  // Determine which auth strategy is in use
-  const useBetterAuth = !isAuthDisabled && authConfig && isBetterAuth(authConfig);
-  const useCustomPlugin = !isAuthDisabled && authConfig && isCustomPlugin(authConfig);
-  const useCustomAuthenticator = !isAuthDisabled && authConfig && isCustomAuthenticator(authConfig);
-  const useArcJwt = !isAuthDisabled && authConfig && isArcJwt(authConfig);
-
-  // Validate: if none of the recognized strategies match, require JWT secret
-  if (
-    !isAuthDisabled &&
-    !useBetterAuth &&
-    !useCustomPlugin &&
-    !useCustomAuthenticator &&
-    !useArcJwt
-  ) {
-    throw new Error(
-      'createApp: Invalid auth configuration.\n' +
-      'Provide one of:\n' +
-      '  - auth: { jwt: { secret } }              (Arc JWT)\n' +
-      '  - auth: { betterAuth: adapter }           (Better Auth)\n' +
-      '  - auth: { plugin: fastifyPlugin }         (Custom plugin)\n' +
-      '  - auth: { authenticate: fn }              (Custom authenticator)\n' +
-      '  - auth: false                             (Disabled)\n' +
-      'Example: auth: { jwt: { secret: process.env.JWT_SECRET } }'
-    );
-  }
-
-  // Arc JWT requires a secret (unless a custom authenticator is provided within AuthPluginOptions)
-  if (useArcJwt) {
-    const arcAuth = authConfig as AuthPluginOptions;
-    if (!arcAuth.jwt?.secret && !arcAuth.authenticate) {
+  // Validate JWT auth requires a secret (unless a custom authenticator is provided)
+  if (!isAuthDisabled && authConfig && authConfig.type === 'jwt') {
+    if (!authConfig.jwt?.secret && !authConfig.authenticate) {
       throw new Error(
         'createApp: JWT secret required when Arc auth is enabled.\n' +
         'Provide auth.jwt.secret, auth.authenticate, or set auth: false to disable.\n' +
-        'Example: auth: { jwt: { secret: process.env.JWT_SECRET } }'
+        'Example: auth: { type: \'jwt\', jwt: { secret: process.env.JWT_SECRET } }'
+      );
+    }
+  }
+
+  // ============================================
+  // 1b. VALIDATE RUNTIME PROFILE
+  // ============================================
+  if (options.runtime === 'distributed') {
+    const MEMORY_NAMES = new Set(['memory', 'memory-cache']);
+    const missing: string[] = [];
+
+    const eventsTransport = options.stores?.events;
+    if (!eventsTransport || MEMORY_NAMES.has(eventsTransport.name)) {
+      missing.push('events transport');
+    }
+
+    const cacheStore = options.stores?.cache;
+    if (!cacheStore || MEMORY_NAMES.has(cacheStore.name)) {
+      missing.push('cache store');
+    }
+
+    const idempotencyStore = options.stores?.idempotency;
+    if (!idempotencyStore || MEMORY_NAMES.has(idempotencyStore.name)) {
+      missing.push('idempotency store');
+    }
+
+    // QueryCache store validation (only when queryCache plugin is enabled)
+    if (options.arcPlugins?.queryCache) {
+      const qcStore = options.stores?.queryCache;
+      if (!qcStore || MEMORY_NAMES.has(qcStore.name)) {
+        missing.push('queryCache store');
+      }
+    }
+
+    if (missing.length > 0) {
+      throw new Error(
+        `[Arc] runtime: 'distributed' requires Redis/durable adapters.\n` +
+        `Missing: ${missing.join(', ')}.\n` +
+        `Provide Redis-backed stores or use runtime: 'memory' for development.`
       );
     }
   }
@@ -270,7 +251,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
   // Helmet - Security headers
   if (config.helmet !== false) {
-    const helmet = await loadPlugin('helmet');
+    const helmet = (await loadPlugin('helmet'))!;
     // Use type assertion to handle complex helmet options
     await fastify.register(helmet, (config.helmet ?? {}) as Record<string, unknown>);
     fastify.log.debug('Helmet (security headers) enabled');
@@ -280,7 +261,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
   // CORS - Cross-origin requests
   if (config.cors !== false) {
-    const cors = await loadPlugin('cors');
+    const cors = (await loadPlugin('cors'))!;
     const corsOptions = config.cors ?? {};
 
     // Require explicit origin in production
@@ -301,7 +282,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
   // Rate limiting - DDoS protection
   if (config.rateLimit !== false) {
-    const rateLimit = await loadPlugin('rateLimit');
+    const rateLimit = (await loadPlugin('rateLimit'))!;
     const rateLimitOpts = config.rateLimit ?? { max: 100, timeWindow: '1 minute' };
     await fastify.register(rateLimit, rateLimitOpts);
 
@@ -338,7 +319,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
   // Under Pressure - Health monitoring
   if (config.underPressure !== false) {
-    const underPressure = await loadPlugin('underPressure');
+    const underPressure = (await loadPlugin('underPressure'))!;
     await fastify.register(underPressure, config.underPressure ?? { exposeStatusRoute: true });
     fastify.log.debug('Health monitoring (under-pressure) enabled');
   } else {
@@ -351,7 +332,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
   // Sensible - HTTP helpers
   if (config.sensible !== false) {
-    const sensible = await loadPlugin('sensible');
+    const sensible = (await loadPlugin('sensible'))!;
     await fastify.register(sensible);
     fastify.log.debug('Sensible (HTTP helpers) enabled');
   }
@@ -406,22 +387,49 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     emitEvents: config.arcPlugins?.emitEvents !== false,
   });
 
+  /** Track a plugin in the Arc plugin registry */
+  const trackPlugin = (name: string, opts?: Record<string, unknown>) => {
+    fastify.arc.plugins.set(name, {
+      name,
+      options: opts,
+      registeredAt: new Date().toISOString(),
+    });
+  };
+  trackPlugin('arc-core');
+
+  // Register event plugin — provides fastify.events for pub/sub.
+  // Without this, arcCorePlugin's CRUD event hooks are no-ops (hasEvents check).
+  // Transport is sourced from stores.events (defaults to MemoryEventTransport).
+  if (config.arcPlugins?.events !== false) {
+    const { default: eventPlugin } = await import('../events/eventPlugin.js');
+    const eventOpts = typeof config.arcPlugins?.events === 'object' ? config.arcPlugins.events : {};
+    await fastify.register(eventPlugin, {
+      ...eventOpts,
+      transport: options.stores?.events, // undefined → eventPlugin defaults to MemoryEventTransport
+    });
+    trackPlugin('arc-events', eventOpts as Record<string, unknown>);
+    fastify.log.debug(`Arc events plugin enabled (transport: ${fastify.events.transportName})`);
+  }
+
   // ============================================
   // 8. REGISTER ARC PLUGINS (opt-in)
   // ============================================
 
   if (config.arcPlugins?.requestId !== false) {
     await fastify.register(requestIdPlugin);
+    trackPlugin('arc-request-id');
     fastify.log.debug('Arc requestId plugin enabled');
   }
 
   if (config.arcPlugins?.health !== false) {
     await fastify.register(healthPlugin);
+    trackPlugin('arc-health');
     fastify.log.debug('Arc health plugin enabled');
   }
 
   if (config.arcPlugins?.gracefulShutdown !== false) {
     await fastify.register(gracefulShutdownPlugin);
+    trackPlugin('arc-graceful-shutdown');
     fastify.log.debug('Arc gracefulShutdown plugin enabled');
   }
 
@@ -430,54 +438,118 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     const { default: cachingPlugin } = await import('../plugins/caching.js');
     const cachingOpts = config.arcPlugins.caching === true ? {} : config.arcPlugins.caching;
     await fastify.register(cachingPlugin, cachingOpts);
+    trackPlugin('arc-caching', cachingOpts as Record<string, unknown>);
     fastify.log.debug('Arc caching plugin enabled');
+  }
+
+  // QueryCache plugin (opt-in)
+  if (config.arcPlugins?.queryCache) {
+    const { queryCachePlugin } = await import('../cache/queryCachePlugin.js');
+    const qcOpts = config.arcPlugins.queryCache === true ? {} : config.arcPlugins.queryCache;
+    const store = options.stores?.queryCache ?? new (await import('../cache/memory.js')).MemoryCacheStore();
+    await fastify.register(queryCachePlugin, { store, ...qcOpts });
+    trackPlugin('arc-query-cache', qcOpts as Record<string, unknown>);
+    fastify.log.debug('Arc queryCache plugin enabled');
   }
 
   // SSE plugin (opt-in, requires events)
   if (config.arcPlugins?.sse) {
-    if (config.arcPlugins?.emitEvents === false) {
-      fastify.log.warn('SSE plugin requires events (arcPlugins.emitEvents). SSE disabled.');
+    if (config.arcPlugins?.events === false) {
+      fastify.log.warn('SSE plugin requires events plugin (arcPlugins.events). SSE disabled.');
     } else {
       const { default: ssePlugin } = await import('../plugins/sse.js');
       const sseOpts = config.arcPlugins.sse === true ? {} : config.arcPlugins.sse;
       await fastify.register(ssePlugin, sseOpts);
+      trackPlugin('arc-sse', sseOpts as Record<string, unknown>);
       fastify.log.debug('Arc SSE plugin enabled');
     }
   }
 
   // ============================================
-  // 9. REGISTER AUTHENTICATION (Arc, Better Auth, or custom)
+  // 9a. DECORATE request.scope (default: public)
+  // ============================================
+  // Every request starts as 'public'. Auth hooks upgrade to 'authenticated' or 'member'.
+  // Elevation plugin (if registered) may further upgrade to 'elevated'.
+  // Initial value is null — the onRequest hook below sets the real default per-request.
+  // Using null avoids Fastify 5's reference-type sharing bug (objects are shared across requests).
+  fastify.decorateRequest('scope', null!);
+  fastify.addHook('onRequest', async (request) => {
+    if (!request.scope) {
+      request.scope = PUBLIC_SCOPE;
+    }
+  });
+
+  // ============================================
+  // 9b. REGISTER AUTHENTICATION (Arc, Better Auth, or custom)
   // ============================================
 
   if (isAuthDisabled) {
     fastify.log.debug('Authentication disabled');
-  } else if (useBetterAuth) {
-    // Better Auth adapter — registers auth routes + fastify.authenticate
-    const { plugin, openapi } = (authConfig as BetterAuthOption).betterAuth;
-    await fastify.register(plugin);
-    // Push OpenAPI paths if the adapter extracted them (and plugin didn't already)
-    if (openapi && !fastify.arc.externalOpenApiPaths.includes(openapi)) {
-      fastify.arc.externalOpenApiPaths.push(openapi);
+  } else if (authConfig) {
+    switch (authConfig.type) {
+      case 'betterAuth': {
+        // Better Auth adapter — registers auth routes + fastify.authenticate
+        const { plugin, openapi } = authConfig.betterAuth;
+        await fastify.register(plugin);
+        trackPlugin('auth-better-auth');
+        // Push OpenAPI paths if the adapter extracted them (and plugin didn't already)
+        if (openapi && !fastify.arc.externalOpenApiPaths.includes(openapi)) {
+          fastify.arc.externalOpenApiPaths.push(openapi);
+        }
+        fastify.log.debug('Better Auth authentication enabled');
+        break;
+      }
+      case 'custom': {
+        // Custom auth plugin — user has full control
+        await fastify.register(authConfig.plugin);
+        trackPlugin('auth-custom');
+        fastify.log.debug('Custom authentication plugin enabled');
+        break;
+      }
+      case 'authenticator': {
+        // Custom authenticator function — decorate directly
+        const { authenticate } = authConfig;
+        fastify.decorate('authenticate', async function (request: FastifyRequest, reply: FastifyReply) {
+          await authenticate(request, reply);
+        });
+        trackPlugin('auth-authenticator');
+        fastify.log.debug('Custom authenticator enabled');
+        break;
+      }
+      case 'jwt': {
+        // Arc's built-in JWT auth plugin
+        const { authPlugin } = await import('../auth/index.js');
+        // Pass all fields except `type` to the auth plugin (matches AuthPluginOptions shape)
+        const { type: _, ...arcAuthOpts } = authConfig;
+        await fastify.register(authPlugin, arcAuthOpts);
+        trackPlugin('auth-jwt');
+        fastify.log.debug('Arc authentication plugin enabled');
+        break;
+      }
     }
-    fastify.log.debug('Better Auth authentication enabled');
-  } else if (useCustomPlugin) {
-    // Custom auth plugin — user has full control
-    const { plugin } = authConfig as CustomPluginAuthOption;
-    await fastify.register(plugin);
-    fastify.log.debug('Custom authentication plugin enabled');
-  } else if (useCustomAuthenticator) {
-    // Custom authenticator function — decorate directly
-    const { authenticate } = authConfig as CustomAuthenticatorOption;
-    fastify.decorate('authenticate', async function (request: FastifyRequest, reply: FastifyReply) {
-      await authenticate(request, reply);
-    });
-    fastify.log.debug('Custom authenticator enabled');
-  } else if (useArcJwt) {
-    // Arc's built-in JWT auth plugin
-    const { authPlugin } = await import('../auth/index.js');
-    const arcAuth = authConfig as AuthPluginOptions;
-    await fastify.register(authPlugin, arcAuth);
-    fastify.log.debug('Arc authentication plugin enabled');
+  }
+
+  // ============================================
+  // 9c. REGISTER ELEVATION PLUGIN (opt-in, after auth)
+  // ============================================
+  if (config.elevation) {
+    const { elevationPlugin } = await import('../scope/elevation.js');
+    await fastify.register(elevationPlugin, config.elevation);
+    trackPlugin('arc-elevation', config.elevation as Record<string, unknown>);
+    fastify.log.debug('Elevation plugin enabled');
+  }
+
+  // ============================================
+  // 9d. REGISTER ERROR HANDLER (opt-out)
+  // ============================================
+  if (config.errorHandler !== false) {
+    const { errorHandlerPlugin } = await import('../plugins/errorHandler.js');
+    const errorOpts = typeof config.errorHandler === 'object' ? config.errorHandler : {
+      includeStack: config.preset !== 'production',
+    };
+    await fastify.register(errorHandlerPlugin, errorOpts);
+    trackPlugin('arc-error-handler', errorOpts as Record<string, unknown>);
+    fastify.log.debug('Arc error handler enabled');
   }
 
   // ============================================
@@ -490,12 +562,28 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   }
 
   // ============================================
+  // 10b. LIFECYCLE HOOKS
+  // ============================================
+  if (config.onReady) {
+    const onReady = config.onReady;
+    fastify.addHook('onReady', async () => {
+      await onReady(fastify);
+    });
+  }
+  if (config.onClose) {
+    const onClose = config.onClose;
+    fastify.addHook('onClose', async () => {
+      await onClose(fastify);
+    });
+  }
+
+  // ============================================
   // 11. LOG SUMMARY
   // ============================================
 
-  const authMode = isAuthDisabled ? 'none' : useBetterAuth ? 'better-auth' : useCustomPlugin ? 'custom-plugin' : useCustomAuthenticator ? 'custom' : useArcJwt ? 'jwt' : 'none';
+  const authMode = isAuthDisabled ? 'none' : authConfig ? authConfig.type : 'none';
   fastify.log.info(
-    { preset: config.preset ?? 'custom', auth: authMode, helmet: config.helmet !== false, cors: config.cors !== false, rateLimit: config.rateLimit !== false },
+    { preset: config.preset ?? 'custom', runtime: config.runtime ?? 'memory', auth: authMode, helmet: config.helmet !== false, cors: config.cors !== false, rateLimit: config.rateLimit !== false },
     'Arc application created'
   );
 

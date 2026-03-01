@@ -18,6 +18,7 @@ import type {
   ResourceConfig,
 } from '../types/index.js';
 import { getAvailablePresets } from '../presets/index.js';
+import { CRUD_OPERATIONS } from '../constants.js';
 
 // ============================================================================
 // Types
@@ -77,7 +78,7 @@ export function validateResourceConfig(
   }
 
   // Check if any CRUD routes will actually be created
-  const crudRoutes = ['list', 'get', 'create', 'update', 'delete'] as const;
+  const crudRoutes = CRUD_OPERATIONS;
   const disabledRoutes = new Set(config.disabledRoutes ?? []);
   const enabledCrudRoutes = crudRoutes.filter(route => !disabledRoutes.has(route));
   const hasCrudRoutes = !config.disableDefaultRoutes && enabledCrudRoutes.length > 0;
@@ -121,7 +122,7 @@ export function validateResourceConfig(
     const ctrl = config.controller as any;
 
     // Check for IController methods (MongoKit-compatible standard)
-    const requiredMethods = ['list', 'get', 'create', 'update', 'delete'] as const;
+    const requiredMethods = CRUD_OPERATIONS;
     for (const method of requiredMethods) {
       if (typeof ctrl[method] !== 'function') {
         errors.push({
@@ -221,11 +222,7 @@ function validatePermissionKeys(
   warnings: ConfigError[]
 ): void {
   const validKeys = new Set([
-    'list',
-    'get',
-    'create',
-    'update',
-    'delete',
+    ...CRUD_OPERATIONS,
     ...(options.additionalPermissionKeys ?? []),
   ]);
 
@@ -307,8 +304,8 @@ function validatePresetOptions(
     slugLookup: ['slugField'],
     tree: ['parentField'],
     softDelete: ['deletedField'],
-    ownedByUser: ['ownerField', 'bypassRoles'],
-    multiTenant: ['tenantField', 'bypassRoles'],
+    ownedByUser: ['ownerField'],
+    multiTenant: ['tenantField', 'allowPublic'],
   };
 
   const validOptions = knownOptions[preset.name] ?? [];

@@ -184,6 +184,41 @@ return createSpan(req, 'processPayment', async (span) => {
 });
 ```
 
+## QueryCache (Server Cache)
+
+TanStack Query-inspired server cache with stale-while-revalidate and auto-invalidation on mutations.
+
+```typescript
+// Enable globally
+const app = await createApp({
+  arcPlugins: { queryCache: true },  // Memory store, zero config
+});
+
+// Per-resource config
+defineResource({
+  name: 'product',
+  cache: {
+    staleTime: 30,      // seconds fresh (no revalidation)
+    gcTime: 300,         // seconds stale data kept (SWR window)
+    tags: ['catalog'],   // cross-resource grouping
+    invalidateOn: { 'category.*': ['catalog'] },  // event → tag invalidation
+  },
+});
+```
+
+**How it works:**
+- `GET` → cached with `x-cache: HIT | STALE | MISS` header
+- `POST/PATCH/DELETE` → auto-bumps resource version, invalidating cached queries
+- Cross-resource: category mutation bumps `catalog` tag → products cache invalidated
+- Multi-tenant safe: cache keys scoped by userId + orgId
+
+**Runtime modes:**
+
+| Mode | Store | Config |
+|------|-------|--------|
+| `memory` (default) | `MemoryCacheStore` (50 MiB budget) | Zero config |
+| `distributed` | `RedisCacheStore` | `stores: { queryCache: new RedisCacheStore({ client: redis }) }` |
+
 ## Response Cache Plugin
 
 ```typescript
@@ -194,14 +229,34 @@ await fastify.register(responseCachePlugin, {
 });
 ```
 
+**Note:** When QueryCache is active for a resource, response-cache is automatically skipped for that resource's GET routes.
+
 ## SSE Plugin (Server-Sent Events)
 
-```typescript
-import { ssePlugin } from '@classytic/arc/plugins';
+Bridges Arc domain events to SSE streams. Requires `eventPlugin` (auto-registered by factory).
 
-await fastify.register(ssePlugin);
-// Requires eventPlugin to be registered — bridges Arc events to SSE streams
+```typescript
+// Via factory (recommended)
+const app = await createApp({
+  arcPlugins: {
+    sse: {
+      path: '/events/stream',       // SSE endpoint (default: '/events/stream')
+      requireAuth: true,            // Fail-closed auth (default: true)
+      patterns: ['order.*', 'product.*'],  // Event patterns to stream (default: ['*'])
+      orgScoped: false,             // Filter events by org from request.scope (default: false)
+      heartbeat: 30000,             // Heartbeat interval in ms (default: 30000)
+    },
+  },
+});
+
+// Manual registration
+import { ssePlugin } from '@classytic/arc/plugins';
+await fastify.register(ssePlugin, { requireAuth: true, orgScoped: true });
 ```
+
+**Fail-closed auth:** When `requireAuth: true` (default), throws at registration if `fastify.authenticate` is missing — prevents exposing SSE without auth.
+
+**Org-scoped:** When `orgScoped: true`, events with `organizationId` are only sent to clients whose `request.scope` matches. Prevents cross-tenant leakage.
 
 ## Error Handler Plugin
 
@@ -254,6 +309,41 @@ defineResource({
 });
 ```
 
+## OpenAPI & External Paths
+
+Arc auto-generates OpenAPI 3.0 specs from resource definitions. External integrations (auth adapters, custom routes) inject their paths via `ExternalOpenApiPaths`.
+
+```typescript
+import type { ExternalOpenApiPaths } from '@classytic/arc/docs';
+
+const externalPaths: ExternalOpenApiPaths = {
+  paths: { '/api/auth/sign-in': { post: { summary: 'Sign in', ... } } },
+  schemas: { User: { type: 'object', properties: { ... } } },
+  securitySchemes: {
+    cookieAuth: { type: 'apiKey', in: 'cookie', name: 'session_token' },
+  },
+  tags: [{ name: 'Authentication' }],
+  // Declare additional security alternatives for Arc resource paths
+  resourceSecurity: [{ apiKeyAuth: [], orgHeader: [] }],
+};
+```
+
+**`resourceSecurity`** — declarative registration of auth alternatives for resource paths:
+- Each array item is **OR**'d with `bearerAuth` (the default)
+- Keys within the same object are **AND**'d (all required together)
+- Example: `[{ apiKeyAuth: [], orgHeader: [] }]` → "bearer OR (api-key AND org-header)"
+
+Arc's Better Auth adapter (`extractBetterAuthOpenApi`) auto-populates `resourceSecurity` when the `apiKey()` plugin is detected — no manual configuration needed.
+
+**Security scheme definitions:**
+
+| Scheme | Type | Source | Always present? |
+|--------|------|--------|-----------------|
+| `bearerAuth` | HTTP Bearer | Arc core | Yes |
+| `orgHeader` | API Key (`x-organization-id`) | Arc core | Yes (multi-tenant) |
+| `cookieAuth` | API Key (cookie) | Better Auth adapter | When Better Auth active |
+| `apiKeyAuth` | API Key (`x-api-key`) | Better Auth adapter | When `apiKey()` plugin active |
+
 ## Deployment
 
 | Environment | Plugins | Notes |
@@ -272,9 +362,10 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) throw new Err
 
 const app = await createApp({
   preset: 'production',
-  auth: { jwt: { secret: process.env.JWT_SECRET } },
+  auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
   cors: { origin: process.env.ALLOWED_ORIGINS?.split(',') ?? [], credentials: true },
-  rateLimit: { max: 300, timeWindow: '1 minute' },
+  rateLimit: { max: 100, timeWindow: '1 minute' },
+  arcPlugins: { queryCache: true },
 });
 
 process.on('SIGTERM', () => app.close());

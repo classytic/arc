@@ -106,18 +106,31 @@ import fastifyWebsocket from '@fastify/websocket';
 await fastify.register(fastifyWebsocket);
 await fastify.register(websocketPlugin, {
   path: '/ws',
-  auth: true,                    // Require authentication (default)
+  auth: true,                    // Fail-closed: throws if authenticate not registered
   resources: ['product', 'order'],  // Auto-broadcast CRUD events
   heartbeatInterval: 30000,      // Ping every 30s (0 to disable)
   maxClientsPerRoom: 10000,
+
+  // Security controls
+  roomPolicy: (client, room) => {       // Authorize room subscriptions (default: allow all)
+    return ['product', 'order'].includes(room);
+  },
+  maxMessageBytes: 16384,               // Max message size from client (default: 16KB)
+  maxSubscriptionsPerClient: 100,       // Max rooms per client (default: 100)
+  exposeStats: 'authenticated',         // Stats at /ws/stats (false | true | 'authenticated')
+
+  // Lifecycle hooks
   authenticate: async (request) => {    // Custom auth (optional)
-    return { userId: request.user?.id, organizationId: request.organizationId };
+    const { getOrgId } = await import('@classytic/arc/scope');
+    return { userId: request.user?.id, organizationId: getOrgId(request.scope) };
   },
   onConnect: async (client) => { console.log('Connected:', client.id); },
   onDisconnect: async (client) => { console.log('Disconnected:', client.id); },
   onMessage: async (client, msg) => { /* custom message handler */ },
 });
 ```
+
+**Fail-closed auth:** When `auth: true` (default), registration throws if `fastify.authenticate` is not available and no custom `authenticate` function is provided. This prevents accidentally exposing WebSocket without auth.
 
 ### Client Protocol
 
@@ -168,6 +181,40 @@ rooms.broadcastToOrg(orgId, 'custom-room', JSON.stringify({ ... }));
 When Arc events include `organizationId`, WebSocket broadcasts are automatically scoped:
 - Client with `organizationId: 'org-A'` only receives events for org-A
 - No cross-tenant data leakage
+
+---
+
+## EventGateway (Unified SSE + WebSocket)
+
+```typescript
+import { eventGatewayPlugin } from '@classytic/arc/integrations/event-gateway';
+```
+
+Single configuration point for both SSE and WebSocket with shared auth, org-scoping, and room policy:
+
+```typescript
+await fastify.register(eventGatewayPlugin, {
+  auth: true,                     // Fail-closed for both SSE and WebSocket
+  orgScoped: true,                // Filter events by org
+  roomPolicy: (client, room) => {
+    return ['product', 'order', 'invoice'].includes(room);
+  },
+  maxMessageBytes: 8192,          // WS message size cap
+  maxSubscriptionsPerClient: 50,  // WS subscription limit
+
+  sse: {                          // false to disable SSE
+    path: '/api/events',
+    patterns: ['order.*', 'product.*'],
+  },
+  ws: {                           // false to disable WebSocket
+    path: '/ws',
+    resources: ['product', 'order'],
+    exposeStats: 'authenticated',
+  },
+});
+```
+
+**When to use:** Prefer EventGateway over separate SSE + WebSocket registration when you want consistent auth, org-scoping, and security policy across both transports.
 
 ---
 

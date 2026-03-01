@@ -20,90 +20,118 @@
  * ```
  */
 
-import type { PermissionCheck } from './types.js';
-import { allowPublic, requireAuth, requireRoles, requireOwnership, anyOf } from './index.js';
+import type { PermissionCheck } from "./types.js";
+import {
+  allowPublic,
+  requireAuth,
+  requireRoles,
+  requireOwnership,
+  anyOf,
+} from "./index.js";
 
 /**
  * ResourcePermissions shape — matches the type in types/index.ts
  */
-interface ResourcePermissions {
-  list?: PermissionCheck;
-  get?: PermissionCheck;
-  create?: PermissionCheck;
-  update?: PermissionCheck;
-  delete?: PermissionCheck;
+interface ResourcePermissions<TDoc = any> {
+  list?: PermissionCheck<TDoc>;
+  get?: PermissionCheck<TDoc>;
+  create?: PermissionCheck<TDoc>;
+  update?: PermissionCheck<TDoc>;
+  delete?: PermissionCheck<TDoc>;
 }
 
-type PermissionOverrides = Partial<ResourcePermissions>;
+type PermissionOverrides<TDoc = any> = Partial<ResourcePermissions<TDoc>>;
 
 /**
  * Merge a base preset with user overrides.
  * Overrides replace individual operations — undefined values don't clear them.
  */
-function withOverrides(base: ResourcePermissions, overrides?: PermissionOverrides): ResourcePermissions {
+function withOverrides<TDoc = any>(
+  base: ResourcePermissions<TDoc>,
+  overrides?: PermissionOverrides<TDoc>,
+): ResourcePermissions<TDoc> {
   if (!overrides) return base;
-  return { ...base, ...overrides };
+  const filtered = Object.fromEntries(
+    Object.entries(overrides).filter(([, v]) => v !== undefined),
+  );
+  return { ...base, ...filtered };
 }
 
 /**
  * Public read, authenticated write.
  * list + get = allowPublic(), create + update + delete = requireAuth()
  */
-export function publicRead(overrides?: PermissionOverrides): ResourcePermissions {
-  return withOverrides({
-    list: allowPublic(),
-    get: allowPublic(),
-    create: requireAuth(),
-    update: requireAuth(),
-    delete: requireAuth(),
-  }, overrides);
+export function publicRead<TDoc = any>(
+  overrides?: PermissionOverrides<TDoc>,
+): ResourcePermissions<TDoc> {
+  return withOverrides(
+    {
+      list: allowPublic(),
+      get: allowPublic(),
+      create: requireAuth(),
+      update: requireAuth(),
+      delete: requireAuth(),
+    },
+    overrides,
+  );
 }
 
 /**
  * Public read, admin write.
  * list + get = allowPublic(), create + update + delete = requireRoles(['admin'])
  */
-export function publicReadAdminWrite(
-  roles: readonly string[] = ['admin'],
-  overrides?: PermissionOverrides,
-): ResourcePermissions {
-  return withOverrides({
-    list: allowPublic(),
-    get: allowPublic(),
-    create: requireRoles(roles),
-    update: requireRoles(roles),
-    delete: requireRoles(roles),
-  }, overrides);
+export function publicReadAdminWrite<TDoc = any>(
+  roles: readonly string[] = ["admin"],
+  overrides?: PermissionOverrides<TDoc>,
+): ResourcePermissions<TDoc> {
+  return withOverrides(
+    {
+      list: allowPublic(),
+      get: allowPublic(),
+      create: requireRoles(roles),
+      update: requireRoles(roles),
+      delete: requireRoles(roles),
+    },
+    overrides,
+  );
 }
 
 /**
  * All operations require authentication.
  */
-export function authenticated(overrides?: PermissionOverrides): ResourcePermissions {
-  return withOverrides({
-    list: requireAuth(),
-    get: requireAuth(),
-    create: requireAuth(),
-    update: requireAuth(),
-    delete: requireAuth(),
-  }, overrides);
+export function authenticated<TDoc = any>(
+  overrides?: PermissionOverrides<TDoc>,
+): ResourcePermissions<TDoc> {
+  return withOverrides(
+    {
+      list: requireAuth(),
+      get: requireAuth(),
+      create: requireAuth(),
+      update: requireAuth(),
+      delete: requireAuth(),
+    },
+    overrides,
+  );
 }
 
 /**
  * All operations require specific roles.
  * @param roles - Required roles (user needs at least one). Default: ['admin']
  */
-export function adminOnly(
-  roles: readonly string[] = ['admin'],
-  overrides?: PermissionOverrides,
-): ResourcePermissions {
-  return withOverrides({
-    list: requireRoles(roles),
-    get: requireRoles(roles),
-    create: requireRoles(roles),
-    update: requireRoles(roles),
-    delete: requireRoles(roles),
-  }, overrides);
+export function adminOnly<TDoc = any>(
+  roles: readonly string[] = ["admin"],
+  overrides?: PermissionOverrides<TDoc>,
+): ResourcePermissions<TDoc> {
+  return withOverrides(
+    {
+      list: requireRoles(roles),
+      get: requireRoles(roles),
+      create: requireRoles(roles),
+      update: requireRoles(roles),
+      delete: requireRoles(roles),
+    },
+    overrides,
+  );
 }
 
 /**
@@ -114,47 +142,54 @@ export function adminOnly(
  * @param ownerField - Field containing owner ID (default: 'userId')
  * @param bypassRoles - Roles that bypass ownership check (default: ['admin'])
  */
-export function ownerWithAdminBypass(
-  ownerField = 'userId',
-  bypassRoles: readonly string[] = ['admin'],
-  overrides?: PermissionOverrides,
-): ResourcePermissions {
-  return withOverrides({
-    list: requireAuth(),
-    get: requireAuth(),
-    create: requireAuth(),
-    update: anyOf(
-      requireRoles(bypassRoles),
-      requireOwnership(ownerField),
-    ),
-    delete: anyOf(
-      requireRoles(bypassRoles),
-      requireOwnership(ownerField),
-    ),
-  }, overrides);
+export function ownerWithAdminBypass<TDoc = any>(
+  ownerField: Extract<keyof TDoc, string> | string = "userId",
+  bypassRoles: readonly string[] = ["admin"],
+  overrides?: PermissionOverrides<TDoc>,
+): ResourcePermissions<TDoc> {
+  return withOverrides(
+    {
+      list: requireAuth(),
+      get: requireAuth(),
+      create: requireAuth(),
+      update: anyOf(requireRoles(bypassRoles), requireOwnership(ownerField)),
+      delete: anyOf(requireRoles(bypassRoles), requireOwnership(ownerField)),
+    },
+    overrides,
+  );
 }
 
 /**
  * Full public access — no auth required for any operation.
  * Use sparingly (dev/testing, truly public APIs).
  */
-export function fullPublic(overrides?: PermissionOverrides): ResourcePermissions {
-  return withOverrides({
-    list: allowPublic(),
-    get: allowPublic(),
-    create: allowPublic(),
-    update: allowPublic(),
-    delete: allowPublic(),
-  }, overrides);
+export function fullPublic<TDoc = any>(
+  overrides?: PermissionOverrides<TDoc>,
+): ResourcePermissions<TDoc> {
+  return withOverrides(
+    {
+      list: allowPublic(),
+      get: allowPublic(),
+      create: allowPublic(),
+      update: allowPublic(),
+      delete: allowPublic(),
+    },
+    overrides,
+  );
 }
 
 /**
  * Read-only: list + get authenticated, write operations denied.
  * Useful for computed/derived resources.
  */
-export function readOnly(overrides?: PermissionOverrides): ResourcePermissions {
-  return withOverrides({
-    list: requireAuth(),
-    get: requireAuth(),
-  }, overrides);
+export function readOnly<TDoc = any>(
+  overrides?: PermissionOverrides<TDoc>,
+): ResourcePermissions<TDoc> {
+  return withOverrides(
+    {
+      list: requireAuth(),
+      get: requireAuth(),
+    },
+    overrides,
+  );
 }

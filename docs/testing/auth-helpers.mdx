@@ -1,0 +1,229 @@
+# Auth Helpers
+
+Reusable Better Auth test primitives for sign-up, sign-in, org creation, and composite org setup.
+
+```typescript
+import {
+  createBetterAuthTestHelpers,
+  setupBetterAuthOrg,
+  safeParseBody,
+} from '@classytic/arc/testing';
+```
+
+## Stateless Helpers
+
+`createBetterAuthTestHelpers()` returns functions that take the app as a parameter, making them safe to use across test suites.
+
+```typescript
+const auth = createBetterAuthTestHelpers();
+// Or with custom base path:
+const auth = createBetterAuthTestHelpers({ basePath: '/auth' });
+```
+
+### signUp
+
+```typescript
+const result = await auth.signUp(app, {
+  email: 'test@example.com',
+  password: 'password123',
+  name: 'Test User',
+});
+// result: { statusCode, token, user, body }
+```
+
+### signIn
+
+```typescript
+const result = await auth.signIn(app, {
+  email: 'test@example.com',
+  password: 'password123',
+});
+// result: { statusCode, token, user, body }
+```
+
+### createOrg
+
+```typescript
+const result = await auth.createOrg(app, token, {
+  name: 'Acme Corp',
+  slug: 'acme-corp',
+});
+// result: { statusCode, orgId, body }
+```
+
+### setActiveOrg
+
+```typescript
+const result = await auth.setActiveOrg(app, token, orgId);
+// result: { statusCode, body }
+```
+
+### authHeaders
+
+```typescript
+const headers = auth.authHeaders(token);
+// { authorization: 'Bearer ...' }
+
+const headers = auth.authHeaders(token, orgId);
+// { authorization: 'Bearer ...', 'x-organization-id': '...' }
+```
+
+## Composite Org Setup
+
+`setupBetterAuthOrg()` creates a complete test environment in one call: app instance, signed-up users, organization with members, and a teardown function.
+
+```typescript
+const ctx = await setupBetterAuthOrg({
+  createApp: async () => {
+    const { createAppInstance } = await import('../src/app.js');
+    return createAppInstance();
+  },
+  org: { name: 'Test Corp', slug: 'test-corp' },
+  users: [
+    { key: 'admin', email: 'admin@test.com', password: 'pass', name: 'Admin', role: 'admin', isCreator: true },
+    { key: 'dm', email: 'dm@test.com', password: 'pass', name: 'DM', role: 'delivery_manager' },
+    { key: 'recruiter', email: 'rec@test.com', password: 'pass', name: 'Recruiter', role: 'recruiter' },
+  ],
+  addMember: async (data) => {
+    const result = await auth.api.addMember({ body: data });
+    return { statusCode: 200 };
+  },
+});
+
+// Use in tests:
+ctx.app          // FastifyInstance
+ctx.orgId        // string
+ctx.users.admin  // { token, userId, email }
+ctx.users.dm     // { token, userId, email }
+
+// Cleanup:
+await ctx.teardown();
+```
+
+### Options
+
+```typescript
+interface SetupBetterAuthOrgOptions {
+  // Factory to create the app — keeps Arc generic
+  createApp: () => Promise<FastifyInstance>;
+
+  // Organization to create
+  org: { name: string; slug: string };
+
+  // Users to create and add to the org
+  // Exactly one must have isCreator: true
+  users: Array<{
+    key: string;       // Reference key (e.g. 'admin')
+    email: string;
+    password: string;
+    name: string;
+    role: string;      // Org role assigned after joining
+    isCreator?: boolean; // Creates the org (becomes owner)
+  }>;
+
+  // App-specific member addition
+  // Apps wire Better Auth differently (auth.api vs HTTP)
+  addMember: (data: {
+    organizationId: string;
+    userId: string;
+    role: string;
+  }) => Promise<{ statusCode: number }>;
+
+  // Optional post-setup hook for domain-specific initialization
+  afterSetup?: (ctx: TestOrgContext) => Promise<void>;
+
+  // Override auth helper options
+  authHelpers?: { basePath?: string };
+}
+```
+
+### afterSetup Hook
+
+Use `afterSetup` for app-specific initialization that Arc can't know about, like setting up role hierarchies:
+
+```typescript
+const ctx = await setupBetterAuthOrg({
+  // ...users, org, etc.
+  afterSetup: async (ctx) => {
+    // Set recruiter → account manager hierarchy
+    const memberCol = mongoose.connection.getClient().db().collection('member');
+    await memberCol.updateOne(
+      { organizationId: new ObjectId(ctx.orgId), userId: new ObjectId(ctx.users.recruiter.userId) },
+      { $set: { accountManagerId: ctx.users.am.userId } },
+    );
+  },
+});
+```
+
+### Return Type
+
+```typescript
+interface TestOrgContext<T = Record<string, TestUserContext>> {
+  app: FastifyInstance;
+  orgId: string;
+  users: T;                    // Keyed by user config `key`
+  teardown: () => Promise<void>; // Closes app
+}
+
+interface TestUserContext {
+  token: string;
+  userId: string;
+  email: string;
+}
+```
+
+## Utility: safeParseBody
+
+Safely parse JSON response bodies. Returns `null` on failure.
+
+```typescript
+const body = safeParseBody(response.body);
+if (body?.success) {
+  console.log(body.data);
+}
+```
+
+## Using with HttpTestHarness
+
+The auth helpers pair naturally with `createBetterAuthProvider`:
+
+```typescript
+import {
+  setupBetterAuthOrg,
+  createHttpTestHarness,
+  createBetterAuthProvider,
+} from '@classytic/arc/testing';
+
+const ctx = await setupBetterAuthOrg({ /* ... */ });
+
+createHttpTestHarness(productResource, () => ({
+  app: ctx.app,
+  fixtures: { valid: { name: 'Test' } },
+  auth: createBetterAuthProvider({
+    tokens: {
+      admin: ctx.users.admin.token,
+      member: ctx.users.member.token,
+    },
+    orgId: ctx.orgId,
+    adminRole: 'admin',
+  }),
+})).runAll();
+```
+
+## Manual vs setupBetterAuthOrg
+
+Use `setupBetterAuthOrg` when you want Arc to handle the boilerplate. Use the stateless helpers directly when you need fine-grained control:
+
+```typescript
+// Manual approach (full control)
+const auth = createBetterAuthTestHelpers();
+const app = await createAppInstance();
+await app.ready();
+
+const admin = await auth.signUp(app, { email: 'a@t.com', password: 'p', name: 'A' });
+const org = await auth.createOrg(app, admin.token, { name: 'Org', slug: 'org' });
+await auth.setActiveOrg(app, admin.token, org.orgId);
+
+// Composite approach (less boilerplate)
+const ctx = await setupBetterAuthOrg({ /* ... */ });
+```

@@ -154,7 +154,7 @@ describe('Feature E2E', () => {
     const mongoUri = await setupTestDatabase();
     app = await createApp({
       preset: 'development',
-      auth: { jwt: { secret: 'test-jwt-secret-must-be-at-least-32-chars-long' } },
+      auth: { type: 'jwt', jwt: { secret: 'test-jwt-secret-must-be-at-least-32-chars-long' } },
       logger: false,
     });
     await app.listen({ port: 3001 });
@@ -214,6 +214,11 @@ it('should debug', () => {
 - MongoDB Memory Server can be slow on first run (downloads binary)
 - Some tests may timeout on slow machines (increase `testTimeout` in vitest.config.ts)
 - Ensure MongoDB is not running on port 27017 (conflicts with memory server)
+
+### Cache Module (✅ Implemented)
+- **QueryCache** — get/set, SWR freshness, version bumping
+- **Cache Keys** — deterministic key generation, param hashing
+- **Tag Versions** — cross-resource tag invalidation
 
 ## Future Tests
 

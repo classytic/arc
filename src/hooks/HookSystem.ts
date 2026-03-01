@@ -11,7 +11,7 @@ import type { AnyRecord, RequestContext, UserBase } from '../types/index.js';
 // Hook Types
 // ============================================================================
 
-export type HookPhase = 'before' | 'after';
+export type HookPhase = 'before' | 'around' | 'after';
 export type HookOperation = 'create' | 'update' | 'delete' | 'read' | 'list';
 
 export interface HookContext<T = AnyRecord> {
@@ -28,6 +28,15 @@ export interface HookContext<T = AnyRecord> {
 export type HookHandler<T = AnyRecord> = (
   ctx: HookContext<T>
 ) => void | Promise<void> | T | Promise<T>;
+
+/**
+ * Around hook handler — wraps the core operation.
+ * Call `next()` to proceed to the next around hook or the actual operation.
+ */
+export type AroundHookHandler<T = AnyRecord> = (
+  ctx: HookContext<T>,
+  next: () => Promise<T | undefined>,
+) => T | undefined | Promise<T | undefined>;
 
 export interface HookRegistration {
   /** Hook name for dependency resolution and debugging */
@@ -46,9 +55,10 @@ export interface HookRegistration {
 // ============================================================================
 
 export interface HookSystemOptions {
-  /** Custom logger for error reporting. Defaults to console.error */
+  /** Custom logger for error/warning reporting. Defaults to console */
   logger?: {
     error: (message: string, ...args: unknown[]) => void;
+    warn?: (message: string, ...args: unknown[]) => void;
   };
 }
 
@@ -59,13 +69,15 @@ export interface HookSystemOptions {
 export class HookSystem {
   private hooks: Map<string, HookRegistration[]>;
   private logger: { error: (message: string, ...args: unknown[]) => void };
+  private warn: (message: string, ...args: unknown[]) => void;
 
   constructor(options?: HookSystemOptions) {
     this.hooks = new Map();
-    // Default to console.error so developers see hook errors during development
+    // Default to console.error/warn so developers see hook issues during development
     // Pass custom logger to redirect to fastify.log or silence in tests
     // Use arrow function wrapper to allow spying in tests
     this.logger = options?.logger ?? { error: (...args: unknown[]) => console.error(...args) };
+    this.warn = options?.logger?.warn ?? ((...args: unknown[]) => console.warn(...args));
   }
 
   /**
@@ -174,6 +186,69 @@ export class HookSystem {
     priority = 10
   ): () => void {
     return this.register(resource, operation, 'after', handler, priority);
+  }
+
+  /**
+   * Register around hook — wraps the core operation.
+   * Call `next()` inside the handler to proceed.
+   */
+  around<T = AnyRecord>(
+    resource: string,
+    operation: HookOperation,
+    handler: AroundHookHandler<T>,
+    priority = 10
+  ): () => void {
+    return this.register(resource, operation, 'around', handler as HookHandler, priority);
+  }
+
+  /**
+   * Execute around hooks as a nested middleware chain.
+   * Each around hook receives `next()` to call the next hook or the core operation.
+   */
+  async executeAround<T = AnyRecord>(
+    resource: string,
+    operation: HookOperation,
+    data: T,
+    execute: () => Promise<T | undefined>,
+    options?: {
+      user?: UserBase;
+      context?: RequestContext;
+      meta?: AnyRecord;
+    }
+  ): Promise<T | undefined> {
+    const key = this.getKey(resource, operation, 'around');
+    const hooks = [...(this.hooks.get(key) ?? [])];
+
+    // Also check wildcard
+    const wildcardKey = this.getKey('*', operation, 'around');
+    const wildcardHooks = this.hooks.get(wildcardKey) ?? [];
+    const allHooks = [...wildcardHooks, ...hooks];
+    allHooks.sort((a, b) => a.priority - b.priority);
+
+    if (allHooks.length === 0) {
+      return execute();
+    }
+
+    // Build nested next() chain
+    let index = 0;
+    const next = async (): Promise<T | undefined> => {
+      if (index < allHooks.length) {
+        const hook = allHooks[index++]!;
+        const ctx: HookContext<T> = {
+          resource,
+          operation,
+          phase: 'around',
+          data,
+          user: options?.user,
+          context: options?.context,
+          meta: options?.meta,
+        };
+        return (hook.handler as unknown as AroundHookHandler<T>)(ctx, next);
+      }
+      return execute();
+    };
+
+    return next();
   }
 
   /**
@@ -304,8 +379,12 @@ export class HookSystem {
             resolvedDeps++;
             if (!dependents.has(dep)) dependents.set(dep, []);
             dependents.get(dep)!.push(hook);
+          } else {
+            this.warn(
+              `[HookSystem] Hook '${hook.name ?? '<unnamed>'}' depends on '${dep}' which is not registered ` +
+              'in the same phase/resource. Dependency will be ignored.'
+            );
           }
-          // Unresolved deps are silently skipped (dependency may be in a different phase/resource)
         }
         inDegree.set(hook, resolvedDeps);
       }
@@ -384,6 +463,86 @@ export class HookSystem {
       }
     }
     return all;
+  }
+
+  /**
+   * Get hooks matching filter criteria.
+   * Useful for debugging and testing specific hook combinations.
+   *
+   * @example
+   * ```typescript
+   * // Find all before-create hooks for products (including wildcards)
+   * const hooks = hookSystem.getRegistered({
+   *   resource: 'product',
+   *   operation: 'create',
+   *   phase: 'before',
+   * });
+   * ```
+   */
+  getRegistered(filter?: {
+    resource?: string;
+    operation?: HookOperation;
+    phase?: HookPhase;
+  }): HookRegistration[] {
+    let results = this.getAll();
+    if (filter?.resource) {
+      results = results.filter(
+        (h) => h.resource === filter.resource || h.resource === '*',
+      );
+    }
+    if (filter?.operation) {
+      results = results.filter((h) => h.operation === filter.operation);
+    }
+    if (filter?.phase) {
+      results = results.filter((h) => h.phase === filter.phase);
+    }
+    return results;
+  }
+
+  /**
+   * Get a structured summary of all registered hooks for debugging.
+   *
+   * @example
+   * ```typescript
+   * const info = hookSystem.inspect();
+   * // { total: 12, resources: { product: [...], '*': [...] }, summary: [...] }
+   * ```
+   */
+  inspect(): {
+    total: number;
+    resources: Record<string, HookRegistration[]>;
+    summary: Array<{
+      name?: string;
+      key: string;
+      priority: number;
+      dependsOn?: string[];
+    }>;
+  } {
+    const all = this.getAll();
+    const byResource = new Map<string, HookRegistration[]>();
+    for (const hook of all) {
+      const arr = byResource.get(hook.resource) ?? [];
+      arr.push(hook);
+      byResource.set(hook.resource, arr);
+    }
+    return {
+      total: all.length,
+      resources: Object.fromEntries(byResource),
+      summary: all.map((h) => ({
+        name: h.name,
+        key: `${h.resource}:${h.operation}:${h.phase}`,
+        priority: h.priority,
+        ...(h.dependsOn?.length ? { dependsOn: h.dependsOn } : {}),
+      })),
+    };
+  }
+
+  /**
+   * Check if any hooks exist for a specific resource/operation/phase combination.
+   */
+  has(resource: string, operation: HookOperation, phase: HookPhase): boolean {
+    const key = this.getKey(resource, operation, phase);
+    return (this.hooks.get(key)?.length ?? 0) > 0;
   }
 
   /**

@@ -1,0 +1,60 @@
+# Testing
+
+Arc provides a complete testing toolkit for resource-based APIs. All utilities are exported from `@classytic/arc/testing`.
+
+```bash
+npm install -D vitest mongodb-memory-server
+```
+
+## Architecture
+
+Arc testing works at two levels:
+
+| Level | Class | What it tests |
+|-------|-------|---------------|
+| **HTTP** | `HttpTestHarness` | Full request lifecycle — routes, auth, permissions, pipeline, field permissions, response envelope |
+| **Model** | `TestHarness` | Mongoose model directly — schema validation, presets, field permissions (no HTTP) |
+
+**Use `HttpTestHarness`** for integration tests. It exercises the same code path your users hit.
+
+## Quick Start
+
+```typescript
+import { beforeAll, afterAll } from 'vitest';
+import {
+  createHttpTestHarness,
+  createBetterAuthProvider,
+} from '@classytic/arc/testing';
+import { setupTestOrg, teardownTestOrg } from './helpers/setup.js';
+import jobResource from '../src/resources/job/job.resource.js';
+
+let ctx;
+beforeAll(async () => { ctx = await setupTestOrg(); }, 60_000);
+afterAll(async () => { await teardownTestOrg(ctx); });
+
+// Auto-generates ~16 HTTP-level tests
+createHttpTestHarness(jobResource, () => ({
+  app: ctx.app,
+  fixtures: {
+    valid: { title: 'Test Job' },
+    update: { title: 'Updated Job' },
+    invalid: {},
+  },
+  auth: createBetterAuthProvider({
+    tokens: { admin: ctx.users.admin.token },
+    orgId: ctx.orgId,
+    adminRole: 'admin',
+  }),
+})).runAll();
+```
+
+This generates tests for:
+- **CRUD** — POST create, GET list, GET by ID, PATCH update, DELETE, 404 handling
+- **Permissions** — 401 for unauthenticated, admin access verified
+- **Validation** — invalid payloads rejected
+
+## Sections
+
+1. [HTTP Test Harness](./http-harness) — auto-generate HTTP-level CRUD, permission, and validation tests
+2. [Auth Helpers](./auth-helpers) — Better Auth test primitives and composite org setup
+3. [Utilities](./utilities) — mocks, request builder, DB helpers, and test app factory

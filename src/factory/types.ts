@@ -6,12 +6,102 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest,
 import type { FastifyCorsOptions } from '@fastify/cors';
 import type { FastifyHelmetOptions } from '@fastify/helmet';
 import type { RateLimitOptions } from '@fastify/rate-limit';
-import type { AuthPluginOptions } from '../types/index.js';
+import type { Authenticator } from '../types/index.js';
+import type { ElevationOptions } from '../scope/elevation.js';
 import type { ExternalOpenApiPaths } from '../docs/externalPaths.js';
+import type { EventTransport } from '../events/EventTransport.js';
+import type { CacheStore } from '../cache/interface.js';
+import type { IdempotencyStore } from '../idempotency/stores/interface.js';
 
 // ============================================================================
-// Auth Strategy Types (Discriminated Union)
+// Auth Strategy Types (Discriminated Union with `type` field)
 // ============================================================================
+
+/**
+ * Arc's built-in JWT auth
+ *
+ * Registers @fastify/jwt, wires up `fastify.authenticate`, and
+ * exposes `fastify.auth` helpers (issueTokens, verifyRefreshToken).
+ *
+ * @example
+ * ```typescript
+ * const app = await createApp({
+ *   auth: {
+ *     type: 'jwt',
+ *     jwt: { secret: process.env.JWT_SECRET },
+ *   },
+ * });
+ *
+ * // With custom authenticator
+ * const app = await createApp({
+ *   auth: {
+ *     type: 'jwt',
+ *     jwt: { secret: process.env.JWT_SECRET },
+ *     authenticate: async (request, { jwt }) => {
+ *       const token = request.headers.authorization?.split(' ')[1];
+ *       if (!token) return null;
+ *       const decoded = jwt.verify(token);
+ *       return userRepo.findById(decoded.id);
+ *     },
+ *   },
+ * });
+ * ```
+ */
+export interface JwtAuthOption {
+  type: 'jwt';
+
+  /**
+   * JWT configuration (optional but recommended)
+   * If provided, jwt utilities are available in authenticator context
+   */
+  jwt?: {
+    /** JWT secret (required for JWT features) */
+    secret: string;
+    /** Access token expiry (default: '15m') */
+    expiresIn?: string;
+    /** Refresh token secret (defaults to main secret) */
+    refreshSecret?: string;
+    /** Refresh token expiry (default: '7d') */
+    refreshExpiresIn?: string;
+    /** Additional @fastify/jwt sign options */
+    sign?: Record<string, unknown>;
+    /** Additional @fastify/jwt verify options */
+    verify?: Record<string, unknown>;
+  };
+
+  /**
+   * Custom authenticator function (recommended)
+   *
+   * Arc calls this for non-public routes.
+   * Return user object to authenticate, null/undefined to reject.
+   *
+   * If not provided and jwt.secret is set, uses default jwtVerify.
+   */
+  authenticate?: Authenticator;
+
+  /**
+   * Custom auth failure handler
+   * Customize the 401 response when authentication fails
+   */
+  onFailure?: (
+    request: FastifyRequest,
+    reply: FastifyReply,
+    error?: Error
+  ) => void | Promise<void>;
+
+  /**
+   * Expose detailed auth error messages in 401 responses.
+   * When false (default), returns generic "Authentication required".
+   * When true, includes the actual error message for debugging.
+   * Decoupled from log level — set explicitly per environment.
+   */
+  exposeAuthErrors?: boolean;
+
+  /**
+   * Property name to store user on request (default: 'user')
+   */
+  userProperty?: string;
+}
 
 /**
  * Better Auth adapter integration
@@ -25,11 +115,12 @@ import type { ExternalOpenApiPaths } from '../docs/externalPaths.js';
  * import { createBetterAuthAdapter } from '@classytic/arc-better-auth';
  *
  * const app = await createApp({
- *   auth: { betterAuth: createBetterAuthAdapter({ auth: myBetterAuth }) },
+ *   auth: { type: 'betterAuth', betterAuth: createBetterAuthAdapter({ auth: myBetterAuth }) },
  * });
  * ```
  */
 export interface BetterAuthOption {
+  type: 'betterAuth';
   /** Better Auth adapter — pass the result of createBetterAuthAdapter() */
   betterAuth: { plugin: FastifyPluginAsync; openapi?: ExternalOpenApiPaths };
 }
@@ -44,6 +135,7 @@ export interface BetterAuthOption {
  * ```typescript
  * const app = await createApp({
  *   auth: {
+ *     type: 'custom',
  *     plugin: async (fastify) => {
  *       fastify.decorate('authenticate', async (request, reply) => { ... });
  *     },
@@ -52,6 +144,7 @@ export interface BetterAuthOption {
  * ```
  */
 export interface CustomPluginAuthOption {
+  type: 'custom';
   /** Custom Fastify plugin that sets up authentication */
   plugin: FastifyPluginAsync;
 }
@@ -66,6 +159,7 @@ export interface CustomPluginAuthOption {
  * ```typescript
  * const app = await createApp({
  *   auth: {
+ *     type: 'authenticator',
  *     authenticate: async (request, reply) => {
  *       const session = await validateSession(request);
  *       if (!session) reply.code(401).send({ error: 'Unauthorized' });
@@ -76,6 +170,7 @@ export interface CustomPluginAuthOption {
  * ```
  */
 export interface CustomAuthenticatorOption {
+  type: 'authenticator';
   /** Authenticate function — decorates fastify.authenticate directly */
   authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 }
@@ -84,14 +179,14 @@ export interface CustomAuthenticatorOption {
  * All supported auth configuration shapes
  *
  * - `false` — Disable authentication entirely
- * - `AuthPluginOptions` — Arc's built-in JWT auth (existing behavior)
- * - `BetterAuthOption` — Better Auth adapter integration
- * - `CustomPluginAuthOption` — Your own Fastify auth plugin
- * - `CustomAuthenticatorOption` — A bare authenticate function
+ * - `JwtAuthOption` — Arc's built-in JWT auth (`type: 'jwt'`)
+ * - `BetterAuthOption` — Better Auth adapter integration (`type: 'betterAuth'`)
+ * - `CustomPluginAuthOption` — Your own Fastify auth plugin (`type: 'custom'`)
+ * - `CustomAuthenticatorOption` — A bare authenticate function (`type: 'authenticator'`)
  */
 export type AuthOption =
   | false
-  | AuthPluginOptions
+  | JwtAuthOption
   | BetterAuthOption
   | CustomPluginAuthOption
   | CustomAuthenticatorOption;
@@ -107,6 +202,7 @@ export type AuthOption =
  * const app = await createApp({
  *   preset: 'development',
  *   auth: {
+ *     type: 'jwt',
  *     jwt: { secret: process.env.JWT_SECRET },
  *   },
  * });
@@ -115,6 +211,7 @@ export type AuthOption =
  * const app = await createApp({
  *   preset: 'production',
  *   auth: {
+ *     type: 'jwt',
  *     jwt: { secret: process.env.JWT_SECRET },
  *     authenticate: async (request, { jwt }) => {
  *       // Check API key first
@@ -143,8 +240,52 @@ export interface CreateAppOptions {
   /** Environment preset: 'production', 'development', 'testing', or 'edge' */
   preset?: 'production' | 'development' | 'testing' | 'edge';
 
+  /**
+   * Runtime profile for store backends.
+   * - 'memory' (default): Uses in-memory stores. Suitable for single-instance deployments.
+   * - 'distributed': Requires Redis-compatible adapters for cache, events, idempotency.
+   *   Startup fails fast if any required distributed adapter is missing.
+   */
+  runtime?: 'memory' | 'distributed';
+
+  /**
+   * Store and transport instances for runtime profile validation.
+   * When `runtime` is `'distributed'`, Arc validates that these are
+   * not memory-backed. Provide Redis or other durable adapters.
+   */
+  stores?: {
+    /** Event transport (e.g., RedisEventTransport) */
+    events?: EventTransport;
+    /** Cache store (e.g., RedisCacheStore) */
+    cache?: CacheStore;
+    /** Idempotency store (e.g., RedisIdempotencyStore) */
+    idempotency?: IdempotencyStore;
+    /** QueryCache store (e.g., RedisCacheStore). Default: MemoryCacheStore. */
+    queryCache?: CacheStore;
+  };
+
   /** Fastify logger configuration */
   logger?: FastifyServerOptions['logger'];
+
+  /**
+   * Enable Arc debug logging.
+   *
+   * - `true` — all Arc modules
+   * - `string` — comma-separated module names (e.g., `'scope,elevation,sse'`)
+   * - `false` or omit — disabled (default)
+   *
+   * Also configurable via `ARC_DEBUG` environment variable.
+   *
+   * @example
+   * ```typescript
+   * // All modules
+   * const app = await createApp({ debug: true });
+   *
+   * // Specific modules
+   * const app = await createApp({ debug: 'scope,elevation' });
+   * ```
+   */
+  debug?: boolean | string;
 
   /** Trust proxy headers (X-Forwarded-For, etc.) */
   trustProxy?: boolean;
@@ -157,21 +298,22 @@ export interface CreateAppOptions {
    * Auth configuration
    *
    * Set to false to disable authentication entirely.
-   * Provide AuthPluginOptions for Arc's built-in JWT auth.
-   * Or use one of the alternative auth strategies.
+   * Each auth strategy requires a `type` discriminant field.
    *
    * @example
    * ```typescript
    * // Disable auth
    * auth: false,
    *
-   * // Arc JWT (existing behavior)
+   * // Arc JWT
    * auth: {
+   *   type: 'jwt',
    *   jwt: { secret: process.env.JWT_SECRET },
    * },
    *
    * // Arc JWT + custom authenticator
    * auth: {
+   *   type: 'jwt',
    *   jwt: { secret: process.env.JWT_SECRET },
    *   authenticate: async (request, { jwt }) => {
    *     const token = request.headers.authorization?.split(' ')[1];
@@ -182,10 +324,11 @@ export interface CreateAppOptions {
    * },
    *
    * // Better Auth adapter
-   * auth: { betterAuth: createBetterAuthAdapter({ auth: myBetterAuth }) },
+   * auth: { type: 'betterAuth', betterAuth: createBetterAuthAdapter({ auth: myBetterAuth }) },
    *
    * // Custom auth plugin
    * auth: {
+   *   type: 'custom',
    *   plugin: async (fastify) => {
    *     fastify.decorate('authenticate', async (req, reply) => { ... });
    *   },
@@ -193,6 +336,7 @@ export interface CreateAppOptions {
    *
    * // Custom authenticator function
    * auth: {
+   *   type: 'authenticator',
    *   authenticate: async (request, reply) => {
    *     const session = await validateSession(request);
    *     if (!session) reply.code(401).send({ error: 'Unauthorized' });
@@ -202,6 +346,33 @@ export interface CreateAppOptions {
    * ```
    */
   auth?: AuthOption;
+
+  // ============================================
+  // Elevation (opt-in)
+  // ============================================
+
+  /**
+   * Platform admin elevation — opt-in for apps with superadmins.
+   *
+   * When configured, platform admins can explicitly elevate their scope
+   * by sending `x-arc-scope: platform` header. Without this header,
+   * superadmins are treated as normal users.
+   *
+   * Set to `false` or omit to disable elevation entirely.
+   *
+   * @example
+   * ```typescript
+   * elevation: {
+   *   platformRoles: ['superadmin'],
+   *   onElevation: (event) => auditLog.write({
+   *     action: 'platform_elevation',
+   *     userId: event.userId,
+   *     targetOrg: event.organizationId,
+   *   }),
+   * }
+   * ```
+   */
+  elevation?: ElevationOptions | false;
 
   // ============================================
   // Security Plugins (opt-out)
@@ -243,7 +414,7 @@ export interface CreateAppOptions {
   // Arc-specific Options
   // ============================================
 
-  /** Enable Arc plugins (requestId, health, gracefulShutdown, caching, sse) */
+  /** Enable Arc plugins (requestId, health, gracefulShutdown, events, caching, sse) */
   arcPlugins?: {
     /** Request ID tracking (default: true) */
     requestId?: boolean;
@@ -253,6 +424,34 @@ export interface CreateAppOptions {
     gracefulShutdown?: boolean;
     /** Emit events for CRUD operations (default: true) */
     emitEvents?: boolean;
+    /**
+     * Event plugin configuration. Default: true (enabled with MemoryEventTransport).
+     * Set to false to disable event plugin registration entirely.
+     * Set to true for defaults (memory transport), or pass EventPluginOptions for fine control.
+     * Transport is sourced from `stores.events` if provided, otherwise defaults to memory.
+     *
+     * When enabled, registers `eventPlugin` which provides `fastify.events` for
+     * pub/sub. Combined with `emitEvents: true`, CRUD operations automatically
+     * emit domain events (e.g., `product.created`, `order.updated`).
+     *
+     * @example
+     * ```typescript
+     * // Memory transport (default)
+     * const app = await createApp({ arcPlugins: { events: true } });
+     *
+     * // With retry and logging
+     * const app = await createApp({
+     *   stores: { events: new RedisEventTransport({ url: 'redis://...' }) },
+     *   arcPlugins: {
+     *     events: {
+     *       logEvents: true,
+     *       retry: { maxRetries: 3, backoffMs: 1000 },
+     *     },
+     *   },
+     * });
+     * ```
+     */
+    events?: Omit<import('../events/eventPlugin.js').EventPluginOptions, 'transport'> | boolean;
     /**
      * Caching headers (ETag + Cache-Control). Default: false (opt-in).
      * Set to true for defaults, or pass CachingOptions for fine control.
@@ -264,6 +463,12 @@ export interface CreateAppOptions {
      * Requires emitEvents to be enabled (or events plugin registered).
      */
     sse?: import('../plugins/sse.js').SSEOptions | boolean;
+    /**
+     * QueryCache — TanStack Query-inspired server cache with SWR.
+     * Default: false (opt-in). Set to true for memory store defaults.
+     * Requires per-resource `cache` config on defineResource().
+     */
+    queryCache?: import('../cache/queryCachePlugin.js').QueryCachePluginOptions | boolean;
   };
 
   /**
@@ -287,8 +492,21 @@ export interface CreateAppOptions {
    */
   typeProvider?: 'typebox';
 
+  /**
+   * Error handler plugin. Normalizes AJV, Mongoose, and ArcError responses
+   * into a consistent JSON envelope. Enabled by default.
+   * Set to false to disable, or pass ErrorHandlerOptions for fine control.
+   */
+  errorHandler?: import('../plugins/errorHandler.js').ErrorHandlerOptions | false;
+
   /** Custom plugin registration function */
   plugins?: (fastify: FastifyInstance) => Promise<void>;
+
+  /** Hook called after all plugins are loaded and the app is ready */
+  onReady?: (fastify: FastifyInstance) => void | Promise<void>;
+
+  /** Hook called when the app is shutting down */
+  onClose?: (fastify: FastifyInstance) => void | Promise<void>;
 }
 
 // Plugin-specific options

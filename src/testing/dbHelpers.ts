@@ -114,8 +114,11 @@ export function withTestDb(
  */
 export class TestFixtures {
   private fixtures: Map<string, any[]> = new Map();
+  private connection: Connection;
 
-  constructor(private connection: Connection) {}
+  constructor(connection: Connection) {
+    this.connection = connection;
+  }
 
   /**
    * Load fixtures into a collection
@@ -234,8 +237,11 @@ export class InMemoryDatabase {
  */
 export class TestTransaction {
   private session?: any;
+  private connection: Connection;
 
-  constructor(private connection: Connection) {}
+  constructor(connection: Connection) {
+    this.connection = connection;
+  }
 
   /**
    * Start transaction
@@ -284,7 +290,11 @@ export class TestTransaction {
  * Seed data helper
  */
 export class TestSeeder {
-  constructor(private connection: Connection) {}
+  private connection: Connection;
+
+  constructor(connection: Connection) {
+    this.connection = connection;
+  }
 
   /**
    * Seed collection with data
@@ -325,8 +335,11 @@ export class TestSeeder {
  */
 export class DatabaseSnapshot {
   private snapshots: Map<string, any[]> = new Map();
+  private connection: Connection;
 
-  constructor(private connection: Connection) {}
+  constructor(connection: Connection) {
+    this.connection = connection;
+  }
 
   /**
    * Take snapshot of current database state

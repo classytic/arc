@@ -73,4 +73,4 @@ export {
   default as arcCorePlugin,
   arcCorePlugin as arcCorePluginFn,
 } from '../core/arcCorePlugin.js';
-export type { ArcCorePluginOptions, ArcCore } from '../core/arcCorePlugin.js';
+export type { ArcCorePluginOptions, ArcCore, PluginMeta } from '../core/arcCorePlugin.js';
