@@ -8,6 +8,7 @@
 import type { Model } from 'mongoose';
 import type { DataAdapter, SchemaMetadata, RepositoryLike } from './interface.js';
 import type { CrudRepository, RouteSchemaOptions, OpenApiSchemas, AnyRecord } from '../types/index.js';
+import { SYSTEM_FIELDS } from '../constants.js';
 import { isMongooseModel, isRepository } from './types.js';
 
 /**
@@ -44,10 +45,27 @@ interface MongooseSchemaType {
  * @typeParam TDoc - The document type (inferred or explicit)
  */
 export interface MongooseAdapterOptions<TDoc = unknown> {
-  /** Mongoose model instance — accepts any Mongoose model without Document constraint */
-  model: Model<any>;
+  /** Mongoose model instance — preserves document type for type safety */
+  model: Model<TDoc>;
   /** Repository implementing CRUD operations - accepts any repository-like object */
   repository: CrudRepository<TDoc> | RepositoryLike;
+  /**
+   * External schema generator plugin for OpenAPI docs.
+   * When provided, replaces the built-in basic type conversion.
+   * Receives the Mongoose model and schema options, must return OpenApiSchemas.
+   *
+   * @example MongoKit integration
+   * ```typescript
+   * import { buildCrudSchemasFromModel } from '@classytic/mongokit';
+   *
+   * createMongooseAdapter({
+   *   model: JobModel,
+   *   repository: jobRepository,
+   *   schemaGenerator: (model, options) => buildCrudSchemasFromModel(model, options),
+   * });
+   * ```
+   */
+  schemaGenerator?: (model: Model<TDoc>, options?: RouteSchemaOptions) => OpenApiSchemas;
 }
 
 // ============================================================================
@@ -62,8 +80,9 @@ export interface MongooseAdapterOptions<TDoc = unknown> {
 export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
   readonly type = 'mongoose' as const;
   readonly name: string;
-  readonly model: Model<any>;
+  readonly model: Model<TDoc>;
   readonly repository: CrudRepository<TDoc> | RepositoryLike;
+  private readonly schemaGenerator?: (model: Model<TDoc>, options?: RouteSchemaOptions) => OpenApiSchemas;
 
   constructor(options: MongooseAdapterOptions<TDoc>) {
     // Runtime validation
@@ -83,6 +102,7 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
 
     this.model = options.model;
     this.repository = options.repository;
+    this.schemaGenerator = options.schemaGenerator;
     this.name = `MongooseAdapter<${options.model.modelName}>`;
   }
 
@@ -108,6 +128,7 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
         Boolean: 'boolean',
         Date: 'date',
         ObjectID: 'objectId',
+        ObjectId: 'objectId',
         Array: 'array',
         Mixed: 'object',
         Buffer: 'object',
@@ -129,10 +150,19 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
   }
 
   /**
-   * Generate OpenAPI schemas from Mongoose model
+   * Generate OpenAPI schemas from Mongoose model.
+   *
+   * If a `schemaGenerator` plugin was provided (e.g. MongoKit's buildCrudSchemasFromModel),
+   * it is used instead of the built-in basic conversion.
    */
   generateSchemas(schemaOptions?: RouteSchemaOptions): OpenApiSchemas | null {
     try {
+      // Delegate to external schema generator plugin when available
+      if (this.schemaGenerator) {
+        return this.schemaGenerator(this.model, schemaOptions);
+      }
+
+      // Built-in basic conversion (fallback)
       const schema = this.model.schema;
       const paths = schema.paths;
       const properties: AnyRecord = {};
@@ -159,37 +189,30 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
         }
       }
 
-      const baseSchema = {
-        type: 'object',
-        properties,
-        required: required.length > 0 ? required : undefined,
-      };
+      // Filter out system-managed fields for input schemas.
+      // Uses SYSTEM_FIELDS from constants (excludes __v which is Mongoose-internal
+      // and already absent from input schemas).
+      const systemFieldSet = new Set<string>(SYSTEM_FIELDS);
+      const inputProperties = Object.fromEntries(
+        Object.entries(properties).filter(
+          ([field]) => !systemFieldSet.has(field)
+        )
+      );
+
+      const inputRequired = required.filter(
+        (field) => !systemFieldSet.has(field)
+      );
 
       return {
-        create: {
-          body: {
-            ...baseSchema,
-            // Remove system-managed fields from create
-            properties: Object.fromEntries(
-              Object.entries(properties).filter(
-                ([field]) =>
-                  !['_id', 'createdAt', 'updatedAt', 'deletedAt'].includes(field)
-              )
-            ),
-          },
+        createBody: {
+          type: 'object',
+          properties: inputProperties,
+          required: inputRequired.length > 0 ? inputRequired : undefined,
         },
-        update: {
-          body: {
-            ...baseSchema,
-            // All fields optional for PATCH
-            required: undefined,
-            properties: Object.fromEntries(
-              Object.entries(properties).filter(
-                ([field]) =>
-                  !['_id', 'createdAt', 'updatedAt', 'deletedAt'].includes(field)
-              )
-            ),
-          },
+        updateBody: {
+          type: 'object',
+          properties: inputProperties,
+          // All fields optional for PATCH
         },
         response: {
           type: 'object',
@@ -251,6 +274,7 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
         baseType.format = 'date-time';
         break;
       case 'ObjectID':
+      case 'ObjectId':
         baseType.type = 'string';
         baseType.pattern = '^[a-f\\d]{24}$';
         break;
@@ -287,14 +311,14 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
  * ```
  */
 export function createMongooseAdapter<TDoc = unknown>(
-  model: Model<any>,
+  model: Model<TDoc>,
   repository: CrudRepository<TDoc> | RepositoryLike,
 ): DataAdapter<TDoc>;
 export function createMongooseAdapter<TDoc = unknown>(
   options: MongooseAdapterOptions<TDoc>,
 ): DataAdapter<TDoc>;
 export function createMongooseAdapter<TDoc = unknown>(
-  modelOrOptions: Model<any> | MongooseAdapterOptions<TDoc>,
+  modelOrOptions: Model<TDoc> | MongooseAdapterOptions<TDoc>,
   repository?: CrudRepository<TDoc> | RepositoryLike,
 ): DataAdapter<TDoc> {
   if (isMongooseModel(modelOrOptions)) {
@@ -304,7 +328,7 @@ export function createMongooseAdapter<TDoc = unknown>(
         'Usage: createMongooseAdapter(Model, repository)'
       );
     }
-    return new MongooseAdapter<TDoc>({ model: modelOrOptions, repository });
+    return new MongooseAdapter<TDoc>({ model: modelOrOptions as Model<TDoc>, repository });
   }
   return new MongooseAdapter<TDoc>(modelOrOptions as MongooseAdapterOptions<TDoc>);
 }

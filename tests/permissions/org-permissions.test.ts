@@ -2,6 +2,7 @@
  * Organization Permission Tests
  *
  * Tests requireOrgMembership, requireOrgRole, and createOrgPermissions.
+ * All functions read `request.scope` (set by auth adapters).
  */
 
 import { describe, it, expect } from 'vitest';
@@ -18,21 +19,25 @@ import {
 // Helpers
 // ============================================================================
 
-/** Build a PermissionContext with org context on the request */
+/** Build a PermissionContext with scope on the request */
 function makeCtx(overrides: {
   user?: Record<string, unknown> | null;
   orgId?: string;
   orgRoles?: string[];
-  orgScope?: string;
+  elevated?: boolean;
 } = {}): PermissionContext {
   const req: Record<string, unknown> = {};
-  if (overrides.orgId || overrides.orgRoles || overrides.orgScope) {
-    req.organizationId = overrides.orgId;
-    req.context = {
-      organizationId: overrides.orgId,
+
+  if (overrides.elevated) {
+    req.scope = { kind: 'elevated', elevatedBy: 'admin' };
+  } else if (overrides.orgId || overrides.orgRoles) {
+    req.scope = {
+      kind: 'member',
+      organizationId: overrides.orgId ?? '',
       orgRoles: overrides.orgRoles ?? [],
-      orgScope: overrides.orgScope ?? 'member',
     };
+  } else if (overrides.user !== null && overrides.user !== undefined) {
+    req.scope = { kind: 'authenticated' };
   }
 
   return {
@@ -57,12 +62,12 @@ describe('requireOrgMembership', () => {
 
   it('denies when no active organization', () => {
     const result = check(makeCtx({ user: { id: 'u1', roles: [] } }));
-    expect(result).toEqual({ granted: false, reason: 'No active organization' });
+    expect(result).toEqual({ granted: false, reason: 'Organization membership required' });
   });
 
-  it('denies when org set but no roles (not a member)', () => {
+  it('grants when org set even with no roles (membership means scope is member)', () => {
     const result = check(makeCtx({ orgId: 'org1', orgRoles: [] }));
-    expect(result).toEqual({ granted: false, reason: 'Not a member of this organization' });
+    expect(result).toBe(true);
   });
 
   it('grants when user is a member', () => {
@@ -70,14 +75,13 @@ describe('requireOrgMembership', () => {
     expect(result).toBe(true);
   });
 
-  it('grants bypass role users without org context', () => {
-    const bypassCheck = requireOrgMembership({ bypassRoles: ['superadmin'] });
-    const result = bypassCheck(makeCtx({ user: { id: 'u1', roles: ['superadmin'] } }));
+  it('grants elevated scope without org context', () => {
+    const result = check(makeCtx({ elevated: true }));
     expect(result).toBe(true);
   });
 
-  it('grants when orgScope is bypass', () => {
-    const result = check(makeCtx({ orgId: 'org1', orgRoles: [], orgScope: 'bypass' }));
+  it('grants when user has multiple org roles (multi-role membership)', () => {
+    const result = check(makeCtx({ orgId: 'org1', orgRoles: ['admin', 'recruiter'] }));
     expect(result).toBe(true);
   });
 });
@@ -105,22 +109,54 @@ describe('requireOrgRole', () => {
     expect(result).toBe(true);
   });
 
-  it('grants with bypass scope', () => {
+  it('grants with elevated scope', () => {
     const check = requireOrgRole('owner');
-    const result = check(makeCtx({ orgId: 'org1', orgRoles: [], orgScope: 'bypass' }));
-    expect(result).toBe(true);
-  });
-
-  it('supports array + options overload', () => {
-    const check = requireOrgRole(['admin'], { bypassRoles: ['superadmin'] });
-    const result = check(makeCtx({ user: { id: 'u1', roles: ['superadmin'] } }));
+    const result = check(makeCtx({ elevated: true }));
     expect(result).toBe(true);
   });
 
   it('denies when no active organization', () => {
     const check = requireOrgRole('admin');
     const result = check(makeCtx());
-    expect(result).toEqual({ granted: false, reason: 'No active organization' });
+    expect(result).toEqual({ granted: false, reason: 'Organization membership required' });
+  });
+
+  // ──────────────────────────────────────────────────────────────
+  // Multi-role support (Better Auth comma-separated → string[])
+  // Better Auth stores roles as "admin,recruiter" → adapter splits
+  // to ['admin', 'recruiter']. requireOrgRole uses .some() so ANY
+  // matching role grants access.
+  // ──────────────────────────────────────────────────────────────
+
+  it('grants when user has multiple roles and one matches', () => {
+    const check = requireOrgRole('admin');
+    const result = check(makeCtx({ orgId: 'org1', orgRoles: ['recruiter', 'admin'] }));
+    expect(result).toBe(true);
+  });
+
+  it('grants when user has multiple roles and second role matches', () => {
+    const check = requireOrgRole('delivery_manager');
+    const result = check(makeCtx({ orgId: 'org1', orgRoles: ['admin', 'delivery_manager'] }));
+    expect(result).toBe(true);
+  });
+
+  it('denies when user has multiple roles but none match', () => {
+    const check = requireOrgRole('owner');
+    const result = check(makeCtx({ orgId: 'org1', orgRoles: ['admin', 'member'] }));
+    expect(result).toEqual({ granted: false, reason: 'Required org roles: owner' });
+  });
+
+  it('grants with multiple required roles when user has one matching', () => {
+    const check = requireOrgRole('admin', 'delivery_manager');
+    const result = check(makeCtx({ orgId: 'org1', orgRoles: ['recruiter', 'delivery_manager'] }));
+    expect(result).toBe(true);
+  });
+
+  it('handles real-world AI-Hire role combinations', () => {
+    // account_manager + recruiter combo
+    const check = requireOrgRole('admin', 'account_manager', 'recruiter');
+    const result = check(makeCtx({ orgId: 'org1', orgRoles: ['account_manager', 'recruiter'] }));
+    expect(result).toBe(true);
   });
 
   it('works with anyOf combinator', async () => {
@@ -156,7 +192,6 @@ describe('createOrgPermissions', () => {
       admin: { product: ['create', 'update'], order: ['create'] },
       member: { product: [], order: [] },
     },
-    bypassRoles: ['superadmin'],
   });
 
   describe('can()', () => {
@@ -190,23 +225,43 @@ describe('createOrgPermissions', () => {
       });
     });
 
-    it('grants bypass role regardless of org permissions', () => {
+    it('grants elevated scope regardless of org permissions', () => {
       const check = perms.can({ product: ['delete'] });
-      const result = check(makeCtx({ user: { id: 'u1', roles: ['superadmin'] } }));
+      const result = check(makeCtx({ elevated: true }));
       expect(result).toBe(true);
     });
 
     it('resolves union of multiple roles', () => {
-      // User with both admin and owner roles
       const check = perms.can({ product: ['delete'] });
       const result = check(makeCtx({ orgId: 'org1', orgRoles: ['admin', 'owner'] }));
       expect(result).toBe(true);
     });
 
+    it('multi-role: admin+member gets admin permissions via union', () => {
+      const check = perms.can({ product: ['create', 'update'] });
+      const result = check(makeCtx({ orgId: 'org1', orgRoles: ['admin', 'member'] }));
+      expect(result).toBe(true);
+    });
+
+    it('multi-role: member+admin union grants delete via owner-only perm', () => {
+      const check = perms.can({ product: ['delete'] });
+      const result = check(makeCtx({ orgId: 'org1', orgRoles: ['member', 'owner'] }));
+      expect(result).toBe(true);
+    });
+
+    it('multi-role: member+admin union does NOT grant delete (neither has it)', () => {
+      const check = perms.can({ product: ['delete'] });
+      const result = check(makeCtx({ orgId: 'org1', orgRoles: ['admin', 'member'] }));
+      expect(result).toEqual({
+        granted: false,
+        reason: 'Missing permissions: product:[delete]',
+      });
+    });
+
     it('denies when no active organization', () => {
       const check = perms.can({ product: ['create'] });
       const result = check(makeCtx());
-      expect(result).toEqual({ granted: false, reason: 'No active organization' });
+      expect(result).toEqual({ granted: false, reason: 'Organization membership required' });
     });
 
     it('denies unauthenticated users', () => {
@@ -217,7 +272,7 @@ describe('createOrgPermissions', () => {
   });
 
   describe('requireRole()', () => {
-    it('delegates to requireOrgRole with bypass roles', () => {
+    it('delegates to requireOrgRole', () => {
       const check = perms.requireRole('admin');
       const result = check(makeCtx({ orgId: 'org1', orgRoles: ['admin'] }));
       expect(result).toBe(true);
@@ -225,9 +280,9 @@ describe('createOrgPermissions', () => {
   });
 
   describe('requireMembership()', () => {
-    it('delegates to requireOrgMembership with bypass roles', () => {
+    it('delegates to requireOrgMembership', () => {
       const check = perms.requireMembership();
-      const result = check(makeCtx({ user: { id: 'u1', roles: ['superadmin'] } }));
+      const result = check(makeCtx({ orgId: 'org1', orgRoles: ['member'] }));
       expect(result).toBe(true);
     });
   });

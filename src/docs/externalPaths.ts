@@ -33,4 +33,13 @@ export interface ExternalOpenApiPaths {
   securitySchemes?: Record<string, Record<string, unknown>>;
   /** Additional tags for grouping operations */
   tags?: Array<{ name: string; description?: string }>;
+  /**
+   * Additional security alternatives for Arc resource paths.
+   * Each item is OR'd with bearerAuth. Keys within the same object are AND'd.
+   *
+   * @example
+   * // "bearer OR (api-key AND org-header)"
+   * resourceSecurity: [{ apiKeyAuth: [], orgHeader: [] }]
+   */
+  resourceSecurity?: Array<Record<string, string[]>>;
 }

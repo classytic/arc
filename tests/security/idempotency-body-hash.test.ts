@@ -26,7 +26,10 @@ describe('Security: Idempotency Body Hash', () => {
     });
 
     // Test endpoint that returns the request body
-    app.post('/orders', async (request) => {
+    // Wire idempotency.middleware in preHandler (route-level, after auth)
+    app.post('/orders', {
+      preHandler: [app.idempotency.middleware],
+    }, async (request) => {
       const body = request.body as { amount: number; customer: string };
       return {
         success: true,
@@ -40,7 +43,9 @@ describe('Security: Idempotency Body Hash', () => {
     });
 
     // Complex endpoint for nested objects test
-    app.post('/complex', async (request) => {
+    app.post('/complex', {
+      preHandler: [app.idempotency.middleware],
+    }, async (request) => {
       return { success: true, data: request.body };
     });
 

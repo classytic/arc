@@ -209,7 +209,12 @@ function parseCookies(header: string | undefined): Map<string, string> {
     const name = pair.slice(0, eqIndex).trim();
     const value = pair.slice(eqIndex + 1).trim();
     if (name) {
-      cookies.set(name, decodeURIComponent(value));
+      try {
+        cookies.set(name, decodeURIComponent(value));
+      } catch {
+        // Malformed percent-encoding — use raw value rather than crashing
+        cookies.set(name, value);
+      }
     }
   }
 

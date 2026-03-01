@@ -5,7 +5,7 @@
  * No string arrays, no alternative patterns.
  */
 
-import type { FastifyRequest } from 'fastify';
+import type { FastifyRequest } from "fastify";
 
 /**
  * User base interface - minimal shape Arc expects
@@ -21,21 +21,21 @@ export interface UserBase {
 /**
  * Context passed to permission check functions
  */
-export interface PermissionContext {
+export interface PermissionContext<TDoc = any> {
   /** Authenticated user or null if unauthenticated */
   user: UserBase | null;
   /** Fastify request object */
   request: FastifyRequest;
   /** Resource name being accessed */
   resource: string;
-  /** Action being performed (list, get, create, update, delete) */
+  /** Action being performed (list, get, create, update, delete, or custom operation name) */
   action: string;
-  /** Resource ID for single-resource operations */
+  /** Resource ID for single-resource operations (shortcut for params.id) */
   resourceId?: string;
-  /** Organization context for multi-tenant apps */
-  organizationId?: string;
+  /** All route parameters (slug, parentId, custom params, etc.) */
+  params?: Record<string, string>;
   /** Request body data */
-  data?: Record<string, unknown>;
+  data?: Partial<TDoc> | Record<string, unknown>;
 }
 
 /**
@@ -74,6 +74,24 @@ export interface PermissionResult {
  * };
  * ```
  */
-export type PermissionCheck = (
-  context: PermissionContext
-) => boolean | PermissionResult | Promise<boolean | PermissionResult>;
+export type PermissionCheck<TDoc = any> = ((
+  context: PermissionContext<TDoc>,
+) => boolean | PermissionResult | Promise<boolean | PermissionResult>) &
+  PermissionCheckMeta;
+
+/**
+ * Optional metadata attached to permission check functions.
+ * Used for OpenAPI docs, introspection, and route-level auth decisions.
+ */
+export interface PermissionCheckMeta {
+  /** Set by allowPublic() — marks the endpoint as publicly accessible */
+  _isPublic?: boolean;
+  /** Set by requireRoles() — the roles required for access */
+  _roles?: readonly string[];
+  /** Set by requireOrgMembership() — org-level permission type */
+  _orgPermission?: string;
+  /** Set by requireOrgRole() — the org roles required for access */
+  _orgRoles?: readonly string[];
+  /** Set by requireTeamMembership() — team-level permission type */
+  _teamPermission?: string;
+}

@@ -79,7 +79,11 @@ export function defineMigration(migration: Migration): Migration {
 export class MigrationRunner {
   private readonly collectionName = '_migrations';
 
-  constructor(private readonly db: mongoose.mongo.Db) {}
+  private readonly db: mongoose.mongo.Db;
+
+  constructor(db: mongoose.mongo.Db) {
+    this.db = db;
+  }
 
   /**
    * Run all pending migrations

@@ -17,7 +17,7 @@ export interface MongoAuditStoreOptions {
 }
 
 // Minimal MongoDB types to avoid mongoose dependency
-interface MongoConnection {
+export interface MongoConnection {
   collection: (name: string) => MongoCollection;
 }
 
@@ -40,7 +40,10 @@ export class MongoAuditStore implements AuditStore {
   private initialized = false;
   private ttlDays: number;
 
-  constructor(private options: MongoAuditStoreOptions) {
+  private options: MongoAuditStoreOptions;
+
+  constructor(options: MongoAuditStoreOptions) {
+    this.options = options;
     const collectionName = options.collection ?? 'audit_logs';
     this.collection = options.connection.collection(collectionName);
     this.ttlDays = options.ttlDays ?? 90;

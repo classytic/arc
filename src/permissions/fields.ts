@@ -21,6 +21,11 @@
  * ```
  */
 
+/** Type guard for Mongoose-like documents with toObject() */
+function isMongooseDoc(obj: unknown): obj is { toObject(): Record<string, unknown> } {
+  return !!obj && typeof obj === 'object' && 'toObject' in obj && typeof (obj as Record<string, unknown>).toObject === 'function';
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -119,7 +124,11 @@ export function applyFieldReadPermissions<T extends Record<string, unknown>>(
 ): T {
   if (!data || typeof data !== 'object') return data;
 
-  const result = { ...data };
+  // Normalize Mongoose documents to plain objects before spreading.
+  // HydratedDocument's spread gives internal properties ($__, $isNew, etc.),
+  // not the actual document fields — toObject() returns a proper plain object.
+  const plain = isMongooseDoc(data) ? data.toObject() as T : data;
+  const result = { ...plain };
 
   for (const [field, perm] of Object.entries(fieldPermissions)) {
     switch (perm._type) {
@@ -186,4 +195,25 @@ export function applyFieldWritePermissions<T extends Record<string, unknown>>(
   }
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Role Resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve effective roles by merging global user roles with org-level roles.
+ *
+ * Global roles come from `req.user.roles` (Better Auth user object).
+ * Org roles come from `req.context.orgRoles` (set by BA adapter's org bridge).
+ *
+ * When no org context exists, returns global roles only — backward compatible.
+ */
+export function resolveEffectiveRoles(
+  userRoles: readonly string[],
+  orgRoles: readonly string[],
+): string[] {
+  if (orgRoles.length === 0) return [...userRoles];
+  if (userRoles.length === 0) return [...orgRoles];
+  return [...new Set([...userRoles, ...orgRoles])];
 }

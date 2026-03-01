@@ -30,9 +30,9 @@ import { BaseController } from '../../src/core/BaseController.js';
 import { createMongooseAdapter } from '../../src/adapters/mongoose.js';
 import { requireAuth, allowPublic } from '../../src/permissions/index.js';
 import { multiTenantPreset } from '../../src/presets/multiTenant.js';
-import { applyPresets } from '../../src/presets/index.js';
 import { setupTestDatabase, teardownTestDatabase } from '../setup.js';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { RequestScope } from '../../src/scope/types.js';
 
 const JWT_SECRET = 'test-jwt-secret-must-be-at-least-32-chars-long!!';
 
@@ -44,6 +44,57 @@ const USER_A2 = new mongoose.Types.ObjectId().toString();
 const USER_B1 = new mongoose.Types.ObjectId().toString();
 const SUPERADMIN = new mongoose.Types.ObjectId().toString();
 const USER_NO_ORG = new mongoose.Types.ObjectId().toString();
+
+/**
+ * Test helper: custom authenticator that also resolves `request.scope`.
+ *
+ * In production apps, auth adapters (Better Auth, resolveOrgFromHeader) handle
+ * scope resolution. For tests using Arc's built-in JWT, we provide a custom
+ * `authenticate` function that reads the decoded JWT payload and sets
+ * `request.scope` accordingly — including elevated scope for platform admins.
+ *
+ * This runs inside `authenticate` (a route-level preHandler) so `request.user`
+ * is available by the time multiTenant middleware reads `request.scope`.
+ *
+ * @param superadminRoles Roles that should get 'elevated' scope
+ */
+function createScopeAwareAuthenticator(superadminRoles: string[] = ['superadmin']) {
+  return async (
+    request: FastifyRequest,
+    { jwt }: { jwt: { verify: <T>(token: string) => T } | null }
+  ): Promise<Record<string, unknown> | null> => {
+    if (!jwt) return null;
+    const auth = request.headers.authorization;
+    if (!auth?.startsWith('Bearer ')) return null;
+    const token = auth.slice(7);
+    const decoded = jwt.verify<Record<string, unknown>>(token);
+    if ((decoded as any).type === 'refresh') return null;
+
+    // Set scope BEFORE returning user — authPlugin will skip scope resolution
+    // if scope is already set (not 'public')
+    const userRoles = (Array.isArray(decoded.roles) ? decoded.roles : []) as string[];
+    const orgId = decoded.organizationId as string | undefined;
+
+    if (superadminRoles.some((r) => userRoles.includes(r))) {
+      // Elevated scope: don't carry organizationId from JWT — platform admins
+      // are "above" orgs. Org scoping for elevated users comes from explicit
+      // headers (e.g. x-organization-id), not from the JWT payload.
+      (request as any).scope = {
+        kind: 'elevated',
+        elevatedBy: String(decoded.id ?? decoded._id ?? 'admin'),
+      } satisfies RequestScope;
+    } else if (orgId) {
+      (request as any).scope = {
+        kind: 'member',
+        organizationId: orgId,
+        orgRoles: userRoles,
+      } satisfies RequestScope;
+    }
+    // else: stays 'public', authPlugin will promote to 'authenticated'
+
+    return decoded;
+  };
+}
 
 // ============================================================================
 // Multi-Tenant E2E
@@ -86,8 +137,8 @@ describe('Multi-Tenant E2E (data isolation)', () => {
       },
     };
 
-    // Apply the preset to get middlewares
-    const preset = multiTenantPreset({ bypassRoles: ['superadmin'] });
+    // Apply the preset to get middlewares (no bypassRoles — elevated scope handles bypass)
+    const preset = multiTenantPreset();
     const withPreset = {
       ...resourceConfig,
       middlewares: preset.middlewares,
@@ -97,7 +148,11 @@ describe('Multi-Tenant E2E (data isolation)', () => {
 
     app = await createApp({
       preset: 'development',
-      auth: { jwt: { secret: JWT_SECRET } },
+      auth: {
+        type: 'jwt',
+        jwt: { secret: JWT_SECRET },
+        authenticate: createScopeAwareAuthenticator(['superadmin']),
+      },
       logger: false,
       helmet: false,
       rateLimit: false,
@@ -420,7 +475,7 @@ describe('Single-Tenant E2E (no org filtering)', () => {
 
     app = await createApp({
       preset: 'development',
-      auth: { jwt: { secret: JWT_SECRET } },
+      auth: { type: 'jwt', jwt: { secret: JWT_SECRET } },
       logger: false,
       helmet: false,
       rateLimit: false,
@@ -545,9 +600,8 @@ describe('Flexible Multi-Tenant (allowPublic list/get)', () => {
     const repo = new Repository(CatalogModel);
     const ctrl = new BaseController(repo);
 
-    // Apply multiTenant with allowPublic for list and get
+    // Apply multiTenant with allowPublic for list and get (no bypassRoles — elevated scope handles bypass)
     const preset = multiTenantPreset({
-      bypassRoles: ['superadmin'],
       allowPublic: ['list', 'get'],
     });
 
@@ -569,7 +623,11 @@ describe('Flexible Multi-Tenant (allowPublic list/get)', () => {
 
     app = await createApp({
       preset: 'development',
-      auth: { jwt: { secret: JWT_SECRET } },
+      auth: {
+        type: 'jwt',
+        jwt: { secret: JWT_SECRET },
+        authenticate: createScopeAwareAuthenticator(['superadmin']),
+      },
       logger: false,
       helmet: false,
       rateLimit: false,

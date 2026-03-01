@@ -21,6 +21,13 @@
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 
+// Plugin-local augmentation for HTTP metrics timing
+declare module 'fastify' {
+  interface FastifyRequest {
+    _startTime?: number;
+  }
+}
+
 export interface HealthCheck {
   /** Name of the dependency */
   name: string;
@@ -58,6 +65,8 @@ interface CheckResult {
 interface HttpMetrics {
   requestsTotal: Record<string, number>;
   requestDurations: number[];
+  /** Write index for ring buffer — wraps modulo capacity */
+  _ringIndex: number;
   startTime: number;
 }
 
@@ -65,6 +74,7 @@ function createHttpMetrics(): HttpMetrics {
   return {
     requestsTotal: {},
     requestDurations: [],
+    _ringIndex: 0,
     startTime: Date.now(),
   };
 }
@@ -255,21 +265,23 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
   // Collect HTTP metrics
   if (collectHttpMetrics) {
     fastify.addHook('onRequest', async (request) => {
-      (request as any)._startTime = Date.now();
+      request._startTime = Date.now();
     });
 
     fastify.addHook('onResponse', async (request, reply) => {
-      const duration = Date.now() - ((request as any)._startTime || Date.now());
+      const duration = Date.now() - (request._startTime ?? Date.now());
 
       // Track by status code bucket (2xx, 3xx, 4xx, 5xx)
       const statusBucket = `${Math.floor(reply.statusCode / 100)}xx`;
       httpMetrics.requestsTotal[statusBucket] = (httpMetrics.requestsTotal[statusBucket] || 0) + 1;
 
-      // Store duration (keep last 10k requests)
-      httpMetrics.requestDurations.push(duration);
-      if (httpMetrics.requestDurations.length > 10000) {
-        httpMetrics.requestDurations.shift();
+      // Store duration in ring buffer (O(1) vs O(n) for Array.shift)
+      if (httpMetrics.requestDurations.length < 10000) {
+        httpMetrics.requestDurations.push(duration);
+      } else {
+        httpMetrics.requestDurations[httpMetrics._ringIndex % 10000] = duration;
       }
+      httpMetrics._ringIndex = httpMetrics._ringIndex + 1;
     });
   }
 
@@ -285,11 +297,12 @@ async function runChecks(checks: HealthCheck[]): Promise<CheckResult[]> {
   for (const check of checks) {
     const start = Date.now();
     const timeout = check.timeout ?? 5000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
 
     try {
       const checkPromise = Promise.resolve(check.check());
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('Health check timeout')), timeout);
+        timer = setTimeout(() => reject(new Error('Health check timeout')), timeout);
       });
 
       const healthy = await Promise.race([checkPromise, timeoutPromise]);
@@ -306,6 +319,8 @@ async function runChecks(checks: HealthCheck[]): Promise<CheckResult[]> {
         duration: Date.now() - start,
         error: (err as Error).message,
       });
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 

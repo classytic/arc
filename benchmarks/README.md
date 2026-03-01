@@ -114,15 +114,13 @@ schema.index({ slug: 1 }, { unique: true });
 .select('name price status')
 ```
 
-### 5. Enable Compression
+### 5. Use Reverse Proxy Compression
 
-```typescript
-import { createApp } from '@classytic/arc/factory';
+Arc does **not** include in-app compression due to Fastify 5 stream issues ([#6017](https://github.com/fastify/fastify/issues/6017)). Use a reverse proxy or CDN instead:
 
-const app = await createApp({
-  preset: 'production'
-});
-```
+- **Nginx**: `gzip on;` in server block
+- **Caddy**: automatic HTTPS + compression by default
+- **Cloudflare / CDN**: handles compression at the edge
 
 ### 6. Use Connection Pooling
 
@@ -159,7 +157,7 @@ This is acceptable for the features provided.
 2. **Enable HTTP/2** in production
 3. **Use PM2 or similar** for process management
 4. **Set appropriate connection pool sizes**
-5. **Enable response compression**
+5. **Use reverse proxy compression** (Nginx, Caddy, Cloudflare — not in-app due to Fastify 5 stream issues)
 6. **Use CDN for static assets**
 7. **Monitor with APM tools** (DataDog, New Relic, etc.)
 

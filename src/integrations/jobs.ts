@@ -199,8 +199,8 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
         const result = await job.handler(bullJob.data, meta);
 
         // Bridge completion event
-        if (bridgeEvents && (fastify as any).events?.publish) {
-          await (fastify as any).events.publish(`job.${queueName}.completed`, {
+        if (bridgeEvents && fastify.events?.publish) {
+          await fastify.events.publish(`job.${queueName}.completed`, {
             jobId: bullJob.id,
             data: bullJob.data,
             result,
@@ -220,8 +220,8 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
 
     // Bridge failure event
     worker.on('failed', async (bullJob: any, error: Error) => {
-      if (bridgeEvents && (fastify as any).events?.publish) {
-        await (fastify as any).events.publish(`job.${queueName}.failed`, {
+      if (bridgeEvents && fastify.events?.publish) {
+        await fastify.events.publish(`job.${queueName}.failed`, {
           jobId: bullJob?.id,
           data: bullJob?.data,
           error: error.message,

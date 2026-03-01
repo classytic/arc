@@ -46,6 +46,10 @@ export interface AuditContext {
   requestId?: string;
   ipAddress?: string;
   userAgent?: string;
+  /** HTTP method + route pattern (e.g., 'PATCH /api/products/:id') */
+  endpoint?: string;
+  /** Request duration in milliseconds */
+  duration?: number;
 }
 
 export interface AuditStoreOptions {

@@ -14,6 +14,7 @@ import type {
 import type { ResourceDefinition } from '../core/defineResource.js';
 import type { FieldPermissionMap } from '../permissions/fields.js';
 import type { PipelineConfig, PipelineStep } from '../pipeline/types.js';
+import { CRUD_OPERATIONS, DEFAULT_UPDATE_METHOD } from '../constants.js';
 
 export interface RegisterOptions {
   module?: string;
@@ -66,6 +67,7 @@ export class ResourceRegistry {
           typeof r.handler === 'string'
             ? r.handler
             : (r.handler as Function).name || 'anonymous',
+        operation: r.operation,
         summary: r.summary,
         description: r.description,
         permissions: r.permissions,
@@ -75,10 +77,11 @@ export class ResourceRegistry {
       events: Object.keys(resource.events ?? {}),
       registeredAt: new Date().toISOString(),
       disableDefaultRoutes: resource.disableDefaultRoutes,
+      updateMethod: resource.updateMethod,
+      disabledRoutes: resource.disabledRoutes,
       openApiSchemas: options.openApiSchemas,
       fieldPermissions: extractFieldPermissions(resource.fields),
       pipelineSteps: extractPipelineSteps(resource.pipe),
-      organizationScoped: resource.organizationScoped,
       rateLimit: resource.rateLimit,
       plugin: resource.toPlugin(), // Store plugin factory
     };
@@ -140,8 +143,16 @@ export class ResourceRegistry {
       byModule: this._groupBy(resources, 'module'),
       presetUsage: presetCounts,
       totalRoutes: resources.reduce((sum, r) => {
-        const defaultRouteCount = r.disableDefaultRoutes ? 0 : 5;
-        return sum + (r.additionalRoutes?.length ?? 0) + defaultRouteCount;
+        if (r.disableDefaultRoutes) {
+          return sum + (r.additionalRoutes?.length ?? 0);
+        }
+        const disabledSet = new Set(r.disabledRoutes ?? []);
+        let defaultCount = CRUD_OPERATIONS.filter(route => !disabledSet.has(route)).length;
+        // 'update' creates 2 routes when updateMethod is 'both' (PUT + PATCH)
+        if (!disabledSet.has('update') && r.updateMethod === 'both') {
+          defaultCount += 1;
+        }
+        return sum + defaultCount + (r.additionalRoutes?.length ?? 0);
       }, 0),
       totalEvents: resources.reduce((sum, r) => sum + (r.events?.length ?? 0), 0),
     };
@@ -153,16 +164,23 @@ export class ResourceRegistry {
   getIntrospection(): IntrospectionData {
     return {
       resources: this.getAll().map((r) => {
-        // Only include default routes if not disabled
-        const defaultRoutes = r.disableDefaultRoutes
-          ? []
-          : [
-              { method: 'GET', path: r.prefix, operation: 'list' },
-              { method: 'GET', path: `${r.prefix}/:id`, operation: 'get' },
-              { method: 'POST', path: r.prefix, operation: 'create' },
-              { method: 'PATCH', path: `${r.prefix}/:id`, operation: 'update' },
-              { method: 'DELETE', path: `${r.prefix}/:id`, operation: 'delete' },
-            ];
+        // Build default routes accounting for disabledRoutes and updateMethod
+        const disabledSet = new Set(r.disabledRoutes ?? []);
+        const updateMethod = r.updateMethod ?? DEFAULT_UPDATE_METHOD;
+        const defaultRoutes = r.disableDefaultRoutes ? [] : [
+          ...(!disabledSet.has('list') ? [{ method: 'GET', path: r.prefix, operation: 'list' }] : []),
+          ...(!disabledSet.has('get') ? [{ method: 'GET', path: `${r.prefix}/:id`, operation: 'get' }] : []),
+          ...(!disabledSet.has('create') ? [{ method: 'POST', path: r.prefix, operation: 'create' }] : []),
+          ...(!disabledSet.has('update') ? (
+            updateMethod === 'both'
+              ? [
+                  { method: 'PUT', path: `${r.prefix}/:id`, operation: 'update' },
+                  { method: 'PATCH', path: `${r.prefix}/:id`, operation: 'update' },
+                ]
+              : [{ method: updateMethod, path: `${r.prefix}/:id`, operation: 'update' }]
+          ) : []),
+          ...(!disabledSet.has('delete') ? [{ method: 'DELETE', path: `${r.prefix}/:id`, operation: 'delete' }] : []),
+        ];
 
         return {
           name: r.name,
@@ -176,7 +194,7 @@ export class ResourceRegistry {
             ...(r.additionalRoutes?.map((ar) => ({
               method: ar.method,
               path: `${r.prefix}${ar.path}`,
-              operation: typeof ar.handler === 'string' ? ar.handler : 'custom',
+              operation: ar.operation ?? (typeof ar.handler === 'string' ? ar.handler : 'custom'),
               handler: typeof ar.handler === 'string' ? ar.handler : undefined,
               summary: ar.summary,
             })) ?? []),
@@ -204,18 +222,28 @@ export class ResourceRegistry {
   }
 
   /**
-   * Unfreeze registry (for testing)
+   * Unfreeze registry (allow new registrations)
    */
-  _unfreeze(): void {
+  unfreeze(): void {
     this._frozen = false;
   }
 
   /**
-   * Clear all resources (for testing)
+   * Reset registry — clear all resources and unfreeze
    */
-  _clear(): void {
+  reset(): void {
     this._resources.clear();
     this._frozen = false;
+  }
+
+  /** @internal Alias for unfreeze() */
+  _unfreeze(): void {
+    this.unfreeze();
+  }
+
+  /** @internal Alias for reset() */
+  _clear(): void {
+    this.reset();
   }
 
   /**

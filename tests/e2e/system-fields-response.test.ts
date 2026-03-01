@@ -38,10 +38,11 @@ import { createApp } from '../../src/factory/createApp.js';
 import { defineResource } from '../../src/core/defineResource.js';
 import { BaseController } from '../../src/core/BaseController.js';
 import { createMongooseAdapter } from '../../src/adapters/mongoose.js';
-import { requireAuth, requireOwnership } from '../../src/permissions/index.js';
+import { requireAuth, requireOwnership, anyOf, requireRoles } from '../../src/permissions/index.js';
 import { multiTenantPreset } from '../../src/presets/multiTenant.js';
 import { setupTestDatabase, teardownTestDatabase, createMockRepository } from '../setup.js';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { RequestScope } from '../../src/scope/types.js';
 
 const JWT_SECRET = 'test-jwt-secret-must-be-at-least-32-chars-long!!';
 
@@ -52,6 +53,39 @@ const USER_B = new mongoose.Types.ObjectId().toString();
 const SUPERADMIN = new mongoose.Types.ObjectId().toString();
 
 type TestApp = FastifyInstance & { auth: { issueTokens: (payload: Record<string, unknown>) => { accessToken: string } } };
+
+/**
+ * Test helper: onRequest hook that resolves `request.scope` from JWT user claims.
+ * Superadmin roles get 'elevated' scope, users with organizationId get 'member' scope.
+ */
+function scopeFromJwtHook(superadminRoles: string[] = ['superadmin']) {
+  return async (request: FastifyRequest, _reply: FastifyReply): Promise<void> => {
+    const user = (request as any).user as Record<string, unknown> | undefined;
+    if (!user) return;
+
+    const userRoles = (Array.isArray(user.roles) ? user.roles : []) as string[];
+
+    if (superadminRoles.some((r) => userRoles.includes(r))) {
+      const orgId = user.organizationId as string | undefined;
+      (request as any).scope = {
+        kind: 'elevated',
+        organizationId: orgId,
+        elevatedBy: String(user.id ?? user._id ?? 'admin'),
+      } satisfies RequestScope;
+      return;
+    }
+
+    const orgId = user.organizationId as string | undefined;
+    if (orgId) {
+      (request as any).scope = {
+        kind: 'member',
+        organizationId: orgId,
+        orgRoles: userRoles,
+      } satisfies RequestScope;
+      return;
+    }
+  };
+}
 
 /**
  * Helper: create a resource with multi-tenant preset and register it via createApp.
@@ -67,7 +101,7 @@ async function buildTestApp(opts: {
   const repo = createMockRepository(Model);
   const ctrl = new BaseController(repo, { schemaOptions: opts.schemaOptions });
 
-  const preset = multiTenantPreset({ bypassRoles: ['superadmin'] });
+  const preset = multiTenantPreset();
 
   const resource = defineResource({
     name: opts.name,
@@ -86,11 +120,13 @@ async function buildTestApp(opts: {
 
   const app = await createApp({
     preset: 'development',
-    auth: { jwt: { secret: JWT_SECRET } },
+    auth: { type: 'jwt', jwt: { secret: JWT_SECRET } },
     logger: false,
     helmet: false,
     rateLimit: false,
     plugins: async (fastify) => {
+      // Resolve request.scope from JWT claims (simulates auth adapter behavior)
+      fastify.addHook('onRequest', scopeFromJwtHook(['superadmin']));
       await fastify.register(resource.toPlugin());
     },
   });
@@ -825,7 +861,7 @@ describe('Ownership & Access Control Response Format', () => {
     const repo = createMockRepository(Model);
     const ctrl = new BaseController(repo);
 
-    const preset = multiTenantPreset({ bypassRoles: ['superadmin'] });
+    const preset = multiTenantPreset();
 
     const resource = defineResource({
       name: 'doc',
@@ -835,19 +871,21 @@ describe('Ownership & Access Control Response Format', () => {
         list: requireAuth(),
         get: requireAuth(),
         create: requireAuth(),
-        update: requireOwnership('createdBy', { bypassRoles: ['superadmin'] }),
-        delete: requireOwnership('createdBy', { bypassRoles: ['superadmin'] }),
+        update: anyOf(requireRoles(['superadmin']), requireOwnership('createdBy')),
+        delete: anyOf(requireRoles(['superadmin']), requireOwnership('createdBy')),
       },
       middlewares: preset.middlewares,
     });
 
     app = await createApp({
       preset: 'development',
-      auth: { jwt: { secret: JWT_SECRET } },
+      auth: { type: 'jwt', jwt: { secret: JWT_SECRET } },
       logger: false,
       helmet: false,
       rateLimit: false,
       plugins: async (fastify) => {
+        // Resolve request.scope from JWT claims (simulates auth adapter behavior)
+        fastify.addHook('onRequest', scopeFromJwtHook(['superadmin']));
         await fastify.register(resource.toPlugin());
       },
     }) as TestApp;

@@ -79,7 +79,7 @@
  *
  * const app = await createApp({
  *   preset: 'production',
- *   auth: { jwt: { secret: process.env.JWT_SECRET } },
+ *   auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
  *   plugins: async (fastify) => {
  *     await fastify.register(productResource.toPlugin());
  *   },
@@ -114,6 +114,7 @@ export {
   BaseController,
   defineResource,
   ResourceDefinition,
+  getControllerScope,
 } from "./core/index.js";
 export type { BaseControllerOptions } from "./core/index.js";
 
@@ -146,6 +147,7 @@ export type {
   JWTPayload,
   // Request context
   RequestContext,
+  ArcInternalMetadata,
   OwnershipCheck,
   FastifyRequestExtras,
   RequestWithExtras,
@@ -180,7 +182,6 @@ export type {
   IntrospectionData,
   // Plugin options
   AuthPluginOptions,
-  OrgScopeOptions,
   IntrospectionPluginOptions,
   CrudRouterOptions,
   RateLimitConfig,
@@ -199,6 +200,11 @@ export type {
   TypedController,
   TypedRepository,
 } from "./types/index.js";
+
+// ============================================================================
+// Constants — single source of truth for defaults and magic values (zero deps)
+// ============================================================================
+export * from "./constants.js";
 
 // ============================================================================
 // Errors — commonly needed alongside defineResource (zero deps, pure classes)
@@ -246,6 +252,7 @@ export {
   requireOrgMembership,
   requireOrgRole,
   createOrgPermissions,
+  createDynamicPermissionMatrix,
   requireTeamMembership,
   // Field-level permissions
   fields,
@@ -257,6 +264,8 @@ export type {
   PermissionCheck,
   PermissionContext,
   PermissionResult,
+  DynamicPermissionMatrixConfig,
+  DynamicPermissionMatrix,
   FieldPermission,
   FieldPermissionMap,
 } from "./permissions/index.js";
@@ -310,6 +319,12 @@ export type { RequestStore } from "./context/index.js";
 // Registry:
 //   import { ResourceRegistry } from '@classytic/arc/registry';
 //
+
+// ============================================================================
+// Logger — centralized debug/warning system (zero deps)
+// ============================================================================
+export { configureArcLogger, arcLog } from "./logger/index.js";
+export type { ArcLoggerOptions, ArcLogWriter, ArcLogger } from "./logger/index.js";
 
 // Version from package.json (injected at build time via tsdown define)
 export const version: string = "__ARC_VERSION__";

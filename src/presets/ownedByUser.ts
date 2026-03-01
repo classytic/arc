@@ -29,32 +29,31 @@ import type {
   RequestWithExtras,
   RouteHandler,
 } from '../types/index.js';
+import { isElevated, PUBLIC_SCOPE } from '../scope/types.js';
+import type { RequestScope } from '../scope/types.js';
 
 export interface OwnedByUserOptions {
   ownerField?: string;
-  bypassRoles?: string[];
 }
 
 /**
- * Create ownership check middleware
+ * Create ownership check middleware.
+ * Elevated scope (platform admin) bypasses ownership checks.
  */
-function createOwnershipCheck(
-  ownerField: string,
-  bypassRoles: string[]
-): RouteHandler {
+function createOwnershipCheck(ownerField: string): RouteHandler {
   return async (request: RequestWithExtras, _reply: FastifyReply): Promise<void> => {
     const user = request.user;
     if (!user) return;
 
-    // Bypass roles skip check
-    const userWithRoles = user as { roles?: string[] };
-    if (userWithRoles.roles && bypassRoles.some((r) => userWithRoles.roles!.includes(r))) return;
+    // Elevated scope bypasses ownership check
+    const scope = request.scope ?? PUBLIC_SCOPE;
+    if (isElevated(scope)) return;
 
     // Set ownership check for controller to validate
     const userWithId = user as { _id?: string; id?: string };
     const userId = userWithId._id ?? userWithId.id;
     if (userId) {
-      (request as any)._ownershipCheck = {
+      request._ownershipCheck = {
         field: ownerField,
         userId,
       };
@@ -63,12 +62,9 @@ function createOwnershipCheck(
 }
 
 export function ownedByUserPreset(options: OwnedByUserOptions = {}): PresetResult {
-  const {
-    ownerField = 'userId',
-    bypassRoles = ['admin', 'superadmin'],
-  } = options;
+  const { ownerField = 'userId' } = options;
 
-  const ownershipMiddleware = createOwnershipCheck(ownerField, bypassRoles);
+  const ownershipMiddleware = createOwnershipCheck(ownerField);
 
   return {
     name: 'ownedByUser',

@@ -2,18 +2,14 @@
  * Soft Delete Preset
  *
  * Adds routes for listing deleted items and restoring them.
+ * The actual soft-delete behavior (deletedAt field, query filtering)
+ * is handled by the repository/adapter layer (e.g., MongoKit's softDelete plugin).
  */
 
 import type { AdditionalRoute, PresetResult, ResourcePermissions } from '../types/index.js';
 import { requireRoles } from '../permissions/index.js';
 
-export interface SoftDeleteOptions {
-  deletedField?: string;
-}
-
-export function softDeletePreset(options: SoftDeleteOptions = {}): PresetResult {
-  const { deletedField: _deletedField = 'deletedAt' } = options;
-
+export function softDeletePreset(): PresetResult {
   return {
     name: 'softDelete',
     additionalRoutes: (permissions: ResourcePermissions): AdditionalRoute[] => [
@@ -24,6 +20,7 @@ export function softDeletePreset(options: SoftDeleteOptions = {}): PresetResult 
         summary: 'Get soft-deleted items',
         permissions: permissions.list ?? requireRoles(['admin']),
         wrapHandler: true,
+        operation: 'listDeleted',
       },
       {
         method: 'POST',
@@ -32,6 +29,7 @@ export function softDeletePreset(options: SoftDeleteOptions = {}): PresetResult 
         summary: 'Restore soft-deleted item',
         permissions: permissions.update ?? requireRoles(['admin']),
         wrapHandler: true,
+        operation: 'restore',
       },
     ],
   };

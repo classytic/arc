@@ -26,10 +26,90 @@ export type {
   PermissionContext,
   PermissionResult,
   UserBase,
-} from './types.js';
+} from "./types.js";
+import { randomUUID } from "node:crypto";
+import { MemoryCacheStore } from "../cache/memory.js";
+import type { CacheLogger, CacheStore } from "../cache/interface.js";
+
+export interface DynamicPermissionMatrixConfig {
+  /**
+   * Resolve role → resource → actions map dynamically (DB/API/config service).
+   * Called at permission-check time (or cache miss if cache enabled).
+   */
+  resolveRolePermissions: (
+    ctx: PermissionContext,
+  ) =>
+    | Record<string, Record<string, readonly string[]>>
+    | Promise<Record<string, Record<string, readonly string[]>>>;
+  /**
+   * Optional cache store adapter.
+   * Use MemoryCacheStore for single-instance apps or RedisCacheStore for distributed setups.
+   */
+  cacheStore?: CacheStore<Record<string, Record<string, readonly string[]>>>;
+  /** Optional logger for cache/runtime failures (default: console) */
+  logger?: CacheLogger;
+  /**
+   * Legacy convenience in-memory cache config.
+   * If `cacheStore` is not provided and ttlMs > 0, Arc creates an internal MemoryCacheStore.
+   */
+  cache?: {
+    /** Cache TTL in milliseconds */
+    ttlMs: number;
+    /** Optional custom cache key builder */
+    key?: (ctx: PermissionContext) => string | null | undefined;
+    /** Hard entry cap for internal memory store (default: 1000) */
+    maxEntries?: number;
+  };
+}
+
+/** Minimal publish/subscribe interface for cross-node cache invalidation. */
+export interface PermissionEventBus {
+  publish: <T>(type: string, payload: T) => Promise<void>;
+  subscribe: (
+    pattern: string,
+    handler: (event: { payload: unknown }) => void | Promise<void>,
+  ) => Promise<(() => void) | void>;
+}
+
+export interface ConnectEventsOptions {
+  /** Called on remote invalidation for app-specific cleanup (e.g., resolver cache) */
+  onRemoteInvalidation?: (orgId: string) => void | Promise<void>;
+  /** Custom event type (default: 'arc.permissions.invalidated') */
+  eventType?: string;
+}
+
+export interface DynamicPermissionMatrix {
+  can: (permissions: Record<string, readonly string[]>) => PermissionCheck;
+  canAction: (resource: string, action: string) => PermissionCheck;
+  requireRole: (...roles: string[]) => PermissionCheck;
+  requireMembership: () => PermissionCheck;
+  requireTeamMembership: () => PermissionCheck;
+  /** Invalidate cached permissions for a specific organization */
+  invalidateByOrg: (orgId: string) => Promise<void>;
+  clearCache: () => Promise<void>;
+
+  /**
+   * Connect to an event system for cross-node cache invalidation.
+   *
+   * Late-binding: call after the event plugin is registered (e.g., in onReady hook).
+   * Once connected, `invalidateByOrg()` auto-publishes an event, and incoming
+   * events from other nodes trigger local cache invalidation.
+   * Echo is suppressed via per-process nodeId matching.
+   */
+  connectEvents(
+    events: PermissionEventBus,
+    options?: ConnectEventsOptions,
+  ): Promise<void>;
+
+  /** Disconnect from the event system. Safe to call even if never connected. */
+  disconnectEvents(): Promise<void>;
+
+  /** Whether events are currently connected. */
+  readonly eventsConnected: boolean;
+}
 
 // Permission presets — common patterns in one call
-import * as presets from './presets.js';
+import * as presets from "./presets.js";
 export { presets as permissions };
 export {
   publicRead,
@@ -39,17 +119,36 @@ export {
   ownerWithAdminBypass,
   fullPublic,
   readOnly,
-} from './presets.js';
+} from "./presets.js";
 
 // Field-level permissions
-export { fields, applyFieldReadPermissions, applyFieldWritePermissions } from './fields.js';
-export type { FieldPermission, FieldPermissionMap, FieldPermissionType } from './fields.js';
+export {
+  fields,
+  applyFieldReadPermissions,
+  applyFieldWritePermissions,
+  resolveEffectiveRoles,
+} from "./fields.js";
+export type {
+  FieldPermission,
+  FieldPermissionMap,
+  FieldPermissionType,
+} from "./fields.js";
 
 import type {
   PermissionCheck,
   PermissionContext,
   PermissionResult,
-} from './types.js';
+} from "./types.js";
+import type { FastifyRequest } from "fastify";
+import type { RequestScope } from "../scope/types.js";
+import {
+  isMember,
+  isElevated,
+  getOrgId,
+  getOrgRoles,
+  getTeamId,
+  PUBLIC_SCOPE,
+} from "../scope/types.js";
 
 // ============================================================================
 // Permission Helpers
@@ -69,7 +168,7 @@ import type {
 export function allowPublic(): PermissionCheck {
   const check: PermissionCheck = () => true;
   // Mark as public for OpenAPI documentation and introspection
-  (check as any)._isPublic = true;
+  check._isPublic = true;
   return check;
 }
 
@@ -87,7 +186,7 @@ export function allowPublic(): PermissionCheck {
 export function requireAuth(): PermissionCheck {
   const check: PermissionCheck = (ctx) => {
     if (!ctx.user) {
-      return { granted: false, reason: 'Authentication required' };
+      return { granted: false, reason: "Authentication required" };
     }
     return true;
   };
@@ -115,11 +214,11 @@ export function requireAuth(): PermissionCheck {
  */
 export function requireRoles(
   roles: readonly string[],
-  options?: { bypassRoles?: readonly string[] }
+  options?: { bypassRoles?: readonly string[] },
 ): PermissionCheck {
   const check: PermissionCheck = (ctx) => {
     if (!ctx.user) {
-      return { granted: false, reason: 'Authentication required' };
+      return { granted: false, reason: "Authentication required" };
     }
 
     const userRoles = (ctx.user.roles ?? []) as string[];
@@ -136,10 +235,10 @@ export function requireRoles(
 
     return {
       granted: false,
-      reason: `Required roles: ${roles.join(', ')}`,
+      reason: `Required roles: ${roles.join(", ")}`,
     };
   };
-  (check as any)._roles = roles;
+  check._roles = roles;
   return check;
 }
 
@@ -159,13 +258,13 @@ export function requireRoles(
  * }
  * ```
  */
-export function requireOwnership(
-  ownerField: string = 'userId',
-  options?: { bypassRoles?: readonly string[] }
-): PermissionCheck {
+export function requireOwnership<TDoc = any>(
+  ownerField: Extract<keyof TDoc, string> | string = "userId",
+  options?: { bypassRoles?: readonly string[] },
+): PermissionCheck<TDoc> {
   return (ctx) => {
     if (!ctx.user) {
-      return { granted: false, reason: 'Authentication required' };
+      return { granted: false, reason: "Authentication required" };
     }
 
     const userRoles = (ctx.user.roles ?? []) as string[];
@@ -178,7 +277,7 @@ export function requireOwnership(
     // Return filters to scope to owned resources
     const userId = ctx.user.id ?? ctx.user._id;
     if (!userId) {
-      return { granted: false, reason: 'User identity missing (no id or _id)' };
+      return { granted: false, reason: "User identity missing (no id or _id)" };
     }
     return {
       granted: true,
@@ -208,7 +307,7 @@ export function allOf(...checks: PermissionCheck[]): PermissionCheck {
     for (const check of checks) {
       const result = await check(ctx);
       const normalized: PermissionResult =
-        typeof result === 'boolean' ? { granted: result } : result;
+        typeof result === "boolean" ? { granted: result } : result;
 
       if (!normalized.granted) {
         return normalized;
@@ -222,7 +321,8 @@ export function allOf(...checks: PermissionCheck[]): PermissionCheck {
 
     return {
       granted: true,
-      filters: Object.keys(mergedFilters).length > 0 ? mergedFilters : undefined,
+      filters:
+        Object.keys(mergedFilters).length > 0 ? mergedFilters : undefined,
     };
   };
 }
@@ -247,7 +347,7 @@ export function anyOf(...checks: PermissionCheck[]): PermissionCheck {
     for (const check of checks) {
       const result = await check(ctx);
       const normalized: PermissionResult =
-        typeof result === 'boolean' ? { granted: result } : result;
+        typeof result === "boolean" ? { granted: result } : result;
 
       if (normalized.granted) {
         return normalized;
@@ -260,7 +360,7 @@ export function anyOf(...checks: PermissionCheck[]): PermissionCheck {
 
     return {
       granted: false,
-      reason: reasons.join('; '),
+      reason: reasons.join("; "),
     };
   };
 }
@@ -275,7 +375,7 @@ export function anyOf(...checks: PermissionCheck[]): PermissionCheck {
  * }
  * ```
  */
-export function denyAll(reason = 'Access denied'): PermissionCheck {
+export function denyAll(reason = "Access denied"): PermissionCheck {
   return () => ({ granted: false, reason });
 }
 
@@ -289,14 +389,14 @@ export function denyAll(reason = 'Access denied'): PermissionCheck {
  * }
  * ```
  */
-export function when(
-  condition: (ctx: PermissionContext) => boolean | Promise<boolean>
-): PermissionCheck {
+export function when<TDoc = any>(
+  condition: (ctx: PermissionContext<TDoc>) => boolean | Promise<boolean>,
+): PermissionCheck<TDoc> {
   return async (ctx) => {
     const result = await condition(ctx);
     return {
       granted: result,
-      reason: result ? undefined : 'Condition not met',
+      reason: result ? undefined : "Condition not met",
     };
   };
 }
@@ -305,26 +405,16 @@ export function when(
 // Organization Permission Helpers
 // ============================================================================
 
-/** Extract org roles from request context (set by Better Auth adapter or orgScopePlugin) */
-function getOrgContext(request: unknown): {
-  organizationId?: string;
-  orgRoles?: string[];
-  orgScope?: string;
-} {
-  const req = request as Record<string, any>;
-  return {
-    organizationId: req?.organizationId ?? req?.context?.organizationId,
-    orgRoles: req?.context?.orgRoles ?? [],
-    orgScope: req?.context?.orgScope,
-  };
+/** Read request.scope safely */
+function getScope(request: FastifyRequest): RequestScope {
+  return request.scope ?? PUBLIC_SCOPE;
 }
 
 /**
  * Require membership in the active organization.
- * User must be authenticated AND a member of the active org.
+ * User must be authenticated AND have an active org (member or elevated scope).
  *
- * Reads `request.context.orgRoles` populated by the Better Auth adapter
- * (with `orgContext: true`) or any middleware that sets the same shape.
+ * Reads `request.scope` set by auth adapters.
  *
  * @example
  * ```typescript
@@ -334,44 +424,28 @@ function getOrgContext(request: unknown): {
  * }
  * ```
  */
-export function requireOrgMembership(
-  options?: { bypassRoles?: readonly string[] }
-): PermissionCheck {
-  const check: PermissionCheck = (ctx) => {
+export function requireOrgMembership<TDoc = any>(): PermissionCheck<TDoc> {
+  const check: PermissionCheck<TDoc> = (ctx) => {
     if (!ctx.user) {
-      return { granted: false, reason: 'Authentication required' };
+      return { granted: false, reason: "Authentication required" };
     }
 
-    const userRoles = (ctx.user.roles ?? []) as string[];
-    if (options?.bypassRoles?.some((r) => userRoles.includes(r))) {
-      return true;
-    }
+    const scope = getScope(ctx.request);
+    if (isElevated(scope)) return true;
+    if (isMember(scope)) return true;
 
-    const org = getOrgContext(ctx.request);
-
-    // Bypass scope = superadmin-level, always pass
-    if (org.orgScope === 'bypass') return true;
-
-    if (!org.organizationId) {
-      return { granted: false, reason: 'No active organization' };
-    }
-
-    if (!org.orgRoles || org.orgRoles.length === 0) {
-      return { granted: false, reason: 'Not a member of this organization' };
-    }
-
-    return true;
+    return { granted: false, reason: "Organization membership required" };
   };
-  (check as any)._orgPermission = 'membership';
+  check._orgPermission = "membership";
   return check;
 }
 
 /**
  * Require specific org-level roles.
- * Checks `request.context.orgRoles` (populated by Better Auth adapter or orgScopePlugin).
+ * Reads `request.scope.orgRoles` (set by auth adapters).
+ * Elevated scope always passes (platform admin bypass).
  *
  * @param roles - Required org roles (user needs at least one)
- * @param options - Optional bypass roles (checked against global user.roles)
  *
  * @example
  * ```typescript
@@ -381,53 +455,36 @@ export function requireOrgMembership(
  * }
  * ```
  */
-export function requireOrgRole(
-  ...args: string[] | [readonly string[], { bypassRoles?: readonly string[] }?]
-): PermissionCheck {
-  // Support both: requireOrgRole('admin', 'owner') and requireOrgRole(['admin'], { bypassRoles: [...] })
-  let roles: readonly string[];
-  let options: { bypassRoles?: readonly string[] } | undefined;
+export function requireOrgRole<TDoc = any>(
+  ...args: string[] | [readonly string[]]
+): PermissionCheck<TDoc> {
+  // Support both: requireOrgRole('admin', 'owner') and requireOrgRole(['admin', 'owner'])
+  const roles: readonly string[] = Array.isArray(args[0])
+    ? args[0]
+    : (args as string[]);
 
-  if (Array.isArray(args[0])) {
-    roles = args[0] as readonly string[];
-    options = args[1] as { bypassRoles?: readonly string[] } | undefined;
-  } else {
-    roles = args as string[];
-    options = undefined;
-  }
-
-  const check: PermissionCheck = (ctx) => {
+  const check: PermissionCheck<TDoc> = (ctx) => {
     if (!ctx.user) {
-      return { granted: false, reason: 'Authentication required' };
+      return { granted: false, reason: "Authentication required" };
     }
 
-    const userRoles = (ctx.user.roles ?? []) as string[];
-    if (options?.bypassRoles?.some((r) => userRoles.includes(r))) {
-      return true;
+    const scope = getScope(ctx.request);
+    if (isElevated(scope)) return true;
+
+    if (!isMember(scope)) {
+      return { granted: false, reason: "Organization membership required" };
     }
 
-    const org = getOrgContext(ctx.request);
-
-    if (org.orgScope === 'bypass') return true;
-
-    if (!org.organizationId) {
-      return { granted: false, reason: 'No active organization' };
-    }
-
-    if (!org.orgRoles || org.orgRoles.length === 0) {
-      return { granted: false, reason: 'Not a member of this organization' };
-    }
-
-    if (roles.some((r) => org.orgRoles!.includes(r))) {
+    if (roles.some((r) => scope.orgRoles.includes(r))) {
       return true;
     }
 
     return {
       granted: false,
-      reason: `Required org roles: ${roles.join(', ')}`,
+      reason: `Required org roles: ${roles.join(", ")}`,
     };
   };
-  (check as any)._orgRoles = roles;
+  check._orgRoles = roles;
   return check;
 }
 
@@ -460,18 +517,17 @@ export function requireOrgRole(
 export function createOrgPermissions(config: {
   statements: Record<string, readonly string[]>;
   roles: Record<string, Record<string, readonly string[]>>;
-  bypassRoles?: readonly string[];
 }): {
   can: (permissions: Record<string, string[]>) => PermissionCheck;
   requireRole: (...roles: string[]) => PermissionCheck;
   requireMembership: () => PermissionCheck;
   requireTeamMembership: () => PermissionCheck;
 } {
-  const { roles: roleMap, bypassRoles } = config;
+  const { roles: roleMap } = config;
 
   function hasPermissions(
     orgRoles: string[],
-    required: Record<string, string[]>
+    required: Record<string, string[]>,
   ): boolean {
     // User's effective permissions = union of all their role permissions
     for (const [resource, actions] of Object.entries(required)) {
@@ -490,32 +546,23 @@ export function createOrgPermissions(config: {
     can(permissions: Record<string, string[]>): PermissionCheck {
       return (ctx) => {
         if (!ctx.user) {
-          return { granted: false, reason: 'Authentication required' };
+          return { granted: false, reason: "Authentication required" };
         }
 
-        const userRoles = (ctx.user.roles ?? []) as string[];
-        if (bypassRoles?.some((r) => userRoles.includes(r))) {
-          return true;
+        const scope = getScope(ctx.request);
+        if (isElevated(scope)) return true;
+
+        if (!isMember(scope)) {
+          return { granted: false, reason: "Organization membership required" };
         }
 
-        const org = getOrgContext(ctx.request);
-        if (org.orgScope === 'bypass') return true;
-
-        if (!org.organizationId) {
-          return { granted: false, reason: 'No active organization' };
-        }
-
-        if (!org.orgRoles || org.orgRoles.length === 0) {
-          return { granted: false, reason: 'Not a member of this organization' };
-        }
-
-        if (hasPermissions(org.orgRoles, permissions)) {
+        if (hasPermissions(scope.orgRoles, permissions)) {
           return true;
         }
 
         const needed = Object.entries(permissions)
-          .map(([r, a]) => `${r}:[${a.join(',')}]`)
-          .join(', ');
+          .map(([r, a]) => `${r}:[${a.join(",")}]`)
+          .join(", ");
         return {
           granted: false,
           reason: `Missing permissions: ${needed}`,
@@ -524,15 +571,330 @@ export function createOrgPermissions(config: {
     },
 
     requireRole(...roles: string[]): PermissionCheck {
-      return requireOrgRole(roles, { bypassRoles });
+      return requireOrgRole(roles);
     },
 
     requireMembership(): PermissionCheck {
-      return requireOrgMembership({ bypassRoles });
+      return requireOrgMembership();
     },
 
     requireTeamMembership(): PermissionCheck {
-      return requireTeamMembership({ bypassRoles });
+      return requireTeamMembership();
+    },
+  };
+}
+
+/**
+ * Create a dynamic role-based permission matrix.
+ *
+ * Use this when role/action mappings are managed outside code
+ * (e.g., admin UI matrix, DB-stored ACLs, remote policy service).
+ *
+ * Supports:
+ * - org role union (any assigned org role can grant)
+ * - global bypass roles
+ * - wildcard resource/action (`*`)
+ * - optional in-memory cache
+ */
+export function createDynamicPermissionMatrix(
+  config: DynamicPermissionMatrixConfig,
+): DynamicPermissionMatrix {
+  const logger = config.logger ?? console;
+  const legacyTtlMs = config.cache?.ttlMs ?? 0;
+  const hasExternalStore = !!config.cacheStore;
+  const cacheTtlMs =
+    legacyTtlMs > 0 ? legacyTtlMs : hasExternalStore ? 300_000 : 0;
+
+  const internalStore =
+    !config.cacheStore && cacheTtlMs > 0
+      ? new MemoryCacheStore<Record<string, Record<string, readonly string[]>>>(
+          {
+            defaultTtlMs: cacheTtlMs,
+            maxEntries: config.cache?.maxEntries ?? 1000,
+          },
+        )
+      : undefined;
+
+  const cacheStore = config.cacheStore ?? internalStore;
+  const trackedKeys = new Set<string>();
+
+  // ── Cross-node event bridge (late-binding) ───────────────────────
+  const nodeId = randomUUID().slice(0, 8);
+  const DEFAULT_EVENT_TYPE = "arc.permissions.invalidated";
+
+  interface InternalEventBridge {
+    publish: <T>(type: string, payload: T) => Promise<void>;
+    unsubscribe: (() => void) | null;
+    eventType: string;
+    onRemoteInvalidation?: (orgId: string) => void | Promise<void>;
+  }
+
+  let eventBridge: InternalEventBridge | null = null;
+
+  /** Clear local cache for an org without publishing events (avoids infinite loops). */
+  async function localInvalidateByOrg(orgId: string): Promise<void> {
+    if (!cacheStore) return;
+    const prefix = `${orgId}::`;
+    const toDelete: string[] = [];
+    for (const key of trackedKeys) {
+      if (key.startsWith(prefix)) toDelete.push(key);
+    }
+    for (const key of toDelete) {
+      try {
+        await cacheStore.delete(key);
+        trackedKeys.delete(key);
+      } catch (error) {
+        logger.warn(
+          `[DynamicPermissionMatrix] invalidateByOrg delete failed for '${key}': ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+  }
+
+  function isActionAllowed(
+    actions: readonly string[] | undefined,
+    action: string,
+  ): boolean {
+    if (!actions || actions.length === 0) return false;
+    return actions.includes("*") || actions.includes(action);
+  }
+
+  function roleAllows(
+    matrix: Record<string, Record<string, readonly string[]>>,
+    role: string,
+    resource: string,
+    action: string,
+  ): boolean {
+    const rolePermissions = matrix[role];
+    if (!rolePermissions) return false;
+    const resourceActions = rolePermissions[resource];
+    const wildcardResourceActions = rolePermissions["*"];
+    return (
+      isActionAllowed(resourceActions, action) ||
+      isActionAllowed(wildcardResourceActions, action)
+    );
+  }
+
+  function buildDefaultCacheKey(
+    ctx: PermissionContext,
+    orgId?: string,
+    orgRoles?: string[],
+  ): string {
+    const userId = String(ctx.user?.id ?? ctx.user?._id ?? "anon");
+    const roles = (orgRoles ?? []).slice().sort().join(",");
+    return `${orgId ?? "no-org"}::${roles}::${userId}`;
+  }
+
+  async function resolveMatrix(
+    ctx: PermissionContext,
+    orgId?: string,
+    orgRoles?: string[],
+  ): Promise<Record<string, Record<string, readonly string[]>>> {
+    if (!cacheStore) {
+      return config.resolveRolePermissions(ctx);
+    }
+
+    const customKey = config.cache?.key?.(ctx);
+    const cacheKey = customKey ?? buildDefaultCacheKey(ctx, orgId, orgRoles);
+
+    if (!cacheKey) {
+      return config.resolveRolePermissions(ctx);
+    }
+
+    try {
+      const hit = await cacheStore.get(cacheKey);
+      if (hit) return hit;
+    } catch (error) {
+      logger.warn(
+        `[DynamicPermissionMatrix] Cache get failed for '${cacheKey}': ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    const value = await config.resolveRolePermissions(ctx);
+
+    try {
+      await cacheStore.set(cacheKey, value, { ttlMs: cacheTtlMs });
+      trackedKeys.add(cacheKey);
+
+      // Cap tracked keys to prevent unbounded memory growth
+      const maxTracked = config.cache?.maxEntries ?? 10_000;
+      if (trackedKeys.size > maxTracked) {
+        const overflow = trackedKeys.size - maxTracked;
+        const iter = trackedKeys.values();
+        for (let i = 0; i < overflow; i++) {
+          const oldest = iter.next().value;
+          if (oldest) trackedKeys.delete(oldest);
+        }
+      }
+    } catch (error) {
+      logger.warn(
+        `[DynamicPermissionMatrix] Cache set failed for '${cacheKey}': ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    return value;
+  }
+
+  function can(required: Record<string, readonly string[]>): PermissionCheck {
+    return async (ctx) => {
+      if (!ctx.user) {
+        return { granted: false, reason: "Authentication required" };
+      }
+
+      const scope = getScope(ctx.request);
+      if (isElevated(scope)) return true;
+
+      if (!isMember(scope)) {
+        return { granted: false, reason: "Organization membership required" };
+      }
+
+      const orgRoles = scope.orgRoles;
+      if (orgRoles.length === 0) {
+        return { granted: false, reason: "Not a member of this organization" };
+      }
+
+      let matrix: Record<string, Record<string, readonly string[]>>;
+      try {
+        matrix = await resolveMatrix(ctx, scope.organizationId, orgRoles);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          granted: false,
+          reason: `Permission matrix resolution failed: ${message}`,
+        };
+      }
+
+      for (const [resource, actions] of Object.entries(required)) {
+        for (const action of actions) {
+          const granted = orgRoles.some((role) =>
+            roleAllows(matrix, role, resource, action),
+          );
+          if (!granted) {
+            return {
+              granted: false,
+              reason: `Missing permission: ${resource}:${action}`,
+            };
+          }
+        }
+      }
+
+      return true;
+    };
+  }
+
+  return {
+    can,
+    canAction(resource: string, action: string): PermissionCheck {
+      return can({ [resource]: [action] });
+    },
+    requireRole(...roles: string[]): PermissionCheck {
+      return requireOrgRole(roles);
+    },
+    requireMembership(): PermissionCheck {
+      return requireOrgMembership();
+    },
+    requireTeamMembership(): PermissionCheck {
+      return requireTeamMembership();
+    },
+    async invalidateByOrg(orgId: string): Promise<void> {
+      await localInvalidateByOrg(orgId);
+
+      // Publish cross-node invalidation event (fail-open)
+      if (eventBridge) {
+        try {
+          await eventBridge.publish(eventBridge.eventType, { orgId, nodeId });
+        } catch (error) {
+          logger.warn(
+            `[DynamicPermissionMatrix] Failed to publish invalidation event for org '${orgId}': ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+    },
+    async clearCache(): Promise<void> {
+      if (!cacheStore) return;
+
+      if (cacheStore.clear) {
+        try {
+          await cacheStore.clear();
+          trackedKeys.clear();
+          return;
+        } catch (error) {
+          logger.warn(
+            `[DynamicPermissionMatrix] cacheStore.clear failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+
+      // Fallback for stores without clear(): delete known keys for this process.
+      for (const key of trackedKeys) {
+        try {
+          await cacheStore.delete(key);
+        } catch (error) {
+          logger.warn(
+            `[DynamicPermissionMatrix] Cache delete failed for '${key}': ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+      trackedKeys.clear();
+    },
+
+    async connectEvents(
+      events: PermissionEventBus,
+      options?: ConnectEventsOptions,
+    ): Promise<void> {
+      // Disconnect previous connection if any (idempotent reconnect)
+      if (eventBridge) {
+        await this.disconnectEvents();
+      }
+
+      const eventType = options?.eventType ?? DEFAULT_EVENT_TYPE;
+
+      const unsubscribeFn = await events.subscribe(eventType, async (event) => {
+        const payload = event.payload as
+          | { orgId?: string; nodeId?: string }
+          | undefined;
+        if (!payload?.orgId) return;
+
+        // Echo dedup: skip events published by this node
+        if (payload.nodeId === nodeId) return;
+
+        // Clear local permission matrix cache (no re-publish)
+        await localInvalidateByOrg(payload.orgId);
+
+        // App-specific cleanup callback
+        if (options?.onRemoteInvalidation) {
+          try {
+            await options.onRemoteInvalidation(payload.orgId);
+          } catch (error) {
+            logger.warn(
+              `[DynamicPermissionMatrix] onRemoteInvalidation callback failed for org '${payload.orgId}': ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
+      });
+
+      eventBridge = {
+        publish: events.publish,
+        unsubscribe: typeof unsubscribeFn === "function" ? unsubscribeFn : null,
+        eventType,
+        onRemoteInvalidation: options?.onRemoteInvalidation,
+      };
+    },
+
+    async disconnectEvents(): Promise<void> {
+      if (!eventBridge) return;
+      try {
+        eventBridge.unsubscribe?.();
+      } catch (error) {
+        logger.warn(
+          `[DynamicPermissionMatrix] disconnectEvents unsubscribe failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      eventBridge = null;
+    },
+
+    get eventsConnected(): boolean {
+      return eventBridge !== null;
     },
   };
 }
@@ -541,18 +903,12 @@ export function createOrgPermissions(config: {
 // Team Permission Helpers
 // ============================================================================
 
-/** Extract team context from request (set by Better Auth adapter) */
-function getTeamContext(request: unknown): { teamId?: string } {
-  const req = request as Record<string, any>;
-  return { teamId: req?.teamId ?? req?.context?.teamId };
-}
-
 /**
  * Require membership in the active team.
  * User must be authenticated, a member of the active org, AND have an active team.
  *
  * Better Auth teams are flat member groups (no team-level roles).
- * Reads `request.context.teamId` populated by the Better Auth adapter.
+ * Reads `request.scope.teamId` set by the Better Auth adapter.
  *
  * @example
  * ```typescript
@@ -562,39 +918,26 @@ function getTeamContext(request: unknown): { teamId?: string } {
  * }
  * ```
  */
-export function requireTeamMembership(
-  options?: { bypassRoles?: readonly string[] }
-): PermissionCheck {
-  const check: PermissionCheck = (ctx) => {
+export function requireTeamMembership<TDoc = any>(): PermissionCheck<TDoc> {
+  const check: PermissionCheck<TDoc> = (ctx) => {
     if (!ctx.user) {
-      return { granted: false, reason: 'Authentication required' };
+      return { granted: false, reason: "Authentication required" };
     }
 
-    const userRoles = (ctx.user.roles ?? []) as string[];
-    if (options?.bypassRoles?.some((r) => userRoles.includes(r))) {
-      return true;
+    const scope = getScope(ctx.request);
+    if (isElevated(scope)) return true;
+
+    if (!isMember(scope)) {
+      return { granted: false, reason: "Organization membership required" };
     }
 
-    const org = getOrgContext(ctx.request);
-
-    // Bypass scope = superadmin-level, always pass
-    if (org.orgScope === 'bypass') return true;
-
-    if (!org.organizationId) {
-      return { granted: false, reason: 'No active organization' };
-    }
-
-    if (!org.orgRoles || org.orgRoles.length === 0) {
-      return { granted: false, reason: 'Not a member of this organization' };
-    }
-
-    const team = getTeamContext(ctx.request);
-    if (!team.teamId) {
-      return { granted: false, reason: 'No active team' };
+    const teamId = getTeamId(scope);
+    if (!teamId) {
+      return { granted: false, reason: "No active team" };
     }
 
     return true;
   };
-  (check as any)._teamPermission = 'membership';
+  check._teamPermission = "membership";
   return check;
 }

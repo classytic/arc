@@ -1,0 +1,168 @@
+# Audit Module
+
+Audit trail tracking with pluggable storage backends.
+
+## Setup
+
+```typescript
+import { auditPlugin } from '@classytic/arc/audit';
+
+// Development: in-memory
+await fastify.register(auditPlugin, {
+  enabled: true,
+  stores: ['memory'],
+});
+
+// Production: MongoDB with TTL
+await fastify.register(auditPlugin, {
+  enabled: true,
+  stores: ['mongodb'],
+  mongoConnection: mongoose.connection,
+  ttlDays: 90,
+});
+```
+
+## Configuration
+
+```typescript
+interface AuditPluginOptions {
+  enabled?: boolean;           // Enable auditing (default: false)
+  stores?: ('memory' | 'mongodb')[];  // Storage backends
+  mongoConnection?: Connection; // Required for mongodb store
+  mongoCollection?: string;    // Collection name (default: 'audit_logs')
+  ttlDays?: number;            // Auto-cleanup after N days (default: 90)
+  customStores?: AuditStore[]; // Custom store implementations
+}
+```
+
+## Storage Backends
+
+### Memory Store (Development)
+
+```typescript
+await fastify.register(auditPlugin, {
+  enabled: true,
+  stores: ['memory'],
+});
+```
+
+- Fast, no persistence
+- Limited by memory
+- **Use for:** Development, testing
+
+### MongoDB Store (Production)
+
+```typescript
+await fastify.register(auditPlugin, {
+  enabled: true,
+  stores: ['mongodb'],
+  mongoConnection: mongoose.connection,
+  mongoCollection: 'audit_logs',
+  ttlDays: 90,
+});
+```
+
+- Persistent, queryable
+- TTL index for auto-cleanup
+- **Use for:** Production, compliance
+
+## Using Audit Logger
+
+```typescript
+// Log CRUD actions
+await fastify.audit.create('product', product._id, product, request.auditContext);
+await fastify.audit.update('product', id, beforeDoc, afterDoc, request.auditContext);
+await fastify.audit.delete('product', id, deletedDoc, request.auditContext);
+await fastify.audit.restore('product', id, restoredDoc, request.auditContext);
+
+// Log custom actions
+await fastify.audit.custom('product', id, 'price_changed', {
+  oldPrice: 100,
+  newPrice: 150,
+}, request.auditContext);
+```
+
+## Audit Context
+
+Automatically populated from request:
+
+```typescript
+interface AuditContext {
+  user?: UserBase;
+  organizationId?: string;
+  requestId?: string;
+  ipAddress?: string;
+  userAgent?: string;
+  endpoint?: string;           // e.g., 'POST /api/products' (auto-set after response)
+  duration?: number;           // Request duration in ms (auto-set after response)
+}
+
+// Access in handlers
+const context = request.auditContext;
+```
+
+**Note:** `endpoint` and `duration` are populated in Fastify's `onResponse` hook, so they're available in audit entries written during response lifecycle.
+
+## Audit Entry Structure
+
+```typescript
+interface AuditEntry {
+  id: string;
+  timestamp: Date;
+  action: 'create' | 'update' | 'delete' | 'restore' | 'custom';
+  resource: string;
+  documentId: string;
+  before?: Record<string, unknown>;
+  after?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  context: AuditContext;
+}
+```
+
+## Querying Audit Logs
+
+```typescript
+const entries = await fastify.audit.query({
+  resource: 'product',
+  documentId: 'product-123',
+  action: 'update',
+  from: new Date('2024-01-01'),
+  to: new Date(),
+  limit: 100,
+});
+```
+
+## Custom Store Implementation
+
+```typescript
+import type { AuditStore, AuditEntry, AuditQueryOptions } from '@classytic/arc/audit';
+
+class CustomAuditStore implements AuditStore {
+  async log(entry: AuditEntry): Promise<void> {
+    // Store the entry
+  }
+
+  async query(options: AuditQueryOptions): Promise<AuditEntry[]> {
+    // Query entries
+    return [];
+  }
+
+  async close(): Promise<void> {
+    // Cleanup
+  }
+}
+
+// Use it
+await fastify.register(auditPlugin, {
+  enabled: true,
+  customStores: [new CustomAuditStore()],
+});
+```
+
+## Deployment Guide
+
+| Setup | Store | Notes |
+|-------|-------|-------|
+| Single instance | memory | Fast, no persistence |
+| Multi-instance | mongodb | Shared, persistent |
+| Compliance | mongodb + TTL | Auto-cleanup after retention period |

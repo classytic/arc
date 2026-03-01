@@ -5,17 +5,22 @@
  * CRUD operations, hooks, authentication, and more
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import mongoose from 'mongoose';
-import { createApp } from '../../src/factory/createApp.js';
-import { defineResource } from '../../src/core/defineResource.js';
-import { BaseController } from '../../src/core/BaseController.js';
-import { createMongooseAdapter } from '../../src/adapters/mongoose.js';
-import { allowPublic } from '../../src/permissions/index.js';
-import { setupTestDatabase, teardownTestDatabase, createMockModel, createMockRepository } from '../setup.js';
-import type { FastifyInstance } from 'fastify';
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import mongoose from "mongoose";
+import { createApp } from "../../src/factory/createApp.js";
+import { defineResource } from "../../src/core/defineResource.js";
+import { BaseController } from "../../src/core/BaseController.js";
+import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
+import { allowPublic } from "../../src/permissions/index.js";
+import {
+  setupTestDatabase,
+  teardownTestDatabase,
+  createMockModel,
+  createMockRepository,
+} from "../setup.js";
+import type { FastifyInstance } from "fastify";
 
-describe('Full Application E2E', () => {
+describe("Full Application E2E", () => {
   let app: FastifyInstance;
   let mongoUri: string;
   const testPort = 3001;
@@ -25,20 +30,22 @@ describe('Full Application E2E', () => {
     mongoUri = await setupTestDatabase();
 
     // Create test models
-    const ProductModel = createMockModel('E2EProduct');
+    const ProductModel = createMockModel("E2EProduct");
     const productRepo = createMockRepository(ProductModel);
-    const productController = new BaseController(productRepo);
+    const productController = new BaseController(productRepo, {
+      resourceName: "product",
+    });
 
     // Define resource with hooks
     const productResource = defineResource({
-      name: 'product',
+      name: "product",
       adapter: createMongooseAdapter({
         model: ProductModel,
         repository: productRepo,
       }),
       controller: productController,
-      prefix: '/products',
-      tag: 'Products',
+      prefix: "/products",
+      tag: "Products",
       permissions: {
         list: allowPublic(),
         get: allowPublic(),
@@ -50,8 +57,11 @@ describe('Full Application E2E', () => {
 
     // Create app with factory
     app = await createApp({
-      preset: 'development',
-      auth: { jwt: { secret: 'test-jwt-secret-must-be-at-least-32-chars-long' } },
+      preset: "development",
+      auth: {
+        type: "jwt",
+        jwt: { secret: "test-jwt-secret-must-be-at-least-32-chars-long" },
+      },
       logger: false,
       cors: { origin: true },
       helmet: false, // Disable for testing
@@ -59,19 +69,21 @@ describe('Full Application E2E', () => {
       plugins: async (fastify) => {
         // Register lifecycle hooks on instance-scoped hook system
         // (Now scoped per app instance instead of global singleton)
-        fastify.arc.hooks.before('product', 'create', async (ctx) => {
+        fastify.arc.hooks.before("product", "create", async (ctx) => {
           // Auto-generate slug from name
-          if (ctx.data?.name && !ctx.data.slug) {
+          if (typeof ctx.data?.name === "string" && !ctx.data.slug) {
             return {
               ...ctx.data,
-              slug: ctx.data.name.toLowerCase().replace(/\s+/g, '-'),
+              slug: ctx.data.name.toLowerCase().replace(/\s+/g, "-"),
             };
           }
+          return ctx.data;
         });
 
-        fastify.arc.hooks.after('product', 'create', async (ctx) => {
+        fastify.arc.hooks.after("product", "create", async (ctx) => {
           // Track created product for testing
-          const createdId = ctx.result?._id?.toString() || null;
+          const result = ctx.result as Record<string, any>;
+          const createdId = result?._id?.toString() || null;
           console.log(`[E2E Test] Product created: ${createdId}`);
         });
 
@@ -80,7 +92,7 @@ describe('Full Application E2E', () => {
       },
     });
 
-    await app.listen({ port: testPort, host: '127.0.0.1' });
+    await app.listen({ port: testPort, host: "127.0.0.1" });
   });
 
   afterAll(async () => {
@@ -88,40 +100,40 @@ describe('Full Application E2E', () => {
     await teardownTestDatabase();
   });
 
-  describe('Health Endpoints', () => {
-    it('should respond to health check', async () => {
+  describe("Health Endpoints", () => {
+    it("should respond to health check", async () => {
       const response = await app.inject({
-        method: 'GET',
-        url: '/_health/live',
+        method: "GET",
+        url: "/_health/live",
       });
 
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
-      expect(payload.status).toBe('ok');
+      expect(payload.status).toBe("ok");
     });
 
-    it('should respond to readiness check', async () => {
+    it("should respond to readiness check", async () => {
       const response = await app.inject({
-        method: 'GET',
-        url: '/_health/ready',
+        method: "GET",
+        url: "/_health/ready",
       });
 
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
-      expect(payload.status).toBe('ready');
+      expect(payload.status).toBe("ready");
     });
   });
 
-  describe('CRUD Operations with Hooks', () => {
+  describe("CRUD Operations with Hooks", () => {
     let productId: string;
 
-    it('should create a product with beforeCreate hook', async () => {
+    it("should create a product with beforeCreate hook", async () => {
       const response = await app.inject({
-        method: 'POST',
-        url: '/products',
+        method: "POST",
+        url: "/products",
         payload: {
-          name: 'Test Product',
-          description: 'A test product',
+          name: "Test Product",
+          description: "A test product",
           price: 99.99,
         },
       });
@@ -131,19 +143,19 @@ describe('Full Application E2E', () => {
 
       expect(payload.success).toBe(true);
       expect(payload.data).toMatchObject({
-        name: 'Test Product',
-        description: 'A test product',
+        name: "Test Product",
+        description: "A test product",
         price: 99.99,
-        slug: 'test-product', // Auto-generated by hook
+        slug: "test-product", // Auto-generated by hook
       });
 
       productId = payload.data._id;
     });
 
-    it('should list products', async () => {
+    it("should list products", async () => {
       const response = await app.inject({
-        method: 'GET',
-        url: '/products',
+        method: "GET",
+        url: "/products",
       });
 
       expect(response.statusCode).toBe(200);
@@ -153,14 +165,14 @@ describe('Full Application E2E', () => {
       // Arc/MongoKit uses 'docs' array (not 'data') with flat pagination
       expect(payload.docs).toBeDefined();
       expect(payload.docs.length).toBeGreaterThanOrEqual(1);
-      expect(payload.docs[0].name).toBe('Test Product');
+      expect(payload.docs[0].name).toBe("Test Product");
       // Pagination fields are flat (not nested)
       expect(payload.total).toBeGreaterThanOrEqual(1);
     });
 
-    it('should get product by ID', async () => {
+    it("should get product by ID", async () => {
       const response = await app.inject({
-        method: 'GET',
+        method: "GET",
         url: `/products/${productId}`,
       });
 
@@ -169,16 +181,16 @@ describe('Full Application E2E', () => {
 
       expect(payload.success).toBe(true);
       expect(payload.data._id).toBe(productId);
-      expect(payload.data.name).toBe('Test Product');
+      expect(payload.data.name).toBe("Test Product");
     });
 
-    it('should update a product', async () => {
+    it("should update a product", async () => {
       const response = await app.inject({
-        method: 'PATCH',
+        method: "PATCH",
         url: `/products/${productId}`,
         payload: {
           price: 149.99,
-          description: 'Updated description',
+          description: "Updated description",
         },
       });
 
@@ -187,13 +199,13 @@ describe('Full Application E2E', () => {
 
       expect(payload.success).toBe(true);
       expect(payload.data.price).toBe(149.99);
-      expect(payload.data.description).toBe('Updated description');
-      expect(payload.data.name).toBe('Test Product'); // Unchanged
+      expect(payload.data.description).toBe("Updated description");
+      expect(payload.data.name).toBe("Test Product"); // Unchanged
     });
 
-    it('should delete a product', async () => {
+    it("should delete a product", async () => {
       const response = await app.inject({
-        method: 'DELETE',
+        method: "DELETE",
         url: `/products/${productId}`,
       });
 
@@ -204,39 +216,39 @@ describe('Full Application E2E', () => {
 
       // Verify deletion
       const getResponse = await app.inject({
-        method: 'GET',
+        method: "GET",
         url: `/products/${productId}`,
       });
 
       expect(getResponse.statusCode).toBe(404);
     });
 
-    it('should return 404 for non-existent product', async () => {
+    it("should return 404 for non-existent product", async () => {
       const response = await app.inject({
-        method: 'GET',
-        url: '/products/507f1f77bcf86cd799439011', // Valid but non-existent ID
+        method: "GET",
+        url: "/products/507f1f77bcf86cd799439011", // Valid but non-existent ID
       });
 
       expect(response.statusCode).toBe(404);
     });
   });
 
-  describe('Query Features', () => {
+  describe("Query Features", () => {
     beforeAll(async () => {
       // Create test products
-      const ProductModel = mongoose.model('E2EProduct');
+      const ProductModel = mongoose.model("E2EProduct");
       await ProductModel.create([
-        { name: 'Cheap Product', price: 10, isActive: true },
-        { name: 'Medium Product', price: 50, isActive: true },
-        { name: 'Expensive Product', price: 200, isActive: true },
-        { name: 'Inactive Product', price: 100, isActive: false },
+        { name: "Cheap Product", price: 10, isActive: true },
+        { name: "Medium Product", price: 50, isActive: true },
+        { name: "Expensive Product", price: 200, isActive: true },
+        { name: "Inactive Product", price: 100, isActive: false },
       ]);
     });
 
-    it('should filter by price range', async () => {
+    it("should filter by price range", async () => {
       const response = await app.inject({
-        method: 'GET',
-        url: '/products?price[gte]=40&price[lte]=100',
+        method: "GET",
+        url: "/products?price[gte]=40&price[lte]=100",
       });
 
       expect(response.statusCode).toBe(200);
@@ -244,14 +256,16 @@ describe('Full Application E2E', () => {
 
       // Arc/MongoKit uses 'docs' for list responses
       expect(payload.docs).toBeDefined();
-      const filteredProducts = payload.docs.filter((p: any) => p.price >= 40 && p.price <= 100);
+      const filteredProducts = payload.docs.filter(
+        (p: any) => p.price >= 40 && p.price <= 100,
+      );
       expect(filteredProducts.length).toBeGreaterThanOrEqual(1);
     });
 
-    it('should filter by exact match', async () => {
+    it("should filter by exact match", async () => {
       const response = await app.inject({
-        method: 'GET',
-        url: '/products?isActive=true',
+        method: "GET",
+        url: "/products?isActive=true",
       });
 
       expect(response.statusCode).toBe(200);
@@ -265,10 +279,10 @@ describe('Full Application E2E', () => {
       expect(allActive).toBe(true);
     });
 
-    it('should sort products', async () => {
+    it("should sort products", async () => {
       const response = await app.inject({
-        method: 'GET',
-        url: '/products?sort=-price&isActive=true',
+        method: "GET",
+        url: "/products?sort=-price&isActive=true",
       });
 
       expect(response.statusCode).toBe(200);
@@ -283,10 +297,10 @@ describe('Full Application E2E', () => {
       }
     });
 
-    it('should paginate results', async () => {
+    it("should paginate results", async () => {
       const response = await app.inject({
-        method: 'GET',
-        url: '/products?page=1&limit=2',
+        method: "GET",
+        url: "/products?page=1&limit=2",
       });
 
       expect(response.statusCode).toBe(200);
@@ -301,11 +315,11 @@ describe('Full Application E2E', () => {
     });
   });
 
-  describe('Error Handling', () => {
-    it('should handle validation errors', async () => {
+  describe("Error Handling", () => {
+    it("should handle validation errors", async () => {
       const response = await app.inject({
-        method: 'POST',
-        url: '/products',
+        method: "POST",
+        url: "/products",
         payload: {
           // Missing required fields
         },
@@ -316,23 +330,23 @@ describe('Full Application E2E', () => {
       expect(response.statusCode).toBeLessThan(500);
     });
 
-    it('should handle invalid ObjectId', async () => {
+    it("should handle invalid ObjectId", async () => {
       const response = await app.inject({
-        method: 'GET',
-        url: '/products/invalid-id',
+        method: "GET",
+        url: "/products/invalid-id",
       });
 
       // MongoKit throws error for invalid ObjectId format, resulting in 500
       expect(response.statusCode).toBeGreaterThanOrEqual(400);
     });
 
-    it('should handle server errors gracefully', async () => {
+    it("should handle server errors gracefully", async () => {
       // Close database connection to force error
       await mongoose.connection.close();
 
       const response = await app.inject({
-        method: 'GET',
-        url: '/products',
+        method: "GET",
+        url: "/products",
       });
 
       expect(response.statusCode).toBe(500);
@@ -342,11 +356,11 @@ describe('Full Application E2E', () => {
     });
   });
 
-  describe('OpenAPI Documentation', () => {
-    it('should expose OpenAPI spec', async () => {
+  describe("OpenAPI Documentation", () => {
+    it("should expose OpenAPI spec", async () => {
       const response = await app.inject({
-        method: 'GET',
-        url: '/docs/json',
+        method: "GET",
+        url: "/docs/json",
       });
 
       // Might not be available depending on factory config

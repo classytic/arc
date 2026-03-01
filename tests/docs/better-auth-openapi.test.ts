@@ -1,100 +1,18 @@
 /**
  * Better Auth OpenAPI Extractor Tests
  *
- * Tests the duck-typed Zod → JSON Schema converter,
- * the Better Auth endpoint introspection → OpenAPI spec generation,
- * and the runtime openApiPlugin serving merged specs.
+ * Tests the Better Auth endpoint introspection → OpenAPI spec generation,
+ * using real Zod v4 schemas converted via z.toJSONSchema().
  */
 
 import { describe, it, expect, afterAll } from 'vitest';
+import { z } from 'zod';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { extractBetterAuthOpenApi, zodLikeToJsonSchema } from '../../src/auth/betterAuthOpenApi.js';
+import { extractBetterAuthOpenApi } from '../../src/auth/betterAuthOpenApi.js';
 import { buildOpenApiSpec } from '../../src/docs/openapi.js';
 import { openApiPlugin } from '../../src/docs/openapi.js';
 import { arcCorePlugin } from '../../src/core/arcCorePlugin.js';
 import type { ExternalOpenApiPaths } from '../../src/docs/externalPaths.js';
-
-// ============================================================================
-// Helpers: Mock Zod-like objects (duck-typed)
-// ============================================================================
-
-function zodString(checks?: Array<{ kind: string }>) {
-  return { _def: { typeName: 'ZodString', checks: checks ?? [] } };
-}
-
-function zodNumber() {
-  return { _def: { typeName: 'ZodNumber' } };
-}
-
-function zodBoolean() {
-  return { _def: { typeName: 'ZodBoolean' } };
-}
-
-function zodDate() {
-  return { _def: { typeName: 'ZodDate' } };
-}
-
-function zodEnum(values: string[]) {
-  return { _def: { typeName: 'ZodEnum', values } };
-}
-
-function zodArray(itemType: unknown) {
-  return { _def: { typeName: 'ZodArray', type: itemType } };
-}
-
-function zodOptional(innerType: unknown) {
-  return { _def: { typeName: 'ZodOptional', innerType } };
-}
-
-function zodDefault(innerType: unknown, defaultValue: unknown) {
-  return { _def: { typeName: 'ZodDefault', innerType, defaultValue } };
-}
-
-function zodNullable(innerType: unknown) {
-  return { _def: { typeName: 'ZodNullable', innerType } };
-}
-
-function zodObject(shapeEntries: Record<string, unknown>) {
-  return {
-    _def: { typeName: 'ZodObject' },
-    shape: shapeEntries,
-  };
-}
-
-function zodObjectWithFnShape(shapeEntries: Record<string, unknown>) {
-  return {
-    _def: { typeName: 'ZodObject' },
-    shape: () => shapeEntries,
-  };
-}
-
-function zodLiteral(value: unknown) {
-  return { _def: { typeName: 'ZodLiteral', value } };
-}
-
-function zodRecord(valueType: unknown) {
-  return { _def: { typeName: 'ZodRecord', valueType } };
-}
-
-function zodUnion(options: unknown[]) {
-  return { _def: { typeName: 'ZodUnion', options } };
-}
-
-function zodEffects(innerSchema: unknown) {
-  return { _def: { typeName: 'ZodEffects', schema: innerSchema } };
-}
-
-function zodPipeline(innerSchema: unknown) {
-  return { _def: { typeName: 'ZodPipeline', in: innerSchema } };
-}
-
-function zodLazy(getter: () => unknown) {
-  return { _def: { typeName: 'ZodLazy', getter } };
-}
-
-function zodNativeEnum(values: Record<string, unknown>) {
-  return { _def: { typeName: 'ZodNativeEnum', values } };
-}
 
 // ============================================================================
 // Helpers: Mock Better Auth endpoint
@@ -111,196 +29,93 @@ function mockEndpoint(path: string, opts: Record<string, unknown> = {}) {
 }
 
 // ============================================================================
-// zodLikeToJsonSchema
+// extractBetterAuthOpenApi with real Zod v4 schemas
 // ============================================================================
 
-describe('zodLikeToJsonSchema', () => {
-  it('returns undefined for non-Zod values', () => {
-    expect(zodLikeToJsonSchema(null)).toBeUndefined();
-    expect(zodLikeToJsonSchema(undefined)).toBeUndefined();
-    expect(zodLikeToJsonSchema('hello')).toBeUndefined();
-    expect(zodLikeToJsonSchema(42)).toBeUndefined();
-    expect(zodLikeToJsonSchema({})).toBeUndefined();
-  });
+describe('extractBetterAuthOpenApi (Zod v4 schemas)', () => {
+  it('generates POST request body from Zod v4 body schema', () => {
+    const mockApi = {
+      signInEmail: mockEndpoint('/sign-in/email', {
+        method: 'POST',
+        body: z.object({
+          email: z.string().email(),
+          password: z.string(),
+          rememberMe: z.boolean().default(true),
+        }),
+      }),
+    };
 
-  it('converts ZodString to { type: "string" }', () => {
-    expect(zodLikeToJsonSchema(zodString())).toEqual({ type: 'string' });
-  });
+    const result = extractBetterAuthOpenApi(mockApi);
+    const postOp = result.paths['/api/auth/sign-in/email']?.post as any;
 
-  it('converts ZodString with email check', () => {
-    expect(zodLikeToJsonSchema(zodString([{ kind: 'email' }]))).toEqual({
-      type: 'string',
-      format: 'email',
-    });
-  });
+    expect(postOp).toBeDefined();
+    expect(postOp.requestBody).toBeDefined();
 
-  it('converts ZodString with url check', () => {
-    expect(zodLikeToJsonSchema(zodString([{ kind: 'url' }]))).toEqual({
-      type: 'string',
-      format: 'uri',
-    });
-  });
-
-  it('converts ZodString with uuid check', () => {
-    expect(zodLikeToJsonSchema(zodString([{ kind: 'uuid' }]))).toEqual({
-      type: 'string',
-      format: 'uuid',
-    });
-  });
-
-  it('converts ZodNumber to { type: "number" }', () => {
-    expect(zodLikeToJsonSchema(zodNumber())).toEqual({ type: 'number' });
-  });
-
-  it('converts ZodBoolean to { type: "boolean" }', () => {
-    expect(zodLikeToJsonSchema(zodBoolean())).toEqual({ type: 'boolean' });
-  });
-
-  it('converts ZodDate to { type: "string", format: "date-time" }', () => {
-    expect(zodLikeToJsonSchema(zodDate())).toEqual({
-      type: 'string',
-      format: 'date-time',
-    });
-  });
-
-  it('converts ZodEnum', () => {
-    expect(zodLikeToJsonSchema(zodEnum(['a', 'b', 'c']))).toEqual({
-      type: 'string',
-      enum: ['a', 'b', 'c'],
-    });
-  });
-
-  it('converts ZodNativeEnum', () => {
-    expect(zodLikeToJsonSchema(zodNativeEnum({ A: 'a', B: 'b' }))).toEqual({
-      type: 'string',
-      enum: ['a', 'b'],
-    });
-  });
-
-  it('converts ZodArray', () => {
-    expect(zodLikeToJsonSchema(zodArray(zodString()))).toEqual({
-      type: 'array',
-      items: { type: 'string' },
-    });
-  });
-
-  it('converts ZodOptional (unwraps inner)', () => {
-    expect(zodLikeToJsonSchema(zodOptional(zodNumber()))).toEqual({
-      type: 'number',
-    });
-  });
-
-  it('converts ZodDefault (unwraps + adds default)', () => {
-    expect(zodLikeToJsonSchema(zodDefault(zodString(), 'hello'))).toEqual({
-      type: 'string',
-      default: 'hello',
-    });
-  });
-
-  it('converts ZodDefault with function defaultValue', () => {
-    expect(zodLikeToJsonSchema(zodDefault(zodNumber(), () => 42))).toEqual({
-      type: 'number',
-      default: 42,
-    });
-  });
-
-  it('converts ZodNullable (unwraps inner)', () => {
-    expect(zodLikeToJsonSchema(zodNullable(zodBoolean()))).toEqual({
-      type: 'boolean',
-    });
-  });
-
-  it('converts ZodLiteral', () => {
-    expect(zodLikeToJsonSchema(zodLiteral('active'))).toEqual({
-      type: 'string',
-      enum: ['active'],
-    });
-  });
-
-  it('converts ZodRecord', () => {
-    expect(zodLikeToJsonSchema(zodRecord(zodNumber()))).toEqual({
-      type: 'object',
-      additionalProperties: { type: 'number' },
-    });
-  });
-
-  it('converts ZodUnion', () => {
-    const result = zodLikeToJsonSchema(zodUnion([zodString(), zodNumber()]));
-    expect(result).toEqual({
-      oneOf: [{ type: 'string' }, { type: 'number' }],
-    });
-  });
-
-  it('converts ZodEffects (unwraps)', () => {
-    expect(zodLikeToJsonSchema(zodEffects(zodString()))).toEqual({
-      type: 'string',
-    });
-  });
-
-  it('converts ZodPipeline (unwraps)', () => {
-    expect(zodLikeToJsonSchema(zodPipeline(zodNumber()))).toEqual({
-      type: 'number',
-    });
-  });
-
-  it('converts ZodLazy (unwraps via getter)', () => {
-    expect(zodLikeToJsonSchema(zodLazy(() => zodString()))).toEqual({
-      type: 'string',
-    });
-  });
-
-  it('converts ZodObject with properties', () => {
-    const schema = zodObject({
-      email: zodString([{ kind: 'email' }]),
-      name: zodString(),
-      age: zodOptional(zodNumber()),
-    });
-
-    const result = zodLikeToJsonSchema(schema);
-    expect(result).toEqual({
+    const schema = postOp.requestBody.content['application/json'].schema;
+    expect(schema).toMatchObject({
       type: 'object',
       properties: {
-        email: { type: 'string', format: 'email' },
-        name: { type: 'string' },
-        age: { type: 'number' },
+        email: expect.objectContaining({ type: 'string', format: 'email' }),
+        password: { type: 'string' },
+        rememberMe: expect.objectContaining({ type: 'boolean', default: true }),
       },
-      required: ['email', 'name'],
     });
+    // All fields are in required (Zod v4 treats default fields as required in JSON Schema)
+    expect(schema.required).toEqual(expect.arrayContaining(['email', 'password', 'rememberMe']));
   });
 
-  it('converts ZodObject with function shape', () => {
-    const schema = zodObjectWithFnShape({
-      token: zodString(),
-    });
+  it('generates query params from Zod v4 query schema', () => {
+    const mockApi = {
+      listSessions: mockEndpoint('/list-sessions', {
+        method: 'GET',
+        query: z.object({
+          page: z.optional(z.number()),
+          limit: z.optional(z.number()),
+        }),
+      }),
+    };
 
-    const result = zodLikeToJsonSchema(schema);
-    expect(result).toEqual({
-      type: 'object',
-      properties: {
-        token: { type: 'string' },
-      },
-      required: ['token'],
-    });
+    const result = extractBetterAuthOpenApi(mockApi);
+    const getOp = result.paths['/api/auth/list-sessions']?.get as any;
+
+    expect(getOp.parameters).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'page', in: 'query', required: false }),
+        expect.objectContaining({ name: 'limit', in: 'query', required: false }),
+      ]),
+    );
   });
 
-  it('preserves description from _def.description', () => {
-    const emailField = zodString([{ kind: 'email' }]);
-    (emailField._def as any).description = 'User email address';
+  it('handles Zod intersection body (Better Auth signUpEmail pattern)', () => {
+    const mockApi = {
+      signUpEmail: mockEndpoint('/sign-up/email', {
+        method: 'POST',
+        body: z.intersection(
+          z.object({
+            name: z.string(),
+            email: z.string().email(),
+            password: z.string(),
+          }),
+          z.record(z.string(), z.string()),
+        ),
+      }),
+    };
 
-    const schema = zodObject({ email: emailField });
-    const result = zodLikeToJsonSchema(schema) as any;
+    const result = extractBetterAuthOpenApi(mockApi);
+    const postOp = result.paths['/api/auth/sign-up/email']?.post as any;
 
-    expect(result.properties.email.description).toBe('User email address');
-  });
+    expect(postOp).toBeDefined();
+    expect(postOp.requestBody).toBeDefined();
 
-  it('falls back to { type: "object" } for unknown Zod types', () => {
-    const unknown = { _def: { typeName: 'ZodSomeNewType' } };
-    expect(zodLikeToJsonSchema(unknown)).toEqual({ type: 'object' });
+    const schema = postOp.requestBody.content['application/json'].schema;
+    // Native z.toJSONSchema produces allOf for intersections
+    expect(schema.allOf).toBeDefined();
+    expect(schema.allOf.length).toBe(2);
   });
 });
 
 // ============================================================================
-// extractBetterAuthOpenApi
+// extractBetterAuthOpenApi — general tests
 // ============================================================================
 
 describe('extractBetterAuthOpenApi', () => {
@@ -308,17 +123,17 @@ describe('extractBetterAuthOpenApi', () => {
     const mockApi = {
       signInEmail: mockEndpoint('/sign-in/email', {
         method: 'POST',
-        body: zodObject({
-          email: zodString([{ kind: 'email' }]),
-          password: zodString(),
+        body: z.object({
+          email: z.string().email(),
+          password: z.string(),
         }),
       }),
       signUpEmail: mockEndpoint('/sign-up/email', {
         method: 'POST',
-        body: zodObject({
-          email: zodString([{ kind: 'email' }]),
-          password: zodString(),
-          name: zodString(),
+        body: z.object({
+          email: z.string().email(),
+          password: z.string(),
+          name: z.string(),
         }),
       }),
       getSession: mockEndpoint('/get-session', {
@@ -339,9 +154,9 @@ describe('extractBetterAuthOpenApi', () => {
     const mockApi = {
       signInEmail: mockEndpoint('/sign-in/email', {
         method: 'POST',
-        body: zodObject({
-          email: zodString([{ kind: 'email' }]),
-          password: zodString(),
+        body: z.object({
+          email: z.string().email(),
+          password: z.string(),
         }),
       }),
     };
@@ -351,14 +166,16 @@ describe('extractBetterAuthOpenApi', () => {
 
     expect(postOp).toBeDefined();
     expect(postOp.requestBody).toBeDefined();
-    expect(postOp.requestBody.content['application/json'].schema).toEqual({
+
+    const schema = postOp.requestBody.content['application/json'].schema;
+    expect(schema).toMatchObject({
       type: 'object',
       properties: {
-        email: { type: 'string', format: 'email' },
+        email: expect.objectContaining({ type: 'string', format: 'email' }),
         password: { type: 'string' },
       },
-      required: ['email', 'password'],
     });
+    expect(schema.required).toEqual(expect.arrayContaining(['email', 'password']));
   });
 
   it('generates GET operations without request body', () => {
@@ -525,8 +342,7 @@ describe('extractBetterAuthOpenApi', () => {
   it('defaults method to POST when body exists', () => {
     const mockApi = {
       signIn: mockEndpoint('/sign-in', {
-        body: zodObject({ email: zodString() }),
-        // no explicit method
+        body: z.object({ email: z.string() }),
       }),
     };
 
@@ -571,9 +387,9 @@ describe('extractBetterAuthOpenApi', () => {
     const mockApi = {
       listSessions: mockEndpoint('/list-sessions', {
         method: 'GET',
-        query: zodObject({
-          page: zodOptional(zodNumber()),
-          limit: zodOptional(zodNumber()),
+        query: z.object({
+          page: z.optional(z.number()),
+          limit: z.optional(z.number()),
         }),
       }),
     };
@@ -587,6 +403,250 @@ describe('extractBetterAuthOpenApi', () => {
         expect.objectContaining({ name: 'limit', in: 'query', required: false }),
       ]),
     );
+  });
+});
+
+// ============================================================================
+// metadata.openapi.requestBody preference
+// ============================================================================
+
+describe('extractBetterAuthOpenApi — metadata.openapi.requestBody', () => {
+  it('prefers metadata.openapi.requestBody over Zod body conversion', () => {
+    const mockApi = {
+      signUpEmail: mockEndpoint('/sign-up/email', {
+        method: 'POST',
+        body: z.intersection(
+          z.object({ name: z.string() }),
+          z.record(z.string(), z.any()),
+        ),
+        metadata: {
+          openapi: {
+            requestBody: {
+              required: true,
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      name: { type: 'string', description: 'User display name' },
+                      email: { type: 'string', format: 'email' },
+                      password: { type: 'string' },
+                    },
+                    required: ['name', 'email', 'password'],
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    };
+
+    const result = extractBetterAuthOpenApi(mockApi);
+    const postOp = result.paths['/api/auth/sign-up/email']?.post as any;
+    const schema = postOp.requestBody.content['application/json'].schema;
+
+    // Should use metadata schema (clean properties), not Zod (allOf)
+    expect(schema.allOf).toBeUndefined();
+    expect(schema.properties.name).toEqual({ type: 'string', description: 'User display name' });
+    expect(schema.required).toEqual(['name', 'email', 'password']);
+  });
+
+  it('falls back to Zod body when no metadata.openapi.requestBody', () => {
+    const mockApi = {
+      signInEmail: mockEndpoint('/sign-in/email', {
+        method: 'POST',
+        body: z.object({ email: z.string().email(), password: z.string() }),
+      }),
+    };
+
+    const result = extractBetterAuthOpenApi(mockApi);
+    const postOp = result.paths['/api/auth/sign-in/email']?.post as any;
+    const schema = postOp.requestBody.content['application/json'].schema;
+
+    // Should use Zod conversion
+    expect(schema.type).toBe('object');
+    expect(schema.properties.email).toMatchObject({ type: 'string', format: 'email' });
+  });
+
+  it('does not mutate original metadata.openapi.requestBody', () => {
+    const originalRequestBody = {
+      required: true,
+      content: {
+        'application/json': {
+          schema: {
+            type: 'object',
+            properties: { name: { type: 'string' } },
+            required: ['name'],
+          },
+        },
+      },
+    };
+
+    const mockApi = {
+      signUpEmail: mockEndpoint('/sign-up/email', {
+        method: 'POST',
+        metadata: { openapi: { requestBody: originalRequestBody } },
+      }),
+    };
+
+    extractBetterAuthOpenApi(mockApi, {
+      userFields: { department: { type: 'string' } },
+    });
+
+    // Original should not have department merged into it
+    const origProps = originalRequestBody.content['application/json'].schema.properties;
+    expect((origProps as any).department).toBeUndefined();
+  });
+});
+
+// ============================================================================
+// userFields merging
+// ============================================================================
+
+describe('extractBetterAuthOpenApi — userFields', () => {
+  it('merges userFields into signUpEmail request body', () => {
+    const mockApi = {
+      signUpEmail: mockEndpoint('/sign-up/email', {
+        method: 'POST',
+        body: z.object({ name: z.string(), email: z.string(), password: z.string() }),
+      }),
+    };
+
+    const result = extractBetterAuthOpenApi(mockApi, {
+      userFields: {
+        department: { type: 'string', description: 'Department', required: true },
+        roles: { type: 'array', description: 'User roles', input: false },
+      },
+    });
+
+    const postOp = result.paths['/api/auth/sign-up/email']?.post as any;
+    const schema = postOp.requestBody.content['application/json'].schema;
+
+    // department should be merged (input defaults to true)
+    expect(schema.properties.department).toEqual({ type: 'string', description: 'Department' });
+    // department should be required
+    expect(schema.required).toContain('department');
+    // roles should NOT be merged (input: false)
+    expect(schema.properties.roles).toBeUndefined();
+  });
+
+  it('makes userFields optional in updateUser request body', () => {
+    const mockApi = {
+      updateUser: mockEndpoint('/update-user', {
+        method: 'POST',
+        body: z.object({ name: z.optional(z.string()) }),
+      }),
+    };
+
+    const result = extractBetterAuthOpenApi(mockApi, {
+      userFields: {
+        department: { type: 'string', required: true },
+      },
+    });
+
+    const postOp = result.paths['/api/auth/update-user']?.post as any;
+    const schema = postOp.requestBody.content['application/json'].schema;
+
+    // department should be in properties but NOT required (updateUser = all optional)
+    expect(schema.properties.department).toBeDefined();
+    expect(schema.required || []).not.toContain('department');
+  });
+
+  it('does not merge userFields into unrelated endpoints', () => {
+    const mockApi = {
+      signInEmail: mockEndpoint('/sign-in/email', {
+        method: 'POST',
+        body: z.object({ email: z.string(), password: z.string() }),
+      }),
+    };
+
+    const result = extractBetterAuthOpenApi(mockApi, {
+      userFields: {
+        department: { type: 'string' },
+      },
+    });
+
+    const postOp = result.paths['/api/auth/sign-in/email']?.post as any;
+    const schema = postOp.requestBody.content['application/json'].schema;
+
+    expect(schema.properties.department).toBeUndefined();
+  });
+});
+
+// ============================================================================
+// User/Session component schemas
+// ============================================================================
+
+describe('extractBetterAuthOpenApi — component schemas', () => {
+  it('includes User and Session component schemas', () => {
+    const mockApi = {
+      getSession: mockEndpoint('/get-session', { method: 'GET' }),
+    };
+
+    const result = extractBetterAuthOpenApi(mockApi);
+
+    expect(result.schemas?.User).toBeDefined();
+    expect(result.schemas?.User?.properties).toMatchObject({
+      id: { type: 'string' },
+      email: expect.objectContaining({ type: 'string', format: 'email' }),
+      name: { type: 'string' },
+    });
+
+    expect(result.schemas?.Session).toBeDefined();
+    expect(result.schemas?.Session?.properties).toMatchObject({
+      token: { type: 'string' },
+      userId: { type: 'string' },
+    });
+  });
+
+  it('merges userFields into User component schema (including input: false)', () => {
+    const result = extractBetterAuthOpenApi({}, {
+      userFields: {
+        department: { type: 'string', description: 'Department' },
+        roles: { type: 'array', description: 'User roles', input: false },
+      },
+    });
+
+    const userProps = result.schemas?.User?.properties as any;
+
+    // Both input and non-input fields appear in User schema (it's the response shape)
+    expect(userProps.department).toEqual({ type: 'string', description: 'Department' });
+    expect(userProps.roles).toEqual({ type: 'array', description: 'User roles' });
+  });
+
+  it('component schemas resolve $ref in responses', () => {
+    const mockApi = {
+      getSession: mockEndpoint('/get-session', {
+        method: 'GET',
+        metadata: {
+          openapi: {
+            responses: {
+              '200': {
+                description: 'Success',
+                content: {
+                  'application/json': {
+                    schema: { $ref: '#/components/schemas/User' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    };
+
+    const result = extractBetterAuthOpenApi(mockApi);
+
+    // The response uses $ref
+    const getOp = result.paths['/api/auth/get-session']?.get as any;
+    expect(getOp.responses['200'].content['application/json'].schema.$ref)
+      .toBe('#/components/schemas/User');
+
+    // The component schema exists to resolve it
+    expect(result.schemas?.User).toBeDefined();
+    expect(result.schemas?.User?.properties).toHaveProperty('id');
+    expect(result.schemas?.User?.properties).toHaveProperty('email');
   });
 });
 

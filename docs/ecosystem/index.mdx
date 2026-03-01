@@ -1,0 +1,66 @@
+# Ecosystem
+
+Build and share plugins, presets, adapters, and transports for Arc.
+
+## Guides
+
+- **[Building Plugins](./building-plugins)** — Complete guide to all 6 extension types
+- **[Plugin Ideas](./plugin-ideas)** — Community plugin ideas with architecture sketches
+
+## Extension Types
+
+| Type | What it does | Import from |
+|------|-------------|-------------|
+| Fastify Plugin | Global functionality | `fastify-plugin` |
+| Arc Plugin | Global + per-resource config | `@classytic/arc/plugins` |
+| Preset | Composable resource behavior | `@classytic/arc/presets` |
+| Pipeline Step | Request guard/transform/interceptor | `@classytic/arc/pipeline` |
+| Event Transport | Custom message broker | `@classytic/arc/events` |
+| Database Adapter | Custom database/ORM | `@classytic/arc/adapters` |
+
+## Quick Start
+
+```typescript
+// 1. Fastify Plugin — simplest
+export default fp(async (fastify, opts) => {
+  fastify.decorate('myService', new MyService());
+}, { name: 'arc-plugin-mine', fastify: '5.x' });
+
+// 2. Arc Plugin — global + per-resource
+export const myPlugin = createPlugin('mine', {
+  forRoot: async (fastify, opts) => { /* global setup */ },
+  forResource: (config, opts) => ({ hooks: [...], additionalRoutes: [...] }),
+});
+
+// 3. Preset — composable behavior
+registerPreset('mine', (opts) => ({
+  name: 'mine',
+  additionalRoutes: [...],
+  middlewares: { create: [...] },
+}));
+
+// 4. Pipeline Step — request middleware
+export const myGuard = guard('mine', (ctx) => true);
+export const myTransform = transform('mine', (ctx) => { /* mutate ctx */ });
+export const myInterceptor = intercept('mine', async (ctx, next) => next());
+
+// 5. Event Transport — message broker
+export class MyTransport implements EventTransport {
+  readonly name = 'mine';
+  async publish(event) { /* ... */ }
+  async subscribe(pattern, handler) { /* ... */ return () => {}; }
+}
+
+// 6. Database Adapter — custom DB
+export function createMyAdapter(opts): DataAdapter {
+  return { repository: new MyRepository(opts) };
+}
+```
+
+## Related Docs
+
+- [Hooks](../framework-extension/hooks) — Lifecycle hooks
+- [Custom Adapters](../framework-extension/custom-adapters) — Database adapters
+- [Presets](../getting-started/presets) — Built-in presets
+- [Events](../production-ops/events) — Event system
+- [Plugins](../production-ops/plugins) — Built-in plugins

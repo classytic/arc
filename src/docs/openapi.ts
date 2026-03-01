@@ -17,7 +17,9 @@
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import type { RegistryEntry, FastifyWithDecorators } from '../types/index.js';
+import type { PermissionCheck } from '../permissions/types.js';
 import type { ExternalOpenApiPaths } from './externalPaths.js';
+import { convertRouteSchema } from '../utils/schemaConverter.js';
 
 export interface OpenApiOptions {
   /** API title */
@@ -202,6 +204,11 @@ export function buildOpenApiSpec(
   const paths: Record<string, PathItem> = {};
   const tags: Array<{ name: string; description?: string }> = [];
 
+  // Collect additional security alternatives from external integrations.
+  // Each item is OR'd with bearerAuth on authenticated resource operations.
+  const additionalSecurity = externalPaths
+    ?.flatMap(ext => ext.resourceSecurity ?? []) ?? [];
+
   for (const resource of resources) {
     // Build tag description with preset/pipeline info
     const tagDescParts = [`${resource.displayName || resource.name} operations`];
@@ -221,7 +228,7 @@ export function buildOpenApiSpec(
       description: tagDescParts.join('. '),
     });
 
-    const resourcePaths = generateResourcePaths(resource, apiPrefix);
+    const resourcePaths = generateResourcePaths(resource, apiPrefix, additionalSecurity);
     Object.assign(paths, resourcePaths);
   }
 
@@ -276,6 +283,8 @@ export function buildOpenApiSpec(
           in: 'header',
           name: 'x-organization-id',
         },
+        // Plugin-specific schemes (e.g. apiKeyAuth) are auto-detected
+        // and injected via externalSecuritySchemes from the auth extractor.
         ...externalSecuritySchemes,
       } as Record<string, SecurityScheme>,
     },
@@ -332,7 +341,11 @@ const DEFAULT_LIST_PARAMS: Parameter[] = [
 /**
  * Generate paths for a resource
  */
-function generateResourcePaths(resource: RegistryEntry, apiPrefix = ''): Record<string, PathItem> {
+function generateResourcePaths(
+  resource: RegistryEntry,
+  apiPrefix = '',
+  additionalSecurity: Array<Record<string, string[]>> = [],
+): Record<string, PathItem> {
   const paths: Record<string, PathItem> = {};
   const basePath = `${apiPrefix}${resource.prefix}`;
 
@@ -341,16 +354,20 @@ function generateResourcePaths(resource: RegistryEntry, apiPrefix = ''): Record<
     return paths;
   }
 
-  // Default CRUD routes
+  // Default CRUD routes (respects disabledRoutes + updateMethod)
   if (!resource.disableDefaultRoutes) {
-    // GET / - List
-    // Use custom listQuery schema if provided, otherwise use defaults
-    const listParams = resource.openApiSchemas?.listQuery
-      ? convertSchemaToParameters(resource.openApiSchemas.listQuery as Record<string, unknown>)
-      : DEFAULT_LIST_PARAMS;
+    const disabledSet = new Set(resource.disabledRoutes ?? []);
+    const updateMethod = resource.updateMethod ?? 'PATCH';
 
-    paths[basePath] = {
-      get: createOperation(resource, 'list', 'List all', {
+    // Collection routes: GET / (list) + POST / (create)
+    const collectionPath: PathItem = {};
+
+    if (!disabledSet.has('list')) {
+      const listParams = resource.openApiSchemas?.listQuery
+        ? convertSchemaToParameters(resource.openApiSchemas.listQuery as Record<string, unknown>)
+        : DEFAULT_LIST_PARAMS;
+
+      collectionPath.get = createOperation(resource, 'list', 'List all', {
         parameters: listParams,
         responses: {
           '200': {
@@ -374,8 +391,11 @@ function generateResourcePaths(resource: RegistryEntry, apiPrefix = ''): Record<
             },
           },
         },
-      }),
-      post: createOperation(resource, 'create', 'Create new', {
+      }, undefined, additionalSecurity);
+    }
+
+    if (!disabledSet.has('create')) {
+      collectionPath.post = createOperation(resource, 'create', 'Create new', {
         requestBody: {
           required: true,
           content: {
@@ -401,12 +421,18 @@ function generateResourcePaths(resource: RegistryEntry, apiPrefix = ''): Record<
             },
           },
         },
-      }),
-    };
+      }, undefined, additionalSecurity);
+    }
 
-    // GET/PATCH/DELETE /:id
-    paths[toOpenApiPath(`${basePath}/:id`)] = {
-      get: createOperation(resource, 'get', 'Get by ID', {
+    if (Object.keys(collectionPath).length > 0) {
+      paths[basePath] = collectionPath;
+    }
+
+    // Item routes: GET /:id + UPDATE /:id + DELETE /:id
+    const itemPath: PathItem = {};
+
+    if (!disabledSet.has('get')) {
+      itemPath.get = createOperation(resource, 'get', 'Get by ID', {
         parameters: [
           { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
         ],
@@ -427,8 +453,11 @@ function generateResourcePaths(resource: RegistryEntry, apiPrefix = ''): Record<
           },
           '404': { description: 'Not found' },
         },
-      }),
-      patch: createOperation(resource, 'update', 'Update', {
+      }, undefined, additionalSecurity);
+    }
+
+    if (!disabledSet.has('update')) {
+      const updateOp = createOperation(resource, 'update', 'Update', {
         parameters: [
           { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
         ],
@@ -457,8 +486,20 @@ function generateResourcePaths(resource: RegistryEntry, apiPrefix = ''): Record<
             },
           },
         },
-      }),
-      delete: createOperation(resource, 'delete', 'Delete', {
+      }, undefined, additionalSecurity);
+
+      if (updateMethod === 'both') {
+        itemPath.put = updateOp;
+        itemPath.patch = updateOp;
+      } else if (updateMethod === 'PUT') {
+        itemPath.put = updateOp;
+      } else {
+        itemPath.patch = updateOp;
+      }
+    }
+
+    if (!disabledSet.has('delete')) {
+      itemPath.delete = createOperation(resource, 'delete', 'Delete', {
         parameters: [
           { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
         ],
@@ -478,8 +519,12 @@ function generateResourcePaths(resource: RegistryEntry, apiPrefix = ''): Record<
             },
           },
         },
-      }),
-    };
+      }, undefined, additionalSecurity);
+    }
+
+    if (Object.keys(itemPath).length > 0) {
+      paths[toOpenApiPath(`${basePath}/:id`)] = itemPath;
+    }
   }
 
   // Additional routes from presets
@@ -492,8 +537,8 @@ function generateResourcePaths(resource: RegistryEntry, apiPrefix = ''): Record<
     }
 
     // Check if route requires auth (not public)
-    const handlerName = typeof route.handler === 'string' ? route.handler : 'handler';
-    const isPublicRoute = (route.permissions as { _isPublic?: boolean })?._isPublic === true;
+    const handlerName = route.operation ?? (typeof route.handler === 'string' ? route.handler : 'handler');
+    const isPublicRoute = (route.permissions as PermissionCheck)?._isPublic === true;
     const requiresAuthForRoute = !!route.permissions && !isPublicRoute;
 
     // Build extras from route schema
@@ -505,7 +550,9 @@ function generateResourcePaths(resource: RegistryEntry, apiPrefix = ''): Record<
     };
 
     // Add request body from route.schema.body (for POST, PUT, PATCH)
-    const routeSchema = route.schema as Record<string, unknown> | undefined;
+    // Auto-convert Zod schemas to JSON Schema (no-op for plain JSON Schema)
+    const rawSchema = route.schema as Record<string, unknown> | undefined;
+    const routeSchema = rawSchema ? convertRouteSchema(rawSchema) : undefined;
     if (routeSchema?.body && ['post', 'put', 'patch'].includes(method)) {
       extras.requestBody = {
         required: true,
@@ -543,7 +590,8 @@ function generateResourcePaths(resource: RegistryEntry, apiPrefix = ''): Record<
       handlerName,
       route.summary ?? handlerName,
       extras,
-      requiresAuthForRoute
+      requiresAuthForRoute,
+      additionalSecurity,
     );
   }
 
@@ -553,21 +601,23 @@ function generateResourcePaths(resource: RegistryEntry, apiPrefix = ''): Record<
 /**
  * Create an operation object
  * @param requiresAuthOverride - Override for whether auth is required (for additional routes)
+ * @param additionalSecurity - Extra security alternatives from external integrations (OR'd with bearerAuth)
  */
 function createOperation(
   resource: RegistryEntry,
   operation: string,
   summary: string,
   extras: Partial<Operation>,
-  requiresAuthOverride?: boolean
+  requiresAuthOverride?: boolean,
+  additionalSecurity: Array<Record<string, string[]>> = [],
 ): Operation {
   const permissions = resource.permissions || {};
   // Check if permission check is defined for this operation
   const operationPermission = (permissions as Record<string, unknown>)[operation];
   // Check if it's marked as public (allowPublic())
-  const isPublic = (operationPermission as { _isPublic?: boolean })?._isPublic === true;
+  const isPublic = (operationPermission as PermissionCheck)?._isPublic === true;
   // Check for role requirements
-  const requiredRoles = (operationPermission as { _roles?: readonly string[] })?._roles;
+  const requiredRoles = (operationPermission as PermissionCheck)?._roles;
   // If override is provided, use it; otherwise check if operation has a permission check that isn't public
   const requiresAuth = requiresAuthOverride !== undefined
     ? requiresAuthOverride
@@ -584,10 +634,6 @@ function createOperation(
   if (resource.presets && resource.presets.length > 0) {
     descParts.push(`**Presets**: ${resource.presets.join(', ')}`);
   }
-  if (resource.organizationScoped) {
-    descParts.push('**Scope**: Organization-scoped (requires `x-organization-id` header)');
-  }
-
   // Find pipeline steps that apply to this operation
   const applicableSteps = (resource.pipelineSteps ?? []).filter((s) => {
     if (!s.operations) return true; // applies to all
@@ -601,7 +647,7 @@ function createOperation(
     ...(descParts.length > 0 && { description: descParts.join('\n\n') }),
     // Only add security requirement if route requires auth
     ...(requiresAuth && {
-      security: [{ bearerAuth: [] }],
+      security: [{ bearerAuth: [] }, ...additionalSecurity],
     }),
     // Permission metadata extension
     ...(permAnnotation && { 'x-arc-permission': permAnnotation }),
@@ -611,8 +657,24 @@ function createOperation(
     }),
     responses: {
       ...(requiresAuth && {
-        '401': { description: 'Unauthorized' },
-        '403': { description: 'Forbidden' },
+        '401': {
+          description: 'Authentication required — no valid Bearer token provided',
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/Error' },
+            },
+          },
+        },
+        '403': {
+          description: permAnnotation?.roles
+            ? `Forbidden — requires one of: ${(permAnnotation.roles as string[]).join(', ')}`
+            : 'Forbidden — insufficient permissions',
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/Error' },
+            },
+          },
+        },
       }),
       '500': { description: 'Internal server error' },
     },
@@ -623,18 +685,35 @@ function createOperation(
 }
 
 /**
- * Describe a permission check function for OpenAPI
+ * Describe a permission check function for OpenAPI.
+ * Extracts role, org role, and team permission metadata from permission functions.
  */
 function describePermissionForOpenApi(
   check: unknown,
-): { type: string; roles?: readonly string[] } | undefined {
+): { type: string; roles?: readonly string[]; orgRoles?: readonly string[] } | undefined {
   if (!check || typeof check !== 'function') return undefined;
 
-  const fn = check as unknown as Record<string, unknown>;
+  const fn = check as PermissionCheck & {
+    _orgRoles?: readonly string[];
+    _orgPermission?: string;
+    _teamPermission?: string;
+  };
 
   if (fn._isPublic === true) return { type: 'public' };
-  if (Array.isArray(fn._roles)) return { type: 'requireRoles', roles: fn._roles as string[] };
-  return { type: 'requireAuth' };
+
+  const result: { type: string; roles?: readonly string[]; orgRoles?: readonly string[] } = {
+    type: 'requireAuth',
+  };
+
+  if (Array.isArray(fn._roles) && fn._roles.length > 0) {
+    result.type = 'requireRoles';
+    result.roles = fn._roles as string[];
+  }
+  if (Array.isArray(fn._orgRoles) && fn._orgRoles.length > 0) {
+    result.orgRoles = fn._orgRoles;
+  }
+
+  return result;
 }
 
 /**

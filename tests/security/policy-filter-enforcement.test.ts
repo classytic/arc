@@ -11,6 +11,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import { ObjectId } from 'mongodb';
 import { BaseController } from '../../src/core/BaseController.js';
 import type { IRequestContext, CrudRepository, AnyRecord } from '../../src/types/index.js';
 
@@ -160,6 +161,38 @@ describe('Security: Policy Filter Enforcement', () => {
       // Should succeed because query._policyFilters is not trusted
       expect(result.success).toBe(true);
       expect(result.status).toBe(200);
+    });
+
+    it('should match $in filters by value for ObjectId-like values', async () => {
+      const jobIdA = new ObjectId();
+      const repoWithObjectId = new MockRepository([
+        {
+          _id: 'oid-1',
+          name: 'Interview 1',
+          // Simulate Mongo document value type
+          jobId: jobIdA,
+        },
+      ]);
+      const ctrl = new BaseController(repoWithObjectId);
+
+      const context = createContextWithPolicyFilters(
+        {
+          params: { id: 'oid-1' },
+          query: {},
+          body: {},
+          user: { id: 'u-1' },
+          headers: {},
+        },
+        {
+          // Different ObjectId instance, same value string
+          jobId: { $in: [new ObjectId(jobIdA.toHexString())] },
+        },
+      );
+
+      const result = await ctrl.get(context);
+      expect(result.success).toBe(true);
+      expect(result.status).toBe(200);
+      expect((result.data as AnyRecord).name).toBe('Interview 1');
     });
   });
 

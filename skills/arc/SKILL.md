@@ -3,17 +3,16 @@ name: arc
 description: |
   @classytic/arc — Resource-oriented backend framework for Fastify.
   Use when building REST APIs with Fastify, resource CRUD, defineResource, createApp,
-  permissions, presets (softDelete, multiTenant, tree, slugLookup, ownedByUser, audited),
-  database adapters, hooks, events, job queues, WebSocket, workflows, authentication,
-  multi-tenant SaaS, OpenAPI generation, or production deployment.
+  permissions, presets, database adapters, hooks, events, QueryCache, authentication,
+  multi-tenant SaaS, OpenAPI, job queues, WebSocket, or production deployment.
   Triggers: arc, fastify resource, defineResource, createApp, BaseController, arc preset,
   arc auth, arc events, arc jobs, arc websocket, arc plugin, arc testing, arc cli,
-  arc permissions, arc hooks, arc pipeline, arc factory, arc migration, arc idempotency.
-version: 2.0.0
+  arc permissions, arc hooks, arc pipeline, arc factory, arc cache, arc QueryCache.
+version: 2.1.0
 license: MIT
 metadata:
   author: Classytic
-  version: "2.0.0"
+  version: "2.1.0"
 tags:
   - fastify
   - rest-api
@@ -23,18 +22,14 @@ tags:
   - multi-tenant
   - presets
   - typescript
-  - mongodb
-  - prisma
+  - cache
   - events
-  - jobs
-  - websocket
   - openapi
-  - tree-shakable
 progressive_disclosure:
   entry_point:
-    summary: "Resource-oriented Fastify framework: defineResource(), presets, permissions, events, jobs, WebSocket, multi-tenant, OpenAPI"
-    when_to_use: "Building REST APIs with Fastify, resource CRUD, authentication, presets, events, jobs, WebSocket, multi-tenant, or production deployment"
-    quick_start: "1. npm install @classytic/arc fastify 2. createApp({ preset: 'production', auth: { jwt: { secret } } }) 3. defineResource({ name, adapter, presets, permissions })"
+    summary: "Resource-oriented Fastify framework: defineResource(), presets, permissions, QueryCache, events, multi-tenant, OpenAPI"
+    when_to_use: "Building REST APIs with Fastify, resource CRUD, authentication, presets, caching, events, or production deployment"
+    quick_start: "1. npm install @classytic/arc fastify 2. createApp({ preset: 'production', auth: { type: 'jwt', jwt: { secret } } }) 3. defineResource({ name, adapter, presets, permissions })"
   context_limit: 700
 ---
 
@@ -42,15 +37,13 @@ progressive_disclosure:
 
 Resource-oriented backend framework for Fastify. Database-agnostic, tree-shakable, production-ready.
 
-**Requires:** Fastify `^5.0.0` | Node.js `>=20` | ESM only
+**Requires:** Fastify `^5.0.0` | Node.js `>=22` | ESM only
 
-## Installation
+## Install
 
 ```bash
 npm install @classytic/arc fastify
-# Database kit (choose one):
-npm install @classytic/mongokit mongoose    # MongoDB
-# npm install @classytic/prismakit          # PostgreSQL/MySQL/SQLite (coming soon)
+npm install @classytic/mongokit mongoose    # MongoDB adapter
 ```
 
 ## Quick Start
@@ -62,8 +55,8 @@ import mongoose from 'mongoose';
 await mongoose.connect(process.env.DB_URI);
 
 const app = await createApp({
-  preset: 'production',    // or 'development', 'testing', 'edge'
-  auth: { jwt: { secret: process.env.JWT_SECRET } },
+  preset: 'production',
+  auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
   cors: { origin: process.env.ALLOWED_ORIGINS?.split(',') },
 });
 
@@ -71,7 +64,7 @@ await app.register(productResource.toPlugin());
 await app.listen({ port: 8040, host: '0.0.0.0' });
 ```
 
-## Core Pattern — defineResource()
+## defineResource()
 
 Single API to define a full REST resource:
 
@@ -86,13 +79,11 @@ const productResource = defineResource({
   permissions: {
     list: allowPublic(),
     get: allowPublic(),
-    create: requireRoles(['admin', 'editor']),
+    create: requireRoles(['admin']),
     update: requireRoles(['admin']),
     delete: requireRoles(['admin']),
-    deleted: requireRoles(['admin']),    // softDelete preset
-    restore: requireRoles(['admin']),    // softDelete preset
-    getBySlug: allowPublic(),            // slugLookup preset
   },
+  cache: { staleTime: 30, gcTime: 300, tags: ['catalog'] },
   additionalRoutes: [
     { method: 'GET', path: '/featured', handler: 'getFeatured', permissions: allowPublic(), wrapHandler: true },
   ],
@@ -100,283 +91,222 @@ const productResource = defineResource({
 
 await fastify.register(productResource.toPlugin());
 // Auto-generates: GET /, GET /:id, POST /, PATCH /:id, DELETE /:id
-// Plus preset routes: GET /deleted, POST /:id/restore, GET /slug/:slug
 ```
 
-## BaseController
+## Authentication
 
-Framework-agnostic CRUD with auto-wiring. Override only what you need:
+Auth uses a **discriminated union** with `type` field:
 
 ```typescript
-import { BaseController } from '@classytic/arc';
-import type { IRequestContext, IControllerResponse } from '@classytic/arc';
-import type { ISoftDeleteController, ISlugLookupController } from '@classytic/arc/presets';
+// Arc JWT
+auth: { type: 'jwt', jwt: { secret, expiresIn: '15m', refreshSecret, refreshExpiresIn: '7d' } }
 
-class ProductController extends BaseController<Product>
-  implements ISoftDeleteController<Product>, ISlugLookupController<Product> {
+// Better Auth (recommended for SaaS with orgs)
+import { createBetterAuthAdapter } from '@classytic/arc/auth';
+auth: { type: 'betterAuth', betterAuth: createBetterAuthAdapter({ auth, orgContext: true }) }
 
-  constructor() {
-    super(productRepository);
-  }
+// Custom Fastify plugin (must decorate fastify.authenticate)
+auth: { type: 'custom', plugin: myAuthPlugin }
 
-  // Custom method — receives Arc context, not Fastify request
-  async getFeatured(req: IRequestContext): Promise<IControllerResponse> {
-    const products = await this.repository.getAll({
-      filters: { isFeatured: true, organizationId: req.organizationId },
-    });
-    return { success: true, data: products };
-  }
+// Custom function (decorates fastify.authenticate directly)
+auth: { type: 'authenticator', authenticate: async (req, reply) => { ... } }
 
-  // Required by ISoftDeleteController
-  async getDeleted(req: IRequestContext): Promise<IControllerResponse> { ... }
-  async restore(req: IRequestContext): Promise<IControllerResponse> { ... }
-
-  // Required by ISlugLookupController
-  async getBySlug(req: IRequestContext): Promise<IControllerResponse> { ... }
-}
+// Disabled
+auth: false
 ```
 
-**IRequestContext shape:**
-
-```typescript
-interface IRequestContext {
-  params: Record<string, string>;
-  query: Record<string, unknown>;
-  body: unknown;
-  user: UserBase | null;
-  headers: Record<string, string | undefined>;
-  organizationId?: string;
-  teamId?: string;
-  metadata?: Record<string, unknown>;   // _policyFilters, middleware data
-}
-```
-
-**IControllerResponse shape:**
-
-```typescript
-interface IControllerResponse<T = unknown> {
-  success: boolean;
-  data?: T;
-  error?: string;
-  status?: number;         // 200, 201, 400, 401, 403, 404, 500
-  meta?: Record<string, unknown>;
-}
-```
-
-## Presets
-
-Composable resource behaviors. String or object form:
-
-| Preset | Routes Added | Controller Interface | Notes |
-|--------|-------------|---------------------|-------|
-| `softDelete` | GET /deleted, POST /:id/restore | `ISoftDeleteController` | Adds `deletedAt` field |
-| `slugLookup` | GET /slug/:slug | `ISlugLookupController` | Configurable `slugField` |
-| `tree` | GET /tree, GET /:parent/children | `ITreeController` | Hierarchical data |
-| `ownedByUser` | none | none (middleware) | Auto-checks `createdBy` on update/delete |
-| `multiTenant` | none | none (middleware) | Auto-filters by `organizationId` |
-| `audited` | none | none (middleware) | Sets `createdBy`/`updatedBy` from user |
-
-```typescript
-presets: [
-  'softDelete',
-  { name: 'softDelete', deletedField: 'archivedAt' },          // custom field
-  { name: 'ownedByUser', ownerField: 'authorId', bypassRoles: ['admin'] },
-  { name: 'multiTenant', tenantField: 'organizationId' },
-  { name: 'tree', parentField: 'parentCategory' },
-]
-```
-
-**Custom presets:**
-
-```typescript
-import { registerPreset } from '@classytic/arc/presets';
-
-registerPreset('timestamped', (options) => ({
-  name: 'timestamped',
-  middlewares: { create: [setCreatedAt], update: [setUpdatedAt] },
-}));
-```
+**Decorates:** `app.authenticate`, `app.optionalAuthenticate`, `app.authorize`
 
 ## Permissions
 
-Function-based, not string arrays. A `PermissionCheck` is any function matching:
-
-```typescript
-type PermissionCheck = (ctx: PermissionContext) => boolean | PermissionResult | Promise<boolean | PermissionResult>;
-
-interface PermissionContext {
-  user: UserBase | null;
-  request: FastifyRequest;
-  resource: string;
-  action: string;
-  resourceId?: string;
-  organizationId?: string;
-  data?: Record<string, unknown>;
-}
-
-interface PermissionResult {
-  granted: boolean;
-  reason?: string;                      // Shown in error response
-  filters?: Record<string, unknown>;    // Injected into query (ownership)
-}
-```
-
-### Built-in Permission Functions
+Function-based. A `PermissionCheck` returns `boolean | { granted, reason?, filters? }`:
 
 ```typescript
 import {
   allowPublic, requireAuth, requireRoles, requireOwnership,
   requireOrgMembership, requireOrgRole, requireTeamMembership,
   allOf, anyOf, when, denyAll,
+  createDynamicPermissionMatrix,
 } from '@classytic/arc';
 
-allowPublic()                                         // No auth
-requireAuth()                                         // Any authenticated user
-requireRoles(['admin', 'editor'])                     // At least one role matches
-requireOwnership('userId', { bypassRoles: ['admin'] })  // Returns scoping filter
-requireOrgMembership()                                // Must be member of active org
-requireOrgRole('admin', 'owner')                      // Must have org-level role
-requireTeamMembership()                               // Must have active team
-denyAll('Maintenance mode')                           // Always deny
-
-// Composite
-allOf(requireAuth(), requireRoles(['admin']))          // AND — all must pass
-anyOf(requireRoles(['admin']), requireOwnership('userId'))  // OR — any can pass
-when(ctx => ctx.request.query.public === 'true')        // Conditional — returns PermissionCheck
+permissions: {
+  list: allowPublic(),
+  get: requireAuth(),
+  create: requireRoles(['admin', 'editor']),
+  update: anyOf(requireOwnership('userId'), requireRoles(['admin'])),
+  delete: allOf(requireAuth(), requireRoles(['admin'])),
+}
 ```
 
-### Custom Permissions
-
-Just write a function that returns `boolean` or `{ granted, reason?, filters? }`:
+**Custom permission:**
 
 ```typescript
-import type { PermissionCheck } from '@classytic/arc/permissions';
-
-// Custom — check subscription tier
 const requirePro = (): PermissionCheck => async (ctx) => {
-  if (!ctx.user) return { granted: false, reason: 'Authentication required' };
-  if (ctx.user.plan !== 'pro') return { granted: false, reason: 'Pro plan required' };
-  return { granted: true };
+  if (!ctx.user) return { granted: false, reason: 'Auth required' };
+  return { granted: ctx.user.plan === 'pro' };
 };
-
-// Custom — time-based role check
-const requireActiveEditor = (): PermissionCheck => async (ctx) => {
-  if (!ctx.user) return false;
-  return ctx.user.roles?.includes('editor') && ctx.user.status === 'active';
-};
-
-// Mix custom + built-in
-defineResource({
-  name: 'report',
-  permissions: {
-    list: requireAuth(),
-    get: requireAuth(),
-    create: requirePro(),
-    update: anyOf(requireActiveEditor(), requireRoles(['admin'])),
-    delete: requireRoles(['admin']),
-  },
-});
 ```
 
-### Preset Permission Shortcuts
-
-```typescript
-import { publicRead, adminOnly, ownerWithAdminBypass, authenticated } from '@classytic/arc';
-
-defineResource({
-  permissions: publicRead(),          // list/get: public, create/update/delete: requireAuth()
-  // or: adminOnly(), authenticated(), ownerWithAdminBypass(), publicReadAdminWrite()
-});
-```
-
-### Field-Level Permissions
+**Field-level permissions:**
 
 ```typescript
 import { fields } from '@classytic/arc';
 
+fields: {
+  password: fields.hidden(),
+  salary: fields.visibleTo(['admin', 'hr']),
+  role: fields.writableBy(['admin']),
+  email: fields.redactFor(['viewer'], '***'),
+}
+```
+
+**Dynamic ACL (DB-managed):**
+
+```typescript
+const acl = createDynamicPermissionMatrix({
+  resolveRolePermissions: async (ctx) => aclService.getRoleMatrix(orgId),
+  cacheStore: new RedisCacheStore({ client: redis, prefix: 'acl:' }),
+});
+permissions: { list: acl.canAction('product', 'read') }
+```
+
+## Presets
+
+| Preset | Routes Added | Controller Interface | Config |
+|--------|-------------|---------------------|--------|
+| `softDelete` | GET /deleted, POST /:id/restore | `ISoftDeleteController` | `{ deletedField }` |
+| `slugLookup` | GET /slug/:slug | `ISlugLookupController` | `{ slugField }` |
+| `tree` | GET /tree, GET /:parent/children | `ITreeController` | `{ parentField }` |
+| `ownedByUser` | none (middleware) | — | `{ ownerField }` |
+| `multiTenant` | none (middleware) | — | `{ tenantField }` |
+| `audited` | none (middleware) | — | — |
+
+```typescript
+presets: ['softDelete', { name: 'multiTenant', tenantField: 'organizationId' }]
+```
+
+## QueryCache
+
+TanStack Query-inspired server cache with stale-while-revalidate and auto-invalidation on mutations.
+
+```typescript
+// Enable globally
+const app = await createApp({ arcPlugins: { queryCache: true } });
+
+// Per-resource config
 defineResource({
-  fields: {
-    password: fields.hidden(),                    // Never in responses, not writable
-    salary: fields.visibleTo(['admin', 'hr']),    // Only visible to these roles
-    role: fields.writableBy(['admin']),            // Only writable by admin
-    email: fields.redactFor(['viewer'], '***'),   // Redacted for these roles
+  name: 'product',
+  cache: {
+    staleTime: 30,      // seconds fresh (no revalidation)
+    gcTime: 300,         // seconds stale data kept (SWR window)
+    tags: ['catalog'],   // cross-resource grouping
+    invalidateOn: { 'category.*': ['catalog'] },  // event pattern → tag targets
+    list: { staleTime: 60 },  // per-operation override
+    byId: { staleTime: 10 },
   },
 });
 ```
 
+**Auto-invalidation:** POST/PATCH/DELETE bumps resource version. Old cached queries expire naturally via TTL.
+
+**Runtime modes:** `memory` (default, zero-config) | `distributed` (requires `stores.queryCache: RedisCacheStore`)
+
+**Response header:** `x-cache: HIT | STALE | MISS`
+
+## BaseController
+
+```typescript
+import { BaseController } from '@classytic/arc';
+import type { IRequestContext, IControllerResponse } from '@classytic/arc';
+
+class ProductController extends BaseController<Product> {
+  constructor() { super(productRepo); }
+
+  async getFeatured(req: IRequestContext): Promise<IControllerResponse> {
+    const products = await this.repository.getAll({ filters: { isFeatured: true } });
+    return { success: true, data: products };
+  }
+}
+```
+
+**IRequestContext:** `{ params, query, body, user, headers, context, metadata, server }`
+
+**IControllerResponse:** `{ success, data?, error?, status?, meta?, headers? }`
+
 ## Adapters (Database-Agnostic)
 
 ```typescript
-interface DataAdapter<TDoc> {
-  repository: CrudRepository<TDoc>;     // Your CRUD impl
-  type: string;                         // 'mongoose', 'prisma', 'custom'
-  name: string;                         // Display name
-  generateSchemas?(): Record<string, unknown>;  // OpenAPI
-  getSchemaMetadata?(): FieldMetadata[];         // Field introspection
-}
-
 // Mongoose
 import { createMongooseAdapter } from '@classytic/arc';
 const adapter = createMongooseAdapter({ model: ProductModel, repository: productRepo });
 
-// Custom
-const customAdapter: DataAdapter<Product> = {
-  repository: myCustomRepo,
-  type: 'custom',
-  name: 'Product',
-};
-```
-
-**CrudRepository interface** (what your repo must implement):
-
-```typescript
+// Custom adapter — implement CrudRepository interface:
 interface CrudRepository<TDoc> {
-  getAll(params?: QueryOptions): Promise<TDoc[] | PaginatedResult<TDoc>>;
-  getById(id: string, options?): Promise<TDoc | null>;
-  create(data: Partial<TDoc>, options?): Promise<TDoc>;
-  update(id: string, data: Partial<TDoc>, options?): Promise<TDoc | null>;
-  delete(id: string, options?): Promise<boolean | { success }>;
+  getAll(params?): Promise<TDoc[] | PaginatedResult<TDoc>>;
+  getById(id: string): Promise<TDoc | null>;
+  create(data): Promise<TDoc>;
+  update(id: string, data): Promise<TDoc | null>;
+  delete(id: string): Promise<boolean>;
 }
 ```
 
-## Request Flow
+## Events
 
+The factory auto-registers `eventPlugin` — no manual setup needed:
+
+```typescript
+// createApp() registers eventPlugin automatically (default: MemoryEventTransport)
+const app = await createApp({
+  stores: { events: new RedisEventTransport(redis) },  // optional, defaults to memory
+  arcPlugins: {
+    events: {                     // event plugin config (default: true, false to disable)
+      logEvents: true,
+      retry: { maxRetries: 3, backoffMs: 1000 },
+    },
+  },
+});
+
+await app.events.publish('order.created', { orderId: '123' });
+await app.events.subscribe('order.*', async (event) => { ... });
 ```
-HTTP Request → onRequest (AsyncLocalStorage) → authenticate → permission check
-→ org scope → custom middlewares → Pipeline (guards → transforms → interceptors)
-→ Controller method → before hooks → Repository operation → after hooks
-→ Event emission → Response
+
+CRUD events auto-emit: `{resource}.created`, `{resource}.updated`, `{resource}.deleted`.
+
+## Factory — createApp()
+
+```typescript
+const app = await createApp({
+  preset: 'production',            // production | development | testing | edge
+  runtime: 'memory',              // memory (default) | distributed
+  auth: { type: 'jwt', jwt: { secret } },
+  cors: { origin: ['https://myapp.com'] },
+  helmet: true,                    // false to disable
+  rateLimit: { max: 100 },         // false to disable
+  arcPlugins: {
+    events: true,                  // event plugin (default: true, false to disable)
+    emitEvents: true,              // CRUD event emission (default: true)
+    queryCache: true,              // server cache (default: false)
+    sse: true,                     // SSE streaming (default: false)
+    caching: true,                 // ETag + Cache-Control (default: false)
+  },
+  stores: {                        // required when runtime: 'distributed'
+    events: new RedisEventTransport({ client: redis }),
+    queryCache: new RedisCacheStore({ client: redis }),
+  },
+});
 ```
 
 ## Hooks
 
-Instance-scoped lifecycle hooks with dependency resolution:
-
 ```typescript
-import { createHookSystem, beforeCreate, afterUpdate, defineHook } from '@classytic/arc/hooks';
+import { createHookSystem, beforeCreate, afterUpdate } from '@classytic/arc/hooks';
 
 const hooks = createHookSystem();
-
-// Shortcut functions
 beforeCreate(hooks, 'product', async (ctx) => { ctx.data.slug = slugify(ctx.data.name); });
 afterUpdate(hooks, 'product', async (ctx) => { await invalidateCache(ctx.result._id); });
-
-// Full API with priority + dependencies
-const hook = defineHook({
-  name: 'slugify',
-  resource: 'product',
-  operation: 'create',
-  phase: 'before',
-  handler: async (ctx) => { ctx.data.slug = slugify(ctx.data.name); },
-  priority: 5,             // lower = earlier (default: 10)
-  dependsOn: ['validate'],  // topological sort
-});
-hook.register(hooks);       // returns unregister function
 ```
 
-## Pipeline (Guards / Transforms / Interceptors)
-
-Advanced request processing — runs after auth/permissions, before controller:
+## Pipeline
 
 ```typescript
 import { guard, transform, intercept } from '@classytic/arc';
@@ -384,223 +314,70 @@ import { guard, transform, intercept } from '@classytic/arc';
 defineResource({
   pipe: {
     create: [
-      guard('verifiedOnly', async (ctx) => ctx.user?.verified === true),
-      transform('injectCreator', async (ctx) => { ctx.body.createdBy = ctx.user._id; }),
-      intercept('timing', async (ctx, next) => {
-        const start = Date.now();
-        const result = await next();
-        console.log(`Took ${Date.now() - start}ms`);
-        return result;
-      }),
+      guard('verified', async (ctx) => ctx.user?.verified === true),
+      transform('inject', async (ctx) => { ctx.body.createdBy = ctx.user._id; }),
     ],
   },
 });
 ```
 
-## Factory — createApp()
-
-Production app factory with opt-out security:
-
-```typescript
-import { createApp } from '@classytic/arc/factory';
-
-const app = await createApp({
-  preset: 'production',      // production | development | testing | edge
-  auth: {
-    jwt: { secret, expiresIn: '7d' },  // Arc JWT (default)
-    // betterAuth: betterAuthAdapter,   // Better Auth (recommended for multi-org)
-    // plugin: myCustomAuthPlugin,       // Bring your own (Passport, Clerk, Auth0)
-    // authenticate: async (req) => user, // Custom function
-    // false,                            // Disable auth
-  },
-  cors: { origin: ['https://myapp.com'] },
-  helmet: true,              // default: true (set false to disable)
-  rateLimit: { max: 300, timeWindow: '1 minute' },
-  underPressure: true,       // default: true
-  typeProvider: 'typebox',   // optional TypeBox integration
-  arcPlugins: {
-    health: true,
-    gracefulShutdown: true,
-    requestId: true,
-  },
-});
-```
-
-**Presets:**
-
-| Preset | Logging | CORS | Rate Limit | Security | Health |
-|--------|---------|------|------------|----------|--------|
-| production | info | strict | 100/min | full | yes |
-| development | debug | permissive | 1000/min | relaxed | yes |
-| testing | silent | none | disabled | minimal | no |
-| edge | warn | none (API GW) | none | none | no |
-
 ## Query Parsing
 
-Built-in parser or pluggable:
-
 ```
-GET /products?page=2&limit=20&sort=-createdAt,name&select=name,price
-GET /products?price[gte]=100&price[lte]=500&status=active
-GET /products?status[in]=active,featured&name[regex]=^Pro
-GET /products?search=keyword&populate=category,brand
-GET /products?populate[author][select]=name,email   # MongoKit parser
+GET /products?page=2&limit=20&sort=-createdAt&select=name,price
+GET /products?price[gte]=100&status[in]=active,featured&search=keyword
+GET /products?populate=category,brand
 ```
 
-```typescript
-// Use MongoKit's advanced parser
-import { QueryParser } from '@classytic/mongokit';
-
-defineResource({
-  queryParser: new QueryParser({ maxLimit: 100, maxFilterDepth: 5 }),
-});
-```
+Operators: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `nin`, `like`, `regex`, `exists`
 
 ## Error Classes
 
 ```typescript
-import {
-  ArcError, NotFoundError, ValidationError, UnauthorizedError, ForbiddenError,
-} from '@classytic/arc';
-import { ConflictError, ServiceUnavailableError } from '@classytic/arc/utils';
-
-// All extend ArcError, have statusCode and toJSON()
-throw new NotFoundError('Product not found');        // 404
-throw new ValidationError('Invalid email format');   // 400
-throw new ForbiddenError('Insufficient permissions'); // 403
-```
-
-## State Machine
-
-```typescript
-import { createStateMachine } from '@classytic/arc/utils';
-
-const orderFSM = createStateMachine('order', {
-  submit: { from: ['draft'], to: 'pending', guard: ({ data }) => data.items.length > 0 },
-  approve: { from: ['pending'], to: 'approved' },
-  ship: { from: ['approved'], to: 'shipped' },
-  cancel: { from: ['draft', 'pending'], to: 'cancelled' },
-}, { trackHistory: true });
-
-orderFSM.can('submit', 'draft');          // true
-orderFSM.getAvailableActions('pending');  // ['approve', 'cancel']
-```
-
-## Circuit Breaker
-
-```typescript
-import { CircuitBreaker } from '@classytic/arc/utils';
-
-const breaker = new CircuitBreaker(
-  async (amount) => stripe.charges.create({ amount }),
-  { failureThreshold: 5, resetTimeout: 30000, fallback: async (amt) => queuePayment(amt) }
-);
+import { ArcError, NotFoundError, ValidationError, UnauthorizedError, ForbiddenError } from '@classytic/arc';
+throw new NotFoundError('Product not found');  // 404
 ```
 
 ## CLI
 
-### Initialize a Project
-
 ```bash
-arc init my-api                                    # Interactive prompts
-arc init my-api --mongokit --better-auth --single --ts  # Non-interactive (all flags)
-arc init my-api --mongokit --jwt --single --js     # JWT auth, JavaScript
-arc init my-api --mongokit --multi --ts            # Multi-tenant
-arc init my-api --edge --skip-install              # Edge/serverless target
+arc init my-api --mongokit --better-auth --ts
+arc generate resource product
+arc docs ./openapi.json --entry ./dist/index.js
+arc introspect --entry ./dist/index.js
+arc doctor
 ```
 
-**Init flags:**
-
-| Flag | Description |
-|------|-------------|
-| `--mongokit` | MongoKit adapter (default, recommended) |
-| `--custom` | Custom adapter (empty template) |
-| `--better-auth` | Better Auth (default, recommended) |
-| `--jwt` | Arc built-in JWT auth (`@fastify/jwt` v10) |
-| `--multi-tenant`, `--multi` | Multi-tenant mode (adds org scoping) |
-| `--single-tenant`, `--single` | Single-tenant mode (default) |
-| `--ts`, `--typescript` | TypeScript (default) |
-| `--js`, `--javascript` | JavaScript |
-| `--edge`, `--serverless` | Target edge/serverless environments |
-| `--force`, `-f` | Overwrite existing directory |
-| `--skip-install` | Skip `npm install` after scaffolding |
-
-### Generate Resources
-
-```bash
-arc generate resource product    # Full resource (model, repo, controller, schemas, resource def)
-arc g r invoice                  # Shorthand
-arc g controller auth            # Controller only
-arc g model order                # Model only
-arc g repository payment         # Repository only
-arc g schemas ticket             # Schemas only
-```
-
-**Scaffolded structure** (for `arc g r product`):
-
-```
-src/resources/product/
-├── product.model.ts
-├── product.repository.ts
-├── product.controller.ts
-├── product.schemas.ts
-├── product.resource.ts
-└── product.test.ts
-```
-
-Auto-detects TypeScript/JavaScript from `tsconfig.json`.
-
-### Introspect & Describe
-
-```bash
-arc introspect --entry ./dist/index.js            # Show all registered resources
-arc describe ./dist/resources.js                  # JSON metadata (arc-describe/v1)
-arc describe ./dist/resources.js product --json   # Single resource
-arc docs ./docs/openapi.json --entry ./dist/index.js  # Export OpenAPI spec
-```
-
-`arc describe` outputs machine-readable JSON with fields, permissions, pipeline, routes, and events per resource — designed for AI agent consumption.
-
-## Subpath Imports (Tree-Shaking)
+## Subpath Imports
 
 ```typescript
-import { defineResource } from '@classytic/arc';                    // Core
-import { createApp } from '@classytic/arc/factory';                 // Factory
-import { allowPublic, requireRoles, requireOrgMembership, requireTeamMembership } from '@classytic/arc/permissions'; // Permissions
-import { eventPlugin } from '@classytic/arc/events';                // Events
-import { RedisEventTransport } from '@classytic/arc/events/redis';  // Redis transport
-import { jobsPlugin, defineJob } from '@classytic/arc/integrations/jobs'; // BullMQ
-import { websocketPlugin } from '@classytic/arc/integrations/websocket'; // WebSocket
-import { streamlinePlugin } from '@classytic/arc/integrations/streamline'; // Workflows
-import { authPlugin } from '@classytic/arc/auth';                   // Auth
-import { healthPlugin, gracefulShutdownPlugin } from '@classytic/arc/plugins'; // Plugins
-import { tracingPlugin } from '@classytic/arc/plugins/tracing';     // OpenTelemetry
-import { auditPlugin } from '@classytic/arc/audit';                 // Audit trail
-import { idempotencyPlugin } from '@classytic/arc/idempotency';     // Idempotency
-import { organizationPlugin } from '@classytic/arc/org';            // Multi-tenant
-import { createHookSystem, beforeCreate } from '@classytic/arc/hooks'; // Hooks
-import { createAccessControlPolicy } from '@classytic/arc/policies'; // Policies
-import { ResourceRegistry } from '@classytic/arc/registry';         // Introspection
-import { createTestApp, TestHarness } from '@classytic/arc/testing'; // Testing
-import { Type, ArcListResponse } from '@classytic/arc/schemas';     // TypeBox
-import { defineMigration } from '@classytic/arc/migrations';        // Migrations
-import { requestContext } from '@classytic/arc';                     // AsyncLocalStorage
-```
-
-## Related Skills
-
-Arc uses MongoKit as its default database adapter. Install its skill for MongoDB repository patterns, plugins, pagination, caching, and query parsing:
-
-```bash
-npx skills add classytic/mongokit
+import { defineResource, BaseController, allowPublic } from '@classytic/arc';
+import { createApp } from '@classytic/arc/factory';
+import { MemoryCacheStore, RedisCacheStore, QueryCache } from '@classytic/arc/cache';
+import { createBetterAuthAdapter, extractBetterAuthOpenApi } from '@classytic/arc/auth';
+import type { ExternalOpenApiPaths } from '@classytic/arc/docs';
+import { eventPlugin } from '@classytic/arc/events';
+import { RedisEventTransport } from '@classytic/arc/events/redis';
+import { healthPlugin, gracefulShutdownPlugin } from '@classytic/arc/plugins';
+import { tracingPlugin } from '@classytic/arc/plugins/tracing';
+import { auditPlugin } from '@classytic/arc/audit';
+import { idempotencyPlugin } from '@classytic/arc/idempotency';
+import { ssePlugin } from '@classytic/arc/plugins';
+import { jobsPlugin } from '@classytic/arc/integrations/jobs';
+import { websocketPlugin } from '@classytic/arc/integrations/websocket';
+import { eventGatewayPlugin } from '@classytic/arc/integrations/event-gateway';
+import { createHookSystem } from '@classytic/arc/hooks';
+import { createTestApp } from '@classytic/arc/testing';
+import { Type, ArcListResponse } from '@classytic/arc/schemas';
+import { createStateMachine, CircuitBreaker } from '@classytic/arc/utils';
+import { defineMigration } from '@classytic/arc/migrations';
+import { isMember, isElevated, getOrgId } from '@classytic/arc/scope';
 ```
 
 ## References (Progressive Disclosure)
 
-For detailed documentation on specific subsystems, see:
-
-- **[events](references/events.md)** — Domain events, transports (Memory/Redis/Streams), injectable logger, retry, auto-emission
-- **[integrations](references/integrations.md)** — BullMQ jobs, WebSocket, Streamline workflows
-- **[auth](references/auth.md)** — JWT, Better Auth (plugins, teams, Redis, microservice gateway), custom auth, multi-tenant auth
-- **[production](references/production.md)** — Health checks, audit trail, idempotency, tracing, SSE, caching
-- **[testing](references/testing.md)** — Test app creation, mocks, data factories, in-memory MongoDB
+- **[auth](references/auth.md)** — JWT, Better Auth, API key auth, custom auth, multi-tenant
+- **[events](references/events.md)** — Domain events, transports, retry, auto-emission
+- **[integrations](references/integrations.md)** — BullMQ jobs, WebSocket, EventGateway, Streamline workflows
+- **[production](references/production.md)** — Health, audit, idempotency, tracing, SSE, QueryCache, OpenAPI
+- **[testing](references/testing.md)** — Test app, mocks, data factories, in-memory MongoDB

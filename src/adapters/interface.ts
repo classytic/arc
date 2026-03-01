@@ -55,6 +55,13 @@ export interface DataAdapter<TDoc = unknown> {
   /** Health check for database connection */
   healthCheck?(): Promise<boolean>;
 
+  /**
+   * Custom filter matching for policy enforcement.
+   * Falls back to built-in MongoDB-style matching if not provided.
+   * Override this for SQL adapters or non-MongoDB query operators.
+   */
+  matchesFilter?: (item: unknown, filters: Record<string, unknown>) => boolean;
+
   /** Close/cleanup resources */
   close?(): Promise<void>;
 }

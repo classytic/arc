@@ -25,7 +25,8 @@
  * });
  */
 
-import type { ParsedQuery, QueryParserInterface } from '../types/index.js';
+import type { ParsedQuery, PopulateOption, QueryParserInterface } from '../types/index.js';
+import { MAX_REGEX_LENGTH, MAX_SEARCH_LENGTH, MAX_FILTER_DEPTH, DEFAULT_MAX_LIMIT as MAX_LIMIT, DEFAULT_LIMIT, RESERVED_QUERY_PARAMS } from '../constants.js';
 
 // ============================================================================
 // Dangerous Patterns (ReDoS protection)
@@ -40,21 +41,6 @@ import type { ParsedQuery, QueryParserInterface } from '../types/index.js';
  * - Backreferences: \1, \2, etc.
  */
 const DANGEROUS_REGEX_PATTERNS = /(\{[0-9,]+\}|\*\+|\+\+|\?\+|(\(.+\))\+|\(\?\:|\\[0-9]|(\[.+\]).+(\[.+\]))/;
-
-/** Maximum allowed regex pattern length */
-const MAX_REGEX_LENGTH = 500;
-
-/** Maximum allowed search query length */
-const MAX_SEARCH_LENGTH = 200;
-
-/** Maximum allowed filter depth (prevents filter bombs) */
-const MAX_FILTER_DEPTH = 10;
-
-/** Maximum allowed limit value */
-const MAX_LIMIT = 1000;
-
-/** Default limit for pagination */
-const DEFAULT_LIMIT = 20;
 
 // ============================================================================
 // Arc Query Parser
@@ -132,8 +118,8 @@ export class ArcQueryParser implements QueryParserInterface {
     // Extract sort
     const sort = this.parseSort(q.sort);
 
-    // Extract populate
-    const populate = this.parseString(q.populate);
+    // Extract populate — handles both simple string and bracket notation object
+    const { populate, populateOptions } = this.parsePopulate(q.populate);
 
     // Extract search
     const search = this.parseSearch(q.search);
@@ -149,6 +135,7 @@ export class ArcQueryParser implements QueryParserInterface {
       limit,
       sort,
       populate,
+      populateOptions,
       search,
       page: after ? undefined : page,
       after,
@@ -170,6 +157,61 @@ export class ArcQueryParser implements QueryParserInterface {
     if (value === undefined || value === null) return undefined;
     const str = String(value).trim();
     return str.length > 0 ? str : undefined;
+  }
+
+  /**
+   * Parse populate parameter — handles both simple string and bracket notation.
+   *
+   * Simple: ?populate=author,category → { populate: 'author,category' }
+   * Bracket: ?populate[author][select]=name,email → { populateOptions: [{ path: 'author', select: 'name email' }] }
+   */
+  private parsePopulate(value: unknown): { populate?: string; populateOptions?: PopulateOption[] } {
+    if (value === undefined || value === null) return {};
+
+    // Simple string: ?populate=author,category
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? { populate: trimmed } : {};
+    }
+
+    // Bracket notation object: ?populate[author][select]=name,email
+    // qs parses this as { author: { select: 'name,email' } }
+    if (typeof value === 'object' && !Array.isArray(value)) {
+      const obj = value as Record<string, unknown>;
+      const keys = Object.keys(obj);
+      if (keys.length === 0) return {};
+
+      const options: PopulateOption[] = [];
+      for (const path of keys) {
+        // Validate path name (prevent injection)
+        if (!/^[a-zA-Z_][a-zA-Z0-9_.]*$/.test(path)) continue;
+
+        const config = obj[path];
+        if (typeof config === 'object' && config !== null && !Array.isArray(config)) {
+          const cfg = config as Record<string, unknown>;
+          const option: PopulateOption = { path };
+
+          // Parse select: convert comma-separated to space-separated (Mongoose format)
+          if (typeof cfg.select === 'string') {
+            option.select = cfg.select.split(',').map(s => s.trim()).filter(Boolean).join(' ');
+          }
+
+          // Parse match (filter conditions)
+          if (typeof cfg.match === 'object' && cfg.match !== null) {
+            option.match = cfg.match as Record<string, unknown>;
+          }
+
+          options.push(option);
+        } else {
+          // Simple value like populate[author]=true → treat as simple populate
+          options.push({ path });
+        }
+      }
+
+      return options.length > 0 ? { populateOptions: options } : {};
+    }
+
+    return {};
   }
 
   private parseSort(value: unknown): Record<string, 1 | -1> | undefined {
@@ -230,20 +272,34 @@ export class ArcQueryParser implements QueryParserInterface {
     return Object.keys(result).length > 0 ? result : undefined;
   }
 
-  private parseFilters(query: Record<string, unknown>): Record<string, unknown> {
-    const reservedKeys = new Set([
-      'page', 'limit', 'sort', 'populate', 'search', 'select',
-      'after', 'cursor', 'lean', '_policyFilters',
-    ]);
+  /**
+   * Check if a value exceeds the maximum nesting depth.
+   * Prevents filter bombs where deeply nested objects consume excessive memory/CPU.
+   */
+  private exceedsDepth(obj: unknown, currentDepth: number = 0): boolean {
+    if (currentDepth > this.maxFilterDepth) return true;
+    if (obj === null || obj === undefined) return false;
+    if (Array.isArray(obj)) {
+      return obj.some(v => this.exceedsDepth(v, currentDepth));
+    }
+    if (typeof obj !== 'object') return false;
+    return Object.values(obj as Record<string, unknown>).some(
+      v => this.exceedsDepth(v, currentDepth + 1)
+    );
+  }
 
+  private parseFilters(query: Record<string, unknown>): Record<string, unknown> {
     const filters: Record<string, unknown> = {};
 
     for (const [key, value] of Object.entries(query)) {
-      if (reservedKeys.has(key)) continue;
+      if (RESERVED_QUERY_PARAMS.has(key)) continue;
       if (value === undefined || value === null) continue;
 
       // Validate field name (prevent injection)
       if (!/^[a-zA-Z_][a-zA-Z0-9_.]*$/.test(key)) continue;
+
+      // Enforce max filter depth (prevents filter bombs)
+      if (this.exceedsDepth(value)) continue;
 
       // Handle nested object format from qs parser: { price: { gte: '40', lte: '100' } }
       // This happens when URL is ?price[gte]=40&price[lte]=100 and qs parses it
@@ -334,6 +390,89 @@ export class ArcQueryParser implements QueryParserInterface {
 
     return value;
   }
+
+  // ============================================================================
+  // OpenAPI Schema Generation
+  // ============================================================================
+
+  /**
+   * Generate OpenAPI-compatible JSON Schema for query parameters.
+   * Arc's defineResource() auto-detects this method and uses it
+   * to document list endpoint query parameters in OpenAPI/Swagger.
+   */
+  getQuerySchema(): {
+    type: 'object';
+    properties: Record<string, unknown>;
+    required?: string[];
+  } {
+    const operatorEntries = Object.entries(this.operators);
+    const operatorLines = operatorEntries.map(([op, mongoOp]) => {
+      const desc: Record<string, string> = {
+        eq: 'Equal (default when no operator specified)',
+        ne: 'Not equal',
+        gt: 'Greater than',
+        gte: 'Greater than or equal',
+        lt: 'Less than',
+        lte: 'Less than or equal',
+        in: 'In list (comma-separated values)',
+        nin: 'Not in list',
+        like: 'Pattern match (case-insensitive)',
+        contains: 'Contains substring (case-insensitive)',
+        regex: 'Regex pattern',
+        exists: 'Field exists (true/false)',
+      };
+      return `  ${op} → ${mongoOp}: ${desc[op] || op}`;
+    });
+
+    return {
+      type: 'object',
+      properties: {
+        page: {
+          type: 'integer',
+          description: 'Page number for offset pagination',
+          default: 1,
+          minimum: 1,
+        },
+        limit: {
+          type: 'integer',
+          description: 'Number of items per page',
+          default: this.defaultLimit,
+          minimum: 1,
+          maximum: this.maxLimit,
+        },
+        sort: {
+          type: 'string',
+          description: 'Sort fields (comma-separated). Prefix with - for descending. Example: -createdAt,name',
+        },
+        search: {
+          type: 'string',
+          description: 'Full-text search query',
+          maxLength: this.maxSearchLength,
+        },
+        select: {
+          type: 'string',
+          description: 'Fields to include/exclude (comma-separated). Prefix with - to exclude. Example: name,email,-password',
+        },
+        populate: {
+          type: 'string',
+          description: 'Fields to populate/join (comma-separated). Example: author,category',
+        },
+        after: {
+          type: 'string',
+          description: 'Cursor value for keyset pagination',
+        },
+        _filterOperators: {
+          type: 'string',
+          description: ['Available filter operators (use as field[operator]=value):', ...operatorLines].join('\n'),
+          'x-internal': true,
+        },
+      },
+    };
+  }
+
+  // ============================================================================
+  // Regex Sanitization
+  // ============================================================================
 
   private sanitizeRegex(pattern: string): string {
     // Limit length

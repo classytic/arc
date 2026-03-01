@@ -4,9 +4,8 @@
  * Introspects a Better Auth instance's `api` object and extracts
  * OpenAPI-compatible path definitions from endpoint metadata.
  *
- * IMPORTANT: This module uses duck-typing to detect Zod schemas.
- * It does NOT import `zod` — it inspects runtime object shapes.
- * This avoids a hard dependency on zod/better-auth from Arc core.
+ * Schema conversion uses Zod v4's native `z.toJSONSchema()` via
+ * the shared `schemaConverter` utility.
  *
  * @example
  * ```typescript
@@ -19,6 +18,7 @@
  */
 
 import type { ExternalOpenApiPaths } from '../docs/externalPaths.js';
+import { toJsonSchema } from '../utils/schemaConverter.js';
 
 // ============================================================================
 // Types
@@ -35,186 +35,22 @@ export interface BetterAuthOpenApiOptions {
   excludePaths?: string[];
   /** Exclude SERVER_ONLY endpoints (default: true) */
   excludeServerOnly?: boolean;
-}
-
-// ============================================================================
-// Duck-Typed Zod → JSON Schema Converter
-// ============================================================================
-
-/**
- * Check if an object looks like a Zod schema (duck-typing).
- * Looks for `._def` with a `typeName` — the universal Zod marker.
- */
-function isZodLike(obj: unknown): obj is { _def: { typeName: string; [k: string]: unknown }; shape?: Record<string, unknown> } {
-  return (
-    obj !== null &&
-    typeof obj === 'object' &&
-    '_def' in (obj as Record<string, unknown>) &&
-    typeof (obj as Record<string, unknown>)._def === 'object' &&
-    typeof ((obj as Record<string, unknown>)._def as Record<string, unknown>).typeName === 'string'
-  );
-}
-
-/**
- * Convert a Zod-like schema to JSON Schema via duck-typing.
- * Handles common types without importing Zod.
- */
-export function zodLikeToJsonSchema(schema: unknown): Record<string, unknown> | undefined {
-  if (!isZodLike(schema)) return undefined;
-
-  const { typeName } = schema._def;
-
-  // ZodObject — walk .shape to extract properties
-  if (typeName === 'ZodObject') {
-    const shape = typeof schema.shape === 'function'
-      ? (schema.shape as () => Record<string, unknown>)()
-      : schema.shape;
-
-    if (!shape || typeof shape !== 'object') return { type: 'object' };
-
-    const properties: Record<string, unknown> = {};
-    const required: string[] = [];
-
-    for (const [key, value] of Object.entries(shape)) {
-      const prop = zodLikeToJsonSchema(value);
-      if (prop) {
-        // Preserve description from Zod .describe() or .meta()
-        if (isZodLike(value) && value._def.description) {
-          (prop as Record<string, unknown>).description = value._def.description;
-        }
-        properties[key] = prop;
-      }
-
-      // Field is required unless it's ZodOptional or ZodDefault
-      if (isZodLike(value)) {
-        const innerType = value._def.typeName;
-        if (innerType !== 'ZodOptional' && innerType !== 'ZodDefault') {
-          required.push(key);
-        }
-      }
-    }
-
-    return {
-      type: 'object',
-      properties,
-      ...(required.length > 0 && { required }),
-    };
-  }
-
-  // ZodOptional — unwrap inner type
-  if (typeName === 'ZodOptional') {
-    const inner = zodLikeToJsonSchema(schema._def.innerType);
-    return inner ?? { type: 'string' };
-  }
-
-  // ZodDefault — unwrap inner type + attach default value
-  if (typeName === 'ZodDefault') {
-    const inner = zodLikeToJsonSchema(schema._def.innerType);
-    const defaultValue = typeof schema._def.defaultValue === 'function'
-      ? (schema._def.defaultValue as () => unknown)()
-      : schema._def.defaultValue;
-    return { ...(inner ?? { type: 'string' }), default: defaultValue };
-  }
-
-  // ZodNullable — unwrap inner type
-  if (typeName === 'ZodNullable') {
-    const inner = zodLikeToJsonSchema(schema._def.innerType);
-    return inner ?? { type: 'string' };
-  }
-
-  // ZodEnum — string enum
-  if (typeName === 'ZodEnum') {
-    return { type: 'string', enum: schema._def.values as string[] };
-  }
-
-  // ZodNativeEnum
-  if (typeName === 'ZodNativeEnum') {
-    const values = schema._def.values;
-    if (values && typeof values === 'object') {
-      return { type: 'string', enum: Object.values(values) };
-    }
-    return { type: 'string' };
-  }
-
-  // ZodLiteral
-  if (typeName === 'ZodLiteral') {
-    const value = schema._def.value;
-    return { type: typeof value as string, enum: [value] };
-  }
-
-  // ZodArray — extract item type
-  if (typeName === 'ZodArray') {
-    const items = zodLikeToJsonSchema(schema._def.type);
-    return { type: 'array', items: items ?? { type: 'string' } };
-  }
-
-  // ZodUnion / ZodDiscriminatedUnion
-  if (typeName === 'ZodUnion' || typeName === 'ZodDiscriminatedUnion') {
-    const options = schema._def.options as unknown[];
-    if (Array.isArray(options)) {
-      const oneOf = options.map(o => zodLikeToJsonSchema(o)).filter(Boolean);
-      if (oneOf.length > 0) return { oneOf };
-    }
-    return { type: 'object' };
-  }
-
-  // ZodRecord
-  if (typeName === 'ZodRecord') {
-    const valueType = zodLikeToJsonSchema(schema._def.valueType);
-    return { type: 'object', additionalProperties: valueType ?? { type: 'string' } };
-  }
-
-  // Primitives
-  const typeMap: Record<string, string> = {
-    ZodString: 'string',
-    ZodNumber: 'number',
-    ZodBoolean: 'boolean',
-    ZodDate: 'string',
-    ZodBigInt: 'integer',
-    ZodAny: 'object',
-    ZodUnknown: 'object',
-    ZodVoid: 'object',
-    ZodNull: 'string',
-    ZodUndefined: 'string',
-  };
-
-  const jsonType = typeMap[typeName];
-  if (jsonType) {
-    const result: Record<string, unknown> = { type: jsonType };
-    // ZodDate should have format: date-time
-    if (typeName === 'ZodDate') result.format = 'date-time';
-    // String format hints from Zod checks
-    if (typeName === 'ZodString' && Array.isArray(schema._def.checks)) {
-      for (const check of schema._def.checks as Array<{ kind: string }>) {
-        if (check.kind === 'email') result.format = 'email';
-        else if (check.kind === 'url') result.format = 'uri';
-        else if (check.kind === 'uuid') result.format = 'uuid';
-      }
-    }
-    return result;
-  }
-
-  // ZodEffects (transform, refine, preprocess) — unwrap inner
-  if (typeName === 'ZodEffects') {
-    return zodLikeToJsonSchema(schema._def.schema) ?? { type: 'object' };
-  }
-
-  // ZodPipeline — unwrap inner
-  if (typeName === 'ZodPipeline') {
-    return zodLikeToJsonSchema(schema._def.in) ?? { type: 'object' };
-  }
-
-  // ZodLazy — try to unwrap
-  if (typeName === 'ZodLazy' && typeof schema._def.getter === 'function') {
-    try {
-      return zodLikeToJsonSchema((schema._def.getter as () => unknown)());
-    } catch {
-      return { type: 'object' };
-    }
-  }
-
-  // Fallback
-  return { type: 'object' };
+  /**
+   * Additional user fields from Better Auth config.
+   * These get merged into signUpEmail/updateUser request body schemas
+   * and the User component schema for $ref resolution.
+   *
+   * Fields with `input: false` are excluded from request bodies
+   * but still appear in the User component schema (output-only).
+   */
+  userFields?: Record<string, {
+    type: string;
+    description?: string;
+    /** Whether this field is required in sign-up (default: false) */
+    required?: boolean;
+    /** Whether this field is accepted in request body (default: true). Set false for output-only fields. */
+    input?: boolean;
+  }>;
 }
 
 // ============================================================================
@@ -234,6 +70,10 @@ interface BetterAuthEndpoint {
         description?: string;
         operationId?: string;
         responses?: Record<string, unknown>;
+        requestBody?: {
+          content: Record<string, { schema: Record<string, unknown> }>;
+          required?: boolean;
+        };
         tags?: string[];
       };
       SERVER_ONLY?: boolean;
@@ -286,8 +126,8 @@ function extractPathParams(path: string): Array<{ name: string; in: 'path'; requ
  * Extract OpenAPI paths from a Better Auth instance's API object.
  *
  * Walks `authApi` (the `auth.api` object from Better Auth), discovers
- * endpoints, converts their Zod schemas to JSON Schema, and returns
- * a complete `ExternalOpenApiPaths` object ready for Arc's spec builder.
+ * endpoints, converts their Zod schemas to JSON Schema via `z.toJSONSchema()`,
+ * and returns a complete `ExternalOpenApiPaths` object ready for Arc's spec builder.
  */
 export function extractBetterAuthOpenApi(
   authApi: Record<string, unknown>,
@@ -299,10 +139,26 @@ export function extractBetterAuthOpenApi(
     tagDescription = 'Better Auth authentication endpoints',
     excludePaths = [],
     excludeServerOnly = true,
+    userFields,
   } = options;
 
   const normalizedBase = basePath.replace(/\/+$/, '');
   const paths: Record<string, Record<string, unknown>> = {};
+
+  // Auto-detect active plugins by inspecting available endpoints.
+  // This avoids hardcoding plugin-specific schemes — the spec adapts to
+  // whatever plugins the app has registered with Better Auth.
+  const detectedPlugins = detectActivePlugins(authApi);
+
+  // Build security options dynamically: session + bearer are always available,
+  // others are added based on detected plugins.
+  const securityOptions: Array<Record<string, unknown[]>> = [
+    { cookieAuth: [] },
+    { bearerAuth: [] },
+  ];
+  if (detectedPlugins.apiKey) {
+    securityOptions.push({ apiKeyAuth: [] });
+  }
 
   for (const [key, value] of Object.entries(authApi)) {
     if (!isBetterAuthEndpoint(value)) continue;
@@ -341,7 +197,7 @@ export function extractBetterAuthOpenApi(
         tags: openApiMeta?.tags ?? [tagName],
         operationId: openApiMeta?.operationId ?? key,
         summary: openApiMeta?.summary ?? formatOperationSummary(key),
-        security: [{ cookieAuth: [] }, { bearerAuth: [] }],
+        security: securityOptions,
       };
 
       if (openApiMeta?.description) {
@@ -354,7 +210,7 @@ export function extractBetterAuthOpenApi(
 
       // Query parameters (for GET/DELETE)
       if ((method === 'get' || method === 'delete') && endpointOpts.query) {
-        const querySchema = zodLikeToJsonSchema(endpointOpts.query);
+        const querySchema = toJsonSchema(endpointOpts.query);
         if (querySchema && querySchema.type === 'object' && querySchema.properties) {
           const props = querySchema.properties as Record<string, Record<string, unknown>>;
           const required = (querySchema.required as string[]) ?? [];
@@ -378,15 +234,30 @@ export function extractBetterAuthOpenApi(
       }
 
       // Request body (for POST/PUT/PATCH)
-      if ((method === 'post' || method === 'put' || method === 'patch') && endpointOpts.body) {
-        const bodySchema = zodLikeToJsonSchema(endpointOpts.body);
-        if (bodySchema) {
-          operation.requestBody = {
-            required: true,
-            content: {
-              'application/json': { schema: bodySchema },
-            },
-          };
+      if (method === 'post' || method === 'put' || method === 'patch') {
+        if (openApiMeta?.requestBody) {
+          // Prefer metadata.openapi.requestBody (cleaner than Zod conversion)
+          operation.requestBody = structuredClone(openApiMeta.requestBody);
+        } else if (endpointOpts.body) {
+          // Fall back to Zod body conversion
+          const bodySchema = toJsonSchema(endpointOpts.body);
+          if (bodySchema) {
+            operation.requestBody = {
+              required: true,
+              content: {
+                'application/json': { schema: bodySchema },
+              },
+            };
+          }
+        }
+
+        // Merge userFields into sign-up and update-user request bodies
+        if (userFields && isUserFieldEndpoint(endpointPath) && operation.requestBody) {
+          mergeUserFieldsIntoRequestBody(
+            operation.requestBody as Record<string, unknown>,
+            userFields,
+            endpointPath,
+          );
         }
       }
 
@@ -408,17 +279,112 @@ export function extractBetterAuthOpenApi(
     }
   }
 
-  return {
-    paths,
-    securitySchemes: {
-      cookieAuth: {
-        type: 'apiKey',
-        in: 'cookie',
-        name: 'better-auth.session_token',
-        description: 'Session cookie set by Better Auth after sign-in',
+  // Build component schemas for $ref resolution (e.g. $ref: "#/components/schemas/User")
+  const schemas: Record<string, Record<string, unknown>> = {
+    User: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string' },
+        email: { type: 'string', format: 'email' },
+        emailVerified: { type: 'boolean' },
+        image: { type: 'string', nullable: true },
+        createdAt: { type: 'string', format: 'date-time' },
+        updatedAt: { type: 'string', format: 'date-time' },
       },
     },
+    Session: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        userId: { type: 'string' },
+        token: { type: 'string' },
+        expiresAt: { type: 'string', format: 'date-time' },
+        ipAddress: { type: 'string', nullable: true },
+        userAgent: { type: 'string', nullable: true },
+        createdAt: { type: 'string', format: 'date-time' },
+        updatedAt: { type: 'string', format: 'date-time' },
+      },
+    },
+  };
+
+  // Merge userFields into User component schema (all fields, including input: false)
+  if (userFields) {
+    const userProps = schemas.User!.properties as Record<string, unknown>;
+    for (const [name, field] of Object.entries(userFields)) {
+      const prop: Record<string, unknown> = { type: field.type };
+      if (field.description) prop.description = field.description;
+      userProps[name] = prop;
+    }
+  }
+
+  // Build security schemes — always include cookieAuth, add plugin-specific schemes dynamically
+  const securitySchemes: Record<string, Record<string, unknown>> = {
+    cookieAuth: {
+      type: 'apiKey',
+      in: 'cookie',
+      name: 'better-auth.session_token',
+      description: 'Session cookie set by Better Auth after sign-in',
+    },
+  };
+
+  if (detectedPlugins.apiKey) {
+    securitySchemes.apiKeyAuth = {
+      type: 'apiKey',
+      in: 'header',
+      name: 'x-api-key',
+      description: 'API key for programmatic access. Pass org context via x-organization-id header.',
+    };
+  }
+
+  // Build resourceSecurity — additional auth alternatives for Arc resource paths.
+  // Each item is OR'd with bearerAuth; keys within the same object are AND'd.
+  const resourceSecurity: Array<Record<string, string[]>> = [];
+  if (detectedPlugins.apiKey) {
+    // API key requires org header for tenant context (AND = same object)
+    resourceSecurity.push({ apiKeyAuth: [], orgHeader: [] });
+  }
+
+  return {
+    paths,
+    schemas,
+    securitySchemes,
     tags: [{ name: tagName, description: tagDescription }],
+    resourceSecurity: resourceSecurity.length > 0 ? resourceSecurity : undefined,
+  };
+}
+
+// ============================================================================
+// Plugin Detection
+// ============================================================================
+
+interface DetectedPlugins {
+  apiKey: boolean;
+  organization: boolean;
+}
+
+/**
+ * Auto-detect active Better Auth plugins by inspecting the API object.
+ *
+ * Rather than hardcoding plugin-specific behavior, we check for known
+ * endpoint signatures that each plugin registers. This way the OpenAPI
+ * spec adapts automatically to whatever plugins the app has enabled —
+ * no Arc update needed when adding/removing plugins.
+ */
+function detectActivePlugins(authApi: Record<string, unknown>): DetectedPlugins {
+  const endpointPaths = new Set<string>();
+
+  for (const value of Object.values(authApi)) {
+    if (isBetterAuthEndpoint(value)) {
+      endpointPaths.add(value.path);
+    }
+  }
+
+  return {
+    // apiKey plugin registers /api-key/create
+    apiKey: endpointPaths.has('/api-key/create'),
+    // organization plugin registers /organization/create
+    organization: endpointPaths.has('/organization/create'),
   };
 }
 
@@ -434,4 +400,49 @@ function formatOperationSummary(key: string): string {
     .replace(/([A-Z])/g, ' $1')
     .replace(/^./, (s) => s.toUpperCase())
     .trim();
+}
+
+/**
+ * Check if an endpoint path should have userFields merged into its request body.
+ */
+function isUserFieldEndpoint(path: string): boolean {
+  return path === '/sign-up/email' || path === '/update-user';
+}
+
+/**
+ * Merge user-defined fields into an existing requestBody schema.
+ * For updateUser, all fields are treated as optional regardless of their `required` setting.
+ */
+function mergeUserFieldsIntoRequestBody(
+  requestBody: Record<string, unknown>,
+  userFields: NonNullable<BetterAuthOpenApiOptions['userFields']>,
+  endpointPath: string,
+): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const content = (requestBody as any)?.content?.['application/json'];
+  if (!content?.schema) return;
+
+  const schema = content.schema as Record<string, unknown>;
+
+  if (!schema.properties) schema.properties = {};
+  if (!schema.required) schema.required = [];
+
+  const props = schema.properties as Record<string, unknown>;
+  const required = schema.required as string[];
+
+  for (const [name, field] of Object.entries(userFields)) {
+    // Skip input: false fields (output-only, not accepted in request body)
+    if (field.input === false) continue;
+
+    // For updateUser, all fields are optional
+    const isRequired = endpointPath === '/update-user' ? false : (field.required ?? false);
+
+    const prop: Record<string, unknown> = { type: field.type };
+    if (field.description) prop.description = field.description;
+    props[name] = prop;
+
+    if (isRequired && !required.includes(name)) {
+      required.push(name);
+    }
+  }
 }

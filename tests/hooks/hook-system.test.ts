@@ -365,4 +365,88 @@ describe('HookSystem', () => {
       );
     });
   });
+
+  describe('dependency warnings', () => {
+    it('warns when dependsOn references unregistered hook', async () => {
+      const warnings: string[] = [];
+      const hooks = new HookSystem({
+        logger: {
+          error: () => {},
+          warn: (msg: string) => { warnings.push(msg); },
+        },
+      });
+
+      hooks.register({
+        name: 'myHook',
+        resource: 'test',
+        operation: 'create',
+        phase: 'before',
+        handler: async () => {},
+        dependsOn: ['nonExistentHook'],
+      });
+
+      // Execute to trigger topological sort
+      await hooks.executeBefore('test', 'create', {}, {});
+
+      expect(warnings.length).toBeGreaterThan(0);
+      expect(warnings[0]).toContain('nonExistentHook');
+      expect(warnings[0]).toContain('not registered');
+    });
+
+    it('does not warn when dependsOn references a registered hook', async () => {
+      const warnings: string[] = [];
+      const hooks = new HookSystem({
+        logger: {
+          error: () => {},
+          warn: (msg: string) => { warnings.push(msg); },
+        },
+      });
+
+      hooks.register({
+        name: 'firstHook',
+        resource: 'test',
+        operation: 'create',
+        phase: 'before',
+        handler: async () => {},
+      });
+
+      hooks.register({
+        name: 'secondHook',
+        resource: 'test',
+        operation: 'create',
+        phase: 'before',
+        handler: async () => {},
+        dependsOn: ['firstHook'],
+      });
+
+      await hooks.executeBefore('test', 'create', {}, {});
+
+      expect(warnings).toHaveLength(0);
+    });
+
+    it('includes hook name in warning message', async () => {
+      const warnings: string[] = [];
+      const hooks = new HookSystem({
+        logger: {
+          error: () => {},
+          warn: (msg: string) => { warnings.push(msg); },
+        },
+      });
+
+      hooks.register({
+        name: 'myNamedHook',
+        resource: 'test',
+        operation: 'create',
+        phase: 'before',
+        handler: async () => {},
+        dependsOn: ['missingDep'],
+      });
+
+      await hooks.executeBefore('test', 'create', {}, {});
+
+      expect(warnings.length).toBeGreaterThan(0);
+      expect(warnings[0]).toContain('myNamedHook');
+      expect(warnings[0]).toContain('missingDep');
+    });
+  });
 });

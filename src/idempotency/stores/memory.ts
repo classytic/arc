@@ -8,6 +8,7 @@
  * - Automatic TTL expiration
  * - Lock support for concurrent request handling
  * - Periodic cleanup of expired entries
+ * - Prefix-based operations for raw key invalidation
  */
 
 import type { IdempotencyResult, IdempotencyStore, IdempotencyLock } from './interface.js';
@@ -116,6 +117,36 @@ export class MemoryIdempotencyStore implements IdempotencyStore {
     this.locks.delete(key);
   }
 
+  async deleteByPrefix(prefix: string): Promise<number> {
+    let count = 0;
+    for (const key of this.results.keys()) {
+      if (key.startsWith(prefix)) {
+        this.results.delete(key);
+        count++;
+      }
+    }
+    for (const key of this.locks.keys()) {
+      if (key.startsWith(prefix)) {
+        this.locks.delete(key);
+      }
+    }
+    return count;
+  }
+
+  async findByPrefix(prefix: string): Promise<IdempotencyResult | undefined> {
+    const now = new Date();
+    for (const [key, result] of this.results) {
+      if (key.startsWith(prefix)) {
+        if (now > result.expiresAt) {
+          this.results.delete(key);
+          continue;
+        }
+        return result;
+      }
+    }
+    return undefined;
+  }
+
   async close(): Promise<void> {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
@@ -125,9 +156,7 @@ export class MemoryIdempotencyStore implements IdempotencyStore {
     this.locks.clear();
   }
 
-  /**
-   * Get current stats (for debugging/monitoring)
-   */
+  /** Get current stats (for debugging/monitoring) */
   getStats(): { results: number; locks: number } {
     return {
       results: this.results.size,
@@ -135,20 +164,15 @@ export class MemoryIdempotencyStore implements IdempotencyStore {
     };
   }
 
-  /**
-   * Remove expired entries
-   */
   private cleanup(): void {
     const now = new Date();
 
-    // Clean expired results
     for (const [key, result] of this.results) {
       if (now > result.expiresAt) {
         this.results.delete(key);
       }
     }
 
-    // Clean expired locks
     for (const [key, lock] of this.locks) {
       if (now > lock.expiresAt) {
         this.locks.delete(key);
@@ -156,11 +180,7 @@ export class MemoryIdempotencyStore implements IdempotencyStore {
     }
   }
 
-  /**
-   * Evict oldest entries when at capacity
-   */
   private evictOldest(): void {
-    // Sort by creation time and remove oldest 10%
     const entries = Array.from(this.results.entries())
       .sort((a, b) => a[1].createdAt.getTime() - b[1].createdAt.getTime());
 

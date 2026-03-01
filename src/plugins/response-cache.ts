@@ -11,8 +11,28 @@
  * - Automatic invalidation on mutations (POST/PUT/PATCH/DELETE)
  * - Manual invalidation via `fastify.responseCache.invalidate()`
  * - Cache stats endpoint for monitoring
- * - Resource-aware: integrates with Arc's event bus for cross-instance invalidation
  * - Zero external deps — pure in-memory, serverless-safe
+ *
+ * NOTE: This cache is per-instance (in-memory). In multi-instance deployments,
+ * each instance maintains its own cache. For cross-instance invalidation,
+ * wire `fastify.responseCache.invalidate()` to your event bus manually.
+ *
+ * ## Auth Safety
+ *
+ * The cache check runs as a **route-level middleware** (`responseCache.middleware`)
+ * that must be wired AFTER authentication in the preHandler chain. Arc's
+ * `createCrudRouter` does this automatically. For custom routes, wire it
+ * manually:
+ *
+ * ```typescript
+ * fastify.get('/data', {
+ *   preHandler: [fastify.authenticate, fastify.responseCache.middleware],
+ * }, handler);
+ * ```
+ *
+ * This ensures cached responses are never served before auth validates the
+ * caller's identity. The default cache key includes `userId` and `orgId`
+ * to prevent cross-caller data leaks.
  *
  * This is a SEPARATE subpath import — only loaded when explicitly used:
  *   import { responseCachePlugin } from '@classytic/arc/plugins/response-cache';
@@ -42,8 +62,14 @@
  * ```
  */
 
-import fp from 'fastify-plugin';
-import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import fp from "fastify-plugin";
+import type {
+  FastifyInstance,
+  FastifyPluginAsync,
+  FastifyReply,
+  FastifyRequest,
+} from "fastify";
+import { hasEvents } from "../utils/typeGuards.js";
 
 // ============================================================================
 // Types
@@ -71,8 +97,31 @@ export interface ResponseCacheOptions {
   xCacheHeader?: boolean;
   /** Enable stats endpoint at this path (default: null = disabled) */
   statsPath?: string | null;
-  /** Custom cache key function (default: method + url) */
+  /** Custom cache key function (default: method + url + userId + orgId) */
   keyFn?: (request: FastifyRequest) => string | null;
+  /**
+   * Auto-invalidate cache entries when CRUD domain events fire (requires eventPlugin).
+   *
+   * - `true`: Invalidate resource prefix on its own CRUD events
+   * - `{ patterns: { 'order.*': ['/api/products'] } }`: Cross-resource invalidation rules
+   * - `false` / omitted: Disabled (default)
+   *
+   * @example
+   * ```typescript
+   * await fastify.register(responseCachePlugin, {
+   *   eventInvalidation: {
+   *     patterns: {
+   *       'order.*': ['/api/products', '/api/inventory'],
+   *     },
+   *   },
+   * });
+   * ```
+   */
+  eventInvalidation?:
+    | boolean
+    | {
+        patterns?: Record<string, string[]>;
+      };
 }
 
 interface CacheEntry {
@@ -103,6 +152,9 @@ export interface ResponseCacheStats {
 class LRUCache {
   private cache = new Map<string, CacheEntry>();
   private maxEntries: number;
+
+  // Locks to prevent caching stale replica data immediately after mutation
+  private invalidatedPrefixes = new Map<string, number>();
 
   // Stats
   hits = 0;
@@ -135,6 +187,11 @@ class LRUCache {
   }
 
   set(key: string, entry: CacheEntry): void {
+    // If prefix is locked due to recent invalidation, do not cache (prevents stale replica reads)
+    if (this.isPrefixLocked(key)) {
+      return;
+    }
+
     // Delete first to reset position
     if (this.cache.has(key)) {
       this.cache.delete(key);
@@ -152,22 +209,47 @@ class LRUCache {
     this.cache.set(key, entry);
   }
 
-  /** Invalidate entries matching a path prefix */
-  invalidatePrefix(prefix: string): number {
+  /** Invalidate entries matching a path prefix and lock it from caching to allow DB replicas to catch up */
+  invalidatePrefix(prefix: string, jitterMs = 1500): number {
     let count = 0;
     for (const key of this.cache.keys()) {
-      // Keys are formatted as "GET:/api/products?page=1"
+      // Keys are formatted as "GET:/api/products?page=1:u=...:o=..."
       // Extract path after method
-      const colonIdx = key.indexOf(':');
+      const colonIdx = key.indexOf(":");
       const path = colonIdx >= 0 ? key.slice(colonIdx + 1) : key;
-      // Strip query string for prefix matching
-      const pathOnly = path.split('?')[0]!;
+      // Strip query string and user/org suffix for prefix matching
+      const pathOnly = path.split("?")[0]!;
       if (pathOnly.startsWith(prefix)) {
         this.cache.delete(key);
         count++;
       }
     }
+
+    // Lock this prefix from being cached for `jitterMs` milliseconds
+    if (jitterMs > 0) {
+      this.invalidatedPrefixes.set(prefix, Date.now() + jitterMs);
+    }
+
     return count;
+  }
+
+  /** Check if a key falls under a recently invalidated prefix */
+  private isPrefixLocked(key: string): boolean {
+    if (this.invalidatedPrefixes.size === 0) return false;
+
+    const colonIdx = key.indexOf(":");
+    const path = colonIdx >= 0 ? key.slice(colonIdx + 1) : key;
+    const pathOnly = path.split("?")[0]!;
+
+    const now = Date.now();
+    for (const [prefix, expiresAt] of this.invalidatedPrefixes.entries()) {
+      if (now > expiresAt) {
+        this.invalidatedPrefixes.delete(prefix);
+      } else if (pathOnly.startsWith(prefix)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Clear all entries */
@@ -196,7 +278,7 @@ class LRUCache {
 // Fastify Type Extensions
 // ============================================================================
 
-declare module 'fastify' {
+declare module "fastify" {
   interface FastifyInstance {
     responseCache: {
       /** Invalidate all cached responses matching a path prefix */
@@ -205,7 +287,29 @@ declare module 'fastify' {
       invalidateAll: () => void;
       /** Get cache statistics */
       stats: () => ResponseCacheStats;
+      /**
+       * Route-level preHandler for cache lookup.
+       * Wire AFTER authenticate in the preHandler chain so that
+       * `request.user` / `request.scope` are populated before the
+       * cache key is computed.
+       *
+       * `createCrudRouter` injects this automatically for GET routes.
+       * For custom routes, add it manually:
+       * ```typescript
+       * fastify.get('/data', {
+       *   preHandler: [fastify.authenticate, fastify.responseCache.middleware],
+       * }, handler);
+       * ```
+       */
+      middleware: (
+        request: FastifyRequest,
+        reply: FastifyReply,
+      ) => Promise<void>;
     };
+  }
+  interface FastifyRequest {
+    /** @internal Cache TTL in seconds — set by onRequest, consumed by middleware + onSend */
+    __arcCacheTTL?: number;
   }
 }
 
@@ -213,16 +317,15 @@ declare module 'fastify' {
 // Plugin Implementation
 // ============================================================================
 
-const responseCachePluginImpl: FastifyPluginAsync<ResponseCacheOptions> = async (
-  fastify: FastifyInstance,
-  opts: ResponseCacheOptions = {},
-) => {
+const responseCachePluginImpl: FastifyPluginAsync<
+  ResponseCacheOptions
+> = async (fastify: FastifyInstance, opts: ResponseCacheOptions = {}) => {
   const {
     maxEntries = 500,
     defaultTTL = 30,
     rules = [],
     exclude = [],
-    invalidateOn = ['POST', 'PUT', 'PATCH', 'DELETE'],
+    invalidateOn = ["POST", "PUT", "PATCH", "DELETE"],
     xCacheHeader = true,
     statsPath = null,
     keyFn,
@@ -233,7 +336,7 @@ const responseCachePluginImpl: FastifyPluginAsync<ResponseCacheOptions> = async 
 
   /** Find TTL for a given URL path (seconds) */
   function getTTL(url: string): number {
-    const path = url.split('?')[0]!;
+    const path = url.split("?")[0]!;
     for (const rule of rules) {
       if (path.startsWith(rule.match)) {
         return rule.ttl;
@@ -247,108 +350,158 @@ const responseCachePluginImpl: FastifyPluginAsync<ResponseCacheOptions> = async 
     return exclude.some((p) => url.startsWith(p));
   }
 
-  /** Build cache key */
+  /** Build cache key — includes user/org scope by default to prevent cross-caller leaks */
   function buildKey(request: FastifyRequest): string | null {
     if (keyFn) return keyFn(request);
-    return `${request.method}:${request.url}`;
+    // Scope the cache key to the user and org to prevent serving
+    // User A's response to User B, or Org A's data to Org B
+    const user = request.user as { id?: string; _id?: string } | undefined;
+    const userId = user?.id ?? user?._id ?? "anon";
+    const scope = request.scope as
+      | { kind: string; organizationId?: string }
+      | undefined;
+    const orgId = scope?.organizationId ?? "no-org";
+    return `${request.method}:${request.url}:u=${userId}:o=${orgId}`;
   }
 
-  // ---- onRequest hook: serve from cache ----
-  fastify.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
-    // Only cache GET/HEAD
-    if (request.method !== 'GET' && request.method !== 'HEAD') return;
-
+  // ---- onRequest hook: mark cacheable GET/HEAD requests ----
+  fastify.addHook("onRequest", async (request: FastifyRequest) => {
+    // Only mark GET/HEAD requests as cacheable (TTL computed early, key deferred to after auth)
+    if (request.method !== "GET" && request.method !== "HEAD") return;
     if (isExcluded(request.url)) return;
 
     const ttl = getTTL(request.url);
-    if (ttl <= 0) return; // TTL 0 = don't cache
+    if (ttl <= 0) return;
+
+    // Store TTL for downstream middleware + onSend
+    request.__arcCacheTTL = ttl;
+  });
+
+  // ---- onResponse hook: invalidate cache only on successful (2xx) mutations ----
+  // This runs AFTER the request completes, so failed/unauthorized mutations
+  // do NOT purge the cache (prevents cache-purge DoS attacks).
+  fastify.addHook(
+    "onResponse",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      if (!invalidateMethods.has(request.method.toUpperCase())) return;
+
+      // Only invalidate on successful responses
+      const statusCode = reply.statusCode;
+      if (statusCode < 200 || statusCode >= 300) return;
+
+      const path = request.url.split("?")[0]!;
+      const segments = path.split("/").filter(Boolean);
+
+      // Detect item-scoped paths by checking if the last segment looks like
+      // a resource ID (not a collection name). This handles both prefixed
+      // routes like /api/products/123 (3 segments) and non-prefixed routes
+      // like /products/123 (2 segments).
+      const lastSegment = segments[segments.length - 1];
+      const isItemScoped =
+        segments.length >= 2 &&
+        lastSegment != null &&
+        /^[0-9a-f]{8,}$|^\d+$/.test(lastSegment);
+
+      if (isItemScoped) {
+        // Item-level mutation — invalidate both the item and its collection
+        const resourceRoot = "/" + segments.slice(0, -1).join("/");
+        cache.invalidatePrefix(resourceRoot);
+        cache.invalidatePrefix(path);
+      } else {
+        // Collection-level mutation (e.g., POST /api/products)
+        cache.invalidatePrefix(path);
+      }
+    },
+  );
+
+  // ---- Route-level middleware: serve from cache (AFTER auth) ----
+  const cacheMiddleware = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<void> => {
+    // Only check cache for cacheable requests
+    const ttl = request.__arcCacheTTL;
+    if (!ttl || ttl <= 0) return;
+    if (request.method !== "GET" && request.method !== "HEAD") return;
 
     const key = buildKey(request);
     if (!key) return;
 
     const entry = cache.get(key);
-    if (!entry) {
-      if (xCacheHeader) {
-        // Mark as miss — the onSend hook will store it
-        (request as any).__arcCacheKey = key;
-        (request as any).__arcCacheTTL = ttl;
-      }
-      return;
-    }
+    if (!entry) return; // Cache MISS — let handler run, onSend will store
 
-    // Cache HIT — serve directly
+    // Cache HIT — serve directly (auth has already validated the caller)
     if (xCacheHeader) {
-      reply.header('x-cache', 'HIT');
+      reply.header("x-cache", "HIT");
     }
 
-    // Restore original headers
     for (const [name, value] of Object.entries(entry.headers)) {
       reply.header(name, value);
     }
 
+    // Clear TTL so the onSend hook doesn't overwrite x-cache to MISS
+    request.__arcCacheTTL = 0;
     reply.code(entry.statusCode).send(entry.body);
-  });
+  };
 
-  // ---- onSend hook: store in cache ----
-  fastify.addHook('onSend', async (request: FastifyRequest, reply: FastifyReply, payload) => {
-    const key = (request as any).__arcCacheKey as string | undefined;
-    if (!key) return payload;
+  // ---- onSend hook: store in cache (recompute key — user is now populated) ----
+  fastify.addHook(
+    "onSend",
+    async (request: FastifyRequest, reply: FastifyReply, payload) => {
+      const ttl = request.__arcCacheTTL;
+      if (!ttl || ttl <= 0) return payload;
 
-    const ttl = (request as any).__arcCacheTTL as number | undefined;
-    if (!ttl || ttl <= 0) return payload;
+      if (request.method !== "GET" && request.method !== "HEAD") return payload;
 
-    // Only cache 2xx responses
-    const statusCode = reply.statusCode;
-    if (statusCode < 200 || statusCode >= 300) return payload;
+      // Only cache 2xx responses
+      const statusCode = reply.statusCode;
+      if (statusCode < 200 || statusCode >= 300) return payload;
 
-    if (xCacheHeader) {
-      reply.header('x-cache', 'MISS');
-    }
+      // Recompute key with now-populated user identity (auth has run by this point)
+      const key = buildKey(request);
+      if (!key) return payload;
 
-    // Store in cache
-    const body = typeof payload === 'string' ? payload : String(payload ?? '');
+      if (xCacheHeader) {
+        reply.header("x-cache", "MISS");
+      }
 
-    // Capture cacheable headers
-    const headers: Record<string, string> = {};
-    const contentType = reply.getHeader('content-type');
-    if (contentType) headers['content-type'] = String(contentType);
-    const etag = reply.getHeader('etag');
-    if (etag) headers['etag'] = String(etag);
+      // Store in cache — handle Buffer correctly (String(buffer) produces '[object Buffer]')
+      let body: string;
+      if (typeof payload === "string") {
+        body = payload;
+      } else if (Buffer.isBuffer(payload)) {
+        body = payload.toString("utf-8");
+      } else if (payload != null) {
+        body = JSON.stringify(payload);
+      } else {
+        body = "";
+      }
 
-    cache.set(key, {
-      body,
-      statusCode,
-      headers,
-      createdAt: Date.now(),
-      ttl: ttl * 1000, // Convert to ms
-    });
+      // Capture cacheable headers
+      const headers: Record<string, string> = {};
+      const contentType = reply.getHeader("content-type");
+      if (contentType) headers["content-type"] = String(contentType);
+      const etag = reply.getHeader("etag");
+      if (etag) headers["etag"] = String(etag);
 
-    return payload;
-  });
+      cache.set(key, {
+        body,
+        statusCode,
+        headers,
+        createdAt: Date.now(),
+        ttl: ttl * 1000, // Convert to ms
+      });
 
-  // ---- onRequest hook: auto-invalidate on mutations ----
-  fastify.addHook('onRequest', async (request: FastifyRequest) => {
-    if (!invalidateMethods.has(request.method.toUpperCase())) return;
-
-    // Invalidate cached entries for the same path prefix
-    const path = request.url.split('?')[0]!;
-    // Walk up to find the resource root (e.g., /api/products/123 → /api/products)
-    const segments = path.split('/').filter(Boolean);
-    if (segments.length >= 2) {
-      const resourceRoot = '/' + segments.slice(0, -1).join('/');
-      cache.invalidatePrefix(resourceRoot);
-      // Also invalidate exact path (e.g., /api/products for POST /api/products)
-      cache.invalidatePrefix(path);
-    } else {
-      cache.invalidatePrefix(path);
-    }
-  });
+      return payload;
+    },
+  );
 
   // ---- Decorator ----
-  fastify.decorate('responseCache', {
+  fastify.decorate("responseCache", {
     invalidate: (pathPrefix: string) => cache.invalidatePrefix(pathPrefix),
     invalidateAll: () => cache.clear(),
     stats: () => cache.getStats(maxEntries),
+    middleware: cacheMiddleware,
   });
 
   // ---- Optional stats endpoint ----
@@ -358,16 +511,66 @@ const responseCachePluginImpl: FastifyPluginAsync<ResponseCacheOptions> = async 
     });
   }
 
+  // ---- Event-driven invalidation (requires eventPlugin) ----
+  const evtInv = opts.eventInvalidation;
+  if (evtInv && hasEvents(fastify)) {
+    const crossResourcePatterns =
+      typeof evtInv === "object" ? (evtInv.patterns ?? {}) : {};
+
+    fastify.events
+      .subscribe("*", async (event) => {
+        const parts = event.type.split(".");
+        if (parts.length !== 2) return;
+        const [resource, action] = parts;
+        if (!resource || !["created", "updated", "deleted"].includes(action!))
+          return;
+
+        // Invalidate the resource's own cache prefix (both singular and plural)
+        cache.invalidatePrefix(`/${resource}s`);
+        cache.invalidatePrefix(`/${resource}`);
+
+        // Apply cross-resource invalidation rules
+        for (const [pattern, prefixes] of Object.entries(
+          crossResourcePatterns,
+        )) {
+          if (eventMatchesPattern(event.type, pattern)) {
+            for (const prefix of prefixes) {
+              cache.invalidatePrefix(prefix);
+            }
+          }
+        }
+      })
+      .catch((err) => {
+        fastify.log?.warn?.(
+          { err },
+          "Response cache: failed to subscribe to events for invalidation",
+        );
+      });
+
+    fastify.log?.debug?.("Response cache: event-driven invalidation enabled");
+  } else if (evtInv) {
+    fastify.log?.warn?.(
+      "Response cache: eventInvalidation enabled but eventPlugin not registered.",
+    );
+  }
+
   fastify.log?.debug?.(
     `Response cache: registered (max=${maxEntries}, defaultTTL=${defaultTTL}s, rules=${rules.length})`,
   );
 };
 
+/** Check if an event type matches a pattern (supports wildcards) */
+function eventMatchesPattern(type: string, pattern: string): boolean {
+  if (pattern === "*") return true;
+  if (pattern.endsWith(".*")) return type.startsWith(pattern.slice(0, -1));
+  return type === pattern;
+}
+
 export const responseCachePlugin: FastifyPluginAsync<ResponseCacheOptions> = fp(
   responseCachePluginImpl,
   {
-    name: 'arc-response-cache',
-    fastify: '5.x',
+    name: "arc-response-cache",
+    fastify: "5.x",
   },
 ) as unknown as FastifyPluginAsync<ResponseCacheOptions>;
 

@@ -123,8 +123,8 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
   }
 
   // Build auth preHandler if needed
-  const authPreHandler = auth && typeof (fastify as any).authenticate === 'function'
-    ? [(fastify as any).authenticate]
+  const authPreHandler = auth && typeof fastify.authenticate === 'function'
+    ? [fastify.authenticate]
     : [];
 
   // Permission check helper
@@ -152,8 +152,8 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
       const run = await wf.start(input, meta);
 
       // Bridge event to Arc's event bus
-      if (bridgeEvents && (fastify as any).events?.publish) {
-        await (fastify as any).events.publish(`workflow.${id}.started`, {
+      if (bridgeEvents && fastify.events?.publish) {
+        await fastify.events.publish(`workflow.${id}.started`, {
           runId: run._id,
           workflowId: id,
           status: run.status,
@@ -189,8 +189,8 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
       const { payload } = (request.body ?? {}) as { payload?: unknown };
       const run = await wf.resume(runId, payload);
 
-      if (bridgeEvents && (fastify as any).events?.publish) {
-        await (fastify as any).events.publish(`workflow.${id}.resumed`, {
+      if (bridgeEvents && fastify.events?.publish) {
+        await fastify.events.publish(`workflow.${id}.resumed`, {
           runId: run._id,
           workflowId: id,
           status: run.status,
@@ -210,8 +210,8 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
       const { runId } = request.params as { runId: string };
       const run = await wf.cancel(runId);
 
-      if (bridgeEvents && (fastify as any).events?.publish) {
-        await (fastify as any).events.publish(`workflow.${id}.cancelled`, {
+      if (bridgeEvents && fastify.events?.publish) {
+        await fastify.events.publish(`workflow.${id}.cancelled`, {
           runId: run._id,
           workflowId: id,
         });

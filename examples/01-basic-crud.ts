@@ -5,7 +5,7 @@
  */
 
 import mongoose from 'mongoose';
-import { defineResource, createMongooseAdapter, permissions, allowPublic, requireRoles } from '../src/index.js';
+import { defineResource, createMongooseAdapter, permissions, allowPublic } from '@classytic/arc';
 import { Repository } from '@classytic/mongokit';
 
 // ============================================================================

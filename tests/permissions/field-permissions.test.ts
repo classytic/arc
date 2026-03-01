@@ -15,6 +15,7 @@ import {
   fields,
   applyFieldReadPermissions,
   applyFieldWritePermissions,
+  resolveEffectiveRoles,
   type FieldPermissionMap,
 } from '../../src/permissions/fields.js';
 
@@ -294,6 +295,119 @@ describe('Field Permissions', () => {
       applyFieldWritePermissions(original, permissions, ['viewer']);
       // Original should still have role
       expect(original.role).toBe('admin');
+    });
+  });
+
+  // ========================================================================
+  // resolveEffectiveRoles
+  // ========================================================================
+
+  describe('resolveEffectiveRoles', () => {
+    it('should return global roles when org roles are empty', () => {
+      expect(resolveEffectiveRoles(['superadmin'], [])).toEqual(['superadmin']);
+    });
+
+    it('should return org roles when global roles are empty', () => {
+      expect(resolveEffectiveRoles([], ['admin'])).toEqual(['admin']);
+    });
+
+    it('should merge global and org roles without duplicates', () => {
+      const result = resolveEffectiveRoles(['user', 'admin'], ['admin', 'delivery_manager']);
+      expect(result).toContain('user');
+      expect(result).toContain('admin');
+      expect(result).toContain('delivery_manager');
+      expect(result).toHaveLength(3); // deduped
+    });
+  });
+
+  // ========================================================================
+  // Bypass-Scoped Users (superadmin)
+  //
+  // Validates the core bug: superadmin users have orgRoles=['superadmin']
+  // (their global roles), NOT org-level roles like 'admin'.
+  // writableBy(['admin', 'delivery_manager']) would strip fields.
+  // ========================================================================
+
+  describe('Bypass-scoped user field permissions', () => {
+    // Simulates the exact scenario from ai-hire: job field permissions
+    const jobFieldPermissions: FieldPermissionMap = {
+      assignedDeliveryManagers: fields.writableBy(['admin', 'delivery_manager']),
+      assignedAccountManagers: fields.writableBy(['admin', 'delivery_manager']),
+      assignedRecruiters: fields.writableBy(['admin', 'delivery_manager', 'account_manager']),
+    };
+
+    it('should strip writableBy fields when superadmin role is not in allowed list', () => {
+      // This is the BUG scenario — superadmin's effective roles don't include 'admin'
+      const body = {
+        title: 'React Dev',
+        assignedDeliveryManagers: ['user-id-1'],
+        assignedAccountManagers: [],
+        assignedRecruiters: [],
+      };
+
+      const effectiveRoles = resolveEffectiveRoles(['superadmin'], ['superadmin']);
+      // effectiveRoles = ['superadmin'] — does NOT include 'admin'
+      expect(effectiveRoles).toEqual(['superadmin']);
+
+      const result = applyFieldWritePermissions(body, jobFieldPermissions, effectiveRoles);
+
+      // BUG: without bypass check, all assignment fields are stripped
+      expect(result).not.toHaveProperty('assignedDeliveryManagers');
+      expect(result).not.toHaveProperty('assignedAccountManagers');
+      expect(result).not.toHaveProperty('assignedRecruiters');
+      expect(result.title).toBe('React Dev');
+    });
+
+    it('should preserve writableBy fields for regular org admin', () => {
+      // Regular org admin — NOT superadmin, goes through normal membership lookup
+      const body = {
+        title: 'React Dev',
+        assignedDeliveryManagers: ['user-id-1'],
+        assignedAccountManagers: [],
+        assignedRecruiters: [],
+      };
+
+      // user.roles = ['user'], orgRoles = ['admin'] (from membership)
+      const effectiveRoles = resolveEffectiveRoles(['user'], ['admin']);
+      expect(effectiveRoles).toContain('admin');
+
+      const result = applyFieldWritePermissions(body, jobFieldPermissions, effectiveRoles);
+
+      // All fields preserved — 'admin' is in writableBy lists
+      expect(result.assignedDeliveryManagers).toEqual(['user-id-1']);
+      expect(result.assignedAccountManagers).toEqual([]);
+      expect(result.assignedRecruiters).toEqual([]);
+    });
+
+    it('should preserve writableBy fields for delivery_manager role', () => {
+      const body = {
+        title: 'React Dev',
+        assignedDeliveryManagers: ['dm-id'],
+        assignedAccountManagers: ['am-id'],
+      };
+
+      const effectiveRoles = resolveEffectiveRoles(['user'], ['delivery_manager']);
+      const result = applyFieldWritePermissions(body, jobFieldPermissions, effectiveRoles);
+
+      expect(result.assignedDeliveryManagers).toEqual(['dm-id']);
+      expect(result.assignedAccountManagers).toEqual(['am-id']);
+    });
+
+    it('should strip DM/AM fields for account_manager role', () => {
+      const body = {
+        title: 'React Dev',
+        assignedDeliveryManagers: ['dm-id'],
+        assignedAccountManagers: ['am-id'],
+        assignedRecruiters: ['recruiter-id'],
+      };
+
+      const effectiveRoles = resolveEffectiveRoles(['user'], ['account_manager']);
+      const result = applyFieldWritePermissions(body, jobFieldPermissions, effectiveRoles);
+
+      // AM can only write recruiters, not DM or AM assignments
+      expect(result).not.toHaveProperty('assignedDeliveryManagers');
+      expect(result).not.toHaveProperty('assignedAccountManagers');
+      expect(result.assignedRecruiters).toEqual(['recruiter-id']);
     });
   });
 });

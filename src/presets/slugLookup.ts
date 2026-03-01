@@ -23,7 +23,8 @@ export function slugLookupPreset(options: SlugLookupOptions = {}): PresetResult 
         handler: 'getBySlug',
         summary: 'Get by slug',
         permissions: permissions.get ?? allowPublic(),
-        wrapHandler: true, // Handler is a ControllerHandler
+        wrapHandler: true,
+        operation: 'getBySlug',
       },
     ],
     // Pass to controller so it knows which param to read

@@ -38,6 +38,7 @@
 
 import type { DataAdapter, SchemaMetadata, FieldMetadata, ValidationResult } from './interface.js';
 import type { CrudRepository, OpenApiSchemas, RouteSchemaOptions, ParsedQuery, QueryParserInterface, AnyRecord } from '../types/index.js';
+import { DEFAULT_MAX_LIMIT, DEFAULT_LIMIT, RESERVED_QUERY_PARAMS } from '../constants.js';
 
 // ============================================================================
 // Prisma DMMF Types (runtime shapes from @prisma/client)
@@ -158,8 +159,8 @@ export class PrismaQueryParser implements QueryParserInterface {
   };
 
   constructor(options: PrismaQueryParserOptions = {}) {
-    this.maxLimit = options.maxLimit ?? 1000;
-    this.defaultLimit = options.defaultLimit ?? 20;
+    this.maxLimit = options.maxLimit ?? DEFAULT_MAX_LIMIT;
+    this.defaultLimit = options.defaultLimit ?? DEFAULT_LIMIT;
     this.softDeleteEnabled = options.softDeleteEnabled ?? true;
     this.softDeleteField = options.softDeleteField ?? 'deletedAt';
   }
@@ -313,7 +314,6 @@ export class PrismaQueryParser implements QueryParserInterface {
   }
 
   private parseFilters(query: Record<string, unknown>): Record<string, unknown> {
-    const reserved = new Set(['page', 'limit', 'sort', 'search', 'select', 'populate', 'after', 'cursor']);
     const filters: Record<string, unknown> = {};
 
     const operators: Record<string, string> = {
@@ -323,7 +323,7 @@ export class PrismaQueryParser implements QueryParserInterface {
     };
 
     for (const [key, value] of Object.entries(query)) {
-      if (reserved.has(key) || value === undefined || value === null) continue;
+      if (RESERVED_QUERY_PARAMS.has(key) || value === undefined || value === null) continue;
 
       const match = key.match(/^([a-zA-Z_][a-zA-Z0-9_.]*)(?:\[([a-z]+)\])?$/);
       if (!match) continue;

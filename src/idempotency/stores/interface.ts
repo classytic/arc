@@ -36,42 +36,48 @@ export interface IdempotencyStore {
   readonly name: string;
 
   /**
-   * Get a cached result for an idempotency key
-   * Returns undefined if not found or expired
+   * Get a cached result for an idempotency key.
+   * Returns undefined if not found or expired.
    */
   get(key: string): Promise<IdempotencyResult | undefined>;
 
   /**
-   * Store a result for an idempotency key
-   * TTL is handled by the store implementation
+   * Store a result for an idempotency key.
+   * TTL is handled by the store implementation.
    */
   set(key: string, result: Omit<IdempotencyResult, 'key'>): Promise<void>;
 
   /**
-   * Try to acquire a lock for processing a key
-   * Returns true if lock acquired, false if already locked
-   * Used to prevent concurrent processing of the same key
+   * Try to acquire a lock for processing a key.
+   * Returns true if lock acquired, false if already locked.
    */
   tryLock(key: string, requestId: string, ttlMs: number): Promise<boolean>;
 
-  /**
-   * Release a lock after processing complete
-   */
+  /** Release a lock after processing complete */
   unlock(key: string, requestId: string): Promise<void>;
 
-  /**
-   * Check if a key is currently locked
-   */
+  /** Check if a key is currently locked */
   isLocked(key: string): Promise<boolean>;
 
-  /**
-   * Delete a cached result (for manual invalidation)
-   */
+  /** Delete a cached result by exact key */
   delete(key: string): Promise<void>;
 
   /**
-   * Close the store (cleanup connections)
+   * Delete all cached results whose key starts with the given prefix.
+   * Used by invalidate() to clear entries by raw idempotency key
+   * regardless of fingerprint.
+   * Returns the number of entries deleted.
    */
+  deleteByPrefix(prefix: string): Promise<number>;
+
+  /**
+   * Find the first cached result whose key starts with the given prefix.
+   * Used by has() to check if any entry exists for a raw idempotency key.
+   * Returns undefined if no matching entry found.
+   */
+  findByPrefix(prefix: string): Promise<IdempotencyResult | undefined>;
+
+  /** Close the store (cleanup connections) */
   close?(): Promise<void>;
 }
 

@@ -38,8 +38,8 @@
  * ```
  */
 
-import type { FastifyPluginAsync } from 'fastify';
-import type { Model, Document } from 'mongoose';
+import type { FastifyPluginAsync } from "fastify";
+import { hasEvents } from "../utils/typeGuards.js";
 import type {
   AdditionalRoute,
   AnyRecord,
@@ -53,19 +53,27 @@ import type {
   OpenApiSchemas,
   QueryParserInterface,
   RateLimitConfig,
+  ResourceCacheConfig,
   ResourceConfig,
   ResourceMetadata,
   ResourcePermissions,
   RouteSchemaOptions,
-} from '../types/index.js';
-import type { DataAdapter } from '../adapters/interface.js';
-import { BaseController } from './BaseController.js';
-import { createCrudRouter } from './createCrudRouter.js';
-import { applyPresets } from '../presets/index.js';
-import type { RegisterOptions } from '../registry/ResourceRegistry.js';
-import { assertValidConfig } from './validateResourceConfig.js';
+} from "../types/index.js";
+import type { DataAdapter } from "../adapters/interface.js";
+import { BaseController } from "./BaseController.js";
+import { createCrudRouter } from "./createCrudRouter.js";
+import { applyPresets } from "../presets/index.js";
+import type { RegisterOptions } from "../registry/ResourceRegistry.js";
+import { assertValidConfig } from "./validateResourceConfig.js";
+import {
+  convertOpenApiSchemas,
+  convertRouteSchema,
+} from "../utils/schemaConverter.js";
+import { CRUD_OPERATIONS } from "../constants.js";
 
-interface ExtendedResourceConfig<TDoc = AnyRecord> extends ResourceConfig<TDoc> {
+interface ExtendedResourceConfig<
+  TDoc = AnyRecord,
+> extends ResourceConfig<TDoc> {
   _appliedPresets?: string[];
   _controllerOptions?: {
     slugField?: string;
@@ -74,8 +82,8 @@ interface ExtendedResourceConfig<TDoc = AnyRecord> extends ResourceConfig<TDoc> 
   };
   _hooks?: Array<{
     presetName: string;
-    operation: 'create' | 'update' | 'delete' | 'read' | 'list';
-    phase: 'before' | 'after';
+    operation: "create" | "update" | "delete" | "read" | "list";
+    phase: "before" | "after";
     handler: (ctx: AnyRecord) => unknown;
     priority?: number;
   }>;
@@ -88,19 +96,21 @@ interface ExtendedResourceConfig<TDoc = AnyRecord> extends ResourceConfig<TDoc> 
  * The adapter provides both repository and schema metadata.
  */
 export function defineResource<TDoc = AnyRecord>(
-  config: ResourceConfig<TDoc>
+  config: ResourceConfig<TDoc>,
 ): ResourceDefinition<TDoc> {
   // Fail-fast validation
   if (!config.skipValidation) {
-    assertValidConfig(config as ResourceConfig<AnyRecord>, { skipControllerCheck: true });
+    assertValidConfig(config as ResourceConfig<AnyRecord>, {
+      skipControllerCheck: true,
+    });
 
     // Validate permissions are PermissionCheck functions
     if (config.permissions) {
       for (const [key, value] of Object.entries(config.permissions)) {
-        if (value !== undefined && typeof value !== 'function') {
+        if (value !== undefined && typeof value !== "function") {
           throw new Error(
             `[Arc] Resource '${config.name}': permissions.${key} must be a PermissionCheck function.\n` +
-            `Use allowPublic(), requireAuth(), or requireRoles(['role']) from @classytic/arc/permissions.`
+              `Use allowPublic(), requireAuth(), or requireRoles(['role']) from @classytic/arc/permissions.`,
           );
         }
       }
@@ -108,18 +118,18 @@ export function defineResource<TDoc = AnyRecord>(
 
     // Validate additionalRoutes
     for (const route of config.additionalRoutes ?? []) {
-      if (typeof route.permissions !== 'function') {
+      if (typeof route.permissions !== "function") {
         throw new Error(
           `[Arc] Resource '${config.name}' route ${route.method} ${route.path}: ` +
-          `permissions is required and must be a PermissionCheck function.\n` +
-          `Use allowPublic() or requireAuth() from @classytic/arc/permissions.`
+            `permissions is required and must be a PermissionCheck function.\n` +
+            `Use allowPublic() or requireAuth() from @classytic/arc/permissions.`,
         );
       }
-      if (typeof route.wrapHandler !== 'boolean') {
+      if (typeof route.wrapHandler !== "boolean") {
         throw new Error(
           `[Arc] Resource '${config.name}' route ${route.method} ${route.path}: ` +
-          `wrapHandler is required.\n` +
-          `Set true for ControllerHandler (context object) or false for FastifyHandler (req, reply).`
+            `wrapHandler is required.\n` +
+            `Set true for ControllerHandler (context object) or false for FastifyHandler (req, reply).`,
         );
       }
     }
@@ -129,62 +139,48 @@ export function defineResource<TDoc = AnyRecord>(
   const repository = config.adapter?.repository;
 
   // Check if any CRUD routes will actually be created
-  const crudRoutes = ['list', 'get', 'create', 'update', 'delete'] as const;
+  const crudRoutes = CRUD_OPERATIONS;
   const disabledRoutes = new Set(config.disabledRoutes ?? []);
-  const hasCrudRoutes = !config.disableDefaultRoutes && crudRoutes.some(route => !disabledRoutes.has(route));
+  const hasCrudRoutes =
+    !config.disableDefaultRoutes &&
+    crudRoutes.some((route) => !disabledRoutes.has(route));
 
-  // Create or use provided controller (only if CRUD routes are enabled)
-  let controller = config.controller;
-  if (!controller && hasCrudRoutes && repository) {
-    // Auto-create BaseController if CRUD routes exist
-    controller = new BaseController<TDoc>(repository, {
-      resourceName: config.name,
-      schemaOptions: config.schemaOptions,
-      queryParser: config.queryParser as QueryParserInterface | undefined,
-      tenantField: config.tenantField,
-    }) as IController<TDoc>;
-  }
-
-  // Track presets
+  // 2. Track presets
   const originalPresets = (config.presets ?? []).map((p) =>
-    typeof p === 'string' ? p : (p as { name: string }).name
+    typeof p === "string" ? p : (p as { name: string }).name,
   );
 
-  // Apply presets
-  const resolvedConfig = (config.presets?.length
-    ? applyPresets(config, config.presets)
-    : config) as ExtendedResourceConfig<TDoc>;
+  // 3. Apply presets FIRST before controller instantiation
+  const resolvedConfig = (
+    config.presets?.length ? applyPresets(config, config.presets) : config
+  ) as ExtendedResourceConfig<TDoc>;
 
   resolvedConfig._appliedPresets = originalPresets;
 
-  // Inject controller options
-  if (controller) {
-    const ctrl = controller as {
-      _setResourceOptions?: (options: {
-        schemaOptions?: RouteSchemaOptions;
-        presetFields?: { slugField?: string; parentField?: string };
-        resourceName?: string;
-        queryParser?: QueryParserInterface;
-        tenantField?: string;
-      }) => void;
-    };
-
-    if (typeof ctrl._setResourceOptions === 'function') {
-      ctrl._setResourceOptions({
-        schemaOptions: resolvedConfig.schemaOptions,
-        presetFields: resolvedConfig._controllerOptions
-          ? {
-              slugField: resolvedConfig._controllerOptions.slugField,
-              parentField: resolvedConfig._controllerOptions.parentField,
-            }
-          : undefined,
-        resourceName: resolvedConfig.name,
-        queryParser: resolvedConfig.queryParser as QueryParserInterface | undefined,
-        tenantField: resolvedConfig.tenantField,
-      });
-    }
+  // 4. Create or use provided controller using the full resolved config
+  let controller = resolvedConfig.controller;
+  if (!controller && hasCrudRoutes && repository) {
+    // Auto-create BaseController if CRUD routes exist
+    controller = new BaseController<TDoc>(repository, {
+      resourceName: resolvedConfig.name,
+      schemaOptions: resolvedConfig.schemaOptions,
+      queryParser: resolvedConfig.queryParser as
+        | QueryParserInterface
+        | undefined,
+      tenantField: resolvedConfig.tenantField,
+      idField: resolvedConfig.idField,
+      matchesFilter: config.adapter?.matchesFilter,
+      cache: resolvedConfig.cache,
+      presetFields: resolvedConfig._controllerOptions
+        ? {
+            slugField: resolvedConfig._controllerOptions.slugField,
+            parentField: resolvedConfig._controllerOptions.parentField,
+          }
+        : undefined,
+    }) as IController<TDoc>;
   }
 
+  // 5. Build definition
   const resource = new ResourceDefinition({
     ...resolvedConfig,
     adapter: config.adapter,
@@ -199,12 +195,12 @@ export function defineResource<TDoc = AnyRecord>(
   // Collect hooks from presets — stored on resource, registered at plugin time via fastify.arc.hooks
   if (resolvedConfig._hooks?.length) {
     resource._pendingHooks.push(
-      ...resolvedConfig._hooks.map(hook => ({
+      ...resolvedConfig._hooks.map((hook) => ({
         operation: hook.operation,
         phase: hook.phase,
         handler: hook.handler,
         priority: hook.priority ?? 10,
-      }))
+      })),
     );
   }
 
@@ -223,7 +219,9 @@ export function defineResource<TDoc = AnyRecord>(
       }
 
       // Auto-detect listQuery schema from queryParser (if not already provided)
-      const queryParser = config.queryParser as QueryParserInterface | undefined;
+      const queryParser = config.queryParser as
+        | QueryParserInterface
+        | undefined;
       if (!openApiSchemas?.listQuery && queryParser?.getQuerySchema) {
         const querySchema = queryParser.getQuerySchema();
         if (querySchema) {
@@ -232,6 +230,11 @@ export function defineResource<TDoc = AnyRecord>(
             listQuery: querySchema as unknown as AnyRecord,
           };
         }
+      }
+
+      // Auto-convert Zod schemas to JSON Schema (no-op for plain JSON Schema)
+      if (openApiSchemas) {
+        openApiSchemas = convertOpenApiSchemas(openApiSchemas);
       }
 
       // Store registry metadata for lazy registration when toPlugin() is called
@@ -247,7 +250,9 @@ export function defineResource<TDoc = AnyRecord>(
   return resource;
 }
 
-interface ResolvedResourceConfig<TDoc = AnyRecord> extends ResourceConfig<TDoc> {
+interface ResolvedResourceConfig<
+  TDoc = AnyRecord,
+> extends ResourceConfig<TDoc> {
   _appliedPresets?: string[];
   _controllerOptions?: {
     slugField?: string;
@@ -255,8 +260,8 @@ interface ResolvedResourceConfig<TDoc = AnyRecord> extends ResourceConfig<TDoc> 
     [key: string]: unknown;
   };
   _pendingHooks?: Array<{
-    operation: 'create' | 'update' | 'delete' | 'read' | 'list';
-    phase: 'before' | 'after';
+    operation: "create" | "update" | "delete" | "read" | "list";
+    phase: "before" | "after";
     handler: (ctx: AnyRecord) => unknown;
     priority: number;
   }>;
@@ -287,7 +292,6 @@ export class ResourceDefinition<TDoc = AnyRecord> {
   readonly middlewares: MiddlewareConfig;
   readonly disableDefaultRoutes: boolean;
   readonly disabledRoutes: CrudRouteKey[];
-  readonly organizationScoped: boolean;
 
   // Events
   readonly events: Record<string, EventDefinition>;
@@ -295,19 +299,25 @@ export class ResourceDefinition<TDoc = AnyRecord> {
   // Rate limiting
   readonly rateLimit?: RateLimitConfig | false;
 
+  // Update method
+  readonly updateMethod?: "PUT" | "PATCH" | "both";
+
   // Pipeline
-  readonly pipe?: import('../pipeline/types.js').PipelineConfig;
+  readonly pipe?: import("../pipeline/types.js").PipelineConfig;
 
   // Field-level permissions
-  readonly fields?: import('../permissions/fields.js').FieldPermissionMap;
+  readonly fields?: import("../permissions/fields.js").FieldPermissionMap;
+
+  // Cache config
+  readonly cache?: ResourceCacheConfig;
 
   // Presets tracking
   readonly _appliedPresets: string[];
 
   // Pending hooks from presets (registered at plugin time via fastify.arc.hooks)
   _pendingHooks: Array<{
-    operation: 'create' | 'update' | 'delete' | 'read' | 'list';
-    phase: 'before' | 'after';
+    operation: "create" | "update" | "delete" | "read" | "list";
+    phase: "before" | "after";
     handler: (ctx: AnyRecord) => unknown;
     priority: number;
   }>;
@@ -318,7 +328,7 @@ export class ResourceDefinition<TDoc = AnyRecord> {
   constructor(config: ResolvedResourceConfig<TDoc>) {
     // Identity
     this.name = config.name;
-    this.displayName = config.displayName ?? capitalize(config.name) + 's';
+    this.displayName = config.displayName ?? capitalize(config.name) + "s";
     this.tag = config.tag ?? this.displayName;
     this.prefix = config.prefix ?? `/${config.name}s`;
 
@@ -340,7 +350,6 @@ export class ResourceDefinition<TDoc = AnyRecord> {
     this.middlewares = config.middlewares ?? {};
     this.disableDefaultRoutes = config.disableDefaultRoutes ?? false;
     this.disabledRoutes = config.disabledRoutes ?? [];
-    this.organizationScoped = config.organizationScoped ?? false;
 
     // Events
     this.events = config.events ?? {};
@@ -348,11 +357,17 @@ export class ResourceDefinition<TDoc = AnyRecord> {
     // Rate limiting
     this.rateLimit = config.rateLimit;
 
+    // Update method
+    this.updateMethod = config.updateMethod;
+
     // Pipeline
     this.pipe = config.pipe;
 
     // Field-level permissions
     this.fields = config.fields;
+
+    // Cache config
+    this.cache = config.cache;
 
     // Presets tracking
     this._appliedPresets = config._appliedPresets ?? [];
@@ -366,31 +381,26 @@ export class ResourceDefinition<TDoc = AnyRecord> {
     return this.adapter?.repository;
   }
 
-  /** Get model from adapter (if available) */
-  get model(): Model<Document> | unknown | undefined {
-    if (!this.adapter) return undefined;
-    return this.adapter.getSchemaMetadata?.()
-      ? (this.adapter as { model?: Model<Document> }).model
-      : undefined;
-  }
-
   _validateControllerMethods(): void {
     const errors: string[] = [];
 
     // Check if any CRUD routes will actually be created
-    const crudRoutes = ['list', 'get', 'create', 'update', 'delete'] as const;
+    const crudRoutes = CRUD_OPERATIONS;
     const disabledRoutes = new Set(this.disabledRoutes ?? []);
-    const enabledCrudRoutes = crudRoutes.filter(route => !disabledRoutes.has(route));
-    const hasCrudRoutes = !this.disableDefaultRoutes && enabledCrudRoutes.length > 0;
+    const enabledCrudRoutes = crudRoutes.filter(
+      (route) => !disabledRoutes.has(route),
+    );
+    const hasCrudRoutes =
+      !this.disableDefaultRoutes && enabledCrudRoutes.length > 0;
 
     if (hasCrudRoutes) {
       if (!this.controller) {
-        errors.push('Controller is required when CRUD routes are enabled');
+        errors.push("Controller is required when CRUD routes are enabled");
       } else {
         const ctrl = this.controller as unknown as AnyRecord;
         // Only validate methods for enabled routes
         for (const method of enabledCrudRoutes) {
-          if (typeof ctrl[method] !== 'function') {
+          if (typeof ctrl[method] !== "function") {
             errors.push(`CRUD method '${method}' not found on controller`);
           }
         }
@@ -398,16 +408,16 @@ export class ResourceDefinition<TDoc = AnyRecord> {
     }
 
     for (const route of this.additionalRoutes) {
-      if (typeof route.handler === 'string') {
+      if (typeof route.handler === "string") {
         if (!this.controller) {
           errors.push(
-            `Route ${route.method} ${route.path}: string handler '${route.handler}' requires a controller`
+            `Route ${route.method} ${route.path}: string handler '${route.handler}' requires a controller`,
           );
         } else {
           const ctrl = this.controller as unknown as Record<string, unknown>;
-          if (typeof ctrl[route.handler] !== 'function') {
+          if (typeof ctrl[route.handler] !== "function") {
             errors.push(
-              `Route ${route.method} ${route.path}: handler '${route.handler}' not found`
+              `Route ${route.method} ${route.path}: handler '${route.handler}' not found`,
             );
           }
         }
@@ -418,10 +428,10 @@ export class ResourceDefinition<TDoc = AnyRecord> {
       const errorMsg = [
         `Resource '${this.name}' validation failed:`,
         ...errors.map((e) => `  - ${e}`),
-        '',
-        'Ensure controller implements IController<TDoc> interface.',
-        'For preset routes (softDelete, tree), add corresponding methods to controller.',
-      ].join('\n');
+        "",
+        "Ensure controller implements IController<TDoc> interface.",
+        "For preset routes (softDelete, tree), add corresponding methods to controller.",
+      ].join("\n");
 
       throw new Error(errorMsg);
     }
@@ -435,9 +445,14 @@ export class ResourceDefinition<TDoc = AnyRecord> {
       const arc = (fastify as FastifyWithDecorators).arc;
       if (arc?.registry && self._registryMeta) {
         try {
-          arc.registry.register(self as unknown as ResourceDefinition<AnyRecord>, self._registryMeta);
+          arc.registry.register(
+            self as unknown as ResourceDefinition<AnyRecord>,
+            self._registryMeta,
+          );
         } catch (err) {
-          fastify.log?.warn?.(`Failed to register resource '${self.name}' in registry: ${err instanceof Error ? err.message : err}`);
+          fastify.log?.warn?.(
+            `Failed to register resource '${self.name}' in registry: ${err instanceof Error ? err.message : err}`,
+          );
         }
       }
 
@@ -450,69 +465,108 @@ export class ResourceDefinition<TDoc = AnyRecord> {
               resource: self.name,
               operation: hook.operation,
               phase: hook.phase,
-              handler: hook.handler as (ctx: { resource: string; operation: string; phase: string; data?: AnyRecord }) => AnyRecord | Promise<AnyRecord>,
+              handler: hook.handler as (ctx: {
+                resource: string;
+                operation: string;
+                phase: string;
+                data?: AnyRecord;
+              }) => AnyRecord | Promise<AnyRecord>,
               priority: hook.priority,
             });
           }
         }
       }
 
-      await fastify.register(async (instance) => {
-        const typedInstance = instance as FastifyWithDecorators;
-
-        // Generate schemas from adapter metadata (if adapter exists)
-        let schemas: CrudSchemas | null = null;
-        if (self.adapter) {
-          const metadata = self.adapter.getSchemaMetadata?.();
-
-          if (metadata && typedInstance.generateSchemas) {
-            // Try to generate from model if available (Mongoose)
-            const model = (self.adapter as { model?: Model<Document> }).model;
-            const instanceWithSchemas = typedInstance as FastifyWithDecorators & { generateSchemas?: (model: Model<Document>, options?: RouteSchemaOptions) => CrudSchemas };
-            if (model && typeof instanceWithSchemas.generateSchemas === 'function') {
-              schemas = instanceWithSchemas.generateSchemas(model, self.schemaOptions);
-            }
-          }
-        }
-
-        // Merge custom schemas
-        if (self.customSchemas && Object.keys(self.customSchemas).length > 0) {
-          schemas = schemas ?? {};
-          for (const [op, customSchema] of Object.entries(self.customSchemas)) {
-            const key = op as keyof CrudSchemas;
-            schemas[key] = schemas[key]
-              ? deepMergeSchemas(schemas[key] as AnyRecord, customSchema as AnyRecord)
-              : customSchema;
-          }
-        }
-
-        // Pass routes as-is to createCrudRouter
-        // String handler resolution and wrapping is handled in createCrudRouter
-        const resolvedRoutes = self.additionalRoutes;
-
-        // Create CRUD routes
-        createCrudRouter(typedInstance, self.controller as unknown as CrudController<TDoc>, {
-          tag: self.tag,
-          schemas: schemas ?? undefined,
-          permissions: self.permissions,
-          middlewares: self.middlewares,
-          additionalRoutes: resolvedRoutes,
-          disableDefaultRoutes: self.disableDefaultRoutes,
-          disabledRoutes: self.disabledRoutes,
-          organizationScoped: self.organizationScoped,
-          resourceName: self.name,
-          schemaOptions: self.schemaOptions,
-          rateLimit: self.rateLimit,
-          pipe: self.pipe,
-          fields: self.fields,
-        });
-
-        if (self.events && Object.keys(self.events).length > 0) {
-          typedInstance.log?.debug?.(
-            `Resource '${self.name}' defined ${Object.keys(self.events).length} events`
+      // Register cross-resource cache invalidation rules
+      const registerRule = (fastify as unknown as Record<string, unknown>)
+        .registerCacheInvalidationRule;
+      if (self.cache?.invalidateOn && typeof registerRule === "function") {
+        for (const [pattern, tags] of Object.entries(self.cache.invalidateOn)) {
+          (registerRule as (rule: { pattern: string; tags: string[] }) => void)(
+            { pattern, tags },
           );
         }
-      }, { prefix: self.prefix });
+      }
+
+      await fastify.register(
+        async (instance) => {
+          const typedInstance = instance as FastifyWithDecorators;
+
+          // Schema generation is handled at define-time (see defineResource, lines ~222-230).
+          // No competing runtime generation here.
+          let schemas: CrudSchemas | null = null;
+
+          // Merge custom schemas (auto-convert Zod schemas within)
+          // Uses convertRouteSchema which properly handles nested response schemas
+          // e.g. { body: z.object(...), response: { 201: z.object(...) } }
+          if (
+            self.customSchemas &&
+            Object.keys(self.customSchemas).length > 0
+          ) {
+            schemas = schemas ?? {};
+            for (const [op, customSchema] of Object.entries(
+              self.customSchemas,
+            )) {
+              const key = op as keyof CrudSchemas;
+              const converted = convertRouteSchema(
+                customSchema as Record<string, unknown>,
+              );
+              schemas[key] = schemas[key]
+                ? deepMergeSchemas(
+                    schemas[key] as AnyRecord,
+                    converted as AnyRecord,
+                  )
+                : (converted as AnyRecord);
+            }
+          }
+
+          // Pass routes as-is to createCrudRouter
+          // String handler resolution and wrapping is handled in createCrudRouter
+          const resolvedRoutes = self.additionalRoutes;
+
+          // Create CRUD routes
+          createCrudRouter(
+            typedInstance,
+            self.controller as unknown as CrudController<TDoc>,
+            {
+              tag: self.tag,
+              schemas: schemas ?? undefined,
+              permissions: self.permissions,
+              middlewares: self.middlewares,
+              additionalRoutes: resolvedRoutes,
+              disableDefaultRoutes: self.disableDefaultRoutes,
+              disabledRoutes: self.disabledRoutes,
+              resourceName: self.name,
+              schemaOptions: self.schemaOptions,
+              rateLimit: self.rateLimit,
+              updateMethod: self.updateMethod,
+              pipe: self.pipe,
+              fields: self.fields,
+            },
+          );
+
+          if (self.events && Object.keys(self.events).length > 0) {
+            typedInstance.log?.debug?.(
+              `Resource '${self.name}' defined ${Object.keys(self.events).length} events`,
+            );
+          }
+        },
+        { prefix: self.prefix },
+      );
+
+      // Emit resource lifecycle event (best-effort)
+      if (hasEvents(fastify)) {
+        try {
+          await fastify.events.publish("arc.resource.registered", {
+            resource: self.name,
+            prefix: self.prefix,
+            presets: self._appliedPresets,
+            timestamp: new Date().toISOString(),
+          });
+        } catch {
+          /* lifecycle events are best-effort */
+        }
+      }
     };
   }
 
@@ -557,8 +611,14 @@ function deepMergeSchemas(base: AnyRecord, override: AnyRecord): AnyRecord {
 
   const result: AnyRecord = { ...base };
   for (const [key, value] of Object.entries(override)) {
-    if (value && typeof value === 'object' && !Array.isArray(value)) {
-      result[key] = deepMergeSchemas(result[key] as AnyRecord, value as AnyRecord);
+    if (Array.isArray(value) && Array.isArray(result[key])) {
+      // Merge arrays with deduplication (e.g., required, enum)
+      result[key] = [...new Set([...(result[key] as unknown[]), ...value])];
+    } else if (value && typeof value === "object" && !Array.isArray(value)) {
+      result[key] = deepMergeSchemas(
+        result[key] as AnyRecord,
+        value as AnyRecord,
+      );
     } else {
       result[key] = value;
     }
@@ -567,7 +627,7 @@ function deepMergeSchemas(base: AnyRecord, override: AnyRecord): AnyRecord {
 }
 
 function capitalize(str: string): string {
-  if (!str) return '';
+  if (!str) return "";
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
 

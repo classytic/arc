@@ -28,21 +28,10 @@ import { ResourceRegistry } from '../registry/ResourceRegistry.js';
 import { requestContext } from '../context/requestContext.js';
 import type { RequestStore } from '../context/requestContext.js';
 import type { ExternalOpenApiPaths } from '../docs/externalPaths.js';
-
-/**
- * Interface for fastify.events (from eventPlugin)
- * Defined here to avoid circular dependency with events module
- */
-interface EventsInterface {
-  publish: <T>(type: string, payload: T) => Promise<void>;
-}
-
-/**
- * Type guard to check if fastify has events plugin registered
- */
-function hasEvents(instance: FastifyInstance): instance is FastifyInstance & { events: EventsInterface } {
-  return 'events' in instance && instance.events != null && typeof (instance.events as EventsInterface).publish === 'function';
-}
+import type { RequestScope } from '../scope/types.js';
+import { getOrgId } from '../scope/types.js';
+import { MUTATION_OPERATIONS } from '../constants.js';
+import { hasEvents } from '../utils/typeGuards.js';
 
 export interface ArcCorePluginOptions {
   /** Enable event emission for CRUD operations (requires eventPlugin) */
@@ -51,11 +40,13 @@ export interface ArcCorePluginOptions {
   hookSystem?: HookSystem;
   /** Resource registry instance (for testing/custom setup) */
   registry?: ResourceRegistry;
-  /**
-   * @deprecated No longer used — global singletons have been removed.
-   * Hook systems are always instance-scoped. This option is ignored.
-   */
-  useGlobalSingletons?: boolean;
+}
+
+export interface PluginMeta {
+  name: string;
+  version?: string;
+  options?: Record<string, unknown>;
+  registeredAt: string;
 }
 
 export interface ArcCore {
@@ -67,6 +58,8 @@ export interface ArcCore {
   emitEvents: boolean;
   /** External OpenAPI paths contributed by auth adapters or third-party integrations */
   externalOpenApiPaths: ExternalOpenApiPaths[];
+  /** Registered plugins for introspection */
+  plugins: Map<string, PluginMeta>;
 }
 
 declare module 'fastify' {
@@ -95,6 +88,7 @@ const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
     registry: actualRegistry,
     emitEvents,
     externalOpenApiPaths: [],
+    plugins: new Map<string, PluginMeta>(),
   });
 
   // Request context via AsyncLocalStorage — zero-cost per request.
@@ -114,7 +108,9 @@ const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
     if (store) {
       const req = request as unknown as Record<string, unknown>;
       store.user = req.user as RequestStore['user'] ?? null;
-      store.organizationId = req.organizationId as string | undefined;
+      store.organizationId = request.scope?.kind === 'member' ? request.scope.organizationId
+        : request.scope?.kind === 'elevated' ? request.scope.organizationId
+        : undefined;
     }
     done();
   });
@@ -122,25 +118,36 @@ const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
   // Wire events into hooks if event plugin is available and events enabled
   if (emitEvents) {
     // Register after hooks that emit events
-    const eventOperations = ['create', 'update', 'delete'] as const;
+    const eventOperations = MUTATION_OPERATIONS;
 
     for (const operation of eventOperations) {
       actualHookSystem.after('*', operation, async (ctx) => {
         // Check if events plugin is registered using type guard
         if (!hasEvents(fastify)) return;
 
+        const store = requestContext.get();
         const eventType = `${ctx.resource}.${operation}d`; // e.g., 'product.created'
+        const userId = ctx.user?.id ?? ctx.user?._id;
+        const organizationId = ctx.context?._scope
+          ? getOrgId(ctx.context._scope as RequestScope)
+          : undefined;
         const payload = {
           resource: ctx.resource,
           operation: ctx.operation,
           data: ctx.result,
-          userId: ctx.user?.id ?? ctx.user?._id,
-          organizationId: ctx.context?.organizationId,
+          userId,
+          organizationId,
           timestamp: new Date().toISOString(),
         };
 
         try {
-          await fastify.events.publish(eventType, payload);
+          await fastify.events.publish(eventType, payload, {
+            correlationId: store?.requestId,
+            resource: ctx.resource,
+            resourceId: extractId(ctx.result),
+            userId: userId ? String(userId) : undefined,
+            organizationId,
+          });
         } catch (error) {
           // Log but don't fail the request
           fastify.log?.warn?.(
@@ -152,6 +159,20 @@ const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
     }
   }
 
+  // Emit arc.ready lifecycle event when all resources are registered
+  fastify.addHook('onReady', async () => {
+    if (!hasEvents(fastify)) return;
+    try {
+      await fastify.events.publish('arc.ready', {
+        resources: actualRegistry.getAll().length,
+        hooks: actualHookSystem.getAll().length,
+        timestamp: new Date().toISOString(),
+      });
+    } catch {
+      // Lifecycle events are best-effort
+    }
+  });
+
   // Cleanup on close
   fastify.addHook('onClose', async () => {
     actualHookSystem.clear();
@@ -160,6 +181,14 @@ const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
 
   fastify.log?.debug?.('Arc core plugin enabled (instance-scoped hooks & registry)');
 };
+
+/** Extract document ID from a result (handles Mongoose docs and plain objects) */
+function extractId(doc: unknown): string | undefined {
+  if (!doc || typeof doc !== 'object') return undefined;
+  const d = doc as Record<string, unknown>;
+  const rawId = d._id ?? d.id;
+  return rawId ? String(rawId) : undefined;
+}
 
 export default fp(arcCorePlugin, {
   name: 'arc-core',

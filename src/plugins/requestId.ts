@@ -55,9 +55,13 @@ const requestIdPlugin: FastifyPluginAsync<RequestIdOptions> = async (
   // Assign request ID on each request
   fastify.addHook('onRequest', async (request) => {
     const incomingId = request.headers[header];
-    const requestId = typeof incomingId === 'string' && incomingId.trim()
-      ? incomingId.trim()
-      : generator();
+    // Sanitize incoming ID: max 128 chars, alphanumeric + dashes/underscores/dots only.
+    // Rejects crafted values that could pollute logs or headers.
+    const sanitized = typeof incomingId === 'string' ? incomingId.trim() : '';
+    const isValid = sanitized.length > 0
+      && sanitized.length <= 128
+      && /^[\w.:-]+$/.test(sanitized);
+    const requestId = isValid ? sanitized : generator();
 
     // Set on request object (Fastify's native id)
     (request as { id: string }).id = requestId;

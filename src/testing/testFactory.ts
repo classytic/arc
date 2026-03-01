@@ -51,7 +51,7 @@ export interface TestAppResult {
  *
  *   beforeAll(async () => {
  *     testApp = await createTestApp({
- *       auth: { jwt: { secret: 'test-secret' } },
+ *       auth: { type: 'jwt', jwt: { secret: 'test-secret' } },
  *     });
  *   });
  *
@@ -72,7 +72,7 @@ export interface TestAppResult {
  * @example Using external MongoDB
  * ```typescript
  * const testApp = await createTestApp({
- *   auth: { jwt: { secret: 'test-secret' } },
+ *   auth: { type: 'jwt', jwt: { secret: 'test-secret' } },
  *   useInMemoryDb: false,
  *   mongoUri: 'mongodb://localhost:27017/test-db',
  * });
@@ -81,7 +81,7 @@ export interface TestAppResult {
  * @example Accessing MongoDB URI for model connections
  * ```typescript
  * const testApp = await createTestApp({
- *   auth: { jwt: { secret: 'test-secret' } },
+ *   auth: { type: 'jwt', jwt: { secret: 'test-secret' } },
  * });
  * await mongoose.connect(testApp.mongoUri); // Connect your models
  * ```
@@ -93,7 +93,7 @@ export async function createTestApp(
   const { useInMemoryDb = true, mongoUri: providedMongoUri, ...appOptions } = options;
 
   // Default auth config for tests
-  const defaultAuth = { jwt: { secret: 'test-secret-32-chars-minimum-len' } };
+  const defaultAuth = { type: 'jwt' as const, jwt: { secret: 'test-secret-32-chars-minimum-len' } };
 
   let inMemoryDb: InMemoryDatabase | null = null;
   let mongoUri: string | undefined = providedMongoUri;
@@ -177,8 +177,11 @@ export class TestRequestBuilder {
   private body?: any;
   private query?: Record<string, any>;
   private headers: Record<string, string> = {};
+  private app: FastifyInstance;
 
-  constructor(private app: FastifyInstance) {}
+  constructor(app: FastifyInstance) {
+    this.app = app;
+  }
 
   get(url: string) {
     this.method = 'GET';
@@ -225,10 +228,19 @@ export class TestRequestBuilder {
     return this;
   }
 
-  withAuth(user: any) {
-    // Mock JWT token (for testing with @fastify/jwt)
-    const token = this.app.jwt?.sign?.(user) || 'mock-token';
-    this.headers['Authorization'] = `Bearer ${token}`;
+  withAuth(userOrHeaders: Record<string, unknown>) {
+    if ('authorization' in userOrHeaders || 'Authorization' in userOrHeaders) {
+      // Pre-built headers (Better Auth tokens, external auth)
+      for (const [key, value] of Object.entries(userOrHeaders)) {
+        if (typeof value === 'string') {
+          this.headers[key] = value;
+        }
+      }
+    } else {
+      // JWT payload — sign with app's JWT plugin
+      const token = this.app.jwt?.sign?.(userOrHeaders) || 'mock-token';
+      this.headers['Authorization'] = `Bearer ${token}`;
+    }
     return this;
   }
 
@@ -336,8 +348,11 @@ export function createSnapshotMatcher() {
  */
 export class TestDataLoader {
   private data: Map<string, any[]> = new Map();
+  private app: FastifyInstance;
 
-  constructor(private app: FastifyInstance) {}
+  constructor(app: FastifyInstance) {
+    this.app = app;
+  }
 
   /**
    * Load test data into database

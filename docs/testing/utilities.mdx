@@ -1,0 +1,289 @@
+# Utilities
+
+Lower-level testing utilities: app factory, request builder, mocks, and database helpers.
+
+```typescript
+import {
+  createTestApp,
+  createMinimalTestApp,
+  TestRequestBuilder,
+  request,
+  createTestAuth,
+  createMockRepository,
+  createMockUser,
+  createMockRequest,
+  createMockReply,
+  createMockController,
+  InMemoryDatabase,
+  TestDatabase,
+} from '@classytic/arc/testing';
+```
+
+## Test App Factory
+
+### createTestApp
+
+Creates a Fastify app with Arc's full plugin stack and an in-memory MongoDB.
+
+```typescript
+import { createTestApp, type TestAppResult } from '@classytic/arc/testing';
+
+let testApp: TestAppResult;
+
+beforeAll(async () => {
+  testApp = await createTestApp({
+    auth: { type: 'jwt', jwt: { secret: 'test-secret-32-chars-minimum-len' } },
+  });
+});
+
+afterAll(async () => {
+  await testApp.close(); // Cleans up DB and app
+});
+
+// Use in tests:
+const res = await testApp.app.inject({
+  method: 'GET',
+  url: '/health',
+});
+```
+
+**Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `useInMemoryDb` | `true` | Use `mongodb-memory-server` for faster tests |
+| `mongoUri` | — | External MongoDB URI (if `useInMemoryDb: false`) |
+| `auth` | JWT | Auth configuration (any Arc auth type) |
+| `logger` | `false` | Disable logging in tests |
+
+**Defaults applied**: `preset: 'testing'`, `helmet: false`, `cors: false`, `rateLimit: false`, `underPressure: false`.
+
+### createMinimalTestApp
+
+Creates a bare Fastify instance without Arc plugins. Use for unit tests that don't need the full stack.
+
+```typescript
+const app = createMinimalTestApp();
+app.get('/test', async () => ({ ok: true }));
+await app.ready();
+
+const res = await app.inject({ method: 'GET', url: '/test' });
+expect(res.json()).toEqual({ ok: true });
+```
+
+## Request Builder
+
+Fluent API for building test requests:
+
+```typescript
+import { request } from '@classytic/arc/testing';
+
+const res = await request(app)
+  .get('/api/products')
+  .withAuth({ id: '1', roles: ['admin'] }) // JWT payload or pre-built headers
+  .withQuery({ page: 1, limit: 10 })
+  .send();
+
+expect(res.statusCode).toBe(200);
+```
+
+### Methods
+
+```typescript
+const builder = new TestRequestBuilder(app);
+
+builder.get('/url')          // GET request
+builder.post('/url')         // POST request
+builder.put('/url')          // PUT request
+builder.patch('/url')        // PATCH request
+builder.delete('/url')       // DELETE request
+builder.withBody(payload)    // Set request body
+builder.withQuery(params)    // Set query parameters
+builder.withHeader(k, v)     // Set single header
+builder.withContentType(t)   // Set Content-Type
+builder.withAuth(userOrHeaders)  // Set auth (JWT payload or pre-built headers)
+builder.send()               // Execute and return response
+```
+
+### withAuth — JWT and Better Auth
+
+`withAuth` auto-detects the auth type:
+
+```typescript
+// JWT — signs payload with app's JWT plugin
+builder.withAuth({ id: '1', roles: ['admin'] });
+
+// Better Auth / pre-built headers — passes through directly
+builder.withAuth({
+  authorization: 'Bearer token...',
+  'x-organization-id': 'org123',
+});
+```
+
+## Test Auth (JWT)
+
+Generate and verify JWT tokens in tests:
+
+```typescript
+import { createTestAuth } from '@classytic/arc/testing';
+
+const auth = createTestAuth(app);
+const token = auth.generateToken({ id: '1', email: 'test@test.com' });
+const decoded = auth.decodeToken(token);
+const verified = await auth.verifyToken(token);
+```
+
+## Mock Factories
+
+### createMockRepository
+
+```typescript
+import { createMockRepository } from '@classytic/arc/testing';
+
+const repo = createMockRepository({
+  getById: vi.fn().mockResolvedValue({ _id: '1', name: 'Test' }),
+  create: vi.fn().mockImplementation((data) =>
+    Promise.resolve({ _id: 'new-id', ...data })
+  ),
+});
+
+// All CRUD methods are pre-mocked:
+// getAll, getById, create, update, delete
+// Also includes preset methods: getBySlug, getDeleted, restore, getTree, getChildren
+```
+
+### createMockUser
+
+```typescript
+import { createMockUser } from '@classytic/arc/testing';
+
+const user = createMockUser({
+  roles: ['admin'],
+  organizationId: 'org123',
+});
+```
+
+### createMockRequest / createMockReply
+
+```typescript
+import { createMockRequest, createMockReply } from '@classytic/arc/testing';
+
+const req = createMockRequest({
+  user: { id: '1', roles: ['admin'] },
+  params: { id: '123' },
+  body: { name: 'Test' },
+});
+
+const reply = createMockReply();
+```
+
+### createMockController
+
+```typescript
+import { createMockController } from '@classytic/arc/testing';
+
+const controller = createMockController({
+  list: vi.fn().mockResolvedValue({ success: true, data: [] }),
+});
+```
+
+## Database Helpers
+
+### InMemoryDatabase
+
+Wrapper around `mongodb-memory-server` for fast isolated tests:
+
+```typescript
+import { InMemoryDatabase } from '@classytic/arc/testing';
+
+const db = new InMemoryDatabase();
+const uri = await db.start();
+
+// Connect mongoose
+await mongoose.connect(uri);
+
+// ... run tests ...
+
+// Cleanup
+await mongoose.disconnect();
+await db.stop();
+```
+
+### TestDatabase
+
+Higher-level database manager with auto-cleanup:
+
+```typescript
+import { TestDatabase } from '@classytic/arc/testing';
+
+const db = new TestDatabase('my-test-db');
+const connection = await db.connect();
+
+// Clear all collections between tests
+await db.clear();
+
+// Drop database and disconnect
+await db.disconnect();
+```
+
+### withTestDb
+
+Lifecycle helper that connects/disconnects automatically:
+
+```typescript
+import { withTestDb } from '@classytic/arc/testing';
+
+withTestDb('test-db', (connection) => {
+  // Tests run with an active connection
+  it('should create document', async () => {
+    // ...
+  });
+});
+```
+
+## Config Test Suite
+
+Test resource configuration without a running app or database:
+
+```typescript
+import { createConfigTestSuite } from '@classytic/arc/testing';
+import productResource from './product.resource.js';
+
+// Generates tests for field permissions, pipeline, events, and permission config
+createConfigTestSuite(productResource);
+```
+
+Tests generated:
+- **Field permissions** — hidden, visibleTo, writableBy, redactFor
+- **Pipeline** — step types, names, handlers, operations
+- **Events** — handler functions, names, schemas
+- **Permission config** — each operation's permission is a function
+
+## Test File Generator
+
+Scaffold a new test file for a resource:
+
+```typescript
+import { generateTestFile } from '@classytic/arc/testing';
+
+const content = generateTestFile('product', {
+  presets: ['softDelete'],
+  modulePath: './modules/catalog',
+});
+// Returns complete test file content as a string
+```
+
+## Async Helpers
+
+```typescript
+import { waitFor, createSpy, createTestTimer } from '@classytic/arc/testing';
+
+// Wait for a condition
+await waitFor(() => queue.length > 0, { timeout: 5000 });
+
+// Create a spy function
+const spy = createSpy();
+
+// Create a controllable timer
+const timer = createTestTimer();
+```

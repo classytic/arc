@@ -30,7 +30,7 @@ export type {
 } from './betterAuth.js';
 
 // Better Auth OpenAPI extractor
-export { extractBetterAuthOpenApi, zodLikeToJsonSchema } from './betterAuthOpenApi.js';
+export { extractBetterAuthOpenApi } from './betterAuthOpenApi.js';
 export type { BetterAuthOpenApiOptions } from './betterAuthOpenApi.js';
 
 // Session Manager

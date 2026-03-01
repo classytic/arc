@@ -28,11 +28,13 @@
  * }
  */
 
-export enum CircuitState {
-  CLOSED = 'CLOSED',
-  OPEN = 'OPEN',
-  HALF_OPEN = 'HALF_OPEN',
-}
+export const CircuitState = {
+  CLOSED: 'CLOSED',
+  OPEN: 'OPEN',
+  HALF_OPEN: 'HALF_OPEN',
+} as const;
+
+export type CircuitState = (typeof CircuitState)[keyof typeof CircuitState];
 
 export interface CircuitBreakerOptions {
   /**
@@ -91,12 +93,15 @@ export interface CircuitBreakerStats {
 }
 
 export class CircuitBreakerError extends Error {
+  state: CircuitState;
+
   constructor(
     message: string,
-    public state: CircuitState
+    state: CircuitState
   ) {
     super(message);
     this.name = 'CircuitBreakerError';
+    this.state = state;
   }
 }
 
@@ -118,10 +123,13 @@ export class CircuitBreaker<T extends (...args: any[]) => Promise<any>> {
   private readonly onError?: (error: Error) => void;
   private readonly name: string;
 
+  private readonly fn: T;
+
   constructor(
-    private readonly fn: T,
+    fn: T,
     options: CircuitBreakerOptions = {}
   ) {
+    this.fn = fn;
     this.failureThreshold = options.failureThreshold ?? 5;
     this.resetTimeout = options.resetTimeout ?? 60000;
     this.timeout = options.timeout ?? 10000;
@@ -400,6 +408,9 @@ export class CircuitBreakerRegistry {
 }
 
 /**
- * Global circuit breaker registry
+ * Create a new CircuitBreakerRegistry instance.
+ * Use this instead of a global singleton — attach to fastify.arc or pass explicitly.
  */
-export const circuitBreakerRegistry = new CircuitBreakerRegistry();
+export function createCircuitBreakerRegistry(): CircuitBreakerRegistry {
+  return new CircuitBreakerRegistry();
+}

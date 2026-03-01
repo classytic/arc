@@ -48,7 +48,7 @@ describe('Event Emission', () => {
         name: 'Test Product',
       }, {
         user: { id: 'user-1', name: 'Test User' },
-        context: { organizationId: 'org-1' },
+        context: { _scope: { kind: 'member', organizationId: 'org-1', orgRoles: [] } },
       });
 
       // Wait for async event processing

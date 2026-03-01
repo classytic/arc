@@ -112,7 +112,7 @@ describe('RBAC Permissions E2E', () => {
 
     app = await createApp({
       preset: 'development',
-      auth: { jwt: { secret: JWT_SECRET } },
+      auth: { type: 'jwt', jwt: { secret: JWT_SECRET } },
       logger: false,
       helmet: false,
       rateLimit: false,

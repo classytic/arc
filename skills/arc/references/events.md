@@ -14,25 +14,61 @@ Domain event pub/sub with pluggable transports. Auto-emits events on CRUD operat
 
 ## Setup
 
+The `createApp()` factory auto-registers `eventPlugin` — no manual registration needed:
+
+```typescript
+import { createApp } from '@classytic/arc/factory';
+
+// Development (in-memory, default — zero config)
+const app = await createApp({ preset: 'development' });
+// app.events is ready to use
+
+// Production (Redis transport, with retry)
+import { RedisEventTransport } from '@classytic/arc/events/redis';
+
+const app = await createApp({
+  stores: { events: new RedisEventTransport(redis) },
+  arcPlugins: {
+    events: {
+      logEvents: true,
+      failOpen: true,            // default: suppress transport failures
+      retry: { maxRetries: 3, backoffMs: 1000 },
+    },
+  },
+});
+
+// Disable event plugin entirely
+const app = await createApp({ arcPlugins: { events: false } });
+```
+
+**Manual registration** (for apps not using `createApp`):
+
 ```typescript
 import { eventPlugin } from '@classytic/arc/events';
 
-// Development (in-memory, default)
-await fastify.register(eventPlugin);
+await fastify.register(eventPlugin);  // Memory transport
 
-// Production (Redis Pub/Sub)
+// Redis Pub/Sub
 import { RedisEventTransport } from '@classytic/arc/events/redis';
 await fastify.register(eventPlugin, {
-  transport: new RedisEventTransport({ client: redisClient }),
+  transport: new RedisEventTransport(redisClient, { channel: 'arc-events' }),
   logEvents: true,
 });
 
-// Production (Redis Streams — ordered, persistent, consumer groups)
+// Redis Streams (ordered, persistent, consumer groups)
 import { RedisStreamTransport } from '@classytic/arc/events/redis-stream';
 await fastify.register(eventPlugin, {
-  transport: new RedisStreamTransport({ client: redisClient }),
+  transport: new RedisStreamTransport(redisClient, {
+    stream: 'arc:events',
+    group: 'api-service',
+    consumer: 'worker-1',
+  }),
 });
 ```
+
+`failOpen` behavior:
+- `true` (default): publish/subscribe/close transport errors are logged and suppressed.
+- `false`: transport errors are thrown to caller.
 
 ## Auto-Emitted Events
 
@@ -56,7 +92,7 @@ await fastify.events.publish('order.created', {
   total: 99.99,
 }, {
   userId: request.user._id,
-  organizationId: request.organizationId,
+  organizationId: getOrgId(request.scope),
   correlationId: request.id,
 });
 
@@ -143,8 +179,7 @@ import type { EventLogger } from '@classytic/arc/events';
 
 // Use Fastify's logger
 await fastify.register(eventPlugin, {
-  transport: new RedisEventTransport({
-    client: redisClient,
+  transport: new RedisEventTransport(redisClient, {
     logger: fastify.log,    // pino logger
   }),
 });
@@ -166,6 +201,10 @@ const retried = withRetry(handler, { maxRetries: 3, logger: fastify.log });
 | `withRetry()` | `retry.ts` | `RetryOptions.logger` |
 | `RedisEventTransport` | `transports/redis.ts` | `RedisEventTransportOptions.logger` |
 | `RedisStreamTransport` | `transports/redis-stream.ts` | `RedisStreamTransportOptions.logger` |
+
+## QueryCache Integration
+
+QueryCache uses events for auto-invalidation. When `arcPlugins.queryCache` is enabled, all CRUD events automatically bump resource versions, invalidating cached queries — zero config required.
 
 ## Retry Logic
 

@@ -84,6 +84,8 @@ export function wrapResponse(dataSchema: JsonSchema): JsonSchema {
       data: dataSchema,
     },
     required: ['success', 'data'],
+    // Allow extra fields (fieldPermissions, meta spreads, etc.)
+    additionalProperties: true,
   };
 }
 
@@ -113,6 +115,8 @@ export function listResponse(itemSchema: JsonSchema): JsonSchema {
       hasPrev: { type: 'boolean', example: false },
     },
     required: ['success', 'docs'],
+    // Allow extra fields (fieldPermissions, meta spreads, etc.)
+    additionalProperties: true,
   };
 }
 
@@ -147,6 +151,8 @@ export function mutationResponse(itemSchema: JsonSchema): JsonSchema {
       message: { type: 'string', example: 'Created successfully' },
     },
     required: ['success', 'data'],
+    // Allow extra fields (fieldPermissions, meta spreads, etc.)
+    additionalProperties: true,
   };
 }
 
@@ -163,6 +169,8 @@ export function deleteResponse(): JsonSchema {
       message: { type: 'string', example: 'Deleted successfully' },
     },
     required: ['success'],
+    // Allow extra fields (fieldPermissions, meta spreads, etc.)
+    additionalProperties: true,
   };
 }
 

@@ -1,0 +1,214 @@
+# Authentication
+
+Auth uses a **discriminated union** — pick a `type`:
+
+```typescript
+// Arc JWT
+auth: { type: 'jwt', jwt: { secret, expiresIn: '15m', refreshSecret, refreshExpiresIn: '7d' } }
+
+// Better Auth (recommended for SaaS with orgs)
+import { createBetterAuthAdapter } from '@classytic/arc/auth';
+auth: { type: 'betterAuth', betterAuth: createBetterAuthAdapter({ auth, orgContext: true }) }
+
+// Custom Fastify plugin (must decorate fastify.authenticate)
+auth: { type: 'custom', plugin: myAuthPlugin }
+
+// Custom function (decorates fastify.authenticate directly)
+auth: { type: 'authenticator', authenticate: async (req, reply) => { ... } }
+
+// Disabled
+auth: false
+```
+
+## Quick Start (JWT)
+
+```bash
+npm install @fastify/jwt@^10.0.0
+```
+
+```typescript
+import { createApp } from '@classytic/arc/factory';
+
+const app = await createApp({
+  preset: 'production',
+  auth: {
+    type: 'jwt',
+    jwt: {
+      secret: process.env.JWT_SECRET,  // Required, 32+ chars
+      expiresIn: '15m',
+    },
+  },
+});
+```
+
+> Arc uses `@fastify/jwt` v10 (fast-jwt internally). If you only use `secret` + `expiresIn`, no migration needed from v9.
+
+## Decorators
+
+| Decorator | Description |
+|-----------|-------------|
+| `fastify.authenticate` | Verify JWT/session, set `request.user`. Returns 401 on failure. |
+| `fastify.optionalAuthenticate` | Parse token if present, skip if absent. Never 401. |
+| `fastify.authorize(...roles)` | Check `user.roles`. `authorize('*')` = any auth user. |
+
+```typescript
+fastify.get('/protected', {
+  preHandler: [fastify.authenticate],
+  handler: async (request) => ({ user: request.user }),
+});
+
+fastify.post('/admin', {
+  preHandler: [fastify.authenticate, fastify.authorize('admin')],
+  handler: async (request) => { /* admins only */ },
+});
+```
+
+## Token Lifecycle (JWT)
+
+```typescript
+// Issue tokens
+const tokens = app.auth.issueTokens({ _id: user._id, email, roles });
+// Returns: { accessToken, refreshToken?, expiresIn, tokenType: 'Bearer' }
+
+// Verify refresh token (rejects access tokens)
+const decoded = app.auth.verifyRefreshToken(refreshToken);
+```
+
+## Permissions
+
+Use permission functions (not string arrays):
+
+```typescript
+import { defineResource, allowPublic, requireAuth, requireRoles } from '@classytic/arc';
+
+defineResource({
+  name: 'product',
+  permissions: {
+    list: allowPublic(),
+    get: allowPublic(),
+    create: requireRoles(['admin', 'editor']),
+    update: requireRoles(['admin']),
+    delete: requireRoles(['admin']),
+  },
+});
+```
+
+| Function | Description |
+|----------|-------------|
+| `allowPublic()` | No authentication required |
+| `requireAuth()` | Any authenticated user |
+| `requireRoles(['admin'])` | At least one role matches |
+| `requireOwnership('userId')` | Resource owner only (elevated bypasses) |
+| `denyAll(reason?)` | Always deny |
+| `allOf(p1, p2)` | AND — all must pass |
+| `anyOf(p1, p2)` | OR — any can pass |
+
+**Custom permission:**
+
+```typescript
+import type { PermissionCheck } from '@classytic/arc/permissions';
+
+const requirePremium = (): PermissionCheck => async (ctx) => {
+  if (!ctx.user) return { granted: false, reason: 'Unauthorized' };
+  return { granted: ctx.user.isPremium };
+};
+```
+
+See [Permissions](./permissions) for full reference.
+
+## Better Auth (SaaS)
+
+```typescript
+import { createBetterAuthAdapter } from '@classytic/arc/auth';
+
+const adapter = createBetterAuthAdapter({
+  auth: getAuth(),         // Your betterAuth() instance
+  basePath: '/api/auth',
+  orgContext: true,        // Auto-resolve org membership into request.scope
+});
+
+const app = await createApp({
+  auth: { type: 'betterAuth', betterAuth: adapter },
+});
+```
+
+**Org context flow** (when `orgContext: true`):
+1. Gets session via Better Auth
+2. Reads `session.activeOrganizationId`, or falls back to `x-organization-id` header (for API key auth)
+3. Looks up org membership
+4. Splits roles: `"admin,recruiter"` → `['admin', 'recruiter']`
+5. Sets `request.scope`: `{ kind: 'member', organizationId, orgRoles: string[] }`
+
+See [Org Module](./org) for multi-tenant setup.
+
+### API Key Auth
+
+When using Better Auth's `apiKey()` plugin, API keys create synthetic sessions that have **no org context**. Arc bridges this gap with the `x-organization-id` header:
+
+```
+x-api-key: ak_live_...           # Authentication
+x-organization-id: org_abc123    # Org context for tenant-scoped resources
+```
+
+Arc's adapter auto-detects the `apiKey()` plugin and generates matching OpenAPI security schemes. See [OpenAPI docs](../production-ops/openapi#external-paths--dynamic-security) for spec details.
+
+## Custom Auth
+
+### Custom Plugin
+
+```typescript
+const app = await createApp({
+  auth: { type: 'custom', plugin: myAuthPlugin },
+  // Plugin must decorate fastify.authenticate
+});
+```
+
+### Custom Function
+
+```typescript
+const app = await createApp({
+  auth: {
+    type: 'authenticator',
+    authenticate: async (req, reply) => {
+      const session = await validateSession(req);
+      if (!session) reply.code(401).send({ error: 'Unauthorized' });
+      req.user = session.user;
+    },
+  },
+});
+```
+
+### Disabled
+
+```typescript
+const app = await createApp({
+  auth: false,
+});
+```
+
+## Request Context
+
+Authenticated user available in controllers via `req.user`:
+
+```typescript
+class ProfileController extends BaseController {
+  async getProfile(req: IRequestContext): Promise<IControllerResponse> {
+    if (!req.user) return { success: false, error: 'Unauthorized', status: 401 };
+    const profile = await this.repository.findById(req.user._id);
+    return { success: true, data: profile };
+  }
+}
+```
+
+## Error Responses
+
+| Status | Condition |
+|--------|-----------|
+| 401 | Missing/invalid token |
+| 403 | Valid token but insufficient roles |
+
+## See Also
+
+- [Permissions](./permissions) — Advanced permission patterns
+- [Org Module](./org) — Multi-tenant organization scoping
+- [Core](./core) — Request context and controllers

@@ -1,0 +1,49 @@
+# Arc Documentation
+
+Arc docs are organized by persona to reduce cognitive load and speed up onboarding.
+
+## Getting Started (App Developers)
+
+Build and ship APIs with Arc conventions.
+
+- [Setup](./getting-started/setup)
+- [Core Concepts](./getting-started/core)
+- [Authentication](./getting-started/auth)
+- [Permissions](./getting-started/permissions)
+- [Presets](./getting-started/presets)
+- [Organization / Multi-tenant](./getting-started/org)
+- [Tree-Shaking](./getting-started/tree-shaking)
+
+## Framework Extension (Arc Contributors)
+
+Extend Arc internals and integration points.
+
+- [Hooks](./framework-extension/hooks)
+- [Custom Adapters](./framework-extension/custom-adapters)
+- [Registry](./framework-extension/registry)
+- [Handler Patterns](./framework-extension/handler-patterns)
+
+## Production Ops (Platform / SRE / Production Owners)
+
+Operate Arc safely at scale.
+
+- [Factory and App Bootstrap](./production-ops/factory)
+- [Plugins](./production-ops/plugins)
+- [Events](./production-ops/events)
+- [Idempotency](./production-ops/idempotency)
+- [Audit](./production-ops/audit)
+- [OpenAPI](./production-ops/openapi)
+
+## Ecosystem (Plugin Authors)
+
+Build and share extensions for Arc.
+
+- [Building Plugins](./ecosystem/building-plugins) — Complete guide to all 6 extension types
+- [Plugin Ideas](./ecosystem/plugin-ideas) — Community plugin ideas with architecture sketches
+
+## Key Features
+
+- **Auth**: Discriminated union — JWT, Better Auth, custom plugin, custom function, or disabled
+- **QueryCache**: TanStack Query-inspired server cache with SWR and auto-invalidation on mutations
+- **Runtime modes**: `memory` (zero config) or `distributed` (Redis stores)
+- Arc is database-agnostic. MongoKit is one adapter, not a requirement.

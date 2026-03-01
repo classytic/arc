@@ -1,0 +1,687 @@
+# Building Plugins for Arc
+
+Create plugins that extend Arc with new capabilities. Arc's plugin system is built on Fastify 5's plugin architecture with additional extension points for resources, pipelines, events, and adapters.
+
+---
+
+## Plugin Types
+
+Arc supports **6 types of extensions**. Pick the right one for your use case:
+
+| Type | What it does | Example |
+|------|-------------|---------|
+| **Fastify Plugin** | Adds global functionality (decorators, hooks, routes) | Rate limiter, metrics, CORS |
+| **Arc Plugin** (`createPlugin`) | Global setup + per-resource config (forRoot/forFeature) | Analytics, file upload, search |
+| **Preset** | Composable resource behavior (routes, middleware, hooks) | Soft delete, versioning, tagging |
+| **Pipeline Step** | Request-level guard/transform/interceptor | Input sanitizer, cache layer, timing |
+| **Event Transport** | Custom event delivery backend | Kafka, RabbitMQ, SQS, NATS |
+| **Database Adapter** | Connect any database/ORM to Arc | PostgreSQL, DynamoDB, Supabase |
+
+---
+
+## 1. Fastify Plugin (Simplest)
+
+For adding global functionality that doesn't need per-resource configuration.
+
+### Template
+
+```typescript
+import fp from 'fastify-plugin';
+import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
+
+// 1. Define your options
+export interface MyPluginOptions {
+  enabled?: boolean;
+  prefix?: string;
+}
+
+// 2. Declare type augmentations
+declare module 'fastify' {
+  interface FastifyInstance {
+    myService: MyService;
+  }
+  // Optional: extend request
+  interface FastifyRequest {
+    myProp?: string;
+  }
+}
+
+// 3. Implement the plugin
+const myPlugin: FastifyPluginAsync<MyPluginOptions> = async (
+  fastify: FastifyInstance,
+  opts: MyPluginOptions,
+) => {
+  const { enabled = true, prefix = '/my-plugin' } = opts;
+  if (!enabled) return;
+
+  // Decorate instance with your service
+  const service = new MyService(opts);
+  fastify.decorate('myService', service);
+
+  // Add request hooks
+  fastify.addHook('onRequest', async (request) => {
+    request.myProp = 'value';
+  });
+
+  // Add routes
+  fastify.get(`${prefix}/status`, async () => {
+    return { success: true, data: service.getStatus() };
+  });
+
+  // Cleanup on shutdown
+  fastify.addHook('onClose', async () => {
+    await service.close();
+  });
+};
+
+// 4. Export with fp() wrapper
+export default fp(myPlugin, {
+  name: 'arc-plugin-my-plugin',
+  fastify: '5.x',
+});
+```
+
+### Usage
+
+```typescript
+import myPlugin from 'arc-plugin-my-plugin';
+
+await fastify.register(myPlugin, { prefix: '/custom' });
+
+// Available everywhere
+fastify.myService.doSomething();
+```
+
+### Rules
+
+- Always wrap with `fp()` — ensures proper plugin encapsulation
+- Always specify `fastify: '5.x'` — Arc targets Fastify 5
+- Always add `onClose` hooks for cleanup — prevents resource leaks
+- Always use `declare module 'fastify'` for type augmentations — no `as any`
+- Use `decorateRequest('prop', null!)` for reference types — avoids Fastify 5's shared-reference bug
+
+---
+
+## 2. Arc Plugin (forRoot / forResource)
+
+For plugins that need **both global setup and per-resource configuration**. This is Arc's signature pattern — one plugin can wire into multiple resources.
+
+### Template
+
+```typescript
+import { createPlugin } from '@classytic/arc/plugins';
+
+// Define options
+interface AnalyticsRootOptions {
+  apiKey: string;
+  trackAll?: boolean;
+}
+
+interface AnalyticsResourceOptions {
+  trackEvents?: boolean;
+  customProperties?: string[];
+}
+
+// Create the plugin
+export const analytics = createPlugin<AnalyticsRootOptions, AnalyticsResourceOptions>(
+  'analytics',
+  {
+    // Called once — global setup
+    forRoot: async (fastify, opts) => {
+      const client = new AnalyticsClient(opts.apiKey);
+      fastify.decorate('analytics', client);
+
+      // Cleanup
+      fastify.addHook('onClose', async () => {
+        await client.flush();
+      });
+    },
+
+    // Called per resource — returns hooks/routes/middleware
+    forResource: (resourceConfig, opts) => {
+      if (!opts.trackEvents) return {};
+
+      return {
+        // Lifecycle hooks
+        hooks: [
+          {
+            operation: 'create',
+            phase: 'after',
+            priority: 100,
+            handler: async (ctx) => {
+              await ctx.context?.analytics?.track(`${ctx.resource}.created`, {
+                resourceId: ctx.result?._id,
+                userId: ctx.user?.id,
+              });
+            },
+          },
+          {
+            operation: 'delete',
+            phase: 'after',
+            priority: 100,
+            handler: async (ctx) => {
+              await ctx.context?.analytics?.track(`${ctx.resource}.deleted`, {
+                resourceId: ctx.resourceId,
+              });
+            },
+          },
+        ],
+
+        // Additional routes
+        additionalRoutes: [
+          {
+            method: 'GET',
+            path: '/analytics',
+            handler: 'getAnalytics',
+            permissions: 'list',
+          },
+        ],
+      };
+    },
+  },
+);
+```
+
+### Usage
+
+```typescript
+import { analytics } from 'arc-plugin-analytics';
+
+// Step 1: Register globally
+await app.register(analytics.forRoot({ apiKey: 'ak_xxx' }));
+
+// Step 2: Apply to resources
+const productResource = defineResource({
+  name: 'product',
+  adapter: productAdapter,
+  ...analytics.forResource({ trackEvents: true }),
+});
+
+const orderResource = defineResource({
+  name: 'order',
+  adapter: orderAdapter,
+  ...analytics.forResource({
+    trackEvents: true,
+    customProperties: ['total', 'currency'],
+  }),
+});
+```
+
+### When to Use forRoot/forResource vs Plain Plugin
+
+| Scenario | Use |
+|----------|-----|
+| Global middleware (rate limit, CORS) | Plain Fastify plugin |
+| Per-resource behavior (analytics per resource, file uploads per resource) | `createPlugin` |
+| Composable resource pattern (soft delete, tagging) | Preset |
+
+---
+
+## 3. Preset (Composable Resource Behavior)
+
+For **reusable patterns** that add routes, middleware, and hooks to any resource with a single line.
+
+### Template
+
+```typescript
+import { registerPreset } from '@classytic/arc/presets';
+import type { PresetResult } from '@classytic/arc/presets';
+
+// Define options
+interface VersioningOptions {
+  versionField?: string;
+  maxVersions?: number;
+}
+
+// Create the preset
+function versioningPreset(options: VersioningOptions = {}): PresetResult {
+  const { versionField = 'version', maxVersions = 50 } = options;
+
+  return {
+    name: 'versioning',
+
+    // Additional routes
+    additionalRoutes: (permissions) => [
+      {
+        method: 'GET',
+        path: '/:id/versions',
+        handler: 'getVersions',
+        permissions: permissions.get,
+        wrapHandler: true,
+      },
+      {
+        method: 'POST',
+        path: '/:id/revert/:versionId',
+        handler: 'revertToVersion',
+        permissions: permissions.update,
+        wrapHandler: true,
+      },
+    ],
+
+    // Per-operation middleware
+    middlewares: {
+      update: [
+        async (request, reply) => {
+          // Auto-increment version before update
+          const body = request.body as Record<string, unknown>;
+          body[versionField] = (body[versionField] as number ?? 0) + 1;
+        },
+      ],
+    },
+
+    // Controller options
+    controllerOptions: { versionField, maxVersions },
+  };
+}
+
+// Register globally
+registerPreset('versioning', versioningPreset);
+
+// Export for direct use
+export { versioningPreset };
+```
+
+### Controller Interface
+
+```typescript
+export interface IVersioningController {
+  getVersions(req: IRequestContext): Promise<IControllerResponse>;
+  revertToVersion(req: IRequestContext): Promise<IControllerResponse>;
+}
+```
+
+### Usage
+
+```typescript
+import 'arc-preset-versioning'; // Registers the preset
+
+defineResource({
+  name: 'document',
+  presets: [
+    { name: 'versioning', maxVersions: 100 },
+  ],
+  permissions: {
+    list: requireAuth(),
+    get: requireAuth(),
+    create: requireAuth(),
+    update: requireAuth(),
+    delete: requireRoles(['admin']),
+    // Preset routes
+    getVersions: requireAuth(),
+    revertToVersion: requireRoles(['editor', 'admin']),
+  },
+});
+```
+
+---
+
+## 4. Pipeline Step (Request Middleware)
+
+For **request-level logic** — validation, transformation, caching, timing.
+
+### Guard (Boolean Gate)
+
+```typescript
+import { guard } from '@classytic/arc/pipeline';
+
+// Block suspended users
+export const requireActiveUser = guard('requireActiveUser', (ctx) => {
+  if (ctx.user?.suspended) {
+    throw new ForbiddenError('Account suspended');
+  }
+  return true;
+});
+
+// Only allow during business hours
+export const businessHoursOnly = guard('businessHoursOnly', {
+  operations: ['create', 'update', 'delete'],
+  handler: (ctx) => {
+    const hour = new Date().getHours();
+    if (hour < 9 || hour > 17) {
+      throw new ForbiddenError('Operations only available during business hours (9-17)');
+    }
+    return true;
+  },
+});
+```
+
+### Transform (Mutate Request)
+
+```typescript
+import { transform } from '@classytic/arc/pipeline';
+
+// Auto-generate slug from name
+export const autoSlug = transform('autoSlug', {
+  operations: ['create', 'update'],
+  handler: (ctx) => {
+    if (ctx.body?.name && !ctx.body?.slug) {
+      ctx.body.slug = ctx.body.name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '');
+    }
+  },
+});
+
+// Sanitize HTML input
+export const sanitizeHtml = transform('sanitizeHtml', {
+  operations: ['create', 'update'],
+  handler: (ctx) => {
+    if (ctx.body?.content) {
+      ctx.body.content = sanitize(ctx.body.content);
+    }
+  },
+});
+```
+
+### Interceptor (Wrap Handler)
+
+```typescript
+import { intercept } from '@classytic/arc/pipeline';
+
+// Response caching
+export const cacheResponse = intercept('cacheResponse', {
+  operations: ['list', 'get'],
+  handler: async (ctx, next) => {
+    const key = `${ctx.resource}:${ctx.operation}:${JSON.stringify(ctx.query)}`;
+    const cached = await redis.get(key);
+    if (cached) return JSON.parse(cached);
+
+    const result = await next();
+    await redis.setex(key, 60, JSON.stringify(result));
+    return result;
+  },
+});
+
+// Performance timing
+export const timing = intercept('timing', async (ctx, next) => {
+  const start = performance.now();
+  const result = await next();
+  const duration = Math.round(performance.now() - start);
+  result.meta = { ...result.meta, durationMs: duration };
+  return result;
+});
+
+// Retry with backoff
+export const retryOnConflict = intercept('retryOnConflict', {
+  operations: ['update'],
+  handler: async (ctx, next) => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await next();
+      } catch (err) {
+        if ((err as any).code !== 'CONFLICT' || attempt === 2) throw err;
+        await new Promise((r) => setTimeout(r, 100 * (attempt + 1)));
+      }
+    }
+    return next();
+  },
+});
+```
+
+### Usage
+
+```typescript
+import { pipe, defineResource } from '@classytic/arc';
+import { autoSlug, sanitizeHtml, cacheResponse, timing } from 'arc-pipeline-utils';
+
+defineResource({
+  name: 'article',
+  adapter: articleAdapter,
+  pipe: pipe(autoSlug, sanitizeHtml, cacheResponse, timing),
+  // Or per-operation:
+  pipe: {
+    create: pipe(autoSlug, sanitizeHtml),
+    list: pipe(cacheResponse, timing),
+    get: pipe(cacheResponse, timing),
+  },
+});
+```
+
+---
+
+## 5. Event Transport
+
+For **custom event delivery backends** — connect Arc's event system to any message broker.
+
+### Template
+
+```typescript
+import type {
+  EventTransport,
+  DomainEvent,
+  EventHandler,
+  EventLogger,
+} from '@classytic/arc/events';
+
+export interface KafkaTransportOptions {
+  brokers: string[];
+  topic?: string;
+  groupId?: string;
+  logger?: EventLogger;
+}
+
+export class KafkaTransport implements EventTransport {
+  readonly name = 'kafka';
+
+  private producer: KafkaProducer;
+  private consumer: KafkaConsumer;
+  private subscriptions = new Map<string, () => void>();
+
+  constructor(private opts: KafkaTransportOptions) {
+    const kafka = new Kafka({ brokers: opts.brokers });
+    this.producer = kafka.producer();
+    this.consumer = kafka.consumer({ groupId: opts.groupId ?? 'arc-events' });
+  }
+
+  async publish(event: DomainEvent): Promise<void> {
+    await this.producer.connect();
+    await this.producer.send({
+      topic: this.opts.topic ?? 'arc-events',
+      messages: [{
+        key: event.type,
+        value: JSON.stringify(event),
+        headers: {
+          'event-type': event.type,
+          'correlation-id': event.meta?.correlationId ?? '',
+        },
+      }],
+    });
+  }
+
+  async subscribe(pattern: string, handler: EventHandler): Promise<() => void> {
+    await this.consumer.connect();
+    await this.consumer.subscribe({
+      topic: this.opts.topic ?? 'arc-events',
+      fromBeginning: false,
+    });
+
+    await this.consumer.run({
+      eachMessage: async ({ message }) => {
+        const event = JSON.parse(message.value!.toString()) as DomainEvent;
+        if (this.matchesPattern(event.type, pattern)) {
+          await handler(event);
+        }
+      },
+    });
+
+    const unsubscribe = () => {
+      this.consumer.disconnect();
+    };
+    return unsubscribe;
+  }
+
+  async close(): Promise<void> {
+    await this.producer.disconnect();
+    await this.consumer.disconnect();
+  }
+
+  private matchesPattern(type: string, pattern: string): boolean {
+    if (pattern === '*') return true;
+    if (pattern.endsWith('.*')) {
+      return type.startsWith(pattern.slice(0, -2));
+    }
+    return type === pattern;
+  }
+}
+```
+
+### Usage
+
+```typescript
+import { eventPlugin } from '@classytic/arc/events';
+import { KafkaTransport } from 'arc-transport-kafka';
+
+await fastify.register(eventPlugin, {
+  transport: new KafkaTransport({
+    brokers: ['kafka:9092'],
+    topic: 'my-app-events',
+    groupId: 'api-service',
+  }),
+});
+
+// Events auto-emitted by Arc resources, or publish manually:
+await fastify.events.publish('order.shipped', { orderId: '123' });
+```
+
+---
+
+## 6. Database Adapter
+
+For connecting **any database or ORM** to Arc. See the full guide at [custom-adapters](../framework-extension/custom-adapters).
+
+### Minimal Interface
+
+```typescript
+import type { DataAdapter, CrudRepository } from '@classytic/arc/adapters';
+
+export function createSupabaseAdapter(options: {
+  client: SupabaseClient;
+  table: string;
+}): DataAdapter {
+  return {
+    repository: {
+      async getAll(opts) {
+        const { data, count } = await options.client
+          .from(options.table)
+          .select('*', { count: 'exact' })
+          .range((opts.page - 1) * opts.limit, opts.page * opts.limit - 1);
+        return { docs: data, total: count, page: opts.page, limit: opts.limit };
+      },
+      async getById(id) {
+        const { data } = await options.client
+          .from(options.table).select('*').eq('id', id).single();
+        return data;
+      },
+      async create(data) {
+        const { data: created } = await options.client
+          .from(options.table).insert(data).select().single();
+        return created;
+      },
+      async update(id, data) {
+        const { data: updated } = await options.client
+          .from(options.table).update(data).eq('id', id).select().single();
+        return updated;
+      },
+      async delete(id) {
+        await options.client.from(options.table).delete().eq('id', id);
+        return true;
+      },
+    },
+  };
+}
+```
+
+---
+
+## Publishing Your Plugin
+
+### Package Naming
+
+| Type | Convention | Example |
+|------|-----------|---------|
+| Fastify plugin | `arc-plugin-{name}` | `arc-plugin-rate-limiter` |
+| Arc plugin | `arc-plugin-{name}` | `arc-plugin-analytics` |
+| Preset | `arc-preset-{name}` | `arc-preset-versioning` |
+| Pipeline | `arc-pipeline-{name}` | `arc-pipeline-sanitizer` |
+| Transport | `arc-transport-{name}` | `arc-transport-kafka` |
+| Adapter | `@arc-adapter/{name}` | `@arc-adapter/supabase` |
+
+### Package.json Template
+
+```json
+{
+  "name": "arc-plugin-my-plugin",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "peerDependencies": {
+    "@classytic/arc": "^1.0.0",
+    "fastify": "^5.0.0"
+  },
+  "keywords": ["arc", "arc-plugin", "fastify"]
+}
+```
+
+### Best Practices
+
+1. **Peer depend on Arc** — don't bundle it, let the user's version resolve
+2. **Export types** — always ship `.d.ts` files for TypeScript users
+3. **Use `declare module 'fastify'`** — for any decorators you add
+4. **Add `onClose` cleanup** — prevent memory leaks on shutdown
+5. **Validate options** — throw clear errors on missing required config
+6. **Document permissions** — if your preset adds routes, document the permission keys
+7. **Test with `@classytic/arc/testing`** — use the test harness for integration tests
+
+---
+
+## Testing Your Plugin
+
+```typescript
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import Fastify from 'fastify';
+import { createApp, defineResource } from '@classytic/arc';
+import myPlugin from 'arc-plugin-my-plugin';
+
+describe('arc-plugin-my-plugin', () => {
+  let app: ReturnType<typeof Fastify>;
+
+  beforeAll(async () => {
+    app = Fastify();
+    await app.register(myPlugin, { /* options */ });
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('decorates fastify instance', () => {
+    expect(app.myService).toBeDefined();
+  });
+
+  it('handles requests', async () => {
+    const res = await app.inject({ method: 'GET', url: '/my-plugin/status' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('cleans up on close', async () => {
+    await app.close();
+    // Verify cleanup happened
+  });
+});
+```
+
+---
+
+## Next Steps
+
+- Browse [Plugin Ideas](./plugin-ideas) for inspiration
+- Read [Custom Adapters](../framework-extension/custom-adapters) for database adapters
+- Read [Hooks](../framework-extension/hooks) for lifecycle extension
+- Read [Presets](../getting-started/presets) for composable behaviors

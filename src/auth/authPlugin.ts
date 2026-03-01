@@ -35,6 +35,8 @@ import type {
   AuthenticatorContext,
   TokenPair,
 } from '../types/index.js';
+import type { RequestScope } from '../scope/types.js';
+import { AUTHENTICATED_SCOPE } from '../scope/types.js';
 
 // ============================================================================
 // Fastify Type Extensions
@@ -91,7 +93,7 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
   fastify: FastifyInstance,
   opts: AuthPluginOptions = {}
 ) => {
-  const { jwt: jwtConfig, authenticate: appAuthenticator, onFailure, userProperty = 'user' } = opts;
+  const { jwt: jwtConfig, authenticate: appAuthenticator, onFailure, userProperty = 'user', exposeAuthErrors = false } = opts;
 
   // ========================================
   // 1. Setup JWT Infrastructure (Optional)
@@ -201,6 +203,22 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
       reqRecord.user = user;
       reqRecord[userProperty] = user;
 
+      // Resolve scope from user claims (skip if custom authenticator already set it)
+      if (!request.scope || request.scope.kind === 'public') {
+        const userRecord = user as Record<string, unknown>;
+        if (userRecord.organizationId) {
+          // User has org context — set member scope
+          request.scope = {
+            kind: 'member',
+            organizationId: String(userRecord.organizationId),
+            orgRoles: Array.isArray(userRecord.orgRoles) ? userRecord.orgRoles as string[] : [],
+          } satisfies RequestScope;
+        } else {
+          // No org context — authenticated only (can be upgraded via resolveOrgFromHeader hook)
+          request.scope = AUTHENTICATED_SCOPE;
+        }
+      }
+
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
 
@@ -210,9 +228,8 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
         return;
       }
 
-      // Default 401 response — hide internal details unless debug/trace logging
-      const isDev = request.server?.log?.level === 'debug' || request.server?.log?.level === 'trace';
-      const message = isDev ? error.message : 'Authentication required';
+      // Default 401 response — hide internal details unless explicitly opted-in
+      const message = exposeAuthErrors ? error.message : 'Authentication required';
 
       reply.code(401).send({
         success: false,
@@ -255,8 +272,22 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
         const reqRecord = request as unknown as Record<string, unknown>;
         reqRecord.user = user;
         reqRecord[userProperty] = user;
+
+        // Resolve scope from user claims (skip if custom authenticator already set it)
+        if (!request.scope || request.scope.kind === 'public') {
+          const userRecord = user as Record<string, unknown>;
+          if (userRecord.organizationId) {
+            request.scope = {
+              kind: 'member',
+              organizationId: String(userRecord.organizationId),
+              orgRoles: Array.isArray(userRecord.orgRoles) ? userRecord.orgRoles as string[] : [],
+            } satisfies RequestScope;
+          } else {
+            request.scope = AUTHENTICATED_SCOPE;
+          }
+        }
       }
-      // No user = continue as unauthenticated (no error)
+      // No user = continue as unauthenticated (scope stays 'public')
     } catch {
       // Silently ignore auth errors — invalid/expired token = treat as unauthenticated
     }

@@ -62,10 +62,6 @@ async function errorHandlerPluginFn(
     errorMap = {},
   } = options;
 
-  // Use includeStack as the single source of truth for detail exposure.
-  // When includeStack is false (production default), hide internal details.
-  const exposeDetails = includeStack;
-
   fastify.setErrorHandler(async (error: FastifyError | Error, request: FastifyRequest, reply: FastifyReply) => {
     // Call custom error handler if provided
     if (onError) {
@@ -99,6 +95,10 @@ async function errorHandlerPluginFn(
       }
       if (error.requestId) {
         response.requestId = error.requestId;
+      }
+      // Log cause chain for debugging (cause is now properly serialized via toJSON)
+      if (error.cause) {
+        request.log.error({ cause: error.cause }, 'Error cause chain');
       }
     }
     // Handle Fastify validation errors
@@ -135,7 +135,7 @@ async function errorHandlerPluginFn(
       const mongooseErrors = (error as { errors: Record<string, { message: string; path: string }> }).errors;
 
       // Security: Don't expose schema field names when details are hidden
-      if (exposeDetails) {
+      if (includeStack) {
         response.details = {
           errors: Object.entries(mongooseErrors).map(([field, err]) => ({
             field: err.path || field,
@@ -160,7 +160,7 @@ async function errorHandlerPluginFn(
       const keyValue = (error as { keyValue?: Record<string, unknown> }).keyValue;
 
       // Security: Don't expose schema field names when details are hidden
-      if (keyValue && exposeDetails) {
+      if (keyValue && includeStack) {
         response.details = { duplicateFields: Object.keys(keyValue) };
       }
     }

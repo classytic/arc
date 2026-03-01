@@ -23,6 +23,8 @@ export interface RedisClient {
   set(key: string, value: string, options?: { EX?: number; NX?: boolean }): Promise<string | null>;
   del(key: string | string[]): Promise<number>;
   exists(key: string | string[]): Promise<number>;
+  /** SCAN command — compatible with node-redis and ioredis varargs signatures. */
+  scan?(cursor: string | number, ...args: (string | number)[]): Promise<[string | number, string[]]>;
   quit?(): Promise<string>;
   disconnect?(): Promise<void>;
 }
@@ -119,6 +121,49 @@ export class RedisIdempotencyStore implements IdempotencyStore {
 
   async delete(key: string): Promise<void> {
     await this.client.del([this.resultKey(key), this.lockKey(key)]);
+  }
+
+  async deleteByPrefix(prefix: string): Promise<number> {
+    const resultKeys = await this.scanByPrefix(this.resultKey(prefix));
+    const lockKeys = await this.scanByPrefix(this.lockKey(prefix));
+    const allKeys = [...resultKeys, ...lockKeys];
+    if (allKeys.length === 0) return 0;
+    return this.client.del(allKeys);
+  }
+
+  async findByPrefix(prefix: string): Promise<IdempotencyResult | undefined> {
+    const keys = await this.scanByPrefix(this.resultKey(prefix));
+    for (const key of keys) {
+      const data = await this.client.get(key);
+      if (!data) continue;
+      try {
+        const result = JSON.parse(data) as IdempotencyResult;
+        if (new Date(result.expiresAt) < new Date()) continue;
+        return {
+          ...result,
+          createdAt: new Date(result.createdAt),
+          expiresAt: new Date(result.expiresAt),
+        };
+      } catch {
+        continue;
+      }
+    }
+    return undefined;
+  }
+
+  /** Scan Redis keys matching a prefix pattern. Falls back to empty if SCAN unavailable. */
+  private async scanByPrefix(prefix: string): Promise<string[]> {
+    if (!this.client.scan) return [];
+    const keys: string[] = [];
+    let cursor: string | number = '0';
+    do {
+      const [nextCursor, batch] = await this.client.scan(
+        cursor, 'MATCH', `${prefix}*`, 'COUNT', 100,
+      );
+      cursor = nextCursor;
+      keys.push(...batch);
+    } while (String(cursor) !== '0');
+    return keys;
   }
 
   async close(): Promise<void> {

@@ -6,16 +6,27 @@
  */
 
 import type { FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import type {
   IController,
   IControllerResponse,
   IRequestContext,
   RequestWithExtras,
+  RequestContext,
+  ArcInternalMetadata,
   PaginatedResult,
   AnyRecord,
 } from '../types/index.js';
+import type { ServerAccessor } from '../types/handlers.js';
 import type { FieldPermissionMap } from '../permissions/fields.js';
-import { applyFieldReadPermissions } from '../permissions/fields.js';
+import { applyFieldReadPermissions, resolveEffectiveRoles } from '../permissions/fields.js';
+import type { RequestScope } from '../scope/types.js';
+import { isElevated, isMember, getOrgId as getOrgIdFromScope, PUBLIC_SCOPE } from '../scope/types.js';
+
+/** Type guard for Mongoose-like documents with toObject() */
+function isMongooseDoc(obj: unknown): obj is { toObject(): Record<string, unknown> } {
+  return !!obj && typeof obj === 'object' && 'toObject' in obj && typeof (obj as Record<string, unknown>).toObject === 'function';
+}
 
 /**
  * Apply field mask to a single object
@@ -27,14 +38,17 @@ function applyFieldMaskToObject(
 ): AnyRecord | null | undefined {
   if (!obj || typeof obj !== 'object') return obj;
 
+  // Normalize Mongoose documents to plain objects
+  const plain = isMongooseDoc(obj) ? obj.toObject() as AnyRecord : obj;
+
   const { include, exclude } = fieldMask;
 
   // If include is specified, only include those fields
   if (include && include.length > 0) {
     const filtered: AnyRecord = {};
     for (const field of include) {
-      if (field in obj) {
-        filtered[field] = obj[field];
+      if (field in plain) {
+        filtered[field] = plain[field];
       }
     }
     return filtered;
@@ -42,14 +56,14 @@ function applyFieldMaskToObject(
 
   // If exclude is specified, remove those fields
   if (exclude && exclude.length > 0) {
-    const filtered: AnyRecord = { ...obj };
+    const filtered: AnyRecord = { ...plain };
     for (const field of exclude) {
       delete filtered[field];
     }
     return filtered;
   }
 
-  return obj;
+  return plain;
 }
 
 /**
@@ -81,6 +95,17 @@ function applyFieldMask<T>(
  */
 export function createRequestContext(req: FastifyRequest): IRequestContext {
   const reqWithExtras = req as RequestWithExtras;
+  const requestContext = (reqWithExtras.context ?? {}) as RequestContext;
+
+  // Build server accessor — exposes events, audit, and log without wrapHandler switching
+  // Use 'in' checks because these decorators are only present when their plugins are registered
+  const srv = req.server as unknown as Record<string, unknown> | undefined;
+  const serverAccessor: ServerAccessor = {
+    events: srv && 'events' in srv ? srv.events as ServerAccessor['events'] : undefined,
+    audit: srv && 'audit' in srv ? srv.audit as ServerAccessor['audit'] : undefined,
+    queryCache: srv && 'queryCache' in srv ? srv.queryCache as ServerAccessor['queryCache'] : undefined,
+    log: req.log,
+  };
 
   return {
     query: (reqWithExtras.query ?? {}) as Record<string, unknown>,
@@ -102,24 +127,75 @@ export function createRequestContext(req: FastifyRequest): IRequestContext {
           } as import('../permissions/types.js').UserBase;
         })()
       : null,
-    organizationId: reqWithExtras.organizationId,
-    teamId: reqWithExtras.teamId,
+    // Typed org/auth context — use this in controller overrides
+    context: requestContext,
+    // Internal metadata — includes context + Arc internals
     metadata: {
       ...reqWithExtras.context,
       // Include Arc metadata for hook execution
       arc: reqWithExtras.arc,
+      // Include scope for org ID and elevation checks
+      _scope: reqWithExtras.scope as RequestScope | undefined,
       // Include ownership check for access control
       _ownershipCheck: reqWithExtras._ownershipCheck,
-      // Merge policy filters - TRUSTED sources override user input
-      // Order matters: query (can be user-injected) FIRST, then trusted middleware LAST
-      _policyFilters: {
-        ...((reqWithExtras.query as AnyRecord)?._policyFilters as AnyRecord ?? {}),
-        ...(reqWithExtras._policyFilters ?? {}),
-      },
+      // Policy filters — ONLY from trusted middleware (req._policyFilters)
+      // SECURITY: Never merge user-supplied query._policyFilters — they are untrusted
+      _policyFilters: reqWithExtras._policyFilters ?? {},
       // Include logger for logging
       log: reqWithExtras.log,
     },
+    // Server accessor — publish events, log, and audit from any handler
+    server: serverAccessor,
   };
+}
+
+/**
+ * Get typed auth context from an IRequestContext.
+ * Use this in controller overrides to access request context.
+ *
+ * For org scope, use `getControllerScope(req)` instead.
+ */
+export function getControllerContext(req: IRequestContext): RequestContext {
+  return (req.context ?? req.metadata ?? {}) as RequestContext;
+}
+
+/**
+ * Get request scope from an IRequestContext.
+ * Returns the RequestScope set by auth adapters.
+ */
+export function getControllerScope(req: IRequestContext): RequestScope {
+  return (req.metadata as ArcInternalMetadata | undefined)?._scope ?? PUBLIC_SCOPE;
+}
+
+/**
+ * Compute per-field capability metadata for the current user.
+ * Only includes fields that have restrictions — unrestricted fields
+ * are omitted (frontend defaults to { readable: true, writable: true }).
+ */
+function computeFieldCapabilities(
+  fieldPerms: FieldPermissionMap,
+  effectiveRoles: string[],
+): Record<string, { readable: boolean; writable: boolean }> {
+  const caps: Record<string, { readable: boolean; writable: boolean }> = {};
+  for (const [field, perm] of Object.entries(fieldPerms)) {
+    let readable = true;
+    let writable = true;
+    switch (perm._type) {
+      case 'hidden':
+        readable = false;
+        writable = false;
+        break;
+      case 'visibleTo':
+        readable = perm.roles?.some((r) => effectiveRoles.includes(r)) ?? false;
+        break;
+      case 'writableBy':
+        writable = perm.roles?.some((r) => effectiveRoles.includes(r)) ?? false;
+        break;
+      // redactFor: field is readable (but redacted) and writable — no restriction flags
+    }
+    caps[field] = { readable, writable };
+  }
+  return caps;
 }
 
 /**
@@ -135,13 +211,34 @@ export function sendControllerResponse<T>(
 ): void {
   // Extract field mask from request if available
   const reqWithExtras = request as RequestWithExtras | undefined;
-  const fieldMask = reqWithExtras?.fieldMask;
-  const fieldMaskConfig = fieldMask ? { include: fieldMask } : undefined;
+  const fieldMaskConfig = reqWithExtras?.fieldMask;
 
   // Extract field-level permissions from arc metadata (set by arcDecorator)
   const arcMeta = (reqWithExtras as unknown as AnyRecord | undefined)?.arc as AnyRecord | undefined;
-  const fieldPerms = arcMeta?.fields as FieldPermissionMap | undefined;
-  const userRoles = (reqWithExtras?.user as AnyRecord | undefined)?.roles as string[] | undefined;
+  const scope = (reqWithExtras?.scope as RequestScope) ?? PUBLIC_SCOPE;
+
+  // Elevated scope (platform admin) skips field restrictions —
+  // consistent with requireOrgRole() and _sanitizeBody() bypass logic.
+  const fieldPerms = isElevated(scope)
+    ? undefined
+    : arcMeta?.fields as FieldPermissionMap | undefined;
+
+  // Only compute roles when field permissions require them
+  const effectiveRoles = fieldPerms
+    ? resolveEffectiveRoles(
+        ((reqWithExtras?.user as AnyRecord | undefined)?.roles ?? []) as string[],
+        isMember(scope) ? scope.orgRoles : [],
+      )
+    : [];
+
+  // Compute field capabilities metadata for frontend consumption (opt-in per resource)
+  // Named `fieldCaps` to avoid variable shadowing with createCrudRouter's `fieldPermissions`
+  const fieldCaps = fieldPerms
+    ? computeFieldCapabilities(fieldPerms, effectiveRoles)
+    : undefined;
+
+  // Only create permission applicator when needed
+  const hasFieldRestrictions = !!(fieldMaskConfig || fieldPerms);
 
   /** Apply both field mask and field-level permissions to a data item */
   const applyPermissions = <D>(data: D): D => {
@@ -149,19 +246,26 @@ export function sendControllerResponse<T>(
     if (fieldPerms && result && typeof result === 'object') {
       if (Array.isArray(result)) {
         result = result.map((item) =>
-          applyFieldReadPermissions(item as AnyRecord, fieldPerms, userRoles ?? []),
+          applyFieldReadPermissions(item as AnyRecord, fieldPerms, effectiveRoles),
         ) as D;
       } else {
-        result = applyFieldReadPermissions(result as AnyRecord, fieldPerms, userRoles ?? []) as D;
+        result = applyFieldReadPermissions(result as AnyRecord, fieldPerms, effectiveRoles) as D;
       }
     }
     return result;
   };
 
+  // Set custom response headers from controller
+  if (response.headers) {
+    for (const [key, value] of Object.entries(response.headers)) {
+      reply.header(key, value);
+    }
+  }
+
   // Handle paginated responses specially (flatten to Arc's ApiResponse format)
   if (response.success && response.data && typeof response.data === 'object' && 'docs' in response.data) {
     const paginatedData = response.data as unknown as PaginatedResult<unknown>;
-    const filteredDocs = applyPermissions(paginatedData.docs);
+    const filteredDocs = hasFieldRestrictions ? applyPermissions(paginatedData.docs) : paginatedData.docs;
 
     reply.code(response.status ?? 200).send({
       success: true,
@@ -173,19 +277,21 @@ export function sendControllerResponse<T>(
       hasNext: paginatedData.hasNext,
       hasPrev: paginatedData.hasPrev,
       ...(response.meta ?? {}),
+      ...(fieldCaps ? { fieldPermissions: fieldCaps } : {}),
     });
     return;
   }
 
   // Handle standard responses
-  const filteredData = applyPermissions(response.data);
+  const filteredData = hasFieldRestrictions ? applyPermissions(response.data) : response.data;
 
   reply.code(response.status ?? (response.success ? 200 : 400)).send({
     success: response.success,
     data: filteredData,
     error: response.error,
     details: response.details,
-    ...( response.meta ?? {}),
+    ...(response.meta ?? {}),
+    ...(fieldCaps ? { fieldPermissions: fieldCaps } : {}),
   });
 }
 

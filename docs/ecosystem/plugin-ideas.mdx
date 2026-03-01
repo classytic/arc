@@ -1,0 +1,386 @@
+# Plugin Ideas
+
+Community plugin ideas for the Arc ecosystem. Each entry includes the plugin type, difficulty, and a sketch of how it would work with Arc's extension points.
+
+**Want to build one?** See [Building Plugins](./building-plugins) for the full guide.
+
+---
+
+## Tier 1 — High Impact, Ready to Build
+
+### `arc-plugin-file-upload`
+**Type:** Arc Plugin (forRoot/forResource) | **Difficulty:** Medium
+
+S3-compatible file upload with presigned URLs, image processing, and per-resource configuration.
+
+```typescript
+const uploads = createPlugin('file-upload', {
+  forRoot: async (fastify, { s3Client, bucket }) => {
+    fastify.decorate('storage', new StorageService(s3Client, bucket));
+  },
+  forResource: (config, { fields, maxSize, allowedTypes }) => ({
+    additionalRoutes: [
+      { method: 'POST', path: '/:id/upload', handler: 'handleUpload' },
+      { method: 'GET', path: '/:id/files', handler: 'listFiles' },
+    ],
+    middlewares: {
+      create: [validateFileFields(fields, { maxSize, allowedTypes })],
+    },
+  }),
+});
+```
+
+---
+
+### `arc-plugin-search`
+**Type:** Arc Plugin (forRoot/forResource) | **Difficulty:** Medium
+
+Full-text search powered by Elasticsearch, Meilisearch, or Typesense. Auto-indexes resources on create/update/delete.
+
+```typescript
+const search = createPlugin('search', {
+  forRoot: async (fastify, { engine, url, apiKey }) => {
+    const client = createSearchClient(engine, { url, apiKey });
+    fastify.decorate('search', client);
+  },
+  forResource: (config, { searchableFields, filters }) => ({
+    hooks: [
+      { operation: 'create', phase: 'after', handler: (ctx) => index(ctx) },
+      { operation: 'update', phase: 'after', handler: (ctx) => index(ctx) },
+      { operation: 'delete', phase: 'after', handler: (ctx) => deindex(ctx) },
+    ],
+    additionalRoutes: [
+      { method: 'GET', path: '/search', handler: 'search' },
+    ],
+  }),
+});
+```
+
+---
+
+### `arc-preset-versioning`
+**Type:** Preset | **Difficulty:** Easy
+
+Track document versions with history, diff, and revert capabilities.
+
+```typescript
+presets: [{ name: 'versioning', maxVersions: 50 }]
+
+// Adds:
+// GET /:id/versions     → List version history
+// GET /:id/versions/:v  → Get specific version
+// POST /:id/revert/:v   → Revert to version
+```
+
+---
+
+### `arc-preset-tagging`
+**Type:** Preset | **Difficulty:** Easy
+
+Tag any resource with configurable taxonomy. Adds tag management routes and filtering.
+
+```typescript
+presets: [{ name: 'tagging', tagField: 'tags', maxTags: 20 }]
+
+// Adds:
+// GET /tags            → List all unique tags
+// POST /:id/tags       → Add tags
+// DELETE /:id/tags/:tag → Remove tag
+// GET ?tags=a,b         → Filter by tags
+```
+
+---
+
+### `arc-preset-comments`
+**Type:** Preset | **Difficulty:** Medium
+
+Add threaded comments to any resource.
+
+```typescript
+presets: ['comments']
+
+// Adds:
+// GET /:id/comments          → List comments
+// POST /:id/comments         → Add comment
+// PATCH /:id/comments/:cid   → Edit comment
+// DELETE /:id/comments/:cid  → Delete comment
+```
+
+---
+
+### `arc-plugin-webhooks`
+**Type:** Arc Plugin | **Difficulty:** Medium
+
+Register webhook endpoints and deliver events via HTTP with retry logic.
+
+```typescript
+await app.register(webhooks.forRoot({
+  signingSecret: 'whsec_xxx',
+  retries: 3,
+  storage: mongoConnection, // Store webhook registrations
+}));
+
+// Auto-delivers events to registered webhooks:
+// product.created → POST https://customer.com/webhook
+```
+
+---
+
+### `arc-transport-rabbitmq`
+**Type:** Event Transport | **Difficulty:** Medium
+
+RabbitMQ transport with exchange/queue routing and dead letter support.
+
+```typescript
+await fastify.register(eventPlugin, {
+  transport: new RabbitMQTransport({
+    url: 'amqp://localhost',
+    exchange: 'arc-events',
+    deadLetterExchange: 'arc-events-dlx',
+  }),
+});
+```
+
+---
+
+### `arc-transport-sqs`
+**Type:** Event Transport | **Difficulty:** Medium
+
+AWS SQS/SNS transport for serverless event processing.
+
+```typescript
+await fastify.register(eventPlugin, {
+  transport: new SQSTransport({
+    region: 'us-east-1',
+    queueUrl: 'https://sqs.us-east-1.amazonaws.com/123/arc-events',
+  }),
+});
+```
+
+---
+
+## Tier 2 — Medium Impact, Great for Contributors
+
+### `arc-plugin-notifications`
+**Type:** Arc Plugin | **Difficulty:** Medium
+
+Multi-channel notifications (email, SMS, push, in-app) triggered by resource events.
+
+```typescript
+const notifications = createPlugin('notifications', {
+  forRoot: async (fastify, { channels }) => {
+    // channels: { email: resendClient, sms: twilioClient, push: fcmClient }
+  },
+  forResource: (config, { templates }) => ({
+    hooks: [{
+      operation: 'create', phase: 'after',
+      handler: (ctx) => notify(templates.onCreate, ctx.result),
+    }],
+  }),
+});
+```
+
+---
+
+### `arc-preset-approval-workflow`
+**Type:** Preset | **Difficulty:** Medium
+
+Add approval/rejection workflow to any resource. Items go through draft → pending → approved/rejected states.
+
+```typescript
+presets: [{ name: 'approval', statusField: 'status', approverRoles: ['admin', 'reviewer'] }]
+
+// Adds:
+// POST /:id/submit    → Submit for approval
+// POST /:id/approve   → Approve (requires approver role)
+// POST /:id/reject    → Reject with reason
+// GET /pending        → List pending approvals
+```
+
+---
+
+### `arc-plugin-export`
+**Type:** Arc Plugin | **Difficulty:** Easy
+
+Export resource data to CSV, Excel, or PDF.
+
+```typescript
+// Adds per-resource:
+// GET /export?format=csv
+// GET /export?format=xlsx
+// GET /export?format=pdf
+```
+
+---
+
+### `arc-plugin-import`
+**Type:** Arc Plugin | **Difficulty:** Medium
+
+Bulk import from CSV/Excel with validation, error reporting, and rollback.
+
+```typescript
+// Adds per-resource:
+// POST /import         → Upload file, returns job ID
+// GET /import/:jobId   → Check import status
+```
+
+---
+
+### `arc-preset-favorites`
+**Type:** Preset | **Difficulty:** Easy
+
+Let users favorite/bookmark any resource.
+
+```typescript
+presets: ['favorites']
+
+// Adds:
+// POST /:id/favorite     → Toggle favorite
+// GET /favorites          → List user's favorites
+```
+
+---
+
+### `arc-pipeline-rate-limit`
+**Type:** Pipeline Step | **Difficulty:** Easy
+
+Per-resource, per-operation rate limiting as a pipeline guard.
+
+```typescript
+import { rateLimit } from 'arc-pipeline-rate-limit';
+
+defineResource({
+  name: 'api-key',
+  pipe: {
+    create: pipe(rateLimit({ max: 5, windowMs: 60_000 })),
+    list: pipe(rateLimit({ max: 100, windowMs: 60_000 })),
+  },
+});
+```
+
+---
+
+### `arc-pipeline-sanitizer`
+**Type:** Pipeline Step | **Difficulty:** Easy
+
+XSS protection and HTML sanitization as a transform.
+
+```typescript
+import { sanitize } from 'arc-pipeline-sanitizer';
+
+defineResource({
+  name: 'comment',
+  pipe: pipe(sanitize({ fields: ['body', 'title'], allowedTags: ['b', 'i', 'a'] })),
+});
+```
+
+---
+
+## Tier 3 — Advanced / Niche
+
+### `arc-adapter-dynamodb`
+**Type:** Database Adapter | **Difficulty:** Hard
+
+AWS DynamoDB adapter with single-table design support.
+
+---
+
+### `arc-adapter-supabase`
+**Type:** Database Adapter | **Difficulty:** Medium
+
+Supabase (PostgREST) adapter with Row Level Security integration.
+
+---
+
+### `arc-adapter-turso`
+**Type:** Database Adapter | **Difficulty:** Medium
+
+Turso/libSQL adapter for edge-deployed SQLite databases.
+
+---
+
+### `arc-transport-kafka`
+**Type:** Event Transport | **Difficulty:** Hard
+
+Apache Kafka transport with partitioning, consumer groups, and exactly-once semantics.
+
+---
+
+### `arc-transport-nats`
+**Type:** Event Transport | **Difficulty:** Medium
+
+NATS JetStream transport for lightweight, high-throughput messaging.
+
+---
+
+### `arc-plugin-ai-embeddings`
+**Type:** Arc Plugin | **Difficulty:** Medium
+
+Auto-generate vector embeddings on resource create/update for semantic search.
+
+```typescript
+const embeddings = createPlugin('ai-embeddings', {
+  forRoot: async (fastify, { provider, model }) => {
+    // OpenAI, Cohere, local model
+  },
+  forResource: (config, { fields, vectorStore }) => ({
+    hooks: [{
+      operation: 'create', phase: 'after',
+      handler: (ctx) => embedAndStore(ctx.result, fields, vectorStore),
+    }],
+    additionalRoutes: [
+      { method: 'POST', path: '/semantic-search', handler: 'semanticSearch' },
+    ],
+  }),
+});
+```
+
+---
+
+### `arc-plugin-realtime-sync`
+**Type:** Arc Plugin | **Difficulty:** Hard
+
+Real-time data sync via WebSocket/SSE. Auto-broadcasts changes to connected clients with room-based filtering.
+
+---
+
+### `arc-preset-localization`
+**Type:** Preset | **Difficulty:** Medium
+
+Multi-language support for any resource. Stores translations per field with locale-aware queries.
+
+```typescript
+presets: [{ name: 'localization', locales: ['en', 'es', 'fr'], defaultLocale: 'en' }]
+
+// Adds:
+// GET /:id?locale=es           → Get Spanish translation
+// PATCH /:id/translations/es   → Update Spanish translation
+// GET /:id/translations        → List all translations
+```
+
+---
+
+### `arc-preset-scheduling`
+**Type:** Preset | **Difficulty:** Medium
+
+Schedule resources for future publish/unpublish.
+
+```typescript
+presets: [{ name: 'scheduling', publishField: 'publishAt', unpublishField: 'unpublishAt' }]
+
+// Adds:
+// POST /:id/schedule   → Set publish/unpublish dates
+// GET /scheduled        → List scheduled items
+// Automatic publish/unpublish via cron job
+```
+
+---
+
+## Contributing
+
+1. Pick an idea (or propose your own)
+2. Read [Building Plugins](./building-plugins)
+3. Build and publish to npm
+4. Submit a PR to add it to the [Arc Plugin Registry](https://github.com/classytic/arc-plugins)
+
+All contributions welcome — from simple presets to full database adapters.

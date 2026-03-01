@@ -4,7 +4,7 @@
  * Adds tenant (organization) filtering and injection middlewares.
  */
 
-import type { FastifyReply } from 'fastify';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import type {
   AnyRecord,
   CrudRouteKey,
@@ -13,22 +13,13 @@ import type {
   RequestWithExtras,
   RouteHandler,
 } from '../types/index.js';
+import { DEFAULT_TENANT_FIELD } from '../constants.js';
+import type { RequestScope } from '../scope/types.js';
+import { isMember, isElevated, getOrgId, PUBLIC_SCOPE } from '../scope/types.js';
 
 export interface MultiTenantOptions {
   /** Field name in database (default: 'organizationId') */
   tenantField?: string;
-
-  /** Roles that bypass tenant isolation (default: ['superadmin']) */
-  bypassRoles?: string[];
-
-  /**
-   * Custom function to extract organizationId from request
-   * If not provided, tries in order:
-   * 1. request.context.organizationId
-   * 2. request.user.organizationId
-   * 3. request.user.organization
-   */
-  extractOrganizationId?: (request: RequestWithExtras) => string | null | undefined;
 
   /**
    * Routes that allow public access (no auth required)
@@ -43,47 +34,44 @@ export interface MultiTenantOptions {
   allowPublic?: CrudRouteKey[];
 }
 
-/**
- * Default organization ID extractor
- * Tries multiple sources in order of priority
- */
-function defaultExtractOrganizationId(request: RequestWithExtras): string | null | undefined {
-  // Priority 1: Explicit context (set by orgScopePlugin or custom middleware)
-  const context = request.context as { organizationId?: string } | undefined;
-  if (context?.organizationId) {
-    return context.organizationId;
-  }
-
-  // Priority 2: User's organizationId field
-  const user = request.user as any;
-  if (user?.organizationId) {
-    return user.organizationId as string;
-  }
-
-  // Priority 3: User's organization object (nested)
-  if (user?.organization) {
-    const org = user.organization as any;
-    return org._id || org.id || org;
-  }
-
-  return null;
+/** Read request.scope safely */
+function getScope(request: FastifyRequest): RequestScope {
+  return request.scope ?? PUBLIC_SCOPE;
 }
 
 /**
  * Create tenant filter middleware
- * Adds tenant filter to query for list/get operations
+ * Adds tenant filter to query for list/get operations.
+ * Reads `request.scope` for org context and elevation bypass.
  */
-function createTenantFilter(
-  tenantField: string,
-  bypassRoles: string[],
-  extractOrganizationId: (request: RequestWithExtras) => string | null | undefined
-): RouteHandler {
+function createTenantFilter(tenantField: string): RouteHandler {
   return async (request: RequestWithExtras, reply: FastifyReply): Promise<void> => {
-    const user = request.user;
+    const scope = getScope(request);
 
-    // SECURITY: Fail-closed - require authentication for multi-tenant routes
-    // Using multiTenant on public routes is a misconfiguration that can leak data
-    if (!user) {
+    // Elevated without org → no filter (admin viewing all)
+    // Elevated with org → filter by that org
+    if (isElevated(scope)) {
+      const orgId = getOrgId(scope);
+      if (orgId) {
+        request._policyFilters = {
+          ...(request._policyFilters ?? {}),
+          [tenantField]: orgId,
+        };
+      }
+      return;
+    }
+
+    // Member → filter by scope.organizationId
+    if (isMember(scope)) {
+      request._policyFilters = {
+        ...(request._policyFilters ?? {}),
+        [tenantField]: scope.organizationId,
+      };
+      return;
+    }
+
+    // authenticated / public → 403 (multi-tenant requires org context)
+    if (scope.kind === 'public') {
       reply.code(401).send({
         success: false,
         error: 'Unauthorized',
@@ -92,28 +80,12 @@ function createTenantFilter(
       return;
     }
 
-    // Bypass roles skip filter
-    const userWithRoles = user as { roles?: string[] };
-    if (userWithRoles.roles && bypassRoles.some((r) => userWithRoles.roles!.includes(r))) return;
-
-    // Extract organization ID using custom or default extractor
-    const orgId = extractOrganizationId(request);
-
-    // Fail-closed: Require orgId for non-bypass users
-    if (!orgId) {
-      reply.code(403).send({
-        success: false,
-        error: 'Forbidden',
-        message: 'Organization context required for this operation',
-      });
-      return;
-    }
-
-    request.query = request.query ?? {};
-    (request.query as AnyRecord)._policyFilters = {
-      ...((request.query as AnyRecord)._policyFilters ?? {}),
-      [tenantField]: orgId,
-    };
+    // authenticated but no org → 403
+    reply.code(403).send({
+      success: false,
+      error: 'Forbidden',
+      message: 'Organization context required for this operation',
+    });
   };
 }
 
@@ -123,56 +95,50 @@ function createTenantFilter(
  * No org context = allow through (public data)
  * Org context present = require auth and apply filter
  */
-function createFlexibleTenantFilter(
-  tenantField: string,
-  bypassRoles: string[],
-  extractOrganizationId: (request: RequestWithExtras) => string | null | undefined
-): RouteHandler {
+function createFlexibleTenantFilter(tenantField: string): RouteHandler {
   return async (request: RequestWithExtras, reply: FastifyReply): Promise<void> => {
-    const user = request.user;
-    const orgId = extractOrganizationId(request);
+    const scope = getScope(request);
 
-    // No org context - allow through (public data, no filtering)
-    if (!orgId) {
+    // Elevated without org → no filter (admin viewing all)
+    if (isElevated(scope)) {
+      const orgId = getOrgId(scope);
+      if (orgId) {
+        request._policyFilters = {
+          ...(request._policyFilters ?? {}),
+          [tenantField]: orgId,
+        };
+      }
       return;
     }
 
-    // Org context present - require authentication
-    if (!user) {
-      reply.code(401).send({
-        success: false,
-        error: 'Unauthorized',
-        message: 'Authentication required for organization-scoped data',
-      });
+    // Member → filter by scope.organizationId
+    if (isMember(scope)) {
+      request._policyFilters = {
+        ...(request._policyFilters ?? {}),
+        [tenantField]: scope.organizationId,
+      };
       return;
     }
 
-    // Bypass roles skip filter (superadmin sees all)
-    const userWithRoles = user as { roles?: string[] };
-    if (userWithRoles.roles && bypassRoles.some((r) => userWithRoles.roles!.includes(r))) {
-      return;
-    }
-
-    // Apply tenant filter
-    request.query = request.query ?? {};
-    (request.query as AnyRecord)._policyFilters = {
-      ...((request.query as AnyRecord)._policyFilters ?? {}),
-      [tenantField]: orgId,
-    };
+    // authenticated / public with no org context → allow through (public data)
+    return;
   };
 }
 
 /**
  * Create tenant injection middleware
- * Injects tenant ID into request body on create
+ * Injects tenant ID into request body on create.
+ * Reads `request.scope` for org context.
  */
-function createTenantInjection(
-  tenantField: string,
-  extractOrganizationId: (request: RequestWithExtras) => string | null | undefined
-): RouteHandler {
+function createTenantInjection(tenantField: string): RouteHandler {
   return async (request: RequestWithExtras, reply: FastifyReply): Promise<void> => {
-    // Extract organization ID using custom or default extractor
-    const orgId = extractOrganizationId(request);
+    const scope = getScope(request);
+    const orgId = getOrgId(scope);
+
+    // Elevated without org → skip injection (admin cross-org operation)
+    if (isElevated(scope) && !orgId) {
+      return;
+    }
 
     // Fail-closed: Require orgId to prevent orphaned data
     if (!orgId) {
@@ -192,16 +158,14 @@ function createTenantInjection(
 
 export function multiTenantPreset(options: MultiTenantOptions = {}): PresetResult {
   const {
-    tenantField = 'organizationId',
-    bypassRoles = ['superadmin'],
-    extractOrganizationId = defaultExtractOrganizationId,
+    tenantField = DEFAULT_TENANT_FIELD,
     allowPublic = [],
   } = options;
 
   // Create middleware variants
-  const strictTenantFilter = createTenantFilter(tenantField, bypassRoles, extractOrganizationId);
-  const flexibleTenantFilter = createFlexibleTenantFilter(tenantField, bypassRoles, extractOrganizationId);
-  const tenantInjection = createTenantInjection(tenantField, extractOrganizationId);
+  const strictTenantFilter = createTenantFilter(tenantField);
+  const flexibleTenantFilter = createFlexibleTenantFilter(tenantField);
+  const tenantInjection = createTenantInjection(tenantField);
 
   // Helper to select appropriate filter based on allowPublic
   const getFilter = (route: CrudRouteKey): RouteHandler =>
