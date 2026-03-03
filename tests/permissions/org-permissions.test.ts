@@ -41,7 +41,7 @@ function makeCtx(overrides: {
   }
 
   return {
-    user: overrides.user === undefined ? { id: 'u1', roles: [] } : overrides.user,
+    user: overrides.user === undefined ? { id: 'u1', role: [] } : overrides.user,
     request: req as any,
     resource: 'product',
     action: 'create',
@@ -61,7 +61,7 @@ describe('requireOrgMembership', () => {
   });
 
   it('denies when no active organization', () => {
-    const result = check(makeCtx({ user: { id: 'u1', roles: [] } }));
+    const result = check(makeCtx({ user: { id: 'u1', role: [] } }));
     expect(result).toEqual({ granted: false, reason: 'Organization membership required' });
   });
 
@@ -166,7 +166,7 @@ describe('requireOrgRole', () => {
     );
 
     // Global superadmin should pass via requireRoles
-    const result = await combined(makeCtx({ user: { id: 'u1', roles: ['superadmin'] } }));
+    const result = await combined(makeCtx({ user: { id: 'u1', role: ['superadmin'] } }));
     const norm1 = typeof result === 'boolean' ? { granted: result } : result;
     expect(norm1.granted).toBe(true);
 

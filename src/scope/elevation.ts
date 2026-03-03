@@ -32,6 +32,7 @@
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { RequestScope } from './types.js';
+import { getUserRoles } from '../permissions/types.js';
 import { arcLog } from '../logger/index.js';
 
 const log = arcLog('elevation');
@@ -112,7 +113,7 @@ const elevationPlugin: FastifyPluginAsync<ElevationOptions> = async (
       return;
     }
 
-    const userRoles = (user.roles ?? []) as string[];
+    const userRoles = getUserRoles(user);
     if (!platformRoles.some((r) => userRoles.includes(r))) {
       log.debug('Elevation rejected — insufficient roles', {
         userId: user.id ?? user._id,

@@ -49,7 +49,7 @@ const app = await createApp({
 |-----------|-------------|
 | `fastify.authenticate` | Verify JWT/session, set `request.user`. Returns 401 on failure. |
 | `fastify.optionalAuthenticate` | Parse token if present, skip if absent. Never 401. |
-| `fastify.authorize(...roles)` | Check `user.roles`. `authorize('*')` = any auth user. |
+| `fastify.authorize(...roles)` | Check `user.role`. `authorize('*')` = any auth user. |
 
 ```typescript
 fastify.get('/protected', {

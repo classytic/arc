@@ -47,7 +47,7 @@ describe('Auth Token Type Enforcement', () => {
     it('should embed type=access in access token', async () => {
       await createApp();
 
-      const tokens = app.auth.issueTokens({ id: 'user-1', roles: ['admin'] });
+      const tokens = app.auth.issueTokens({ id: 'user-1', role: ['admin'] });
       const decoded = app.auth.jwt!.decode<Record<string, unknown>>(tokens.accessToken);
 
       expect(decoded).not.toBeNull();
@@ -85,7 +85,7 @@ describe('Auth Token Type Enforcement', () => {
     it('should accept a valid access token', async () => {
       await createApp();
 
-      const tokens = app.auth.issueTokens({ id: 'user-1', roles: ['admin'] });
+      const tokens = app.auth.issueTokens({ id: 'user-1', role: ['admin'] });
 
       const res = await app.inject({
         method: 'GET',

@@ -41,7 +41,7 @@ describe('API Tests', () => {
   });
 
   test('POST /products (authenticated)', async () => {
-    const token = testApp.app.jwt.sign({ _id: 'user-1', roles: ['admin'] });
+    const token = testApp.app.jwt.sign({ _id: 'user-1', role: ['admin'] });
 
     const response = await testApp.app.inject({
       method: 'POST',
@@ -84,7 +84,7 @@ describe('Product API', () => {
     // Create
     const created = await harness.inject('POST', '/products', {
       body: { name: 'Widget', price: 10 },
-      auth: { _id: 'user-1', roles: ['admin'] },
+      auth: { _id: 'user-1', role: ['admin'] },
     });
     expect(created.statusCode).toBe(201);
 
@@ -95,13 +95,13 @@ describe('Product API', () => {
     // Update
     const updated = await harness.inject('PATCH', `/products/${created.json().data._id}`, {
       body: { price: 15 },
-      auth: { _id: 'user-1', roles: ['admin'] },
+      auth: { _id: 'user-1', role: ['admin'] },
     });
     expect(updated.json().data.price).toBe(15);
 
     // Delete
     const deleted = await harness.inject('DELETE', `/products/${created.json().data._id}`, {
-      auth: { _id: 'user-1', roles: ['admin'] },
+      auth: { _id: 'user-1', role: ['admin'] },
     });
     expect(deleted.statusCode).toBe(200);
   });

@@ -13,7 +13,7 @@
  * class MyPolicy implements PolicyEngine {
  *   can(user, operation, context) {
  *     return {
- *       allowed: user.roles.includes('admin'),
+ *       allowed: getUserRoles(user).includes('admin'),
  *       reason: 'Admin role required',
  *     };
  *   }
@@ -35,7 +35,7 @@
  *
  *   can(user, operation) {
  *     const allowedRoles = this.roles[operation] || [];
- *     const hasRole = user.roles.some(r => allowedRoles.includes(r));
+ *     const hasRole = getUserRoles(user).some(r => allowedRoles.includes(r));
  *     return {
  *       allowed: hasRole,
  *       reason: hasRole ? undefined : `Requires one of: ${allowedRoles.join(', ')}`,

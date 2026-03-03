@@ -26,7 +26,7 @@ describe('Security: Release Blockers', () => {
         user: {
           _id: 'user123',
           email: 'user@example.com',
-          roles: ['user'],
+          role: ['user'],
         },
         scope: { kind: 'authenticated' },
         query: {},
@@ -70,7 +70,7 @@ describe('Security: Release Blockers', () => {
       const request = {
         user: {
           _id: 'user123',
-          roles: ['user'],
+          role: ['user'],
         },
         scope: { kind: 'authenticated' },
         body: {
@@ -114,7 +114,7 @@ describe('Security: Release Blockers', () => {
       const request = {
         user: {
           _id: 'user123',
-          roles: ['user'],
+          role: ['user'],
         },
         scope: { kind: 'member', organizationId: 'org-abc', orgRoles: ['user'] },
         query: {},
@@ -144,7 +144,7 @@ describe('Security: Release Blockers', () => {
       const request = {
         user: {
           _id: 'admin123',
-          roles: ['superadmin'],
+          role: ['superadmin'],
         },
         scope: { kind: 'elevated', elevatedBy: 'admin123' },
         query: {},

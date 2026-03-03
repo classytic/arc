@@ -192,7 +192,7 @@ describe('BodySanitizer', () => {
         salary: { _type: 'writableBy' as const, roles: ['admin', 'hr'] },
       };
       const req = createReq({
-        user: { _id: 'user-1', roles: ['user'] },
+        user: { _id: 'user-1', role: ['user'] },
         metadata: {
           arc: { fields: fieldPerms },
           _scope: { kind: 'member' as const, organizationId: 'org-1', orgRoles: ['user'] },
@@ -212,7 +212,7 @@ describe('BodySanitizer', () => {
         salary: { _type: 'writableBy' as const, roles: ['admin', 'hr'] },
       };
       const req = createReq({
-        user: { _id: 'user-1', roles: ['admin'] },
+        user: { _id: 'user-1', role: ['admin'] },
         metadata: {
           arc: { fields: fieldPerms },
           _scope: { kind: 'member' as const, organizationId: 'org-1', orgRoles: ['admin'] },
@@ -232,7 +232,7 @@ describe('BodySanitizer', () => {
         department: { _type: 'writableBy' as const, roles: ['hr', 'admin'] },
       };
       const req = createReq({
-        user: { _id: 'user-1', roles: ['user'] },
+        user: { _id: 'user-1', role: ['user'] },
         metadata: {
           arc: { fields: fieldPerms },
           _scope: { kind: 'member' as const, organizationId: 'org-1', orgRoles: ['hr'] },
@@ -252,7 +252,7 @@ describe('BodySanitizer', () => {
         password: { _type: 'hidden' as const },
       };
       const req = createReq({
-        user: { _id: 'user-1', roles: ['admin'] },
+        user: { _id: 'user-1', role: ['admin'] },
         metadata: {
           arc: { fields: fieldPerms },
           _scope: { kind: 'member' as const, organizationId: 'org-1', orgRoles: ['admin'] },
@@ -279,7 +279,7 @@ describe('BodySanitizer', () => {
         internalNotes: { _type: 'writableBy' as const, roles: ['admin'] },
       };
       const req = createReq({
-        user: { _id: 'user-1', roles: ['superadmin'] },
+        user: { _id: 'user-1', role: ['superadmin'] },
         metadata: {
           arc: { fields: fieldPerms },
           _scope: { kind: 'elevated' as const, elevatedBy: 'admin' },
@@ -298,7 +298,7 @@ describe('BodySanitizer', () => {
     it('still strips system fields even for elevated scope', () => {
       const sanitizer = createSanitizer();
       const req = createReq({
-        user: { _id: 'user-1', roles: ['superadmin'] },
+        user: { _id: 'user-1', role: ['superadmin'] },
         metadata: {
           _scope: { kind: 'elevated' as const, elevatedBy: 'admin' },
         } as unknown as Record<string, unknown>,
@@ -320,7 +320,7 @@ describe('BodySanitizer', () => {
         },
       });
       const req = createReq({
-        user: { _id: 'user-1', roles: ['superadmin'] },
+        user: { _id: 'user-1', role: ['superadmin'] },
         metadata: {
           _scope: { kind: 'elevated' as const, elevatedBy: 'admin' },
         } as unknown as Record<string, unknown>,
@@ -353,7 +353,7 @@ describe('BodySanitizer', () => {
     it('sanitizes body without applying field permissions when no arc.fields', () => {
       const sanitizer = createSanitizer();
       const req = createReq({
-        user: { _id: 'user-1', roles: ['user'] },
+        user: { _id: 'user-1', role: ['user'] },
         metadata: {
           _scope: { kind: 'member' as const, organizationId: 'org-1', orgRoles: ['user'] },
         } as unknown as Record<string, unknown>,

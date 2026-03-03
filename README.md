@@ -326,11 +326,12 @@ import { tracingPlugin } from '@classytic/arc/plugins/tracing';
 ## CLI
 
 ```bash
-arc init my-api --mongokit --better-auth --ts   # Scaffold project
-arc generate resource product                    # Generate resource files
-arc docs ./openapi.json --entry ./dist/index.js  # Export OpenAPI
-arc introspect --entry ./dist/index.js           # Show resources
-arc doctor                                        # Health check
+npx @classytic/arc init my-api --mongokit --better-auth --ts   # Scaffold project
+npx @classytic/arc generate resource product                    # Generate resource files
+npx @classytic/arc describe ./dist/index.js                     # Resource metadata (JSON)
+npx @classytic/arc docs ./openapi.json --entry ./dist/index.js  # Export OpenAPI
+npx @classytic/arc introspect --entry ./dist/index.js           # Show resources
+npx @classytic/arc doctor                                        # Health check
 ```
 
 ## Subpath Imports

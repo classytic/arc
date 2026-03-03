@@ -221,6 +221,7 @@ function parseInitOptions(rawArgs) {
   const opts = {
     name: undefined,
     adapter: undefined,
+    auth: undefined,
     tenant: undefined,
     typescript: undefined,
     edge: undefined,

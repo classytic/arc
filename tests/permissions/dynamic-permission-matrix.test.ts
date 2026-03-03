@@ -27,7 +27,7 @@ function makeCtx(overrides: {
   }
 
   return {
-    user: overrides.user === undefined ? { id: 'u1', roles: [] } : overrides.user,
+    user: overrides.user === undefined ? { id: 'u1', role: [] } : overrides.user,
     request: req as any,
     resource: 'product',
     action: 'create',
@@ -115,7 +115,7 @@ describe('createDynamicPermissionMatrix', () => {
     const unauth = await check(makeCtx({ user: null }));
     expect(unauth).toEqual({ granted: false, reason: 'Authentication required' });
 
-    const noOrg = await check(makeCtx({ user: { id: 'u1', roles: [] } }));
+    const noOrg = await check(makeCtx({ user: { id: 'u1', role: [] } }));
     expect(noOrg).toEqual({ granted: false, reason: 'Organization membership required' });
 
     const noMembership = await check(makeCtx({ orgId: 'org1', orgRoles: [] }));
@@ -152,8 +152,8 @@ describe('createDynamicPermissionMatrix', () => {
     });
 
     const check = perms.canAction('product', 'create');
-    expect(await check(makeCtx({ orgId: 'orgA', orgRoles: ['admin'], user: { id: 'u1', roles: [] } }))).toBe(true);
-    expect(await check(makeCtx({ orgId: 'orgB', orgRoles: ['admin'], user: { id: 'u1', roles: [] } }))).toBe(true);
+    expect(await check(makeCtx({ orgId: 'orgA', orgRoles: ['admin'], user: { id: 'u1', role: [] } }))).toBe(true);
+    expect(await check(makeCtx({ orgId: 'orgB', orgRoles: ['admin'], user: { id: 'u1', role: [] } }))).toBe(true);
     expect(resolver).toHaveBeenCalledTimes(1);
   });
 

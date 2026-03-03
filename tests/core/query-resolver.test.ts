@@ -249,6 +249,52 @@ describe('QueryResolver', () => {
       expect(result.filters?.workspaceId).toBe('ws-1');
       expect(result.filters?.organizationId).toBeUndefined();
     });
+
+    it('skips org filter when tenantField is false (platform-universal)', () => {
+      const resolver = createResolver({ tenantField: false });
+      const req = createReq({
+        metadata: {
+          _scope: { kind: 'member', organizationId: 'org-1', orgRoles: ['admin'] },
+        } as unknown as Record<string, unknown>,
+      });
+
+      const result = resolver.resolve(req);
+
+      // No org filter applied — platform-universal
+      expect(result.filters?.organizationId).toBeUndefined();
+    });
+
+    it('still applies policy filters when tenantField is false', () => {
+      const resolver = createResolver({ tenantField: false });
+      const req = createReq({
+        metadata: {
+          _policyFilters: { status: 'active' },
+          _scope: { kind: 'member', organizationId: 'org-1', orgRoles: ['user'] },
+        } as unknown as Record<string, unknown>,
+      });
+
+      const result = resolver.resolve(req);
+
+      // Policy filters work, but org filter is skipped
+      expect(result.filters?.status).toBe('active');
+      expect(result.filters?.organizationId).toBeUndefined();
+    });
+
+    it('applies query filters normally when tenantField is false', () => {
+      const resolver = createResolver({ tenantField: false });
+      const req = createReq({
+        query: { status: 'pending', category: 'electronics' },
+        metadata: {
+          _scope: { kind: 'member', organizationId: 'org-1', orgRoles: [] },
+        } as unknown as Record<string, unknown>,
+      });
+
+      const result = resolver.resolve(req);
+
+      expect(result.filters?.status).toBe('pending');
+      expect(result.filters?.category).toBe('electronics');
+      expect(result.filters?.organizationId).toBeUndefined();
+    });
   });
 
   // --------------------------------------------------------------------------
@@ -445,7 +491,7 @@ describe('QueryResolver', () => {
   describe('user and context passthrough', () => {
     it('passes user through to query options', () => {
       const resolver = createResolver();
-      const user = { _id: 'user-1', email: 'test@example.com', roles: ['user'] };
+      const user = { _id: 'user-1', email: 'test@example.com', role: ['user'] };
       const req = createReq({ user });
 
       const result = resolver.resolve(req);

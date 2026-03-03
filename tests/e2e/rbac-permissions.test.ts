@@ -164,7 +164,7 @@ describe('RBAC Permissions E2E', () => {
 
     it('should allow unauthenticated get on articles (public read)', async () => {
       // First create an article (need auth for create)
-      const token = issueToken({ id: USER_1, roles: ['user'] });
+      const token = issueToken({ id: USER_1, role: ['user'] });
       const createRes = await app.inject({
         method: 'POST',
         url: '/articles',
@@ -196,7 +196,7 @@ describe('RBAC Permissions E2E', () => {
     });
 
     it('should allow authenticated create on articles', async () => {
-      const token = issueToken({ id: USER_2, roles: ['user'] });
+      const token = issueToken({ id: USER_2, role: ['user'] });
 
       const res = await app.inject({
         method: 'POST',
@@ -208,7 +208,7 @@ describe('RBAC Permissions E2E', () => {
     });
 
     it('should allow create regardless of role (just needs auth)', async () => {
-      const token = issueToken({ id: USER_3, roles: [] }); // No roles
+      const token = issueToken({ id: USER_3, role: [] }); // No roles
 
       const res = await app.inject({
         method: 'POST',
@@ -228,7 +228,7 @@ describe('RBAC Permissions E2E', () => {
     let articleId: string;
 
     beforeAll(async () => {
-      const token = issueToken({ id: USER_10, roles: ['user'] });
+      const token = issueToken({ id: USER_10, role: ['user'] });
       const res = await app.inject({
         method: 'POST',
         url: '/articles',
@@ -240,7 +240,7 @@ describe('RBAC Permissions E2E', () => {
     });
 
     it('should reject non-admin from deleting articles', async () => {
-      const token = issueToken({ id: USER_10, roles: ['user'] });
+      const token = issueToken({ id: USER_10, role: ['user'] });
 
       const res = await app.inject({
         method: 'DELETE',
@@ -251,7 +251,7 @@ describe('RBAC Permissions E2E', () => {
     });
 
     it('should allow admin to delete articles', async () => {
-      const token = issueToken({ id: ADMIN_1, roles: ['admin'] });
+      const token = issueToken({ id: ADMIN_1, role: ['admin'] });
 
       const res = await app.inject({
         method: 'DELETE',
@@ -278,7 +278,7 @@ describe('RBAC Permissions E2E', () => {
     let ownedArticleId: string;
 
     beforeAll(async () => {
-      const token = issueToken({ id: OWNER_ID, roles: ['user'] });
+      const token = issueToken({ id: OWNER_ID, role: ['user'] });
       const res = await app.inject({
         method: 'POST',
         url: '/articles',
@@ -290,7 +290,7 @@ describe('RBAC Permissions E2E', () => {
     });
 
     it('should allow admin to update any article', async () => {
-      const adminToken = issueToken({ id: ADMIN_99, roles: ['admin'] });
+      const adminToken = issueToken({ id: ADMIN_99, role: ['admin'] });
 
       const res = await app.inject({
         method: 'PATCH',
@@ -303,7 +303,7 @@ describe('RBAC Permissions E2E', () => {
     });
 
     it('should allow owner to update their own article', async () => {
-      const ownerToken = issueToken({ id: OWNER_ID, roles: ['user'] });
+      const ownerToken = issueToken({ id: OWNER_ID, role: ['user'] });
 
       const res = await app.inject({
         method: 'PATCH',
@@ -318,7 +318,7 @@ describe('RBAC Permissions E2E', () => {
     });
 
     it('should reject non-owner non-admin from updating', async () => {
-      const otherToken = issueToken({ id: OTHER_USER, roles: ['user'] });
+      const otherToken = issueToken({ id: OTHER_USER, role: ['user'] });
 
       const res = await app.inject({
         method: 'PATCH',
@@ -362,7 +362,7 @@ describe('RBAC Permissions E2E', () => {
 
     it('requireRoles should block insufficient roles', async () => {
       const userId = new mongoose.Types.ObjectId().toString();
-      const token = issueToken({ id: userId, roles: ['user'] });
+      const token = issueToken({ id: userId, role: ['user'] });
       const createRes = await app.inject({
         method: 'POST',
         url: '/articles',

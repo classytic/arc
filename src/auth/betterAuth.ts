@@ -17,7 +17,7 @@
 
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
-import { requireOrgRole, requireOrgMembership, requireTeamMembership } from '../permissions/index.js';
+import { requireOrgRole, requireOrgMembership, requireTeamMembership, normalizeRoles } from '../permissions/index.js';
 import type { ExternalOpenApiPaths } from '../docs/externalPaths.js';
 import type { RequestScope } from '../scope/types.js';
 import { AUTHENTICATED_SCOPE } from '../scope/types.js';
@@ -315,7 +315,7 @@ async function tryDirectGetMemberRole(
 
   try {
     const result = await getActiveMemberRole({ headers, query: { organizationId } });
-    if (result?.role) return parseRoles(result.role);
+    if (result?.role) return normalizeRoles(result.role);
     return null;
   } catch {
     return null;
@@ -378,25 +378,14 @@ function normalizeId(value: unknown): string | null {
   return String(value);
 }
 
-/** Parse role payload from Better Auth (string, csv, array) into normalized roles[] */
-function parseRoles(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.map((r) => String(r).trim()).filter(Boolean);
-  }
-  if (typeof value === 'string') {
-    return value.split(',').map((r) => r.trim()).filter(Boolean);
-  }
-  return [];
-}
-
 /** Extract role field from heterogeneous org membership shapes */
 function extractRolesFromMembership(membership: Record<string, unknown>): string[] {
-  const direct = parseRoles(membership.role ?? membership.roles ?? membership.orgRole);
+  const direct = normalizeRoles(membership.role ?? membership.roles ?? membership.orgRole);
   if (direct.length > 0) return direct;
 
   const nestedMembership = membership.membership as Record<string, unknown> | undefined;
   if (nestedMembership) {
-    const nested = parseRoles(nestedMembership.role ?? nestedMembership.roles);
+    const nested = normalizeRoles(nestedMembership.role ?? nestedMembership.roles);
     if (nested.length > 0) return nested;
   }
 
@@ -451,7 +440,7 @@ async function resolveOrgRoles(
   if (roleResponse.ok) {
     const roleData = await roleResponse.json() as Record<string, unknown> | null;
     if (roleData?.role) {
-      return parseRoles(roleData.role);
+      return normalizeRoles(roleData.role);
     }
   }
 

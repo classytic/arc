@@ -101,7 +101,7 @@ describe('Dynamic Permission Matrix E2E', () => {
 
           // Set scope based on elevation header + roles
           const wantsElevation = request.headers['x-arc-scope'] === 'platform';
-          const userRoles = (decoded.roles ?? []) as string[];
+          const userRoles = (decoded.role ?? []) as string[];
           if (wantsElevation && userRoles.includes('superadmin')) {
             (request as any).scope = { kind: 'elevated', elevatedBy: String(decoded.id) };
           } else if (decoded.organizationId) {
@@ -149,7 +149,7 @@ describe('Dynamic Permission Matrix E2E', () => {
     it('user with project:create permission can POST', async () => {
       const token = issueToken({
         id: USER_1,
-        roles: [],
+        role: [],
         organizationId: ORG_1,
         orgRoles: ['editor'],
       });
@@ -168,7 +168,7 @@ describe('Dynamic Permission Matrix E2E', () => {
     it('user without project:create permission gets 403', async () => {
       const token = issueToken({
         id: USER_2,
-        roles: [],
+        role: [],
         organizationId: ORG_1,
         orgRoles: ['viewer'],
       });
@@ -186,7 +186,7 @@ describe('Dynamic Permission Matrix E2E', () => {
     it('viewer can read projects', async () => {
       const token = issueToken({
         id: USER_2,
-        roles: [],
+        role: [],
         organizationId: ORG_1,
         orgRoles: ['viewer'],
       });
@@ -203,7 +203,7 @@ describe('Dynamic Permission Matrix E2E', () => {
     it('viewer cannot delete projects', async () => {
       const token = issueToken({
         id: USER_2,
-        roles: [],
+        role: [],
         organizationId: ORG_1,
         orgRoles: ['viewer'],
       });
@@ -221,7 +221,7 @@ describe('Dynamic Permission Matrix E2E', () => {
       // Create disposable project
       const adminToken = issueToken({
         id: USER_1,
-        roles: [],
+        role: [],
         organizationId: ORG_1,
         orgRoles: ['admin'],
       });
@@ -252,7 +252,7 @@ describe('Dynamic Permission Matrix E2E', () => {
     it('user with viewer+editor gets union of both permissions', async () => {
       const token = issueToken({
         id: USER_1,
-        roles: [],
+        role: [],
         organizationId: ORG_1,
         orgRoles: ['viewer', 'editor'],
       });
@@ -277,7 +277,7 @@ describe('Dynamic Permission Matrix E2E', () => {
     it('superadmin bypasses matrix entirely', async () => {
       const token = issueToken({
         id: SUPERADMIN,
-        roles: ['superadmin'],
+        role: ['superadmin'],
         organizationId: ORG_1,
       });
 
@@ -311,7 +311,7 @@ describe('Dynamic Permission Matrix E2E', () => {
       // Make a request to trigger re-resolution
       const token = issueToken({
         id: USER_1,
-        roles: [],
+        role: [],
         organizationId: ORG_1,
         orgRoles: ['viewer'],
       });

@@ -18,6 +18,7 @@ import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import type { RegistryEntry, FastifyWithDecorators } from '../types/index.js';
 import type { PermissionCheck } from '../permissions/types.js';
+import { getUserRoles } from '../permissions/types.js';
 import type { ExternalOpenApiPaths } from './externalPaths.js';
 import { convertRouteSchema } from '../utils/schemaConverter.js';
 
@@ -168,9 +169,9 @@ const openApiPlugin: FastifyPluginAsync<OpenApiOptions> = async (
   fastify.get(`${prefix}/openapi.json`, async (request, reply) => {
     // Check auth if required
     if (authRoles.length > 0) {
-      const user = (request as { user?: { roles?: string[] } }).user;
-      const hasRole = authRoles.some((role) => user?.roles?.includes(role));
-      if (!hasRole && !user?.roles?.includes('superadmin')) {
+      const user = (request as { user?: Record<string, unknown> }).user;
+      const roles = getUserRoles(user);
+      if (!authRoles.some((r) => roles.includes(r)) && !roles.includes('superadmin')) {
         reply.code(403).send({ error: 'Access denied' });
         return;
       }

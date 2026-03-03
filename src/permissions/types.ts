@@ -14,8 +14,36 @@ import type { FastifyRequest } from "fastify";
 export interface UserBase {
   id?: string;
   _id?: string;
-  roles?: string[];
+  /** User roles — string (comma-separated), string[], or undefined. Matches Better Auth's admin plugin pattern. */
+  role?: string | string[];
   [key: string]: unknown;
+}
+
+/**
+ * Extract normalized roles from a user object.
+ *
+ * Reads `user.role` which can be:
+ * - A comma-separated string: `"superadmin,user"` (Better Auth admin plugin)
+ * - A string array: `["admin", "user"]` (JWT / custom auth)
+ * - A single string: `"admin"`
+ */
+/**
+ * Normalize a raw role value (string, comma-separated string, or array) into a string[].
+ * Shared low-level helper used by both getUserRoles() and the Better Auth adapter.
+ */
+export function normalizeRoles(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((r) => String(r).trim()).filter(Boolean);
+  }
+  if (typeof value === 'string' && value.length > 0) {
+    return value.split(',').map((r) => r.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+export function getUserRoles(user: UserBase | null | undefined): string[] {
+  if (!user) return [];
+  return normalizeRoles(user.role);
 }
 
 /**
@@ -59,7 +87,7 @@ export interface PermissionResult {
  * @example
  * ```typescript
  * // Simple boolean return
- * const isAdmin: PermissionCheck = (ctx) => ctx.user?.roles?.includes('admin') ?? false;
+ * const isAdmin: PermissionCheck = (ctx) => getUserRoles(ctx.user).includes('admin');
  *
  * // With filters for ownership
  * const ownedByUser: PermissionCheck = (ctx) => ({

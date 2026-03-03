@@ -57,7 +57,7 @@ describe('Elevation Plugin (real auth flow)', () => {
     });
     await app.ready();
 
-    const token = issueToken({ id: 'admin-1', roles: ['superadmin'] });
+    const token = issueToken({ id: 'admin-1', role: ['superadmin'] });
     const res = await app.inject({
       method: 'GET',
       url: '/items',
@@ -92,7 +92,7 @@ describe('Elevation Plugin (real auth flow)', () => {
     });
     await app.ready();
 
-    const token = issueToken({ id: 'admin-1', roles: ['superadmin'] });
+    const token = issueToken({ id: 'admin-1', role: ['superadmin'] });
     const res = await app.inject({
       method: 'GET',
       url: '/items',
@@ -118,7 +118,7 @@ describe('Elevation Plugin (real auth flow)', () => {
     });
     await app.ready();
 
-    const token = issueToken({ id: 'user-1', roles: ['user'] });
+    const token = issueToken({ id: 'user-1', role: ['user'] });
     const res = await app.inject({
       method: 'GET',
       url: '/items',
@@ -187,7 +187,7 @@ describe('Elevation Plugin (real auth flow)', () => {
     });
     await app.ready();
 
-    const token = issueToken({ id: 'admin-1', roles: ['superadmin'] });
+    const token = issueToken({ id: 'admin-1', role: ['superadmin'] });
     await app.inject({
       method: 'GET',
       url: '/items',
@@ -228,7 +228,7 @@ describe('Elevation Plugin (real auth flow)', () => {
     });
     await app.ready();
 
-    const token = issueToken({ id: 'admin-1', roles: ['superadmin'] });
+    const token = issueToken({ id: 'admin-1', role: ['superadmin'] });
     const res = await app.inject({
       method: 'GET',
       url: '/items',
@@ -265,7 +265,7 @@ describe('Elevation Plugin (real auth flow)', () => {
     });
     await app.ready();
 
-    const token = issueToken({ id: 'user-1', roles: ['user'] });
+    const token = issueToken({ id: 'user-1', role: ['user'] });
     const res = await app.inject({
       method: 'GET',
       url: '/items',
@@ -297,7 +297,7 @@ describe('Elevation Plugin (real auth flow)', () => {
     });
     await app.ready();
 
-    const token = issueToken({ id: 'admin-1', roles: ['superadmin'] });
+    const token = issueToken({ id: 'admin-1', role: ['superadmin'] });
     const res = await app.inject({
       method: 'GET',
       url: '/items',

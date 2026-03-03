@@ -502,20 +502,17 @@ function packageJsonTemplate(config: ProjectConfig): string {
         "test:watch": "vitest",
       };
 
-  // Subpath imports for clean DX
-  const imports: Record<string, string> = config.typescript
-    ? {
-        "#config/*": "./dist/config/*",
-        "#shared/*": "./dist/shared/*",
-        "#resources/*": "./dist/resources/*",
-        "#plugins/*": "./dist/plugins/*",
-      }
-    : {
-        "#config/*": "./src/config/*",
-        "#shared/*": "./src/shared/*",
-        "#resources/*": "./src/resources/*",
-        "#plugins/*": "./src/plugins/*",
-      };
+  // Subpath imports — always point to ./src/ for tsx dev mode.
+  // Production builds (tsc → dist/) can override via tsconfig paths or build step.
+  const imports: Record<string, string> = {
+    "#config/*": "./src/config/*",
+    "#shared/*": "./src/shared/*",
+    "#resources/*": "./src/resources/*",
+    "#plugins/*": "./src/plugins/*",
+    "#services/*": "./src/services/*",
+    "#lib/*": "./src/lib/*",
+    "#utils/*": "./src/utils/*",
+  };
 
   return JSON.stringify(
     {
@@ -1553,7 +1550,7 @@ export const requireSuperadmin = ()${returnType} =>
  * - requireOrgMembership()             — just checks if user is in the org (any role)
  * - requireTeamMembership()            — checks if user is in the active team
  *
- * These are DIFFERENT from platform-level helpers above (requireRoles checks user.roles).
+ * These are DIFFERENT from platform-level helpers above (requireRoles checks user.role).
  * Platform superadmin automatically bypasses all org role checks.
  *
  * IMPORTANT: When using Better Auth's Access Control (ac) with custom roles,
@@ -1571,13 +1568,13 @@ import {
 export { requireOrgMembership, requireOrgRole, requireTeamMembership };
 
 /**
- * Require organization owner (checks member.role, not user.roles)
+ * Require organization owner (checks member.role, not user.role)
  */
 export const requireOrgOwner = ()${returnType} =>
   requireOrgRole(['owner']);
 
 /**
- * Require organization manager or higher (checks member.role, not user.roles)
+ * Require organization manager or higher (checks member.role, not user.role)
  */
 export const requireOrgManager = ()${returnType} =>
   requireOrgRole(['manager', 'admin', 'owner']);
@@ -1589,7 +1586,7 @@ export const requireOrgStaff = ()${returnType} =>
   requireOrgMembership();
 `;
     } else {
-      // JWT: no BA org plugin — use requireRoles() with user.roles
+      // JWT: no BA org plugin — use requireRoles() with user.role
       content += `
 /**
  * Require organization owner (elevated scope auto-bypasses)
@@ -2751,11 +2748,11 @@ export async function login(request${ts ? ": FastifyRequest" : ""}, reply${ts ? 
       return reply.code(401).send({ success: false, message: 'Invalid credentials' });
     }
 
-    const tokens = request.server.auth.issueTokens({ id: user._id.toString(), roles: user.roles });
+    const tokens = request.server.auth.issueTokens({ id: user._id.toString(), role: user.role });
 
     return reply.send({
       success: true,
-      user: { id: user._id, name: user.name, email: user.email, roles: user.roles },
+      user: { id: user._id, name: user.name, email: user.email, role: user.role },
       ...tokens,
     });
   } catch (error) {

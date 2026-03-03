@@ -37,6 +37,7 @@ import type {
 } from '../types/index.js';
 import type { RequestScope } from '../scope/types.js';
 import { AUTHENTICATED_SCOPE } from '../scope/types.js';
+import { getUserRoles } from '../permissions/types.js';
 
 // ============================================================================
 // Fastify Type Extensions
@@ -400,7 +401,7 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
         return;
       }
 
-      const userRoles = user.roles ?? [];
+      const userRoles = getUserRoles(user);
 
       // Special case: ['*'] means any authenticated user
       if (allowedRoles.length === 1 && allowedRoles[0] === '*') {

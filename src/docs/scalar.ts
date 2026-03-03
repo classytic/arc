@@ -17,6 +17,7 @@
 
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
+import { getUserRoles } from '../permissions/types.js';
 
 export interface ScalarOptions {
   /** Route prefix for UI (default: '/docs') */
@@ -91,9 +92,9 @@ const scalarPlugin: FastifyPluginAsync<ScalarOptions> = async (
   fastify.get(routePrefix, async (request, reply) => {
     // Check auth if required
     if (authRoles.length > 0) {
-      const user = (request as { user?: { roles?: string[] } }).user;
-      const hasRole = authRoles.some((role) => user?.roles?.includes(role));
-      if (!hasRole && !user?.roles?.includes('superadmin')) {
+      const user = (request as { user?: Record<string, unknown> }).user;
+      const roles = getUserRoles(user);
+      if (!authRoles.some((r) => roles.includes(r)) && !roles.includes('superadmin')) {
         reply.code(403).send({ error: 'Access denied' });
         return;
       }

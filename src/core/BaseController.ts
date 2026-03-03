@@ -89,8 +89,9 @@ export interface BaseControllerOptions {
   /**
    * Field name used for multi-tenant scoping (default: 'organizationId').
    * Override to match your schema: 'workspaceId', 'tenantId', 'teamId', etc.
+   * Set to `false` to disable org filtering for platform-universal resources.
    */
-  tenantField?: string;
+  tenantField?: string | false;
   /**
    * Primary key field name (default: '_id').
    * Override for non-MongoDB adapters (e.g., 'id' for SQL databases).
@@ -133,7 +134,7 @@ export class BaseController<
   protected defaultLimit: number;
   protected defaultSort: string;
   protected resourceName?: string;
-  protected tenantField: string;
+  protected tenantField: string | false;
   protected idField: string = DEFAULT_ID_FIELD;
 
   /** Composable access control (ID filtering, policy checks, org scope, ownership) */
@@ -158,7 +159,7 @@ export class BaseController<
     this.defaultLimit = options.defaultLimit ?? DEFAULT_LIMIT;
     this.defaultSort = options.defaultSort ?? DEFAULT_SORT;
     this.resourceName = options.resourceName;
-    this.tenantField = options.tenantField ?? DEFAULT_TENANT_FIELD;
+    this.tenantField = options.tenantField !== undefined ? options.tenantField : DEFAULT_TENANT_FIELD;
     this.idField = options.idField ?? DEFAULT_ID_FIELD;
     this._matchesFilter = options.matchesFilter;
     if (options.cache) this._cacheConfig = options.cache;
@@ -454,10 +455,10 @@ export class BaseController<
       arcContext,
     );
 
-    // Inject org/tenant scope
+    // Inject org/tenant scope (skip for platform-universal resources with tenantField: false)
     const scope = arcContext?._scope;
     const createOrgId = scope ? getOrgIdFromScope(scope) : undefined;
-    if (createOrgId) {
+    if (this.tenantField && createOrgId) {
       data[this.tenantField] = createOrgId;
     }
 
