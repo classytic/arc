@@ -382,7 +382,7 @@ describe('BaseController', () => {
           assignedDeliveryManagers: ['user-id-1'],
           assignedRecruiters: ['recruiter-id-1'],
         },
-        user: { ...mockUser, roles: ['superadmin'] },
+        user: { ...mockUser, role: ['superadmin'] },
         metadata: { arc: { hooks, fields: fieldPermissions }, _scope: { kind: 'elevated', elevatedBy: 'admin' } },
       });
 
@@ -404,7 +404,7 @@ describe('BaseController', () => {
           assignedDeliveryManagers: ['user-id-1'],
           assignedRecruiters: ['recruiter-id-1'],
         },
-        user: { ...mockUser, roles: ['user'] },
+        user: { ...mockUser, role: ['user'] },
         metadata: { arc: { hooks, fields: fieldPermissions }, _scope: { kind: 'member', organizationId: '507f1f77bcf86cd799439011', orgRoles: ['account_manager'] } },
       });
 
@@ -425,7 +425,7 @@ describe('BaseController', () => {
           name: 'React Dev',
           assignedDeliveryManagers: ['dm-id'],
         },
-        user: { ...mockUser, roles: ['user'] },
+        user: { ...mockUser, role: ['user'] },
         metadata: { arc: { hooks, fields: fieldPermissions }, _scope: { kind: 'member', organizationId: '507f1f77bcf86cd799439011', orgRoles: ['admin'] } },
       });
 

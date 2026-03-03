@@ -204,7 +204,7 @@ export function applyFieldWritePermissions<T extends Record<string, unknown>>(
 /**
  * Resolve effective roles by merging global user roles with org-level roles.
  *
- * Global roles come from `req.user.roles` (Better Auth user object).
+ * Global roles come from `req.user.role` (normalized via getUserRoles()).
  * Org roles come from `req.context.orgRoles` (set by BA adapter's org bridge).
  *
  * When no org context exists, returns global roles only — backward compatible.

@@ -31,7 +31,7 @@ import type { PermissionContext } from '../../src/permissions/types.js';
 
 function makeCtx(overrides: Partial<PermissionContext> = {}): PermissionContext {
   return {
-    user: { id: 'u1', roles: [] },
+    user: { id: 'u1', role: [] },
     request: {} as any,
     resource: 'test',
     action: 'list',
@@ -70,7 +70,7 @@ describe('Permission Presets', () => {
     it('should set create, update, delete to requireAuth', async () => {
       const perms = publicRead();
       const unauthed = makeCtx({ user: null });
-      const authed = makeCtx({ user: { id: 'u1', roles: [] } });
+      const authed = makeCtx({ user: { id: 'u1', role: [] } });
 
       // Unauthenticated should fail create/update/delete
       expect(await checkGranted(perms.create, unauthed)).toBe(false);
@@ -85,8 +85,8 @@ describe('Permission Presets', () => {
 
     it('should accept overrides for individual operations', async () => {
       const perms = publicRead({ delete: requireRoles(['superadmin']) });
-      const authed = makeCtx({ user: { id: 'u1', roles: ['user'] } });
-      const superadmin = makeCtx({ user: { id: 'u1', roles: ['superadmin'] } });
+      const authed = makeCtx({ user: { id: 'u1', role: ['user'] } });
+      const superadmin = makeCtx({ user: { id: 'u1', role: ['superadmin'] } });
 
       // Regular auth user can still create/update
       expect(await checkGranted(perms.create, authed)).toBe(true);
@@ -110,7 +110,7 @@ describe('Permission Presets', () => {
 
     it('should deny writes for non-admin', async () => {
       const perms = publicReadAdminWrite();
-      const user = makeCtx({ user: { id: 'u1', roles: ['user'] } });
+      const user = makeCtx({ user: { id: 'u1', role: ['user'] } });
 
       expect(await checkGranted(perms.create, user)).toBe(false);
       expect(await checkGranted(perms.update, user)).toBe(false);
@@ -119,7 +119,7 @@ describe('Permission Presets', () => {
 
     it('should allow writes for admin', async () => {
       const perms = publicReadAdminWrite();
-      const admin = makeCtx({ user: { id: 'u1', roles: ['admin'] } });
+      const admin = makeCtx({ user: { id: 'u1', role: ['admin'] } });
 
       expect(await checkGranted(perms.create, admin)).toBe(true);
       expect(await checkGranted(perms.update, admin)).toBe(true);
@@ -128,8 +128,8 @@ describe('Permission Presets', () => {
 
     it('should accept custom role array', async () => {
       const perms = publicReadAdminWrite(['editor', 'moderator']);
-      const editor = makeCtx({ user: { id: 'u1', roles: ['editor'] } });
-      const admin = makeCtx({ user: { id: 'u1', roles: ['admin'] } });
+      const editor = makeCtx({ user: { id: 'u1', role: ['editor'] } });
+      const admin = makeCtx({ user: { id: 'u1', role: ['admin'] } });
 
       expect(await checkGranted(perms.create, editor)).toBe(true);
       expect(await checkGranted(perms.create, admin)).toBe(false);
@@ -149,7 +149,7 @@ describe('Permission Presets', () => {
     it('should set all operations to requireAuth', async () => {
       const perms = authenticated();
       const unauthed = makeCtx({ user: null });
-      const authed = makeCtx({ user: { id: 'u1', roles: [] } });
+      const authed = makeCtx({ user: { id: 'u1', role: [] } });
 
       expect(await checkGranted(perms.list, unauthed)).toBe(false);
       expect(await checkGranted(perms.get, unauthed)).toBe(false);
@@ -175,8 +175,8 @@ describe('Permission Presets', () => {
   describe('adminOnly()', () => {
     it('should set all operations to requireRoles(["admin"])', async () => {
       const perms = adminOnly();
-      const user = makeCtx({ user: { id: 'u1', roles: ['user'] } });
-      const admin = makeCtx({ user: { id: 'u1', roles: ['admin'] } });
+      const user = makeCtx({ user: { id: 'u1', role: ['user'] } });
+      const admin = makeCtx({ user: { id: 'u1', role: ['admin'] } });
 
       expect(await checkGranted(perms.list, user)).toBe(false);
       expect(await checkGranted(perms.create, user)).toBe(false);
@@ -186,8 +186,8 @@ describe('Permission Presets', () => {
 
     it('should accept custom roles', async () => {
       const perms = adminOnly(['superadmin']);
-      const admin = makeCtx({ user: { id: 'u1', roles: ['admin'] } });
-      const superadmin = makeCtx({ user: { id: 'u1', roles: ['superadmin'] } });
+      const admin = makeCtx({ user: { id: 'u1', role: ['admin'] } });
+      const superadmin = makeCtx({ user: { id: 'u1', role: ['superadmin'] } });
 
       expect(await checkGranted(perms.list, admin)).toBe(false);
       expect(await checkGranted(perms.list, superadmin)).toBe(true);
@@ -202,7 +202,7 @@ describe('Permission Presets', () => {
     it('should set list/get/create to requireAuth', async () => {
       const perms = ownerWithAdminBypass();
       const unauthed = makeCtx({ user: null });
-      const authed = makeCtx({ user: { id: 'u1', roles: [] } });
+      const authed = makeCtx({ user: { id: 'u1', role: [] } });
 
       expect(await checkGranted(perms.list, unauthed)).toBe(false);
       expect(await checkGranted(perms.create, unauthed)).toBe(false);
@@ -240,7 +240,7 @@ describe('Permission Presets', () => {
 
     it('should accept overrides', async () => {
       const perms = fullPublic({ delete: requireRoles(['admin']) });
-      const user = makeCtx({ user: { id: 'u1', roles: ['user'] } });
+      const user = makeCtx({ user: { id: 'u1', role: ['user'] } });
       expect(await checkGranted(perms.delete, user)).toBe(false);
       // Other operations remain public
       expect(isPublicCheck(perms.list)).toBe(true);
@@ -254,7 +254,7 @@ describe('Permission Presets', () => {
   describe('readOnly()', () => {
     it('should set list and get to requireAuth', async () => {
       const perms = readOnly();
-      const authed = makeCtx({ user: { id: 'u1', roles: [] } });
+      const authed = makeCtx({ user: { id: 'u1', role: [] } });
       expect(await checkGranted(perms.list, authed)).toBe(true);
       expect(await checkGranted(perms.get, authed)).toBe(true);
     });
@@ -268,7 +268,7 @@ describe('Permission Presets', () => {
 
     it('should accept overrides', async () => {
       const perms = readOnly({ create: requireRoles(['admin']) });
-      const admin = makeCtx({ user: { id: 'u1', roles: ['admin'] } });
+      const admin = makeCtx({ user: { id: 'u1', role: ['admin'] } });
       expect(await checkGranted(perms.create, admin)).toBe(true);
     });
   });

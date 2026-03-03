@@ -63,7 +63,7 @@ function scopeFromJwtHook(superadminRoles: string[] = ['superadmin']) {
     const user = (request as any).user as Record<string, unknown> | undefined;
     if (!user) return;
 
-    const userRoles = (Array.isArray(user.roles) ? user.roles : []) as string[];
+    const userRoles = (Array.isArray(user.role) ? user.role : []) as string[];
 
     if (superadminRoles.some((r) => userRoles.includes(r))) {
       const orgId = user.organizationId as string | undefined;
@@ -177,7 +177,7 @@ describe('System Fields & Response Format E2E', () => {
   // --------------------------------------------------------------------------
 
   it('POST /tasks returns 201 with correct response envelope', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
 
     const res = await app.inject({
       method: 'POST',
@@ -207,7 +207,7 @@ describe('System Fields & Response Format E2E', () => {
   });
 
   it('system fields in request body are stripped (cannot override _id, __v, createdAt, updatedAt)', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
     const fakeId = new mongoose.Types.ObjectId().toString();
 
     const res = await app.inject({
@@ -239,7 +239,7 @@ describe('System Fields & Response Format E2E', () => {
   });
 
   it('createdBy cannot be spoofed via request body', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
 
     const res = await app.inject({
       method: 'POST',
@@ -258,7 +258,7 @@ describe('System Fields & Response Format E2E', () => {
   });
 
   it('organizationId cannot be spoofed via request body', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
     const fakeOrg = new mongoose.Types.ObjectId().toString();
 
     const res = await app.inject({
@@ -282,7 +282,7 @@ describe('System Fields & Response Format E2E', () => {
   // --------------------------------------------------------------------------
 
   it('GET /tasks/:id returns 200 with { success, data }', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
 
     const res = await app.inject({
       method: 'GET',
@@ -299,7 +299,7 @@ describe('System Fields & Response Format E2E', () => {
   });
 
   it('GET /tasks/:id with non-existent ID returns 404', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
     const fakeId = new mongoose.Types.ObjectId().toString();
 
     const res = await app.inject({
@@ -319,7 +319,7 @@ describe('System Fields & Response Format E2E', () => {
   // --------------------------------------------------------------------------
 
   it('GET /tasks returns paginated envelope { success, docs, page, limit, total, pages, hasNext, hasPrev }', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
 
     const res = await app.inject({
       method: 'GET',
@@ -350,7 +350,7 @@ describe('System Fields & Response Format E2E', () => {
   // --------------------------------------------------------------------------
 
   it('PATCH /tasks/:id returns 200 with updatedBy auto-injected', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
 
     const res = await app.inject({
       method: 'PATCH',
@@ -368,7 +368,7 @@ describe('System Fields & Response Format E2E', () => {
   });
 
   it('system fields in update body are stripped', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
 
     const res = await app.inject({
       method: 'PATCH',
@@ -393,7 +393,7 @@ describe('System Fields & Response Format E2E', () => {
   });
 
   it('updatedBy cannot be spoofed via request body', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
 
     const res = await app.inject({
       method: 'PATCH',
@@ -416,7 +416,7 @@ describe('System Fields & Response Format E2E', () => {
   // --------------------------------------------------------------------------
 
   it('DELETE /tasks/:id returns 200 with { success, data: { message } }', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
 
     // Create an item to delete
     const createRes = await app.inject({
@@ -443,7 +443,7 @@ describe('System Fields & Response Format E2E', () => {
   });
 
   it('DELETE /tasks/:id with non-existent ID returns 404', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
     const fakeId = new mongoose.Types.ObjectId().toString();
 
     const res = await app.inject({
@@ -520,7 +520,7 @@ describe('FieldRules E2E', () => {
   });
 
   it('systemManaged field is stripped from create body', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
 
     const res = await app.inject({
       method: 'POST',
@@ -542,7 +542,7 @@ describe('FieldRules E2E', () => {
   });
 
   it('readonly field is stripped from create body', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
 
     const res = await app.inject({
       method: 'POST',
@@ -564,7 +564,7 @@ describe('FieldRules E2E', () => {
   });
 
   it('readonly field is stripped from update body', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
 
     // Create a product first
     const createRes = await app.inject({
@@ -596,7 +596,7 @@ describe('FieldRules E2E', () => {
   });
 
   it('systemManaged field is stripped from update body', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
 
     // Create a product first
     const createRes = await app.inject({
@@ -626,7 +626,7 @@ describe('FieldRules E2E', () => {
   });
 
   it('systemManaged fields are blocked from select queries', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
 
     // Create a product
     await app.inject({
@@ -655,7 +655,7 @@ describe('FieldRules E2E', () => {
   });
 
   it('readonly field is visible in read responses', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
 
     // Create a product with DB-set sku
     const createRes = await app.inject({
@@ -716,7 +716,7 @@ describe('Auto-Injected Fields E2E', () => {
   });
 
   it('create injects createdBy from authenticated user', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
 
     const res = await app.inject({
       method: 'POST',
@@ -731,7 +731,7 @@ describe('Auto-Injected Fields E2E', () => {
   });
 
   it('create injects organizationId from JWT context', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
 
     const res = await app.inject({
       method: 'POST',
@@ -746,7 +746,7 @@ describe('Auto-Injected Fields E2E', () => {
   });
 
   it('update injects updatedBy from authenticated user', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
 
     // Create note
     const createRes = await app.inject({
@@ -772,7 +772,7 @@ describe('Auto-Injected Fields E2E', () => {
 
   it('different user updating sets their own updatedBy', async () => {
     // User A creates
-    const tokenA = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const tokenA = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
     const createRes = await app.inject({
       method: 'POST',
       url: '/notes',
@@ -783,7 +783,7 @@ describe('Auto-Injected Fields E2E', () => {
     expect(JSON.parse(createRes.body).data.createdBy).toBe(USER_A);
 
     // User B in same org updates (superadmin to bypass ownership if needed)
-    const tokenAdmin = app.auth.issueTokens({ id: USER_B, roles: ['superadmin'], organizationId: ORG_A }).accessToken;
+    const tokenAdmin = app.auth.issueTokens({ id: USER_B, role: ['superadmin'], organizationId: ORG_A }).accessToken;
     const updateRes = await app.inject({
       method: 'PATCH',
       url: `/notes/${noteId}`,
@@ -798,7 +798,7 @@ describe('Auto-Injected Fields E2E', () => {
   });
 
   it('timestamps are auto-managed (createdAt set on create, updatedAt changes on update)', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
 
     // Create
     const createRes = await app.inject({
@@ -902,7 +902,7 @@ describe('Ownership & Access Control Response Format', () => {
 
   it('non-owner cannot update another users resource (policy filter → 404)', async () => {
     // User A creates
-    const tokenA = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const tokenA = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
     const createRes = await app.inject({
       method: 'POST',
       url: '/docs',
@@ -913,7 +913,7 @@ describe('Ownership & Access Control Response Format', () => {
 
     // User B tries to update (same org, but not owner)
     // requireOwnership applies policy filter { createdBy: USER_B } → doc not found
-    const tokenB = app.auth.issueTokens({ id: USER_B, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const tokenB = app.auth.issueTokens({ id: USER_B, role: ['user'], organizationId: ORG_A }).accessToken;
     const updateRes = await app.inject({
       method: 'PATCH',
       url: `/docs/${docId}`,
@@ -926,7 +926,7 @@ describe('Ownership & Access Control Response Format', () => {
 
   it('non-owner cannot delete another users resource (policy filter → 404)', async () => {
     // User A creates
-    const tokenA = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const tokenA = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
     const createRes = await app.inject({
       method: 'POST',
       url: '/docs',
@@ -936,7 +936,7 @@ describe('Ownership & Access Control Response Format', () => {
     const docId = JSON.parse(createRes.body).data._id;
 
     // User B tries to delete — policy filter scopes query, doc invisible to B
-    const tokenB = app.auth.issueTokens({ id: USER_B, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const tokenB = app.auth.issueTokens({ id: USER_B, role: ['user'], organizationId: ORG_A }).accessToken;
     const deleteRes = await app.inject({
       method: 'DELETE',
       url: `/docs/${docId}`,
@@ -947,7 +947,7 @@ describe('Ownership & Access Control Response Format', () => {
   });
 
   it('owner can update their own resource', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
 
     const createRes = await app.inject({
       method: 'POST',
@@ -970,7 +970,7 @@ describe('Ownership & Access Control Response Format', () => {
 
   it('superadmin can bypass ownership check', async () => {
     // User A creates
-    const tokenA = app.auth.issueTokens({ id: USER_A, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const tokenA = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
     const createRes = await app.inject({
       method: 'POST',
       url: '/docs',
@@ -980,7 +980,7 @@ describe('Ownership & Access Control Response Format', () => {
     const docId = JSON.parse(createRes.body).data._id;
 
     // Superadmin updates
-    const adminToken = app.auth.issueTokens({ id: SUPERADMIN, roles: ['superadmin'], organizationId: ORG_A }).accessToken;
+    const adminToken = app.auth.issueTokens({ id: SUPERADMIN, role: ['superadmin'], organizationId: ORG_A }).accessToken;
     const updateRes = await app.inject({
       method: 'PATCH',
       url: `/docs/${docId}`,

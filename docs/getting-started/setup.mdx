@@ -209,7 +209,7 @@ bootstrap().catch((err) => {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "generate": "arc generate"
+    "generate": "npx @classytic/arc generate"
   }
 }
 ```
@@ -258,21 +258,48 @@ curl http://localhost:3000/_health/live
 
 ## Using the CLI
 
-Generate resources quickly:
+### Initialize a New Project
+
+```bash
+# Scaffold a complete Arc project
+npx @classytic/arc init my-api --mongokit --better-auth --ts
+
+# With options
+npx @classytic/arc init my-api --mongokit --multi-tenant --ts --better-auth
+npx @classytic/arc init my-api --custom --single --js --jwt --skip-install
+```
+
+### Generate Resources
 
 ```bash
 # Generate full resource (model, repository, controller, routes, tests)
-npx arc generate resource order --module sales
+npx @classytic/arc generate resource order --module sales
 
 # With presets
-npx arc generate resource invoice -p softDelete,multiTenant
+npx @classytic/arc generate resource invoice -p softDelete,multiTenant
 
 # Preview without creating files
-npx arc generate resource payment --dry-run
+npx @classytic/arc generate resource payment --dry-run
 
 # Generate specific files only
-npx arc generate controller auth
-npx arc generate model customer
+npx @classytic/arc generate controller auth
+npx @classytic/arc generate model customer
+```
+
+### Introspect & Diagnostics
+
+```bash
+# Show all registered resources from an entry file
+npx @classytic/arc introspect --entry ./dist/index.js
+
+# Output JSON metadata for resources (AI agent friendly)
+npx @classytic/arc describe ./dist/index.js
+
+# Export OpenAPI specification
+npx @classytic/arc docs ./openapi.json --entry ./dist/index.js
+
+# Health check environment and dependencies
+npx @classytic/arc doctor
 ```
 
 ---

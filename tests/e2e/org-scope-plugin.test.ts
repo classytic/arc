@@ -68,7 +68,7 @@ function scopeFromJwtPreHandler(
     const user = (request as any).user as Record<string, unknown> | undefined;
     if (!user) return;
 
-    const userRoles = (Array.isArray(user.roles) ? user.roles : []) as string[];
+    const userRoles = (Array.isArray(user.role) ? user.role : []) as string[];
     const userId = String(user.id ?? user._id ?? '');
 
     // Elevated scope for platform admins
@@ -265,7 +265,7 @@ describe('Request Scope System', () => {
       });
       await app.ready();
 
-      const token = issueToken({ id: 'user-1', roles: ['user'] });
+      const token = issueToken({ id: 'user-1', role: ['user'] });
       const res = await app.inject({
         method: 'GET', url: '/items',
         headers: authHeader(token),
@@ -313,7 +313,7 @@ describe('Request Scope System', () => {
       });
       await app.ready();
 
-      const token = issueToken({ id: 'user-1', roles: ['user'] });
+      const token = issueToken({ id: 'user-1', role: ['user'] });
       const res = await app.inject({
         method: 'GET', url: '/items',
         headers: { ...authHeader(token), 'x-organization-id': 'org-alpha' },
@@ -343,7 +343,7 @@ describe('Request Scope System', () => {
       });
       await app.ready();
 
-      const token = issueToken({ id: 'user-1', roles: ['user'] });
+      const token = issueToken({ id: 'user-1', role: ['user'] });
       const res = await app.inject({
         method: 'GET', url: '/items',
         headers: authHeader(token),
@@ -368,7 +368,7 @@ describe('Request Scope System', () => {
       });
       await app.ready();
 
-      const token = issueToken({ id: 'user-1', roles: ['user'] });
+      const token = issueToken({ id: 'user-1', role: ['user'] });
       const res = await app.inject({
         method: 'GET', url: '/items',
         headers: { ...authHeader(token), 'x-organization-id': 'org-gamma' },
@@ -395,7 +395,7 @@ describe('Request Scope System', () => {
       });
       await app.ready();
 
-      const token = issueToken({ id: 'user-1', roles: ['user'] });
+      const token = issueToken({ id: 'user-1', role: ['user'] });
 
       const res1 = await app.inject({
         method: 'GET', url: '/items',
@@ -427,7 +427,7 @@ describe('Request Scope System', () => {
       });
       await app.ready();
 
-      const token = issueToken({ id: 'user-2', roles: ['user'] });
+      const token = issueToken({ id: 'user-2', role: ['user'] });
       const res = await app.inject({
         method: 'GET', url: '/items',
         headers: { ...authHeader(token), 'x-organization-id': 'org-beta' },
@@ -474,7 +474,7 @@ describe('Request Scope System', () => {
       });
       await app.ready();
 
-      const token = issueToken({ id: 'user-1', roles: ['user'] });
+      const token = issueToken({ id: 'user-1', role: ['user'] });
       const res = await app.inject({
         method: 'GET', url: '/items',
         headers: { ...authHeader(token), 'x-organization-id': 'org-alpha' },
@@ -507,7 +507,7 @@ describe('Request Scope System', () => {
       });
       await app.ready();
 
-      const token = issueToken({ id: 'user-1', roles: ['user'] });
+      const token = issueToken({ id: 'user-1', role: ['user'] });
       const res = await app.inject({
         method: 'GET', url: '/items',
         headers: { ...authHeader(token), 'x-tenant-id': 'tenant-123' },
@@ -534,7 +534,7 @@ describe('Request Scope System', () => {
       });
       await app.ready();
 
-      const token = issueToken({ id: 'user-1', roles: ['user'] });
+      const token = issueToken({ id: 'user-1', role: ['user'] });
       const res = await app.inject({
         method: 'GET', url: '/items',
         headers: { ...authHeader(token), 'x-organization-id': 'org-alpha' },
@@ -572,7 +572,7 @@ describe('Request Scope System', () => {
       });
       await app.ready();
 
-      const token = issueToken({ id: 'user-1', roles: ['user'] });
+      const token = issueToken({ id: 'user-1', role: ['user'] });
 
       // org-4 (even) -> allowed
       const res1 = await app.inject({
@@ -620,7 +620,7 @@ describe('Request Scope System', () => {
       });
       await app.ready();
 
-      const token = issueToken({ id: 'admin-1', roles: ['superadmin'] });
+      const token = issueToken({ id: 'admin-1', role: ['superadmin'] });
       const res = await app.inject({
         method: 'GET', url: '/items',
         headers: { ...authHeader(token), 'x-organization-id': 'any-org' },
@@ -652,7 +652,7 @@ describe('Request Scope System', () => {
       });
       await app.ready();
 
-      const token = issueToken({ id: 'admin-1', roles: ['superadmin'] });
+      const token = issueToken({ id: 'admin-1', role: ['superadmin'] });
       const res = await app.inject({
         method: 'GET', url: '/items',
         headers: authHeader(token),
@@ -699,7 +699,7 @@ describe('Request Scope System', () => {
       });
       await app.ready();
 
-      const token = issueToken({ id: 'user-1', roles: ['user'] });
+      const token = issueToken({ id: 'user-1', role: ['user'] });
       const res = await app.inject({
         method: 'GET', url: '/items',
         headers: authHeader(token),

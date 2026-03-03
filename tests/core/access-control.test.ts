@@ -156,6 +156,35 @@ describe('AccessControl', () => {
         workspaceId: 'ws-1',
       });
     });
+
+    it('skips org filter when tenantField is false (platform-universal)', () => {
+      const ac = createAccessControl({ tenantField: false });
+      const req = createReq({
+        _scope: { kind: 'member', organizationId: 'org-1', orgRoles: ['admin'] },
+      });
+
+      const filter = ac.buildIdFilter('abc123', req);
+
+      // Should only have ID — no org filter
+      expect(filter).toEqual({ _id: 'abc123' });
+    });
+
+    it('skips org filter with tenantField: false even with policy filters', () => {
+      const ac = createAccessControl({ tenantField: false });
+      const req = createReq({
+        _policyFilters: { status: 'active' },
+        _scope: { kind: 'member', organizationId: 'org-1', orgRoles: ['user'] },
+      });
+
+      const filter = ac.buildIdFilter('abc123', req);
+
+      // Policy filters applied, but no org filter
+      expect(filter).toEqual({
+        _id: 'abc123',
+        status: 'active',
+      });
+      expect(filter.organizationId).toBeUndefined();
+    });
   });
 
   // --------------------------------------------------------------------------
@@ -424,6 +453,26 @@ describe('AccessControl', () => {
       // Simulate an item where organizationId might be stored differently
       expect(ac.checkOrgScope({ organizationId: '507f1f77bcf86cd799439012' }, arcContext)).toBe(true);
     });
+
+    it('always returns true when tenantField is false (platform-universal)', () => {
+      const ac = createAccessControl({ tenantField: false });
+      const arcContext: ArcInternalMetadata = {
+        _scope: { kind: 'member', organizationId: 'org-1', orgRoles: ['admin'] },
+      };
+
+      // Item without organizationId should pass — platform-universal skips org check
+      expect(ac.checkOrgScope({ name: 'Test' }, arcContext)).toBe(true);
+    });
+
+    it('returns true with tenantField: false even for cross-org items', () => {
+      const ac = createAccessControl({ tenantField: false });
+      const arcContext: ArcInternalMetadata = {
+        _scope: { kind: 'member', organizationId: 'org-1', orgRoles: [] },
+      };
+
+      // Item with different org should still pass — platform-universal ignores org
+      expect(ac.checkOrgScope({ organizationId: 'org-2', name: 'Test' }, arcContext)).toBe(true);
+    });
   });
 
   // --------------------------------------------------------------------------
@@ -636,6 +685,42 @@ describe('AccessControl', () => {
       await ac.fetchWithAccessControl('abc', req, repo, queryOptions);
 
       expect(repo.getById).toHaveBeenCalledWith('abc', queryOptions);
+    });
+
+    it('fetches item without org filter when tenantField is false (platform-universal)', async () => {
+      const ac = createAccessControl({ tenantField: false });
+      const item = { _id: 'abc', name: 'Platform Item' };
+      const repo = {
+        getById: vi.fn().mockResolvedValue(item),
+        getOne: vi.fn(),
+      };
+      const req = createReq({
+        _scope: { kind: 'member', organizationId: 'org-1', orgRoles: ['user'] },
+      });
+
+      const result = await ac.fetchWithAccessControl('abc', req, repo);
+
+      // Should use getById directly (no compound filter, only _id)
+      expect(result).toEqual(item);
+      expect(repo.getById).toHaveBeenCalledWith('abc', undefined);
+      expect(repo.getOne).not.toHaveBeenCalled();
+    });
+
+    it('returns item via post-hoc check with tenantField: false even without org field', async () => {
+      const ac = createAccessControl({ tenantField: false });
+      const item = { _id: 'abc', name: 'Platform Item' }; // no organizationId
+      const repo = {
+        getById: vi.fn().mockResolvedValue(item),
+        // no getOne — forces fallback path
+      };
+      const req = createReq({
+        _scope: { kind: 'member', organizationId: 'org-1', orgRoles: [] },
+      });
+
+      const result = await ac.fetchWithAccessControl('abc', req, repo);
+
+      // Should return item — checkOrgScope skips when tenantField is false
+      expect(result).toEqual(item);
     });
   });
 

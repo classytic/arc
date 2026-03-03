@@ -93,7 +93,7 @@ describe('Single-Tenant Mode', () => {
 
     beforeAll(async () => {
       // Create articles as two different users (no org claims — single-tenant mode)
-      const token1 = issueToken({ id: USER_1, roles: ['user'] });
+      const token1 = issueToken({ id: USER_1, role: ['user'] });
       const res1 = await app.inject({
         method: 'POST',
         url: '/articles',
@@ -103,7 +103,7 @@ describe('Single-Tenant Mode', () => {
       expect(res1.statusCode).toBe(201);
       article1Id = JSON.parse(res1.body).data._id;
 
-      const token2 = issueToken({ id: USER_2, roles: ['user'] });
+      const token2 = issueToken({ id: USER_2, role: ['user'] });
       const res2 = await app.inject({
         method: 'POST',
         url: '/articles',
@@ -115,7 +115,7 @@ describe('Single-Tenant Mode', () => {
     });
 
     it('all authenticated users see all records (no org scope without multiTenantPreset)', async () => {
-      const token = issueToken({ id: USER_1, roles: ['user'] });
+      const token = issueToken({ id: USER_1, role: ['user'] });
       const res = await app.inject({
         method: 'GET',
         url: '/articles',
@@ -132,7 +132,7 @@ describe('Single-Tenant Mode', () => {
 
     it('authenticated scope sees all records (no org filtering applied)', async () => {
       // User 2 also sees all records
-      const token = issueToken({ id: USER_2, roles: ['user'] });
+      const token = issueToken({ id: USER_2, role: ['user'] });
       const res = await app.inject({
         method: 'GET',
         url: '/articles',
@@ -147,7 +147,7 @@ describe('Single-Tenant Mode', () => {
     });
 
     it('no organizationId is auto-injected on create', async () => {
-      const token = issueToken({ id: USER_1, roles: ['user'] });
+      const token = issueToken({ id: USER_1, role: ['user'] });
       const res = await app.inject({
         method: 'POST',
         url: '/articles',
@@ -177,7 +177,7 @@ describe('Single-Tenant Mode', () => {
     });
 
     it('requireRoles blocks insufficient roles', async () => {
-      const token = issueToken({ id: USER_1, roles: ['user'] });
+      const token = issueToken({ id: USER_1, role: ['user'] });
       // Create an article first
       const createRes = await app.inject({
         method: 'POST',
@@ -199,7 +199,7 @@ describe('Single-Tenant Mode', () => {
 
     it('requireOwnership scopes to createdBy (no org context needed)', async () => {
       // User 1 creates an article
-      const token1 = issueToken({ id: USER_1, roles: ['user'] });
+      const token1 = issueToken({ id: USER_1, role: ['user'] });
       const createRes = await app.inject({
         method: 'POST',
         url: '/articles',
@@ -218,7 +218,7 @@ describe('Single-Tenant Mode', () => {
       expect(updateRes.statusCode).toBe(200);
 
       // User 2 cannot update (not owner, not admin)
-      const token2 = issueToken({ id: USER_2, roles: ['user'] });
+      const token2 = issueToken({ id: USER_2, role: ['user'] });
       const failRes = await app.inject({
         method: 'PATCH',
         url: `/articles/${articleId}`,

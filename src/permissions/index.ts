@@ -27,6 +27,8 @@ export type {
   PermissionResult,
   UserBase,
 } from "./types.js";
+export { getUserRoles, normalizeRoles } from "./types.js";
+import { getUserRoles } from "./types.js";
 import { randomUUID } from "node:crypto";
 import { MemoryCacheStore } from "../cache/memory.js";
 import type { CacheLogger, CacheStore } from "../cache/interface.js";
@@ -221,7 +223,7 @@ export function requireRoles(
       return { granted: false, reason: "Authentication required" };
     }
 
-    const userRoles = (ctx.user.roles ?? []) as string[];
+    const userRoles = getUserRoles(ctx.user);
 
     // Check bypass roles first
     if (options?.bypassRoles?.some((r) => userRoles.includes(r))) {
@@ -267,7 +269,7 @@ export function requireOwnership<TDoc = any>(
       return { granted: false, reason: "Authentication required" };
     }
 
-    const userRoles = (ctx.user.roles ?? []) as string[];
+    const userRoles = getUserRoles(ctx.user);
 
     // Check bypass roles
     if (options?.bypassRoles?.some((r) => userRoles.includes(r))) {

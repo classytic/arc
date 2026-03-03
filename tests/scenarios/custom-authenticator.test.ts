@@ -24,7 +24,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 // ============================================================================
 
 interface MockSession {
-  user: { id: string; roles: string[]; organizationId?: string };
+  user: { id: string; role: string[]; organizationId?: string };
 }
 
 const sessionStore = new Map<string, MockSession>();
@@ -37,13 +37,13 @@ const ORG_1 = new mongoose.Types.ObjectId().toString();
 const ORG_2 = new mongoose.Types.ObjectId().toString();
 
 sessionStore.set('admin-session', {
-  user: { id: USER_ADMIN, roles: ['admin'], organizationId: ORG_1 },
+  user: { id: USER_ADMIN, role: ['admin'], organizationId: ORG_1 },
 });
 sessionStore.set('user-session', {
-  user: { id: USER_REGULAR, roles: ['user'], organizationId: ORG_1 },
+  user: { id: USER_REGULAR, role: ['user'], organizationId: ORG_1 },
 });
 sessionStore.set('other-session', {
-  user: { id: USER_OTHER, roles: ['user'], organizationId: ORG_2 },
+  user: { id: USER_OTHER, role: ['user'], organizationId: ORG_2 },
 });
 
 // ============================================================================
@@ -70,7 +70,7 @@ async function clerkAuthenticator(request: FastifyRequest, reply: FastifyReply) 
     (request as any).scope = {
       kind: 'member',
       organizationId: session.user.organizationId,
-      orgRoles: session.user.roles,
+      orgRoles: session.user.role,
     };
   } else {
     (request as any).scope = { kind: 'authenticated' };

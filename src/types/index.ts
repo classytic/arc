@@ -458,7 +458,7 @@ export interface ResourceConfig<TDoc = AnyRecord> {
    * Override to match your schema: 'workspaceId', 'tenantId', 'teamId', etc.
    * Takes effect when org context is present (via multiTenant preset).
    */
-  tenantField?: string;
+  tenantField?: string | false;
   /**
    * Primary key field name (default: '_id').
    * Override for non-MongoDB adapters (e.g., 'id' for SQL databases).
@@ -776,7 +776,7 @@ export interface TokenPair {
  * const tokens = fastify.auth.issueTokens({
  *   id: user._id,
  *   email: user.email,
- *   roles: user.roles,
+ *   role: user.role,
  * });
  *
  * return { success: true, ...tokens, user };

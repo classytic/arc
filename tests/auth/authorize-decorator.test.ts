@@ -77,7 +77,7 @@ describe('Authorize Decorator', () => {
   describe('Role-based access', () => {
     it('should allow admin to access admin-only route', async () => {
       await createApp();
-      const token = issueToken({ id: 'user-1', roles: ['admin'] });
+      const token = issueToken({ id: 'user-1', role: ['admin'] });
 
       const res = await app.inject({
         method: 'GET',
@@ -92,7 +92,7 @@ describe('Authorize Decorator', () => {
 
     it('should reject non-admin from admin-only route with 403', async () => {
       await createApp();
-      const token = issueToken({ id: 'user-2', roles: ['viewer'] });
+      const token = issueToken({ id: 'user-2', role: ['viewer'] });
 
       const res = await app.inject({
         method: 'GET',
@@ -111,7 +111,7 @@ describe('Authorize Decorator', () => {
       await createApp();
 
       // Admin should work
-      const adminToken = issueToken({ id: 'u1', roles: ['admin'] });
+      const adminToken = issueToken({ id: 'u1', role: ['admin'] });
       const res1 = await app.inject({
         method: 'GET',
         url: '/editor',
@@ -120,7 +120,7 @@ describe('Authorize Decorator', () => {
       expect(res1.statusCode).toBe(200);
 
       // Editor should work
-      const editorToken = issueToken({ id: 'u2', roles: ['editor'] });
+      const editorToken = issueToken({ id: 'u2', role: ['editor'] });
       const res2 = await app.inject({
         method: 'GET',
         url: '/editor',
@@ -129,7 +129,7 @@ describe('Authorize Decorator', () => {
       expect(res2.statusCode).toBe(200);
 
       // Viewer should be rejected
-      const viewerToken = issueToken({ id: 'u3', roles: ['viewer'] });
+      const viewerToken = issueToken({ id: 'u3', role: ['viewer'] });
       const res3 = await app.inject({
         method: 'GET',
         url: '/editor',
@@ -140,7 +140,7 @@ describe('Authorize Decorator', () => {
 
     it('should handle user with multiple roles', async () => {
       await createApp();
-      const token = issueToken({ id: 'u1', roles: ['viewer', 'editor', 'moderator'] });
+      const token = issueToken({ id: 'u1', role: ['viewer', 'editor', 'moderator'] });
 
       const res = await app.inject({
         method: 'GET',
@@ -159,7 +159,7 @@ describe('Authorize Decorator', () => {
   describe('Wildcard authorization (*)', () => {
     it('should allow any authenticated user with wildcard', async () => {
       await createApp();
-      const token = issueToken({ id: 'u1', roles: [] }); // No roles at all
+      const token = issueToken({ id: 'u1', role: [] }); // No roles at all
 
       const res = await app.inject({
         method: 'GET',
@@ -235,7 +235,7 @@ describe('Authorize Decorator', () => {
 
     it('should reject when user has wrong roles for specific endpoint', async () => {
       await createApp();
-      const token = issueToken({ id: 'u1', roles: ['admin', 'editor'] });
+      const token = issueToken({ id: 'u1', role: ['admin', 'editor'] });
 
       const res = await app.inject({
         method: 'DELETE',
@@ -250,7 +250,7 @@ describe('Authorize Decorator', () => {
 
     it('should pass with exact matching role', async () => {
       await createApp();
-      const token = issueToken({ id: 'u1', roles: ['superadmin'] });
+      const token = issueToken({ id: 'u1', role: ['superadmin'] });
 
       const res = await app.inject({
         method: 'DELETE',
@@ -297,7 +297,7 @@ describe('Optional Authenticate', () => {
 
   it('should populate request.user when valid token is present', async () => {
     await createApp();
-    const token = issueToken({ id: 'user-1', roles: ['admin'], organizationId: 'org-1' });
+    const token = issueToken({ id: 'user-1', role: ['admin'], organizationId: 'org-1' });
 
     const res = await app.inject({
       method: 'GET',
@@ -309,7 +309,7 @@ describe('Optional Authenticate', () => {
     const body = JSON.parse(res.body);
     expect(body.user).not.toBeNull();
     expect(body.user.id).toBe('user-1');
-    expect(body.user.roles).toEqual(['admin']);
+    expect(body.user.role).toEqual(['admin']);
     expect(body.user.organizationId).toBe('org-1');
   });
 
@@ -344,7 +344,7 @@ describe('Optional Authenticate', () => {
   it('should ignore refresh tokens (not populate user)', async () => {
     await createApp();
     // Issue a refresh token — optionalAuthenticate should silently ignore it
-    const tokens = app.auth.issueTokens({ id: 'user-1', roles: ['admin'] });
+    const tokens = app.auth.issueTokens({ id: 'user-1', role: ['admin'] });
 
     const res = await app.inject({
       method: 'GET',

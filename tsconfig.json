@@ -24,8 +24,8 @@
 
     // Emit options
     "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
+    "declarationMap": false,
+    "sourceMap": false,
     "noEmit": true, // tsup handles emit
 
     // Other

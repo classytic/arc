@@ -72,7 +72,7 @@ function createScopeAwareAuthenticator(superadminRoles: string[] = ['superadmin'
 
     // Set scope BEFORE returning user — authPlugin will skip scope resolution
     // if scope is already set (not 'public')
-    const userRoles = (Array.isArray(decoded.roles) ? decoded.roles : []) as string[];
+    const userRoles = (Array.isArray(decoded.role) ? decoded.role : []) as string[];
     const orgId = decoded.organizationId as string | undefined;
 
     if (superadminRoles.some((r) => userRoles.includes(r))) {
@@ -183,7 +183,7 @@ describe('Multi-Tenant E2E (data isolation)', () => {
 
   describe('Create — organizationId auto-injection', () => {
     it('should inject organizationId from user context on create', async () => {
-      const token = issueToken({ id: USER_A1, roles: ['user'], organizationId: ORG_A });
+      const token = issueToken({ id: USER_A1, role: ['user'], organizationId: ORG_A });
 
       const res = await app.inject({
         method: 'POST',
@@ -199,7 +199,7 @@ describe('Multi-Tenant E2E (data isolation)', () => {
     });
 
     it('should reject create without org context', async () => {
-      const token = issueToken({ id: USER_NO_ORG, roles: ['user'] }); // No organizationId
+      const token = issueToken({ id: USER_NO_ORG, role: ['user'] }); // No organizationId
 
       const res = await app.inject({
         method: 'POST',
@@ -222,7 +222,7 @@ describe('Multi-Tenant E2E (data isolation)', () => {
   describe('Data isolation', () => {
     beforeAll(async () => {
       // Create 3 invoices for Org-A
-      const tokenA = issueToken({ id: USER_A1, roles: ['user'], organizationId: ORG_A });
+      const tokenA = issueToken({ id: USER_A1, role: ['user'], organizationId: ORG_A });
       for (const inv of [
         { title: 'Org-A Invoice 1', amount: 100 },
         { title: 'Org-A Invoice 2', amount: 200 },
@@ -237,7 +237,7 @@ describe('Multi-Tenant E2E (data isolation)', () => {
       }
 
       // Create 2 invoices for Org-B
-      const tokenB = issueToken({ id: USER_B1, roles: ['user'], organizationId: ORG_B });
+      const tokenB = issueToken({ id: USER_B1, role: ['user'], organizationId: ORG_B });
       for (const inv of [
         { title: 'Org-B Invoice 1', amount: 500 },
         { title: 'Org-B Invoice 2', amount: 600 },
@@ -252,7 +252,7 @@ describe('Multi-Tenant E2E (data isolation)', () => {
     });
 
     it('Org-A user should only see Org-A invoices', async () => {
-      const token = issueToken({ id: USER_A1, roles: ['user'], organizationId: ORG_A });
+      const token = issueToken({ id: USER_A1, role: ['user'], organizationId: ORG_A });
 
       const res = await app.inject({
         method: 'GET',
@@ -270,7 +270,7 @@ describe('Multi-Tenant E2E (data isolation)', () => {
     });
 
     it('Org-B user should only see Org-B invoices', async () => {
-      const token = issueToken({ id: USER_B1, roles: ['user'], organizationId: ORG_B });
+      const token = issueToken({ id: USER_B1, role: ['user'], organizationId: ORG_B });
 
       const res = await app.inject({
         method: 'GET',
@@ -287,7 +287,7 @@ describe('Multi-Tenant E2E (data isolation)', () => {
     });
 
     it('different user in same org should see same org data', async () => {
-      const token = issueToken({ id: USER_A2, roles: ['user'], organizationId: ORG_A });
+      const token = issueToken({ id: USER_A2, role: ['user'], organizationId: ORG_A });
 
       const res = await app.inject({
         method: 'GET',
@@ -302,7 +302,7 @@ describe('Multi-Tenant E2E (data isolation)', () => {
 
     it('Org-A user cannot get Org-B invoice by ID (cross-tenant)', async () => {
       // First get an Org-B invoice ID
-      const tokenB = issueToken({ id: USER_B1, roles: ['user'], organizationId: ORG_B });
+      const tokenB = issueToken({ id: USER_B1, role: ['user'], organizationId: ORG_B });
       const listRes = await app.inject({
         method: 'GET',
         url: '/invoices',
@@ -311,7 +311,7 @@ describe('Multi-Tenant E2E (data isolation)', () => {
       const orgBInvoiceId = JSON.parse(listRes.body).docs[0]._id;
 
       // Try to access it as Org-A user
-      const tokenA = issueToken({ id: USER_A1, roles: ['user'], organizationId: ORG_A });
+      const tokenA = issueToken({ id: USER_A1, role: ['user'], organizationId: ORG_A });
       const getRes = await app.inject({
         method: 'GET',
         url: `/invoices/${orgBInvoiceId}`,
@@ -324,7 +324,7 @@ describe('Multi-Tenant E2E (data isolation)', () => {
 
     it('Org-A user cannot update Org-B invoice (cross-tenant)', async () => {
       // Get Org-B invoice ID
-      const tokenB = issueToken({ id: USER_B1, roles: ['user'], organizationId: ORG_B });
+      const tokenB = issueToken({ id: USER_B1, role: ['user'], organizationId: ORG_B });
       const listRes = await app.inject({
         method: 'GET',
         url: '/invoices',
@@ -333,7 +333,7 @@ describe('Multi-Tenant E2E (data isolation)', () => {
       const orgBInvoiceId = JSON.parse(listRes.body).docs[0]._id;
 
       // Try to update as Org-A
-      const tokenA = issueToken({ id: USER_A1, roles: ['user'], organizationId: ORG_A });
+      const tokenA = issueToken({ id: USER_A1, role: ['user'], organizationId: ORG_A });
       const updateRes = await app.inject({
         method: 'PATCH',
         url: `/invoices/${orgBInvoiceId}`,
@@ -345,7 +345,7 @@ describe('Multi-Tenant E2E (data isolation)', () => {
     });
 
     it('Org-A user cannot delete Org-B invoice (cross-tenant)', async () => {
-      const tokenB = issueToken({ id: USER_B1, roles: ['user'], organizationId: ORG_B });
+      const tokenB = issueToken({ id: USER_B1, role: ['user'], organizationId: ORG_B });
       const listRes = await app.inject({
         method: 'GET',
         url: '/invoices',
@@ -353,7 +353,7 @@ describe('Multi-Tenant E2E (data isolation)', () => {
       });
       const orgBInvoiceId = JSON.parse(listRes.body).docs[0]._id;
 
-      const tokenA = issueToken({ id: USER_A1, roles: ['user'], organizationId: ORG_A });
+      const tokenA = issueToken({ id: USER_A1, role: ['user'], organizationId: ORG_A });
       const deleteRes = await app.inject({
         method: 'DELETE',
         url: `/invoices/${orgBInvoiceId}`,
@@ -370,7 +370,7 @@ describe('Multi-Tenant E2E (data isolation)', () => {
 
   describe('Superadmin bypass', () => {
     it('superadmin should see ALL invoices across orgs', async () => {
-      const token = issueToken({ id: SUPERADMIN, roles: ['superadmin'], organizationId: ORG_A });
+      const token = issueToken({ id: SUPERADMIN, role: ['superadmin'], organizationId: ORG_A });
 
       const res = await app.inject({
         method: 'GET',
@@ -386,7 +386,7 @@ describe('Multi-Tenant E2E (data isolation)', () => {
 
     it('superadmin should get any invoice regardless of org', async () => {
       // Get Org-B invoice
-      const tokenB = issueToken({ id: USER_B1, roles: ['user'], organizationId: ORG_B });
+      const tokenB = issueToken({ id: USER_B1, role: ['user'], organizationId: ORG_B });
       const listRes = await app.inject({
         method: 'GET',
         url: '/invoices',
@@ -395,7 +395,7 @@ describe('Multi-Tenant E2E (data isolation)', () => {
       const orgBInvoiceId = JSON.parse(listRes.body).docs[0]._id;
 
       // Superadmin can access it
-      const adminToken = issueToken({ id: SUPERADMIN, roles: ['superadmin'] });
+      const adminToken = issueToken({ id: SUPERADMIN, role: ['superadmin'] });
       const getRes = await app.inject({
         method: 'GET',
         url: `/invoices/${orgBInvoiceId}`,
@@ -420,7 +420,7 @@ describe('Multi-Tenant E2E (data isolation)', () => {
     });
 
     it('user without org context should get 403 on list', async () => {
-      const token = issueToken({ id: USER_NO_ORG, roles: ['user'] });
+      const token = issueToken({ id: USER_NO_ORG, role: ['user'] });
 
       const res = await app.inject({
         method: 'GET',
@@ -487,8 +487,8 @@ describe('Single-Tenant E2E (no org filtering)', () => {
     await app.ready();
 
     // Seed data from different "users" (single-tenant = no org filtering)
-    const token1 = app.auth.issueTokens({ id: USER_A1, roles: ['user'] }).accessToken;
-    const token2 = app.auth.issueTokens({ id: USER_B1, roles: ['user'] }).accessToken;
+    const token1 = app.auth.issueTokens({ id: USER_A1, role: ['user'] }).accessToken;
+    const token2 = app.auth.issueTokens({ id: USER_B1, role: ['user'] }).accessToken;
 
     for (const title of ['Note by User-A1 #1', 'Note by User-A1 #2']) {
       await app.inject({
@@ -515,7 +515,7 @@ describe('Single-Tenant E2E (no org filtering)', () => {
   });
 
   it('all users should see ALL notes (no org filtering)', async () => {
-    const token = app.auth.issueTokens({ id: USER_A1, roles: ['user'] }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A1, role: ['user'] }).accessToken;
 
     const res = await app.inject({
       method: 'GET',
@@ -530,7 +530,7 @@ describe('Single-Tenant E2E (no org filtering)', () => {
 
   it('any user can get any note by ID', async () => {
     // User A creates, User B reads
-    const tokenA = app.auth.issueTokens({ id: USER_A1, roles: ['user'] }).accessToken;
+    const tokenA = app.auth.issueTokens({ id: USER_A1, role: ['user'] }).accessToken;
     const listRes = await app.inject({
       method: 'GET',
       url: '/notes',
@@ -538,7 +538,7 @@ describe('Single-Tenant E2E (no org filtering)', () => {
     });
     const noteId = JSON.parse(listRes.body).docs[0]._id;
 
-    const tokenB = app.auth.issueTokens({ id: USER_B1, roles: ['user'] }).accessToken;
+    const tokenB = app.auth.issueTokens({ id: USER_B1, role: ['user'] }).accessToken;
     const getRes = await app.inject({
       method: 'GET',
       url: `/notes/${noteId}`,
@@ -549,7 +549,7 @@ describe('Single-Tenant E2E (no org filtering)', () => {
   });
 
   it('any user can update any note', async () => {
-    const token = app.auth.issueTokens({ id: USER_A1, roles: ['user'] }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A1, role: ['user'] }).accessToken;
     const listRes = await app.inject({
       method: 'GET',
       url: '/notes',
@@ -557,7 +557,7 @@ describe('Single-Tenant E2E (no org filtering)', () => {
     });
     const noteId = JSON.parse(listRes.body).docs[0]._id;
 
-    const tokenB = app.auth.issueTokens({ id: USER_B1, roles: ['user'] }).accessToken;
+    const tokenB = app.auth.issueTokens({ id: USER_B1, role: ['user'] }).accessToken;
     const updateRes = await app.inject({
       method: 'PATCH',
       url: `/notes/${noteId}`,
@@ -639,8 +639,8 @@ describe('Flexible Multi-Tenant (allowPublic list/get)', () => {
     await app.ready();
 
     // Seed: 2 items for Org-A, 1 item for Org-B
-    const tokenA = app.auth.issueTokens({ id: USER_A1, roles: ['user'], organizationId: ORG_A }).accessToken;
-    const tokenB = app.auth.issueTokens({ id: USER_B1, roles: ['user'], organizationId: ORG_B }).accessToken;
+    const tokenA = app.auth.issueTokens({ id: USER_A1, role: ['user'], organizationId: ORG_A }).accessToken;
+    const tokenB = app.auth.issueTokens({ id: USER_B1, role: ['user'], organizationId: ORG_B }).accessToken;
 
     await app.inject({
       method: 'POST', url: '/catalog',
@@ -675,7 +675,7 @@ describe('Flexible Multi-Tenant (allowPublic list/get)', () => {
   it('authenticated user WITH org context should see only their org items', async () => {
     // optionalAuthenticate parses the JWT on allowPublic() routes without requiring it.
     // This populates request.user → flexible filter extracts org → applies filter.
-    const token = app.auth.issueTokens({ id: USER_A1, roles: ['user'], organizationId: ORG_A }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_A1, role: ['user'], organizationId: ORG_A }).accessToken;
 
     const res = await app.inject({
       method: 'GET',
@@ -694,7 +694,7 @@ describe('Flexible Multi-Tenant (allowPublic list/get)', () => {
 
   it('authenticated user WITHOUT org context on allowPublic route sees ALL items', async () => {
     // User has valid JWT but no organizationId — flexible filter passes through (public data)
-    const token = app.auth.issueTokens({ id: USER_NO_ORG, roles: ['user'] }).accessToken;
+    const token = app.auth.issueTokens({ id: USER_NO_ORG, role: ['user'] }).accessToken;
 
     const res = await app.inject({
       method: 'GET',
@@ -726,12 +726,270 @@ describe('Flexible Multi-Tenant (allowPublic list/get)', () => {
     expect(noAuthRes.statusCode).toBe(401);
 
     // Auth but no org → 403 (tenant injection requires org)
-    const noOrgToken = app.auth.issueTokens({ id: USER_NO_ORG, roles: ['user'] }).accessToken;
+    const noOrgToken = app.auth.issueTokens({ id: USER_NO_ORG, role: ['user'] }).accessToken;
     const noOrgRes = await app.inject({
       method: 'POST', url: '/catalog',
       headers: { authorization: `Bearer ${noOrgToken}` },
       payload: { name: 'Orphan', price: 1 },
     });
     expect(noOrgRes.statusCode).toBe(403);
+  });
+});
+
+// ============================================================================
+// Platform-Universal E2E (tenantField: false — no org filtering)
+// ============================================================================
+
+describe('Platform-Universal E2E (tenantField: false)', () => {
+  let app: FastifyInstance;
+
+  const CustomerSchema = new mongoose.Schema(
+    {
+      name: { type: String, required: true },
+      phone: { type: String, required: true },
+      email: String,
+      createdBy: { type: mongoose.Schema.Types.ObjectId },
+    },
+    { timestamps: true }
+  );
+
+  beforeAll(async () => {
+    await setupTestDatabase();
+
+    const CustomerModel = mongoose.models['PlatformCustomer'] || mongoose.model('PlatformCustomer', CustomerSchema);
+    const { Repository } = require('@classytic/mongokit');
+    const repo = new Repository(CustomerModel);
+
+    // Platform-universal resource: tenantField: false disables org filtering
+    const resource = defineResource({
+      name: 'customer',
+      adapter: createMongooseAdapter({ model: CustomerModel, repository: repo }),
+      prefix: '/customers',
+      tag: 'Customers',
+      tenantField: false,
+      permissions: {
+        list: requireAuth(),
+        get: requireAuth(),
+        create: requireAuth(),
+        update: requireAuth(),
+        delete: requireAuth(),
+      },
+    });
+
+    app = await createApp({
+      preset: 'development',
+      auth: {
+        type: 'jwt',
+        jwt: { secret: JWT_SECRET },
+        authenticate: createScopeAwareAuthenticator(['superadmin']),
+      },
+      logger: false,
+      helmet: false,
+      rateLimit: false,
+      plugins: async (fastify) => {
+        await fastify.register(resource.toPlugin());
+      },
+    });
+
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app?.close();
+    await teardownTestDatabase();
+  });
+
+  function issueToken(payload: Record<string, unknown>) {
+    return app.auth.issueTokens(payload).accessToken;
+  }
+
+  function authHeader(token: string) {
+    return { authorization: `Bearer ${token}` };
+  }
+
+  // --------------------------------------------------------------------------
+  // Create — no organizationId injection
+  // --------------------------------------------------------------------------
+
+  describe('Create — no org injection', () => {
+    it('should create item WITHOUT organizationId even when user has org context', async () => {
+      const token = issueToken({ id: USER_A1, role: ['user'], organizationId: ORG_A });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/customers',
+        headers: authHeader(token),
+        payload: { name: 'John Doe', phone: '+1234567890' },
+      });
+
+      expect(res.statusCode).toBe(201);
+      const body = JSON.parse(res.body);
+      expect(body.data.name).toBe('John Doe');
+      // organizationId should NOT be injected — platform-universal
+      expect(body.data.organizationId).toBeUndefined();
+    });
+
+    it('should create item when user has no org context', async () => {
+      const token = issueToken({ id: USER_NO_ORG, role: ['user'] });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/customers',
+        headers: authHeader(token),
+        payload: { name: 'Jane Doe', phone: '+0987654321' },
+      });
+
+      // Should succeed — platform-universal resources don't require org context
+      expect(res.statusCode).toBe(201);
+      const body = JSON.parse(res.body);
+      expect(body.data.name).toBe('Jane Doe');
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Cross-org visibility — all users see ALL items
+  // --------------------------------------------------------------------------
+
+  describe('Cross-org visibility', () => {
+    beforeAll(async () => {
+      // Seed additional data from different orgs
+      const tokenA = issueToken({ id: USER_A1, role: ['user'], organizationId: ORG_A });
+      const tokenB = issueToken({ id: USER_B1, role: ['user'], organizationId: ORG_B });
+
+      await app.inject({
+        method: 'POST', url: '/customers',
+        headers: authHeader(tokenA),
+        payload: { name: 'Customer from Org-A', phone: '+111' },
+      });
+      await app.inject({
+        method: 'POST', url: '/customers',
+        headers: authHeader(tokenB),
+        payload: { name: 'Customer from Org-B', phone: '+222' },
+      });
+    });
+
+    it('Org-A user should see ALL customers (no org filtering)', async () => {
+      const token = issueToken({ id: USER_A1, role: ['user'], organizationId: ORG_A });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/customers',
+        headers: authHeader(token),
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      // All 4 customers: 2 from Create tests + 2 from seeding
+      expect(body.docs.length).toBe(4);
+    });
+
+    it('Org-B user should see ALL customers (no org filtering)', async () => {
+      const token = issueToken({ id: USER_B1, role: ['user'], organizationId: ORG_B });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/customers',
+        headers: authHeader(token),
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.docs.length).toBe(4);
+    });
+
+    it('user without org context should see ALL customers', async () => {
+      const token = issueToken({ id: USER_NO_ORG, role: ['user'] });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/customers',
+        headers: authHeader(token),
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.docs.length).toBe(4);
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Get/Update/Delete — no cross-org restriction
+  // --------------------------------------------------------------------------
+
+  describe('Get/Update/Delete — no cross-org restriction', () => {
+    let customerId: string;
+
+    beforeAll(async () => {
+      // Create a customer as Org-A user
+      const token = issueToken({ id: USER_A1, role: ['user'], organizationId: ORG_A });
+      const res = await app.inject({
+        method: 'POST', url: '/customers',
+        headers: authHeader(token),
+        payload: { name: 'Shared Customer', phone: '+333' },
+      });
+      customerId = JSON.parse(res.body).data._id;
+    });
+
+    it('Org-B user can get customer created by Org-A user', async () => {
+      const token = issueToken({ id: USER_B1, role: ['user'], organizationId: ORG_B });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/customers/${customerId}`,
+        headers: authHeader(token),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body).data.name).toBe('Shared Customer');
+    });
+
+    it('Org-B user can update customer created by Org-A user', async () => {
+      const token = issueToken({ id: USER_B1, role: ['user'], organizationId: ORG_B });
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/customers/${customerId}`,
+        headers: authHeader(token),
+        payload: { name: 'Updated by Org-B' },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body).data.name).toBe('Updated by Org-B');
+    });
+
+    it('Org-B user can delete customer created by Org-A user', async () => {
+      const token = issueToken({ id: USER_B1, role: ['user'], organizationId: ORG_B });
+
+      const res = await app.inject({
+        method: 'DELETE',
+        url: `/customers/${customerId}`,
+        headers: authHeader(token),
+      });
+
+      expect(res.statusCode).toBe(200);
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Auth enforcement — still requires authentication
+  // --------------------------------------------------------------------------
+
+  describe('Auth enforcement', () => {
+    it('unauthenticated request should get 401', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/customers',
+      });
+      expect(res.statusCode).toBe(401);
+    });
+
+    it('unauthenticated create should get 401', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/customers',
+        payload: { name: 'Sneaky', phone: '+999' },
+      });
+      expect(res.statusCode).toBe(401);
+    });
   });
 });

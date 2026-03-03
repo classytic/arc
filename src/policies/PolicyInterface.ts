@@ -9,7 +9,7 @@
  * class RBACPolicy implements PolicyEngine {
  *   can(user, operation, context) {
  *     return {
- *       allowed: user.roles.includes('admin'),
+ *       allowed: getUserRoles(user).includes('admin'),
  *       reason: 'Admin role required',
  *     };
  *   }
@@ -156,7 +156,7 @@ export interface PolicyContext {
  *   can(user, operation, context) {
  *     // Check RBAC
  *     const allowedRoles = this.config.roles[operation] || [];
- *     if (!user.roles.some(r => allowedRoles.includes(r))) {
+ *     if (!getUserRoles(user).some(r => allowedRoles.includes(r))) {
  *       return { allowed: false, reason: 'Insufficient permissions' };
  *     }
  *

@@ -244,7 +244,7 @@ describe('C2: ArcInternalMetadata typed access via _meta()', () => {
   it('ArcInternalMetadata interface should type internal fields', () => {
     const meta: ArcInternalMetadata = {
       _policyFilters: { organizationId: 'org-123' },
-      _scope: { kind: 'authenticated', userId: 'u1', roles: [] },
+      _scope: { kind: 'authenticated', userId: 'u1', role: [] },
       _ownershipCheck: { field: 'authorId', userId: 'u1' },
       arc: {
         hooks: new HookSystem(),
@@ -278,7 +278,7 @@ describe('C2: ArcInternalMetadata typed access via _meta()', () => {
     const req = createReq(hooks, {
       metadata: {
         arc: { hooks },
-        _scope: { kind: 'authenticated', userId: 'u1', roles: ['admin'] },
+        _scope: { kind: 'authenticated', userId: 'u1', role: ['admin'] },
         _policyFilters: { status: 'active' },
       },
     });

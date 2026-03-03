@@ -73,7 +73,7 @@ describe('JWT-Only Org Scoping (no Better Auth)', () => {
 
           // Set scope based on elevation header + roles
           const wantsElevation = request.headers['x-arc-scope'] === 'platform';
-          const userRoles = (decoded.roles ?? []) as string[];
+          const userRoles = (decoded.role ?? []) as string[];
           if (wantsElevation && userRoles.includes('superadmin')) {
             (request as any).scope = { kind: 'elevated', elevatedBy: String(decoded.id) };
           }
@@ -111,7 +111,7 @@ describe('JWT-Only Org Scoping (no Better Auth)', () => {
 
   describe('Token-embedded org context', () => {
     it('should extract organizationId from JWT token claims', async () => {
-      const token = issueToken({ id: USER_A, roles: ['user'], organizationId: ORG_A });
+      const token = issueToken({ id: USER_A, role: ['user'], organizationId: ORG_A });
       const res = await app.inject({
         method: 'POST',
         url: '/tasks',
@@ -125,7 +125,7 @@ describe('JWT-Only Org Scoping (no Better Auth)', () => {
     });
 
     it('should auto-inject organizationId on create via multiTenantPreset', async () => {
-      const token = issueToken({ id: USER_A, roles: ['user'], organizationId: ORG_A });
+      const token = issueToken({ id: USER_A, role: ['user'], organizationId: ORG_A });
       const res = await app.inject({
         method: 'POST',
         url: '/tasks',
@@ -140,7 +140,7 @@ describe('JWT-Only Org Scoping (no Better Auth)', () => {
     });
 
     it('should prevent client from overriding organizationId in body', async () => {
-      const token = issueToken({ id: USER_A, roles: ['user'], organizationId: ORG_A });
+      const token = issueToken({ id: USER_A, role: ['user'], organizationId: ORG_A });
       const res = await app.inject({
         method: 'POST',
         url: '/tasks',
@@ -165,7 +165,7 @@ describe('JWT-Only Org Scoping (no Better Auth)', () => {
 
     beforeAll(async () => {
       // Create tasks in both orgs
-      const tokenA = issueToken({ id: USER_A, roles: ['user'], organizationId: ORG_A });
+      const tokenA = issueToken({ id: USER_A, role: ['user'], organizationId: ORG_A });
       const resA = await app.inject({
         method: 'POST',
         url: '/tasks',
@@ -174,7 +174,7 @@ describe('JWT-Only Org Scoping (no Better Auth)', () => {
       });
       orgATaskId = JSON.parse(resA.body).data._id;
 
-      const tokenB = issueToken({ id: USER_B, roles: ['user'], organizationId: ORG_B });
+      const tokenB = issueToken({ id: USER_B, role: ['user'], organizationId: ORG_B });
       const resB = await app.inject({
         method: 'POST',
         url: '/tasks',
@@ -185,7 +185,7 @@ describe('JWT-Only Org Scoping (no Better Auth)', () => {
     });
 
     it('Org-A user only sees Org-A records', async () => {
-      const token = issueToken({ id: USER_A, roles: ['user'], organizationId: ORG_A });
+      const token = issueToken({ id: USER_A, role: ['user'], organizationId: ORG_A });
       const res = await app.inject({
         method: 'GET',
         url: '/tasks',
@@ -200,7 +200,7 @@ describe('JWT-Only Org Scoping (no Better Auth)', () => {
     });
 
     it('Org-B user only sees Org-B records', async () => {
-      const token = issueToken({ id: USER_B, roles: ['user'], organizationId: ORG_B });
+      const token = issueToken({ id: USER_B, role: ['user'], organizationId: ORG_B });
       const res = await app.inject({
         method: 'GET',
         url: '/tasks',
@@ -215,7 +215,7 @@ describe('JWT-Only Org Scoping (no Better Auth)', () => {
     });
 
     it('Org-A user gets 404 for Org-B record by ID', async () => {
-      const token = issueToken({ id: USER_A, roles: ['user'], organizationId: ORG_A });
+      const token = issueToken({ id: USER_A, role: ['user'], organizationId: ORG_A });
       const res = await app.inject({
         method: 'GET',
         url: `/tasks/${orgBTaskId}`,
@@ -226,7 +226,7 @@ describe('JWT-Only Org Scoping (no Better Auth)', () => {
     });
 
     it('Org-A user gets 404 updating Org-B record', async () => {
-      const token = issueToken({ id: USER_A, roles: ['user'], organizationId: ORG_A });
+      const token = issueToken({ id: USER_A, role: ['user'], organizationId: ORG_A });
       const res = await app.inject({
         method: 'PATCH',
         url: `/tasks/${orgBTaskId}`,
@@ -244,7 +244,7 @@ describe('JWT-Only Org Scoping (no Better Auth)', () => {
 
   describe('Superadmin bypass', () => {
     it('superadmin sees all records across orgs', async () => {
-      const token = issueToken({ id: SUPERADMIN, roles: ['superadmin'] });
+      const token = issueToken({ id: SUPERADMIN, role: ['superadmin'] });
       const res = await app.inject({
         method: 'GET',
         url: '/tasks',

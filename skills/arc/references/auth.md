@@ -32,7 +32,7 @@ const app = await createApp({
 
 ```typescript
 // Issue tokens
-const tokens = app.auth.issueTokens({ _id: user._id, email, roles });
+const tokens = app.auth.issueTokens({ _id: user._id, email, role });
 // Returns: { accessToken, refreshToken?, expiresIn, tokenType: 'Bearer' }
 
 // Verify refresh token (rejects access tokens)
@@ -112,7 +112,7 @@ auth: false
 |-----------|-------------|-----|-------------|
 | `fastify.authenticate` | Verify JWT/session, set `request.user` | Yes | Yes |
 | `fastify.optionalAuthenticate` | Parse token if present, skip if absent | Yes | Yes |
-| `fastify.authorize(...roles)` | Check `user.roles`. `authorize('*')` = any auth user | Yes | No |
+| `fastify.authorize(...roles)` | Check `user.role`. `authorize('*')` = any auth user | Yes | No |
 
 ## Permission Functions
 
@@ -192,7 +192,7 @@ import type { RequestScope } from '@classytic/arc/scope';
 
 | Layer | Source | Checked By |
 |-------|--------|------------|
-| Platform roles | `user.roles[]` | `requireRoles()`, `authorize()` |
+| Platform roles | `user.role` (`string \| string[]`) | `requireRoles()`, `authorize()` |
 | Org roles | `request.scope.orgRoles` | `requireOrgRole()`, `requireOrgMembership()` |
 
 ## Microservice Gateway Pattern
@@ -213,7 +213,7 @@ const app = await createApp({
     authenticate: async (req, reply) => {
       const userId = req.headers['x-user-id'];
       if (!userId) return reply.code(401).send({ error: 'Unauthorized' });
-      req.user = { id: userId, roles: JSON.parse(req.headers['x-user-roles'] || '[]') };
+      req.user = { id: userId, role: JSON.parse(req.headers['x-user-roles'] || '[]') };
     },
   },
 });

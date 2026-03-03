@@ -99,7 +99,7 @@ function createReq(overrides: Partial<IRequestContext> = {}): IRequestContext {
     query: {},
     body: {},
     params: {},
-    user: { _id: "user-1", email: "test@example.com", roles: ["admin"] },
+    user: { _id: "user-1", email: "test@example.com", role: ["admin"] },
     headers: {},
     metadata: {
       arc: {

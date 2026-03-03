@@ -154,7 +154,7 @@ describe("Populate with Select - E2E Integration", () => {
     userToken = app.auth.issueTokens({
       id: userId,
       email: "user@test.com",
-      roles: ["user"],
+      role: ["user"],
       organizationId: orgId,
     }).accessToken;
   });

@@ -14,6 +14,7 @@ import type {
   RouteSchemaOptions,
 } from '../types/index.js';
 import { applyFieldWritePermissions, resolveEffectiveRoles } from '../permissions/fields.js';
+import { getUserRoles } from '../permissions/types.js';
 import { isElevated, isMember, PUBLIC_SCOPE } from '../scope/types.js';
 import { SYSTEM_FIELDS } from '../constants.js';
 
@@ -70,7 +71,7 @@ export class BodySanitizer {
       if (!isElevated(scope)) {
         const fieldPerms = arcContext?.arc?.fields;
         if (fieldPerms) {
-          const globalRoles = ((req.user as AnyRecord | undefined)?.roles ?? []) as string[];
+          const globalRoles = getUserRoles(req.user as Record<string, unknown> | undefined);
           const orgRoles = isMember(scope) ? scope.orgRoles : [];
           const effectiveRoles = resolveEffectiveRoles(globalRoles, orgRoles);
           sanitized = applyFieldWritePermissions(sanitized, fieldPerms, effectiveRoles);

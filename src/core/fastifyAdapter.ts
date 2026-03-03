@@ -20,6 +20,7 @@ import type {
 import type { ServerAccessor } from '../types/handlers.js';
 import type { FieldPermissionMap } from '../permissions/fields.js';
 import { applyFieldReadPermissions, resolveEffectiveRoles } from '../permissions/fields.js';
+import { getUserRoles } from '../permissions/types.js';
 import type { RequestScope } from '../scope/types.js';
 import { isElevated, isMember, getOrgId as getOrgIdFromScope, PUBLIC_SCOPE } from '../scope/types.js';
 
@@ -226,7 +227,7 @@ export function sendControllerResponse<T>(
   // Only compute roles when field permissions require them
   const effectiveRoles = fieldPerms
     ? resolveEffectiveRoles(
-        ((reqWithExtras?.user as AnyRecord | undefined)?.roles ?? []) as string[],
+        getUserRoles(reqWithExtras?.user as Record<string, unknown> | undefined),
         isMember(scope) ? scope.orgRoles : [],
       )
     : [];

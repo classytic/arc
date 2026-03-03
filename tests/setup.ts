@@ -55,7 +55,7 @@ export function createTestFastify(): FastifyInstance {
 export const mockUser = {
   _id: '507f1f77bcf86cd799439011', // Valid ObjectId format
   email: 'test@example.com',
-  roles: ['admin'],
+  role: ['admin'],
 };
 
 /**

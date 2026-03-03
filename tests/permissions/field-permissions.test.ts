@@ -367,7 +367,7 @@ describe('Field Permissions', () => {
         assignedRecruiters: [],
       };
 
-      // user.roles = ['user'], orgRoles = ['admin'] (from membership)
+      // user.role = ['user'], orgRoles = ['admin'] (from membership)
       const effectiveRoles = resolveEffectiveRoles(['user'], ['admin']);
       expect(effectiveRoles).toContain('admin');
 

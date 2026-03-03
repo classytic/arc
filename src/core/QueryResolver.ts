@@ -36,8 +36,8 @@ export interface QueryResolverConfig {
   defaultSort?: string;
   /** Schema options for field sanitization */
   schemaOptions?: RouteSchemaOptions;
-  /** Field name used for multi-tenant scoping (default: 'organizationId') */
-  tenantField?: string;
+  /** Field name used for multi-tenant scoping (default: 'organizationId'). Set to `false` to disable. */
+  tenantField?: string | false;
 }
 
 // ============================================================================
@@ -60,7 +60,7 @@ export class QueryResolver {
   private defaultLimit: number;
   private defaultSort: string;
   private schemaOptions: RouteSchemaOptions;
-  private tenantField: string;
+  private tenantField: string | false;
 
   constructor(config: QueryResolverConfig = {}) {
     this.queryParser = config.queryParser ?? getDefaultQueryParser();
@@ -68,7 +68,7 @@ export class QueryResolver {
     this.defaultLimit = config.defaultLimit ?? DEFAULT_LIMIT;
     this.defaultSort = config.defaultSort ?? DEFAULT_SORT;
     this.schemaOptions = config.schemaOptions ?? {};
-    this.tenantField = config.tenantField ?? DEFAULT_TENANT_FIELD;
+    this.tenantField = config.tenantField !== undefined ? config.tenantField : DEFAULT_TENANT_FIELD;
   }
 
   /**
@@ -107,9 +107,10 @@ export class QueryResolver {
     }
 
     // Org/tenant scope -- derived from request.scope via metadata
+    // Skip for platform-universal resources (tenantField: false)
     const scope = arcContext?._scope;
     const orgId = scope ? getOrgIdFromScope(scope) : undefined;
-    if (orgId && !policyFilters?.[this.tenantField]) {
+    if (this.tenantField && orgId && !policyFilters?.[this.tenantField]) {
       // Only set if not already set by multiTenant preset
       filters[this.tenantField] = orgId;
     }

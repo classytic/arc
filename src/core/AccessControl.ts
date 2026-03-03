@@ -21,8 +21,8 @@ import { MAX_REGEX_LENGTH } from '../constants.js';
 // ============================================================================
 
 export interface AccessControlConfig {
-  /** Field name used for multi-tenant scoping (default: 'organizationId') */
-  tenantField: string;
+  /** Field name used for multi-tenant scoping (default: 'organizationId'). Set to `false` to disable org filtering. */
+  tenantField: string | false;
   /** Primary key field name (default: '_id') */
   idField: string;
   /**
@@ -44,7 +44,7 @@ export interface AccessControlRepository {
 // ============================================================================
 
 export class AccessControl {
-  private readonly tenantField: string;
+  private readonly tenantField: string | false;
   private readonly idField: string;
   private readonly _adapterMatchesFilter?: (item: unknown, filters: Record<string, unknown>) => boolean;
 
@@ -80,9 +80,10 @@ export class AccessControl {
     }
 
     // Apply org/tenant scope filter — derived from request.scope
+    // Skip for platform-universal resources (tenantField: false)
     const scope = arcContext?._scope;
     const orgId = scope ? getOrgIdFromScope(scope) : undefined;
-    if (orgId && !policyFilters?.[this.tenantField]) {
+    if (this.tenantField && orgId && !policyFilters?.[this.tenantField]) {
       filter[this.tenantField] = orgId;
     }
 
@@ -119,6 +120,8 @@ export class AccessControl {
    * unscoped records from leaking across tenants.
    */
   checkOrgScope(item: AnyRecord | null, arcContext: ArcInternalMetadata | RequestContext | undefined): boolean {
+    // Platform-universal resources (tenantField: false) skip org scope check entirely
+    if (!this.tenantField) return true;
     const scope = (arcContext as ArcInternalMetadata | undefined)?._scope;
     const orgId = scope ? getOrgIdFromScope(scope) : undefined;
     if (!item || !orgId) return true;
