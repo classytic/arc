@@ -13,7 +13,7 @@
  * - Single audit point for all state transitions
  *
  * @example
- * import { createActionRouter } from '@classytic/arc';
+ * import { createActionRouter } from '@classytic/arc/core';
  * import { requireRoles } from '@classytic/arc/permissions';
  *
  * createActionRouter(fastify, {
@@ -183,29 +183,10 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
       properties: bodyProperties,
       required: ['action'],
     },
-    response: {
-      200: {
-        type: 'object',
-        properties: {
-          success: { type: 'boolean' },
-          data: { type: 'object' },
-        },
-      },
-      400: {
-        type: 'object',
-        properties: {
-          success: { type: 'boolean' },
-          error: { type: 'string' },
-        },
-      },
-      403: {
-        type: 'object',
-        properties: {
-          success: { type: 'boolean' },
-          error: { type: 'string' },
-        },
-      },
-    },
+    // No response schema — action handlers return dynamic shapes
+    // (Mongoose documents, composite objects, etc.) that cannot be
+    // described with a static JSON Schema.  Fastify will serialize
+    // them with plain JSON.stringify, which honours toJSON().
   };
 
   // Build preHandlers
