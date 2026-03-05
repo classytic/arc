@@ -8,11 +8,12 @@ npm install -D vitest mongodb-memory-server
 
 ## Architecture
 
-Arc testing works at two levels:
+Arc testing works at three levels:
 
 | Level | Class | What it tests |
 |-------|-------|---------------|
 | **HTTP** | `HttpTestHarness` | Full request lifecycle — routes, auth, permissions, pipeline, field permissions, response envelope |
+| **Action** | `createActionRouter` | Unified action endpoints — validation, permissions, idempotency, error handling, response serialization |
 | **Model** | `TestHarness` | Mongoose model directly — schema validation, presets, field permissions (no HTTP) |
 
 **Use `HttpTestHarness`** for integration tests. It exercises the same code path your users hit.
@@ -56,5 +57,6 @@ This generates tests for:
 ## Sections
 
 1. [HTTP Test Harness](./http-harness) — auto-generate HTTP-level CRUD, permission, and validation tests
-2. [Auth Helpers](./auth-helpers) — Better Auth test primitives and composite org setup
-3. [Utilities](./utilities) — mocks, request builder, DB helpers, and test app factory
+2. [Action Router](./action-router) — test `createActionRouter` action endpoints (validation, permissions, idempotency, error handling)
+3. [Auth Helpers](./auth-helpers) — Better Auth test primitives and composite org setup
+4. [Utilities](./utilities) — mocks, request builder, DB helpers, and test app factory

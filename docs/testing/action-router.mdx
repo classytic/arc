@@ -1,0 +1,665 @@
+# Action Router Testing
+
+Unit and integration tests for `createActionRouter` — the unified action endpoint factory (Stripe pattern).
+
+```typescript
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import Fastify, { type FastifyInstance } from 'fastify';
+import { createActionRouter } from '@classytic/arc/core';
+```
+
+## Test Helpers
+
+Set up reusable helpers for permission stubs and app creation:
+
+```typescript
+import type {
+  ActionHandler,
+  ActionRouterConfig,
+  IdempotencyService,
+} from '@classytic/arc/core';
+import type { PermissionCheck, PermissionContext, PermissionResult } from '@classytic/arc/types';
+
+/** Mark action as public (no auth required) */
+function publicAction(): PermissionCheck {
+  const check = (() => true) as PermissionCheck & { _isPublic: boolean };
+  check._isPublic = true;
+  return check;
+}
+
+/** Mark action as protected with optional custom checker */
+function protectedAction(
+  checker?: (ctx: PermissionContext) => boolean | PermissionResult
+): PermissionCheck {
+  return (checker ?? ((ctx: PermissionContext) => !!ctx.user)) as PermissionCheck;
+}
+
+/** Mark action as role-restricted (adds _roles metadata for OpenAPI) */
+function rolesAction(roles: string[]): PermissionCheck {
+  const check = ((ctx: PermissionContext) => !!ctx.user) as PermissionCheck & { _roles: string[] };
+  check._roles = roles;
+  return check;
+}
+
+/** Build a Fastify app with createActionRouter registered */
+async function buildApp(
+  config: ActionRouterConfig,
+  opts?: { authenticate?: (req: any, reply: any) => Promise<void> }
+): Promise<FastifyInstance> {
+  const app = Fastify({ logger: false });
+  if (opts?.authenticate) {
+    (app as any).authenticate = opts.authenticate;
+  }
+  createActionRouter(app, config);
+  await app.ready();
+  return app;
+}
+
+/** Shorthand to inject a POST /:id/action request */
+function inject(
+  app: FastifyInstance,
+  action: string,
+  id = 'test-id',
+  extra: Record<string, any> = {},
+  headers: Record<string, string> = {}
+) {
+  return app.inject({
+    method: 'POST',
+    url: `/${id}/action`,
+    payload: { action, ...extra },
+    headers,
+  });
+}
+```
+
+## Action Validation
+
+The router validates actions against the registered enum via Fastify schema validation.
+
+```typescript
+describe('Action Validation', () => {
+  let app: FastifyInstance;
+
+  beforeAll(async () => {
+    app = await buildApp({
+      tag: 'Test',
+      actions: {
+        approve: async (id) => ({ id, approved: true }),
+        reject: async (id) => ({ id, rejected: true }),
+      },
+    });
+  });
+  afterAll(() => app.close());
+
+  it('returns 400 for unknown action', async () => {
+    const res = await inject(app, 'nonexistent');
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 400 for empty action string', async () => {
+    const res = await inject(app, '');
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('is case-sensitive', async () => {
+    const res = await inject(app, 'Approve'); // 'Approve' not in enum
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 400 when body has no action field', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/test-id/action',
+      payload: { someData: 'value' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});
+```
+
+## Handler Execution
+
+Handlers receive `(id, data, req)` and their return value is wrapped in `{ success: true, data }`.
+
+```typescript
+describe('Handler Execution', () => {
+  it('wraps result in success response', async () => {
+    const app = await buildApp({
+      actions: {
+        process: async (id, data) => ({ id, processed: true, input: data }),
+      },
+    });
+
+    const res = await inject(app, 'process', 'order-123', { amount: 100 });
+    const body = JSON.parse(res.body);
+    expect(res.statusCode).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.data.id).toBe('order-123');
+    expect(body.data.input.amount).toBe(100);
+
+    await app.close();
+  });
+
+  it('strips action field from data passed to handler', async () => {
+    let receivedData: any;
+    const app = await buildApp({
+      actions: {
+        check: async (_id, data) => { receivedData = data; return {}; },
+      },
+    });
+
+    await inject(app, 'check', 'id', { key: 'value' });
+    expect(receivedData.key).toBe('value');
+    expect(receivedData.action).toBeUndefined();
+
+    await app.close();
+  });
+
+  it('handles null, undefined, arrays, and primitives', async () => {
+    const app = await buildApp({
+      actions: {
+        nullAction: async () => null,
+        voidAction: async () => undefined,
+        list: async () => [{ id: '1' }, { id: '2' }],
+        count: async () => 42,
+      },
+    });
+
+    expect(JSON.parse((await inject(app, 'nullAction')).body).data).toBeNull();
+    expect((await inject(app, 'list')).statusCode).toBe(200);
+    expect(JSON.parse((await inject(app, 'count')).body).data).toBe(42);
+
+    await app.close();
+  });
+});
+```
+
+## Error Handling
+
+Errors thrown by handlers are caught and serialized. Use `statusCode`/`status` on the error, or provide `onError` for custom handling.
+
+```typescript
+describe('Error Handling', () => {
+  it('uses error.statusCode', async () => {
+    const app = await buildApp({
+      actions: {
+        fail: async () => {
+          const err = new Error('Not found') as any;
+          err.statusCode = 404;
+          throw err;
+        },
+      },
+    });
+
+    const res = await inject(app, 'fail');
+    expect(res.statusCode).toBe(404);
+    expect(JSON.parse(res.body).error).toBe('Not found');
+    await app.close();
+  });
+
+  it('defaults to 500 with ACTION_FAILED code', async () => {
+    const app = await buildApp({
+      actions: { crash: async () => { throw new Error('Unexpected'); } },
+    });
+
+    const res = await inject(app, 'crash');
+    expect(res.statusCode).toBe(500);
+    expect(JSON.parse(res.body).code).toBe('ACTION_FAILED');
+    await app.close();
+  });
+
+  it('supports custom onError handler', async () => {
+    const app = await buildApp({
+      actions: {
+        fail: async () => { throw new Error('Something broke'); },
+      },
+      onError: (error, action, id) => ({
+        statusCode: 422,
+        error: `Custom: ${error.message} in ${action} for ${id}`,
+        code: 'CUSTOM_ERROR',
+      }),
+    });
+
+    const res = await inject(app, 'fail', 'item-1');
+    expect(res.statusCode).toBe(422);
+    expect(JSON.parse(res.body).code).toBe('CUSTOM_ERROR');
+    await app.close();
+  });
+});
+```
+
+## Permission Checks
+
+Actions can have per-action permissions, a global fallback, or both. Permission checks receive a `PermissionContext` with `user`, `action`, `resourceId`, `resource` (tag), and `data`.
+
+```typescript
+describe('Permission Checks', () => {
+  it('allows access when no permissions defined', async () => {
+    const app = await buildApp({
+      actions: { open: async () => ({ result: 'ok' }) },
+    });
+    expect((await inject(app, 'open')).statusCode).toBe(200);
+    await app.close();
+  });
+
+  it('returns 401 when no user present', async () => {
+    const app = await buildApp({
+      actions: { denied: async () => ({}) },
+      actionPermissions: { denied: protectedAction((ctx) => !!ctx.user) },
+    });
+    expect((await inject(app, 'denied')).statusCode).toBe(401);
+    await app.close();
+  });
+
+  it('returns 403 when user present but not permitted', async () => {
+    const app = Fastify({ logger: false });
+    app.addHook('preHandler', async (req: any) => { req.user = { id: 'u1' }; });
+    createActionRouter(app, {
+      actions: { denied: async () => ({}) },
+      actionPermissions: { denied: protectedAction(() => false) },
+    });
+    await app.ready();
+
+    expect((await inject(app, 'denied')).statusCode).toBe(403);
+    await app.close();
+  });
+
+  it('supports PermissionResult with reason', async () => {
+    const app = Fastify({ logger: false });
+    app.addHook('preHandler', async (req: any) => { req.user = { id: 'u1' }; });
+    createActionRouter(app, {
+      actions: { check: async () => ({}) },
+      actionPermissions: {
+        check: protectedAction(() => ({ granted: false, reason: 'Insufficient tier' })),
+      },
+    });
+    await app.ready();
+
+    const body = JSON.parse((await inject(app, 'check')).body);
+    expect(body.error).toBe('Insufficient tier');
+    await app.close();
+  });
+
+  it('falls back to globalAuth when no action-specific permission', async () => {
+    let globalCalled = false;
+    const app = await buildApp({
+      actions: { noSpecific: async () => ({}) },
+      globalAuth: protectedAction(() => { globalCalled = true; return true; }),
+    });
+
+    await inject(app, 'noSpecific');
+    expect(globalCalled).toBe(true);
+    await app.close();
+  });
+
+  it('prefers action-specific over globalAuth', async () => {
+    let specificCalled = false, globalCalled = false;
+    const app = await buildApp({
+      actions: { specific: async () => ({}) },
+      actionPermissions: {
+        specific: protectedAction(() => { specificCalled = true; return true; }),
+      },
+      globalAuth: protectedAction(() => { globalCalled = true; return true; }),
+    });
+
+    await inject(app, 'specific');
+    expect(specificCalled).toBe(true);
+    expect(globalCalled).toBe(false);
+    await app.close();
+  });
+
+  it('catches permission check errors and returns 403', async () => {
+    const app = await buildApp({
+      actions: { boom: async () => ({}) },
+      actionPermissions: {
+        boom: protectedAction(() => { throw new Error('Auth service down'); }),
+      },
+    });
+
+    const res = await inject(app, 'boom');
+    expect(res.statusCode).toBe(403);
+    expect(JSON.parse(res.body).error).toBe('Permission denied');
+    await app.close();
+  });
+
+  it('passes correct context to permission check', async () => {
+    let ctx: PermissionContext | undefined;
+    const app = Fastify({ logger: false });
+    app.addHook('preHandler', async (req: any) => {
+      req.user = { id: 'user-42', role: 'admin' };
+    });
+    createActionRouter(app, {
+      tag: 'Orders',
+      actions: { approve: async () => ({}) },
+      actionPermissions: {
+        approve: protectedAction((c) => { ctx = c; return true; }),
+      },
+    });
+    await app.ready();
+
+    await inject(app, 'approve', 'order-99', { reason: 'looks good' });
+    expect(ctx!.user?.id).toBe('user-42');
+    expect(ctx!.action).toBe('approve');
+    expect(ctx!.resourceId).toBe('order-99');
+    expect(ctx!.resource).toBe('Orders');
+    expect(ctx!.data?.reason).toBe('looks good');
+    await app.close();
+  });
+});
+```
+
+## Auth Pre-Handler Behavior
+
+The router optimizes authentication based on the permission mix:
+
+| Scenario | Behavior |
+|----------|----------|
+| All actions protected | Global `authenticate` preHandler applied |
+| All actions public | No auth preHandler |
+| Mixed public/protected | Auth deferred to per-action check |
+
+```typescript
+describe('Auth Pre-Handler', () => {
+  it('applies global auth when all actions are protected', async () => {
+    let authCalled = false;
+    const app = await buildApp(
+      {
+        actions: { a: async () => 'a', b: async () => 'b' },
+        actionPermissions: { a: protectedAction(), b: protectedAction() },
+      },
+      { authenticate: async (req: any) => { authCalled = true; req.user = { id: 'u1' }; } },
+    );
+
+    await inject(app, 'a');
+    expect(authCalled).toBe(true);
+    await app.close();
+  });
+
+  it('skips global auth when all actions are public', async () => {
+    let authCalled = false;
+    const app = await buildApp(
+      {
+        actions: { a: async () => 'a' },
+        actionPermissions: { a: publicAction() },
+      },
+      { authenticate: async () => { authCalled = true; } },
+    );
+
+    await inject(app, 'a');
+    expect(authCalled).toBe(false);
+    await app.close();
+  });
+
+  it('defers auth to per-action for mixed public/protected', async () => {
+    let globalAuthCalled = false;
+    const app = await buildApp(
+      {
+        actions: {
+          public: async () => ({ public: true }),
+          private: async () => ({ private: true }),
+        },
+        actionPermissions: {
+          public: publicAction(),
+          private: protectedAction(),
+        },
+      },
+      { authenticate: async () => { globalAuthCalled = true; } },
+    );
+
+    await inject(app, 'public');
+    expect(globalAuthCalled).toBe(false); // Not called for public action
+    await app.close();
+  });
+});
+```
+
+## Idempotency
+
+When an `idempotencyService` is provided and the request includes an `idempotency-key` header, duplicate requests return the cached result.
+
+```typescript
+describe('Idempotency', () => {
+  function createMemoryIdempotencyService(): IdempotencyService {
+    const store = new Map<string, any>();
+    return {
+      async check(key) {
+        if (store.has(key)) return { isNew: false, existingResult: store.get(key) };
+        return { isNew: true };
+      },
+      async complete(key, result) { if (key) store.set(key, result); },
+      async fail() {},
+    };
+  }
+
+  it('returns cached result on replay', async () => {
+    let callCount = 0;
+    const app = await buildApp({
+      actions: {
+        charge: async (id) => { callCount++; return { id, attempt: callCount }; },
+      },
+      idempotencyService: createMemoryIdempotencyService(),
+    });
+
+    const res1 = await inject(app, 'charge', 'o1', {}, { 'idempotency-key': 'k1' });
+    const res2 = await inject(app, 'charge', 'o1', {}, { 'idempotency-key': 'k1' });
+
+    expect(JSON.parse(res1.body).data.attempt).toBe(1);
+    expect(JSON.parse(res2.body).cached).toBe(true);
+    expect(callCount).toBe(1);
+    await app.close();
+  });
+
+  it('skips idempotency when no key header', async () => {
+    let callCount = 0;
+    const app = await buildApp({
+      actions: { process: async () => { callCount++; return {}; } },
+      idempotencyService: createMemoryIdempotencyService(),
+    });
+
+    await inject(app, 'process');
+    await inject(app, 'process');
+    expect(callCount).toBe(2);
+    await app.close();
+  });
+
+  it('calls fail() on handler error', async () => {
+    let failedKey: string | undefined;
+    const app = await buildApp({
+      actions: { crash: async () => { throw new Error('boom'); } },
+      idempotencyService: {
+        async check() { return { isNew: true }; },
+        async complete() {},
+        async fail(key) { failedKey = key; },
+      },
+    });
+
+    await inject(app, 'crash', 'id', {}, { 'idempotency-key': 'fail-key' });
+    expect(failedKey).toBe('fail-key');
+    await app.close();
+  });
+});
+```
+
+## Response Serialization
+
+Action handlers return dynamic shapes (Mongoose documents, nested objects, arrays, primitives). The router serializes them without schema stripping.
+
+```typescript
+describe('Response Serialization', () => {
+  it('preserves all fields (no schema stripping)', async () => {
+    const app = await buildApp({
+      actions: {
+        detail: async () => ({
+          _id: 'abc', name: 'Order', status: 'active',
+          items: [{ product: 'Widget', qty: 3 }],
+        }),
+      },
+    });
+
+    const body = JSON.parse((await inject(app, 'detail')).body);
+    expect(body.data._id).toBe('abc');
+    expect(body.data.items).toHaveLength(1);
+    await app.close();
+  });
+
+  it('honours toJSON()', async () => {
+    const app = await buildApp({
+      actions: {
+        model: async () => ({
+          _id: '123', name: 'Test',
+          toJSON() { return { id: this._id, name: this.name }; },
+        }),
+      },
+    });
+
+    const body = JSON.parse((await inject(app, 'model')).body);
+    expect(body.data.id).toBe('123');
+    await app.close();
+  });
+});
+```
+
+## Action Schemas
+
+Per-action body schemas add additional validated properties beyond `action`:
+
+```typescript
+describe('Action Schemas', () => {
+  it('validates action-specific body properties', async () => {
+    const app = await buildApp({
+      actions: {
+        dispatch: async (id, data) => ({ id, driver: data.transport?.driver }),
+      },
+      actionSchemas: {
+        dispatch: {
+          transport: { type: 'object', properties: { driver: { type: 'string' } } },
+        },
+      },
+    });
+
+    const body = JSON.parse(
+      (await inject(app, 'dispatch', 'o1', { transport: { driver: 'John' } })).body
+    );
+    expect(body.data.driver).toBe('John');
+    await app.close();
+  });
+});
+```
+
+## OpenAPI Schema
+
+The router auto-generates OpenAPI schema with action enum, tags, and role metadata:
+
+```typescript
+describe('OpenAPI Schema', () => {
+  it('generates action enum in body schema', async () => {
+    const app = Fastify({ logger: false });
+    let capturedSchema: any;
+    app.addHook('onRoute', (opts) => {
+      if (opts.url === '/:id/action') capturedSchema = opts.schema;
+    });
+
+    createActionRouter(app, {
+      actions: { approve: async () => ({}), reject: async () => ({}) },
+    });
+    await app.ready();
+
+    expect(capturedSchema.body.properties.action.enum).toEqual(['approve', 'reject']);
+    await app.close();
+  });
+
+  it('includes role metadata in description', async () => {
+    const app = Fastify({ logger: false });
+    let capturedSchema: any;
+    app.addHook('onRoute', (opts) => {
+      if (opts.url === '/:id/action') capturedSchema = opts.schema;
+    });
+
+    createActionRouter(app, {
+      actions: { approve: async () => ({}) },
+      actionPermissions: { approve: rolesAction(['admin', 'manager']) },
+    });
+    await app.ready();
+
+    expect(capturedSchema.description).toContain('admin');
+    expect(capturedSchema.description).toContain('manager');
+    await app.close();
+  });
+});
+```
+
+## Edge Cases
+
+```typescript
+describe('Edge Cases', () => {
+  it('skips route registration when actions is empty', async () => {
+    const app = Fastify({ logger: false });
+    createActionRouter(app, { actions: {} });
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/id/action', payload: { action: 'x' } });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('works with various ID formats (ObjectId, UUID, numeric)', async () => {
+    const app = await buildApp({
+      actions: { echo: async (id) => ({ id }) },
+    });
+
+    for (const id of ['507f1f77bcf86cd799439011', '550e8400-e29b-41d4-a716-446655440000', '12345']) {
+      expect(JSON.parse((await inject(app, 'echo', id)).body).data.id).toBe(id);
+    }
+    await app.close();
+  });
+
+  it('returns 404 for non-POST methods', async () => {
+    const app = await buildApp({ actions: { test: async () => ({}) } });
+    const res = await app.inject({ method: 'GET', url: '/id/action' });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('does not execute handler when permission denied', async () => {
+    let called = false;
+    const app = await buildApp({
+      actions: { sensitive: async () => { called = true; return {}; } },
+      actionPermissions: { sensitive: protectedAction(() => false) },
+    });
+
+    await inject(app, 'sensitive');
+    expect(called).toBe(false);
+    await app.close();
+  });
+
+  it('checks permission before idempotency', async () => {
+    const order: string[] = [];
+    const app = await buildApp({
+      actions: { test: async () => { order.push('handler'); return {}; } },
+      actionPermissions: {
+        test: protectedAction(() => { order.push('permission'); return true; }),
+      },
+      idempotencyService: {
+        async check() { order.push('idempotency'); return { isNew: true }; },
+        async complete() {},
+        async fail() {},
+      },
+    });
+
+    await inject(app, 'test', 'id', {}, { 'idempotency-key': 'k1' });
+    expect(order.indexOf('permission')).toBeLessThan(order.indexOf('idempotency'));
+    await app.close();
+  });
+});
+```
+
+## Execution Order
+
+The action router processes requests in this order:
+
+1. **Schema validation** — Fastify validates `action` against the registered enum
+2. **Auth pre-handler** — Global `authenticate` (if all actions protected) or per-action (if mixed)
+3. **Permission check** — Action-specific permission, then `globalAuth` fallback
+4. **Idempotency check** — If `idempotencyService` provided and `idempotency-key` header present
+5. **Handler execution** — The action handler runs
+6. **Idempotency complete/fail** — Result cached or failure recorded
