@@ -173,6 +173,13 @@ export interface CustomAuthenticatorOption {
   type: 'authenticator';
   /** Authenticate function — decorates fastify.authenticate directly */
   authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  /**
+   * Optional authenticate function for public routes.
+   * If not provided, Arc auto-generates one by wrapping `authenticate` and
+   * intercepting 401/403 responses so unauthenticated requests proceed as public.
+   * Provide this if your authenticator has side effects that shouldn't run on public routes.
+   */
+  optionalAuthenticate?: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 }
 
 /**
@@ -498,6 +505,24 @@ export interface CreateAppOptions {
    * Set to false to disable, or pass ErrorHandlerOptions for fine control.
    */
   errorHandler?: import('../plugins/errorHandler.js').ErrorHandlerOptions | false;
+
+  /**
+   * Custom AJV keywords to allow in route schemas.
+   *
+   * Arc already allows `"example"` by default. Use this to add
+   * additional non-standard keywords your query parsers or schema
+   * generators may use (e.g., `x-internal` from MongoKit).
+   *
+   * @example
+   * ```typescript
+   * const app = await createApp({
+   *   ajv: { keywords: ['x-internal'] },
+   * });
+   * ```
+   */
+  ajv?: {
+    keywords?: string[];
+  };
 
   /** Custom plugin registration function */
   plugins?: (fastify: FastifyInstance) => Promise<void>;

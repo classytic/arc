@@ -464,7 +464,6 @@ export class ArcQueryParser implements QueryParserInterface {
         _filterOperators: {
           type: 'string',
           description: ['Available filter operators (use as field[operator]=value):', ...operatorLines].join('\n'),
-          'x-internal': true,
         },
       },
     };

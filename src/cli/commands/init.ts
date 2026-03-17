@@ -2684,7 +2684,21 @@ ${orgPluginUsage}
         enabled: process.env.NODE_ENV === 'production',
       },
     });
-  }
+${
+  config.adapter === "mongokit"
+    ? `
+    // Register stub Mongoose models for Better Auth collections.
+    // BA uses the raw MongoDB driver, so no Mongoose models exist by default.
+    // These stubs (strict: false) enable populate() on refs like 'user', 'organization', etc.
+    const baCollections = ['user', 'organization', 'member', 'invitation', 'session', 'account'];
+    for (const name of baCollections) {
+      if (!mongoose.models[name]) {
+        mongoose.model(name, new mongoose.Schema({}, { strict: false, collection: name }));
+      }
+    }
+`
+    : ""
+}  }
 
   return _auth;
 }

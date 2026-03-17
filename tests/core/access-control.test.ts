@@ -322,6 +322,69 @@ describe('AccessControl', () => {
       expect(ac.checkPolicyFilters({ status: 'archived' }, req)).toBe(false);
     });
 
+    it('enforces sibling constraints alongside $or', () => {
+      const ac = createAccessControl();
+      const req = createReq({
+        _policyFilters: {
+          $or: [{ ownerId: 'u1' }, { reviewerId: 'u1' }],
+          status: 'published',
+        },
+      });
+
+      // Matches $or AND sibling status
+      expect(ac.checkPolicyFilters({ ownerId: 'u1', status: 'published' }, req)).toBe(true);
+      expect(ac.checkPolicyFilters({ reviewerId: 'u1', status: 'published' }, req)).toBe(true);
+
+      // Matches $or but NOT sibling status — should be denied
+      expect(ac.checkPolicyFilters({ ownerId: 'u1', status: 'draft' }, req)).toBe(false);
+      expect(ac.checkPolicyFilters({ reviewerId: 'u1', status: 'draft' }, req)).toBe(false);
+
+      // Matches sibling status but NOT $or — should be denied
+      expect(ac.checkPolicyFilters({ ownerId: 'u2', status: 'published' }, req)).toBe(false);
+    });
+
+    it('enforces sibling constraints alongside $and', () => {
+      const ac = createAccessControl();
+      const req = createReq({
+        _policyFilters: {
+          $and: [{ role: 'editor' }, { active: true }],
+          department: 'engineering',
+        },
+      });
+
+      // All match
+      expect(ac.checkPolicyFilters({ role: 'editor', active: true, department: 'engineering' }, req)).toBe(true);
+
+      // $and passes but sibling fails
+      expect(ac.checkPolicyFilters({ role: 'editor', active: true, department: 'sales' }, req)).toBe(false);
+
+      // sibling passes but $and fails
+      expect(ac.checkPolicyFilters({ role: 'viewer', active: true, department: 'engineering' }, req)).toBe(false);
+    });
+
+    it('enforces sibling constraints with both $and and $or', () => {
+      const ac = createAccessControl();
+      const req = createReq({
+        _policyFilters: {
+          $and: [{ active: true }],
+          $or: [{ ownerId: 'u1' }, { reviewerId: 'u1' }],
+          status: 'published',
+        },
+      });
+
+      // All three conditions met
+      expect(ac.checkPolicyFilters({ active: true, ownerId: 'u1', status: 'published' }, req)).toBe(true);
+
+      // Missing $and condition
+      expect(ac.checkPolicyFilters({ active: false, ownerId: 'u1', status: 'published' }, req)).toBe(false);
+
+      // Missing $or condition
+      expect(ac.checkPolicyFilters({ active: true, ownerId: 'u2', status: 'published' }, req)).toBe(false);
+
+      // Missing sibling condition
+      expect(ac.checkPolicyFilters({ active: true, ownerId: 'u1', status: 'draft' }, req)).toBe(false);
+    });
+
     it('handles nested dot-notation paths', () => {
       const ac = createAccessControl();
       const req = createReq({
@@ -721,6 +784,61 @@ describe('AccessControl', () => {
 
       // Should return item — checkOrgScope skips when tenantField is false
       expect(result).toEqual(item);
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // validateItemAccess
+  // --------------------------------------------------------------------------
+
+  describe('validateItemAccess()', () => {
+    it('returns false for null item', () => {
+      const ac = createAccessControl();
+      const req = createReq();
+
+      expect(ac.validateItemAccess(null as any, req)).toBe(false);
+    });
+
+    it('returns true when no access control constraints exist', () => {
+      const ac = createAccessControl();
+      const req = createReq();
+
+      expect(ac.validateItemAccess({ _id: '1', name: 'Test' }, req)).toBe(true);
+    });
+
+    it('validates org scope', () => {
+      const ac = createAccessControl();
+      const req = createReq({
+        _scope: { kind: 'member', organizationId: 'org-1', orgRoles: [] },
+      });
+
+      expect(ac.validateItemAccess({ organizationId: 'org-1', name: 'Test' }, req)).toBe(true);
+      expect(ac.validateItemAccess({ organizationId: 'org-2', name: 'Test' }, req)).toBe(false);
+    });
+
+    it('validates policy filters', () => {
+      const ac = createAccessControl();
+      const req = createReq({
+        _policyFilters: { status: 'active' },
+      });
+
+      expect(ac.validateItemAccess({ status: 'active', name: 'Test' }, req)).toBe(true);
+      expect(ac.validateItemAccess({ status: 'archived', name: 'Test' }, req)).toBe(false);
+    });
+
+    it('validates both org scope AND policy filters', () => {
+      const ac = createAccessControl();
+      const req = createReq({
+        _scope: { kind: 'member', organizationId: 'org-1', orgRoles: [] },
+        _policyFilters: { status: 'active' },
+      });
+
+      // Both pass
+      expect(ac.validateItemAccess({ organizationId: 'org-1', status: 'active' }, req)).toBe(true);
+      // Org fails
+      expect(ac.validateItemAccess({ organizationId: 'org-2', status: 'active' }, req)).toBe(false);
+      // Policy fails
+      expect(ac.validateItemAccess({ organizationId: 'org-1', status: 'archived' }, req)).toBe(false);
     });
   });
 
