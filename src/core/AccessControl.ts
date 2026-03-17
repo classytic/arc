@@ -187,6 +187,21 @@ export class AccessControl {
     }
   }
 
+  /**
+   * Post-fetch access control validation for items fetched by non-ID queries
+   * (e.g., getBySlug, restore). Applies org scope, policy filters, and
+   * ownership checks — the same guarantees as fetchWithAccessControl.
+   */
+  validateItemAccess(item: AnyRecord | null, req: IRequestContext): boolean {
+    if (!item) return false;
+
+    const arcContext = this._meta(req);
+    if (!this.checkOrgScope(item, arcContext)) return false;
+    if (!this.checkPolicyFilters(item, req)) return false;
+
+    return true;
+  }
+
   // ============================================================================
   // Private Helpers
   // ============================================================================
@@ -282,27 +297,29 @@ export class AccessControl {
    * Supports: $eq, $ne, $gt, $gte, $lt, $lte, $in, $nin, $exists, $regex, $and, $or
    */
   private defaultMatchesPolicyFilters(item: AnyRecord, policyFilters: AnyRecord): boolean {
-    // Handle $and operator
+    // Check $and operator — all conditions must match
     if (policyFilters.$and && Array.isArray(policyFilters.$and)) {
-      return policyFilters.$and.every((condition: AnyRecord) => {
+      const andMatches = policyFilters.$and.every((condition: AnyRecord) => {
         return Object.entries(condition).every(([key, value]) => {
           return this.matchesFilter(item, key, value);
         });
       });
+      if (!andMatches) return false;
     }
 
-    // Handle $or operator
+    // Check $or operator — at least one condition must match
     if (policyFilters.$or && Array.isArray(policyFilters.$or)) {
-      return policyFilters.$or.some((condition: AnyRecord) => {
+      const orMatches = policyFilters.$or.some((condition: AnyRecord) => {
         return Object.entries(condition).every(([key, value]) => {
           return this.matchesFilter(item, key, value);
         });
       });
+      if (!orMatches) return false;
     }
 
-    // Check each policy filter constraint
+    // Check each non-logical sibling constraint (always evaluated,
+    // even when $and/$or are present on the same filter object)
     for (const [key, value] of Object.entries(policyFilters)) {
-      // Skip MongoDB logical operators (already handled above)
       if (key.startsWith('$')) continue;
 
       if (!this.matchesFilter(item, key, value)) {

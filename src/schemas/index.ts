@@ -115,6 +115,6 @@ export function ArcPaginationQuery() {
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, default: 20 })),
     sort: Type.Optional(Type.String()),
     select: Type.Optional(Type.String()),
-    populate: Type.Optional(Type.String()),
-  });
+    populate: Type.Optional(Type.Any()),
+  }, { additionalProperties: true });
 }

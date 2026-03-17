@@ -123,6 +123,16 @@ const app = await createApp({
 });
 ```
 
+## Custom AJV Keywords
+
+External query parsers or schema generators may use non-standard JSON Schema keywords (e.g., `x-internal` from MongoKit). By default, Fastify's AJV strict mode rejects unknown keywords. Use `ajv.keywords` to allowlist them:
+
+```typescript
+const app = await createApp({
+  ajv: { keywords: ['x-internal'] },
+});
+```
+
 ## Lifecycle Hooks
 
 ```typescript

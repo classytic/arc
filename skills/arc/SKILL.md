@@ -8,11 +8,11 @@ description: |
   Triggers: arc, fastify resource, defineResource, createApp, BaseController, arc preset,
   arc auth, arc events, arc jobs, arc websocket, arc plugin, arc testing, arc cli,
   arc permissions, arc hooks, arc pipeline, arc factory, arc cache, arc QueryCache.
-version: 2.1.0
+version: 2.3.0
 license: MIT
 metadata:
   author: Classytic
-  version: "2.1.0"
+  version: "2.3.0"
 tags:
   - fastify
   - rest-api
@@ -282,6 +282,7 @@ const app = await createApp({
   cors: { origin: ['https://myapp.com'] },
   helmet: true,                    // false to disable
   rateLimit: { max: 100 },         // false to disable
+  ajv: { keywords: ['x-internal'] }, // custom AJV keywords for schema validation
   arcPlugins: {
     events: true,                  // event plugin (default: true, false to disable)
     emitEvents: true,              // CRUD event emission (default: true)

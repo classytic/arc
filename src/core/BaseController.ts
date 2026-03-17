@@ -195,6 +195,17 @@ export class BaseController<
   // Internal Helpers
   // ============================================================================
 
+  /**
+   * Get the tenant field name if multi-tenant scoping is enabled.
+   * Returns `undefined` when `tenantField` is `false` (platform-universal mode).
+   *
+   * Use this in subclass overrides instead of accessing `this.tenantField` directly
+   * to avoid TypeScript indexing errors with `string | false`.
+   */
+  protected getTenantField(): string | undefined {
+    return this.tenantField || undefined;
+  }
+
   /** Extract typed Arc internal metadata from request */
   private meta(req: IRequestContext): ArcInternalMetadata | undefined {
     return req.metadata as ArcInternalMetadata | undefined;
@@ -644,7 +655,7 @@ export class BaseController<
 
   async delete(
     req: IRequestContext,
-  ): Promise<IControllerResponse<{ message: string }>> {
+  ): Promise<IControllerResponse<{ message: string; id?: string; soft?: boolean }>> {
     const id = req.params.id;
     if (!id) {
       return { success: false, error: "ID parameter is required", status: 400 };
@@ -742,9 +753,14 @@ export class BaseController<
       );
     }
 
+    const deleteResult = typeof result === "object" && result !== null ? result as Record<string, unknown> : {};
     return {
       success: true,
-      data: { message: "Deleted successfully" },
+      data: {
+        message: (deleteResult.message as string) || "Deleted successfully",
+        ...(id ? { id } : {}),
+        ...(deleteResult.soft ? { soft: true } : {}),
+      },
       status: 200,
     };
   }
@@ -768,13 +784,10 @@ export class BaseController<
     const slugField = this._presetFields.slugField ?? "slug";
     const slug = (req.params[slugField] ?? req.params.slug) as string;
     const options = this.queryResolver.resolve(req, this.meta(req));
-    const arcContext = this.meta(req);
     const item = await repo.getBySlug(slug, options);
 
-    if (
-      !item ||
-      !this.accessControl.checkOrgScope(item as AnyRecord, arcContext)
-    ) {
+    // Full access control: org scope + policy filters (same as GET /:id)
+    if (!this.accessControl.validateItemAccess(item as AnyRecord, req)) {
       return { success: false, error: "Resource not found", status: 404 };
     }
 
@@ -826,6 +839,7 @@ export class BaseController<
   async restore(req: IRequestContext): Promise<IControllerResponse<TDoc>> {
     const repo = this.repository as TRepository & {
       restore?: (id: string) => Promise<TDoc | null>;
+      getById: (id: string, options?: unknown) => Promise<TDoc | null>;
     };
     if (!repo.restore) {
       return { success: false, error: "Restore not implemented", status: 501 };
@@ -834,6 +848,27 @@ export class BaseController<
     const id = req.params.id;
     if (!id) {
       return { success: false, error: "ID parameter is required", status: 400 };
+    }
+
+    // Pre-restore access control: fetch the (soft-deleted) item and validate
+    // org scope, policy filters, and ownership — same as DELETE /:id
+    const existing = await this.accessControl.fetchWithAccessControl<TDoc>(
+      id,
+      req,
+      repo,
+    );
+
+    if (!existing) {
+      return { success: false, error: "Resource not found", status: 404 };
+    }
+
+    if (!this.accessControl.checkOwnership(existing as AnyRecord, req)) {
+      return {
+        success: false,
+        error: "You do not have permission to restore this resource",
+        details: { code: "OWNERSHIP_DENIED" },
+        status: 403,
+      };
     }
 
     const item = await repo.restore(id);

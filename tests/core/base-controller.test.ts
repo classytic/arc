@@ -174,7 +174,7 @@ describe('BaseController', () => {
       const response = await controller.delete(req);
 
       expect(response.success).toBe(true);
-      expect(response.data).toMatchObject({ message: 'Deleted successfully' });
+      expect(response.data).toMatchObject({ message: 'Deleted successfully', id: item._id.toString() });
 
       // Verify deletion
       const found = await Model.findById(item._id);

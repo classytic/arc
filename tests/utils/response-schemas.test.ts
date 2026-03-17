@@ -143,7 +143,8 @@ describe('Response Format Consistency', () => {
       const messageResult = messageWrapper();
 
       expect(messageResult.properties).toHaveProperty('success');
-      expect(messageResult.properties).toHaveProperty('message');
+      expect(messageResult.properties).toHaveProperty('data');
+      expect((messageResult.properties as Record<string, any>).data.properties).toHaveProperty('message');
     });
   });
 });

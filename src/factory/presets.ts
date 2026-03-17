@@ -51,7 +51,7 @@ export const productionPreset: Partial<CreateAppOptions> = {
     origin: false, // Disabled by default in production
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'x-organization-id', 'x-request-id'],
   },
 
   // Rate limiting - strict
@@ -95,10 +95,10 @@ export const developmentPreset: Partial<CreateAppOptions> = {
 
   // CORS - allow all origins in development
   cors: {
-    origin: true, // Allow all origins
+    origin: true, // Allow all origins (reflects request Origin for credentials)
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'x-organization-id', 'x-request-id'],
   },
 
   // Rate limiting - very relaxed

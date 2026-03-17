@@ -159,14 +159,22 @@ export function mutationResponse(itemSchema: JsonSchema): JsonSchema {
 /**
  * Create a delete response schema
  *
- * Runtime format: { success, message }
+ * Runtime format: { success, data: { message, id?, soft? } }
  */
 export function deleteResponse(): JsonSchema {
   return {
     type: 'object',
     properties: {
       success: { type: 'boolean', example: true },
-      message: { type: 'string', example: 'Deleted successfully' },
+      data: {
+        type: 'object',
+        properties: {
+          message: { type: 'string', example: 'Deleted successfully' },
+          id: { type: 'string', example: '507f1f77bcf86cd799439011' },
+          soft: { type: 'boolean', example: false },
+        },
+        required: ['message'],
+      },
     },
     required: ['success'],
     // Allow extra fields (fieldPermissions, meta spreads, etc.)

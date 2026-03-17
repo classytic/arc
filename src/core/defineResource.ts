@@ -160,6 +160,18 @@ export function defineResource<TDoc = AnyRecord>(
   // 4. Create or use provided controller using the full resolved config
   let controller = resolvedConfig.controller;
   if (!controller && hasCrudRoutes && repository) {
+    // Extract maxLimit from queryParser schema so BaseController's QueryResolver
+    // and Fastify validation stay in sync with the parser's configured limit.
+    const qp = resolvedConfig.queryParser as QueryParserInterface | undefined;
+    let maxLimitFromParser: number | undefined;
+    if (qp?.getQuerySchema) {
+      const qpSchema = qp.getQuerySchema();
+      const limitProp = qpSchema?.properties?.limit as { maximum?: number } | undefined;
+      if (limitProp?.maximum) {
+        maxLimitFromParser = limitProp.maximum;
+      }
+    }
+
     // Auto-create BaseController if CRUD routes exist
     controller = new BaseController<TDoc>(repository, {
       resourceName: resolvedConfig.name,
@@ -167,6 +179,7 @@ export function defineResource<TDoc = AnyRecord>(
       queryParser: resolvedConfig.queryParser as
         | QueryParserInterface
         | undefined,
+      maxLimit: maxLimitFromParser,
       tenantField: resolvedConfig.tenantField,
       idField: resolvedConfig.idField,
       matchesFilter: config.adapter?.matchesFilter,
@@ -518,6 +531,43 @@ export class ResourceDefinition<TDoc = AnyRecord> {
                   )
                 : (converted as AnyRecord);
             }
+          }
+
+          // Apply queryParser's listQuery schema as the Fastify querystring
+          // validation schema for the list route. Without this, the hardcoded
+          // default (maximum: 100) overrides the parser's configured maxLimit.
+          //
+          // Normalize the schema for Fastify/AJV compatibility:
+          // 1. Default additionalProperties to true (matching Arc's own getListQueryParams)
+          // 2. Remove type constraints from params that qs may parse as objects
+          //    (e.g., ?populate[author][select]=name → { populate: { author: { select: "name" } } })
+          //    External schemas often declare these as type:"string" for OpenAPI docs,
+          //    but qs bracket notation produces objects that AJV would then reject.
+          const listQuerySchema = self._registryMeta?.openApiSchemas?.listQuery;
+          if (listQuerySchema) {
+            const FLEXIBLE_PARAMS = ['populate', 'select', 'lookup', 'aggregate'];
+            const props = (listQuerySchema as AnyRecord).properties as AnyRecord | undefined;
+            const normalizedProps = props ? { ...props } : undefined;
+            if (normalizedProps) {
+              for (const key of FLEXIBLE_PARAMS) {
+                if (normalizedProps[key] && typeof normalizedProps[key] === 'object') {
+                  const { type: _type, ...rest } = normalizedProps[key] as AnyRecord;
+                  normalizedProps[key] = rest;
+                }
+              }
+            }
+            const normalizedSchema = {
+              ...listQuerySchema,
+              ...(normalizedProps ? { properties: normalizedProps } : {}),
+              additionalProperties: (listQuerySchema as AnyRecord).additionalProperties ?? true,
+            };
+            schemas = schemas ?? {};
+            schemas.list = schemas.list
+              ? deepMergeSchemas(
+                  { querystring: normalizedSchema } as AnyRecord,
+                  schemas.list as AnyRecord,
+                )
+              : ({ querystring: normalizedSchema } as AnyRecord);
           }
 
           // Pass routes as-is to createCrudRouter
