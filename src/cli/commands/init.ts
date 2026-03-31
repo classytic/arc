@@ -9,11 +9,11 @@
  * Automatically installs dependencies using detected package manager.
  */
 
-import * as fs from "node:fs/promises";
+import { execSync, spawn } from "node:child_process";
 import { accessSync } from "node:fs";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as readline from "node:readline";
-import { execSync, spawn } from "node:child_process";
 
 type PackageManager = "npm" | "pnpm" | "yarn" | "bun";
 
@@ -60,21 +60,13 @@ export async function init(options: InitOptions = {}): Promise<void> {
   const config = await gatherConfig(options);
 
   console.log(`\nCreating project: ${config.name}`);
-  console.log(
-    `   Adapter: ${config.adapter === "mongokit" ? "MongoKit (MongoDB)" : "Custom"}`,
-  );
+  console.log(`   Adapter: ${config.adapter === "mongokit" ? "MongoKit (MongoDB)" : "Custom"}`);
   console.log(
     `   Auth: ${config.auth === "better-auth" ? "Better Auth (recommended)" : "Arc JWT"}`,
   );
-  console.log(
-    `   Tenant: ${config.tenant === "multi" ? "Multi-tenant" : "Single-tenant"}`,
-  );
-  console.log(
-    `   Language: ${config.typescript ? "TypeScript" : "JavaScript"}`,
-  );
-  console.log(
-    `   Target: ${config.edge ? "Edge/Serverless" : "Node.js Server"}\n`,
-  );
+  console.log(`   Tenant: ${config.tenant === "multi" ? "Multi-tenant" : "Single-tenant"}`);
+  console.log(`   Language: ${config.typescript ? "TypeScript" : "JavaScript"}`);
+  console.log(`   Target: ${config.edge ? "Edge/Serverless" : "Node.js Server"}\n`);
 
   const projectPath = path.join(process.cwd(), config.name);
 
@@ -83,14 +75,11 @@ export async function init(options: InitOptions = {}): Promise<void> {
     await fs.access(projectPath);
     // If we reach here, the directory EXISTS
     if (!options.force) {
-      throw new Error(
-        `Directory "${config.name}" already exists. Use --force to overwrite.`,
-      );
+      throw new Error(`Directory "${config.name}" already exists. Use --force to overwrite.`);
     }
   } catch (err) {
     // ENOENT = directory doesn't exist = good, fall through to scaffolding
-    const isNotFound =
-      err && typeof err === "object" && "code" in err && err.code === "ENOENT";
+    const isNotFound = err && typeof err === "object" && "code" in err && err.code === "ENOENT";
     if (!isNotFound) throw err;
     // else: directory doesn't exist, continue normally
   }
@@ -218,11 +207,7 @@ async function installDependencies(
 /**
  * Get the install command for a package manager
  */
-function getInstallCommand(
-  pm: PackageManager,
-  packages: string[],
-  isDev: boolean,
-): string {
+function getInstallCommand(pm: PackageManager, packages: string[], isDev: boolean): string {
   const pkgList = packages.join(" ");
 
   switch (pm) {
@@ -232,7 +217,6 @@ function getInstallCommand(
       return `yarn add ${isDev ? "-D" : ""} ${pkgList}`;
     case "bun":
       return `bun add ${isDev ? "-d" : ""} ${pkgList}`;
-    case "npm":
     default:
       return `npm install ${isDev ? "--save-dev" : ""} ${pkgList}`;
   }
@@ -284,8 +268,7 @@ async function gatherConfig(options: InitOptions): Promise<ProjectConfig> {
 
   try {
     // Project name
-    const name =
-      options.name || (await question("Project name: ")) || "my-arc-app";
+    const name = options.name || (await question("Project name: ")) || "my-arc-app";
 
     // Adapter choice
     let adapter: "mongokit" | "custom" = options.adapter || "mongokit";
@@ -299,27 +282,21 @@ async function gatherConfig(options: InitOptions): Promise<ProjectConfig> {
     // Auth strategy
     let auth: "jwt" | "better-auth" = options.auth || "better-auth";
     if (!options.auth && !nonInteractive) {
-      const authChoice = await question(
-        "Auth strategy [1=Better Auth (recommended), 2=Arc JWT]: ",
-      );
+      const authChoice = await question("Auth strategy [1=Better Auth (recommended), 2=Arc JWT]: ");
       auth = authChoice === "2" ? "jwt" : "better-auth";
     }
 
     // Tenant mode
     let tenant: "multi" | "single" = options.tenant || "single";
     if (!options.tenant && !nonInteractive) {
-      const tenantChoice = await question(
-        "Tenant mode [1=Single-tenant, 2=Multi-tenant]: ",
-      );
+      const tenantChoice = await question("Tenant mode [1=Single-tenant, 2=Multi-tenant]: ");
       tenant = tenantChoice === "2" ? "multi" : "single";
     }
 
     // TypeScript or JavaScript
     let typescript = options.typescript ?? true;
     if (options.typescript === undefined && !nonInteractive) {
-      const tsChoice = await question(
-        "Language [1=TypeScript (recommended), 2=JavaScript]: ",
-      );
+      const tsChoice = await question("Language [1=TypeScript (recommended), 2=JavaScript]: ");
       typescript = tsChoice !== "2";
     }
 
@@ -342,10 +319,7 @@ async function gatherConfig(options: InitOptions): Promise<ProjectConfig> {
 // Project Structure Creation
 // ============================================================================
 
-async function createProjectStructure(
-  projectPath: string,
-  config: ProjectConfig,
-): Promise<void> {
+async function createProjectStructure(projectPath: string, config: ProjectConfig): Promise<void> {
   const ext = config.typescript ? "ts" : "js";
 
   // Create directories - Clean architecture (organized by resource, no barrels)
@@ -400,20 +374,16 @@ async function createProjectStructure(
   // Shared utilities
   files[`src/shared/index.${ext}`] = sharedIndexTemplate(config);
   files[`src/shared/adapter.${ext}`] =
-    config.adapter === "mongokit"
-      ? createAdapterTemplate(config)
-      : customAdapterTemplate(config);
+    config.adapter === "mongokit" ? createAdapterTemplate(config) : customAdapterTemplate(config);
   files[`src/shared/permissions.${ext}`] = permissionsTemplate(config);
 
   // Presets
   if (config.tenant === "multi") {
-    files[`src/shared/presets/index.${ext}`] =
-      presetsMultiTenantTemplate(config);
+    files[`src/shared/presets/index.${ext}`] = presetsMultiTenantTemplate(config);
     files[`src/shared/presets/flexible-multi-tenant.${ext}`] =
       flexibleMultiTenantPresetTemplate(config);
   } else {
-    files[`src/shared/presets/index.${ext}`] =
-      presetsSingleTenantTemplate(config);
+    files[`src/shared/presets/index.${ext}`] = presetsSingleTenantTemplate(config);
   }
 
   // Plugins (app-specific, easy to extend)
@@ -429,29 +399,19 @@ async function createProjectStructure(
   } else {
     // JWT: manual user model + auth handlers
     files[`src/resources/user/user.model.${ext}`] = userModelTemplate(config);
-    files[`src/resources/user/user.repository.${ext}`] =
-      userRepositoryTemplate(config);
-    files[`src/resources/user/user.controller.${ext}`] =
-      userControllerTemplate(config);
-    files[`src/resources/auth/auth.resource.${ext}`] =
-      authResourceTemplate(config);
-    files[`src/resources/auth/auth.handlers.${ext}`] =
-      authHandlersTemplate(config);
-    files[`src/resources/auth/auth.schemas.${ext}`] =
-      authSchemasTemplate(config);
+    files[`src/resources/user/user.repository.${ext}`] = userRepositoryTemplate(config);
+    files[`src/resources/user/user.controller.${ext}`] = userControllerTemplate(config);
+    files[`src/resources/auth/auth.resource.${ext}`] = authResourceTemplate(config);
+    files[`src/resources/auth/auth.handlers.${ext}`] = authHandlersTemplate(config);
+    files[`src/resources/auth/auth.schemas.${ext}`] = authSchemasTemplate(config);
   }
 
   // Example resource (src/resources/example/)
-  files[`src/resources/example/example.model.${ext}`] =
-    exampleModelTemplate(config);
-  files[`src/resources/example/example.repository.${ext}`] =
-    exampleRepositoryTemplate(config);
-  files[`src/resources/example/example.resource.${ext}`] =
-    exampleResourceTemplate(config);
-  files[`src/resources/example/example.controller.${ext}`] =
-    exampleControllerTemplate(config);
-  files[`src/resources/example/example.schemas.${ext}`] =
-    exampleSchemasTemplate(config);
+  files[`src/resources/example/example.model.${ext}`] = exampleModelTemplate(config);
+  files[`src/resources/example/example.repository.${ext}`] = exampleRepositoryTemplate(config);
+  files[`src/resources/example/example.resource.${ext}`] = exampleResourceTemplate(config);
+  files[`src/resources/example/example.controller.${ext}`] = exampleControllerTemplate(config);
+  files[`src/resources/example/example.schemas.${ext}`] = exampleSchemasTemplate(config);
 
   // Tests
   files[`tests/example.test.${ext}`] = exampleTestTemplate(config);
@@ -459,18 +419,24 @@ async function createProjectStructure(
     files[`tests/auth.test.${ext}`] = authTestTemplate(config);
   }
 
+  // Docker Containerization
+  if (!config.edge) {
+    files.Dockerfile = dockerfileTemplate(config);
+    files[".dockerignore"] = dockerignoreTemplate();
+    files["docker-compose.yml"] = dockerComposeTemplate(config);
+  }
+
   // Save project config for CLI tools (generate, etc.)
-  files[".arcrc"] =
-    JSON.stringify(
-      {
-        adapter: config.adapter,
-        auth: config.auth,
-        tenant: config.tenant,
-        typescript: config.typescript,
-      },
-      null,
-      2,
-    ) + "\n";
+  files[".arcrc"] = `${JSON.stringify(
+    {
+      adapter: config.adapter,
+      auth: config.auth,
+      tenant: config.tenant,
+      typescript: config.typescript,
+    },
+    null,
+    2,
+  )}\n`;
 
   // Write all files
   for (const [filePath, content] of Object.entries(files)) {
@@ -595,10 +561,11 @@ node_modules/
 dist/
 *.js.map
 
-# Environment
-.env
+# Environment (local overrides — never commit secrets)
 .env.local
 .env.*.local
+# Uncomment if your .env contains secrets:
+# .env
 
 # IDE
 .vscode/
@@ -620,7 +587,15 @@ coverage/
 }
 
 function envExampleTemplate(config: ProjectConfig): string {
-  let content = `# Server
+  let content = `# Environment Files (Next.js-style priority):
+#   .env.local         → machine-specific overrides (gitignored)
+#   .env.production    → production defaults
+#   .env.development   → development defaults (or .env.dev)
+#   .env               → shared defaults (fallback)
+#
+# Tip: Copy this file to .env.local for local development
+
+# Server
 PORT=8040
 HOST=0.0.0.0
 NODE_ENV=development
@@ -776,12 +751,14 @@ arc introspect
 arc docs
 \`\`\`
 
-## Environment Files
+## Environment Files (Next.js-style)
 
-- \`.env.development\` / \`.env.dev\` - Development (default)
-- \`.env.test\` / \`.env.qa\` - Testing / QA
-- \`.env.production\` / \`.env.prod\` - Production
-- \`.env\` - Fallback
+Priority (first loaded wins):
+1. \`.env.local\` — Machine-specific overrides (gitignored)
+2. \`.env.{environment}\` — e.g., \`.env.production\`, \`.env.development\`, \`.env.test\`
+3. \`.env\` — Shared defaults (fallback)
+
+Short forms also supported: \`.env.prod\`, \`.env.dev\`, \`.env.test\`
 
 ## API Documentation
 
@@ -801,6 +778,24 @@ API documentation is available via Scalar UI:
 | POST | /examples | Create |
 | PATCH | /examples/:id | Update |
 | DELETE | /examples/:id | Delete |
+
+## Docker Deployment
+
+This project comes ready for containerization:
+
+\`\`\`bash
+# Build the production image
+docker build -t ${config.name} .
+
+# Run the container
+docker run -p 8040:8040 --env-file .env ${config.name}
+\`\`\`
+
+If you're using a database (like MongoDB), you can use Docker Compose to spin up the full stack locally:
+
+\`\`\`bash
+docker-compose up -d
+\`\`\`
 `;
 }
 
@@ -850,9 +845,7 @@ main().catch((err) => {
 
 function appTemplate(config: ProjectConfig): string {
   const ts = config.typescript;
-  const typeImport = ts
-    ? "import type { FastifyInstance } from 'fastify';\n"
-    : "";
+  const typeImport = ts ? "import type { FastifyInstance } from 'fastify';\n" : "";
 
   const betterAuthImport =
     config.auth === "better-auth"
@@ -908,6 +901,9 @@ export async function createAppInstance()${ts ? ": Promise<FastifyInstance>" : "
       credentials: config.cors.credentials,
     },
     trustProxy: true,
+    arcPlugins: {
+      metrics: config.env === 'production',  // Prometheus /_metrics endpoint
+    },
   });
 
   // Register app-specific plugins (explicit dependency injection)
@@ -930,44 +926,64 @@ function envLoaderTemplate(config: ProjectConfig): string {
  * Environment Loader
  *
  * MUST be imported FIRST before any other imports.
- * Loads .env files based on NODE_ENV.
+ * Loads .env files based on NODE_ENV with Next.js-style priority:
+ *
+ *   .env.local        (always loaded first — gitignored, machine-specific overrides)
+ *   .env.{environment} (e.g., .env.production, .env.dev, .env.test)
+ *   .env              (fallback defaults)
+ *
+ * Supports both long-form (production, development, test) and
+ * short-form (prod, dev, test) env file names.
  *
  * Usage:
- *   import './config/env.js';  // First line of entry point
+ *   import '#config/env.js';  // First line of entry point
  */
 
 import dotenv from 'dotenv';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-/**
- * Normalize environment string to short form
- */
-function normalizeEnv(env${ts ? ": string | undefined" : ""})${ts ? ": string" : ""} {
-  const normalized = (env || '').toLowerCase();
-  if (normalized === 'production' || normalized === 'prod') return 'prod';
-  if (normalized === 'test' || normalized === 'qa') return 'test';
+${ts ? "type EnvName = 'prod' | 'dev' | 'test';\n" : ""}const ENV_ALIASES${ts ? ": Record<EnvName, string>" : ""} = {
+  prod: 'production',
+  dev: 'development',
+  test: 'test',
+};
+
+function normalizeEnv(env${ts ? ": string | undefined" : ""})${ts ? ": EnvName" : ""} {
+  const raw = (env || '').toLowerCase();
+  if (raw === 'production' || raw === 'prod') return 'prod';
+  if (raw === 'test' || raw === 'qa') return 'test';
   return 'dev';
 }
 
-// Determine environment
 const env = normalizeEnv(process.env.NODE_ENV);
+const longForm = ENV_ALIASES[env];
 
-// Load environment-specific .env file
-const envFile = resolve(process.cwd(), \`.env.\${env}\`);
-const defaultEnvFile = resolve(process.cwd(), '.env');
+// Priority: .env.local → .env.{long} → .env.{short} → .env
+// Same convention as Next.js — .env.local always wins, never committed to git
+const candidates = [
+  '.env.local',
+  \`.env.\${longForm}\`,
+  \`.env.\${env}\`,
+  '.env',
+].map((f) => resolve(process.cwd(), f));
 
-if (existsSync(envFile)) {
-  dotenv.config({ path: envFile });
-  console.log(\`Loaded: .env.\${env}\`);
-} else if (existsSync(defaultEnvFile)) {
-  dotenv.config({ path: defaultEnvFile });
-  console.log('Loaded: .env');
-} else {
-  console.warn('Warning: No .env file found');
+const loaded${ts ? ": string[]" : ""} = [];
+for (const file of candidates) {
+  if (existsSync(file)) {
+    // override: false means earlier files take priority (first loaded wins)
+    dotenv.config({ path: file, override: false });
+    loaded.push(file.split(/[\\\\/]/).pop()${ts ? "!" : ""});
+  }
 }
 
-// Export for reference
+// Only log in development (silent in production/test)
+if (env === 'dev' && loaded.length > 0) {
+  console.log(\`env: \${loaded.join(' + ')}\`);
+} else if (loaded.length === 0) {
+  console.warn('No .env file found — using process environment only');
+}
+
 export const ENV = env;
 `;
 }
@@ -1026,9 +1042,7 @@ ORG_HEADER=x-organization-id
 
 function pluginsIndexTemplate(config: ProjectConfig): string {
   const ts = config.typescript;
-  const typeImport = ts
-    ? "import type { FastifyInstance } from 'fastify';\n"
-    : "";
+  const typeImport = ts ? "import type { FastifyInstance } from 'fastify';\n" : "";
   const configType = ts ? ": { config: AppConfig }" : "";
   const appType = ts ? ": FastifyInstance" : "";
 
@@ -1085,9 +1099,7 @@ export async function registerPlugins(
 
 function resourcesIndexTemplate(config: ProjectConfig): string {
   const ts = config.typescript;
-  const typeImport = ts
-    ? "import type { FastifyInstance } from 'fastify';\n"
-    : "";
+  const typeImport = ts ? "import type { FastifyInstance } from 'fastify';\n" : "";
   const appType = ts ? ": FastifyInstance" : "";
 
   const authImports =
@@ -1788,14 +1800,14 @@ ${
 `
     : ""
 }${
-    config.tenant === "multi"
-      ? `
+  config.tenant === "multi"
+    ? `
   org: {
     header: process.env.ORG_HEADER || 'x-organization-id',
   },
 `
-      : ""
-  }};
+    : ""
+}};
 
 export default config;
 `;
@@ -1844,9 +1856,7 @@ export default Example;
 
 function exampleRepositoryTemplate(config: ProjectConfig): string {
   const ts = config.typescript;
-  const typeImport = ts
-    ? "import type { ExampleDocument } from './example.model.js';\n"
-    : "";
+  const typeImport = ts ? "import type { ExampleDocument } from './example.model.js';\n" : "";
   const generic = ts ? "<ExampleDocument>" : "";
 
   return `/**
@@ -1935,7 +1945,8 @@ const exampleResource = defineResource${ts ? "<ExampleDocument>" : ""}({
   controller: exampleController,
 
   presets: [
-    'softDelete',${
+    'softDelete',
+    'bulk',${
       config.tenant === "multi"
         ? `
     flexibleMultiTenantPreset({ tenantField: 'organizationId' }),`
@@ -3097,10 +3108,7 @@ ${
 // Success Message
 // ============================================================================
 
-function printSuccessMessage(
-  config: ProjectConfig,
-  skipInstall?: boolean,
-): void {
+function printSuccessMessage(config: ProjectConfig, skipInstall?: boolean): void {
   const installStep = skipInstall ? `  npm install\n` : "";
   const ext = config.typescript ? "ts" : "js";
 
@@ -3159,6 +3167,94 @@ Project structure:
 Documentation:
   https://github.com/classytic/arc
 `);
+}
+
+function dockerignoreTemplate(): string {
+  return `node_modules
+dist
+.env
+.env.*
+.git
+.vscode
+.idea
+Dockerfile
+docker-compose.yml
+coverage
+npm-debug.log*
+.DS_Store
+`;
+}
+
+function dockerfileTemplate(config: ProjectConfig): string {
+  return `# Multi-stage Dockerfile for Arc + Fastify
+# Optimized for production and caching
+
+# 1. Build Stage
+FROM node:22-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+${config.typescript ? "COPY tsconfig*.json ./" : ""}
+# If using pnpm, bun, or yarn, adjust the lockfile here
+RUN npm ci
+
+COPY . .
+${config.typescript ? "RUN npm run build" : ""}
+
+# 2. Production Stage
+FROM node:22-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+
+COPY package*.json ./
+RUN npm ci --only=production
+
+${config.typescript ? "COPY --from=builder /app/dist ./dist" : "COPY src ./src"}
+
+EXPOSE 8040
+CMD ["npm", "start"]
+`;
+}
+
+function dockerComposeTemplate(config: ProjectConfig): string {
+  let content = `version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8040:8040"
+    environment:
+      - NODE_ENV=development
+      - PORT=8040
+      - HOST=0.0.0.0`;
+
+  if (config.adapter === "mongokit") {
+    content += `
+      - MONGODB_URI=mongodb://mongo:27017/${config.name}
+    depends_on:
+      - mongo
+
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db`;
+  }
+
+  content += `
+
+volumes:`;
+
+  if (config.adapter === "mongokit") {
+    content += `
+  mongo-data:
+`;
+  }
+
+  return content;
 }
 
 export default init;

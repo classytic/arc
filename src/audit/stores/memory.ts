@@ -5,7 +5,7 @@
  * Logs are lost on restart.
  */
 
-import type { AuditEntry, AuditQueryOptions, AuditStore } from './interface.js';
+import type { AuditEntry, AuditQueryOptions, AuditStore } from "./interface.js";
 
 export interface MemoryAuditStoreOptions {
   /** Maximum entries to keep (default: 1000) */
@@ -13,7 +13,7 @@ export interface MemoryAuditStoreOptions {
 }
 
 export class MemoryAuditStore implements AuditStore {
-  readonly name = 'memory';
+  readonly name = "memory";
   private entries: AuditEntry[] = [];
   private maxEntries: number;
 

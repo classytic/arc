@@ -34,9 +34,9 @@
  * ```
  */
 
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
-import fp from 'fastify-plugin';
-import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
+import fp from "fastify-plugin";
 
 // ============================================================================
 // Types
@@ -84,7 +84,7 @@ export interface SessionCookieOptions {
   /** Prevent client-side JavaScript access (default: true) */
   httpOnly?: boolean;
   /** SameSite attribute (default: 'lax') */
-  sameSite?: 'strict' | 'lax' | 'none';
+  sameSite?: "strict" | "lax" | "none";
   /** Cookie path (default: '/') */
   path?: string;
   /** Cookie domain */
@@ -125,7 +125,7 @@ export interface SessionManagerResult {
 // Fastify Type Extensions
 // ============================================================================
 
-declare module 'fastify' {
+declare module "fastify" {
   interface FastifyInstance {
     /** Authenticate middleware — validates session and sets request.user */
     authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -162,9 +162,7 @@ declare module 'fastify' {
  * Returns `sessionId.signature` format.
  */
 function signSessionId(sessionId: string, secret: string): string {
-  const signature = createHmac('sha256', secret)
-    .update(sessionId)
-    .digest('base64url');
+  const signature = createHmac("sha256", secret).update(sessionId).digest("base64url");
   return `${sessionId}.${signature}`;
 }
 
@@ -173,7 +171,7 @@ function signSessionId(sessionId: string, secret: string): string {
  * Returns the session ID if valid, null otherwise.
  */
 function verifySessionId(signedValue: string, secret: string): string | null {
-  const lastDotIndex = signedValue.lastIndexOf('.');
+  const lastDotIndex = signedValue.lastIndexOf(".");
   if (lastDotIndex === -1) return null;
 
   const sessionId = signedValue.slice(0, lastDotIndex);
@@ -181,9 +179,7 @@ function verifySessionId(signedValue: string, secret: string): string | null {
 
   if (!sessionId || !signature) return null;
 
-  const expectedSignature = createHmac('sha256', secret)
-    .update(sessionId)
-    .digest('base64url');
+  const expectedSignature = createHmac("sha256", secret).update(sessionId).digest("base64url");
 
   // Constant-time comparison to prevent timing attacks
   const sigBuf = Buffer.from(signature);
@@ -201,9 +197,9 @@ function parseCookies(header: string | undefined): Map<string, string> {
   const cookies = new Map<string, string>();
   if (!header) return cookies;
 
-  const pairs = header.split(';');
+  const pairs = header.split(";");
   for (const pair of pairs) {
-    const eqIndex = pair.indexOf('=');
+    const eqIndex = pair.indexOf("=");
     if (eqIndex === -1) continue;
 
     const name = pair.slice(0, eqIndex).trim();
@@ -233,31 +229,31 @@ function buildSetCookieHeader(
   const parts = [
     `${name}=${encodeURIComponent(value)}`,
     `Max-Age=${maxAgeSeconds}`,
-    `Path=${options.path ?? '/'}`,
+    `Path=${options.path ?? "/"}`,
   ];
 
   if (options.httpOnly !== false) {
-    parts.push('HttpOnly');
+    parts.push("HttpOnly");
   }
 
-  if (options.secure ?? (process.env.NODE_ENV === 'production')) {
-    parts.push('Secure');
+  if (options.secure ?? process.env.NODE_ENV === "production") {
+    parts.push("Secure");
   }
 
-  parts.push(`SameSite=${capitalize(options.sameSite ?? 'lax')}`);
+  parts.push(`SameSite=${capitalize(options.sameSite ?? "lax")}`);
 
   if (options.domain) {
     parts.push(`Domain=${options.domain}`);
   }
 
-  return parts.join('; ');
+  return parts.join("; ");
 }
 
 /**
  * Build a Set-Cookie header that clears (expires) the cookie.
  */
 function buildClearCookieHeader(name: string, options: SessionCookieOptions): string {
-  return buildSetCookieHeader(name, '', 0, options);
+  return buildSetCookieHeader(name, "", 0, options);
 }
 
 function capitalize(s: string): string {
@@ -466,7 +462,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     maxAge: maxAgeSeconds = 7 * 24 * 60 * 60, // 7 days
     updateAge: updateAgeSeconds = 24 * 60 * 60, // 24 hours
     freshAge: freshAgeSeconds = 10 * 60, // 10 minutes
-    cookieName = 'arc.session',
+    cookieName = "arc.session",
     cookie: cookieOptions = {},
   } = options;
 
@@ -474,7 +470,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
   if (secret.length < 32) {
     throw new Error(
       `Session secret must be at least 32 characters (current: ${secret.length}). ` +
-      'Use a strong random secret for production.',
+        "Use a strong random secret for production.",
     );
   }
 
@@ -547,8 +543,8 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     if (!session) {
       reply.code(401).send({
         success: false,
-        error: 'Unauthorized',
-        message: 'Authentication required',
+        error: "Unauthorized",
+        message: "Authentication required",
       });
       return;
     }
@@ -557,9 +553,9 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     if (elapsed > freshAgeMs) {
       reply.code(403).send({
         success: false,
-        error: 'SessionNotFresh',
-        message: 'Session is not fresh. Please re-authenticate to perform this action.',
-        code: 'SESSION_NOT_FRESH',
+        error: "SessionNotFresh",
+        message: "Session is not fresh. Please re-authenticate to perform this action.",
+        code: "SESSION_NOT_FRESH",
       });
       return;
     }
@@ -575,16 +571,14 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     const authenticate = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
       // Parse cookies from header
       const cookieHeader = request.headers.cookie;
-      const cookies = parseCookies(
-        typeof cookieHeader === 'string' ? cookieHeader : undefined,
-      );
+      const cookies = parseCookies(typeof cookieHeader === "string" ? cookieHeader : undefined);
 
       const signedValue = cookies.get(cookieName);
       if (!signedValue) {
         reply.code(401).send({
           success: false,
-          error: 'Unauthorized',
-          message: 'No session cookie',
+          error: "Unauthorized",
+          message: "No session cookie",
         });
         return;
       }
@@ -593,11 +587,11 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       const sessionId = verifySessionId(signedValue, secret);
       if (!sessionId) {
         // Tampered or invalid cookie — clear it
-        reply.header('Set-Cookie', buildClearCookieHeader(cookieName, cookieOptions));
+        reply.header("Set-Cookie", buildClearCookieHeader(cookieName, cookieOptions));
         reply.code(401).send({
           success: false,
-          error: 'Unauthorized',
-          message: 'Invalid session',
+          error: "Unauthorized",
+          message: "Invalid session",
         });
         return;
       }
@@ -606,11 +600,11 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       const session = await store.get(sessionId);
       if (!session) {
         // Session deleted or expired — clear cookie
-        reply.header('Set-Cookie', buildClearCookieHeader(cookieName, cookieOptions));
+        reply.header("Set-Cookie", buildClearCookieHeader(cookieName, cookieOptions));
         reply.code(401).send({
           success: false,
-          error: 'Unauthorized',
-          message: 'Session expired or revoked',
+          error: "Unauthorized",
+          message: "Session expired or revoked",
         });
         return;
       }
@@ -618,11 +612,11 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       // Check expiration (belt-and-suspenders, store should handle this too)
       if (Date.now() > session.expiresAt) {
         await store.delete(sessionId);
-        reply.header('Set-Cookie', buildClearCookieHeader(cookieName, cookieOptions));
+        reply.header("Set-Cookie", buildClearCookieHeader(cookieName, cookieOptions));
         reply.code(401).send({
           success: false,
-          error: 'Unauthorized',
-          message: 'Session expired',
+          error: "Unauthorized",
+          message: "Session expired",
         });
         return;
       }
@@ -650,7 +644,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
             maxAgeSeconds,
             cookieOptions,
           );
-          reply.header('Set-Cookie', newCookie);
+          reply.header("Set-Cookie", newCookie);
 
           // Update the session on request with refreshed data
           (request as unknown as Record<string, unknown>).session = {
@@ -663,11 +657,11 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
 
     // ---- Decorate fastify ----
 
-    if (!fastify.hasDecorator('authenticate')) {
-      fastify.decorate('authenticate', authenticate);
+    if (!fastify.hasDecorator("authenticate")) {
+      fastify.decorate("authenticate", authenticate);
     }
 
-    fastify.decorate('sessionManager', {
+    fastify.decorate("sessionManager", {
       createSession,
       revokeSession: (sessionId: string) => store.delete(sessionId),
       revokeAllSessions: (userId: string) => store.deleteAll(userId),
@@ -683,8 +677,8 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
 
   // Wrap with fastify-plugin for encapsulation transparency
   const plugin = fp(sessionPlugin, {
-    name: 'arc-session',
-    fastify: '5.x',
+    name: "arc-session",
+    fastify: "5.x",
   }) as FastifyPluginAsync;
 
   return { plugin, requireFresh };

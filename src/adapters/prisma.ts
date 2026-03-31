@@ -36,9 +36,16 @@
  * ```
  */
 
-import type { DataAdapter, SchemaMetadata, FieldMetadata, ValidationResult } from './interface.js';
-import type { CrudRepository, OpenApiSchemas, RouteSchemaOptions, ParsedQuery, QueryParserInterface, AnyRecord } from '../types/index.js';
-import { DEFAULT_MAX_LIMIT, DEFAULT_LIMIT, RESERVED_QUERY_PARAMS } from '../constants.js';
+import { DEFAULT_LIMIT, DEFAULT_MAX_LIMIT, RESERVED_QUERY_PARAMS } from "../constants.js";
+import type {
+  AnyRecord,
+  CrudRepository,
+  OpenApiSchemas,
+  ParsedQuery,
+  QueryParserInterface,
+  RouteSchemaOptions,
+} from "../types/index.js";
+import type { DataAdapter, FieldMetadata, SchemaMetadata, ValidationResult } from "./interface.js";
 
 // ============================================================================
 // Prisma DMMF Types (runtime shapes from @prisma/client)
@@ -146,15 +153,15 @@ export class PrismaQueryParser implements QueryParserInterface {
 
   /** Map Arc operators to Prisma operators */
   private readonly operatorMap: Record<string, string> = {
-    $eq: 'equals',
-    $ne: 'not',
-    $gt: 'gt',
-    $gte: 'gte',
-    $lt: 'lt',
-    $lte: 'lte',
-    $in: 'in',
-    $nin: 'notIn',
-    $regex: 'contains',
+    $eq: "equals",
+    $ne: "not",
+    $gt: "gt",
+    $gte: "gte",
+    $lt: "lt",
+    $lte: "lte",
+    $in: "in",
+    $nin: "notIn",
+    $regex: "contains",
     $exists: undefined as unknown as string, // Handled specially in translateFilters
   };
 
@@ -162,7 +169,7 @@ export class PrismaQueryParser implements QueryParserInterface {
     this.maxLimit = options.maxLimit ?? DEFAULT_MAX_LIMIT;
     this.defaultLimit = options.defaultLimit ?? DEFAULT_LIMIT;
     this.softDeleteEnabled = options.softDeleteEnabled ?? true;
-    this.softDeleteField = options.softDeleteField ?? 'deletedAt';
+    this.softDeleteField = options.softDeleteField ?? "deletedAt";
   }
 
   /**
@@ -206,9 +213,9 @@ export class PrismaQueryParser implements QueryParserInterface {
     }
 
     // Build orderBy
-    const orderBy: Array<Record<string, 'asc' | 'desc'>> | undefined = parsed.sort
+    const orderBy: Array<Record<string, "asc" | "desc">> | undefined = parsed.sort
       ? Object.entries(parsed.sort).map(([field, dir]) => ({
-          [field]: (dir === 1 ? 'asc' : 'desc') as 'asc' | 'desc',
+          [field]: (dir === 1 ? "asc" : "desc") as "asc" | "desc",
         }))
       : undefined;
 
@@ -221,7 +228,7 @@ export class PrismaQueryParser implements QueryParserInterface {
       ? Object.fromEntries(
           Object.entries(parsed.select)
             .filter(([, v]) => v === 1)
-            .map(([k]) => [k, true])
+            .map(([k]) => [k, true]),
         )
       : undefined;
 
@@ -244,11 +251,11 @@ export class PrismaQueryParser implements QueryParserInterface {
       if (value === null || value === undefined) continue;
 
       // Handle nested operator objects: { status: { $ne: 'deleted' } }
-      if (typeof value === 'object' && !Array.isArray(value)) {
+      if (typeof value === "object" && !Array.isArray(value)) {
         const prismaCondition: Record<string, unknown> = {};
 
         for (const [op, opValue] of Object.entries(value as Record<string, unknown>)) {
-          if (op === '$exists') {
+          if (op === "$exists") {
             // $exists: true → { not: null }, $exists: false → null
             result[field] = opValue ? { not: null } : null;
             continue;
@@ -284,11 +291,11 @@ export class PrismaQueryParser implements QueryParserInterface {
     const sortStr = String(value);
     const result: Record<string, 1 | -1> = {};
 
-    for (const field of sortStr.split(',')) {
+    for (const field of sortStr.split(",")) {
       const trimmed = field.trim();
       if (!trimmed || !/^-?[a-zA-Z_][a-zA-Z0-9_.]*$/.test(trimmed)) continue;
 
-      if (trimmed.startsWith('-')) {
+      if (trimmed.startsWith("-")) {
         result[trimmed.slice(1)] = -1;
       } else {
         result[trimmed] = 1;
@@ -303,11 +310,13 @@ export class PrismaQueryParser implements QueryParserInterface {
 
     const result: Record<string, 0 | 1> = {};
 
-    for (const field of String(value).split(',')) {
+    for (const field of String(value).split(",")) {
       const trimmed = field.trim();
       if (!trimmed || !/^-?[a-zA-Z_][a-zA-Z0-9_.]*$/.test(trimmed)) continue;
 
-      result[trimmed.startsWith('-') ? trimmed.slice(1) : trimmed] = trimmed.startsWith('-') ? 0 : 1;
+      result[trimmed.startsWith("-") ? trimmed.slice(1) : trimmed] = trimmed.startsWith("-")
+        ? 0
+        : 1;
     }
 
     return Object.keys(result).length > 0 ? result : undefined;
@@ -317,9 +326,17 @@ export class PrismaQueryParser implements QueryParserInterface {
     const filters: Record<string, unknown> = {};
 
     const operators: Record<string, string> = {
-      eq: '$eq', ne: '$ne', gt: '$gt', gte: '$gte',
-      lt: '$lt', lte: '$lte', in: '$in', nin: '$nin',
-      like: '$regex', contains: '$regex', exists: '$exists',
+      eq: "$eq",
+      ne: "$ne",
+      gt: "$gt",
+      gte: "$gte",
+      lt: "$lt",
+      lte: "$lte",
+      in: "$in",
+      nin: "$nin",
+      like: "$regex",
+      contains: "$regex",
+      exists: "$exists",
     };
 
     for (const [key, value] of Object.entries(query)) {
@@ -333,7 +350,10 @@ export class PrismaQueryParser implements QueryParserInterface {
 
       if (operator && operators[operator]) {
         if (!filters[fieldName]) filters[fieldName] = {};
-        (filters[fieldName] as Record<string, unknown>)[operators[operator]] = this.coerceValue(value, operator);
+        (filters[fieldName] as Record<string, unknown>)[operators[operator]] = this.coerceValue(
+          value,
+          operator,
+        );
       } else if (!operator) {
         filters[fieldName] = this.coerceValue(value);
       }
@@ -343,25 +363,25 @@ export class PrismaQueryParser implements QueryParserInterface {
   }
 
   private coerceValue(value: unknown, operator?: string): unknown {
-    if (operator === 'in' || operator === 'nin') {
-      if (Array.isArray(value)) return value.map(v => this.coerceValue(v));
-      if (typeof value === 'string' && value.includes(',')) {
-        return value.split(',').map(v => this.coerceValue(v.trim()));
+    if (operator === "in" || operator === "nin") {
+      if (Array.isArray(value)) return value.map((v) => this.coerceValue(v));
+      if (typeof value === "string" && value.includes(",")) {
+        return value.split(",").map((v) => this.coerceValue(v.trim()));
       }
       return [this.coerceValue(value)];
     }
 
-    if (operator === 'exists') {
-      return String(value).toLowerCase() === 'true' || value === '1';
+    if (operator === "exists") {
+      return String(value).toLowerCase() === "true" || value === "1";
     }
 
-    if (value === 'true') return true;
-    if (value === 'false') return false;
-    if (value === 'null') return null;
+    if (value === "true") return true;
+    if (value === "false") return false;
+    if (value === "null") return null;
 
-    if (typeof value === 'string') {
+    if (typeof value === "string") {
       const num = Number(value);
-      if (!Number.isNaN(num) && value.trim() !== '') return num;
+      if (!Number.isNaN(num) && value.trim() !== "") return num;
     }
 
     return value;
@@ -373,7 +393,7 @@ export class PrismaQueryParser implements QueryParserInterface {
  */
 export interface PrismaQueryOptions {
   where?: Record<string, unknown>;
-  orderBy?: Array<Record<string, 'asc' | 'desc'>>;
+  orderBy?: Array<Record<string, "asc" | "desc">>;
   take?: number;
   skip?: number;
   select?: Record<string, boolean>;
@@ -402,7 +422,7 @@ export interface PrismaAdapterOptions<TModel> {
 }
 
 export class PrismaAdapter<TModel = unknown> implements DataAdapter<TModel> {
-  readonly type = 'prisma' as const;
+  readonly type = "prisma" as const;
   readonly name: string;
   readonly repository: CrudRepository<TModel>;
   readonly queryParser: PrismaQueryParser;
@@ -420,19 +440,24 @@ export class PrismaAdapter<TModel = unknown> implements DataAdapter<TModel> {
     this.dmmf = options.dmmf;
     this.name = `prisma:${options.modelName}`;
     this.softDeleteEnabled = options.softDeleteEnabled ?? true;
-    this.softDeleteField = options.softDeleteField ?? 'deletedAt';
+    this.softDeleteField = options.softDeleteField ?? "deletedAt";
 
     // Initialize query parser
-    this.queryParser = options.queryParser ?? new PrismaQueryParser({
-      softDeleteEnabled: this.softDeleteEnabled,
-      softDeleteField: this.softDeleteField,
-    });
+    this.queryParser =
+      options.queryParser ??
+      new PrismaQueryParser({
+        softDeleteEnabled: this.softDeleteEnabled,
+        softDeleteField: this.softDeleteField,
+      });
   }
 
   /**
    * Parse URL query parameters and convert to Prisma query options
    */
-  parseQuery(query: Record<string, unknown>, policyFilters?: Record<string, unknown>): PrismaQueryOptions {
+  parseQuery(
+    query: Record<string, unknown>,
+    policyFilters?: Record<string, unknown>,
+  ): PrismaQueryOptions {
     const parsed = this.queryParser.parse(query);
     return this.queryParser.toPrismaQuery(parsed, policyFilters);
   }
@@ -443,7 +468,7 @@ export class PrismaAdapter<TModel = unknown> implements DataAdapter<TModel> {
    */
   applyPolicyFilters(
     where: Record<string, unknown>,
-    policyFilters: Record<string, unknown>
+    policyFilters: Record<string, unknown>,
   ): Record<string, unknown> {
     return { ...where, ...policyFilters };
   }
@@ -454,7 +479,7 @@ export class PrismaAdapter<TModel = unknown> implements DataAdapter<TModel> {
 
     try {
       const model = this.dmmf.datamodel?.models?.find(
-        (m: DmmfModel) => m.name.toLowerCase() === this.modelName.toLowerCase()
+        (m: DmmfModel) => m.name.toLowerCase() === this.modelName.toLowerCase(),
       );
 
       if (!model) return null;
@@ -468,18 +493,18 @@ export class PrismaAdapter<TModel = unknown> implements DataAdapter<TModel> {
         createBody: createBodySchema,
         updateBody: updateBodySchema,
         params: {
-          type: 'object',
+          type: "object",
           properties: {
-            id: { type: 'string' },
+            id: { type: "string" },
           },
-          required: ['id'],
+          required: ["id"],
         },
         listQuery: {
-          type: 'object',
+          type: "object",
           properties: {
-            page: { type: 'number', minimum: 1, description: 'Page number for pagination' },
-            limit: { type: 'number', minimum: 1, maximum: 100, description: 'Items per page' },
-            sort: { type: 'string', description: 'Sort field (e.g., "name", "-createdAt")' },
+            page: { type: "number", minimum: 1, description: "Page number for pagination" },
+            limit: { type: "number", minimum: 1, maximum: 100, description: "Items per page" },
+            sort: { type: "string", description: 'Sort field (e.g., "name", "-createdAt")' },
             // Note: Actual filtering requires custom query parser implementation
             // This is placeholder documentation only
           },
@@ -496,7 +521,7 @@ export class PrismaAdapter<TModel = unknown> implements DataAdapter<TModel> {
 
     try {
       const model = this.dmmf.datamodel?.models?.find(
-        (m: DmmfModel) => m.name.toLowerCase() === this.modelName.toLowerCase()
+        (m: DmmfModel) => m.name.toLowerCase() === this.modelName.toLowerCase(),
       );
 
       if (!model) return null;
@@ -515,17 +540,17 @@ export class PrismaAdapter<TModel = unknown> implements DataAdapter<TModel> {
           unique: true,
         })),
       };
-    } catch (err) {
+    } catch (_err) {
       return null;
     }
   }
 
   async validate(data: unknown): Promise<ValidationResult> {
     // Prisma validates on write, so we do basic type checking here
-    if (!data || typeof data !== 'object') {
+    if (!data || typeof data !== "object") {
       return {
         valid: false,
-        errors: [{ field: 'root', message: 'Data must be an object' }],
+        errors: [{ field: "root", message: "Data must be an object" }],
       };
     }
 
@@ -533,12 +558,12 @@ export class PrismaAdapter<TModel = unknown> implements DataAdapter<TModel> {
     if (this.dmmf) {
       try {
         const model = this.dmmf.datamodel?.models?.find(
-          (m: DmmfModel) => m.name.toLowerCase() === this.modelName.toLowerCase()
+          (m: DmmfModel) => m.name.toLowerCase() === this.modelName.toLowerCase(),
         );
 
         if (model) {
           const requiredFields = model.fields.filter(
-            (f: DmmfField) => f.isRequired && !f.hasDefaultValue && !f.isGenerated
+            (f: DmmfField) => f.isRequired && !f.hasDefaultValue && !f.isGenerated,
           );
 
           const errors: Array<{ field: string; message: string }> = [];
@@ -556,7 +581,7 @@ export class PrismaAdapter<TModel = unknown> implements DataAdapter<TModel> {
             return { valid: false, errors };
           }
         }
-      } catch (err) {
+      } catch (_err) {
         // Validation failed, but we'll let Prisma handle it on write
       }
     }
@@ -576,7 +601,7 @@ export class PrismaAdapter<TModel = unknown> implements DataAdapter<TModel> {
       }
       await delegate.findMany({ take: 1 });
       return true;
-    } catch (err) {
+    } catch (_err) {
       return false;
     }
   }
@@ -584,7 +609,7 @@ export class PrismaAdapter<TModel = unknown> implements DataAdapter<TModel> {
   async close(): Promise<void> {
     try {
       await this.client.$disconnect();
-    } catch (err) {
+    } catch (_err) {
       // Already disconnected or error - ignore
     }
   }
@@ -609,7 +634,7 @@ export class PrismaAdapter<TModel = unknown> implements DataAdapter<TModel> {
     }
 
     return {
-      type: 'object',
+      type: "object",
       properties,
       ...(required.length > 0 && { required }),
     };
@@ -632,7 +657,7 @@ export class PrismaAdapter<TModel = unknown> implements DataAdapter<TModel> {
     }
 
     return {
-      type: 'object',
+      type: "object",
       properties,
       ...(required.length > 0 && { required }),
     };
@@ -650,7 +675,7 @@ export class PrismaAdapter<TModel = unknown> implements DataAdapter<TModel> {
     }
 
     return {
-      type: 'object',
+      type: "object",
       properties,
     };
   }
@@ -662,7 +687,7 @@ export class PrismaAdapter<TModel = unknown> implements DataAdapter<TModel> {
     }
 
     // Skip internal Prisma fields
-    if (field.name.startsWith('_')) {
+    if (field.name.startsWith("_")) {
       return true;
     }
 
@@ -674,31 +699,31 @@ export class PrismaAdapter<TModel = unknown> implements DataAdapter<TModel> {
 
     // Map Prisma types to JSON Schema types
     switch (field.type) {
-      case 'String':
-        schema.type = 'string';
+      case "String":
+        schema.type = "string";
         break;
-      case 'Int':
-      case 'BigInt':
-        schema.type = 'integer';
+      case "Int":
+      case "BigInt":
+        schema.type = "integer";
         break;
-      case 'Float':
-      case 'Decimal':
-        schema.type = 'number';
+      case "Float":
+      case "Decimal":
+        schema.type = "number";
         break;
-      case 'Boolean':
-        schema.type = 'boolean';
+      case "Boolean":
+        schema.type = "boolean";
         break;
-      case 'DateTime':
-        schema.type = 'string';
-        schema.format = 'date-time';
+      case "DateTime":
+        schema.type = "string";
+        schema.format = "date-time";
         break;
-      case 'Json':
-        schema.type = 'object';
+      case "Json":
+        schema.type = "object";
         break;
       default:
         // Enums and other types
-        if (field.kind === 'enum') {
-          schema.type = 'string';
+        if (field.kind === "enum") {
+          schema.type = "string";
           // Extract enum values from DMMF if available
           if (this.dmmf?.datamodel?.enums) {
             const enumDef = this.dmmf.datamodel.enums.find((e: DmmfEnum) => e.name === field.type);
@@ -707,14 +732,14 @@ export class PrismaAdapter<TModel = unknown> implements DataAdapter<TModel> {
             }
           }
         } else {
-          schema.type = 'string';
+          schema.type = "string";
         }
     }
 
     // Handle arrays
     if (field.isList) {
       return {
-        type: 'array',
+        type: "array",
         items: schema,
       };
     }
@@ -753,28 +778,25 @@ export class PrismaAdapter<TModel = unknown> implements DataAdapter<TModel> {
     return metadata;
   }
 
-  private mapPrismaTypeToMetadataType(
-    type: string,
-    kind: string
-  ): FieldMetadata['type'] {
-    if (kind === 'enum') return 'enum';
+  private mapPrismaTypeToMetadataType(type: string, kind: string): FieldMetadata["type"] {
+    if (kind === "enum") return "enum";
 
     switch (type) {
-      case 'String':
-        return 'string';
-      case 'Int':
-      case 'BigInt':
-      case 'Float':
-      case 'Decimal':
-        return 'number';
-      case 'Boolean':
-        return 'boolean';
-      case 'DateTime':
-        return 'date';
-      case 'Json':
-        return 'object';
+      case "String":
+        return "string";
+      case "Int":
+      case "BigInt":
+      case "Float":
+      case "Decimal":
+        return "number";
+      case "Boolean":
+        return "boolean";
+      case "DateTime":
+        return "date";
+      case "Json":
+        return "object";
       default:
-        return 'string';
+        return "string";
     }
   }
 }
@@ -796,7 +818,7 @@ export class PrismaAdapter<TModel = unknown> implements DataAdapter<TModel> {
  * });
  */
 export function createPrismaAdapter<TModel>(
-  options: PrismaAdapterOptions<TModel>
+  options: PrismaAdapterOptions<TModel>,
 ): PrismaAdapter<TModel> {
   return new PrismaAdapter(options);
 }

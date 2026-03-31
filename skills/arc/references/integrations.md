@@ -1,7 +1,9 @@
 # Arc Integrations
 
-Pluggable adapters for BullMQ jobs, WebSocket real-time, and Streamline workflows.
+Pluggable adapters for BullMQ jobs, WebSocket real-time, Streamline workflows, and MCP tools.
 All are separate subpath imports — only loaded when explicitly used.
+
+> **MCP** has its own dedicated reference: [mcp.md](mcp.md) — auto-generate tools from resources, custom tools, Better Auth OAuth 2.1.
 
 ## Job Queue (BullMQ)
 
@@ -74,9 +76,17 @@ const stats = await fastify.jobs.getStats();
 // { 'send-email': { waiting: 5, active: 2, completed: 100, failed: 3, delayed: 0 } }
 ```
 
+### Timeout & DLQ
+
+Job timeout via `Promise.race` (timer always cleaned up). DLQ queues tracked and closed on shutdown:
+
+```typescript
+defineJob({ name: 'x', handler, timeout: 60000, deadLetterQueue: 'x:dead', retries: 3 });
+```
+
 ### Event Bridge
 
-When `bridgeEvents: true` (default), job events are published to Arc's event bus:
+When `bridgeEvents: true` (default), job events fire-and-forget (never fail the worker):
 - `job.send-email.completed` — `{ jobId, data, result }`
 - `job.send-email.failed` — `{ jobId, data, error, attemptsMade }`
 
@@ -214,6 +224,8 @@ await fastify.register(eventGatewayPlugin, {
 });
 ```
 
+**`@fastify/websocket` auto-registration:** EventGateway auto-registers `@fastify/websocket` if not present. Throws with install instructions if package missing (or use `ws: false`).
+
 **When to use:** Prefer EventGateway over separate SSE + WebSocket registration when you want consistent auth, org-scoping, and security policy across both transports.
 
 ---
@@ -276,3 +288,98 @@ All optional, gracefully degrade:
 - `auth: false` — No authentication required
 - If `fastify.authenticate` is not registered, auth middleware is skipped
 - If no permission check defined for an operation, defaults to allow
+
+---
+
+## Webhooks (Outbound)
+
+```typescript
+import { webhookPlugin } from '@classytic/arc/integrations/webhooks';
+```
+
+Fastify plugin that auto-dispatches Arc events to customer webhook endpoints with HMAC-SHA256 signing, delivery logging, and pluggable persistence.
+
+### Setup
+
+```typescript
+await fastify.register(webhookPlugin);
+
+// With custom store (MongoDB, Redis, etc.)
+await fastify.register(webhookPlugin, {
+  store: myMongoWebhookStore,  // implements WebhookStore { getAll, save, remove }
+  timeout: 5000,               // delivery timeout (default: 10000ms)
+  maxLogEntries: 500,          // ring buffer cap (default: 1000)
+});
+```
+
+**Requires:** `arc-events` plugin (auto-registered by `createApp`).
+
+### Register Webhooks
+
+```typescript
+await app.webhooks.register({
+  id: 'wh-1',
+  url: 'https://customer.com/webhook',
+  events: ['order.created', 'order.shipped'],
+  secret: 'whsec_abc123',
+});
+
+// Patterns: exact ('order.created'), prefix ('order.*'), global ('*')
+```
+
+### Auto-Dispatch
+
+Events published via `fastify.events.publish()` auto-deliver to matching webhooks — no manual wiring:
+
+```typescript
+await app.events.publish('order.created', { orderId: '123' });
+// → POST https://customer.com/webhook
+//   Headers: x-webhook-signature, x-webhook-id, x-webhook-event
+//   Body: { type, payload, meta }
+```
+
+### HMAC Signing
+
+Every delivery is signed with the subscription's secret using HMAC-SHA256:
+
+```
+x-webhook-signature: sha256=a1b2c3...
+```
+
+Verify on the receiving end:
+```typescript
+import { createHmac } from 'node:crypto';
+const expected = 'sha256=' + createHmac('sha256', secret).update(rawBody).digest('hex');
+if (expected !== req.headers['x-webhook-signature']) throw new Error('Invalid signature');
+```
+
+### Delivery Log
+
+```typescript
+const log = app.webhooks.deliveryLog();     // all entries
+const recent = app.webhooks.deliveryLog(10); // last 10
+
+// Each entry: { subscriptionId, eventType, success, status?, error?, timestamp }
+```
+
+### WebhookStore Interface
+
+Implement for persistent subscriptions (default: in-memory):
+
+```typescript
+interface WebhookStore {
+  readonly name: string;
+  getAll(): Promise<WebhookSubscription[]>;
+  save(sub: WebhookSubscription): Promise<void>;
+  remove(id: string): Promise<void>;
+}
+```
+
+### Fastify Decorators
+
+```typescript
+app.webhooks.register(sub)    // Add/replace subscription
+app.webhooks.unregister(id)   // Remove subscription
+app.webhooks.list()           // All subscriptions (copy)
+app.webhooks.deliveryLog(n?)  // Delivery history (ring buffer)
+```

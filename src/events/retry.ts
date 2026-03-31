@@ -29,7 +29,7 @@
  * ```
  */
 
-import type { DomainEvent, EventHandler, EventLogger } from './EventTransport.js';
+import type { DomainEvent, EventHandler, EventLogger } from "./EventTransport.js";
 
 export interface RetryOptions {
   /**
@@ -81,10 +81,7 @@ export interface RetryOptions {
  * On failure, retries with exponential backoff (with jitter).
  * After all retries exhausted, calls `onDead` callback if provided.
  */
-export function withRetry(
-  handler: EventHandler,
-  options: RetryOptions = {},
-): EventHandler {
+export function withRetry(handler: EventHandler, options: RetryOptions = {}): EventHandler {
   const {
     maxRetries = 3,
     backoffMs = 1000,
@@ -95,7 +92,7 @@ export function withRetry(
     logger = console,
   } = options;
 
-  const label = name ?? handler.name ?? 'anonymous';
+  const label = name ?? handler.name ?? "anonymous";
 
   return async (event: DomainEvent): Promise<void> => {
     const errors: Error[] = [];
@@ -116,7 +113,7 @@ export function withRetry(
 
           logger.warn(
             `[Arc Events] Handler '${label}' failed for ${event.type} ` +
-            `(attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${Math.round(delay)}ms: ${error.message}`,
+              `(attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${Math.round(delay)}ms: ${error.message}`,
           );
 
           await sleep(delay);
@@ -127,14 +124,14 @@ export function withRetry(
     // All retries exhausted — event is dead
     logger.error(
       `[Arc Events] Handler '${label}' permanently failed for ${event.type} ` +
-      `after ${maxRetries + 1} attempts. ${errors.length} errors.`,
+        `after ${maxRetries + 1} attempts. ${errors.length} errors.`,
     );
 
     if (onDead) {
       try {
         await onDead(event, errors);
       } catch (dlqErr) {
-        logger.error('[Arc Events] Dead letter callback failed:', dlqErr);
+        logger.error("[Arc Events] Dead letter callback failed:", dlqErr);
       }
     }
   };
@@ -161,11 +158,11 @@ export function withRetry(
  * });
  * ```
  */
-export function createDeadLetterPublisher(
-  events: { publish: <T>(type: string, payload: T, meta?: Record<string, unknown>) => Promise<void> },
-): (event: DomainEvent, errors: Error[]) => Promise<void> {
+export function createDeadLetterPublisher(events: {
+  publish: <T>(type: string, payload: T, meta?: Record<string, unknown>) => Promise<void>;
+}): (event: DomainEvent, errors: Error[]) => Promise<void> {
   return async (event: DomainEvent, errors: Error[]) => {
-    await events.publish('$deadLetter', {
+    await events.publish("$deadLetter", {
       originalEvent: event,
       errors: errors.map((e) => ({
         message: e.message,

@@ -5,7 +5,7 @@
  * Suitable for production use.
  */
 
-import type { AuditEntry, AuditQueryOptions, AuditStore } from './interface.js';
+import type { AuditEntry, AuditQueryOptions, AuditStore } from "./interface.js";
 
 export interface MongoAuditStoreOptions {
   /** MongoDB connection or mongoose instance */
@@ -24,7 +24,10 @@ export interface MongoConnection {
 interface MongoCollection {
   insertOne: (doc: Record<string, unknown>) => Promise<unknown>;
   find: (query: Record<string, unknown>) => MongoCursor;
-  createIndex: (spec: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown>;
+  createIndex: (
+    spec: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ) => Promise<unknown>;
 }
 
 interface MongoCursor {
@@ -35,16 +38,13 @@ interface MongoCursor {
 }
 
 export class MongoAuditStore implements AuditStore {
-  readonly name = 'mongodb';
+  readonly name = "mongodb";
   private collection: MongoCollection;
   private initialized = false;
   private ttlDays: number;
 
-  private options: MongoAuditStoreOptions;
-
   constructor(options: MongoAuditStoreOptions) {
-    this.options = options;
-    const collectionName = options.collection ?? 'audit_logs';
+    const collectionName = options.collection ?? "audit_logs";
     this.collection = options.connection.collection(collectionName);
     this.ttlDays = options.ttlDays ?? 90;
   }
@@ -70,7 +70,7 @@ export class MongoAuditStore implements AuditStore {
       if (this.ttlDays > 0) {
         await this.collection.createIndex(
           { timestamp: 1 },
-          { expireAfterSeconds: this.ttlDays * 24 * 60 * 60 }
+          { expireAfterSeconds: this.ttlDays * 24 * 60 * 60 },
         );
       }
 
@@ -152,7 +152,7 @@ export class MongoAuditStore implements AuditStore {
       id: String(doc._id),
       resource: doc.resource as string,
       documentId: doc.documentId as string,
-      action: doc.action as AuditEntry['action'],
+      action: doc.action as AuditEntry["action"],
       userId: doc.userId as string | undefined,
       organizationId: doc.organizationId as string | undefined,
       before: doc.before as Record<string, unknown> | undefined,

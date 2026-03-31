@@ -16,24 +16,27 @@
  * ```
  */
 
+export type { ElevationEvent, ElevationOptions } from "./elevation.js";
+// Elevation plugin
+export { default as elevationPlugin, elevationPlugin as elevationPluginFn } from "./elevation.js";
+export type { RateLimitKeyContext, TenantKeyGeneratorOptions } from "./rateLimitKey.js";
+// Per-tenant rate limit key generator
+export { createTenantKeyGenerator } from "./rateLimitKey.js";
+export type { ResolveOrgFromHeaderOptions } from "./resolveOrgFromHeader.js";
+// Org-from-header utility
+export { resolveOrgFromHeader } from "./resolveOrgFromHeader.js";
 // Core types and guards
-export type { RequestScope } from './types.js';
+export type { RequestScope } from "./types.js";
 export {
-  isMember,
-  isElevated,
-  hasOrgAccess,
-  isAuthenticated,
+  AUTHENTICATED_SCOPE,
   getOrgId,
   getOrgRoles,
   getTeamId,
+  getUserId,
+  getUserRoles,
+  hasOrgAccess,
+  isAuthenticated,
+  isElevated,
+  isMember,
   PUBLIC_SCOPE,
-  AUTHENTICATED_SCOPE,
-} from './types.js';
-
-// Elevation plugin
-export { default as elevationPlugin, elevationPlugin as elevationPluginFn } from './elevation.js';
-export type { ElevationOptions, ElevationEvent } from './elevation.js';
-
-// Org-from-header utility
-export { resolveOrgFromHeader } from './resolveOrgFromHeader.js';
-export type { ResolveOrgFromHeaderOptions } from './resolveOrgFromHeader.js';
+} from "./types.js";

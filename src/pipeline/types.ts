@@ -2,7 +2,7 @@
  * Pipeline Types — Shared type definitions for guard/transform/intercept.
  */
 
-import type { IRequestContext, IControllerResponse, AnyRecord } from '../types/index.js';
+import type { IControllerResponse, IRequestContext } from "../types/index.js";
 
 /**
  * Pipeline context passed to guards, transforms, and interceptors.
@@ -12,14 +12,14 @@ export interface PipelineContext extends IRequestContext {
   /** Resource name being accessed */
   resource: string;
   /** CRUD operation being performed */
-  operation: 'list' | 'get' | 'create' | 'update' | 'delete' | string;
+  operation: "list" | "get" | "create" | "update" | "delete" | string;
 }
 
 /**
  * Which operations a pipeline step applies to.
  * If omitted, applies to ALL operations.
  */
-export type OperationFilter = Array<'list' | 'get' | 'create' | 'update' | 'delete' | string>;
+export type OperationFilter = Array<"list" | "get" | "create" | "update" | "delete" | string>;
 
 // ============================================================================
 // Guard
@@ -30,7 +30,7 @@ export type OperationFilter = Array<'list' | 'get' | 'create' | 'update' | 'dele
  * Return true to proceed, throw to deny.
  */
 export interface Guard {
-  readonly _type: 'guard';
+  readonly _type: "guard";
   readonly name: string;
   readonly operations?: OperationFilter;
   handler(ctx: PipelineContext): boolean | Promise<boolean>;
@@ -45,10 +45,10 @@ export interface Guard {
  * Returns modified context (or mutates in place).
  */
 export interface Transform {
-  readonly _type: 'transform';
+  readonly _type: "transform";
   readonly name: string;
   readonly operations?: OperationFilter;
-  handler(ctx: PipelineContext): PipelineContext | void | Promise<PipelineContext | void>;
+  handler(ctx: PipelineContext): PipelineContext | undefined | Promise<PipelineContext | undefined>;
 }
 
 // ============================================================================
@@ -64,7 +64,7 @@ export type NextFunction = () => Promise<IControllerResponse<unknown>>;
  * Intercept — wraps handler execution (before + after pattern).
  */
 export interface Interceptor {
-  readonly _type: 'interceptor';
+  readonly _type: "interceptor";
   readonly name: string;
   readonly operations?: OperationFilter;
   handler(ctx: PipelineContext, next: NextFunction): Promise<IControllerResponse<unknown>>;

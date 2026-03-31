@@ -23,16 +23,16 @@
  * });
  */
 
-export { createApp, ArcFactory } from './createApp.js';
-export { getPreset, productionPreset, developmentPreset, testingPreset } from './presets.js';
+export { ArcFactory, createApp } from "./createApp.js";
+export { developmentPreset, getPreset, productionPreset, testingPreset } from "./presets.js";
 export type {
-  CreateAppOptions,
   AuthOption,
-  JwtAuthOption,
   BetterAuthOption,
-  CustomPluginAuthOption,
+  CreateAppOptions,
   CustomAuthenticatorOption,
-  UnderPressureOptions,
+  CustomPluginAuthOption,
+  JwtAuthOption,
   MultipartOptions,
   RawBodyOptions,
-} from './types.js';
+  UnderPressureOptions,
+} from "./types.js";

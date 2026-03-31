@@ -35,8 +35,11 @@ export function normalizeRoles(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value.map((r) => String(r).trim()).filter(Boolean);
   }
-  if (typeof value === 'string' && value.length > 0) {
-    return value.split(',').map((r) => r.trim()).filter(Boolean);
+  if (typeof value === "string" && value.length > 0) {
+    return value
+      .split(",")
+      .map((r) => r.trim())
+      .filter(Boolean);
   }
   return [];
 }

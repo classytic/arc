@@ -4,74 +4,77 @@
  * Common utilities for the Arc framework.
  */
 
-// Errors
-export {
-  ArcError,
-  NotFoundError,
-  ValidationError,
-  UnauthorizedError,
-  ForbiddenError,
-  ConflictError,
-  OrgRequiredError,
-  OrgAccessDeniedError,
-  RateLimitError,
-  ServiceUnavailableError,
-  createError,
-  isArcError,
-} from './errors.js';
-export type { ErrorDetails } from './errors.js';
-
-// Response Schemas
-export {
-  successResponseSchema,
-  errorResponseSchema,
-  paginationSchema,
-  wrapResponse,
-  listResponse,
-  itemResponse,
-  mutationResponse,
-  deleteResponse,
-  responses,
-  queryParams,
-  getListQueryParams,
-  getDefaultCrudSchemas,
-  itemWrapper,
-  paginateWrapper,
-  messageWrapper,
-} from './responseSchemas.js';
-export type { JsonSchema } from './responseSchemas.js';
-
-// State Machine
-export { createStateMachine } from './stateMachine.js';
-export type { StateMachine, TransitionConfig } from './stateMachine.js';
-
+export type { CircuitBreakerOptions, CircuitBreakerStats } from "./circuitBreaker.js";
 // Circuit Breaker
 export {
   CircuitBreaker,
   CircuitBreakerError,
   CircuitBreakerRegistry,
+  CircuitState,
   createCircuitBreaker,
   createCircuitBreakerRegistry,
-  CircuitState,
-} from './circuitBreaker.js';
-export type { CircuitBreakerOptions, CircuitBreakerStats } from './circuitBreaker.js';
-
+} from "./circuitBreaker.js";
+// Compensating Transaction
+export type {
+  CompensationDefinition,
+  CompensationError,
+  CompensationHooks,
+  CompensationResult,
+  CompensationStep,
+} from "./compensation.js";
+export { defineCompensation, withCompensation } from "./compensation.js";
+export type { ErrorDetails } from "./errors.js";
+// Errors
+export {
+  ArcError,
+  ConflictError,
+  createError,
+  ForbiddenError,
+  isArcError,
+  NotFoundError,
+  OrgAccessDeniedError,
+  OrgRequiredError,
+  RateLimitError,
+  ServiceUnavailableError,
+  UnauthorizedError,
+  ValidationError,
+} from "./errors.js";
+export type { ArcQueryParserOptions } from "./queryParser.js";
 // Query Parser
 export {
   ArcQueryParser,
   createQueryParser,
-} from './queryParser.js';
-export type { ArcQueryParserOptions } from './queryParser.js';
-
-// Type Guards
-export { hasEvents } from './typeGuards.js';
-export type { EventsDecorator } from './typeGuards.js';
-
+} from "./queryParser.js";
+export type { JsonSchema } from "./responseSchemas.js";
+// Response Schemas
+export {
+  deleteResponse,
+  errorResponseSchema,
+  getDefaultCrudSchemas,
+  getListQueryParams,
+  itemResponse,
+  itemWrapper,
+  listResponse,
+  messageWrapper,
+  mutationResponse,
+  paginateWrapper,
+  paginationSchema,
+  queryParams,
+  responses,
+  successResponseSchema,
+  wrapResponse,
+} from "./responseSchemas.js";
 // Schema Converter
 export {
-  toJsonSchema,
-  isJsonSchema,
-  isZodSchema,
   convertOpenApiSchemas,
   convertRouteSchema,
-} from './schemaConverter.js';
+  isJsonSchema,
+  isZodSchema,
+  toJsonSchema,
+} from "./schemaConverter.js";
+export type { StateMachine, TransitionConfig } from "./stateMachine.js";
+// State Machine
+export { createStateMachine } from "./stateMachine.js";
+export type { EventsDecorator } from "./typeGuards.js";
+// Type Guards
+export { hasEvents } from "./typeGuards.js";

@@ -16,7 +16,7 @@
  * });
  */
 
-import type { IdempotencyStore, IdempotencyResult } from './interface.js';
+import type { IdempotencyResult, IdempotencyStore } from "./interface.js";
 
 export interface RedisClient {
   get(key: string): Promise<string | null>;
@@ -24,7 +24,10 @@ export interface RedisClient {
   del(key: string | string[]): Promise<number>;
   exists(key: string | string[]): Promise<number>;
   /** SCAN command — compatible with node-redis and ioredis varargs signatures. */
-  scan?(cursor: string | number, ...args: (string | number)[]): Promise<[string | number, string[]]>;
+  scan?(
+    cursor: string | number,
+    ...args: (string | number)[]
+  ): Promise<[string | number, string[]]>;
   quit?(): Promise<string>;
   disconnect?(): Promise<void>;
 }
@@ -41,7 +44,7 @@ export interface RedisIdempotencyStoreOptions {
 }
 
 export class RedisIdempotencyStore implements IdempotencyStore {
-  readonly name = 'redis';
+  readonly name = "redis";
   private client: RedisClient;
   private prefix: string;
   private lockPrefix: string;
@@ -49,8 +52,8 @@ export class RedisIdempotencyStore implements IdempotencyStore {
 
   constructor(options: RedisIdempotencyStoreOptions) {
     this.client = options.client;
-    this.prefix = options.prefix ?? 'idem:';
-    this.lockPrefix = options.lockPrefix ?? 'idem:lock:';
+    this.prefix = options.prefix ?? "idem:";
+    this.lockPrefix = options.lockPrefix ?? "idem:lock:";
     this.ttlMs = options.ttlMs ?? 86400000;
   }
 
@@ -83,11 +86,9 @@ export class RedisIdempotencyStore implements IdempotencyStore {
     }
   }
 
-  async set(key: string, result: Omit<IdempotencyResult, 'key'>): Promise<void> {
+  async set(key: string, result: Omit<IdempotencyResult, "key">): Promise<void> {
     const data: IdempotencyResult = { key, ...result };
-    const ttlSeconds = Math.ceil(
-      (new Date(result.expiresAt).getTime() - Date.now()) / 1000
-    );
+    const ttlSeconds = Math.ceil((new Date(result.expiresAt).getTime() - Date.now()) / 1000);
 
     if (ttlSeconds > 0) {
       await this.client.set(this.resultKey(key), JSON.stringify(data), {
@@ -98,12 +99,11 @@ export class RedisIdempotencyStore implements IdempotencyStore {
 
   async tryLock(key: string, requestId: string, ttlMs: number): Promise<boolean> {
     const ttlSeconds = Math.ceil(ttlMs / 1000);
-    const result = await this.client.set(
-      this.lockKey(key),
-      requestId,
-      { EX: ttlSeconds, NX: true }
-    );
-    return result === 'OK';
+    const result = await this.client.set(this.lockKey(key), requestId, {
+      EX: ttlSeconds,
+      NX: true,
+    });
+    return result === "OK";
   }
 
   async unlock(key: string, requestId: string): Promise<void> {
@@ -144,9 +144,7 @@ export class RedisIdempotencyStore implements IdempotencyStore {
           createdAt: new Date(result.createdAt),
           expiresAt: new Date(result.expiresAt),
         };
-      } catch {
-        continue;
-      }
+      } catch {}
     }
     return undefined;
   }
@@ -155,14 +153,18 @@ export class RedisIdempotencyStore implements IdempotencyStore {
   private async scanByPrefix(prefix: string): Promise<string[]> {
     if (!this.client.scan) return [];
     const keys: string[] = [];
-    let cursor: string | number = '0';
+    let cursor: string | number = "0";
     do {
       const [nextCursor, batch] = await this.client.scan(
-        cursor, 'MATCH', `${prefix}*`, 'COUNT', 100,
+        cursor,
+        "MATCH",
+        `${prefix}*`,
+        "COUNT",
+        100,
       );
       cursor = nextCursor;
       keys.push(...batch);
-    } while (String(cursor) !== '0');
+    } while (String(cursor) !== "0");
     return keys;
   }
 

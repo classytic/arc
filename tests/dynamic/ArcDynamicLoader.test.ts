@@ -2,10 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   ArcDynamicLoader,
   type ArcArchitectureSchema,
-} from "../../src/ai/ArcDynamicLoader.js";
+} from "../../src/dynamic/ArcDynamicLoader.js";
 import type { PermissionCheck } from "../../src/permissions/types.js";
 
-describe("ArcDynamicLoader (AI / AAS)", () => {
+describe("ArcDynamicLoader (Dynamic / AAS)", () => {
   it("should parse an AAS schema and dynamically map it to Arc resources", () => {
     // 1. Mock adapter resolver
     const resolvedAdapters: string[] = [];

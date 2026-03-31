@@ -16,11 +16,7 @@
  *   });
  */
 
-import type {
-  FastifyInstance,
-  FastifyPluginAsync,
-  FastifyRequest,
-} from "fastify";
+import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
 import type { DomainEvent } from "../events/EventTransport.js";
 import type { WebSocketClient, WebSocketMessage } from "./websocket.js";
@@ -33,9 +29,7 @@ export interface EventGatewayOptions {
   /** Require auth for all real-time connections (default: true) */
   auth?: boolean;
   /** Custom auth function for WebSocket upgrade */
-  authenticate?: (
-    request: unknown,
-  ) => Promise<{ userId?: string; organizationId?: string } | null>;
+  authenticate?: (request: unknown) => Promise<{ userId?: string; organizationId?: string } | null>;
   /** Filter events by org from request.scope (default: false) */
   orgScoped?: boolean;
   /** Room/subscription authorization policy */
@@ -67,10 +61,7 @@ export interface EventGatewayOptions {
         heartbeatInterval?: number;
         maxClientsPerRoom?: number;
         exposeStats?: boolean | "authenticated";
-        onMessage?: (
-          client: WebSocketClient,
-          message: WebSocketMessage,
-        ) => void | Promise<void>;
+        onMessage?: (client: WebSocketClient, message: WebSocketMessage) => void | Promise<void>;
         onConnect?: (client: WebSocketClient) => void | Promise<void>;
         onDisconnect?: (client: WebSocketClient) => void | Promise<void>;
       };
@@ -117,6 +108,19 @@ const eventGatewayPluginImpl: FastifyPluginAsync<EventGatewayOptions> = async (
 
   // Register WebSocket if not disabled
   if (opts.ws !== false) {
+    // Auto-register @fastify/websocket if not already registered
+    if (!fastify.hasDecorator("websocketServer")) {
+      try {
+        const wsPlugin = await import("@fastify/websocket");
+        await fastify.register(wsPlugin.default ?? wsPlugin);
+      } catch {
+        throw new Error(
+          "[arc-event-gateway] WebSocket support requires @fastify/websocket.\n" +
+            "Install it: npm install @fastify/websocket\n" +
+            "Or disable WebSocket: eventGateway({ ws: false })",
+        );
+      }
+    }
     const { websocketPlugin } = await import("./websocket.js");
     await fastify.register(websocketPlugin, {
       path: opts.ws?.path ?? "/ws",

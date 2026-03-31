@@ -1,4 +1,4 @@
-import type { CacheLogger, CacheSetOptions, CacheStats, CacheStore } from './interface.js';
+import type { CacheLogger, CacheSetOptions, CacheStats, CacheStore } from "./interface.js";
 
 interface MemoryEntry<TValue> {
   value: TValue;
@@ -41,7 +41,7 @@ export interface MemoryCacheStoreOptions {
  * - Stats tracking for observability
  */
 export class MemoryCacheStore<TValue = unknown> implements CacheStore<TValue> {
-  readonly name = 'memory-cache';
+  readonly name = "memory-cache";
 
   private readonly cache = new Map<string, MemoryEntry<TValue>>();
   private readonly defaultTtlMs: number;
@@ -97,7 +97,7 @@ export class MemoryCacheStore<TValue = unknown> implements CacheStore<TValue> {
     const size = this.estimateSize(value);
     if (size > this.maxEntryBytes) {
       this.logger.warn(
-        `[MemoryCacheStore] Skipping oversized entry for key '${key}' (${size} bytes > ${this.maxEntryBytes} bytes)`
+        `[MemoryCacheStore] Skipping oversized entry for key '${key}' (${size} bytes > ${this.maxEntryBytes} bytes)`,
       );
       return;
     }
@@ -182,7 +182,7 @@ export class MemoryCacheStore<TValue = unknown> implements CacheStore<TValue> {
     try {
       const json = JSON.stringify(value);
       if (!json) return 0;
-      return Buffer.byteLength(json, 'utf8');
+      return Buffer.byteLength(json, "utf8");
     } catch {
       return this.maxEntryBytes + 1;
     }

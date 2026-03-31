@@ -19,24 +19,23 @@
  * });
  */
 
-export {
-  HookSystem,
-  createHookSystem,
-  defineHook,
-  beforeCreate,
-  afterCreate,
-  beforeUpdate,
-  afterUpdate,
-  beforeDelete,
-  afterDelete,
-} from './HookSystem.js';
-
 export type {
-  HookPhase,
-  HookOperation,
+  DefineHookOptions,
   HookContext,
   HookHandler,
+  HookOperation,
+  HookPhase,
   HookRegistration,
   HookSystemOptions,
-  DefineHookOptions,
-} from './HookSystem.js';
+} from "./HookSystem.js";
+export {
+  afterCreate,
+  afterDelete,
+  afterUpdate,
+  beforeCreate,
+  beforeDelete,
+  beforeUpdate,
+  createHookSystem,
+  defineHook,
+  HookSystem,
+} from "./HookSystem.js";

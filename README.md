@@ -81,6 +81,23 @@ auth: false
 
 **Decorates:** `app.authenticate`, `app.optionalAuthenticate`, `app.authorize`
 
+### Token Revocation
+
+Arc provides the `isRevoked` primitive — you implement the store (Redis, DB, Better Auth):
+
+```typescript
+auth: {
+  type: 'jwt',
+  jwt: { secret: process.env.JWT_SECRET },
+  isRevoked: async (decoded) => {
+    // Redis set, DB lookup, or any async check
+    return await redis.sismember('revoked-tokens', decoded.jti ?? decoded.id);
+  },
+}
+```
+
+Fail-closed: if the revocation check throws, the token is rejected.
+
 ## Permissions
 
 Function-based, composable:
@@ -221,6 +238,114 @@ await app.events.subscribe('order.*', async (event) => { ... });
 
 CRUD events (`product.created`, `product.updated`, `product.deleted`) emit automatically.
 
+### defineEvent — Typed Events with Schema Validation
+
+Declare events with schemas for runtime validation and introspection:
+
+```typescript
+import { defineEvent, createEventRegistry } from '@classytic/arc/events';
+
+// Define typed events
+const OrderCreated = defineEvent({
+  name: 'order.created',
+  version: 1,
+  description: 'Emitted when an order is placed',
+  schema: {
+    type: 'object',
+    properties: {
+      orderId: { type: 'string' },
+      total: { type: 'number' },
+      currency: { type: 'string' },
+    },
+    required: ['orderId', 'total'],
+  },
+});
+
+// Type-safe event creation
+const event = OrderCreated.create({ orderId: 'o-1', total: 100 }, { userId: 'user-1' });
+await app.events.publish(event.type, event.payload, event.meta);
+```
+
+**Event Registry** — catalog + auto-validation on publish:
+
+```typescript
+const registry = createEventRegistry();
+registry.register(OrderCreated);
+registry.register(OrderShipped);
+
+// Wire into eventPlugin — validates payloads on publish
+const app = await createApp({
+  arcPlugins: {
+    events: { registry, validateMode: 'warn' },
+    // 'warn' (default): log warning, still publish
+    // 'reject': throw error, do NOT publish
+    // 'off': registry is introspection-only
+  },
+});
+
+// Introspect at runtime
+app.events.registry?.catalog();
+// → [{ name: 'order.created', version: 1, schema: {...} }, ...]
+```
+
+Export the registry alongside resources for `arc describe` to auto-detect:
+
+```typescript
+// src/events.ts
+export const eventRegistry = createEventRegistry();
+eventRegistry.register(OrderCreated);
+eventRegistry.register(OrderShipped);
+```
+
+### Event Transports
+
+| Transport | Import | Use Case |
+|-----------|--------|----------|
+| `MemoryEventTransport` | `@classytic/arc/events` | Development, testing, single-instance |
+| `RedisEventTransport` | `@classytic/arc/events/redis` | Multi-instance pub/sub (fan-out) |
+| `RedisStreamTransport` | `@classytic/arc/events/redis-stream` | Ordered events with consumer groups |
+
+```typescript
+// Redis Pub/Sub
+import { RedisEventTransport } from '@classytic/arc/events/redis';
+const transport = new RedisEventTransport(redis, { channel: 'arc-events' });
+
+// Redis Streams (ordered, durable)
+import { RedisStreamTransport } from '@classytic/arc/events/redis-stream';
+const transport = new RedisStreamTransport(redis, { stream: 'arc-events' });
+```
+
+**Behavioral contract:**
+- **Memory**: Handlers execute sequentially (ordered, awaited)
+- **Redis Pub/Sub**: Handlers fire-and-forget (unordered, fan-out)
+- **Redis Streams**: Ordered delivery with consumer group acknowledgment
+
+### Retry & Dead Letter Queue
+
+```typescript
+import { withRetry, createDeadLetterPublisher } from '@classytic/arc/events';
+
+// Per-handler retry with exponential backoff
+await app.events.subscribe('order.created', withRetry(
+  async (event) => { await sendConfirmationEmail(event.payload); },
+  {
+    maxRetries: 3,
+    backoffMs: 1000,
+    onDead: createDeadLetterPublisher(app.events), // publishes to $deadLetter channel
+  },
+));
+
+// Or configure auto-retry for ALL handlers via plugin
+const app = await createApp({
+  arcPlugins: {
+    events: {
+      retry: { maxRetries: 3, backoffMs: 1000 },
+      deadLetterQueue: { store: async (event, errors) => { /* custom DLQ */ } },
+    },
+  },
+});
+```
+
 ## Factory — createApp()
 
 ```typescript
@@ -282,6 +407,7 @@ await app.register(websocketPlugin, {
   auth: true,                       // fail-closed: throws if authenticate not registered
   resources: ['product', 'order'],
   roomPolicy: (client, room) => ['product', 'order'].includes(room),
+  reauthInterval: 300000,           // re-validate token every 5 min (0 = disabled)
   maxMessageBytes: 16384,           // 16KB message size cap
   maxSubscriptionsPerClient: 100,   // prevent resource exhaustion
 });
@@ -294,6 +420,49 @@ await app.register(eventGatewayPlugin, {
   sse: { path: '/api/events', patterns: ['order.*'] },
   ws: { path: '/ws', resources: ['product', 'order'] },
 });
+```
+
+## Pipeline — Guards, Transforms, Interceptors
+
+Functional composition for cross-cutting concerns:
+
+```typescript
+import { pipe, guard, transform, intercept } from '@classytic/arc';
+
+const isActive = guard('isActive', (ctx) => ctx.query?.filters?.isActive !== false);
+const slugify = transform('slugify', (ctx) => ({ ...ctx, body: { ...ctx.body, slug: toSlug(ctx.body.name) } }));
+const timing = intercept('timing', async (ctx, next) => {
+  const start = Date.now();
+  const result = await next();
+  console.log(`${ctx.resource}.${ctx.operation}: ${Date.now() - start}ms`);
+  return result;
+});
+
+defineResource({
+  name: 'product',
+  pipe: pipe(isActive, slugify, timing),
+  // or per-operation: pipe: { create: pipe(slugify), list: pipe(timing) }
+});
+```
+
+## Utilities
+
+```typescript
+// Circuit Breaker — fault tolerance for external service calls
+import { createCircuitBreaker } from '@classytic/arc/utils';
+const paymentBreaker = createCircuitBreaker(
+  async (amount) => stripe.charges.create({ amount }),
+  { name: 'stripe', failureThreshold: 5, resetTimeout: 30000, fallback: async () => cached },
+);
+
+// State Machine — workflow validation
+import { createStateMachine } from '@classytic/arc/utils';
+const orderState = createStateMachine('Order', {
+  approve: ['pending', 'draft'],
+  cancel: ['pending', 'approved'],
+  fulfill: { from: ['approved'], to: 'fulfilled', guard: ({ data }) => data.paid },
+});
+orderState.assert('approve', currentStatus); // throws if invalid transition
 ```
 
 ## Integrations
@@ -334,6 +503,19 @@ npx @classytic/arc introspect --entry ./dist/index.js           # Show resources
 npx @classytic/arc doctor                                        # Health check
 ```
 
+`arc describe` auto-detects exported `EventRegistry` and includes the event catalog in output:
+
+```json
+{
+  "$schema": "arc-describe/v1",
+  "resources": [...],
+  "eventCatalog": [
+    { "name": "order.created", "version": 1, "hasSchema": true, "schemaFields": ["orderId", "total"], "requiredFields": ["orderId", "total"] }
+  ],
+  "stats": { "totalResources": 5, "totalRoutes": 28, "totalCatalogedEvents": 3 }
+}
+```
+
 ## Subpath Imports
 
 | Import | Purpose |
@@ -342,12 +524,12 @@ npx @classytic/arc doctor                                        # Health check
 | `@classytic/arc/factory` | `createApp()`, presets |
 | `@classytic/arc/cache` | `MemoryCacheStore`, `RedisCacheStore`, `QueryCache` |
 | `@classytic/arc/auth` | Auth plugin, Better Auth adapter, session manager |
-| `@classytic/arc/events` | Event plugin, memory transport |
-| `@classytic/arc/events/redis` | Redis event transport |
-| `@classytic/arc/events/redis-stream` | Redis Streams transport |
+| `@classytic/arc/events` | Event plugin, transports, `defineEvent`, `createEventRegistry` |
+| `@classytic/arc/events/redis` | Redis Pub/Sub event transport |
+| `@classytic/arc/events/redis-stream` | Redis Streams event transport |
 | `@classytic/arc/plugins` | Health, graceful shutdown, request ID, SSE, caching |
 | `@classytic/arc/plugins/tracing` | OpenTelemetry |
-| `@classytic/arc/permissions` | All permission functions |
+| `@classytic/arc/permissions` | All permission functions, role hierarchy |
 | `@classytic/arc/scope` | Request scope helpers (`isMember`, `isElevated`, `getOrgId`) |
 | `@classytic/arc/org` | Organization module |
 | `@classytic/arc/hooks` | Lifecycle hooks |
@@ -364,20 +546,7 @@ npx @classytic/arc doctor                                        # Health check
 | `@classytic/arc/integrations/event-gateway` | Unified SSE + WebSocket gateway |
 | `@classytic/arc/integrations/streamline` | Workflow orchestration |
 | `@classytic/arc/docs` | OpenAPI generation |
-| `@classytic/arc/cli` | CLI commands |
-
-## Documentation
-
-- [Setup](docs/getting-started/setup.md) — Project setup
-- [Core Concepts](docs/getting-started/core.md) — Resources, controllers, adapters
-- [Authentication](docs/getting-started/auth.md) — JWT, Better Auth, custom auth
-- [Permissions](docs/getting-started/permissions.md) — RBAC, ABAC, field-level
-- [Presets](docs/getting-started/presets.md) — softDelete, multiTenant, tree, etc.
-- [Organizations](docs/getting-started/org.md) — Multi-tenant SaaS
-- [Factory](docs/production-ops/factory.md) — createApp() and environment presets
-- [Events](docs/production-ops/events.md) — Domain events and transports
-- [Plugins](docs/production-ops/plugins.md) — Health, caching, SSE, tracing
-- [Hooks](docs/framework-extension/hooks.md) — Lifecycle hooks
+| `@classytic/arc/cli` | CLI commands (programmatic) |
 
 ## License
 

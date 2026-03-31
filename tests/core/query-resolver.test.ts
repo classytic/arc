@@ -113,7 +113,8 @@ describe('QueryResolver', () => {
 
       const result = resolver.resolve(req);
 
-      expect(result.select).toBe('name price -password');
+      // Select is preserved in parsed format (object projection from parser)
+      expect(result.select).toEqual({ name: 1, price: 1, password: 0 });
     });
   });
 
@@ -346,10 +347,8 @@ describe('QueryResolver', () => {
 
       const result = resolver.resolve(req);
 
-      // internalScore should be filtered out
-      expect(result.select).not.toContain('internalScore');
-      expect(result.select).toContain('name');
-      expect(result.select).toContain('price');
+      // internalScore should be filtered out from object projection
+      expect(result.select).toEqual({ name: 1, price: 1 });
     });
 
     it('blocks hidden fields from select', () => {
@@ -364,9 +363,8 @@ describe('QueryResolver', () => {
 
       const result = resolver.resolve(req);
 
-      expect(result.select).not.toContain('password');
-      expect(result.select).toContain('name');
-      expect(result.select).toContain('email');
+      // password should be filtered out from object projection
+      expect(result.select).toEqual({ name: 1, email: 1 });
     });
 
     it('returns undefined select when all fields are blocked', () => {
@@ -390,7 +388,8 @@ describe('QueryResolver', () => {
 
       const result = resolver.resolve(req);
 
-      expect(result.select).toBe('name price');
+      // Preserved as object projection from parser
+      expect(result.select).toEqual({ name: 1, price: 1 });
     });
   });
 

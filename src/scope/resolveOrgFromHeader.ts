@@ -22,8 +22,9 @@
  * ```
  */
 
-import type { FastifyReply, FastifyRequest } from 'fastify';
-import type { RequestScope } from './types.js';
+import type { FastifyReply, FastifyRequest } from "fastify";
+import { normalizeRoles } from "../permissions/types.js";
+import type { RequestScope } from "./types.js";
 
 export interface ResolveOrgFromHeaderOptions {
   /** Header name (default: 'x-organization-id') */
@@ -41,43 +42,43 @@ export interface ResolveOrgFromHeaderOptions {
 export function resolveOrgFromHeader(
   options: ResolveOrgFromHeaderOptions,
 ): (request: FastifyRequest, reply: FastifyReply) => Promise<void> {
-  const { header = 'x-organization-id', resolveMembership } = options;
+  const { header = "x-organization-id", resolveMembership } = options;
 
   return async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     const orgId = request.headers[header] as string | undefined;
     if (!orgId) return; // No org header — scope stays as auth adapter set it
 
     const scope = request.scope;
-    if (!scope || scope.kind === 'public') {
+    if (!scope || scope.kind === "public") {
       reply.code(401).send({
         success: false,
-        error: 'Unauthorized',
-        message: 'Authentication required for organization access',
-        code: 'ORG_AUTH_REQUIRED',
+        error: "Unauthorized",
+        message: "Authentication required for organization access",
+        code: "ORG_AUTH_REQUIRED",
       });
       return;
     }
 
     // Already elevated — don't downgrade
-    if (scope.kind === 'elevated') return;
+    if (scope.kind === "elevated") return;
 
     const user = request.user;
     if (!user) {
       reply.code(401).send({
         success: false,
-        error: 'Unauthorized',
-        message: 'Authentication required for organization access',
-        code: 'ORG_AUTH_REQUIRED',
+        error: "Unauthorized",
+        message: "Authentication required for organization access",
+        code: "ORG_AUTH_REQUIRED",
       });
       return;
     }
 
-    const userId = String(user.id ?? user._id ?? '');
+    const userId = String(user.id ?? user._id ?? "");
     if (!userId) {
       reply.code(401).send({
         success: false,
-        error: 'Unauthorized',
-        message: 'User identity required for organization access',
+        error: "Unauthorized",
+        message: "User identity required for organization access",
       });
       return;
     }
@@ -86,15 +87,17 @@ export function resolveOrgFromHeader(
     if (!membership) {
       reply.code(403).send({
         success: false,
-        error: 'Forbidden',
-        message: 'Not a member of this organization',
-        code: 'ORG_ACCESS_DENIED',
+        error: "Forbidden",
+        message: "Not a member of this organization",
+        code: "ORG_ACCESS_DENIED",
       });
       return;
     }
 
     request.scope = {
-      kind: 'member',
+      kind: "member",
+      userId: userId || undefined,
+      userRoles: normalizeRoles(user.role),
       organizationId: orgId,
       orgRoles: membership.roles,
     } satisfies RequestScope;

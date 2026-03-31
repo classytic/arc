@@ -224,8 +224,6 @@ it('should debug', () => {
 
 Tests we should add:
 - [ ] Presets (softDelete, slugLookup, multiTenant, ownedByUser)
-- [ ] Health plugin (Prometheus metrics, readiness checks)
-- [ ] Tracing plugin (OpenTelemetry spans)
 - [ ] Schema migrations (up, down, validation)
 - [ ] Factory presets (production, development, testing)
 - [ ] Authentication/Authorization

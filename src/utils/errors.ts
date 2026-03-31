@@ -37,8 +37,8 @@ export class ArcError extends Error {
   constructor(message: string, options: ErrorDetails = {}) {
     // Pass cause to native Error for proper chain support (Node 16.9+)
     super(message, options.cause ? { cause: options.cause } : undefined);
-    this.name = 'ArcError';
-    this.code = options.code ?? 'ARC_ERROR';
+    this.name = "ArcError";
+    this.code = options.code ?? "ARC_ERROR";
     this.statusCode = options.statusCode ?? 500;
     this.details = options.details;
     // cause is now set by super() — keep explicit assignment for TypeScript override
@@ -73,9 +73,10 @@ export class ArcError extends Error {
       ...(this.requestId && { requestId: this.requestId }),
       ...(this.details && { details: this.details }),
       ...(this.cause && {
-        cause: this.cause instanceof ArcError
-          ? this.cause.toJSON()
-          : { message: (this.cause as Error).message, name: (this.cause as Error).name },
+        cause:
+          this.cause instanceof ArcError
+            ? this.cause.toJSON()
+            : { message: (this.cause as Error).message, name: (this.cause as Error).name },
       }),
     };
   }
@@ -91,11 +92,11 @@ export class NotFoundError extends ArcError {
       : `${resource} not found`;
 
     super(message, {
-      code: 'NOT_FOUND',
+      code: "NOT_FOUND",
       statusCode: 404,
       details: { resource, identifier },
     });
-    this.name = 'NotFoundError';
+    this.name = "NotFoundError";
   }
 }
 
@@ -105,16 +106,13 @@ export class NotFoundError extends ArcError {
 export class ValidationError extends ArcError {
   readonly errors: Array<{ field: string; message: string }>;
 
-  constructor(
-    message: string,
-    errors: Array<{ field: string; message: string }> = []
-  ) {
+  constructor(message: string, errors: Array<{ field: string; message: string }> = []) {
     super(message, {
-      code: 'VALIDATION_ERROR',
+      code: "VALIDATION_ERROR",
       statusCode: 400,
       details: { errors },
     });
-    this.name = 'ValidationError';
+    this.name = "ValidationError";
     this.errors = errors;
   }
 }
@@ -123,12 +121,12 @@ export class ValidationError extends ArcError {
  * Unauthorized Error - 401
  */
 export class UnauthorizedError extends ArcError {
-  constructor(message = 'Authentication required') {
+  constructor(message = "Authentication required") {
     super(message, {
-      code: 'UNAUTHORIZED',
+      code: "UNAUTHORIZED",
       statusCode: 401,
     });
-    this.name = 'UnauthorizedError';
+    this.name = "UnauthorizedError";
   }
 }
 
@@ -136,12 +134,12 @@ export class UnauthorizedError extends ArcError {
  * Forbidden Error - 403
  */
 export class ForbiddenError extends ArcError {
-  constructor(message = 'Access denied') {
+  constructor(message = "Access denied") {
     super(message, {
-      code: 'FORBIDDEN',
+      code: "FORBIDDEN",
       statusCode: 403,
     });
-    this.name = 'ForbiddenError';
+    this.name = "ForbiddenError";
   }
 }
 
@@ -151,11 +149,11 @@ export class ForbiddenError extends ArcError {
 export class ConflictError extends ArcError {
   constructor(message: string, field?: string) {
     super(message, {
-      code: 'CONFLICT',
+      code: "CONFLICT",
       statusCode: 409,
       details: field ? { field } : undefined,
     });
-    this.name = 'ConflictError';
+    this.name = "ConflictError";
   }
 }
 
@@ -165,16 +163,13 @@ export class ConflictError extends ArcError {
 export class OrgRequiredError extends ArcError {
   readonly organizations?: Array<{ id: string; roles?: string[] }>;
 
-  constructor(
-    message: string,
-    organizations?: Array<{ id: string; roles?: string[] }>
-  ) {
+  constructor(message: string, organizations?: Array<{ id: string; roles?: string[] }>) {
     super(message, {
-      code: 'ORG_SELECTION_REQUIRED',
+      code: "ORG_SELECTION_REQUIRED",
       statusCode: 403,
       details: organizations ? { organizations } : undefined,
     });
-    this.name = 'OrgRequiredError';
+    this.name = "OrgRequiredError";
     this.organizations = organizations;
   }
 }
@@ -184,12 +179,12 @@ export class OrgRequiredError extends ArcError {
  */
 export class OrgAccessDeniedError extends ArcError {
   constructor(orgId?: string) {
-    super('Organization access denied', {
-      code: 'ORG_ACCESS_DENIED',
+    super("Organization access denied", {
+      code: "ORG_ACCESS_DENIED",
       statusCode: 403,
       details: orgId ? { organizationId: orgId } : undefined,
     });
-    this.name = 'OrgAccessDeniedError';
+    this.name = "OrgAccessDeniedError";
   }
 }
 
@@ -199,13 +194,13 @@ export class OrgAccessDeniedError extends ArcError {
 export class RateLimitError extends ArcError {
   readonly retryAfter?: number;
 
-  constructor(message = 'Too many requests', retryAfter?: number) {
+  constructor(message = "Too many requests", retryAfter?: number) {
     super(message, {
-      code: 'RATE_LIMITED',
+      code: "RATE_LIMITED",
       statusCode: 429,
       details: retryAfter ? { retryAfter } : undefined,
     });
-    this.name = 'RateLimitError';
+    this.name = "RateLimitError";
     this.retryAfter = retryAfter;
   }
 }
@@ -214,12 +209,12 @@ export class RateLimitError extends ArcError {
  * Service Unavailable Error - 503
  */
 export class ServiceUnavailableError extends ArcError {
-  constructor(message = 'Service temporarily unavailable') {
+  constructor(message = "Service temporarily unavailable") {
     super(message, {
-      code: 'SERVICE_UNAVAILABLE',
+      code: "SERVICE_UNAVAILABLE",
       statusCode: 503,
     });
-    this.name = 'ServiceUnavailableError';
+    this.name = "ServiceUnavailableError";
   }
 }
 
@@ -229,21 +224,21 @@ export class ServiceUnavailableError extends ArcError {
 export function createError(
   statusCode: number,
   message: string,
-  details?: Record<string, unknown>
+  details?: Record<string, unknown>,
 ): ArcError {
   const codes: Record<number, string> = {
-    400: 'BAD_REQUEST',
-    401: 'UNAUTHORIZED',
-    403: 'FORBIDDEN',
-    404: 'NOT_FOUND',
-    409: 'CONFLICT',
-    429: 'RATE_LIMITED',
-    500: 'INTERNAL_ERROR',
-    503: 'SERVICE_UNAVAILABLE',
+    400: "BAD_REQUEST",
+    401: "UNAUTHORIZED",
+    403: "FORBIDDEN",
+    404: "NOT_FOUND",
+    409: "CONFLICT",
+    429: "RATE_LIMITED",
+    500: "INTERNAL_ERROR",
+    503: "SERVICE_UNAVAILABLE",
   };
 
   return new ArcError(message, {
-    code: codes[statusCode] ?? 'ERROR',
+    code: codes[statusCode] ?? "ERROR",
     statusCode,
     details,
   });

@@ -4,7 +4,7 @@
  * Server-side membership validation.
  */
 
-import type { UserBase, UserOrganization } from '../types/index.js';
+import type { UserBase, UserOrganization } from "../types/index.js";
 
 export interface OrgMembershipOptions {
   /** Path to user's organizations array */
@@ -26,17 +26,15 @@ export interface OrgRolesOptions {
 export async function orgMembershipCheck(
   user: UserBase | undefined | null,
   orgId: string | undefined | null,
-  options: OrgMembershipOptions = {}
+  options: OrgMembershipOptions = {},
 ): Promise<boolean> {
-  const {
-    userOrgsPath = 'organizations',
-    validateFromDb,
-  } = options;
+  const { userOrgsPath = "organizations", validateFromDb } = options;
 
   if (!user || !orgId) return false;
 
   // Check from user object
-  const userOrgs = ((user as UserBase & { [key: string]: unknown })[userOrgsPath] ?? []) as UserOrganization[];
+  const userOrgs = ((user as UserBase & { [key: string]: unknown })[userOrgsPath] ??
+    []) as UserOrganization[];
   const isMemberFromUser = userOrgs.some((o) => {
     const memberOrgId = o.organizationId?.toString() ?? String(o);
     return memberOrgId === orgId.toString();
@@ -62,13 +60,14 @@ export async function orgMembershipCheck(
 export function getUserOrgRoles(
   user: UserBase | undefined | null,
   orgId: string | undefined | null,
-  options: OrgRolesOptions = {}
+  options: OrgRolesOptions = {},
 ): string[] {
-  const { userOrgsPath = 'organizations' } = options;
+  const { userOrgsPath = "organizations" } = options;
 
   if (!user || !orgId) return [];
 
-  const userOrgs = ((user as UserBase & { [key: string]: unknown })[userOrgsPath] ?? []) as UserOrganization[];
+  const userOrgs = ((user as UserBase & { [key: string]: unknown })[userOrgsPath] ??
+    []) as UserOrganization[];
   const membership = userOrgs.find((o) => {
     const memberOrgId = o.organizationId?.toString() ?? String(o);
     return memberOrgId === orgId.toString();
@@ -86,7 +85,7 @@ export function hasOrgRole(
   user: UserBase | undefined | null,
   orgId: string | undefined | null,
   roles: string | string[],
-  options: OrgRolesOptions = {}
+  options: OrgRolesOptions = {},
 ): boolean {
   const userOrgRoles = getUserOrgRoles(user, orgId, options);
   const requiredRoles = Array.isArray(roles) ? roles : [roles];

@@ -24,7 +24,7 @@
  * ```
  */
 
-import type { SessionData, SessionStore } from './sessionManager.js';
+import type { SessionData, SessionStore } from "./sessionManager.js";
 
 // ============================================================================
 // Types
@@ -70,8 +70,8 @@ export class RedisSessionStore implements SessionStore {
 
   constructor(options: RedisSessionStoreOptions) {
     this.redis = options.redis;
-    this.prefix = options.prefix ?? 'arc:session:';
-    this.userPrefix = options.userPrefix ?? 'arc:user-sessions:';
+    this.prefix = options.prefix ?? "arc:session:";
+    this.userPrefix = options.userPrefix ?? "arc:user-sessions:";
   }
 
   async get(sessionId: string): Promise<SessionData | null> {
@@ -104,7 +104,7 @@ export class RedisSessionStore implements SessionStore {
     const serialized = JSON.stringify(data);
 
     // Store session with TTL
-    await this.redis.set(this.prefix + sessionId, serialized, 'EX', ttlSeconds);
+    await this.redis.set(this.prefix + sessionId, serialized, "EX", ttlSeconds);
 
     // Add to user index set (with generous TTL)
     const userKey = this.userPrefix + data.userId;

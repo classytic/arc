@@ -5,28 +5,32 @@
  * This allows controllers implementing IController to work seamlessly with Fastify.
  */
 
-import type { FastifyRequest, FastifyReply } from 'fastify';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyReply, FastifyRequest } from "fastify";
+import type { FieldPermissionMap } from "../permissions/fields.js";
+import { applyFieldReadPermissions, resolveEffectiveRoles } from "../permissions/fields.js";
+import { getUserRoles } from "../permissions/types.js";
+import type { RequestScope } from "../scope/types.js";
+import { isElevated, isMember, PUBLIC_SCOPE } from "../scope/types.js";
+import type { ServerAccessor } from "../types/handlers.js";
 import type {
+  AnyRecord,
+  ArcInternalMetadata,
   IController,
   IControllerResponse,
   IRequestContext,
-  RequestWithExtras,
-  RequestContext,
-  ArcInternalMetadata,
   PaginatedResult,
-  AnyRecord,
-} from '../types/index.js';
-import type { ServerAccessor } from '../types/handlers.js';
-import type { FieldPermissionMap } from '../permissions/fields.js';
-import { applyFieldReadPermissions, resolveEffectiveRoles } from '../permissions/fields.js';
-import { getUserRoles } from '../permissions/types.js';
-import type { RequestScope } from '../scope/types.js';
-import { isElevated, isMember, getOrgId as getOrgIdFromScope, PUBLIC_SCOPE } from '../scope/types.js';
+  RequestContext,
+  RequestWithExtras,
+} from "../types/index.js";
 
 /** Type guard for Mongoose-like documents with toObject() */
 function isMongooseDoc(obj: unknown): obj is { toObject(): Record<string, unknown> } {
-  return !!obj && typeof obj === 'object' && 'toObject' in obj && typeof (obj as Record<string, unknown>).toObject === 'function';
+  return (
+    !!obj &&
+    typeof obj === "object" &&
+    "toObject" in obj &&
+    typeof (obj as Record<string, unknown>).toObject === "function"
+  );
 }
 
 /**
@@ -35,12 +39,12 @@ function isMongooseDoc(obj: unknown): obj is { toObject(): Record<string, unknow
  */
 function applyFieldMaskToObject(
   obj: AnyRecord | null | undefined,
-  fieldMask: { include?: string[]; exclude?: string[] }
+  fieldMask: { include?: string[]; exclude?: string[] },
 ): AnyRecord | null | undefined {
-  if (!obj || typeof obj !== 'object') return obj;
+  if (!obj || typeof obj !== "object") return obj;
 
   // Normalize Mongoose documents to plain objects
-  const plain = isMongooseDoc(obj) ? obj.toObject() as AnyRecord : obj;
+  const plain = isMongooseDoc(obj) ? (obj.toObject() as AnyRecord) : obj;
 
   const { include, exclude } = fieldMask;
 
@@ -72,7 +76,7 @@ function applyFieldMaskToObject(
  */
 function applyFieldMask<T>(
   data: T,
-  fieldMask: { include?: string[]; exclude?: string[] } | undefined
+  fieldMask: { include?: string[]; exclude?: string[] } | undefined,
 ): T {
   if (!fieldMask) return data;
 
@@ -82,7 +86,7 @@ function applyFieldMask<T>(
   }
 
   // Handle single objects
-  if (data && typeof data === 'object') {
+  if (data && typeof data === "object") {
     return applyFieldMaskToObject(data as AnyRecord, fieldMask) as T;
   }
 
@@ -102,9 +106,10 @@ export function createRequestContext(req: FastifyRequest): IRequestContext {
   // Use 'in' checks because these decorators are only present when their plugins are registered
   const srv = req.server as unknown as Record<string, unknown> | undefined;
   const serverAccessor: ServerAccessor = {
-    events: srv && 'events' in srv ? srv.events as ServerAccessor['events'] : undefined,
-    audit: srv && 'audit' in srv ? srv.audit as ServerAccessor['audit'] : undefined,
-    queryCache: srv && 'queryCache' in srv ? srv.queryCache as ServerAccessor['queryCache'] : undefined,
+    events: srv && "events" in srv ? (srv.events as ServerAccessor["events"]) : undefined,
+    audit: srv && "audit" in srv ? (srv.audit as ServerAccessor["audit"]) : undefined,
+    queryCache:
+      srv && "queryCache" in srv ? (srv.queryCache as ServerAccessor["queryCache"]) : undefined,
     log: req.log,
   };
 
@@ -125,7 +130,7 @@ export function createRequestContext(req: FastifyRequest): IRequestContext {
             _id: normalizedId,
             // Preserve original role/roles/permissions as-is
             // Devs can define their own authorization structure
-          } as import('../permissions/types.js').UserBase;
+          } as import("../permissions/types.js").UserBase;
         })()
       : null,
     // Typed org/auth context — use this in controller overrides
@@ -182,14 +187,14 @@ function computeFieldCapabilities(
     let readable = true;
     let writable = true;
     switch (perm._type) {
-      case 'hidden':
+      case "hidden":
         readable = false;
         writable = false;
         break;
-      case 'visibleTo':
+      case "visibleTo":
         readable = perm.roles?.some((r) => effectiveRoles.includes(r)) ?? false;
         break;
-      case 'writableBy':
+      case "writableBy":
         writable = perm.roles?.some((r) => effectiveRoles.includes(r)) ?? false;
         break;
       // redactFor: field is readable (but redacted) and writable — no restriction flags
@@ -208,7 +213,7 @@ function computeFieldCapabilities(
 export function sendControllerResponse<T>(
   reply: FastifyReply,
   response: IControllerResponse<T>,
-  request?: FastifyRequest
+  request?: FastifyRequest,
 ): void {
   // Extract field mask from request if available
   const reqWithExtras = request as RequestWithExtras | undefined;
@@ -222,7 +227,7 @@ export function sendControllerResponse<T>(
   // consistent with requireOrgRole() and _sanitizeBody() bypass logic.
   const fieldPerms = isElevated(scope)
     ? undefined
-    : arcMeta?.fields as FieldPermissionMap | undefined;
+    : (arcMeta?.fields as FieldPermissionMap | undefined);
 
   // Only compute roles when field permissions require them
   const effectiveRoles = fieldPerms
@@ -234,9 +239,7 @@ export function sendControllerResponse<T>(
 
   // Compute field capabilities metadata for frontend consumption (opt-in per resource)
   // Named `fieldCaps` to avoid variable shadowing with createCrudRouter's `fieldPermissions`
-  const fieldCaps = fieldPerms
-    ? computeFieldCapabilities(fieldPerms, effectiveRoles)
-    : undefined;
+  const fieldCaps = fieldPerms ? computeFieldCapabilities(fieldPerms, effectiveRoles) : undefined;
 
   // Only create permission applicator when needed
   const hasFieldRestrictions = !!(fieldMaskConfig || fieldPerms);
@@ -244,7 +247,7 @@ export function sendControllerResponse<T>(
   /** Apply both field mask and field-level permissions to a data item */
   const applyPermissions = <D>(data: D): D => {
     let result = fieldMaskConfig ? applyFieldMask(data, fieldMaskConfig) : data;
-    if (fieldPerms && result && typeof result === 'object') {
+    if (fieldPerms && result && typeof result === "object") {
       if (Array.isArray(result)) {
         result = result.map((item) =>
           applyFieldReadPermissions(item as AnyRecord, fieldPerms, effectiveRoles),
@@ -264,9 +267,16 @@ export function sendControllerResponse<T>(
   }
 
   // Handle paginated responses specially (flatten to Arc's ApiResponse format)
-  if (response.success && response.data && typeof response.data === 'object' && 'docs' in response.data) {
+  if (
+    response.success &&
+    response.data &&
+    typeof response.data === "object" &&
+    "docs" in response.data
+  ) {
     const paginatedData = response.data as unknown as PaginatedResult<unknown>;
-    const filteredDocs = hasFieldRestrictions ? applyPermissions(paginatedData.docs) : paginatedData.docs;
+    const filteredDocs = hasFieldRestrictions
+      ? applyPermissions(paginatedData.docs)
+      : paginatedData.docs;
 
     reply.code(response.status ?? 200).send({
       success: true,
@@ -313,7 +323,7 @@ export function sendControllerResponse<T>(
  * ```
  */
 export function createFastifyHandler<T>(
-  controllerMethod: (req: IRequestContext) => Promise<IControllerResponse<T>>
+  controllerMethod: (req: IRequestContext) => Promise<IControllerResponse<T>>,
 ) {
   return async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
     const requestContext = createRequestContext(req);

@@ -41,8 +41,14 @@
  * });
  */
 
-import type { FastifyInstance, FastifyRequest, FastifyReply, RouteOptions } from 'fastify';
-import type { RequestWithExtras, PermissionCheck, PermissionContext, PermissionResult, UserBase } from '../types/index.js';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type {
+  PermissionCheck,
+  PermissionContext,
+  PermissionResult,
+  RequestWithExtras,
+  UserBase,
+} from "../types/index.js";
 
 /**
  * Action handler function
@@ -54,7 +60,7 @@ import type { RequestWithExtras, PermissionCheck, PermissionContext, PermissionR
 export type ActionHandler<TData = any, TResult = any> = (
   id: string,
   data: TData,
-  req: RequestWithExtras
+  req: RequestWithExtras,
 ) => Promise<TResult>;
 
 /**
@@ -105,7 +111,7 @@ export interface ActionRouterConfig {
   onError?: (
     error: Error,
     action: string,
-    id: string
+    id: string,
   ) => { statusCode: number; error: string; code?: string };
 }
 
@@ -142,26 +148,26 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
   const actionEnum = Object.keys(actions);
 
   if (actionEnum.length === 0) {
-    fastify.log.warn('[createActionRouter] No actions defined, skipping route creation');
+    fastify.log.warn("[createActionRouter] No actions defined, skipping route creation");
     return;
   }
 
   // Build unified body schema with action-specific properties
   const bodyProperties: Record<string, any> = {
     action: {
-      type: 'string',
+      type: "string",
       enum: actionEnum,
-      description: `Action to perform: ${actionEnum.join(' | ')}`,
+      description: `Action to perform: ${actionEnum.join(" | ")}`,
     },
   };
 
   // Add action-specific schema properties
   Object.entries(actionSchemas).forEach(([actionName, schema]) => {
-    if (schema && typeof schema === 'object') {
+    if (schema && typeof schema === "object") {
       Object.entries(schema).forEach(([propName, propSchema]) => {
         bodyProperties[propName] = {
           ...propSchema,
-          description: `${propSchema.description || ''} (for ${actionName} action)`.trim(),
+          description: `${propSchema.description || ""} (for ${actionName} action)`.trim(),
         };
       });
     }
@@ -169,19 +175,19 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
 
   const routeSchema = {
     tags: tag ? [tag] : undefined,
-    summary: `Perform action (${actionEnum.join('/')})`,
+    summary: `Perform action (${actionEnum.join("/")})`,
     description: buildActionDescription(actions, actionPermissions),
     params: {
-      type: 'object',
+      type: "object",
       properties: {
-        id: { type: 'string', description: 'Resource ID' },
+        id: { type: "string", description: "Resource ID" },
       },
-      required: ['id'],
+      required: ["id"],
     },
     body: {
-      type: 'object',
+      type: "object",
       properties: bodyProperties,
-      required: ['action'],
+      required: ["action"],
     },
     // No response schema — action handlers return dynamic shapes
     // (Mongoose documents, composite objects, etc.) that cannot be
@@ -193,12 +199,12 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
   const preHandler = [];
 
   // Determine which actions require authentication
-  const hasPublicActions = Object.entries(actionPermissions).some(
-    ([, p]) => (p as PermissionCheck)?._isPublic
-  ) || (globalAuth && (globalAuth as PermissionCheck)?._isPublic);
-  const hasProtectedActions = Object.entries(actionPermissions).some(
-    ([, p]) => !(p as PermissionCheck)?._isPublic
-  ) || (globalAuth && !(globalAuth as PermissionCheck)?._isPublic);
+  const hasPublicActions =
+    Object.entries(actionPermissions).some(([, p]) => (p as PermissionCheck)?._isPublic) ||
+    (globalAuth && (globalAuth as PermissionCheck)?._isPublic);
+  const hasProtectedActions =
+    Object.entries(actionPermissions).some(([, p]) => !(p as PermissionCheck)?._isPublic) ||
+    (globalAuth && !(globalAuth as PermissionCheck)?._isPublic);
 
   // If ALL actions are protected, use global auth preHandler.
   // If mixed (some public, some protected), defer auth to per-action check
@@ -209,7 +215,7 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
 
   // Register the unified action endpoint
   fastify.post(
-    '/:id/action',
+    "/:id/action",
     {
       schema: routeSchema,
       preHandler: preHandler.length ? preHandler : undefined,
@@ -217,7 +223,7 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
     async (req: FastifyRequest, reply: FastifyReply) => {
       const { action, ...data } = req.body as { action: string; [key: string]: any };
       const { id } = req.params as { id: string };
-      const rawIdempotencyKey = req.headers['idempotency-key'];
+      const rawIdempotencyKey = req.headers["idempotency-key"];
       const idempotencyKey = Array.isArray(rawIdempotencyKey)
         ? rawIdempotencyKey[0]
         : rawIdempotencyKey;
@@ -227,7 +233,7 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
       if (!handler) {
         return reply.code(400).send({
           success: false,
-          error: `Invalid action '${action}'. Valid actions: ${actionEnum.join(', ')}`,
+          error: `Invalid action '${action}'. Valid actions: ${actionEnum.join(", ")}`,
           validActions: actionEnum,
         });
       }
@@ -246,7 +252,7 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
             if (!reply.sent) {
               return reply.code(401).send({
                 success: false,
-                error: 'Authentication required',
+                error: "Authentication required",
               });
             }
             return;
@@ -261,7 +267,7 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
         const context: PermissionContext = {
           user: (reqWithExtras.user as UserBase | null) ?? null,
           request: req,
-          resource: tag ?? 'action',
+          resource: tag ?? "action",
           action,
           resourceId: id,
           params: req.params as Record<string, string> | undefined,
@@ -274,18 +280,18 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
         try {
           result = await permissionCheck(context);
         } catch (err) {
-          req.log?.warn?.({ err, resource: tag ?? 'action', action }, 'Permission check threw');
+          req.log?.warn?.({ err, resource: tag ?? "action", action }, "Permission check threw");
           return reply.code(403).send({
             success: false,
-            error: 'Permission denied',
+            error: "Permission denied",
           });
         }
 
-        if (typeof result === 'boolean') {
+        if (typeof result === "boolean") {
           if (!result) {
             return reply.code(context.user ? 403 : 401).send({
               success: false,
-              error: context.user ? `Permission denied for '${action}'` : 'Authentication required',
+              error: context.user ? `Permission denied for '${action}'` : "Authentication required",
             });
           }
         } else {
@@ -293,7 +299,9 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
           if (!permResult.granted) {
             return reply.code(context.user ? 403 : 401).send({
               success: false,
-              error: permResult.reason ?? (context.user ? `Permission denied for '${action}'` : 'Authentication required'),
+              error:
+                permResult.reason ??
+                (context.user ? `Permission denied for '${action}'` : "Authentication required"),
             });
           }
         }
@@ -310,13 +318,10 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
             userId: (user?._id as string | undefined)?.toString?.() || user?.id || null,
           };
 
-          const idempotencyResult = await idempotencyService.check(
-            idempotencyKey,
-            payloadForHash
-          );
+          const idempotencyResult = await idempotencyService.check(idempotencyKey, payloadForHash);
           // Use 'in' to check presence, not truthiness — existingResult may be
           // a valid falsy value (0, false, '', null) from a previous execution.
-          if (!idempotencyResult.isNew && 'existingResult' in idempotencyResult) {
+          if (!idempotencyResult.isNew && "existingResult" in idempotencyResult) {
             return reply.send({
               success: true,
               data: idempotencyResult.existingResult,
@@ -354,10 +359,10 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
         // Default error handling
         const err = error as Record<string, unknown>;
         const statusCode = (err.statusCode as number) || (err.status as number) || 500;
-        const errorCode = (err.code as string) || 'ACTION_FAILED';
+        const errorCode = (err.code as string) || "ACTION_FAILED";
 
         if (statusCode >= 500) {
-          req.log.error({ err: error, action, id }, 'Action handler error');
+          req.log.error({ err: error, action, id }, "Action handler error");
         }
 
         return reply.code(statusCode).send({
@@ -366,12 +371,12 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
           code: errorCode,
         });
       }
-    }
+    },
   );
 
   fastify.log.debug(
     { actions: actionEnum, tag },
-    '[createActionRouter] Registered action endpoint: POST /:id/action'
+    "[createActionRouter] Registered action endpoint: POST /:id/action",
   );
 }
 
@@ -381,16 +386,16 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
  */
 function buildActionDescription(
   actions: Record<string, ActionHandler>,
-  actionPermissions: Record<string, PermissionCheck>
+  actionPermissions: Record<string, PermissionCheck>,
 ): string {
-  const lines = ['Unified action endpoint for state transitions.\n\n**Available actions:**'];
+  const lines = ["Unified action endpoint for state transitions.\n\n**Available actions:**"];
 
   Object.keys(actions).forEach((action) => {
     const perm = actionPermissions[action];
     const roles = (perm as PermissionCheck)?._roles;
-    const roleStr = roles?.length ? ` (requires: ${roles.join(' or ')})` : '';
+    const roleStr = roles?.length ? ` (requires: ${roles.join(" or ")})` : "";
     lines.push(`- \`${action}\`${roleStr}`);
   });
 
-  return lines.join('\n');
+  return lines.join("\n");
 }

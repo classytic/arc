@@ -29,53 +29,52 @@ import type {
   PresetResult,
   ResourceConfig,
   RouteSchemaOptions,
-} from '../types/index.js';
+} from "../types/index.js";
 
+export type { MultiTenantOptions } from "./multiTenant.js";
+export { multiTenantPreset } from "./multiTenant.js";
+export type { OwnedByUserOptions } from "./ownedByUser.js";
+
+export { ownedByUserPreset } from "./ownedByUser.js";
+export type { SlugLookupOptions } from "./slugLookup.js";
+export { slugLookupPreset } from "./slugLookup.js";
 // Export preset functions
-export { softDeletePreset } from './softDelete.js';
-
-
-export { slugLookupPreset } from './slugLookup.js';
-export type { SlugLookupOptions } from './slugLookup.js';
-
-export { ownedByUserPreset } from './ownedByUser.js';
-export type { OwnedByUserOptions } from './ownedByUser.js';
-
-export { multiTenantPreset } from './multiTenant.js';
-export type { MultiTenantOptions } from './multiTenant.js';
+export { softDeletePreset } from "./softDelete.js";
 
 /**
  * Convenience alias for multiTenantPreset with public list/get routes
  * Equivalent to: multiTenantPreset({ allowPublic: ['list', 'get'] })
  */
 export const flexibleMultiTenantPreset = (
-  options: Omit<import('./multiTenant.js').MultiTenantOptions, 'allowPublic'> = {}
-) => multiTenantPreset({ ...options, allowPublic: ['list', 'get'] });
+  options: Omit<import("./multiTenant.js").MultiTenantOptions, "allowPublic"> = {},
+) => multiTenantPreset({ ...options, allowPublic: ["list", "get"] });
 
-export { treePreset } from './tree.js';
-export type { TreeOptions } from './tree.js';
-
-export { auditedPreset } from './audited.js';
-export type { AuditedPresetOptions } from './audited.js';
+export type { AuditedPresetOptions } from "./audited.js";
+export { auditedPreset } from "./audited.js";
+export type { BulkOperation, BulkPresetOptions } from "./bulk.js";
+export { bulkPreset } from "./bulk.js";
+export type { TreeOptions } from "./tree.js";
+export { treePreset } from "./tree.js";
 
 // Export preset type interfaces for type safety
 export type {
-  ISoftDeleteController,
-  ISlugLookupController,
-  ITreeController,
-  IOwnedByUserPreset,
-  IMultiTenantPreset,
   IAuditedPreset,
+  IMultiTenantPreset,
+  IOwnedByUserPreset,
   IPresetController,
-} from './types.js';
+  ISlugLookupController,
+  ISoftDeleteController,
+  ITreeController,
+} from "./types.js";
 
+import { auditedPreset } from "./audited.js";
+import { bulkPreset } from "./bulk.js";
+import { multiTenantPreset } from "./multiTenant.js";
+import { ownedByUserPreset } from "./ownedByUser.js";
+import { slugLookupPreset } from "./slugLookup.js";
 // Import preset implementations for sync resolution
-import { softDeletePreset } from './softDelete.js';
-import { slugLookupPreset } from './slugLookup.js';
-import { ownedByUserPreset } from './ownedByUser.js';
-import { multiTenantPreset } from './multiTenant.js';
-import { treePreset } from './tree.js';
-import { auditedPreset } from './audited.js';
+import { softDeletePreset } from "./softDelete.js";
+import { treePreset } from "./tree.js";
 
 // ============================================================================
 // Preset Registry
@@ -90,13 +89,16 @@ const presetRegistry: Record<string, PresetFactory> = {
   multiTenant: multiTenantPreset,
   tree: treePreset,
   audited: auditedPreset,
+  bulk: bulkPreset,
 };
 
 /**
  * Get preset by name with options
  */
-export function getPreset(nameOrConfig: string | { name: string; [key: string]: unknown }): PresetResult {
-  if (typeof nameOrConfig === 'object' && nameOrConfig.name) {
+export function getPreset(
+  nameOrConfig: string | { name: string; [key: string]: unknown },
+): PresetResult {
+  if (typeof nameOrConfig === "object" && nameOrConfig.name) {
     const { name, ...options } = nameOrConfig;
     return resolvePreset(name, options);
   }
@@ -111,11 +113,11 @@ function resolvePreset(name: string, options: AnyRecord = {}): PresetResult {
   const factory = presetRegistry[name];
 
   if (!factory) {
-    const available = Object.keys(presetRegistry).join(', ');
+    const available = Object.keys(presetRegistry).join(", ");
     throw new Error(
       `Unknown preset: '${name}'\n` +
-      `Available presets: ${available}\n` +
-      `Docs: https://github.com/classytic/arc#presets`
+        `Available presets: ${available}\n` +
+        `Docs: https://github.com/classytic/arc#presets`,
     );
   }
 
@@ -131,9 +133,7 @@ export function registerPreset(
   options?: { override?: boolean },
 ): void {
   if (presetRegistry[name] && !options?.override) {
-    throw new Error(
-      `Preset '${name}' already exists. Pass { override: true } to replace.`,
-    );
+    throw new Error(`Preset '${name}' already exists. Pass { override: true } to replace.`);
   }
   presetRegistry[name] = factory;
 }
@@ -158,7 +158,7 @@ type PresetInput = string | PresetResult | { name: string; [key: string]: unknow
 interface PresetConflict {
   presets: [string, string];
   message: string;
-  severity: 'error' | 'warning';
+  severity: "error" | "warning";
 }
 
 /**
@@ -170,10 +170,11 @@ function validatePresetCombination(presets: PresetResult[]): PresetConflict[] {
   const routeMap = new Map<string, string>(); // "METHOD /path" -> preset name
 
   for (const preset of presets) {
-    const name = preset.name ?? 'unknown';
-    const routes: AdditionalRoute[] = typeof preset.additionalRoutes === 'function'
-      ? preset.additionalRoutes({})
-      : (preset.additionalRoutes ?? []);
+    const name = preset.name ?? "unknown";
+    const routes: AdditionalRoute[] =
+      typeof preset.additionalRoutes === "function"
+        ? preset.additionalRoutes({})
+        : (preset.additionalRoutes ?? []);
 
     for (const route of routes) {
       const key = `${route.method} ${route.path}`;
@@ -182,7 +183,7 @@ function validatePresetCombination(presets: PresetResult[]): PresetConflict[] {
         conflicts.push({
           presets: [existing, name],
           message: `Both '${existing}' and '${name}' define route ${key}`,
-          severity: 'error',
+          severity: "error",
         });
       }
       routeMap.set(key, name);
@@ -198,7 +199,7 @@ function validatePresetCombination(presets: PresetResult[]): PresetConflict[] {
  */
 export function applyPresets<TDoc = AnyRecord>(
   config: ResourceConfig<TDoc>,
-  presets: PresetInput[] = []
+  presets: PresetInput[] = [],
 ): ResourceConfig<TDoc> {
   let result = { ...config };
 
@@ -207,11 +208,11 @@ export function applyPresets<TDoc = AnyRecord>(
 
   // Validate combinations — fail-fast on route collisions
   const conflicts = validatePresetCombination(resolved);
-  const errors = conflicts.filter((c) => c.severity === 'error');
+  const errors = conflicts.filter((c) => c.severity === "error");
   if (errors.length > 0) {
     throw new Error(
       `[Arc] Resource '${config.name}' preset conflicts:\n` +
-      errors.map((c) => `  - ${c.message}`).join('\n'),
+        errors.map((c) => `  - ${c.message}`).join("\n"),
     );
   }
 
@@ -228,12 +229,12 @@ export function applyPresets<TDoc = AnyRecord>(
 function resolvePresetInput(preset: PresetInput): PresetResult {
   // Check if already a fully-resolved PresetResult (has middlewares or additionalRoutes)
   // This allows custom presets to be passed directly without registry lookup
-  if (typeof preset === 'object' && ('middlewares' in preset || 'additionalRoutes' in preset)) {
+  if (typeof preset === "object" && ("middlewares" in preset || "additionalRoutes" in preset)) {
     return preset as PresetResult;
   }
 
   // Object with name and options (for registry lookup)
-  if (typeof preset === 'object' && 'name' in preset) {
+  if (typeof preset === "object" && "name" in preset) {
     const { name, ...options } = preset as { name: string; [key: string]: unknown };
     return resolvePreset(name, options);
   }
@@ -251,8 +252,8 @@ interface ExtendedResourceConfig<TDoc = AnyRecord> extends ResourceConfig<TDoc> 
   };
   _hooks?: Array<{
     presetName: string;
-    operation: 'create' | 'update' | 'delete' | 'read' | 'list';
-    phase: 'before' | 'after';
+    operation: "create" | "update" | "delete" | "read" | "list";
+    phase: "before" | "after";
     handler: (ctx: {
       resource: string;
       operation: string;
@@ -272,20 +273,18 @@ interface ExtendedResourceConfig<TDoc = AnyRecord> extends ResourceConfig<TDoc> 
  */
 function mergePreset<TDoc = AnyRecord>(
   config: ResourceConfig<TDoc>,
-  preset: PresetResult
+  preset: PresetResult,
 ): ResourceConfig<TDoc> {
   const result = { ...config } as ExtendedResourceConfig<TDoc>;
 
   // Merge additional routes
   if (preset.additionalRoutes) {
-    const routes: AdditionalRoute[] = typeof preset.additionalRoutes === 'function'
-      ? preset.additionalRoutes(config.permissions ?? {})
-      : preset.additionalRoutes;
+    const routes: AdditionalRoute[] =
+      typeof preset.additionalRoutes === "function"
+        ? preset.additionalRoutes(config.permissions ?? {})
+        : preset.additionalRoutes;
 
-    result.additionalRoutes = [
-      ...(result.additionalRoutes ?? []),
-      ...routes,
-    ];
+    result.additionalRoutes = [...(result.additionalRoutes ?? []), ...routes];
   }
 
   // Merge middlewares
@@ -293,10 +292,7 @@ function mergePreset<TDoc = AnyRecord>(
     result.middlewares = result.middlewares ?? {};
     for (const [op, mws] of Object.entries(preset.middlewares)) {
       const key = op as keyof MiddlewareConfig;
-      result.middlewares[key] = [
-        ...(result.middlewares[key] ?? []),
-        ...(mws ?? []),
-      ];
+      result.middlewares[key] = [...(result.middlewares[key] ?? []), ...(mws ?? [])];
     }
   }
 

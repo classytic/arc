@@ -22,15 +22,14 @@
  * // Admins can modify any post
  */
 
-import type { FastifyReply } from 'fastify';
+import type { FastifyReply } from "fastify";
+import { isElevated, PUBLIC_SCOPE } from "../scope/types.js";
 import type {
   MiddlewareConfig,
   PresetResult,
   RequestWithExtras,
   RouteHandler,
-} from '../types/index.js';
-import { isElevated, PUBLIC_SCOPE } from '../scope/types.js';
-import type { RequestScope } from '../scope/types.js';
+} from "../types/index.js";
 
 export interface OwnedByUserOptions {
   ownerField?: string;
@@ -62,12 +61,12 @@ function createOwnershipCheck(ownerField: string): RouteHandler {
 }
 
 export function ownedByUserPreset(options: OwnedByUserOptions = {}): PresetResult {
-  const { ownerField = 'userId' } = options;
+  const { ownerField = "userId" } = options;
 
   const ownershipMiddleware = createOwnershipCheck(ownerField);
 
   return {
-    name: 'ownedByUser',
+    name: "ownedByUser",
     middlewares: {
       update: [ownershipMiddleware],
       delete: [ownershipMiddleware],

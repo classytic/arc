@@ -45,7 +45,7 @@ export interface IdempotencyStore {
    * Store a result for an idempotency key.
    * TTL is handled by the store implementation.
    */
-  set(key: string, result: Omit<IdempotencyResult, 'key'>): Promise<void>;
+  set(key: string, result: Omit<IdempotencyResult, "key">): Promise<void>;
 
   /**
    * Try to acquire a lock for processing a key.
@@ -88,8 +88,8 @@ export function createIdempotencyResult(
   statusCode: number,
   body: unknown,
   headers: Record<string, string>,
-  ttlMs: number
-): Omit<IdempotencyResult, 'key'> {
+  ttlMs: number,
+): Omit<IdempotencyResult, "key"> {
   const now = new Date();
   return {
     statusCode,

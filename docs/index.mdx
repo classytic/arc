@@ -34,16 +34,18 @@ Operate Arc safely at scale.
 - [Audit](./production-ops/audit)
 - [OpenAPI](./production-ops/openapi)
 
-## Ecosystem (Plugin Authors)
+## Ecosystem (Plugin Authors & Integrations)
 
 Build and share extensions for Arc.
 
+- [MCP — AI Agent Tools](./ecosystem/mcp) — Expose resources to AI agents (Claude, Cursor, Copilot)
 - [Building Plugins](./ecosystem/building-plugins) — Complete guide to all 6 extension types
 - [Plugin Ideas](./ecosystem/plugin-ideas) — Community plugin ideas with architecture sketches
 
 ## Key Features
 
 - **Auth**: Discriminated union — JWT, Better Auth, custom plugin, custom function, or disabled
+- **MCP**: Auto-generate AI agent tools from resources — stateless, auth-flexible, multi-tenant
 - **QueryCache**: TanStack Query-inspired server cache with SWR and auto-invalidation on mutations
 - **Runtime modes**: `memory` (zero config) or `distributed` (Redis stores)
 - Arc is database-agnostic. MongoKit is one adapter, not a requirement.

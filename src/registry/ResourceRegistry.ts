@@ -4,17 +4,17 @@
  * Singleton that tracks all registered resources for introspection.
  */
 
+import { CRUD_OPERATIONS, DEFAULT_UPDATE_METHOD } from "../constants.js";
+import type { ResourceDefinition } from "../core/defineResource.js";
+import type { FieldPermissionMap } from "../permissions/fields.js";
+import type { PipelineConfig, PipelineStep } from "../pipeline/types.js";
 import type {
   IntrospectionData,
   OpenApiSchemas,
   RegistryEntry,
   RegistryStats,
   ResourcePermissions,
-} from '../types/index.js';
-import type { ResourceDefinition } from '../core/defineResource.js';
-import type { FieldPermissionMap } from '../permissions/fields.js';
-import type { PipelineConfig, PipelineStep } from '../pipeline/types.js';
-import { CRUD_OPERATIONS, DEFAULT_UPDATE_METHOD } from '../constants.js';
+} from "../types/index.js";
 
 export interface RegisterOptions {
   module?: string;
@@ -36,9 +36,7 @@ export class ResourceRegistry {
    */
   register(resource: ResourceDefinition<unknown>, options: RegisterOptions = {}): this {
     if (this._frozen) {
-      throw new Error(
-        `Registry frozen. Cannot register '${resource.name}' after startup.`
-      );
+      throw new Error(`Registry frozen. Cannot register '${resource.name}' after startup.`);
     }
 
     if (this._resources.has(resource.name)) {
@@ -64,9 +62,7 @@ export class ResourceRegistry {
         method: r.method,
         path: r.path,
         handler:
-          typeof r.handler === 'string'
-            ? r.handler
-            : (r.handler as Function).name || 'anonymous',
+          typeof r.handler === "string" ? r.handler : (r.handler as Function).name || "anonymous",
         operation: r.operation,
         summary: r.summary,
         description: r.description,
@@ -140,16 +136,16 @@ export class ResourceRegistry {
 
     return {
       totalResources: resources.length,
-      byModule: this._groupBy(resources, 'module'),
+      byModule: this._groupBy(resources, "module"),
       presetUsage: presetCounts,
       totalRoutes: resources.reduce((sum, r) => {
         if (r.disableDefaultRoutes) {
           return sum + (r.additionalRoutes?.length ?? 0);
         }
         const disabledSet = new Set(r.disabledRoutes ?? []);
-        let defaultCount = CRUD_OPERATIONS.filter(route => !disabledSet.has(route)).length;
+        let defaultCount = CRUD_OPERATIONS.filter((route) => !disabledSet.has(route)).length;
         // 'update' creates 2 routes when updateMethod is 'both' (PUT + PATCH)
-        if (!disabledSet.has('update') && r.updateMethod === 'both') {
+        if (!disabledSet.has("update") && r.updateMethod === "both") {
           defaultCount += 1;
         }
         return sum + defaultCount + (r.additionalRoutes?.length ?? 0);
@@ -167,20 +163,30 @@ export class ResourceRegistry {
         // Build default routes accounting for disabledRoutes and updateMethod
         const disabledSet = new Set(r.disabledRoutes ?? []);
         const updateMethod = r.updateMethod ?? DEFAULT_UPDATE_METHOD;
-        const defaultRoutes = r.disableDefaultRoutes ? [] : [
-          ...(!disabledSet.has('list') ? [{ method: 'GET', path: r.prefix, operation: 'list' }] : []),
-          ...(!disabledSet.has('get') ? [{ method: 'GET', path: `${r.prefix}/:id`, operation: 'get' }] : []),
-          ...(!disabledSet.has('create') ? [{ method: 'POST', path: r.prefix, operation: 'create' }] : []),
-          ...(!disabledSet.has('update') ? (
-            updateMethod === 'both'
-              ? [
-                  { method: 'PUT', path: `${r.prefix}/:id`, operation: 'update' },
-                  { method: 'PATCH', path: `${r.prefix}/:id`, operation: 'update' },
-                ]
-              : [{ method: updateMethod, path: `${r.prefix}/:id`, operation: 'update' }]
-          ) : []),
-          ...(!disabledSet.has('delete') ? [{ method: 'DELETE', path: `${r.prefix}/:id`, operation: 'delete' }] : []),
-        ];
+        const defaultRoutes = r.disableDefaultRoutes
+          ? []
+          : [
+              ...(!disabledSet.has("list")
+                ? [{ method: "GET", path: r.prefix, operation: "list" }]
+                : []),
+              ...(!disabledSet.has("get")
+                ? [{ method: "GET", path: `${r.prefix}/:id`, operation: "get" }]
+                : []),
+              ...(!disabledSet.has("create")
+                ? [{ method: "POST", path: r.prefix, operation: "create" }]
+                : []),
+              ...(!disabledSet.has("update")
+                ? updateMethod === "both"
+                  ? [
+                      { method: "PUT", path: `${r.prefix}/:id`, operation: "update" },
+                      { method: "PATCH", path: `${r.prefix}/:id`, operation: "update" },
+                    ]
+                  : [{ method: updateMethod, path: `${r.prefix}/:id`, operation: "update" }]
+                : []),
+              ...(!disabledSet.has("delete")
+                ? [{ method: "DELETE", path: `${r.prefix}/:id`, operation: "delete" }]
+                : []),
+            ];
 
         return {
           name: r.name,
@@ -194,8 +200,8 @@ export class ResourceRegistry {
             ...(r.additionalRoutes?.map((ar) => ({
               method: ar.method,
               path: `${r.prefix}${ar.path}`,
-              operation: ar.operation ?? (typeof ar.handler === 'string' ? ar.handler : 'custom'),
-              handler: typeof ar.handler === 'string' ? ar.handler : undefined,
+              operation: ar.operation ?? (typeof ar.handler === "string" ? ar.handler : "custom"),
+              handler: typeof ar.handler === "string" ? ar.handler : undefined,
               summary: ar.summary,
             })) ?? []),
           ],
@@ -249,13 +255,10 @@ export class ResourceRegistry {
   /**
    * Group by key
    */
-  private _groupBy(
-    arr: RegistryEntry[],
-    key: keyof RegistryEntry
-  ): Record<string, number> {
+  private _groupBy(arr: RegistryEntry[], key: keyof RegistryEntry): Record<string, number> {
     const result: Record<string, number> = {};
     for (const item of arr) {
-      const k = String(item[key] ?? 'uncategorized');
+      const k = String(item[key] ?? "uncategorized");
       result[k] = (result[k] ?? 0) + 1;
     }
     return result;
@@ -268,12 +271,10 @@ export default ResourceRegistry;
 // Helpers for extracting v2.0 metadata
 // ---------------------------------------------------------------------------
 
-function extractFieldPermissions(
-  fields?: FieldPermissionMap,
-): RegistryEntry['fieldPermissions'] {
+function extractFieldPermissions(fields?: FieldPermissionMap): RegistryEntry["fieldPermissions"] {
   if (!fields || Object.keys(fields).length === 0) return undefined;
 
-  const result: NonNullable<RegistryEntry['fieldPermissions']> = {};
+  const result: NonNullable<RegistryEntry["fieldPermissions"]> = {};
   for (const [field, perm] of Object.entries(fields)) {
     const entry: { type: string; roles?: readonly string[]; redactValue?: unknown } = {
       type: perm._type,
@@ -285,9 +286,7 @@ function extractFieldPermissions(
   return result;
 }
 
-function extractPipelineSteps(
-  pipe?: PipelineConfig,
-): RegistryEntry['pipelineSteps'] {
+function extractPipelineSteps(pipe?: PipelineConfig): RegistryEntry["pipelineSteps"] {
   if (!pipe) return undefined;
 
   const steps: PipelineStep[] = [];

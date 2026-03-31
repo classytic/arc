@@ -20,6 +20,8 @@
  * ```
  */
 
+export type { RoleHierarchy } from "./roleHierarchy.js";
+export { createRoleHierarchy } from "./roleHierarchy.js";
 // Re-export types
 export type {
   PermissionCheck,
@@ -28,10 +30,11 @@ export type {
   UserBase,
 } from "./types.js";
 export { getUserRoles, normalizeRoles } from "./types.js";
-import { getUserRoles } from "./types.js";
+
 import { randomUUID } from "node:crypto";
-import { MemoryCacheStore } from "../cache/memory.js";
 import type { CacheLogger, CacheStore } from "../cache/interface.js";
+import { MemoryCacheStore } from "../cache/memory.js";
+import { getUserRoles } from "./types.js";
 
 export interface DynamicPermissionMatrixConfig {
   /**
@@ -70,7 +73,7 @@ export interface PermissionEventBus {
   subscribe: (
     pattern: string,
     handler: (event: { payload: unknown }) => void | Promise<void>,
-  ) => Promise<(() => void) | void>;
+  ) => Promise<(() => void) | undefined>;
 }
 
 export interface ConnectEventsOptions {
@@ -98,10 +101,7 @@ export interface DynamicPermissionMatrix {
    * events from other nodes trigger local cache invalidation.
    * Echo is suppressed via per-process nodeId matching.
    */
-  connectEvents(
-    events: PermissionEventBus,
-    options?: ConnectEventsOptions,
-  ): Promise<void>;
+  connectEvents(events: PermissionEventBus, options?: ConnectEventsOptions): Promise<void>;
 
   /** Disconnect from the event system. Safe to call even if never connected. */
   disconnectEvents(): Promise<void>;
@@ -112,45 +112,40 @@ export interface DynamicPermissionMatrix {
 
 // Permission presets — common patterns in one call
 import * as presets from "./presets.js";
-export { presets as permissions };
-export {
-  publicRead,
-  publicReadAdminWrite,
-  authenticated,
-  adminOnly,
-  ownerWithAdminBypass,
-  fullPublic,
-  readOnly,
-} from "./presets.js";
 
-// Field-level permissions
-export {
-  fields,
-  applyFieldReadPermissions,
-  applyFieldWritePermissions,
-  resolveEffectiveRoles,
-} from "./fields.js";
 export type {
   FieldPermission,
   FieldPermissionMap,
   FieldPermissionType,
 } from "./fields.js";
+// Field-level permissions
+export {
+  applyFieldReadPermissions,
+  applyFieldWritePermissions,
+  fields,
+  resolveEffectiveRoles,
+} from "./fields.js";
+export {
+  adminOnly,
+  authenticated,
+  fullPublic,
+  ownerWithAdminBypass,
+  publicRead,
+  publicReadAdminWrite,
+  readOnly,
+} from "./presets.js";
+export { presets as permissions };
 
-import type {
-  PermissionCheck,
-  PermissionContext,
-  PermissionResult,
-} from "./types.js";
 import type { FastifyRequest } from "fastify";
 import type { RequestScope } from "../scope/types.js";
 import {
-  isMember,
-  isElevated,
-  getOrgId,
-  getOrgRoles,
+  getUserId as getScopeUserId,
   getTeamId,
+  isElevated,
+  isMember,
   PUBLIC_SCOPE,
 } from "../scope/types.js";
+import type { PermissionCheck, PermissionContext, PermissionResult } from "./types.js";
 
 // ============================================================================
 // Permission Helpers
@@ -277,7 +272,8 @@ export function requireOwnership<TDoc = any>(
     }
 
     // Return filters to scope to owned resources
-    const userId = ctx.user.id ?? ctx.user._id;
+    // Prefer scope.userId (set by auth adapters), fall back to user object
+    const userId = getScopeUserId(getScope(ctx.request)) ?? ctx.user.id ?? ctx.user._id;
     if (!userId) {
       return { granted: false, reason: "User identity missing (no id or _id)" };
     }
@@ -323,8 +319,7 @@ export function allOf(...checks: PermissionCheck[]): PermissionCheck {
 
     return {
       granted: true,
-      filters:
-        Object.keys(mergedFilters).length > 0 ? mergedFilters : undefined,
+      filters: Object.keys(mergedFilters).length > 0 ? mergedFilters : undefined,
     };
   };
 }
@@ -461,9 +456,7 @@ export function requireOrgRole<TDoc = any>(
   ...args: string[] | [readonly string[]]
 ): PermissionCheck<TDoc> {
   // Support both: requireOrgRole('admin', 'owner') and requireOrgRole(['admin', 'owner'])
-  const roles: readonly string[] = Array.isArray(args[0])
-    ? args[0]
-    : (args as string[]);
+  const roles: readonly string[] = Array.isArray(args[0]) ? args[0] : (args as string[]);
 
   const check: PermissionCheck<TDoc> = (ctx) => {
     if (!ctx.user) {
@@ -527,10 +520,7 @@ export function createOrgPermissions(config: {
 } {
   const { roles: roleMap } = config;
 
-  function hasPermissions(
-    orgRoles: string[],
-    required: Record<string, string[]>,
-  ): boolean {
+  function hasPermissions(orgRoles: string[], required: Record<string, string[]>): boolean {
     // User's effective permissions = union of all their role permissions
     for (const [resource, actions] of Object.entries(required)) {
       for (const action of actions) {
@@ -604,17 +594,14 @@ export function createDynamicPermissionMatrix(
   const logger = config.logger ?? console;
   const legacyTtlMs = config.cache?.ttlMs ?? 0;
   const hasExternalStore = !!config.cacheStore;
-  const cacheTtlMs =
-    legacyTtlMs > 0 ? legacyTtlMs : hasExternalStore ? 300_000 : 0;
+  const cacheTtlMs = legacyTtlMs > 0 ? legacyTtlMs : hasExternalStore ? 300_000 : 0;
 
   const internalStore =
     !config.cacheStore && cacheTtlMs > 0
-      ? new MemoryCacheStore<Record<string, Record<string, readonly string[]>>>(
-          {
-            defaultTtlMs: cacheTtlMs,
-            maxEntries: config.cache?.maxEntries ?? 1000,
-          },
-        )
+      ? new MemoryCacheStore<Record<string, Record<string, readonly string[]>>>({
+          defaultTtlMs: cacheTtlMs,
+          maxEntries: config.cache?.maxEntries ?? 1000,
+        })
       : undefined;
 
   const cacheStore = config.cacheStore ?? internalStore;
@@ -653,10 +640,7 @@ export function createDynamicPermissionMatrix(
     }
   }
 
-  function isActionAllowed(
-    actions: readonly string[] | undefined,
-    action: string,
-  ): boolean {
+  function isActionAllowed(actions: readonly string[] | undefined, action: string): boolean {
     if (!actions || actions.length === 0) return false;
     return actions.includes("*") || actions.includes(action);
   }
@@ -672,8 +656,7 @@ export function createDynamicPermissionMatrix(
     const resourceActions = rolePermissions[resource];
     const wildcardResourceActions = rolePermissions["*"];
     return (
-      isActionAllowed(resourceActions, action) ||
-      isActionAllowed(wildcardResourceActions, action)
+      isActionAllowed(resourceActions, action) || isActionAllowed(wildcardResourceActions, action)
     );
   }
 
@@ -768,9 +751,7 @@ export function createDynamicPermissionMatrix(
 
       for (const [resource, actions] of Object.entries(required)) {
         for (const action of actions) {
-          const granted = orgRoles.some((role) =>
-            roleAllows(matrix, role, resource, action),
-          );
+          const granted = orgRoles.some((role) => roleAllows(matrix, role, resource, action));
           if (!granted) {
             return {
               granted: false,
@@ -840,10 +821,7 @@ export function createDynamicPermissionMatrix(
       trackedKeys.clear();
     },
 
-    async connectEvents(
-      events: PermissionEventBus,
-      options?: ConnectEventsOptions,
-    ): Promise<void> {
+    async connectEvents(events: PermissionEventBus, options?: ConnectEventsOptions): Promise<void> {
       // Disconnect previous connection if any (idempotent reconnect)
       if (eventBridge) {
         await this.disconnectEvents();
@@ -852,9 +830,7 @@ export function createDynamicPermissionMatrix(
       const eventType = options?.eventType ?? DEFAULT_EVENT_TYPE;
 
       const unsubscribeFn = await events.subscribe(eventType, async (event) => {
-        const payload = event.payload as
-          | { orgId?: string; nodeId?: string }
-          | undefined;
+        const payload = event.payload as { orgId?: string; nodeId?: string } | undefined;
         if (!payload?.orgId) return;
 
         // Echo dedup: skip events published by this node

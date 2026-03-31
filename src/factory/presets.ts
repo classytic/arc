@@ -7,7 +7,7 @@
  * - testing: In-memory DB, no rate limiting
  */
 
-import type { CreateAppOptions } from './types.js';
+import type { CreateAppOptions } from "./types.js";
 
 /**
  * Production preset - strict security, performance optimized
@@ -15,21 +15,21 @@ import type { CreateAppOptions } from './types.js';
 export const productionPreset: Partial<CreateAppOptions> = {
   // Raw JSON logs for production (log aggregators like Datadog, CloudWatch, etc.)
   logger: {
-    level: 'info',
+    level: "info",
     // Redact sensitive data from logs to prevent credential leaks
     redact: {
       paths: [
-        'req.headers.authorization',
-        'req.headers.cookie',
+        "req.headers.authorization",
+        "req.headers.cookie",
         'req.headers["set-cookie"]',
-        '*.password',
-        '*.secret',
-        '*.token',
-        '*.accessToken',
-        '*.refreshToken',
-        '*.creditCard',
+        "*.password",
+        "*.secret",
+        "*.token",
+        "*.accessToken",
+        "*.refreshToken",
+        "*.creditCard",
       ],
-      censor: '[REDACTED]',
+      censor: "[REDACTED]",
     },
   },
   trustProxy: true,
@@ -50,22 +50,32 @@ export const productionPreset: Partial<CreateAppOptions> = {
   cors: {
     origin: false, // Disabled by default in production
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'x-organization-id', 'x-request-id'],
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "Accept",
+      "x-organization-id",
+      "x-request-id",
+    ],
   },
 
   // Rate limiting - strict
   rateLimit: {
     max: 100,
-    timeWindow: '1 minute',
+    timeWindow: "1 minute",
   },
 
   // Note: Compression not included (use proxy/CDN instead)
 
   // Under pressure - health monitoring
+  // Note: maxEventLoopDelay is intentionally generous (3s) to avoid false 503s
+  // on containerized platforms (Render, Railway, Fly.io) where event loop spikes
+  // are common during cold starts and behind Cloudflare/proxy health checks.
+  // Override to tighten: underPressure: { maxEventLoopDelay: 500 }
   underPressure: {
     exposeStatusRoute: true,
-    maxEventLoopDelay: 1000,
+    maxEventLoopDelay: 3000,
     maxHeapUsedBytes: 1024 * 1024 * 1024, // 1GB
     maxRssBytes: 1024 * 1024 * 1024, // 1GB
   },
@@ -76,13 +86,13 @@ export const productionPreset: Partial<CreateAppOptions> = {
  */
 export const developmentPreset: Partial<CreateAppOptions> = {
   logger: {
-    level: 'debug',
+    level: "debug",
     transport: {
-      target: 'pino-pretty',
+      target: "pino-pretty",
       options: {
         colorize: true,
-        translateTime: 'SYS:HH:MM:ss',
-        ignore: 'pid,hostname',
+        translateTime: "SYS:HH:MM:ss",
+        ignore: "pid,hostname",
       },
     },
   },
@@ -97,14 +107,20 @@ export const developmentPreset: Partial<CreateAppOptions> = {
   cors: {
     origin: true, // Allow all origins (reflects request Origin for credentials)
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'x-organization-id', 'x-request-id'],
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "Accept",
+      "x-organization-id",
+      "x-request-id",
+    ],
   },
 
   // Rate limiting - very relaxed
   rateLimit: {
     max: 1000,
-    timeWindow: '1 minute',
+    timeWindow: "1 minute",
   },
 
   // Note: Compression not included (use proxy/CDN instead)
@@ -155,7 +171,7 @@ export const testingPreset: Partial<CreateAppOptions> = {
  */
 export const edgePreset: Partial<CreateAppOptions> = {
   logger: {
-    level: 'warn', // Minimal logging to reduce I/O overhead
+    level: "warn", // Minimal logging to reduce I/O overhead
   },
   trustProxy: true, // Always behind API Gateway / CDN
 
@@ -169,30 +185,32 @@ export const edgePreset: Partial<CreateAppOptions> = {
 
   // Utilities — minimal footprint
   sensible: true,
-  multipart: false,  // Use pre-signed URLs for file uploads
-  rawBody: false,    // Register per-route if needed for webhooks
+  multipart: false, // Use pre-signed URLs for file uploads
+  rawBody: false, // Register per-route if needed for webhooks
 
   // Arc plugins — serverless runtime handles lifecycle
   arcPlugins: {
-    requestId: false,      // API Gateway provides request IDs
-    health: false,         // Lambda has its own health checks
+    requestId: false, // API Gateway provides request IDs
+    health: false, // Lambda has its own health checks
     gracefulShutdown: false, // Runtime manages shutdown
-    emitEvents: true,      // Keep events for business logic
+    emitEvents: true, // Keep events for business logic
   },
 };
 
 /**
  * Get preset by name
  */
-export function getPreset(name: 'production' | 'development' | 'testing' | 'edge'): Partial<CreateAppOptions> {
+export function getPreset(
+  name: "production" | "development" | "testing" | "edge",
+): Partial<CreateAppOptions> {
   switch (name) {
-    case 'production':
+    case "production":
       return productionPreset;
-    case 'development':
+    case "development":
       return developmentPreset;
-    case 'testing':
+    case "testing":
       return testingPreset;
-    case 'edge':
+    case "edge":
       return edgePreset;
     default:
       throw new Error(`Unknown preset: ${name}`);

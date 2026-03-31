@@ -25,8 +25,15 @@
  * });
  */
 
-import type { ParsedQuery, PopulateOption, QueryParserInterface } from '../types/index.js';
-import { MAX_REGEX_LENGTH, MAX_SEARCH_LENGTH, MAX_FILTER_DEPTH, DEFAULT_MAX_LIMIT as MAX_LIMIT, DEFAULT_LIMIT, RESERVED_QUERY_PARAMS } from '../constants.js';
+import {
+  DEFAULT_LIMIT,
+  MAX_FILTER_DEPTH,
+  DEFAULT_MAX_LIMIT as MAX_LIMIT,
+  MAX_REGEX_LENGTH,
+  MAX_SEARCH_LENGTH,
+  RESERVED_QUERY_PARAMS,
+} from "../constants.js";
+import type { ParsedQuery, PopulateOption, QueryParserInterface } from "../types/index.js";
 
 // ============================================================================
 // Dangerous Patterns (ReDoS protection)
@@ -40,7 +47,8 @@ import { MAX_REGEX_LENGTH, MAX_SEARCH_LENGTH, MAX_FILTER_DEPTH, DEFAULT_MAX_LIMI
  * - Nested quantifiers: (a+)+, (a*)*
  * - Backreferences: \1, \2, etc.
  */
-const DANGEROUS_REGEX_PATTERNS = /(\{[0-9,]+\}|\*\+|\+\+|\?\+|(\(.+\))\+|\(\?\:|\\[0-9]|(\[.+\]).+(\[.+\]))/;
+const DANGEROUS_REGEX_PATTERNS =
+  /(\{[0-9,]+\}|\*\+|\+\+|\?\+|(\(.+\))\+|\(\?:|\\[0-9]|(\[.+\]).+(\[.+\]))/;
 
 // ============================================================================
 // Arc Query Parser
@@ -82,18 +90,18 @@ export class ArcQueryParser implements QueryParserInterface {
 
   /** Supported filter operators */
   private readonly operators: Record<string, string> = {
-    eq: '$eq',
-    ne: '$ne',
-    gt: '$gt',
-    gte: '$gte',
-    lt: '$lt',
-    lte: '$lte',
-    in: '$in',
-    nin: '$nin',
-    like: '$regex',
-    contains: '$regex',
-    regex: '$regex',
-    exists: '$exists',
+    eq: "$eq",
+    ne: "$ne",
+    gt: "$gt",
+    gte: "$gte",
+    lt: "$lt",
+    lte: "$lte",
+    in: "$in",
+    nin: "$nin",
+    like: "$regex",
+    contains: "$regex",
+    regex: "$regex",
+    exists: "$exists",
   };
 
   constructor(options: ArcQueryParserOptions = {}) {
@@ -169,14 +177,14 @@ export class ArcQueryParser implements QueryParserInterface {
     if (value === undefined || value === null) return {};
 
     // Simple string: ?populate=author,category
-    if (typeof value === 'string') {
+    if (typeof value === "string") {
       const trimmed = value.trim();
       return trimmed.length > 0 ? { populate: trimmed } : {};
     }
 
     // Bracket notation object: ?populate[author][select]=name,email
     // qs parses this as { author: { select: 'name,email' } }
-    if (typeof value === 'object' && !Array.isArray(value)) {
+    if (typeof value === "object" && !Array.isArray(value)) {
       const obj = value as Record<string, unknown>;
       const keys = Object.keys(obj);
       if (keys.length === 0) return {};
@@ -187,17 +195,21 @@ export class ArcQueryParser implements QueryParserInterface {
         if (!/^[a-zA-Z_][a-zA-Z0-9_.]*$/.test(path)) continue;
 
         const config = obj[path];
-        if (typeof config === 'object' && config !== null && !Array.isArray(config)) {
+        if (typeof config === "object" && config !== null && !Array.isArray(config)) {
           const cfg = config as Record<string, unknown>;
           const option: PopulateOption = { path };
 
           // Parse select: convert comma-separated to space-separated (Mongoose format)
-          if (typeof cfg.select === 'string') {
-            option.select = cfg.select.split(',').map(s => s.trim()).filter(Boolean).join(' ');
+          if (typeof cfg.select === "string") {
+            option.select = cfg.select
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean)
+              .join(" ");
           }
 
           // Parse match (filter conditions)
-          if (typeof cfg.match === 'object' && cfg.match !== null) {
+          if (typeof cfg.match === "object" && cfg.match !== null) {
             option.match = cfg.match as Record<string, unknown>;
           }
 
@@ -220,14 +232,14 @@ export class ArcQueryParser implements QueryParserInterface {
     const sortStr = String(value);
     const result: Record<string, 1 | -1> = {};
 
-    for (const field of sortStr.split(',')) {
+    for (const field of sortStr.split(",")) {
       const trimmed = field.trim();
       if (!trimmed) continue;
 
       // Validate field name (prevent injection)
       if (!/^-?[a-zA-Z_][a-zA-Z0-9_.]*$/.test(trimmed)) continue;
 
-      if (trimmed.startsWith('-')) {
+      if (trimmed.startsWith("-")) {
         result[trimmed.slice(1)] = -1;
       } else {
         result[trimmed] = 1;
@@ -255,14 +267,14 @@ export class ArcQueryParser implements QueryParserInterface {
     const selectStr = String(value);
     const result: Record<string, 0 | 1> = {};
 
-    for (const field of selectStr.split(',')) {
+    for (const field of selectStr.split(",")) {
       const trimmed = field.trim();
       if (!trimmed) continue;
 
       // Validate field name (prevent injection)
       if (!/^-?[a-zA-Z_][a-zA-Z0-9_.]*$/.test(trimmed)) continue;
 
-      if (trimmed.startsWith('-')) {
+      if (trimmed.startsWith("-")) {
         result[trimmed.slice(1)] = 0;
       } else {
         result[trimmed] = 1;
@@ -280,11 +292,11 @@ export class ArcQueryParser implements QueryParserInterface {
     if (currentDepth > this.maxFilterDepth) return true;
     if (obj === null || obj === undefined) return false;
     if (Array.isArray(obj)) {
-      return obj.some(v => this.exceedsDepth(v, currentDepth));
+      return obj.some((v) => this.exceedsDepth(v, currentDepth));
     }
-    if (typeof obj !== 'object') return false;
-    return Object.values(obj as Record<string, unknown>).some(
-      v => this.exceedsDepth(v, currentDepth + 1)
+    if (typeof obj !== "object") return false;
+    return Object.values(obj as Record<string, unknown>).some((v) =>
+      this.exceedsDepth(v, currentDepth + 1),
     );
   }
 
@@ -303,12 +315,12 @@ export class ArcQueryParser implements QueryParserInterface {
 
       // Handle nested object format from qs parser: { price: { gte: '40', lte: '100' } }
       // This happens when URL is ?price[gte]=40&price[lte]=100 and qs parses it
-      if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+      if (typeof value === "object" && value !== null && !Array.isArray(value)) {
         const operatorObj = value as Record<string, unknown>;
         const operatorKeys = Object.keys(operatorObj);
 
         // Check if all keys are known operators
-        const allOperators = operatorKeys.every(op => this.operators[op]);
+        const allOperators = operatorKeys.every((op) => this.operators[op]);
 
         if (allOperators && operatorKeys.length > 0) {
           // Convert operator object: { gte: '40', lte: '100' } → { $gte: 40, $lte: 100 }
@@ -351,39 +363,39 @@ export class ArcQueryParser implements QueryParserInterface {
 
   private parseFilterValue(value: unknown, operator?: string): unknown {
     // Handle arrays (for $in, $nin operators)
-    if (operator === 'in' || operator === 'nin') {
+    if (operator === "in" || operator === "nin") {
       if (Array.isArray(value)) {
-        return value.map(v => this.coerceValue(v));
+        return value.map((v) => this.coerceValue(v));
       }
-      if (typeof value === 'string' && value.includes(',')) {
-        return value.split(',').map(v => this.coerceValue(v.trim()));
+      if (typeof value === "string" && value.includes(",")) {
+        return value.split(",").map((v) => this.coerceValue(v.trim()));
       }
       return [this.coerceValue(value)];
     }
 
     // Handle regex operators
-    if (operator === 'like' || operator === 'contains' || operator === 'regex') {
+    if (operator === "like" || operator === "contains" || operator === "regex") {
       return this.sanitizeRegex(String(value));
     }
 
     // Handle exists operator
-    if (operator === 'exists') {
+    if (operator === "exists") {
       const str = String(value).toLowerCase();
-      return str === 'true' || str === '1';
+      return str === "true" || str === "1";
     }
 
     return this.coerceValue(value);
   }
 
   private coerceValue(value: unknown): unknown {
-    if (value === 'true') return true;
-    if (value === 'false') return false;
-    if (value === 'null') return null;
+    if (value === "true") return true;
+    if (value === "false") return false;
+    if (value === "null") return null;
 
     // Try to parse as number
-    if (typeof value === 'string') {
+    if (typeof value === "string") {
       const num = Number(value);
-      if (!Number.isNaN(num) && value.trim() !== '') {
+      if (!Number.isNaN(num) && value.trim() !== "") {
         return num;
       }
     }
@@ -401,69 +413,74 @@ export class ArcQueryParser implements QueryParserInterface {
    * to document list endpoint query parameters in OpenAPI/Swagger.
    */
   getQuerySchema(): {
-    type: 'object';
+    type: "object";
     properties: Record<string, unknown>;
     required?: string[];
   } {
     const operatorEntries = Object.entries(this.operators);
     const operatorLines = operatorEntries.map(([op, mongoOp]) => {
       const desc: Record<string, string> = {
-        eq: 'Equal (default when no operator specified)',
-        ne: 'Not equal',
-        gt: 'Greater than',
-        gte: 'Greater than or equal',
-        lt: 'Less than',
-        lte: 'Less than or equal',
-        in: 'In list (comma-separated values)',
-        nin: 'Not in list',
-        like: 'Pattern match (case-insensitive)',
-        contains: 'Contains substring (case-insensitive)',
-        regex: 'Regex pattern',
-        exists: 'Field exists (true/false)',
+        eq: "Equal (default when no operator specified)",
+        ne: "Not equal",
+        gt: "Greater than",
+        gte: "Greater than or equal",
+        lt: "Less than",
+        lte: "Less than or equal",
+        in: "In list (comma-separated values)",
+        nin: "Not in list",
+        like: "Pattern match (case-insensitive)",
+        contains: "Contains substring (case-insensitive)",
+        regex: "Regex pattern",
+        exists: "Field exists (true/false)",
       };
       return `  ${op} → ${mongoOp}: ${desc[op] || op}`;
     });
 
     return {
-      type: 'object',
+      type: "object",
       properties: {
         page: {
-          type: 'integer',
-          description: 'Page number for offset pagination',
+          type: "integer",
+          description: "Page number for offset pagination",
           default: 1,
           minimum: 1,
         },
         limit: {
-          type: 'integer',
-          description: 'Number of items per page',
+          type: "integer",
+          description: "Number of items per page",
           default: this.defaultLimit,
           minimum: 1,
           maximum: this.maxLimit,
         },
         sort: {
-          type: 'string',
-          description: 'Sort fields (comma-separated). Prefix with - for descending. Example: -createdAt,name',
+          type: "string",
+          description:
+            "Sort fields (comma-separated). Prefix with - for descending. Example: -createdAt,name",
         },
         search: {
-          type: 'string',
-          description: 'Full-text search query',
+          type: "string",
+          description: "Full-text search query",
           maxLength: this.maxSearchLength,
         },
         select: {
-          type: 'string',
-          description: 'Fields to include/exclude (comma-separated). Prefix with - to exclude. Example: name,email,-password',
+          type: "string",
+          description:
+            "Fields to include/exclude (comma-separated). Prefix with - to exclude. Example: name,email,-password",
         },
         populate: {
-          type: 'string',
-          description: 'Fields to populate/join (comma-separated). Example: author,category',
+          type: "string",
+          description: "Fields to populate/join (comma-separated). Example: author,category",
         },
         after: {
-          type: 'string',
-          description: 'Cursor value for keyset pagination',
+          type: "string",
+          description: "Cursor value for keyset pagination",
         },
         _filterOperators: {
-          type: 'string',
-          description: ['Available filter operators (use as field[operator]=value):', ...operatorLines].join('\n'),
+          type: "string",
+          description: [
+            "Available filter operators (use as field[operator]=value):",
+            ...operatorLines,
+          ].join("\n"),
         },
       },
     };
@@ -480,7 +497,7 @@ export class ArcQueryParser implements QueryParserInterface {
     // Check for dangerous patterns
     if (DANGEROUS_REGEX_PATTERNS.test(sanitized)) {
       // Escape the entire pattern to treat as literal string
-      sanitized = sanitized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      sanitized = sanitized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     }
 
     return sanitized;

@@ -1,0 +1,270 @@
+# MCP — AI Agent Tools
+
+Expose Arc resources as [Model Context Protocol](https://modelcontextprotocol.io) tools so AI agents (Claude, Cursor, Copilot, etc.) can interact with your API.
+
+**Two levels:**
+- **Level 1** — Auto-generate tools from `defineResource()`. Zero custom code.
+- **Level 2** — Declarative custom tools with `defineTool()` + `createMcpServer()`.
+
+```bash
+npm install @modelcontextprotocol/sdk zod
+```
+
+Both are optional peer deps — only loaded when `mcpPlugin` is registered.
+
+## Quick Start
+
+```typescript
+import { mcpPlugin } from '@classytic/arc/mcp';
+
+await app.register(mcpPlugin, {
+  resources: [productResource, orderResource],
+  auth: false,
+});
+// Done. 10 tools auto-generated, stateless, ready for any MCP client.
+```
+
+Connect Claude CLI:
+
+```bash
+claude mcp add --transport http my-api http://localhost:3000/mcp
+echo "List all products" | claude -p --allowedTools "mcp__my-api__*"
+```
+
+## What Gets Generated
+
+Per resource, up to 5 CRUD tools:
+
+| Tool | Input | Annotations |
+|------|-------|-------------|
+| `list_{plural}` | Pagination + filterable fields | `readOnlyHint: true` |
+| `get_{name}` | `{ id }` | `readOnlyHint: true` |
+| `create_{name}` | Required + optional fields from `fieldRules` | `destructiveHint: false` |
+| `update_{name}` | `{ id }` + optional fields | `destructiveHint: true, idempotentHint: true` |
+| `delete_{name}` | `{ id }` | `destructiveHint: true, idempotentHint: true` |
+
+Tool handlers call `BaseController` — same pipeline as REST. Auth, org-scoping, hooks, field permissions, cache all apply.
+
+## Auth
+
+Arc doesn't enforce an auth strategy. Three modes — you choose:
+
+### No Auth
+
+```typescript
+await app.register(mcpPlugin, { resources, auth: false });
+```
+
+### Better Auth OAuth 2.1
+
+Full MCP spec-compliant flow: authorization code + PKCE, token exchange, dynamic client registration.
+
+```typescript
+// auth.config.ts
+import { mcp } from 'better-auth/plugins';
+betterAuth({ plugins: [mcp({ loginPage: '/login' })] });
+
+// app.ts
+await app.register(mcpPlugin, { resources, auth: getAuth() });
+```
+
+Discovery endpoints (`/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource`) auto-registered.
+
+### Custom Auth Function
+
+Any auth strategy — API key, gateway headers, JWT, static org:
+
+```typescript
+await app.register(mcpPlugin, {
+  resources,
+  auth: async (headers) => {
+    if (headers['x-api-key'] !== process.env.MCP_API_KEY) return null;
+    return { userId: 'service', organizationId: 'org-123', roles: ['admin'] };
+  },
+});
+```
+
+Return `{ userId, organizationId?, roles? }` to allow. Return `null` to reject (401).
+
+## Multi-Tenancy
+
+The `organizationId` from auth flows into BaseController org-scoping automatically:
+
+```
+auth returns { userId: 'alice', organizationId: 'org-a' }
+  → QueryResolver adds { organizationId: 'org-a' } to every query
+  → Agent only sees org-a's data
+```
+
+Works with any `tenantField`. Resources with `tenantField: false` are visible to all.
+
+## Transport Modes
+
+### Stateless (default)
+
+Fresh server per request. No session tracking. Best for production, horizontal scaling, serverless.
+
+```typescript
+await app.register(mcpPlugin, { resources }); // stateless by default
+```
+
+### Stateful
+
+Session-cached with TTL. Use when you need server-initiated notifications.
+
+```typescript
+await app.register(mcpPlugin, { resources, stateful: true, sessionTtlMs: 600000 });
+```
+
+## Custom Tools
+
+Domain-specific tools co-located with their resource:
+
+```
+src/resources/order/
+  order.resource.ts
+  order.mcp.ts          ← custom MCP tools
+```
+
+```typescript
+// order.mcp.ts
+import { defineTool, guard, requireAuth, requireOrg } from '@classytic/arc/mcp';
+import { z } from 'zod';
+
+export const fulfillOrderTool = defineTool('fulfill_order', {
+  description: 'Mark order as fulfilled and trigger shipping',
+  input: {
+    orderId: z.string().describe('Order ID'),
+    trackingNumber: z.string().describe('Shipping tracking number'),
+  },
+  annotations: { destructiveHint: true },
+  handler: guard(requireAuth, requireOrg, async ({ orderId, trackingNumber }, ctx) => {
+    const result = await orderService.fulfill(orderId, trackingNumber, ctx.session!.organizationId);
+    return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+  }),
+});
+```
+
+Wire in `app.ts`:
+
+```typescript
+import { fulfillOrderTool } from './resources/order/order.mcp.js';
+
+await app.register(mcpPlugin, {
+  resources,
+  extraTools: [fulfillOrderTool],
+});
+```
+
+Generate scaffold: `arc generate resource order --mcp`
+
+## Guards
+
+Permission helpers for custom tools. Same patterns as Arc's REST permissions, adapted for MCP:
+
+```typescript
+import { guard, requireAuth, requireOrg, requireRole, customGuard } from '@classytic/arc/mcp';
+
+// Compose guards — rejects before handler runs
+defineTool('admin_action', {
+  description: 'Admin only',
+  handler: guard(requireAuth, requireOrg, requireRole('admin'), async (input, ctx) => {
+    // only runs if authenticated + has org + has admin role
+    return { content: [{ type: 'text', text: 'Done' }] };
+  }),
+});
+```
+
+| Guard | Rejects when |
+|-------|-------------|
+| `requireAuth` | No session or anonymous |
+| `requireOrg` | No `organizationId` |
+| `requireRole('admin')` | User lacks the role |
+| `requireRole('admin', 'editor')` | User has neither (OR logic) |
+| `requireOrgId('org-x')` | Session org doesn't match |
+| `customGuard(fn, msg)` | Custom predicate returns false |
+
+Inline checks also available: `isAuthenticated(ctx)`, `hasOrg(ctx)`, `getUserId(ctx)`, `getOrgId(ctx)`.
+
+## Custom Prompts
+
+Reusable prompt templates that MCP clients can surface:
+
+```typescript
+import { definePrompt } from '@classytic/arc/mcp';
+import { z } from 'zod';
+
+const planSprintPrompt = definePrompt('plan_sprint', {
+  description: 'Plan a sprint from backlog tasks',
+  args: { sprintName: z.string(), teamSize: z.number().optional() },
+  handler: ({ sprintName, teamSize }) => ({
+    messages: [{
+      role: 'user',
+      content: { type: 'text', text: `Plan sprint "${sprintName}" for a team of ${teamSize ?? 5}. Use list_tasks to see the backlog.` },
+    }],
+  }),
+});
+
+await app.register(mcpPlugin, {
+  resources,
+  extraPrompts: [planSprintPrompt],
+});
+```
+
+## Schema Discovery
+
+The plugin auto-registers MCP resources for agent discovery:
+
+- `arc://schemas` — list all resources with field counts, operations, presets
+- `arc://schemas/{name}` — full schema for a specific resource
+
+Agents read these to understand available fields and filters before calling tools.
+
+## Multiple MCP Endpoints
+
+Mount separate servers scoped to different resource groups:
+
+```typescript
+await app.register(mcpPlugin, { resources: catalogResources, prefix: '/mcp/catalog' });
+await app.register(mcpPlugin, { resources: orderResources, prefix: '/mcp/orders' });
+```
+
+## Plugin Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `resources` | `ResourceDefinition[]` | required | Resources to expose |
+| `auth` | `BetterAuthHandler \| McpAuthResolver \| false` | `false` | Auth mode |
+| `prefix` | `string` | `'/mcp'` | Endpoint path |
+| `serverName` | `string` | `'arc-mcp'` | Server identity |
+| `instructions` | `string` | — | LLM guidance |
+| `exclude` | `string[]` | — | Resources to exclude |
+| `toolNamePrefix` | `string` | — | Prefix: `'crm'` → `crm_list_products` |
+| `overrides` | `Record<string, McpResourceConfig>` | — | Per-resource overrides |
+| `extraTools` | `ToolDefinition[]` | — | Custom tools |
+| `extraPrompts` | `PromptDefinition[]` | — | Custom prompts |
+| `stateful` | `boolean` | `false` | Enable session caching |
+| `sessionTtlMs` | `number` | `1800000` | Session TTL (stateful only) |
+| `maxSessions` | `number` | `1000` | Max sessions (stateful only) |
+
+## Subpath Exports
+
+```typescript
+import {
+  mcpPlugin,              // Level 1 — Fastify plugin
+  createMcpServer,        // Level 2 — declarative factory
+  defineTool,             // tool builder
+  definePrompt,           // prompt builder
+  fieldRulesToZod,        // fieldRules → Zod shape converter
+  resourceToTools,        // ResourceDefinition → ToolDefinition[]
+  guard,                  // permission wrapper
+  requireAuth,            // guard: must be authenticated
+  requireOrg,             // guard: must have org context
+  requireRole,            // guard: must have role
+  isAuthenticated,        // inline check
+  hasOrg,                 // inline check
+  getUserId,              // extract user ID
+  getOrgId,               // extract org ID
+  denied,                 // error response helper
+} from '@classytic/arc/mcp';
+```

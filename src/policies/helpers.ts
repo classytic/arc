@@ -4,8 +4,8 @@
  * Common operations for working with PolicyEngine implementations.
  */
 
-import type { FastifyRequest, FastifyReply } from 'fastify';
-import type { PolicyEngine, PolicyResult } from './PolicyInterface.js';
+import type { FastifyReply, FastifyRequest } from "fastify";
+import type { PolicyEngine, PolicyResult } from "./PolicyInterface.js";
 
 /**
  * Helper to create Fastify middleware from any PolicyEngine implementation
@@ -32,11 +32,11 @@ import type { PolicyEngine, PolicyResult } from './PolicyInterface.js';
  */
 export function createPolicyMiddleware(
   policy: PolicyEngine,
-  operation: string
+  operation: string,
 ): (request: FastifyRequest, reply: FastifyReply) => Promise<void> {
   return async function policyMiddleware(
     request: FastifyRequest,
-    reply: FastifyReply
+    reply: FastifyReply,
   ): Promise<void> {
     // Build context from request
     const context = {
@@ -52,8 +52,8 @@ export function createPolicyMiddleware(
     if (!result.allowed) {
       return reply.code(403).send({
         success: false,
-        error: 'Access denied',
-        message: result.reason || 'You do not have permission to perform this action',
+        error: "Access denied",
+        message: result.reason || "You do not have permission to perform this action",
       });
     }
 
@@ -108,7 +108,7 @@ export function createPolicyMiddleware(
  */
 export function combinePolicies(...policies: PolicyEngine[]): PolicyEngine {
   if (policies.length === 0) {
-    throw new Error('combinePolicies requires at least one policy');
+    throw new Error("combinePolicies requires at least one policy");
   }
 
   if (policies.length === 1) {
@@ -150,7 +150,7 @@ export function combinePolicies(...policies: PolicyEngine[]): PolicyEngine {
 
       for (const result of results) {
         if (result.fieldMask?.exclude) {
-          result.fieldMask.exclude.forEach((field) => allExcludes.add(field));
+          for (const field of result.fieldMask.exclude) allExcludes.add(field);
         }
         if (result.fieldMask?.include) {
           allIncludes.push(new Set(result.fieldMask.include));
@@ -232,7 +232,7 @@ export function combinePolicies(...policies: PolicyEngine[]): PolicyEngine {
  */
 export function anyPolicy(...policies: PolicyEngine[]): PolicyEngine {
   if (policies.length === 0) {
-    throw new Error('anyPolicy requires at least one policy');
+    throw new Error("anyPolicy requires at least one policy");
   }
 
   if (policies.length === 1) {
@@ -265,16 +265,12 @@ export function anyPolicy(...policies: PolicyEngine[]): PolicyEngine {
         const results: PolicyResult[] = [];
 
         for (const policy of policies) {
-          const result = await policy.can(
-            request.user,
-            operation,
-            {
-              document: request.document,
-              body: request.body,
-              params: request.params,
-              query: request.query,
-            }
-          );
+          const result = await policy.can(request.user, operation, {
+            document: request.document,
+            body: request.body,
+            params: request.params,
+            query: request.query,
+          });
 
           if (result.allowed) {
             // First success - attach result and continue
@@ -301,8 +297,8 @@ export function anyPolicy(...policies: PolicyEngine[]): PolicyEngine {
         // All policies denied
         return reply.code(403).send({
           success: false,
-          error: 'Access denied',
-          message: results[0]?.reason || 'You do not have permission to perform this action',
+          error: "Access denied",
+          message: results[0]?.reason || "You do not have permission to perform this action",
         });
       };
     },
@@ -350,17 +346,17 @@ export function allowAll(): PolicyEngine {
  * // result.reason === 'This resource is deprecated'
  * ```
  */
-export function denyAll(reason = 'Operation not allowed'): PolicyEngine {
+export function denyAll(reason = "Operation not allowed"): PolicyEngine {
   return {
     can() {
       return { allowed: false, reason };
     },
 
     toMiddleware() {
-      return async (request: FastifyRequest, reply: FastifyReply) => {
+      return async (_request: FastifyRequest, reply: FastifyReply) => {
         return reply.code(403).send({
           success: false,
-          error: 'Access denied',
+          error: "Access denied",
           message: reason,
         });
       };

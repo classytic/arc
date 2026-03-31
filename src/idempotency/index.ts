@@ -26,28 +26,25 @@
  * // Client usage: POST /api/orders + Idempotency-Key header
  */
 
+export type { IdempotencyPluginOptions } from "./idempotencyPlugin.js";
 // Main plugin
 export {
   default as idempotencyPlugin,
   idempotencyPlugin as idempotencyPluginFn,
-} from './idempotencyPlugin.js';
-export type { IdempotencyPluginOptions } from './idempotencyPlugin.js';
-
+} from "./idempotencyPlugin.js";
+// Types
+export type {
+  IdempotencyLock,
+  IdempotencyResult,
+  IdempotencyStore,
+  MemoryIdempotencyStoreOptions,
+} from "./stores/index.js";
 // Core store (lightweight, no external deps)
-export { MemoryIdempotencyStore, createIdempotencyResult } from './stores/index.js';
-
-// Redis store — use dedicated subpath to avoid pulling ioredis:
-//   import { RedisIdempotencyStore } from '@classytic/arc/idempotency/redis';
-export type { RedisIdempotencyStoreOptions, RedisClient } from './stores/redis.js';
+export { createIdempotencyResult, MemoryIdempotencyStore } from "./stores/index.js";
 
 // MongoDB store — use dedicated subpath to avoid pulling mongoose:
 //   import { MongoIdempotencyStore } from '@classytic/arc/idempotency/mongodb';
-export type { MongoIdempotencyStoreOptions } from './stores/mongodb.js';
-
-// Types
-export type {
-  IdempotencyStore,
-  IdempotencyResult,
-  IdempotencyLock,
-  MemoryIdempotencyStoreOptions,
-} from './stores/index.js';
+export type { MongoIdempotencyStoreOptions } from "./stores/mongodb.js";
+// Redis store — use dedicated subpath to avoid pulling ioredis:
+//   import { RedisIdempotencyStore } from '@classytic/arc/idempotency/redis';
+export type { RedisClient, RedisIdempotencyStoreOptions } from "./stores/redis.js";

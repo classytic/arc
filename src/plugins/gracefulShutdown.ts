@@ -27,8 +27,8 @@
  * });
  */
 
-import fp from 'fastify-plugin';
-import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync } from "fastify";
+import fp from "fastify-plugin";
 
 export interface GracefulShutdownOptions {
   /** Maximum time to wait for graceful shutdown in ms (default: 30000) */
@@ -48,17 +48,17 @@ export interface GracefulShutdownOptions {
    * @param reason - `'timeout'` if shutdown exceeded `timeout` ms,
    *                 `'error'` if `onShutdown` or `fastify.close()` threw.
    */
-  onForceExit?: (reason: 'timeout' | 'error') => void;
+  onForceExit?: (reason: "timeout" | "error") => void;
 }
 
 const gracefulShutdownPlugin: FastifyPluginAsync<GracefulShutdownOptions> = async (
   fastify: FastifyInstance,
-  opts: GracefulShutdownOptions = {}
+  opts: GracefulShutdownOptions = {},
 ) => {
   const {
     timeout = 30000,
     onShutdown,
-    signals = ['SIGTERM', 'SIGINT'],
+    signals = ["SIGTERM", "SIGINT"],
     logEvents = true,
     onForceExit = () => process.exit(1),
   } = opts;
@@ -72,22 +72,25 @@ const gracefulShutdownPlugin: FastifyPluginAsync<GracefulShutdownOptions> = asyn
     // Prevent multiple shutdown attempts
     if (isShuttingDown) {
       if (logEvents) {
-        fastify.log?.warn?.({ signal }, 'Shutdown already in progress, ignoring signal');
+        fastify.log?.warn?.({ signal }, "Shutdown already in progress, ignoring signal");
       }
       return;
     }
     isShuttingDown = true;
 
     if (logEvents) {
-      fastify.log?.info?.({ signal, timeout }, 'Shutdown signal received, starting graceful shutdown');
+      fastify.log?.info?.(
+        { signal, timeout },
+        "Shutdown signal received, starting graceful shutdown",
+      );
     }
 
     // Set a hard timeout — force-exit only as last resort
     const forceExitTimer = setTimeout(() => {
       if (logEvents) {
-        fastify.log?.error?.('Graceful shutdown timeout exceeded, forcing exit');
+        fastify.log?.error?.("Graceful shutdown timeout exceeded, forcing exit");
       }
-      onForceExit('timeout');
+      onForceExit("timeout");
     }, timeout);
 
     // Don't keep the process alive just for this timer
@@ -96,20 +99,20 @@ const gracefulShutdownPlugin: FastifyPluginAsync<GracefulShutdownOptions> = asyn
     try {
       // 1. Stop accepting new connections and wait for in-flight requests
       if (logEvents) {
-        fastify.log?.info?.('Closing server to new connections');
+        fastify.log?.info?.("Closing server to new connections");
       }
       await fastify.close();
 
       // 2. Run custom cleanup (database connections, Redis, etc.)
       if (onShutdown) {
         if (logEvents) {
-          fastify.log?.info?.('Running custom shutdown handler');
+          fastify.log?.info?.("Running custom shutdown handler");
         }
         await onShutdown();
       }
 
       if (logEvents) {
-        fastify.log?.info?.('Graceful shutdown complete');
+        fastify.log?.info?.("Graceful shutdown complete");
       }
 
       clearTimeout(forceExitTimer);
@@ -117,22 +120,24 @@ const gracefulShutdownPlugin: FastifyPluginAsync<GracefulShutdownOptions> = asyn
       // instead of calling process.exit(0) which skips cleanup
     } catch (err) {
       if (logEvents) {
-        fastify.log?.error?.({ error: (err as Error).message }, 'Error during shutdown');
+        fastify.log?.error?.({ error: (err as Error).message }, "Error during shutdown");
       }
       clearTimeout(forceExitTimer);
-      onForceExit('error');
+      onForceExit("error");
     }
   };
 
   // Register signal handlers (with references for cleanup)
   for (const signal of signals) {
-    const handler = () => { void shutdown(signal); };
+    const handler = () => {
+      void shutdown(signal);
+    };
     signalHandlers.set(signal, handler);
     process.on(signal, handler);
   }
 
   // Cleanup signal handlers on close to prevent test pollution
-  fastify.addHook('onClose', async () => {
+  fastify.addHook("onClose", async () => {
     for (const [signal, handler] of signalHandlers) {
       process.removeListener(signal, handler);
     }
@@ -140,17 +145,17 @@ const gracefulShutdownPlugin: FastifyPluginAsync<GracefulShutdownOptions> = asyn
   });
 
   // Decorate fastify with manual shutdown trigger
-  fastify.decorate('shutdown', async () => {
-    await shutdown('MANUAL');
+  fastify.decorate("shutdown", async () => {
+    await shutdown("MANUAL");
   });
 
   if (logEvents) {
-    fastify.log?.debug?.({ signals }, 'Graceful shutdown plugin registered');
+    fastify.log?.debug?.({ signals }, "Graceful shutdown plugin registered");
   }
 };
 
 // Extend Fastify types
-declare module 'fastify' {
+declare module "fastify" {
   interface FastifyInstance {
     /** Trigger graceful shutdown manually */
     shutdown: () => Promise<void>;
@@ -158,8 +163,8 @@ declare module 'fastify' {
 }
 
 export default fp(gracefulShutdownPlugin, {
-  name: 'arc-graceful-shutdown',
-  fastify: '5.x',
+  name: "arc-graceful-shutdown",
+  fastify: "5.x",
 });
 
 export { gracefulShutdownPlugin };

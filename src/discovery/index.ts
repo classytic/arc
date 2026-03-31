@@ -32,10 +32,11 @@
  * }
  * ```
  */
-import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
-import { readdir, stat } from 'node:fs/promises';
-import { join, resolve, extname } from 'node:path';
-import { pathToFileURL } from 'node:url';
+
+import { readdir } from "node:fs/promises";
+import { extname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 
 // ============================================================================
 // Types
@@ -82,10 +83,10 @@ export interface DiscoveryPluginOptions extends DiscoveryOptions {
  */
 function matchPattern(filename: string, pattern: string): boolean {
   // Expand {ts,js} brace patterns
-  if (pattern.includes('{') && pattern.includes('}')) {
+  if (pattern.includes("{") && pattern.includes("}")) {
     const match = pattern.match(/\{([^}]+)\}/);
     if (match) {
-      const alternatives = match[1]!.split(',').map((s) => s.trim());
+      const alternatives = match[1]?.split(",").map((s) => s.trim()) ?? [];
       return alternatives.some((alt) => {
         const expanded = pattern.replace(match[0], alt);
         return matchPattern(filename, expanded);
@@ -94,7 +95,7 @@ function matchPattern(filename: string, pattern: string): boolean {
   }
 
   // Simple wildcard: *.resource.ts → any file ending with .resource.ts
-  if (pattern.startsWith('*')) {
+  if (pattern.startsWith("*")) {
     const suffix = pattern.slice(1);
     return filename.endsWith(suffix);
   }
@@ -106,11 +107,7 @@ function matchPattern(filename: string, pattern: string): boolean {
 /**
  * Recursively scan directories for files matching a pattern.
  */
-async function scanDirectory(
-  dir: string,
-  pattern: string,
-  recursive: boolean
-): Promise<string[]> {
+async function scanDirectory(dir: string, pattern: string, recursive: boolean): Promise<string[]> {
   const results: string[] = [];
   const resolvedDir = resolve(dir);
 
@@ -126,7 +123,7 @@ async function scanDirectory(
       results.push(...nested);
     } else if (entry.isFile()) {
       // Strip any path prefix from pattern (e.g., **/*.resource.ts → *.resource.ts)
-      const filePattern = pattern.replace(/^\*\*\//, '');
+      const filePattern = pattern.replace(/^\*\*\//, "");
       if (matchPattern(String(entry.name), filePattern)) {
         results.push(fullPath);
       }
@@ -146,11 +143,11 @@ async function scanDirectory(
  * @returns Array of discovered resources with their file paths
  */
 export async function discoverResources(
-  options: DiscoveryOptions
+  options: DiscoveryOptions,
 ): Promise<Array<{ resource: DiscoverableResource; filePath: string }>> {
   const {
     paths,
-    pattern = '*.resource.{ts,js}',
+    pattern = "*.resource.{ts,js}",
     exportName,
     filter,
     onDiscover,
@@ -171,7 +168,7 @@ export async function discoverResources(
 
   // Import each file and extract the resource
   for (const filePath of allFiles) {
-    const ext = extname(filePath);
+    const _ext = extname(filePath);
     // Only import .js and .mjs files (compiled output). .ts files need a loader.
     // In development with tsx/ts-node, .ts files work too.
     const fileUrl = pathToFileURL(filePath).href;
@@ -193,14 +190,22 @@ export async function discoverResources(
     }
 
     // 2. Check default export
-    if (!resource && module.default && typeof (module.default as Record<string, unknown>).toPlugin === 'function') {
+    if (
+      !resource &&
+      module.default &&
+      typeof (module.default as Record<string, unknown>).toPlugin === "function"
+    ) {
       resource = module.default as DiscoverableResource;
     }
 
     // 3. Search for first export with toPlugin()
     if (!resource) {
       for (const value of Object.values(module)) {
-        if (value && typeof value === 'object' && typeof (value as Record<string, unknown>).toPlugin === 'function') {
+        if (
+          value &&
+          typeof value === "object" &&
+          typeof (value as Record<string, unknown>).toPlugin === "function"
+        ) {
           resource = value as DiscoverableResource;
           break;
         }
@@ -210,8 +215,8 @@ export async function discoverResources(
     if (!resource) {
       throw new Error(
         `No resource found in: ${filePath}\n` +
-        'Resource files must export an object with a toPlugin() method.\n' +
-        'Use defineResource() or export the resource as default.'
+          "Resource files must export an object with a toPlugin() method.\n" +
+          "Use defineResource() or export the resource as default.",
       );
     }
 
@@ -234,15 +239,17 @@ export async function discoverResources(
 
 const discoveryPluginImpl: FastifyPluginAsync<DiscoveryPluginOptions> = async (
   fastify: FastifyInstance,
-  options: DiscoveryPluginOptions
+  options: DiscoveryPluginOptions,
 ) => {
   const { prefix, ...discoveryOptions } = options;
 
   const discovered = await discoverResources({
     ...discoveryOptions,
-    onDiscover: discoveryOptions.onDiscover ?? ((name, filePath) => {
-      fastify.log.debug({ resource: name, file: filePath }, 'Auto-discovered resource');
-    }),
+    onDiscover:
+      discoveryOptions.onDiscover ??
+      ((name, filePath) => {
+        fastify.log.debug({ resource: name, file: filePath }, "Auto-discovered resource");
+      }),
   });
 
   // Register all discovered resources
@@ -255,9 +262,7 @@ const discoveryPluginImpl: FastifyPluginAsync<DiscoveryPluginOptions> = async (
     }
   }
 
-  fastify.log.debug(
-    `Auto-discovery: registered ${discovered.length} resource(s)`
-  );
+  fastify.log.debug(`Auto-discovery: registered ${discovered.length} resource(s)`);
 };
 
 /** Auto-discovery plugin for Arc resources */

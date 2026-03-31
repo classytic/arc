@@ -1,21 +1,25 @@
 /**
  * Arc CLI - Programmatic API
  *
- * Re-exports CLI commands for programmatic usage.
+ * These are CLI utilities for project scaffolding and environment validation.
+ * They are NOT runtime framework modules and should NOT be imported in
+ * application code. They exist here for scriptable automation only.
+ *
+ * Primary interface: `arc doctor` / `npx @classytic/arc doctor`
+ * Secondary interface: `import { doctor } from '@classytic/arc/cli'`
  *
  * @example
- * import { generate, init } from '@classytic/arc/cli';
+ * // In a setup script or test harness (not application code):
+ * import { doctor } from '@classytic/arc/cli';
+ * await doctor();
  *
- * // Generate a resource
+ * import { generate } from '@classytic/arc/cli';
  * await generate('resource', ['product']);
- *
- * // Initialize a new project
- * await init({ name: 'my-api', typescript: true });
  */
 
-export { generate } from './commands/generate.js';
-export { init } from './commands/init.js';
-export { introspect } from './commands/introspect.js';
-export { describe } from './commands/describe.js';
-export { exportDocs } from './commands/docs.js';
-export { doctor } from './commands/doctor.js';
+export { describe } from "./commands/describe.js";
+export { exportDocs } from "./commands/docs.js";
+export { doctor } from "./commands/doctor.js";
+export { generate } from "./commands/generate.js";
+export { init } from "./commands/init.js";
+export { introspect } from "./commands/introspect.js";

@@ -19,8 +19,8 @@
  * });
  */
 
-import fp from 'fastify-plugin';
-import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync } from "fastify";
+import fp from "fastify-plugin";
 
 export interface CachingRule {
   /** Path prefix to match (e.g., '/api/products') */
@@ -77,7 +77,7 @@ const cachingPlugin: FastifyPluginAsync<CachingOptions> = async (
     maxAge = 0,
     etag = true,
     conditional = true,
-    methods = ['GET', 'HEAD'],
+    methods = ["GET", "HEAD"],
     exclude = [],
     rules = [],
   } = opts;
@@ -87,26 +87,26 @@ const cachingPlugin: FastifyPluginAsync<CachingOptions> = async (
   /** Find the first matching rule for a URL path */
   function findRule(url: string): CachingRule | undefined {
     // Strip query string
-    const path = url.split('?')[0]!;
+    const path = url.split("?")[0]!;
     return rules.find((r) => path.startsWith(r.match));
   }
 
   /** Build Cache-Control header value */
   function buildCacheControl(rule?: CachingRule): string {
     const age = rule?.maxAge ?? maxAge;
-    if (age <= 0) return 'no-cache';
+    if (age <= 0) return "no-cache";
 
     const parts: string[] = [];
-    parts.push(rule?.private ? 'private' : 'public');
+    parts.push(rule?.private ? "private" : "public");
     parts.push(`max-age=${age}`);
     if (rule?.staleWhileRevalidate) {
       parts.push(`stale-while-revalidate=${rule.staleWhileRevalidate}`);
     }
-    return parts.join(', ');
+    return parts.join(", ");
   }
 
   // onSend hook — runs just before the response is sent
-  fastify.addHook('onSend', async (request, reply, payload) => {
+  fastify.addHook("onSend", async (request, reply, payload) => {
     const url = request.url;
 
     // Skip excluded paths
@@ -118,8 +118,8 @@ const cachingPlugin: FastifyPluginAsync<CachingOptions> = async (
 
     // Mutation methods always get no-store
     if (!methodSet.has(method)) {
-      if (!reply.hasHeader('cache-control')) {
-        reply.header('cache-control', 'no-store');
+      if (!reply.hasHeader("cache-control")) {
+        reply.header("cache-control", "no-store");
       }
       return payload;
     }
@@ -131,23 +131,23 @@ const cachingPlugin: FastifyPluginAsync<CachingOptions> = async (
     }
 
     // Don't override user-set Cache-Control
-    if (!reply.hasHeader('cache-control')) {
+    if (!reply.hasHeader("cache-control")) {
       const rule = findRule(url);
-      reply.header('cache-control', buildCacheControl(rule));
+      reply.header("cache-control", buildCacheControl(rule));
     }
 
     // ETag generation
     if (etag && payload) {
-      const body = typeof payload === 'string' ? payload : String(payload);
+      const body = typeof payload === "string" ? payload : String(payload);
       const tag = `"${fnv1a(body)}"`;
-      reply.header('etag', tag);
+      reply.header("etag", tag);
 
       // Conditional request: check If-None-Match
       if (conditional) {
-        const ifNoneMatch = request.headers['if-none-match'];
+        const ifNoneMatch = request.headers["if-none-match"];
         if (ifNoneMatch && ifNoneMatch === tag) {
           reply.code(304);
-          return '';
+          return "";
         }
       }
     }
@@ -155,12 +155,12 @@ const cachingPlugin: FastifyPluginAsync<CachingOptions> = async (
     return payload;
   });
 
-  fastify.log?.debug?.('Caching plugin registered');
+  fastify.log?.debug?.("Caching plugin registered");
 };
 
 export default fp(cachingPlugin, {
-  name: 'arc-caching',
-  fastify: '5.x',
+  name: "arc-caching",
+  fastify: "5.x",
 });
 
 export { cachingPlugin };

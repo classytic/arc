@@ -4,7 +4,7 @@
  * Standard JSON Schema definitions for API responses.
  */
 
-import type { AnyRecord } from '../types/index.js';
+import type { AnyRecord } from "../types/index.js";
 
 // ============================================================================
 // Schema Types
@@ -29,25 +29,25 @@ export interface JsonSchema {
  * Base success response schema
  */
 export const successResponseSchema: JsonSchema = {
-  type: 'object',
+  type: "object",
   properties: {
-    success: { type: 'boolean', example: true },
+    success: { type: "boolean", example: true },
   },
-  required: ['success'],
+  required: ["success"],
 };
 
 /**
  * Error response schema
  */
 export const errorResponseSchema: JsonSchema = {
-  type: 'object',
+  type: "object",
   properties: {
-    success: { type: 'boolean', example: false },
-    error: { type: 'string', description: 'Error message' },
-    code: { type: 'string', description: 'Error code' },
-    message: { type: 'string', description: 'Detailed message' },
+    success: { type: "boolean", example: false },
+    error: { type: "string", description: "Error message" },
+    code: { type: "string", description: "Error code" },
+    message: { type: "string", description: "Detailed message" },
   },
-  required: ['success', 'error'],
+  required: ["success", "error"],
 };
 
 /**
@@ -57,16 +57,16 @@ export const errorResponseSchema: JsonSchema = {
  * { page, limit, total, pages, hasNext, hasPrev }
  */
 export const paginationSchema: JsonSchema = {
-  type: 'object',
+  type: "object",
   properties: {
-    page: { type: 'integer', example: 1 },
-    limit: { type: 'integer', example: 20 },
-    total: { type: 'integer', example: 100 },
-    pages: { type: 'integer', example: 5 },
-    hasNext: { type: 'boolean', example: true },
-    hasPrev: { type: 'boolean', example: false },
+    page: { type: "integer", example: 1 },
+    limit: { type: "integer", example: 20 },
+    total: { type: "integer", example: 100 },
+    pages: { type: "integer", example: 5 },
+    hasNext: { type: "boolean", example: true },
+    hasPrev: { type: "boolean", example: false },
   },
-  required: ['page', 'limit', 'total', 'pages', 'hasNext', 'hasPrev'],
+  required: ["page", "limit", "total", "pages", "hasNext", "hasPrev"],
 };
 
 // ============================================================================
@@ -78,12 +78,12 @@ export const paginationSchema: JsonSchema = {
  */
 export function wrapResponse(dataSchema: JsonSchema): JsonSchema {
   return {
-    type: 'object',
+    type: "object",
     properties: {
-      success: { type: 'boolean', example: true },
+      success: { type: "boolean", example: true },
       data: dataSchema,
     },
-    required: ['success', 'data'],
+    required: ["success", "data"],
     // Allow extra fields (fieldPermissions, meta spreads, etc.)
     additionalProperties: true,
   };
@@ -99,22 +99,22 @@ export function wrapResponse(dataSchema: JsonSchema): JsonSchema {
  */
 export function listResponse(itemSchema: JsonSchema): JsonSchema {
   return {
-    type: 'object',
+    type: "object",
     properties: {
-      success: { type: 'boolean', example: true },
+      success: { type: "boolean", example: true },
       docs: {
-        type: 'array',
+        type: "array",
         items: itemSchema,
       },
       // Flat pagination fields (not nested)
-      page: { type: 'integer', example: 1 },
-      limit: { type: 'integer', example: 20 },
-      total: { type: 'integer', example: 100 },
-      pages: { type: 'integer', example: 5 },
-      hasNext: { type: 'boolean', example: false },
-      hasPrev: { type: 'boolean', example: false },
+      page: { type: "integer", example: 1 },
+      limit: { type: "integer", example: 20 },
+      total: { type: "integer", example: 100 },
+      pages: { type: "integer", example: 5 },
+      hasNext: { type: "boolean", example: false },
+      hasPrev: { type: "boolean", example: false },
     },
-    required: ['success', 'docs'],
+    required: ["success", "docs"],
     // Allow extra fields (fieldPermissions, meta spreads, etc.)
     additionalProperties: true,
   };
@@ -144,13 +144,13 @@ export const itemWrapper = itemResponse;
  */
 export function mutationResponse(itemSchema: JsonSchema): JsonSchema {
   return {
-    type: 'object',
+    type: "object",
     properties: {
-      success: { type: 'boolean', example: true },
+      success: { type: "boolean", example: true },
       data: itemSchema,
-      message: { type: 'string', example: 'Created successfully' },
+      message: { type: "string", example: "Created successfully" },
     },
-    required: ['success', 'data'],
+    required: ["success", "data"],
     // Allow extra fields (fieldPermissions, meta spreads, etc.)
     additionalProperties: true,
   };
@@ -163,20 +163,20 @@ export function mutationResponse(itemSchema: JsonSchema): JsonSchema {
  */
 export function deleteResponse(): JsonSchema {
   return {
-    type: 'object',
+    type: "object",
     properties: {
-      success: { type: 'boolean', example: true },
+      success: { type: "boolean", example: true },
       data: {
-        type: 'object',
+        type: "object",
         properties: {
-          message: { type: 'string', example: 'Deleted successfully' },
-          id: { type: 'string', example: '507f1f77bcf86cd799439011' },
-          soft: { type: 'boolean', example: false },
+          message: { type: "string", example: "Deleted successfully" },
+          id: { type: "string", example: "507f1f77bcf86cd799439011" },
+          soft: { type: "boolean", example: false },
         },
-        required: ['message'],
+        required: ["message"],
       },
     },
-    required: ['success'],
+    required: ["success"],
     // Allow extra fields (fieldPermissions, meta spreads, etc.)
     additionalProperties: true,
   };
@@ -193,38 +193,38 @@ export const messageWrapper = deleteResponse;
 
 export const responses = {
   200: (schema: JsonSchema) => ({
-    description: 'Successful response',
+    description: "Successful response",
     content: {
-      'application/json': { schema },
+      "application/json": { schema },
     },
   }),
 
   201: (schema: JsonSchema) => ({
-    description: 'Created successfully',
+    description: "Created successfully",
     content: {
-      'application/json': { schema: mutationResponse(schema) },
+      "application/json": { schema: mutationResponse(schema) },
     },
   }),
 
   400: {
-    description: 'Bad Request',
+    description: "Bad Request",
     content: {
-      'application/json': {
+      "application/json": {
         schema: {
           ...errorResponseSchema,
           properties: {
             ...errorResponseSchema.properties,
-            code: { type: 'string', example: 'VALIDATION_ERROR' },
+            code: { type: "string", example: "VALIDATION_ERROR" },
             details: {
-              type: 'object',
+              type: "object",
               properties: {
                 errors: {
-                  type: 'array',
+                  type: "array",
                   items: {
-                    type: 'object',
+                    type: "object",
                     properties: {
-                      field: { type: 'string' },
-                      message: { type: 'string' },
+                      field: { type: "string" },
+                      message: { type: "string" },
                     },
                   },
                 },
@@ -237,14 +237,14 @@ export const responses = {
   },
 
   401: {
-    description: 'Unauthorized',
+    description: "Unauthorized",
     content: {
-      'application/json': {
+      "application/json": {
         schema: {
           ...errorResponseSchema,
           properties: {
             ...errorResponseSchema.properties,
-            code: { type: 'string', example: 'UNAUTHORIZED' },
+            code: { type: "string", example: "UNAUTHORIZED" },
           },
         },
       },
@@ -252,14 +252,14 @@ export const responses = {
   },
 
   403: {
-    description: 'Forbidden',
+    description: "Forbidden",
     content: {
-      'application/json': {
+      "application/json": {
         schema: {
           ...errorResponseSchema,
           properties: {
             ...errorResponseSchema.properties,
-            code: { type: 'string', example: 'FORBIDDEN' },
+            code: { type: "string", example: "FORBIDDEN" },
           },
         },
       },
@@ -267,14 +267,14 @@ export const responses = {
   },
 
   404: {
-    description: 'Not Found',
+    description: "Not Found",
     content: {
-      'application/json': {
+      "application/json": {
         schema: {
           ...errorResponseSchema,
           properties: {
             ...errorResponseSchema.properties,
-            code: { type: 'string', example: 'NOT_FOUND' },
+            code: { type: "string", example: "NOT_FOUND" },
           },
         },
       },
@@ -282,14 +282,14 @@ export const responses = {
   },
 
   409: {
-    description: 'Conflict',
+    description: "Conflict",
     content: {
-      'application/json': {
+      "application/json": {
         schema: {
           ...errorResponseSchema,
           properties: {
             ...errorResponseSchema.properties,
-            code: { type: 'string', example: 'CONFLICT' },
+            code: { type: "string", example: "CONFLICT" },
           },
         },
       },
@@ -297,14 +297,14 @@ export const responses = {
   },
 
   500: {
-    description: 'Internal Server Error',
+    description: "Internal Server Error",
     content: {
-      'application/json': {
+      "application/json": {
         schema: {
           ...errorResponseSchema,
           properties: {
             ...errorResponseSchema.properties,
-            code: { type: 'string', example: 'INTERNAL_ERROR' },
+            code: { type: "string", example: "INTERNAL_ERROR" },
           },
         },
       },
@@ -319,36 +319,36 @@ export const responses = {
 export const queryParams = {
   pagination: {
     page: {
-      type: 'integer',
+      type: "integer",
       minimum: 1,
       default: 1,
-      description: 'Page number',
+      description: "Page number",
     },
     limit: {
-      type: 'integer',
+      type: "integer",
       minimum: 1,
       maximum: 100,
       default: 20,
-      description: 'Items per page',
+      description: "Items per page",
     },
   },
 
   sorting: {
     sort: {
-      type: 'string',
-      description: 'Sort field (prefix with - for descending)',
-      example: '-createdAt',
+      type: "string",
+      description: "Sort field (prefix with - for descending)",
+      example: "-createdAt",
     },
   },
 
   filtering: {
     select: {
-      description: 'Fields to include (space-separated or object)',
-      example: 'name email createdAt',
+      description: "Fields to include (space-separated or object)",
+      example: "name email createdAt",
     },
     populate: {
-      description: 'Relations to populate (comma-separated string or bracket-notation object)',
-      example: 'author,category',
+      description: "Relations to populate (comma-separated string or bracket-notation object)",
+      example: "author,category",
     },
   },
 };
@@ -358,7 +358,7 @@ export const queryParams = {
  */
 export function getListQueryParams(): AnyRecord {
   return {
-    type: 'object',
+    type: "object",
     properties: {
       ...queryParams.pagination,
       ...queryParams.sorting,
@@ -380,7 +380,7 @@ export function getListQueryParams(): AnyRecord {
  * Enables fast-json-stringify while still passing through all fields.
  */
 const genericItemSchema: JsonSchema = {
-  type: 'object',
+  type: "object",
   additionalProperties: true,
 };
 
@@ -391,12 +391,12 @@ const genericItemSchema: JsonSchema = {
  * `keywords: ['example']` AJV config (e.g., raw Fastify without createApp).
  */
 function stripExamples<T>(schema: T): T {
-  if (schema === null || typeof schema !== 'object') return schema;
+  if (schema === null || typeof schema !== "object") return schema;
   if (Array.isArray(schema)) return schema.map(stripExamples) as T;
 
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
-    if (key === 'example') continue;
+    if (key === "example") continue;
     result[key] = stripExamples(value);
   }
   return result as T;

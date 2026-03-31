@@ -17,13 +17,10 @@
  * const stats = fastify.arc.registry.getStats();
  */
 
-export {
-  ResourceRegistry,
-} from './ResourceRegistry.js';
-export type { RegisterOptions } from './ResourceRegistry.js';
-
+export type { IntrospectionPluginOptions } from "./introspectionPlugin.js";
 export {
   default as introspectionPlugin,
   introspectionPlugin as introspectionPluginFn,
-} from './introspectionPlugin.js';
-export type { IntrospectionPluginOptions } from './introspectionPlugin.js';
+} from "./introspectionPlugin.js";
+export type { RegisterOptions } from "./ResourceRegistry.js";
+export { ResourceRegistry } from "./ResourceRegistry.js";

@@ -6,30 +6,30 @@
  * is handled by the repository/adapter layer (e.g., MongoKit's softDelete plugin).
  */
 
-import type { AdditionalRoute, PresetResult, ResourcePermissions } from '../types/index.js';
-import { requireRoles } from '../permissions/index.js';
+import { requireRoles } from "../permissions/index.js";
+import type { AdditionalRoute, PresetResult, ResourcePermissions } from "../types/index.js";
 
 export function softDeletePreset(): PresetResult {
   return {
-    name: 'softDelete',
+    name: "softDelete",
     additionalRoutes: (permissions: ResourcePermissions): AdditionalRoute[] => [
       {
-        method: 'GET',
-        path: '/deleted',
-        handler: 'getDeleted',
-        summary: 'Get soft-deleted items',
-        permissions: permissions.list ?? requireRoles(['admin']),
+        method: "GET",
+        path: "/deleted",
+        handler: "getDeleted",
+        summary: "Get soft-deleted items",
+        permissions: permissions.list ?? requireRoles(["admin"]),
         wrapHandler: true,
-        operation: 'listDeleted',
+        operation: "listDeleted",
       },
       {
-        method: 'POST',
-        path: '/:id/restore',
-        handler: 'restore',
-        summary: 'Restore soft-deleted item',
-        permissions: permissions.update ?? requireRoles(['admin']),
+        method: "POST",
+        path: "/:id/restore",
+        handler: "restore",
+        summary: "Restore soft-deleted item",
+        permissions: permissions.update ?? requireRoles(["admin"]),
         wrapHandler: true,
-        operation: 'restore',
+        operation: "restore",
       },
     ],
   };

@@ -15,9 +15,9 @@
  * // UI available at /docs
  */
 
-import fp from 'fastify-plugin';
-import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
-import { getUserRoles } from '../permissions/types.js';
+import type { FastifyInstance, FastifyPluginAsync } from "fastify";
+import fp from "fastify-plugin";
+import { getUserRoles } from "../permissions/types.js";
 
 export interface ScalarOptions {
   /** Route prefix for UI (default: '/docs') */
@@ -27,7 +27,17 @@ export interface ScalarOptions {
   /** Page title */
   title?: string;
   /** Theme (default: 'default') */
-  theme?: 'default' | 'alternate' | 'moon' | 'purple' | 'solarized' | 'bluePlanet' | 'saturn' | 'kepler' | 'mars' | 'deepSpace';
+  theme?:
+    | "default"
+    | "alternate"
+    | "moon"
+    | "purple"
+    | "solarized"
+    | "bluePlanet"
+    | "saturn"
+    | "kepler"
+    | "mars"
+    | "deepSpace";
   /** Show sidebar (default: true) */
   showSidebar?: boolean;
   /** Dark mode (default: false) */
@@ -42,17 +52,17 @@ export interface ScalarOptions {
 
 const scalarPlugin: FastifyPluginAsync<ScalarOptions> = async (
   fastify: FastifyInstance,
-  opts: ScalarOptions = {}
+  opts: ScalarOptions = {},
 ) => {
   const {
-    routePrefix = '/docs',
-    specUrl = '/_docs/openapi.json',
-    title = 'API Documentation',
-    theme = 'default',
+    routePrefix = "/docs",
+    specUrl = "/_docs/openapi.json",
+    title = "API Documentation",
+    theme = "default",
     showSidebar = true,
     darkMode = false,
     authRoles = [],
-    customCss = '',
+    customCss = "",
     favicon,
   } = opts;
 
@@ -72,7 +82,7 @@ const scalarPlugin: FastifyPluginAsync<ScalarOptions> = async (
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${title}</title>
-  ${favicon ? `<link rel="icon" href="${favicon}">` : ''}
+  ${favicon ? `<link rel="icon" href="${favicon}">` : ""}
   <style>
     body { margin: 0; padding: 0; }
     ${customCss}
@@ -94,17 +104,17 @@ const scalarPlugin: FastifyPluginAsync<ScalarOptions> = async (
     if (authRoles.length > 0) {
       const user = (request as { user?: Record<string, unknown> }).user;
       const roles = getUserRoles(user);
-      if (!authRoles.some((r) => roles.includes(r)) && !roles.includes('superadmin')) {
-        reply.code(403).send({ error: 'Access denied' });
+      if (!authRoles.some((r) => roles.includes(r)) && !roles.includes("superadmin")) {
+        reply.code(403).send({ error: "Access denied" });
         return;
       }
     }
 
-    reply.type('text/html').send(html);
+    reply.type("text/html").send(html);
   });
 
   // Redirect /docs/ to /docs
-  if (!routePrefix.endsWith('/')) {
+  if (!routePrefix.endsWith("/")) {
     fastify.get(`${routePrefix}/`, async (_, reply) => {
       reply.redirect(routePrefix);
     });
@@ -114,8 +124,8 @@ const scalarPlugin: FastifyPluginAsync<ScalarOptions> = async (
 };
 
 export default fp(scalarPlugin, {
-  name: 'arc-scalar',
-  fastify: '5.x',
+  name: "arc-scalar",
+  fastify: "5.x",
 });
 
 export { scalarPlugin };

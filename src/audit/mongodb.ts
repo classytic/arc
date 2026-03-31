@@ -12,5 +12,6 @@
  *   store: new MongoAuditStore({ connection: mongoose.connection }),
  * });
  */
-export { MongoAuditStore } from './stores/mongodb.js';
-export type { MongoAuditStoreOptions } from './stores/mongodb.js';
+
+export type { MongoAuditStoreOptions } from "./stores/mongodb.js";
+export { MongoAuditStore } from "./stores/mongodb.js";

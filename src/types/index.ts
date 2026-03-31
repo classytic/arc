@@ -185,6 +185,15 @@ export interface ControllerQueryOptions {
    * When set, takes precedence over simple `populate`
    */
   populateOptions?: PopulateOption[];
+  /**
+   * Lookup/join options (database-agnostic).
+   * MongoKit maps these to $lookup aggregation pipeline stages.
+   * Future adapters (PrismaKit, PgKit) would map to SQL JOINs.
+   *
+   * @example
+   * URL: ?lookup[category][from]=categories&lookup[category][localField]=categorySlug&lookup[category][foreignField]=slug
+   */
+  lookups?: LookupOption[];
   select?: string | string[] | Record<string, 0 | 1>; // String, array, or MongoDB projection
   filters?: Record<string, unknown>;
   search?: string;
@@ -194,6 +203,28 @@ export interface ControllerQueryOptions {
   context?: Record<string, unknown>; // Additional context
   /** Allow additional options */
   [key: string]: unknown;
+}
+
+/**
+ * Database-agnostic lookup/join option.
+ * Parsed from URL: ?lookup[alias][from]=collection&lookup[alias][localField]=field&lookup[alias][foreignField]=field
+ *
+ * MongoKit maps this to MongoDB $lookup aggregation.
+ * Future adapters would map to SQL JOINs or Prisma includes.
+ */
+export interface LookupOption {
+  /** Source collection/table to join from */
+  from: string;
+  /** Local field to match on */
+  localField: string;
+  /** Foreign field to match on */
+  foreignField: string;
+  /** Alias for the joined data (defaults to the lookup key) */
+  as?: string;
+  /** Return a single object instead of array (default: false) */
+  single?: boolean;
+  /** Field selection on the joined collection (comma-separated) */
+  select?: string;
 }
 
 /**
@@ -242,6 +273,11 @@ export interface ParsedQuery {
    * @example [{ path: 'author', select: 'name email' }]
    */
   populateOptions?: PopulateOption[];
+  /**
+   * Lookup/join options from MongoKit QueryParser or custom parsers.
+   * Maps to $lookup in MongoDB, JOINs in SQL adapters.
+   */
+  lookups?: LookupOption[];
   search?: string;
   page?: number;
   after?: string; // Cursor for cursor-based pagination
@@ -518,7 +554,7 @@ export interface AdditionalRoute {
    * Handler - string (controller method name) or function
    * Function can be Fastify handler or (request, reply) => Promise<unknown>
    */
-  handler: string | RouteHandlerMethod | ((request: FastifyRequest, reply: FastifyReply) => unknown);
+  handler: string | RouteHandlerMethod | ((request: FastifyRequest<any>, reply: FastifyReply) => unknown);
 
   /** Permission check - REQUIRED */
   permissions: PermissionCheck;
@@ -569,7 +605,13 @@ export interface RouteSchemaOptions {
   requiredFields?: string[];
   optionalFields?: string[];
   excludeFields?: string[];
-  fieldRules?: Record<string, { systemManaged?: boolean; [key: string]: unknown }>;
+  fieldRules?: Record<string, {
+    systemManaged?: boolean;
+    immutable?: boolean;
+    immutableAfterCreate?: boolean;
+    optional?: boolean;
+    [key: string]: unknown;
+  }>;
   query?: Record<string, unknown>; // Query parameter schema for OpenAPI
 }
 
@@ -962,6 +1004,47 @@ export interface AuthPluginOptions {
    * Property name to store user on request (default: 'user')
    */
   userProperty?: string;
+
+  /**
+   * Custom token extractor for the built-in JWT auth path.
+   * When not provided, defaults to extracting Bearer token from Authorization header.
+   * Use this when tokens are in HttpOnly cookies, custom headers, or query params.
+   *
+   * @example
+   * ```typescript
+   * // Extract from HttpOnly cookie
+   * tokenExtractor: (request) => request.cookies?.['auth-token'] ?? null,
+   *
+   * // Extract from custom header
+   * tokenExtractor: (request) => request.headers['x-api-token'] as string ?? null,
+   * ```
+   */
+  tokenExtractor?: (request: FastifyRequest) => string | null;
+
+  /**
+   * Token revocation check — called after JWT verification succeeds.
+   * Return `true` to reject the token (revoked), `false` to allow.
+   *
+   * Arc provides this primitive — implement your own store (Redis set,
+   * DB lookup, Better Auth session check, etc.)
+   *
+   * **Fail-closed**: if the check throws, the token is treated as revoked.
+   *
+   * @example
+   * ```typescript
+   * // Redis-backed revocation
+   * isRevoked: async (decoded) => {
+   *   return await redis.sismember('revoked-tokens', decoded.jti ?? decoded.id);
+   * },
+   *
+   * // DB-backed revocation
+   * isRevoked: async (decoded) => {
+   *   const user = await db.user.findById(decoded.id);
+   *   return !user || user.bannedAt != null;
+   * },
+   * ```
+   */
+  isRevoked?: (decoded: Record<string, unknown>) => boolean | Promise<boolean>;
 }
 
 
@@ -1080,7 +1163,8 @@ export interface IntrospectionData {
 
 export interface EventDefinition {
   name: string;
-  handler: (data: unknown) => Promise<void> | void;
+  /** Optional handler — events are published via fastify.events.publish(), not invoked through resource definitions */
+  handler?: (data: unknown) => Promise<void> | void;
   schema?: Record<string, unknown>; // JSON schema for event payload
   description?: string; // Event documentation
 }

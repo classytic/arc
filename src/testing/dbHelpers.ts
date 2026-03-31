@@ -4,9 +4,9 @@
  * Utilities for managing test databases and fixtures
  */
 
-import { beforeAll, afterAll, afterEach } from 'vitest';
-import mongoose from 'mongoose';
-import type { Connection } from 'mongoose';
+import type { Connection } from "mongoose";
+import mongoose from "mongoose";
+import { afterAll, afterEach, beforeAll } from "vitest";
 
 /**
  * Test database manager
@@ -23,7 +23,7 @@ export class TestDatabase {
    * Connect to test database
    */
   async connect(uri?: string): Promise<Connection> {
-    const mongoUri = uri || process.env.MONGO_TEST_URI || 'mongodb://localhost:27017';
+    const mongoUri = uri || process.env.MONGO_TEST_URI || "mongodb://localhost:27017";
     const fullUri = `${mongoUri}/${this.dbName}`;
 
     this.connection = await mongoose.createConnection(fullUri).asPromise();
@@ -46,7 +46,7 @@ export class TestDatabase {
    */
   async clear(): Promise<void> {
     if (!this.connection?.db) {
-      throw new Error('Database not connected');
+      throw new Error("Database not connected");
     }
 
     const collections = await this.connection.db.collections();
@@ -58,7 +58,7 @@ export class TestDatabase {
    */
   getConnection(): Connection {
     if (!this.connection) {
-      throw new Error('Database not connected');
+      throw new Error("Database not connected");
     }
     return this.connection;
   }
@@ -80,7 +80,7 @@ export class TestDatabase {
  */
 export function withTestDb(
   tests: (db: TestDatabase) => void | Promise<void>,
-  options: { uri?: string; dbName?: string } = {}
+  options: { uri?: string; dbName?: string } = {},
 ): void {
   const db = new TestDatabase(options.dbName);
 
@@ -198,14 +198,14 @@ export class InMemoryDatabase {
    */
   async start(): Promise<string> {
     try {
-      const { MongoMemoryServer } = await import('mongodb-memory-server');
+      const { MongoMemoryServer } = await import("mongodb-memory-server");
       this.mongod = await MongoMemoryServer.create();
       const uri = this.mongod.getUri() as string;
       this.uri = uri;
       return uri;
     } catch {
       throw new Error(
-        'mongodb-memory-server not installed. Install with: npm install -D mongodb-memory-server'
+        "mongodb-memory-server not installed. Install with: npm install -D mongodb-memory-server",
       );
     }
   }
@@ -226,7 +226,7 @@ export class InMemoryDatabase {
    */
   getUri(): string {
     if (!this.uri) {
-      throw new Error('In-memory database not started');
+      throw new Error("In-memory database not started");
     }
     return this.uri;
   }
@@ -256,7 +256,7 @@ export class TestTransaction {
    */
   async commit(): Promise<void> {
     if (!this.session) {
-      throw new Error('Transaction not started');
+      throw new Error("Transaction not started");
     }
     await this.session.commitTransaction();
     await this.session.endSession();
@@ -268,7 +268,7 @@ export class TestTransaction {
    */
   async rollback(): Promise<void> {
     if (!this.session) {
-      throw new Error('Transaction not started');
+      throw new Error("Transaction not started");
     }
     await this.session.abortTransaction();
     await this.session.endSession();
@@ -280,7 +280,7 @@ export class TestTransaction {
    */
   getSession(): any {
     if (!this.session) {
-      throw new Error('Transaction not started');
+      throw new Error("Transaction not started");
     }
     return this.session;
   }
@@ -323,7 +323,7 @@ export class TestSeeder {
    */
   async clearAll(): Promise<void> {
     if (!this.connection.db) {
-      throw new Error('Database not connected');
+      throw new Error("Database not connected");
     }
     const collections = await this.connection.db.collections();
     await Promise.all(collections.map((collection) => collection.deleteMany({})));
@@ -346,7 +346,7 @@ export class DatabaseSnapshot {
    */
   async take(): Promise<void> {
     if (!this.connection.db) {
-      throw new Error('Database not connected');
+      throw new Error("Database not connected");
     }
     const collections = await this.connection.db.collections();
 
@@ -361,7 +361,7 @@ export class DatabaseSnapshot {
    */
   async restore(): Promise<void> {
     if (!this.connection.db) {
-      throw new Error('Database not connected');
+      throw new Error("Database not connected");
     }
     // Clear current data
     const collections = await this.connection.db.collections();

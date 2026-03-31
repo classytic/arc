@@ -23,15 +23,15 @@
  * });
  */
 
+export type { AuditLogger, AuditPluginOptions } from "./auditPlugin.js";
 // Plugin
 export {
-  default as auditPlugin,
   auditPlugin as auditPluginFn,
-} from './auditPlugin.js';
-export type { AuditPluginOptions, AuditLogger } from './auditPlugin.js';
+  default as auditPlugin,
+} from "./auditPlugin.js";
 
 // Core stores (lightweight, no external deps)
-export { createAuditEntry, MemoryAuditStore } from './stores/index.js';
+export { createAuditEntry, MemoryAuditStore } from "./stores/index.js";
 
 // MongoDB store — use dedicated subpath to avoid pulling mongoose:
 //   import { MongoAuditStore } from '@classytic/arc/audit/mongodb';
@@ -45,4 +45,4 @@ export type {
   AuditStoreOptions,
   MemoryAuditStoreOptions,
   MongoAuditStoreOptions,
-} from './stores/index.js';
+} from "./stores/index.js";

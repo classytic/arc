@@ -1,10 +1,10 @@
 import { defineResource } from "../core/defineResource.js";
 import {
-  publicRead,
-  authenticated,
   adminOnly,
-  ownerWithAdminBypass,
+  authenticated,
   fullPublic,
+  ownerWithAdminBypass,
+  publicRead,
   readOnly,
 } from "../permissions/index.js";
 import type { PermissionCheck } from "../permissions/types.js";
@@ -51,10 +51,7 @@ export interface ArcResourceSchema {
   presets?: string[];
 
   /** Simple schema mapping (can be passed to dynamic Zod generation) */
-  schema?: Record<
-    string,
-    "string" | "number" | "boolean" | "date" | "object" | "array"
-  >;
+  schema?: Record<string, "string" | "number" | "boolean" | "date" | "object" | "array">;
 }
 
 export interface DynamicLoaderContext {
@@ -81,10 +78,7 @@ export class ArcDynamicLoader {
    */
   load(schema: ArcArchitectureSchema) {
     return schema.resources.map((resourceDef) => {
-      const adapter = this.context.adapterResolver(
-        resourceDef.name,
-        resourceDef.adapterPattern,
-      );
+      const adapter = this.context.adapterResolver(resourceDef.name, resourceDef.adapterPattern);
 
       return defineResource({
         name: resourceDef.name,
@@ -133,13 +127,11 @@ export class ArcDynamicLoader {
     else if (create === "admin") permissions.create = adminOnly().create;
 
     if (update === "auth") permissions.update = authenticated().update;
-    else if (update === "owner")
-      permissions.update = ownerWithAdminBypass().update;
+    else if (update === "owner") permissions.update = ownerWithAdminBypass().update;
     else if (update === "admin") permissions.update = adminOnly().update;
 
     if (del === "auth") permissions.delete = authenticated().delete;
-    else if (del === "owner")
-      permissions.delete = ownerWithAdminBypass().delete;
+    else if (del === "owner") permissions.delete = ownerWithAdminBypass().delete;
     else if (del === "admin") permissions.delete = adminOnly().delete;
 
     return permissions;

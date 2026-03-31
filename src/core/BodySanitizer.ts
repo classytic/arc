@@ -7,16 +7,16 @@
  * Designed to be used standalone or composed into controllers.
  */
 
+import { SYSTEM_FIELDS } from "../constants.js";
+import { applyFieldWritePermissions, resolveEffectiveRoles } from "../permissions/fields.js";
+import { getUserRoles } from "../permissions/types.js";
+import { isElevated, isMember, PUBLIC_SCOPE } from "../scope/types.js";
 import type {
   AnyRecord,
   ArcInternalMetadata,
   IRequestContext,
   RouteSchemaOptions,
-} from '../types/index.js';
-import { applyFieldWritePermissions, resolveEffectiveRoles } from '../permissions/fields.js';
-import { getUserRoles } from '../permissions/types.js';
-import { isElevated, isMember, PUBLIC_SCOPE } from '../scope/types.js';
-import { SYSTEM_FIELDS } from '../constants.js';
+} from "../types/index.js";
 
 // ============================================================================
 // Configuration
@@ -45,7 +45,12 @@ export class BodySanitizer {
    * Also applies field-level write permissions when the request has
    * field permission metadata.
    */
-  sanitize(body: AnyRecord, _operation: 'create' | 'update', req?: IRequestContext, meta?: ArcInternalMetadata): AnyRecord {
+  sanitize(
+    body: AnyRecord,
+    _operation: "create" | "update",
+    req?: IRequestContext,
+    meta?: ArcInternalMetadata,
+  ): AnyRecord {
     let sanitized = { ...body };
 
     // Strip universal system fields

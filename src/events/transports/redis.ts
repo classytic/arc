@@ -14,7 +14,7 @@
  * await app.register(eventPlugin, { transport });
  */
 
-import type { EventTransport, DomainEvent, EventHandler, EventLogger } from '../EventTransport.js';
+import type { DomainEvent, EventHandler, EventLogger, EventTransport } from "../EventTransport.js";
 
 // ---------------------------------------------------------------------------
 // Minimal Redis-like interface so consumers don't need ioredis at type level.
@@ -75,7 +75,7 @@ function serialize(event: DomainEvent): string {
 
 function deserialize(raw: string): DomainEvent {
   return JSON.parse(raw, (key, value) => {
-    if (key === 'timestamp' && typeof value === 'string') return new Date(value);
+    if (key === "timestamp" && typeof value === "string") return new Date(value);
     return value;
   }) as DomainEvent;
 }
@@ -85,7 +85,7 @@ function deserialize(raw: string): DomainEvent {
 // ---------------------------------------------------------------------------
 
 export class RedisEventTransport implements EventTransport {
-  readonly name = 'redis';
+  readonly name = "redis";
 
   /** Publish-side client (the original client or a duplicate). */
   private pub: RedisLike;
@@ -109,7 +109,7 @@ export class RedisEventTransport implements EventTransport {
   private listenerAttached = false;
 
   constructor(redis: RedisLike, options: RedisEventTransportOptions = {}) {
-    const { channel = 'arc-events', externalLifecycle = false, logger = console } = options;
+    const { channel = "arc-events", externalLifecycle = false, logger = console } = options;
 
     this.channel = channel;
     this.externalLifecycle = externalLifecycle;
@@ -151,7 +151,7 @@ export class RedisEventTransport implements EventTransport {
       }
     }
 
-    this.handlers.get(redisPattern)!.add(handler);
+    this.handlers.get(redisPattern)?.add(handler);
 
     // Return unsubscribe function.
     return () => {
@@ -197,13 +197,13 @@ export class RedisEventTransport implements EventTransport {
     this.listenerAttached = true;
 
     // Pattern-matched messages (from psubscribe)
-    this.sub.on('pmessage', (...args: unknown[]) => {
+    this.sub.on("pmessage", (...args: unknown[]) => {
       const [redisPattern, , message] = args as [string, string, string];
       this.dispatch(redisPattern, message);
     });
 
     // Exact-matched messages (from subscribe)
-    this.sub.on('message', (...args: unknown[]) => {
+    this.sub.on("message", (...args: unknown[]) => {
       const [channel, message] = args as [string, string];
       this.dispatch(channel, message);
     });
@@ -230,7 +230,7 @@ export class RedisEventTransport implements EventTransport {
         const result = handler(event);
         // If the handler returns a promise, catch rejections so one failing
         // handler doesn't prevent the rest from executing.
-        if (result && typeof (result as Promise<void>).catch === 'function') {
+        if (result && typeof (result as Promise<void>).catch === "function") {
           (result as Promise<void>).catch((err) => {
             this.logger.error(`[RedisEventTransport] Handler error for ${event.type}:`, err);
           });
@@ -259,7 +259,7 @@ export class RedisEventTransport implements EventTransport {
    * Returns true if the pattern contains glob characters.
    */
   private isGlob(pattern: string): boolean {
-    return pattern.includes('*') || pattern.includes('?') || pattern.includes('[');
+    return pattern.includes("*") || pattern.includes("?") || pattern.includes("[");
   }
 }
 

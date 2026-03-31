@@ -5,7 +5,7 @@
  * This is the ONLY contract between Arc and data persistence.
  */
 
-import type { CrudRepository, OpenApiSchemas, RouteSchemaOptions } from '../types/index.js';
+import type { CrudRepository, OpenApiSchemas, RouteSchemaOptions } from "../types/index.js";
 
 /**
  * Minimal repository interface for flexible adapter compatibility.
@@ -30,7 +30,7 @@ export interface DataAdapter<TDoc = unknown> {
   repository: CrudRepository<TDoc> | RepositoryLike;
 
   /** Adapter identifier for introspection */
-  readonly type: 'mongoose' | 'prisma' | 'drizzle' | 'typeorm' | 'custom';
+  readonly type: "mongoose" | "prisma" | "drizzle" | "typeorm" | "custom";
 
   /** Human-readable name */
   readonly name: string;
@@ -44,7 +44,7 @@ export interface DataAdapter<TDoc = unknown> {
    * @param options - Schema generation options (field rules, populate settings, etc.)
    * @returns OpenAPI schemas for CRUD operations or null if not supported
    */
-  generateSchemas?(options?: RouteSchemaOptions): OpenApiSchemas | null;
+  generateSchemas?(options?: RouteSchemaOptions): OpenApiSchemas | Record<string, unknown> | null;
 
   /** Extract schema metadata for OpenAPI/introspection */
   getSchemaMetadata?(): SchemaMetadata | null;
@@ -74,7 +74,7 @@ export interface SchemaMetadata {
 }
 
 export interface FieldMetadata {
-  type: 'string' | 'number' | 'boolean' | 'date' | 'object' | 'array' | 'objectId' | 'enum';
+  type: "string" | "number" | "boolean" | "date" | "object" | "array" | "objectId" | "enum";
   required?: boolean;
   unique?: boolean;
   default?: unknown;
@@ -90,7 +90,7 @@ export interface FieldMetadata {
 }
 
 export interface RelationMetadata {
-  type: 'one-to-one' | 'one-to-many' | 'many-to-many';
+  type: "one-to-one" | "one-to-many" | "many-to-many";
   target: string;
   foreignKey?: string;
   through?: string;

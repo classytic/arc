@@ -202,6 +202,52 @@ const retried = withRetry(handler, { maxRetries: 3, logger: fastify.log });
 | `RedisEventTransport` | `transports/redis.ts` | `RedisEventTransportOptions.logger` |
 | `RedisStreamTransport` | `transports/redis-stream.ts` | `RedisStreamTransportOptions.logger` |
 
+## Typed Events — defineEvent & Event Registry
+
+Declare events with schemas for runtime validation and introspection:
+
+```typescript
+import { defineEvent, createEventRegistry } from '@classytic/arc/events';
+
+const OrderCreated = defineEvent({
+  name: 'order.created',
+  version: 1,
+  description: 'Emitted when an order is placed',
+  schema: {
+    type: 'object',
+    properties: {
+      orderId: { type: 'string' },
+      total: { type: 'number' },
+    },
+    required: ['orderId', 'total'],
+  },
+});
+
+// Type-safe event creation
+const event = OrderCreated.create({ orderId: 'o-1', total: 100 }, { userId: 'user-1' });
+await app.events.publish(event.type, event.payload, event.meta);
+```
+
+**Event Registry** — catalog + auto-validation on publish:
+
+```typescript
+const registry = createEventRegistry();
+registry.register(OrderCreated);
+
+const app = await createApp({
+  arcPlugins: {
+    events: { registry, validateMode: 'warn' },
+    // 'warn' (default): log warning, still publish
+    // 'reject': throw error, do NOT publish
+    // 'off': registry is introspection-only
+  },
+});
+
+// Introspect at runtime
+app.events.registry?.catalog();
+// → [{ name: 'order.created', version: 1, schema: {...} }, ...]
+```
+
 ## QueryCache Integration
 
 QueryCache uses events for auto-invalidation. When `arcPlugins.queryCache` is enabled, all CRUD events automatically bump resource versions, invalidating cached queries — zero config required.

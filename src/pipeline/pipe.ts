@@ -27,16 +27,16 @@
  * ```
  */
 
+import type { IControllerResponse } from "../types/index.js";
+import { ForbiddenError } from "../utils/index.js";
 import type {
-  PipelineStep,
-  PipelineContext,
   Guard,
-  Transform,
   Interceptor,
   NextFunction,
-} from './types.js';
-import type { IControllerResponse } from '../types/index.js';
-import { ForbiddenError } from '../utils/index.js';
+  PipelineContext,
+  PipelineStep,
+  Transform,
+} from "./types.js";
 
 /**
  * Compose pipeline steps into an ordered array.
@@ -80,13 +80,13 @@ export async function executePipeline(
   for (const step of steps) {
     if (!appliesTo(step, operation)) continue;
     switch (step._type) {
-      case 'guard':
+      case "guard":
         guards.push(step);
         break;
-      case 'transform':
+      case "transform":
         transforms.push(step);
         break;
-      case 'interceptor':
+      case "interceptor":
         interceptors.push(step);
         break;
     }

@@ -29,11 +29,13 @@
  * ```
  */
 
-import type { PipelineContext, Transform, OperationFilter } from './types.js';
+import type { OperationFilter, PipelineContext, Transform } from "./types.js";
 
 interface TransformOptions {
   operations?: OperationFilter;
-  handler: (ctx: PipelineContext) => PipelineContext | void | Promise<PipelineContext | void>;
+  handler: (
+    ctx: PipelineContext,
+  ) => PipelineContext | undefined | Promise<PipelineContext | undefined>;
 }
 
 /**
@@ -44,14 +46,15 @@ interface TransformOptions {
  */
 export function transform(
   name: string,
-  handlerOrOptions: ((ctx: PipelineContext) => PipelineContext | void | Promise<PipelineContext | void>) | TransformOptions,
+  handlerOrOptions:
+    | ((ctx: PipelineContext) => PipelineContext | undefined | Promise<PipelineContext | undefined>)
+    | TransformOptions,
 ): Transform {
-  const opts = typeof handlerOrOptions === 'function'
-    ? { handler: handlerOrOptions }
-    : handlerOrOptions;
+  const opts =
+    typeof handlerOrOptions === "function" ? { handler: handlerOrOptions } : handlerOrOptions;
 
   return {
-    _type: 'transform' as const,
+    _type: "transform" as const,
     name,
     operations: opts.operations,
     handler: opts.handler,

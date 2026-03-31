@@ -15,36 +15,34 @@
  * }, handler);
  */
 
+// Organization Plugin (adapter-based REST endpoints)
+export {
+  default as organizationPlugin,
+  organizationPlugin as organizationPluginFn,
+} from "./organizationPlugin.js";
+export type { OrgGuardOptions } from "./orgGuard.js";
 // Org Guard Middleware (for route-level enforcement)
 export {
   orgGuard,
   requireOrg,
   requireOrgRole,
-} from './orgGuard.js';
-export type { OrgGuardOptions } from './orgGuard.js';
-
+} from "./orgGuard.js";
+export type { OrgMembershipOptions, OrgRolesOptions } from "./orgMembership.js";
 // Org Membership Utilities
 export {
-  orgMembershipCheck,
   getUserOrgRoles,
   hasOrgRole,
-} from './orgMembership.js';
-export type { OrgMembershipOptions, OrgRolesOptions } from './orgMembership.js';
-
-// Organization Plugin (adapter-based REST endpoints)
-export {
-  default as organizationPlugin,
-  organizationPlugin as organizationPluginFn,
-} from './organizationPlugin.js';
+  orgMembershipCheck,
+} from "./orgMembership.js";
 
 // Organization Types (adapter interfaces)
 export type {
-  OrgDoc,
-  MemberDoc,
-  InvitationDoc,
-  OrgAdapter,
   InvitationAdapter,
+  InvitationDoc,
+  MemberDoc,
+  OrgAdapter,
+  OrganizationPluginOptions,
+  OrgDoc,
   OrgPermissionStatement,
   OrgRole,
-  OrganizationPluginOptions,
-} from './types.js';
+} from "./types.js";

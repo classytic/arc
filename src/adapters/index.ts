@@ -5,21 +5,19 @@
  */
 
 export type {
+  AdapterFactory,
   DataAdapter,
-  SchemaMetadata,
   FieldMetadata,
   RelationMetadata,
-  ValidationResult,
-  AdapterFactory,
   RepositoryLike,
-} from './interface.js';
-
-export { MongooseAdapter, createMongooseAdapter } from './mongoose.js';
-export type { MongooseAdapterOptions } from './mongoose.js';
-
-export { PrismaAdapter, createPrismaAdapter, PrismaQueryParser } from './prisma.js';
+  SchemaMetadata,
+  ValidationResult,
+} from "./interface.js";
+export type { MongooseAdapterOptions } from "./mongoose.js";
+export { createMongooseAdapter, MongooseAdapter } from "./mongoose.js";
 export type {
   PrismaAdapterOptions,
-  PrismaQueryParserOptions,
   PrismaQueryOptions,
-} from './prisma.js';
+  PrismaQueryParserOptions,
+} from "./prisma.js";
+export { createPrismaAdapter, PrismaAdapter, PrismaQueryParser } from "./prisma.js";

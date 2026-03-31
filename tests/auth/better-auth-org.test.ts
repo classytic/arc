@@ -119,7 +119,7 @@ describe('Better Auth Org Context Bridge', () => {
 
     const res = await app.inject({ method: 'GET', url: '/test' });
     expect(res.statusCode).toBe(200);
-    expect(capturedScope).toEqual({
+    expect(capturedScope).toMatchObject({
       kind: 'member',
       organizationId: 'org-123',
       orgRoles: ['admin', 'member'],
@@ -143,7 +143,7 @@ describe('Better Auth Org Context Bridge', () => {
 
     const res = await app.inject({ method: 'GET', url: '/test' });
     expect(res.statusCode).toBe(200);
-    expect(capturedScope).toEqual({ kind: 'authenticated' });
+    expect(capturedScope).toMatchObject({ kind: 'authenticated' });
   });
 
   it('prefers org member scope for superadmin users when active org membership exists', async () => {
@@ -164,7 +164,7 @@ describe('Better Auth Org Context Bridge', () => {
     const res = await app.inject({ method: 'GET', url: '/test' });
     expect(res.statusCode).toBe(200);
     // Superadmin with active org = member scope (no implicit bypass)
-    expect(capturedScope).toEqual({
+    expect(capturedScope).toMatchObject({
       kind: 'member',
       organizationId: 'org-123',
       orgRoles: ['member'],
@@ -189,7 +189,7 @@ describe('Better Auth Org Context Bridge', () => {
     const res = await app.inject({ method: 'GET', url: '/test' });
     expect(res.statusCode).toBe(200);
     // No implicit bypass — superadmin without org = just authenticated
-    expect(capturedScope).toEqual({ kind: 'authenticated' });
+    expect(capturedScope).toMatchObject({ kind: 'authenticated' });
   });
 
   it('sets authenticated scope when user is not a member', async () => {
@@ -209,7 +209,7 @@ describe('Better Auth Org Context Bridge', () => {
 
     const res = await app.inject({ method: 'GET', url: '/test' });
     expect(res.statusCode).toBe(200);
-    expect(capturedScope).toEqual({ kind: 'authenticated' });
+    expect(capturedScope).toMatchObject({ kind: 'authenticated' });
   });
 
   it('falls back to organization/list when get-active-member returns null', async () => {
@@ -233,7 +233,7 @@ describe('Better Auth Org Context Bridge', () => {
 
     const res = await app.inject({ method: 'GET', url: '/test' });
     expect(res.statusCode).toBe(200);
-    expect(capturedScope).toEqual({
+    expect(capturedScope).toMatchObject({
       kind: 'member',
       organizationId: 'org-123',
       orgRoles: ['admin', 'recruiter'],

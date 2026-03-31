@@ -20,14 +20,8 @@
  * ```
  */
 
+import { allowPublic, anyOf, requireAuth, requireOwnership, requireRoles } from "./index.js";
 import type { PermissionCheck } from "./types.js";
-import {
-  allowPublic,
-  requireAuth,
-  requireRoles,
-  requireOwnership,
-  anyOf,
-} from "./index.js";
 
 /**
  * ResourcePermissions shape — matches the type in types/index.ts
@@ -51,9 +45,7 @@ function withOverrides<TDoc = any>(
   overrides?: PermissionOverrides<TDoc>,
 ): ResourcePermissions<TDoc> {
   if (!overrides) return base;
-  const filtered = Object.fromEntries(
-    Object.entries(overrides).filter(([, v]) => v !== undefined),
-  );
+  const filtered = Object.fromEntries(Object.entries(overrides).filter(([, v]) => v !== undefined));
   return { ...base, ...filtered };
 }
 

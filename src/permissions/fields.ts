@@ -23,14 +23,19 @@
 
 /** Type guard for Mongoose-like documents with toObject() */
 function isMongooseDoc(obj: unknown): obj is { toObject(): Record<string, unknown> } {
-  return !!obj && typeof obj === 'object' && 'toObject' in obj && typeof (obj as Record<string, unknown>).toObject === 'function';
+  return (
+    !!obj &&
+    typeof obj === "object" &&
+    "toObject" in obj &&
+    typeof (obj as Record<string, unknown>).toObject === "function"
+  );
 }
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export type FieldPermissionType = 'hidden' | 'visibleTo' | 'writableBy' | 'redactFor';
+export type FieldPermissionType = "hidden" | "visibleTo" | "writableBy" | "redactFor";
 
 export interface FieldPermission {
   readonly _type: FieldPermissionType;
@@ -54,7 +59,7 @@ export const fields = {
    * ```
    */
   hidden(): FieldPermission {
-    return { _type: 'hidden' };
+    return { _type: "hidden" };
   },
 
   /**
@@ -67,7 +72,7 @@ export const fields = {
    * ```
    */
   visibleTo(roles: readonly string[]): FieldPermission {
-    return { _type: 'visibleTo', roles };
+    return { _type: "visibleTo", roles };
   },
 
   /**
@@ -81,7 +86,7 @@ export const fields = {
    * ```
    */
   writableBy(roles: readonly string[]): FieldPermission {
-    return { _type: 'writableBy', roles };
+    return { _type: "writableBy", roles };
   },
 
   /**
@@ -99,8 +104,8 @@ export const fields = {
    * }
    * ```
    */
-  redactFor(roles: readonly string[], redactValue: unknown = '***'): FieldPermission {
-    return { _type: 'redactFor', roles, redactValue };
+  redactFor(roles: readonly string[], redactValue: unknown = "***"): FieldPermission {
+    return { _type: "redactFor", roles, redactValue };
   },
 };
 
@@ -122,36 +127,36 @@ export function applyFieldReadPermissions<T extends Record<string, unknown>>(
   fieldPermissions: FieldPermissionMap,
   userRoles: readonly string[],
 ): T {
-  if (!data || typeof data !== 'object') return data;
+  if (!data || typeof data !== "object") return data;
 
   // Normalize Mongoose documents to plain objects before spreading.
   // HydratedDocument's spread gives internal properties ($__, $isNew, etc.),
   // not the actual document fields — toObject() returns a proper plain object.
-  const plain = isMongooseDoc(data) ? data.toObject() as T : data;
+  const plain = isMongooseDoc(data) ? (data.toObject() as T) : data;
   const result = { ...plain };
 
   for (const [field, perm] of Object.entries(fieldPermissions)) {
     switch (perm._type) {
-      case 'hidden':
+      case "hidden":
         // Always strip
         delete result[field];
         break;
 
-      case 'visibleTo':
+      case "visibleTo":
         // Strip if user doesn't have any of the required roles
         if (!perm.roles?.some((r) => userRoles.includes(r))) {
           delete result[field];
         }
         break;
 
-      case 'redactFor':
+      case "redactFor":
         // Redact if user HAS any of the specified roles
         if (perm.roles?.some((r) => userRoles.includes(r))) {
-          (result as Record<string, unknown>)[field] = perm.redactValue ?? '***';
+          (result as Record<string, unknown>)[field] = perm.redactValue ?? "***";
         }
         break;
 
-      case 'writableBy':
+      case "writableBy":
         // Write-only permission — no effect on reads
         break;
     }
@@ -178,12 +183,12 @@ export function applyFieldWritePermissions<T extends Record<string, unknown>>(
 
   for (const [field, perm] of Object.entries(fieldPermissions)) {
     switch (perm._type) {
-      case 'hidden':
+      case "hidden":
         // Hidden fields can never be written
         delete result[field];
         break;
 
-      case 'writableBy':
+      case "writableBy":
         // Only writable by specific roles — strip if user lacks them
         if (field in result && !perm.roles?.some((r) => userRoles.includes(r))) {
           delete result[field];

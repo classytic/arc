@@ -7,5 +7,6 @@
  * @example
  * import { RedisStreamTransport } from '@classytic/arc/events/redis-stream';
  */
-export { RedisStreamTransport } from './redis-stream.js';
-export type { RedisStreamLike, RedisStreamTransportOptions } from './redis-stream.js';
+
+export type { RedisStreamLike, RedisStreamTransportOptions } from "./redis-stream.js";
+export { RedisStreamTransport } from "./redis-stream.js";

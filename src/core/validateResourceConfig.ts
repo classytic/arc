@@ -11,14 +11,9 @@
  * }
  */
 
-import type {
-  AdditionalRoute,
-  IController,
-  PresetResult,
-  ResourceConfig,
-} from '../types/index.js';
-import { getAvailablePresets } from '../presets/index.js';
-import { CRUD_OPERATIONS } from '../constants.js';
+import { CRUD_OPERATIONS } from "../constants.js";
+import { getAvailablePresets } from "../presets/index.js";
+import type { AdditionalRoute, PresetResult, ResourceConfig } from "../types/index.js";
 
 // ============================================================================
 // Types
@@ -54,7 +49,7 @@ export interface ValidateOptions {
  */
 export function validateResourceConfig(
   config: ResourceConfig,
-  options: ValidateOptions = {}
+  options: ValidateOptions = {},
 ): ValidationResult {
   const errors: ConfigError[] = [];
   const warnings: ConfigError[] = [];
@@ -65,37 +60,37 @@ export function validateResourceConfig(
 
   if (!config.name) {
     errors.push({
-      field: 'name',
-      message: 'Resource name is required',
+      field: "name",
+      message: "Resource name is required",
       suggestion: 'Add a unique resource name (e.g., "product", "user")',
     });
   } else if (!/^[a-z][a-z0-9-]*$/i.test(config.name)) {
     errors.push({
-      field: 'name',
+      field: "name",
       message: `Invalid resource name "${config.name}"`,
-      suggestion: 'Use alphanumeric characters and hyphens, starting with a letter',
+      suggestion: "Use alphanumeric characters and hyphens, starting with a letter",
     });
   }
 
   // Check if any CRUD routes will actually be created
   const crudRoutes = CRUD_OPERATIONS;
   const disabledRoutes = new Set(config.disabledRoutes ?? []);
-  const enabledCrudRoutes = crudRoutes.filter(route => !disabledRoutes.has(route));
+  const enabledCrudRoutes = crudRoutes.filter((route) => !disabledRoutes.has(route));
   const hasCrudRoutes = !config.disableDefaultRoutes && enabledCrudRoutes.length > 0;
 
   // Adapter is required when CRUD routes are enabled
   if (hasCrudRoutes) {
     if (!config.adapter) {
       errors.push({
-        field: 'adapter',
-        message: 'Data adapter is required when CRUD routes are enabled',
-        suggestion: 'Provide an adapter: createMongooseAdapter({ model, repository })',
+        field: "adapter",
+        message: "Data adapter is required when CRUD routes are enabled",
+        suggestion: "Provide an adapter: createMongooseAdapter({ model, repository })",
       });
     } else if (!config.adapter.repository) {
       errors.push({
-        field: 'adapter.repository',
-        message: 'Adapter must provide a repository',
-        suggestion: 'Ensure your adapter returns a valid CrudRepository',
+        field: "adapter.repository",
+        message: "Adapter must provide a repository",
+        suggestion: "Ensure your adapter returns a valid CrudRepository",
       });
     }
 
@@ -105,9 +100,9 @@ export function validateResourceConfig(
     // Service resources (no CRUD routes) don't need adapter or controller
     if (!config.adapter && !config.additionalRoutes?.length) {
       warnings.push({
-        field: 'config',
-        message: 'Resource has no adapter and no additionalRoutes',
-        suggestion: 'Provide either adapter for CRUD or additionalRoutes for custom logic',
+        field: "config",
+        message: "Resource has no adapter and no additionalRoutes",
+        suggestion: "Provide either adapter for CRUD or additionalRoutes for custom logic",
       });
     }
   }
@@ -124,11 +119,11 @@ export function validateResourceConfig(
     // Check for IController methods (MongoKit-compatible standard)
     const requiredMethods = CRUD_OPERATIONS;
     for (const method of requiredMethods) {
-      if (typeof ctrl[method] !== 'function') {
+      if (typeof ctrl[method] !== "function") {
         errors.push({
           field: `controller.${method}`,
           message: `Missing required CRUD method "${method}"`,
-          suggestion: 'Extend BaseController which implements IController interface',
+          suggestion: "Extend BaseController which implements IController interface",
         });
       }
     }
@@ -160,16 +155,16 @@ export function validateResourceConfig(
   // ========================================
 
   if (config.prefix) {
-    if (!config.prefix.startsWith('/')) {
+    if (!config.prefix.startsWith("/")) {
       errors.push({
-        field: 'prefix',
+        field: "prefix",
         message: `Prefix must start with "/" (got "${config.prefix}")`,
         suggestion: `Change to "/${config.prefix}"`,
       });
     }
-    if (config.prefix.endsWith('/') && config.prefix !== '/') {
+    if (config.prefix.endsWith("/") && config.prefix !== "/") {
       warnings.push({
-        field: 'prefix',
+        field: "prefix",
         message: `Prefix should not end with "/" (got "${config.prefix}")`,
         suggestion: `Change to "${config.prefix.slice(0, -1)}"`,
       });
@@ -198,13 +193,13 @@ export function validateResourceConfig(
 function validateAdditionalRouteHandlers(
   controller: unknown,
   routes: AdditionalRoute[],
-  errors: ConfigError[]
+  errors: ConfigError[],
 ): void {
   const ctrl = controller as Record<string, unknown>;
 
   for (const route of routes) {
-    if (typeof route.handler === 'string') {
-      if (typeof ctrl[route.handler] !== 'function') {
+    if (typeof route.handler === "string") {
+      if (typeof ctrl[route.handler] !== "function") {
         errors.push({
           field: `additionalRoutes[${route.method} ${route.path}]`,
           message: `Handler "${route.handler}" not found on controller`,
@@ -218,38 +213,35 @@ function validateAdditionalRouteHandlers(
 function validatePermissionKeys(
   config: ResourceConfig,
   options: ValidateOptions,
-  errors: ConfigError[],
-  warnings: ConfigError[]
+  _errors: ConfigError[],
+  warnings: ConfigError[],
 ): void {
-  const validKeys = new Set([
-    ...CRUD_OPERATIONS,
-    ...(options.additionalPermissionKeys ?? []),
-  ]);
+  const validKeys = new Set([...CRUD_OPERATIONS, ...(options.additionalPermissionKeys ?? [])]);
 
   // Add keys from additional routes
   for (const route of config.additionalRoutes ?? []) {
-    if (typeof route.handler === 'string') {
+    if (typeof route.handler === "string") {
       validKeys.add(route.handler);
     }
   }
 
   // Add preset-specific keys
   for (const preset of config.presets ?? []) {
-    const presetName = typeof preset === 'string' ? preset : (preset as { name: string }).name;
-    if (presetName === 'softDelete') {
-      validKeys.add('deleted');
-      validKeys.add('restore');
+    const presetName = typeof preset === "string" ? preset : (preset as { name: string }).name;
+    if (presetName === "softDelete") {
+      validKeys.add("deleted");
+      validKeys.add("restore");
     }
-    if (presetName === 'slugLookup') {
-      validKeys.add('getBySlug');
+    if (presetName === "slugLookup") {
+      validKeys.add("getBySlug");
     }
-    if (presetName === 'tree') {
+    if (presetName === "tree") {
       // Semantic keys (intuitive)
-      validKeys.add('tree');
-      validKeys.add('children');
+      validKeys.add("tree");
+      validKeys.add("children");
       // Handler names (exact match)
-      validKeys.add('getTree');
-      validKeys.add('getChildren');
+      validKeys.add("getTree");
+      validKeys.add("getChildren");
     }
   }
 
@@ -258,7 +250,7 @@ function validatePermissionKeys(
       warnings.push({
         field: `permissions.${key}`,
         message: `Unknown permission key "${key}"`,
-        suggestion: `Valid keys: ${Array.from(validKeys).join(', ')}`,
+        suggestion: `Valid keys: ${Array.from(validKeys).join(", ")}`,
       });
     }
   }
@@ -267,30 +259,30 @@ function validatePermissionKeys(
 function validatePresets(
   presets: Array<string | PresetResult | { name: string; [key: string]: unknown }>,
   errors: ConfigError[],
-  warnings: ConfigError[]
+  warnings: ConfigError[],
 ): void {
   const availablePresets = getAvailablePresets();
 
   for (const preset of presets) {
     // Skip validation for fully-resolved PresetResult objects (custom presets)
     // These have middlewares/additionalRoutes and are ready to use
-    if (typeof preset === 'object' && ('middlewares' in preset || 'additionalRoutes' in preset)) {
+    if (typeof preset === "object" && ("middlewares" in preset || "additionalRoutes" in preset)) {
       // This is a custom preset passed as PresetResult - skip registry validation
       continue;
     }
 
-    const presetName = typeof preset === 'string' ? preset : preset.name;
+    const presetName = typeof preset === "string" ? preset : preset.name;
 
     if (!availablePresets.includes(presetName)) {
       errors.push({
-        field: 'presets',
+        field: "presets",
         message: `Unknown preset "${presetName}"`,
-        suggestion: `Available presets: ${availablePresets.join(', ')}`,
+        suggestion: `Available presets: ${availablePresets.join(", ")}`,
       });
     }
 
     // Validate preset options if object form (but not full PresetResult)
-    if (typeof preset === 'object') {
+    if (typeof preset === "object") {
       validatePresetOptions(preset, warnings);
     }
   }
@@ -298,37 +290,35 @@ function validatePresets(
 
 function validatePresetOptions(
   preset: PresetResult | { name: string; [key: string]: unknown },
-  warnings: ConfigError[]
+  warnings: ConfigError[],
 ): void {
   const knownOptions: Record<string, string[]> = {
-    slugLookup: ['slugField'],
-    tree: ['parentField'],
-    softDelete: ['deletedField'],
-    ownedByUser: ['ownerField'],
-    multiTenant: ['tenantField', 'allowPublic'],
+    slugLookup: ["slugField"],
+    tree: ["parentField"],
+    softDelete: ["deletedField"],
+    ownedByUser: ["ownerField"],
+    multiTenant: ["tenantField", "allowPublic"],
   };
 
   const validOptions = knownOptions[preset.name] ?? [];
-  const providedOptions = Object.keys(preset).filter((k) => k !== 'name');
+  const providedOptions = Object.keys(preset).filter((k) => k !== "name");
 
   for (const opt of providedOptions) {
     if (!validOptions.includes(opt)) {
       warnings.push({
         field: `presets[${preset.name}].${opt}`,
         message: `Unknown option "${opt}" for preset "${preset.name}"`,
-        suggestion: validOptions.length > 0
-          ? `Valid options: ${validOptions.join(', ')}`
-          : `Preset "${preset.name}" has no configurable options`,
+        suggestion:
+          validOptions.length > 0
+            ? `Valid options: ${validOptions.join(", ")}`
+            : `Preset "${preset.name}" has no configurable options`,
       });
     }
   }
 }
 
-function validateAdditionalRoutes(
-  routes: AdditionalRoute[],
-  errors: ConfigError[]
-): void {
-  const validMethods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'];
+function validateAdditionalRoutes(routes: AdditionalRoute[], errors: ConfigError[]): void {
+  const validMethods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"];
   const seenRoutes = new Set<string>();
 
   for (const [i, route] of routes.entries()) {
@@ -337,7 +327,7 @@ function validateAdditionalRoutes(
       errors.push({
         field: `additionalRoutes[${i}].method`,
         message: `Invalid HTTP method "${route.method}"`,
-        suggestion: `Valid methods: ${validMethods.join(', ')}`,
+        suggestion: `Valid methods: ${validMethods.join(", ")}`,
       });
     }
 
@@ -345,9 +335,9 @@ function validateAdditionalRoutes(
     if (!route.path) {
       errors.push({
         field: `additionalRoutes[${i}].path`,
-        message: 'Route path is required',
+        message: "Route path is required",
       });
-    } else if (!route.path.startsWith('/')) {
+    } else if (!route.path.startsWith("/")) {
       errors.push({
         field: `additionalRoutes[${i}].path`,
         message: `Route path must start with "/" (got "${route.path}")`,
@@ -359,7 +349,7 @@ function validateAdditionalRoutes(
     if (!route.handler) {
       errors.push({
         field: `additionalRoutes[${i}].handler`,
-        message: 'Route handler is required',
+        message: "Route handler is required",
       });
     }
 
@@ -382,16 +372,13 @@ function validateAdditionalRoutes(
 /**
  * Format validation errors for display
  */
-export function formatValidationErrors(
-  resourceName: string,
-  result: ValidationResult
-): string {
+export function formatValidationErrors(resourceName: string, result: ValidationResult): string {
   const lines: string[] = [];
 
   if (result.errors.length > 0) {
     lines.push(`Resource "${resourceName}" validation failed:`);
-    lines.push('');
-    lines.push('ERRORS:');
+    lines.push("");
+    lines.push("ERRORS:");
     for (const err of result.errors) {
       lines.push(`  ✗ ${err.field}: ${err.message}`);
       if (err.suggestion) {
@@ -401,8 +388,8 @@ export function formatValidationErrors(
   }
 
   if (result.warnings.length > 0) {
-    if (lines.length > 0) lines.push('');
-    lines.push('WARNINGS:');
+    if (lines.length > 0) lines.push("");
+    lines.push("WARNINGS:");
     for (const warn of result.warnings) {
       lines.push(`  ⚠ ${warn.field}: ${warn.message}`);
       if (warn.suggestion) {
@@ -411,30 +398,29 @@ export function formatValidationErrors(
     }
   }
 
-  return lines.join('\n');
+  return lines.join("\n");
 }
 
 /**
  * Validate and throw if invalid
  */
-export function assertValidConfig(
-  config: ResourceConfig,
-  options?: ValidateOptions
-): void {
+export function assertValidConfig(config: ResourceConfig, options?: ValidateOptions): void {
   const result = validateResourceConfig(config, options);
 
   if (!result.valid) {
-    const errorMsg = formatValidationErrors(config.name ?? 'unknown', result);
+    const errorMsg = formatValidationErrors(config.name ?? "unknown", result);
     throw new Error(errorMsg);
   }
 
   // Log warnings in development
-  if (result.warnings.length > 0 && process.env.NODE_ENV !== 'production') {
-    console.warn(formatValidationErrors(config.name ?? 'unknown', {
-      valid: true,
-      errors: [],
-      warnings: result.warnings,
-    }));
+  if (result.warnings.length > 0 && process.env.NODE_ENV !== "production") {
+    console.warn(
+      formatValidationErrors(config.name ?? "unknown", {
+        valid: true,
+        errors: [],
+        warnings: result.warnings,
+      }),
+    );
   }
 }
 

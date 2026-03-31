@@ -26,7 +26,7 @@
  * ```
  */
 
-import type { PipelineContext, Guard, OperationFilter } from './types.js';
+import type { Guard, OperationFilter, PipelineContext } from "./types.js";
 
 interface GuardOptions {
   operations?: OperationFilter;
@@ -43,12 +43,11 @@ export function guard(
   name: string,
   handlerOrOptions: ((ctx: PipelineContext) => boolean | Promise<boolean>) | GuardOptions,
 ): Guard {
-  const opts = typeof handlerOrOptions === 'function'
-    ? { handler: handlerOrOptions }
-    : handlerOrOptions;
+  const opts =
+    typeof handlerOrOptions === "function" ? { handler: handlerOrOptions } : handlerOrOptions;
 
   return {
-    _type: 'guard' as const,
+    _type: "guard" as const,
     name,
     operations: opts.operations,
     handler: opts.handler,

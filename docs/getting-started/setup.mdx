@@ -13,18 +13,19 @@ Get started with Arc in under 5 minutes.
 ### 1. Install Dependencies
 
 ```bash
-# Core packages
-npm install @classytic/arc @classytic/mongokit fastify@^5.7.4 mongoose@^9.2.1
+# Core (qs and fastify-plugin are bundled with Arc — no separate install needed)
+npm install @classytic/arc fastify
+
+# Database adapter (choose one)
+npm install @classytic/mongokit mongoose    # MongoDB (recommended)
+# Or bring your own adapter implementing Arc's DataAdapter interface
 
 # Authentication (choose one)
-npm install @fastify/jwt@^10.0.0    # Arc JWT auth (uses fast-jwt internally)
-# npm install better-auth            # Better Auth adapter
+npm install @fastify/jwt                    # Arc JWT auth
+# npm install better-auth                  # Better Auth (recommended for SaaS)
 
-# Optional: Security & performance plugins
+# Optional: Security & performance
 npm install @fastify/cors @fastify/helmet @fastify/rate-limit @fastify/under-pressure
-
-# Optional: Type-safe schemas
-npm install @sinclair/typebox @fastify/type-provider-typebox
 
 # Dev dependencies
 npm install -D typescript @types/node vitest pino-pretty
@@ -306,14 +307,33 @@ npx @classytic/arc doctor
 
 ## Production Setup
 
-### Environment Variables
+### Environment Files (Next.js-style)
+
+Arc CLI projects load env files with this priority (first loaded wins):
+
+| Priority | File | Purpose |
+|----------|------|---------|
+| 1 | `.env.local` | Machine-specific overrides (gitignored) |
+| 2 | `.env.production` / `.env.prod` | Environment-specific defaults |
+| 3 | `.env` | Shared defaults (fallback) |
+
+All matching files are loaded and merged — earlier files take priority via `dotenv({ override: false })`.
 
 ```bash
-# .env
+# .env (shared defaults — committed to git)
+PORT=8040
+HOST=0.0.0.0
+CORS_ORIGINS=http://localhost:3000
+
+# .env.local (your machine — gitignored, never committed)
+MONGODB_URI=mongodb://localhost:27017/mydb
+JWT_SECRET=your-32-char-minimum-secret-key
+BETTER_AUTH_SECRET=your-secret-here
+
+# .env.production (production defaults — committed)
 NODE_ENV=production
 PORT=3000
-MONGO_URI=mongodb+srv://user:pass@cluster.mongodb.net/mydb
-JWT_SECRET=your-32-char-minimum-secret-key
+MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/mydb
 ```
 
 ### Production App Configuration

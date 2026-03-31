@@ -9,5 +9,6 @@
  *
  * const store = new MongoIdempotencyStore({ connection: mongoose.connection });
  */
-export { MongoIdempotencyStore } from './stores/mongodb.js';
-export type { MongoIdempotencyStoreOptions } from './stores/mongodb.js';
+
+export type { MongoIdempotencyStoreOptions } from "./stores/mongodb.js";
+export { MongoIdempotencyStore } from "./stores/mongodb.js";

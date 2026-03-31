@@ -4,7 +4,10 @@
  * Adds tenant (organization) filtering and injection middlewares.
  */
 
-import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyReply, FastifyRequest } from "fastify";
+import { DEFAULT_TENANT_FIELD } from "../constants.js";
+import type { RequestScope } from "../scope/types.js";
+import { getOrgId, isElevated, isMember, PUBLIC_SCOPE } from "../scope/types.js";
 import type {
   AnyRecord,
   CrudRouteKey,
@@ -12,10 +15,7 @@ import type {
   PresetResult,
   RequestWithExtras,
   RouteHandler,
-} from '../types/index.js';
-import { DEFAULT_TENANT_FIELD } from '../constants.js';
-import type { RequestScope } from '../scope/types.js';
-import { isMember, isElevated, getOrgId, PUBLIC_SCOPE } from '../scope/types.js';
+} from "../types/index.js";
 
 export interface MultiTenantOptions {
   /** Field name in database (default: 'organizationId') */
@@ -71,11 +71,11 @@ function createTenantFilter(tenantField: string): RouteHandler {
     }
 
     // authenticated / public → 403 (multi-tenant requires org context)
-    if (scope.kind === 'public') {
+    if (scope.kind === "public") {
       reply.code(401).send({
         success: false,
-        error: 'Unauthorized',
-        message: 'Authentication required for multi-tenant resources',
+        error: "Unauthorized",
+        message: "Authentication required for multi-tenant resources",
       });
       return;
     }
@@ -83,8 +83,8 @@ function createTenantFilter(tenantField: string): RouteHandler {
     // authenticated but no org → 403
     reply.code(403).send({
       success: false,
-      error: 'Forbidden',
-      message: 'Organization context required for this operation',
+      error: "Forbidden",
+      message: "Organization context required for this operation",
     });
   };
 }
@@ -96,7 +96,7 @@ function createTenantFilter(tenantField: string): RouteHandler {
  * Org context present = require auth and apply filter
  */
 function createFlexibleTenantFilter(tenantField: string): RouteHandler {
-  return async (request: RequestWithExtras, reply: FastifyReply): Promise<void> => {
+  return async (request: RequestWithExtras, _reply: FastifyReply): Promise<void> => {
     const scope = getScope(request);
 
     // Elevated without org → no filter (admin viewing all)
@@ -144,8 +144,8 @@ function createTenantInjection(tenantField: string): RouteHandler {
     if (!orgId) {
       reply.code(403).send({
         success: false,
-        error: 'Forbidden',
-        message: 'Organization context required to create resources',
+        error: "Forbidden",
+        message: "Organization context required to create resources",
       });
       return;
     }
@@ -157,10 +157,7 @@ function createTenantInjection(tenantField: string): RouteHandler {
 }
 
 export function multiTenantPreset(options: MultiTenantOptions = {}): PresetResult {
-  const {
-    tenantField = DEFAULT_TENANT_FIELD,
-    allowPublic = [],
-  } = options;
+  const { tenantField = DEFAULT_TENANT_FIELD, allowPublic = [] } = options;
 
   // Create middleware variants
   const strictTenantFilter = createTenantFilter(tenantField);
@@ -172,13 +169,13 @@ export function multiTenantPreset(options: MultiTenantOptions = {}): PresetResul
     allowPublic.includes(route) ? flexibleTenantFilter : strictTenantFilter;
 
   return {
-    name: 'multiTenant',
+    name: "multiTenant",
     middlewares: {
-      list: [getFilter('list')],
-      get: [getFilter('get')],
+      list: [getFilter("list")],
+      get: [getFilter("get")],
       create: [tenantInjection],
-      update: [getFilter('update')],
-      delete: [getFilter('delete')],
+      update: [getFilter("update")],
+      delete: [getFilter("delete")],
     } as MiddlewareConfig,
   };
 }

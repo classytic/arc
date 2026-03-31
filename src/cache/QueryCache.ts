@@ -8,8 +8,8 @@
  * - Tag-based cross-resource invalidation
  */
 
-import type { CacheStore } from './interface.js';
-import { tagVersionKey, versionKey } from './keys.js';
+import type { CacheStore } from "./interface.js";
+import { tagVersionKey, versionKey } from "./keys.js";
 
 /** Metadata wrapper stored in CacheStore */
 export interface CacheEnvelope<T = unknown> {
@@ -29,7 +29,7 @@ export interface QueryCacheConfig {
   tags?: string[];
 }
 
-export type CacheStatus = 'fresh' | 'stale' | 'miss';
+export type CacheStatus = "fresh" | "stale" | "miss";
 
 export interface CacheResult<T> {
   data: T;
@@ -44,24 +44,24 @@ export class QueryCache {
   }
 
   async get<T>(key: string): Promise<CacheResult<T>> {
-    const envelope = await this.store.get(key) as CacheEnvelope<T> | undefined;
+    const envelope = (await this.store.get(key)) as CacheEnvelope<T> | undefined;
 
-    if (!envelope || !envelope.createdAt) {
-      return { data: undefined as T, status: 'miss' };
+    if (!envelope?.createdAt) {
+      return { data: undefined as T, status: "miss" };
     }
 
     const now = Date.now();
 
     if (now >= envelope.expiresAt) {
       await this.store.delete(key);
-      return { data: undefined as T, status: 'miss' };
+      return { data: undefined as T, status: "miss" };
     }
 
     if (now < envelope.staleAfter) {
-      return { data: envelope.data, status: 'fresh' };
+      return { data: envelope.data, status: "fresh" };
     }
 
-    return { data: envelope.data, status: 'stale' };
+    return { data: envelope.data, status: "stale" };
   }
 
   async set<T>(key: string, data: T, config: QueryCacheConfig): Promise<void> {
@@ -87,7 +87,7 @@ export class QueryCache {
 
   /** Get current version for a resource (defaults to 0 if not set) */
   async getResourceVersion(resource: string): Promise<number> {
-    const ver = await this.store.get(versionKey(resource)) as number | undefined;
+    const ver = (await this.store.get(versionKey(resource))) as number | undefined;
     return ver ?? 0;
   }
 
@@ -101,7 +101,7 @@ export class QueryCache {
 
   /** Get current version for a tag */
   async getTagVersion(tag: string): Promise<number> {
-    const ver = await this.store.get(tagVersionKey(tag)) as number | undefined;
+    const ver = (await this.store.get(tagVersionKey(tag))) as number | undefined;
     return ver ?? 0;
   }
 

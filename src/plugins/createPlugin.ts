@@ -36,9 +36,15 @@
  * ```
  */
 
-import fp from 'fastify-plugin';
-import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
-import type { AnyRecord, AdditionalRoute, PresetHook, MiddlewareConfig, RouteSchemaOptions } from '../types/index.js';
+import type { FastifyInstance, FastifyPluginAsync } from "fastify";
+import fp from "fastify-plugin";
+import type {
+  AdditionalRoute,
+  AnyRecord,
+  MiddlewareConfig,
+  PresetHook,
+  RouteSchemaOptions,
+} from "../types/index.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -123,7 +129,7 @@ export function createPlugin<
 
       return fp(plugin, {
         name: `arc-plugin-${name}`,
-        fastify: '5.x',
+        fastify: "5.x",
       });
     },
 

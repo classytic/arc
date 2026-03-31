@@ -14,21 +14,18 @@
  * });
  */
 
-import fp from "fastify-plugin";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
+import fp from "fastify-plugin";
+import { requestContext } from "../context/requestContext.js";
+import type { EventRegistry } from "./defineEvent.js";
 import {
-  MemoryEventTransport,
   createEvent,
-  type EventTransport,
   type DomainEvent,
   type EventHandler,
+  type EventTransport,
+  MemoryEventTransport,
 } from "./EventTransport.js";
-import {
-  withRetry,
-  createDeadLetterPublisher,
-  type RetryOptions,
-} from "./retry.js";
-import { requestContext } from "../context/requestContext.js";
+import { createDeadLetterPublisher, type RetryOptions, withRetry } from "./retry.js";
 
 export interface EventPluginOptions {
   /** Event transport (default: MemoryEventTransport) */
@@ -54,10 +51,7 @@ export interface EventPluginOptions {
    * Auto-wrap all subscribed handlers with retry logic.
    * When enabled, failed handler invocations are retried with exponential backoff.
    */
-  retry?: Pick<
-    RetryOptions,
-    "maxRetries" | "backoffMs" | "maxBackoffMs" | "jitter"
-  >;
+  retry?: Pick<RetryOptions, "maxRetries" | "backoffMs" | "maxBackoffMs" | "jitter">;
   /**
    * Dead letter queue for events that exhaust all retries.
    * Requires `retry` to be enabled. If `retry` is set but no custom `store`,
@@ -71,24 +65,39 @@ export interface EventPluginOptions {
   onPublish?: (event: DomainEvent) => void;
   /** Callback on publish failure (for metrics/alerting) */
   onPublishError?: (event: DomainEvent, error: Error) => void;
+  /**
+   * Event registry for payload validation and introspection.
+   * When provided, payloads are validated against registered schemas on publish.
+   *
+   * @example
+   * ```typescript
+   * const registry = createEventRegistry();
+   * registry.register(defineEvent({ name: 'order.created', schema: { ... } }));
+   *
+   * await fastify.register(eventPlugin, { registry, validateMode: 'warn' });
+   * ```
+   */
+  registry?: EventRegistry;
+  /**
+   * How to handle schema validation failures on publish:
+   * - `'warn'` (default when registry is provided): log a warning, still publish
+   * - `'reject'`: throw an error, do NOT publish
+   * - `'off'`: skip validation entirely (registry is only for introspection)
+   */
+  validateMode?: "warn" | "reject" | "off";
 }
 
 declare module "fastify" {
   interface FastifyInstance {
     events: {
       /** Publish an event */
-      publish: <T>(
-        type: string,
-        payload: T,
-        meta?: Partial<DomainEvent["meta"]>,
-      ) => Promise<void>;
+      publish: <T>(type: string, payload: T, meta?: Partial<DomainEvent["meta"]>) => Promise<void>;
       /** Subscribe to events */
-      subscribe: (
-        pattern: string,
-        handler: EventHandler,
-      ) => Promise<() => void>;
+      subscribe: (pattern: string, handler: EventHandler) => Promise<() => void>;
       /** Get transport name */
       transportName: string;
+      /** Event registry for introspection (undefined when no registry configured) */
+      registry?: EventRegistry;
     };
   }
 }
@@ -106,7 +115,12 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
     wal,
     onPublish,
     onPublishError,
+    registry,
+    validateMode: rawValidateMode,
   } = opts;
+
+  // Default validateMode: 'warn' when registry is provided, 'off' otherwise
+  const validateMode = rawValidateMode ?? (registry ? "warn" : "off");
 
   // Decorate fastify with event utilities
   fastify.decorate("events", {
@@ -118,9 +132,7 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
       // Auto-inject correlationId from request context if not already set
       const store = requestContext.get();
       const enrichedMeta: Partial<DomainEvent["meta"]> = {
-        ...(store?.requestId && !meta?.correlationId
-          ? { correlationId: store.requestId }
-          : {}),
+        ...(store?.requestId && !meta?.correlationId ? { correlationId: store.requestId } : {}),
         ...meta,
       };
       const event = createEvent(type, payload, enrichedMeta);
@@ -134,6 +146,19 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
           },
           "Publishing event",
         );
+      }
+
+      // Schema validation (when registry is provided and mode is not 'off')
+      if (registry && validateMode !== "off") {
+        const result = registry.validate(type, payload);
+        if (!result.valid) {
+          const msg = `[Arc Events] Event '${type}' payload validation failed: ${result.errors?.join("; ")}`;
+          if (validateMode === "reject") {
+            throw new Error(msg);
+          }
+          // warn mode — log and continue
+          fastify.log?.warn?.(msg);
+        }
       }
 
       try {
@@ -155,10 +180,7 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
       }
     },
 
-    subscribe: async (
-      pattern: string,
-      handler: EventHandler,
-    ): Promise<() => void> => {
+    subscribe: async (pattern: string, handler: EventHandler): Promise<() => void> => {
       // Auto-wrap handler with retry if configured (skip for DLQ subscriptions)
       let wrappedHandler = handler;
       if (retryOpts && pattern !== "$deadLetter") {
@@ -170,10 +192,7 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
       }
 
       if (logEvents) {
-        fastify.log?.info?.(
-          { pattern, retry: !!retryOpts },
-          "Subscribing to events",
-        );
+        fastify.log?.info?.({ pattern, retry: !!retryOpts }, "Subscribing to events");
       }
       try {
         return await transport.subscribe(pattern, wrappedHandler);
@@ -188,6 +207,7 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
     },
 
     transportName: transport.name,
+    registry,
   });
 
   // Cleanup on close

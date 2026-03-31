@@ -1,0 +1,198 @@
+/**
+ * @classytic/arc — fieldRules → Zod Shape Converter
+ *
+ * Converts Arc's schemaOptions.fieldRules into flat Zod shapes
+ * compatible with the MCP SDK's registerTool() inputSchema format.
+ *
+ * Returns `Record<string, z.ZodTypeAny>` (flat shape), NOT z.object().
+ * The SDK wraps it internally.
+ *
+ * @example
+ * ```typescript
+ * import { fieldRulesToZod } from '@classytic/arc/mcp';
+ *
+ * const shape = fieldRulesToZod(resource.schemaOptions.fieldRules, {
+ *   mode: 'create',
+ *   hiddenFields: resource.schemaOptions.hiddenFields,
+ * });
+ * // shape = { name: z.string(), price: z.number() }
+ * ```
+ */
+
+import { z } from "zod";
+
+// ============================================================================
+// Types
+// ============================================================================
+
+export interface FieldRulesToZodOptions {
+  /** create: required enforced. update: all optional. list: filters + pagination. */
+  mode?: "create" | "update" | "list";
+  /** Fields hidden from all schemas */
+  hiddenFields?: string[];
+  /** Fields excluded from create/update schemas */
+  readonlyFields?: string[];
+  /** Extra fields to hide (e.g., from McpResourceConfig.hideFields) */
+  extraHideFields?: string[];
+  /** Filterable fields — only used in list mode */
+  filterableFields?: string[];
+}
+
+/** Single field rule entry from Arc's schemaOptions.fieldRules */
+export interface FieldRuleEntry {
+  type?: string;
+  required?: boolean;
+  systemManaged?: boolean;
+  hidden?: boolean;
+  immutable?: boolean;
+  immutableAfterCreate?: boolean;
+  optional?: boolean;
+  minLength?: number;
+  maxLength?: number;
+  min?: number;
+  max?: number;
+  enum?: string[];
+  pattern?: string;
+  description?: string;
+  [key: string]: unknown;
+}
+
+// ============================================================================
+// Static pagination fields (shared across all list schemas)
+// ============================================================================
+
+const PAGINATION_SHAPE: Record<string, z.ZodTypeAny> = {
+  page: z.number().int().min(1).optional().describe("Page number (1-based)"),
+  limit: z.number().int().min(1).max(100).optional().describe("Items per page (max 100)"),
+  sort: z.string().optional().describe("Sort field, prefix with - for descending"),
+  search: z.string().optional().describe("Full-text search query"),
+};
+
+// ============================================================================
+// Main
+// ============================================================================
+
+/**
+ * Convert Arc fieldRules to a flat Zod shape.
+ *
+ * @returns Flat shape `Record<string, z.ZodTypeAny>` — pass directly to defineTool() or registerTool()
+ */
+export function fieldRulesToZod(
+  fieldRules: Record<string, FieldRuleEntry> | undefined,
+  options: FieldRulesToZodOptions = {},
+): Record<string, z.ZodTypeAny> {
+  const { mode = "create", hiddenFields = [], readonlyFields = [], extraHideFields = [] } = options;
+
+  if (mode === "list") {
+    return buildListShape(fieldRules, options);
+  }
+
+  if (!fieldRules) return {};
+
+  const allHidden = new Set([...hiddenFields, ...extraHideFields]);
+  const allReadonly = new Set(readonlyFields);
+  const shape: Record<string, z.ZodTypeAny> = {};
+
+  for (const [name, rule] of Object.entries(fieldRules)) {
+    if (rule.systemManaged || rule.hidden || allHidden.has(name)) continue;
+    if (allReadonly.has(name)) continue;
+    if (mode === "update" && rule.immutable) continue;
+
+    const field = buildFieldSchema(rule);
+
+    if (mode === "update") {
+      shape[name] = field.optional();
+    } else {
+      const isRequired = rule.required === true && !rule.optional;
+      shape[name] = isRequired ? field : field.optional();
+    }
+  }
+
+  return shape;
+}
+
+// ============================================================================
+// Internal
+// ============================================================================
+
+/** Build Zod type for a single field rule */
+function buildFieldSchema(rule: FieldRuleEntry): z.ZodTypeAny {
+  // Enum takes priority — use z.enum() instead of z.string()
+  if (rule.enum?.length) {
+    const schema = z.enum(rule.enum as [string, ...string[]]);
+    return rule.description ? schema.describe(rule.description) : schema;
+  }
+
+  const base = typeToZod(rule.type);
+
+  // String constraints
+  if (base instanceof z.ZodString) {
+    let s = base;
+    if (rule.minLength != null) s = s.min(rule.minLength);
+    if (rule.maxLength != null) s = s.max(rule.maxLength);
+    if (rule.pattern) {
+      try {
+        s = s.regex(new RegExp(rule.pattern));
+      } catch {
+        /* invalid regex — skip */
+      }
+    }
+    return rule.description ? s.describe(rule.description) : s;
+  }
+
+  // Number constraints
+  if (base instanceof z.ZodNumber) {
+    let n = base;
+    if (rule.min != null) n = n.min(rule.min);
+    if (rule.max != null) n = n.max(rule.max);
+    return rule.description ? n.describe(rule.description) : n;
+  }
+
+  return rule.description ? base.describe(rule.description) : base;
+}
+
+/** Map Arc field type string to base Zod type */
+function typeToZod(type: string | undefined): z.ZodTypeAny {
+  switch (type) {
+    case "string":
+      return z.string();
+    case "number":
+      return z.number();
+    case "boolean":
+      return z.boolean();
+    case "date":
+      return z.string().describe("ISO 8601 date string");
+    case "array":
+      return z.array(z.any());
+    case "object":
+      return z.record(z.string(), z.any());
+    default:
+      return z.string();
+  }
+}
+
+/** Build list/query shape with filterable fields + pagination */
+function buildListShape(
+  fieldRules: Record<string, FieldRuleEntry> | undefined,
+  options: FieldRulesToZodOptions,
+): Record<string, z.ZodTypeAny> {
+  const { filterableFields = [], hiddenFields = [], extraHideFields = [] } = options;
+  const allHidden = new Set([...hiddenFields, ...extraHideFields]);
+
+  // Start with pagination fields
+  const shape: Record<string, z.ZodTypeAny> = { ...PAGINATION_SHAPE };
+
+  // Add filterable fields
+  if (fieldRules) {
+    for (const name of filterableFields) {
+      if (allHidden.has(name)) continue;
+      const rule = fieldRules[name];
+      if (!rule) continue;
+
+      const filterField = buildFieldSchema(rule);
+      shape[name] = filterField.optional();
+    }
+  }
+
+  return shape;
+}
