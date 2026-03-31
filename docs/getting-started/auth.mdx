@@ -224,15 +224,80 @@ class ProfileController extends BaseController {
 }
 ```
 
+## Token Revocation
+
+Arc provides the `isRevoked` primitive — you implement the store (Redis, DB, Better Auth):
+
+```typescript
+auth: {
+  type: 'jwt',
+  jwt: { secret: process.env.JWT_SECRET },
+  isRevoked: async (decoded) => {
+    return await redis.sismember('revoked-tokens', decoded.jti ?? decoded.id);
+  },
+}
+```
+
+**Fail-closed:** If the revocation check throws, the token is rejected.
+
+## Custom Token Extraction
+
+Override how tokens are resolved from the request:
+
+```typescript
+auth: {
+  type: 'jwt',
+  jwt: { secret },
+  tokenExtractor: (req) => req.cookies?.['auth-token'] ?? null,
+}
+```
+
+Default: reads `Authorization: Bearer <token>` header.
+
+## Request Scope
+
+Every authenticated request gets a `request.scope` — a discriminated union describing the caller's identity:
+
+```typescript
+import { getUserId, getUserRoles, getOrgId } from '@classytic/arc/scope';
+
+// Variants:
+// { kind: 'public' }
+// { kind: 'authenticated', userId?, userRoles? }
+// { kind: 'member', userId?, userRoles, organizationId, orgRoles, teamId? }
+// { kind: 'elevated', userId?, organizationId?, elevatedBy }
+
+const userId = getUserId(request.scope);         // string | undefined
+const roles = getUserRoles(request.scope);       // string[]
+const orgId = getOrgId(request.scope);           // string | undefined
+```
+
+## Role Hierarchy
+
+Define inheritance so you don't list every admin tier in 20+ permission definitions:
+
+```typescript
+import { createRoleHierarchy } from '@classytic/arc/permissions';
+
+const hierarchy = createRoleHierarchy({
+  superadmin: ['admin'],
+  admin: ['branch_manager'],
+  branch_manager: ['staff'],
+});
+
+hierarchy.expand(['admin']);                    // → ['admin', 'branch_manager', 'staff']
+hierarchy.includes(['admin'], 'staff');        // → true
+```
+
 ## Error Responses
 
 | Status | Condition |
 |--------|-----------|
-| 401 | Missing/invalid token |
+| 401 | Missing/invalid/revoked token |
 | 403 | Valid token but insufficient roles |
 
 ## See Also
 
 - [Permissions](./permissions) — Advanced permission patterns
 - [Org Module](./org) — Multi-tenant organization scoping
-- [Core](./core) — Request context and controllers
+- [Core](./core) — Request context, query parsing, controllers

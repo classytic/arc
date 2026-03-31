@@ -18,11 +18,11 @@
  * });
  */
 
-import fp from 'fastify-plugin';
-import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync } from "fastify";
+import fp from "fastify-plugin";
 
 // Plugin-local augmentation for HTTP metrics timing
-declare module 'fastify' {
+declare module "fastify" {
   interface FastifyRequest {
     _startTime?: number;
   }
@@ -81,10 +81,10 @@ function createHttpMetrics(): HttpMetrics {
 
 const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
   fastify: FastifyInstance,
-  opts: HealthOptions = {}
+  opts: HealthOptions = {},
 ) => {
   const {
-    prefix = '/_health',
+    prefix = "/_health",
     checks = [],
     metrics = false,
     metricsCollector,
@@ -99,87 +99,95 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
   // Liveness Probe
   // ========================================
 
-  fastify.get(`${prefix}/live`, {
-    schema: {
-      tags: ['Health'],
-      summary: 'Liveness probe',
-      description: 'Returns 200 if the process is alive',
-      response: {
-        200: {
-          type: 'object',
-          properties: {
-            status: { type: 'string', enum: ['ok'] },
-            timestamp: { type: 'string' },
-            version: { type: 'string' },
+  fastify.get(
+    `${prefix}/live`,
+    {
+      schema: {
+        tags: ["Health"],
+        summary: "Liveness probe",
+        description: "Returns 200 if the process is alive",
+        response: {
+          200: {
+            type: "object",
+            properties: {
+              status: { type: "string", enum: ["ok"] },
+              timestamp: { type: "string" },
+              version: { type: "string" },
+            },
           },
         },
       },
     },
-  }, async () => {
-    return {
-      status: 'ok',
-      timestamp: new Date().toISOString(),
-      ...(version ? { version } : {}),
-    };
-  });
+    async () => {
+      return {
+        status: "ok",
+        timestamp: new Date().toISOString(),
+        ...(version ? { version } : {}),
+      };
+    },
+  );
 
   // ========================================
   // Readiness Probe
   // ========================================
 
-  fastify.get(`${prefix}/ready`, {
-    schema: {
-      tags: ['Health'],
-      summary: 'Readiness probe',
-      description: 'Returns 200 if all dependencies are healthy',
-      response: {
-        200: {
-          type: 'object',
-          properties: {
-            status: { type: 'string', enum: ['ready', 'not_ready'] },
-            timestamp: { type: 'string' },
-            checks: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  name: { type: 'string' },
-                  healthy: { type: 'boolean' },
-                  duration: { type: 'number' },
-                  error: { type: 'string' },
+  fastify.get(
+    `${prefix}/ready`,
+    {
+      schema: {
+        tags: ["Health"],
+        summary: "Readiness probe",
+        description: "Returns 200 if all dependencies are healthy",
+        response: {
+          200: {
+            type: "object",
+            properties: {
+              status: { type: "string", enum: ["ready", "not_ready"] },
+              timestamp: { type: "string" },
+              checks: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    name: { type: "string" },
+                    healthy: { type: "boolean" },
+                    duration: { type: "number" },
+                    error: { type: "string" },
+                  },
                 },
               },
             },
           },
-        },
-        503: {
-          type: 'object',
-          properties: {
-            status: { type: 'string', enum: ['not_ready'] },
-            timestamp: { type: 'string' },
-            checks: { type: 'array' },
+          503: {
+            type: "object",
+            properties: {
+              status: { type: "string", enum: ["not_ready"] },
+              timestamp: { type: "string" },
+              checks: { type: "array" },
+            },
           },
         },
       },
     },
-  }, async (_, reply) => {
-    const results = await runChecks(checks);
-    const criticalFailed = results.some(
-      (r) => !r.healthy && (checks.find((c) => c.name === r.name)?.critical ?? true)
-    );
+    async (_, reply) => {
+      const results = await runChecks(checks);
+      const criticalFailed = results.some(
+        (r) => !r.healthy && (checks.find((c) => c.name === r.name)?.critical ?? true),
+      );
 
-    const response = {
-      status: criticalFailed ? 'not_ready' : 'ready',
-      timestamp: new Date().toISOString(),
-      checks: results,
-    };
+      const response = {
+        status: criticalFailed ? "not_ready" : "ready",
+        timestamp: new Date().toISOString(),
+        checks: results,
+      };
 
-    if (criticalFailed) {
-      reply.code(503);
-    }
+      if (criticalFailed) {
+        reply.code(503);
+      }
 
-    return response;
-  });
+      return response;
+    },
+  );
 
   // ========================================
   // Metrics Endpoint (Optional)
@@ -187,7 +195,7 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
 
   if (metrics) {
     fastify.get(`${prefix}/metrics`, async (_, reply) => {
-      reply.type('text/plain; charset=utf-8');
+      reply.type("text/plain; charset=utf-8");
 
       if (metricsCollector) {
         return await metricsCollector();
@@ -199,43 +207,43 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
       const cpu = process.cpuUsage();
 
       const lines = [
-        '# HELP process_uptime_seconds Process uptime in seconds',
-        '# TYPE process_uptime_seconds gauge',
+        "# HELP process_uptime_seconds Process uptime in seconds",
+        "# TYPE process_uptime_seconds gauge",
         `process_uptime_seconds ${uptime.toFixed(2)}`,
-        '',
-        '# HELP process_memory_heap_bytes Heap memory usage in bytes',
-        '# TYPE process_memory_heap_bytes gauge',
+        "",
+        "# HELP process_memory_heap_bytes Heap memory usage in bytes",
+        "# TYPE process_memory_heap_bytes gauge",
         `process_memory_heap_bytes{type="used"} ${memory.heapUsed}`,
         `process_memory_heap_bytes{type="total"} ${memory.heapTotal}`,
-        '',
-        '# HELP process_memory_rss_bytes RSS memory in bytes',
-        '# TYPE process_memory_rss_bytes gauge',
+        "",
+        "# HELP process_memory_rss_bytes RSS memory in bytes",
+        "# TYPE process_memory_rss_bytes gauge",
         `process_memory_rss_bytes ${memory.rss}`,
-        '',
-        '# HELP process_memory_external_bytes External memory in bytes',
-        '# TYPE process_memory_external_bytes gauge',
+        "",
+        "# HELP process_memory_external_bytes External memory in bytes",
+        "# TYPE process_memory_external_bytes gauge",
         `process_memory_external_bytes ${memory.external}`,
-        '',
-        '# HELP process_cpu_user_microseconds User CPU time in microseconds',
-        '# TYPE process_cpu_user_microseconds counter',
+        "",
+        "# HELP process_cpu_user_microseconds User CPU time in microseconds",
+        "# TYPE process_cpu_user_microseconds counter",
         `process_cpu_user_microseconds ${cpu.user}`,
-        '',
-        '# HELP process_cpu_system_microseconds System CPU time in microseconds',
-        '# TYPE process_cpu_system_microseconds counter',
+        "",
+        "# HELP process_cpu_system_microseconds System CPU time in microseconds",
+        "# TYPE process_cpu_system_microseconds counter",
         `process_cpu_system_microseconds ${cpu.system}`,
-        '',
+        "",
       ];
 
       // HTTP request metrics
       if (collectHttpMetrics && Object.keys(httpMetrics.requestsTotal).length > 0) {
         lines.push(
-          '# HELP http_requests_total Total HTTP requests by status code',
-          '# TYPE http_requests_total counter'
+          "# HELP http_requests_total Total HTTP requests by status code",
+          "# TYPE http_requests_total counter",
         );
         for (const [status, count] of Object.entries(httpMetrics.requestsTotal)) {
           lines.push(`http_requests_total{status="${status}"} ${count}`);
         }
-        lines.push('');
+        lines.push("");
 
         // Request duration histogram
         if (httpMetrics.requestDurations.length > 0) {
@@ -246,29 +254,29 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
           const sum = sorted.reduce((a, b) => a + b, 0);
 
           lines.push(
-            '# HELP http_request_duration_milliseconds HTTP request duration',
-            '# TYPE http_request_duration_milliseconds summary',
+            "# HELP http_request_duration_milliseconds HTTP request duration",
+            "# TYPE http_request_duration_milliseconds summary",
             `http_request_duration_milliseconds{quantile="0.5"} ${p50.toFixed(2)}`,
             `http_request_duration_milliseconds{quantile="0.95"} ${p95.toFixed(2)}`,
             `http_request_duration_milliseconds{quantile="0.99"} ${p99.toFixed(2)}`,
             `http_request_duration_milliseconds_sum ${sum.toFixed(2)}`,
             `http_request_duration_milliseconds_count ${sorted.length}`,
-            ''
+            "",
           );
         }
       }
 
-      return lines.join('\n');
+      return lines.join("\n");
     });
   }
 
   // Collect HTTP metrics
   if (collectHttpMetrics) {
-    fastify.addHook('onRequest', async (request) => {
+    fastify.addHook("onRequest", async (request) => {
       request._startTime = Date.now();
     });
 
-    fastify.addHook('onResponse', async (request, reply) => {
+    fastify.addHook("onResponse", async (request, reply) => {
       const duration = Date.now() - (request._startTime ?? Date.now());
 
       // Track by status code bucket (2xx, 3xx, 4xx, 5xx)
@@ -302,7 +310,7 @@ async function runChecks(checks: HealthCheck[]): Promise<CheckResult[]> {
     try {
       const checkPromise = Promise.resolve(check.check());
       const timeoutPromise = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('Health check timeout')), timeout);
+        timer = setTimeout(() => reject(new Error("Health check timeout")), timeout);
       });
 
       const healthy = await Promise.race([checkPromise, timeoutPromise]);
@@ -328,8 +336,8 @@ async function runChecks(checks: HealthCheck[]): Promise<CheckResult[]> {
 }
 
 export default fp(healthPlugin, {
-  name: 'arc-health',
-  fastify: '5.x',
+  name: "arc-health",
+  fastify: "5.x",
 });
 
 export { healthPlugin };

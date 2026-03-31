@@ -39,7 +39,7 @@
  * });
  * ```
  */
-import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 
 // ============================================================================
 // Types (no BullMQ import at module level)
@@ -53,7 +53,7 @@ export interface JobDefinition<TData = unknown, TResult = unknown> {
   /** Number of retries on failure (default: 3) */
   retries?: number;
   /** Backoff strategy */
-  backoff?: { type: 'exponential' | 'fixed'; delay: number };
+  backoff?: { type: "exponential" | "fixed"; delay: number };
   /** Job timeout in ms (default: 30000) */
   timeout?: number;
   /** Concurrency per worker (default: 1) */
@@ -95,7 +95,7 @@ export interface JobsPluginOptions {
   /** Default job options applied to all jobs */
   defaults?: {
     retries?: number;
-    backoff?: { type: 'exponential' | 'fixed'; delay: number };
+    backoff?: { type: "exponential" | "fixed"; delay: number };
     timeout?: number;
     removeOnComplete?: boolean | number;
     removeOnFail?: boolean | number;
@@ -106,7 +106,7 @@ export interface JobDispatcher {
   dispatch<TData = unknown>(
     name: string,
     data: TData,
-    options?: JobDispatchOptions
+    options?: JobDispatchOptions,
   ): Promise<{ jobId: string }>;
   getQueue(name: string): unknown | null;
   getStats(): Promise<Record<string, QueueStats>>;
@@ -139,7 +139,7 @@ export interface QueueStats {
  * });
  */
 export function defineJob<TData = unknown, TResult = unknown>(
-  definition: JobDefinition<TData, TResult>
+  definition: JobDefinition<TData, TResult>,
 ): JobDefinition<TData, TResult> {
   return definition;
 }
@@ -150,32 +150,27 @@ export function defineJob<TData = unknown, TResult = unknown>(
 
 const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
   fastify: FastifyInstance,
-  options: JobsPluginOptions
+  options: JobsPluginOptions,
 ) => {
-  const {
-    connection,
-    jobs,
-    prefix = '/jobs',
-    bridgeEvents = true,
-    defaults = {},
-  } = options;
+  const { connection, jobs, prefix = "/jobs", bridgeEvents = true, defaults = {} } = options;
 
   // Dynamic import of BullMQ (only when plugin is actually registered)
   let Queue: any;
   let Worker: any;
 
   try {
-    const bullmq = await import('bullmq');
+    const bullmq = await import("bullmq");
     Queue = bullmq.Queue;
     Worker = bullmq.Worker;
   } catch {
     throw new Error(
       '@classytic/arc/integrations/jobs requires "bullmq" package.\n' +
-      'Install it: npm install bullmq'
+        "Install it: npm install bullmq",
     );
   }
 
   const queues = new Map<string, InstanceType<typeof Queue>>();
+  const dlqQueues = new Map<string, InstanceType<typeof Queue>>();
   const workers = new Map<string, InstanceType<typeof Worker>>();
 
   // Register each job as a queue + worker pair
@@ -186,7 +181,16 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
     const queue = new Queue(queueName, { connection });
     queues.set(queueName, queue);
 
-    // Create worker
+    // DLQ queue — only created when explicitly configured
+    let dlqQueue: InstanceType<typeof Queue> | null = null;
+    if (job.deadLetterQueue != null) {
+      const dlqName = job.deadLetterQueue || `${queueName}:dead`;
+      dlqQueue = new Queue(dlqName, { connection });
+      dlqQueues.set(dlqName, dlqQueue);
+    }
+
+    // Create worker with timeout support
+    const jobTimeout = job.timeout ?? defaults.timeout;
     const worker = new Worker(
       queueName,
       async (bullJob: any) => {
@@ -196,15 +200,40 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
           timestamp: Date.now(),
         };
 
-        const result = await job.handler(bullJob.data, meta);
+        // Apply job-level timeout if configured.
+        // Clear the timer on success to avoid orphaned timers under load.
+        let result: unknown;
+        if (jobTimeout) {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error(`Job '${queueName}' timed out after ${jobTimeout}ms`)),
+              jobTimeout,
+            );
+          });
+          try {
+            result = await Promise.race([job.handler(bullJob.data, meta), timeoutPromise]);
+          } finally {
+            clearTimeout(timer);
+          }
+        } else {
+          result = await job.handler(bullJob.data, meta);
+        }
 
         // Bridge completion event
         if (bridgeEvents && fastify.events?.publish) {
-          await fastify.events.publish(`job.${queueName}.completed`, {
-            jobId: bullJob.id,
-            data: bullJob.data,
-            result,
-          });
+          try {
+            await fastify.events.publish(`job.${queueName}.completed`, {
+              jobId: bullJob.id,
+              data: bullJob.data,
+              result,
+            });
+          } catch (err) {
+            fastify.log.warn(
+              { err, jobId: bullJob.id },
+              `Failed to publish job.${queueName}.completed event`,
+            );
+          }
         }
 
         return result;
@@ -215,18 +244,42 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
         limiter: job.rateLimit
           ? { max: job.rateLimit.max, duration: job.rateLimit.duration }
           : undefined,
-      }
+      },
     );
 
-    // Bridge failure event
-    worker.on('failed', async (bullJob: any, error: Error) => {
+    // Bridge failure event + DLQ routing
+    worker.on("failed", async (bullJob: any, error: Error) => {
+      // Move to dead-letter queue when all retries are exhausted
+      const maxAttempts = job.retries ?? defaults.retries ?? 3;
+      if (dlqQueue && bullJob && bullJob.attemptsMade >= maxAttempts) {
+        try {
+          await dlqQueue.add(`${queueName}:dead`, bullJob.data, {
+            jobId: `${bullJob.id}:dlq`,
+            removeOnComplete: false,
+          });
+          fastify.log.warn(
+            { jobId: bullJob.id, dlq: job.deadLetterQueue ?? `${queueName}:dead` },
+            `Job moved to dead-letter queue`,
+          );
+        } catch (dlqErr) {
+          fastify.log.error({ err: dlqErr, jobId: bullJob.id }, `Failed to move job to DLQ`);
+        }
+      }
+
       if (bridgeEvents && fastify.events?.publish) {
-        await fastify.events.publish(`job.${queueName}.failed`, {
-          jobId: bullJob?.id,
-          data: bullJob?.data,
-          error: error.message,
-          attemptsMade: bullJob?.attemptsMade,
-        });
+        try {
+          await fastify.events.publish(`job.${queueName}.failed`, {
+            jobId: bullJob?.id,
+            data: bullJob?.data,
+            error: error.message,
+            attemptsMade: bullJob?.attemptsMade,
+          });
+        } catch (err) {
+          fastify.log.warn(
+            { err, jobId: bullJob?.id },
+            `Failed to publish job.${queueName}.failed event`,
+          );
+        }
       }
     });
 
@@ -238,7 +291,9 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
     async dispatch(name, data, opts = {}) {
       const queue = queues.get(name);
       if (!queue) {
-        throw new Error(`Job queue '${name}' not registered. Available: ${Array.from(queues.keys()).join(', ')}`);
+        throw new Error(
+          `Job queue '${name}' not registered. Available: ${Array.from(queues.keys()).join(", ")}`,
+        );
       }
 
       const jobDef = jobs.find((j) => j.name === name);
@@ -249,7 +304,7 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
         removeOnComplete: opts.removeOnComplete ?? defaults.removeOnComplete ?? 100,
         removeOnFail: opts.removeOnFail ?? defaults.removeOnFail ?? 500,
         attempts: jobDef?.retries ?? defaults.retries ?? 3,
-        backoff: jobDef?.backoff ?? defaults.backoff ?? { type: 'exponential', delay: 1000 },
+        backoff: jobDef?.backoff ?? defaults.backoff ?? { type: "exponential", delay: 1000 },
       });
 
       return { jobId: bullJob.id };
@@ -282,13 +337,16 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
       for (const queue of queues.values()) {
         closePromises.push(queue.close());
       }
+      for (const dlq of dlqQueues.values()) {
+        closePromises.push(dlq.close());
+      }
       await Promise.all(closePromises);
     },
   };
 
   // Decorate fastify
-  if (!fastify.hasDecorator('jobs')) {
-    fastify.decorate('jobs', dispatcher);
+  if (!fastify.hasDecorator("jobs")) {
+    fastify.decorate("jobs", dispatcher);
   }
 
   // Management endpoints
@@ -298,7 +356,7 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
   });
 
   // Graceful shutdown
-  fastify.addHook('onClose', async () => {
+  fastify.addHook("onClose", async () => {
     await dispatcher.close();
   });
 };

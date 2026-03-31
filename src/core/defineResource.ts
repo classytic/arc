@@ -39,7 +39,10 @@
  */
 
 import type { FastifyPluginAsync } from "fastify";
-import { hasEvents } from "../utils/typeGuards.js";
+import type { DataAdapter } from "../adapters/interface.js";
+import { CRUD_OPERATIONS } from "../constants.js";
+import { applyPresets } from "../presets/index.js";
+import type { RegisterOptions } from "../registry/ResourceRegistry.js";
 import type {
   AdditionalRoute,
   AnyRecord,
@@ -59,21 +62,13 @@ import type {
   ResourcePermissions,
   RouteSchemaOptions,
 } from "../types/index.js";
-import type { DataAdapter } from "../adapters/interface.js";
+import { convertOpenApiSchemas, convertRouteSchema } from "../utils/schemaConverter.js";
+import { hasEvents } from "../utils/typeGuards.js";
 import { BaseController } from "./BaseController.js";
 import { createCrudRouter } from "./createCrudRouter.js";
-import { applyPresets } from "../presets/index.js";
-import type { RegisterOptions } from "../registry/ResourceRegistry.js";
 import { assertValidConfig } from "./validateResourceConfig.js";
-import {
-  convertOpenApiSchemas,
-  convertRouteSchema,
-} from "../utils/schemaConverter.js";
-import { CRUD_OPERATIONS } from "../constants.js";
 
-interface ExtendedResourceConfig<
-  TDoc = AnyRecord,
-> extends ResourceConfig<TDoc> {
+interface ExtendedResourceConfig<TDoc = AnyRecord> extends ResourceConfig<TDoc> {
   _appliedPresets?: string[];
   _controllerOptions?: {
     slugField?: string;
@@ -142,8 +137,7 @@ export function defineResource<TDoc = AnyRecord>(
   const crudRoutes = CRUD_OPERATIONS;
   const disabledRoutes = new Set(config.disabledRoutes ?? []);
   const hasCrudRoutes =
-    !config.disableDefaultRoutes &&
-    crudRoutes.some((route) => !disabledRoutes.has(route));
+    !config.disableDefaultRoutes && crudRoutes.some((route) => !disabledRoutes.has(route));
 
   // 2. Track presets
   const originalPresets = (config.presets ?? []).map((p) =>
@@ -176,9 +170,7 @@ export function defineResource<TDoc = AnyRecord>(
     controller = new BaseController<TDoc>(repository, {
       resourceName: resolvedConfig.name,
       schemaOptions: resolvedConfig.schemaOptions,
-      queryParser: resolvedConfig.queryParser as
-        | QueryParserInterface
-        | undefined,
+      queryParser: resolvedConfig.queryParser as QueryParserInterface | undefined,
       maxLimit: maxLimitFromParser,
       tenantField: resolvedConfig.tenantField,
       idField: resolvedConfig.idField,
@@ -232,9 +224,7 @@ export function defineResource<TDoc = AnyRecord>(
       }
 
       // Auto-detect listQuery schema from queryParser (if not already provided)
-      const queryParser = config.queryParser as
-        | QueryParserInterface
-        | undefined;
+      const queryParser = config.queryParser as QueryParserInterface | undefined;
       if (!openApiSchemas?.listQuery && queryParser?.getQuerySchema) {
         const querySchema = queryParser.getQuerySchema();
         if (querySchema) {
@@ -263,9 +253,7 @@ export function defineResource<TDoc = AnyRecord>(
   return resource;
 }
 
-interface ResolvedResourceConfig<
-  TDoc = AnyRecord,
-> extends ResourceConfig<TDoc> {
+interface ResolvedResourceConfig<TDoc = AnyRecord> extends ResourceConfig<TDoc> {
   _appliedPresets?: string[];
   _controllerOptions?: {
     slugField?: string;
@@ -341,7 +329,7 @@ export class ResourceDefinition<TDoc = AnyRecord> {
   constructor(config: ResolvedResourceConfig<TDoc>) {
     // Identity
     this.name = config.name;
-    this.displayName = config.displayName ?? capitalize(config.name) + "s";
+    this.displayName = config.displayName ?? `${capitalize(config.name)}s`;
     this.tag = config.tag ?? this.displayName;
     this.prefix = config.prefix ?? `/${config.name}s`;
 
@@ -400,11 +388,8 @@ export class ResourceDefinition<TDoc = AnyRecord> {
     // Check if any CRUD routes will actually be created
     const crudRoutes = CRUD_OPERATIONS;
     const disabledRoutes = new Set(this.disabledRoutes ?? []);
-    const enabledCrudRoutes = crudRoutes.filter(
-      (route) => !disabledRoutes.has(route),
-    );
-    const hasCrudRoutes =
-      !this.disableDefaultRoutes && enabledCrudRoutes.length > 0;
+    const enabledCrudRoutes = crudRoutes.filter((route) => !disabledRoutes.has(route));
+    const hasCrudRoutes = !this.disableDefaultRoutes && enabledCrudRoutes.length > 0;
 
     if (hasCrudRoutes) {
       if (!this.controller) {
@@ -495,9 +480,7 @@ export class ResourceDefinition<TDoc = AnyRecord> {
         .registerCacheInvalidationRule;
       if (self.cache?.invalidateOn && typeof registerRule === "function") {
         for (const [pattern, tags] of Object.entries(self.cache.invalidateOn)) {
-          (registerRule as (rule: { pattern: string; tags: string[] }) => void)(
-            { pattern, tags },
-          );
+          (registerRule as (rule: { pattern: string; tags: string[] }) => void)({ pattern, tags });
         }
       }
 
@@ -509,26 +492,61 @@ export class ResourceDefinition<TDoc = AnyRecord> {
           // No competing runtime generation here.
           let schemas: CrudSchemas | null = null;
 
+          // Auto-generate CrudSchemas from adapter's OpenApiSchemas when customSchemas
+          // isn't provided. Maps createBody → create.body, updateBody → update.body,
+          // params → get/update/delete.params, response → all ops.
+          //
+          // Body schemas default to additionalProperties:true so the built-in fallback
+          // extractor doesn't reject unknown fields. Explicit generators (MongoKit) can
+          // override this by setting additionalProperties in their output.
+          const openApi = self._registryMeta?.openApiSchemas;
+          if (openApi && (!self.customSchemas || Object.keys(self.customSchemas).length === 0)) {
+            const generated: Record<string, AnyRecord> = {};
+            const { createBody, updateBody, params, response } = openApi as AnyRecord;
+
+            // Ensure body schemas allow additional properties by default
+            // (prevents the built-in Mongoose extractor from rejecting unknown fields)
+            const safeBody = (schema: AnyRecord): AnyRecord => {
+              if (schema && typeof schema === "object" && schema.type === "object") {
+                return { additionalProperties: true, ...schema };
+              }
+              return schema;
+            };
+
+            if (createBody) {
+              generated.create = { body: safeBody(createBody as AnyRecord) };
+            }
+            if (updateBody) {
+              // PATCH semantics: strip `required` so all fields are optional.
+              // PUT gets the original with required fields intact.
+              const patchBody = { ...(updateBody as AnyRecord) };
+              delete patchBody.required;
+              generated.update = { body: safeBody(patchBody) };
+              if (params) generated.update.params = params;
+            }
+            if (params) {
+              generated.get = { params };
+              generated.delete = { params };
+              if (!generated.update) generated.update = { params };
+              else if (!generated.update.params) generated.update.params = params;
+            }
+
+            if (Object.keys(generated).length > 0) {
+              schemas = generated as CrudSchemas;
+            }
+          }
+
           // Merge custom schemas (auto-convert Zod schemas within)
           // Uses convertRouteSchema which properly handles nested response schemas
           // e.g. { body: z.object(...), response: { 201: z.object(...) } }
-          if (
-            self.customSchemas &&
-            Object.keys(self.customSchemas).length > 0
-          ) {
+          // customSchemas override auto-generated schemas when both exist.
+          if (self.customSchemas && Object.keys(self.customSchemas).length > 0) {
             schemas = schemas ?? {};
-            for (const [op, customSchema] of Object.entries(
-              self.customSchemas,
-            )) {
+            for (const [op, customSchema] of Object.entries(self.customSchemas)) {
               const key = op as keyof CrudSchemas;
-              const converted = convertRouteSchema(
-                customSchema as Record<string, unknown>,
-              );
+              const converted = convertRouteSchema(customSchema as Record<string, unknown>);
               schemas[key] = schemas[key]
-                ? deepMergeSchemas(
-                    schemas[key] as AnyRecord,
-                    converted as AnyRecord,
-                  )
+                ? deepMergeSchemas(schemas[key] as AnyRecord, converted as AnyRecord)
                 : (converted as AnyRecord);
             }
           }
@@ -545,12 +563,12 @@ export class ResourceDefinition<TDoc = AnyRecord> {
           //    but qs bracket notation produces objects that AJV would then reject.
           const listQuerySchema = self._registryMeta?.openApiSchemas?.listQuery;
           if (listQuerySchema) {
-            const FLEXIBLE_PARAMS = ['populate', 'select', 'lookup', 'aggregate'];
+            const FLEXIBLE_PARAMS = ["populate", "select", "lookup", "aggregate"];
             const props = (listQuerySchema as AnyRecord).properties as AnyRecord | undefined;
             const normalizedProps = props ? { ...props } : undefined;
             if (normalizedProps) {
               for (const key of FLEXIBLE_PARAMS) {
-                if (normalizedProps[key] && typeof normalizedProps[key] === 'object') {
+                if (normalizedProps[key] && typeof normalizedProps[key] === "object") {
                   const { type: _type, ...rest } = normalizedProps[key] as AnyRecord;
                   normalizedProps[key] = rest;
                 }
@@ -575,25 +593,21 @@ export class ResourceDefinition<TDoc = AnyRecord> {
           const resolvedRoutes = self.additionalRoutes;
 
           // Create CRUD routes
-          createCrudRouter(
-            typedInstance,
-            self.controller as unknown as CrudController<TDoc>,
-            {
-              tag: self.tag,
-              schemas: schemas ?? undefined,
-              permissions: self.permissions,
-              middlewares: self.middlewares,
-              additionalRoutes: resolvedRoutes,
-              disableDefaultRoutes: self.disableDefaultRoutes,
-              disabledRoutes: self.disabledRoutes,
-              resourceName: self.name,
-              schemaOptions: self.schemaOptions,
-              rateLimit: self.rateLimit,
-              updateMethod: self.updateMethod,
-              pipe: self.pipe,
-              fields: self.fields,
-            },
-          );
+          createCrudRouter(typedInstance, self.controller as unknown as CrudController<TDoc>, {
+            tag: self.tag,
+            schemas: schemas ?? undefined,
+            permissions: self.permissions,
+            middlewares: self.middlewares,
+            additionalRoutes: resolvedRoutes,
+            disableDefaultRoutes: self.disableDefaultRoutes,
+            disabledRoutes: self.disabledRoutes,
+            resourceName: self.name,
+            schemaOptions: self.schemaOptions,
+            rateLimit: self.rateLimit,
+            updateMethod: self.updateMethod,
+            pipe: self.pipe,
+            fields: self.fields,
+          });
 
           if (self.events && Object.keys(self.events).length > 0) {
             typedInstance.log?.debug?.(
@@ -665,10 +679,7 @@ function deepMergeSchemas(base: AnyRecord, override: AnyRecord): AnyRecord {
       // Merge arrays with deduplication (e.g., required, enum)
       result[key] = [...new Set([...(result[key] as unknown[]), ...value])];
     } else if (value && typeof value === "object" && !Array.isArray(value)) {
-      result[key] = deepMergeSchemas(
-        result[key] as AnyRecord,
-        value as AnyRecord,
-      );
+      result[key] = deepMergeSchemas(result[key] as AnyRecord, value as AnyRecord);
     } else {
       result[key] = value;
     }

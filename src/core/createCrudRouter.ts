@@ -11,27 +11,44 @@
  * - Framework-agnostic controllers via adapter pattern
  */
 
-import type { FastifyInstance, FastifyRequest, FastifyReply, RouteHandlerMethod } from 'fastify';
+import type {
+  FastifyReply,
+  FastifyRequest,
+  preHandlerHookHandler,
+  RouteHandlerMethod,
+} from "fastify";
+
+// Fastify 5.8+ tightened preHandler hook types. RouteHandlerMethod returns `unknown`
+// but preHandler expects `void | Promise<unknown>`. This alias bridges the gap safely
+// since all Arc middleware conforms at runtime.
+type PreHandlerHook = preHandlerHookHandler | RouteHandlerMethod;
+
+import { CRUD_OPERATIONS, DEFAULT_UPDATE_METHOD } from "../constants.js";
+import { requestContext } from "../context/requestContext.js";
+import type { PermissionCheck, PermissionContext, PermissionResult } from "../permissions/types.js";
+import { executePipeline } from "../pipeline/pipe.js";
+import type { PipelineConfig, PipelineContext, PipelineStep } from "../pipeline/types.js";
+import type { ControllerHandler } from "../types/handlers.js";
 import type {
   AdditionalRoute,
   CrudController,
   CrudRouterOptions,
   FastifyWithDecorators,
   IController,
+  IControllerResponse,
+  IRequestContext,
   RateLimitConfig,
   RequestWithExtras,
   UserLike,
-} from '../types/index.js';
-import type { ControllerHandler } from '../types/handlers.js';
-import type { IControllerResponse, IRequestContext } from '../types/index.js';
-import type { PermissionCheck, PermissionContext, PermissionResult } from '../permissions/types.js';
-import type { PipelineConfig, PipelineStep, PipelineContext } from '../pipeline/types.js';
-import { createCrudHandlers, createFastifyHandler, createRequestContext, sendControllerResponse } from './fastifyAdapter.js';
-import { executePipeline } from '../pipeline/pipe.js';
-import { getDefaultCrudSchemas } from '../utils/responseSchemas.js';
-import { convertRouteSchema } from '../utils/schemaConverter.js';
-import { requestContext } from '../context/requestContext.js';
-import { CRUD_OPERATIONS, DEFAULT_UPDATE_METHOD } from '../constants.js';
+} from "../types/index.js";
+import { getDefaultCrudSchemas } from "../utils/responseSchemas.js";
+import { convertRouteSchema } from "../utils/schemaConverter.js";
+import {
+  createCrudHandlers,
+  createFastifyHandler,
+  createRequestContext,
+  sendControllerResponse,
+} from "./fastifyAdapter.js";
 
 // ============================================================================
 // Rate Limit Helpers
@@ -58,7 +75,7 @@ interface RouteRateLimitConfig {
  * - `undefined`               -> no override (inherits instance-level config)
  */
 function buildRateLimitConfig(
-  rateLimit: RateLimitConfig | false | undefined
+  rateLimit: RateLimitConfig | false | undefined,
 ): RouteRateLimitConfig | undefined {
   if (rateLimit === undefined) return undefined;
 
@@ -104,7 +121,7 @@ function requiresAuthentication(permission: PermissionCheck | undefined): boolea
  */
 function buildAuthMiddleware(
   fastify: FastifyWithDecorators,
-  permission: PermissionCheck | undefined
+  permission: PermissionCheck | undefined,
 ): RouteHandlerMethod | null {
   if (requiresAuthentication(permission)) {
     // Protected route: require auth (401 if no token)
@@ -126,7 +143,7 @@ function buildAuthMiddleware(
 function buildPermissionMiddleware(
   permissionCheck: PermissionCheck | undefined,
   resourceName: string,
-  action: string
+  action: string,
 ): RouteHandlerMethod | null {
   // No permission check = public route
   if (!permissionCheck) return null;
@@ -151,17 +168,17 @@ function buildPermissionMiddleware(
     try {
       result = await permissionCheck(context);
     } catch (err) {
-      request.log?.warn?.({ err, resource: resourceName, action }, 'Permission check threw');
-      reply.code(403).send({ success: false, error: 'Permission denied' });
+      request.log?.warn?.({ err, resource: resourceName, action }, "Permission check threw");
+      reply.code(403).send({ success: false, error: "Permission denied" });
       return;
     }
 
     // Handle boolean result
-    if (typeof result === 'boolean') {
+    if (typeof result === "boolean") {
       if (!result) {
         reply.code(context.user ? 403 : 401).send({
           success: false,
-          error: context.user ? 'Permission denied' : 'Authentication required',
+          error: context.user ? "Permission denied" : "Authentication required",
         });
         return;
       }
@@ -173,7 +190,8 @@ function buildPermissionMiddleware(
     if (!permResult.granted) {
       reply.code(context.user ? 403 : 401).send({
         success: false,
-        error: permResult.reason ?? (context.user ? 'Permission denied' : 'Authentication required'),
+        error:
+          permResult.reason ?? (context.user ? "Permission denied" : "Authentication required"),
       });
       return;
     }
@@ -203,30 +221,34 @@ function createAdditionalRoutes<TDoc = unknown>(
     cacheMw: RouteHandlerMethod | null;
     idempotencyMw: RouteHandlerMethod | null;
     pipeline?: PipelineConfig;
-  }
+  },
 ): void {
-  const { tag, resourceName, arcDecorator, rateLimitConfig, cacheMw, idempotencyMw, pipeline } = options;
+  const { tag, resourceName, arcDecorator, rateLimitConfig, cacheMw, idempotencyMw, pipeline } =
+    options;
 
   for (const route of routes) {
     // Derive logical operation name for pipeline keys and permission actions.
     // Priority: explicit operation > handler name (string) > method+path slug
-    const opName = route.operation
-      ?? (typeof route.handler === 'string' ? route.handler : `${route.method.toLowerCase()}${route.path.replace(/[/:]/g, '_')}`);
+    const opName =
+      route.operation ??
+      (typeof route.handler === "string"
+        ? route.handler
+        : `${route.method.toLowerCase()}${route.path.replace(/[/:]/g, "_")}`);
 
     // Resolve handler - wrapHandler is REQUIRED (no auto-detection)
     let handler: RouteHandlerMethod;
 
-    if (typeof route.handler === 'string') {
+    if (typeof route.handler === "string") {
       // String handlers require a controller
       if (!controller) {
         throw new Error(
           `Route ${route.method} ${route.path}: string handler '${route.handler}' requires a controller. ` +
-          'Either provide a controller or use a function handler instead.'
+            "Either provide a controller or use a function handler instead.",
         );
       }
       const ctrl = controller as unknown as Record<string, unknown>;
       const method = ctrl[route.handler];
-      if (typeof method !== 'function') {
+      if (typeof method !== "function") {
         throw new Error(`Handler '${route.handler}' not found on controller`);
       }
       // Bind method to controller
@@ -282,29 +304,33 @@ function createAdditionalRoutes<TDoc = unknown>(
     const permissionMw = buildPermissionMiddleware(route.permissions, resourceName, opName);
 
     // Resolve preHandler - can be array or function that receives fastify
-    const customPreHandlers = typeof route.preHandler === 'function'
-      ? (route.preHandler as (fastify: FastifyWithDecorators) => RouteHandlerMethod[])(fastify)
-      : (route.preHandler ?? []) as RouteHandlerMethod[];
+    const customPreHandlers =
+      typeof route.preHandler === "function"
+        ? (route.preHandler as (fastify: FastifyWithDecorators) => RouteHandlerMethod[])(fastify)
+        : ((route.preHandler ?? []) as PreHandlerHook[]);
 
     // Select plugin middleware based on HTTP method
-    const pluginMw = route.method === 'GET'
-      ? cacheMw
-      : ['POST', 'PUT', 'PATCH'].includes(route.method) ? idempotencyMw : null;
+    const pluginMw =
+      route.method === "GET"
+        ? cacheMw
+        : ["POST", "PUT", "PATCH"].includes(route.method)
+          ? idempotencyMw
+          : null;
 
     const preHandler = [
       arcDecorator,
-      authMw,        // Authenticate first (populates request.user)
-      permissionMw,  // Then check permissions
-      pluginMw,      // Cache (GET) or idempotency (mutations) — after auth
+      authMw, // Authenticate first (populates request.user)
+      permissionMw, // Then check permissions
+      pluginMw, // Cache (GET) or idempotency (mutations) — after auth
       ...customPreHandlers,
-    ].filter(Boolean) as RouteHandlerMethod[];
+    ].filter(Boolean) as PreHandlerHook[];
 
     fastify.route({
       method: route.method,
       url: route.path,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       schema: schema as Record<string, any>, // Fastify RouteOptions.schema requires this shape
-      preHandler: preHandler.length > 0 ? preHandler : undefined,
+      preHandler: preHandler.length > 0 ? (preHandler as any) : undefined,
       handler,
       ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
     });
@@ -365,17 +391,17 @@ function createPipelineHandler<T>(
 export function createCrudRouter<TDoc = unknown>(
   fastify: FastifyWithDecorators,
   controller: CrudController<TDoc> | undefined,
-  options: CrudRouterOptions = {}
+  options: CrudRouterOptions = {},
 ): void {
   const {
-    tag = 'Resource',
+    tag = "Resource",
     schemas = {},
     permissions = {},
     middlewares = {},
     additionalRoutes = [],
     disableDefaultRoutes = false,
     disabledRoutes = [],
-    resourceName = 'unknown',
+    resourceName = "unknown",
     schemaOptions,
     rateLimit,
     pipe: pipeline,
@@ -393,14 +419,17 @@ export function createCrudRouter<TDoc = unknown>(
   // Skip response-cache when QueryCache is active for this resource.
   // QueryCache handles caching at the controller level (data-layer) with SWR,
   // so the HTTP-level response-cache is unnecessary and would cause double caching.
-  const resourceHasQueryCache = fastify.hasDecorator('queryCache') &&
-    controller && typeof (controller as unknown as Record<string, unknown>)._cacheConfig !== 'undefined' &&
+  const resourceHasQueryCache =
+    fastify.hasDecorator("queryCache") &&
+    controller &&
+    typeof (controller as unknown as Record<string, unknown>)._cacheConfig !== "undefined" &&
     (controller as unknown as Record<string, unknown>)._cacheConfig !== undefined;
-  const cacheMw: RouteHandlerMethod | null = (!resourceHasQueryCache && fastify.hasDecorator('responseCache'))
-    ? fastify.responseCache.middleware as RouteHandlerMethod
-    : null;
-  const idempotencyMw: RouteHandlerMethod | null = fastify.hasDecorator('idempotency')
-    ? fastify.idempotency.middleware as RouteHandlerMethod
+  const cacheMw: RouteHandlerMethod | null =
+    !resourceHasQueryCache && fastify.hasDecorator("responseCache")
+      ? (fastify.responseCache.middleware as RouteHandlerMethod)
+      : null;
+  const idempotencyMw: RouteHandlerMethod | null = fastify.hasDecorator("idempotency")
+    ? (fastify.idempotency.middleware as RouteHandlerMethod)
     : null;
 
   // Pre-build frozen arc metadata — allocated once, shared across all requests
@@ -438,9 +467,9 @@ export function createCrudRouter<TDoc = unknown>(
 
   // ID params schema
   const idParamsSchema = {
-    type: 'object' as const,
-    properties: { id: { type: 'string' as const } },
-    required: ['id' as const],
+    type: "object" as const,
+    properties: { id: { type: "string" as const } },
+    required: ["id" as const],
   };
 
   // Default response/querystring schemas for fast-json-stringify serialization
@@ -467,8 +496,8 @@ export function createCrudRouter<TDoc = unknown>(
     // Controller is required for default CRUD routes
     if (!controller) {
       throw new Error(
-        'Controller is required when disableDefaultRoutes is not true. ' +
-        'Provide a controller or use defineResource which auto-creates BaseController.'
+        "Controller is required when disableDefaultRoutes is not true. " +
+          "Provide a controller or use defineResource which auto-creates BaseController.",
       );
     }
 
@@ -481,13 +510,10 @@ export function createCrudRouter<TDoc = unknown>(
       for (const op of ops) {
         const steps = resolvePipelineSteps(pipeline, op);
         if (steps.length > 0) {
-          const method = ctrl[op].bind(ctrl) as (ctx: IRequestContext) => Promise<IControllerResponse<unknown>>;
-          wrapped[op] = createPipelineHandler(
-            method,
-            steps,
-            op,
-            resourceName,
-          );
+          const method = ctrl[op].bind(ctrl) as (
+            ctx: IRequestContext,
+          ) => Promise<IControllerResponse<unknown>>;
+          wrapped[op] = createPipelineHandler(method, steps, op, resourceName);
         }
       }
       // Create standard handlers first, then override with pipeline-wrapped ones
@@ -504,62 +530,91 @@ export function createCrudRouter<TDoc = unknown>(
   // Standard CRUD routes
   if (!disableDefaultRoutes && handlers) {
     // GET / - List all
-    if (!disabledRoutes.includes('list')) {
+    if (!disabledRoutes.includes("list")) {
       const authMw = buildAuthMiddleware(fastify, permissions.list);
-      const permMw = buildPermissionMiddleware(permissions.list, resourceName, 'list');
-      const listPreHandler = [arcDecorator, authMw, permMw, cacheMw, ...mw.list].filter(Boolean) as RouteHandlerMethod[];
+      const permMw = buildPermissionMiddleware(permissions.list, resourceName, "list");
+      const listPreHandler = [arcDecorator, authMw, permMw, cacheMw, ...mw.list].filter(
+        Boolean,
+      ) as PreHandlerHook[];
       fastify.route({
-        method: 'GET',
-        url: '/',
-        schema: buildSchema({ tags: [tag], summary: `List ${tag}` }, defaultSchemas.list, schemas.list as Record<string, unknown> | undefined),
-        preHandler: listPreHandler.length > 0 ? listPreHandler : undefined,
+        method: "GET",
+        url: "/",
+        schema: buildSchema(
+          { tags: [tag], summary: `List ${tag}` },
+          defaultSchemas.list,
+          schemas.list as Record<string, unknown> | undefined,
+        ),
+        preHandler: listPreHandler.length > 0 ? (listPreHandler as any) : undefined,
         handler: handlers.list,
         ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
       });
     }
 
     // GET /:id - Get by ID
-    if (!disabledRoutes.includes('get')) {
+    if (!disabledRoutes.includes("get")) {
       const authMw = buildAuthMiddleware(fastify, permissions.get);
-      const permMw = buildPermissionMiddleware(permissions.get, resourceName, 'get');
-      const getPreHandler = [arcDecorator, authMw, permMw, cacheMw, ...mw.get].filter(Boolean) as RouteHandlerMethod[];
+      const permMw = buildPermissionMiddleware(permissions.get, resourceName, "get");
+      const getPreHandler = [arcDecorator, authMw, permMw, cacheMw, ...mw.get].filter(
+        Boolean,
+      ) as PreHandlerHook[];
       fastify.route({
-        method: 'GET',
-        url: '/:id',
-        schema: buildSchema({ tags: [tag], summary: `Get ${tag} by ID`, params: idParamsSchema }, defaultSchemas.get, schemas.get as Record<string, unknown> | undefined),
-        preHandler: getPreHandler.length > 0 ? getPreHandler : undefined,
+        method: "GET",
+        url: "/:id",
+        schema: buildSchema(
+          { tags: [tag], summary: `Get ${tag} by ID`, params: idParamsSchema },
+          defaultSchemas.get,
+          schemas.get as Record<string, unknown> | undefined,
+        ),
+        preHandler: getPreHandler.length > 0 ? (getPreHandler as any) : undefined,
         handler: handlers.get,
         ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
       });
     }
 
     // POST / - Create
-    if (!disabledRoutes.includes('create')) {
+    if (!disabledRoutes.includes("create")) {
       const authMw = buildAuthMiddleware(fastify, permissions.create);
-      const permMw = buildPermissionMiddleware(permissions.create, resourceName, 'create');
-      const createPreHandler = [arcDecorator, authMw, permMw, idempotencyMw, ...mw.create].filter(Boolean) as RouteHandlerMethod[];
+      const permMw = buildPermissionMiddleware(permissions.create, resourceName, "create");
+      const createPreHandler = [arcDecorator, authMw, permMw, idempotencyMw, ...mw.create].filter(
+        Boolean,
+      ) as PreHandlerHook[];
       fastify.route({
-        method: 'POST',
-        url: '/',
-        schema: buildSchema({ tags: [tag], summary: `Create ${tag}` }, defaultSchemas.create, schemas.create as Record<string, unknown> | undefined),
-        preHandler: createPreHandler.length > 0 ? createPreHandler : undefined,
+        method: "POST",
+        url: "/",
+        schema: buildSchema(
+          { tags: [tag], summary: `Create ${tag}` },
+          defaultSchemas.create,
+          schemas.create as Record<string, unknown> | undefined,
+        ),
+        preHandler: createPreHandler.length > 0 ? (createPreHandler as any) : undefined,
         handler: handlers.create,
         ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
       });
     }
 
     // UPDATE /:id - PATCH, PUT, or both
-    if (!disabledRoutes.includes('update')) {
-      const updateMethods = updateMethod === 'both' ? ['PUT', 'PATCH'] as const : [updateMethod] as const;
+    if (!disabledRoutes.includes("update")) {
+      const updateMethods =
+        updateMethod === "both" ? (["PUT", "PATCH"] as const) : ([updateMethod] as const);
       const authMw = buildAuthMiddleware(fastify, permissions.update);
-      const permMw = buildPermissionMiddleware(permissions.update, resourceName, 'update');
-      const updatePreHandler = [arcDecorator, authMw, permMw, idempotencyMw, ...mw.update].filter(Boolean) as RouteHandlerMethod[];
+      const permMw = buildPermissionMiddleware(permissions.update, resourceName, "update");
+      const updatePreHandler = [arcDecorator, authMw, permMw, idempotencyMw, ...mw.update].filter(
+        Boolean,
+      ) as PreHandlerHook[];
       for (const method of updateMethods) {
         fastify.route({
           method,
-          url: '/:id',
-          schema: buildSchema({ tags: [tag], summary: `${method === 'PUT' ? 'Replace' : 'Update'} ${tag}`, params: idParamsSchema }, defaultSchemas.update, schemas.update as Record<string, unknown> | undefined),
-          preHandler: updatePreHandler.length > 0 ? updatePreHandler : undefined,
+          url: "/:id",
+          schema: buildSchema(
+            {
+              tags: [tag],
+              summary: `${method === "PUT" ? "Replace" : "Update"} ${tag}`,
+              params: idParamsSchema,
+            },
+            defaultSchemas.update,
+            schemas.update as Record<string, unknown> | undefined,
+          ),
+          preHandler: updatePreHandler.length > 0 ? (updatePreHandler as any) : undefined,
           handler: handlers.update,
           ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
         });
@@ -567,15 +622,21 @@ export function createCrudRouter<TDoc = unknown>(
     }
 
     // DELETE /:id - Delete
-    if (!disabledRoutes.includes('delete')) {
+    if (!disabledRoutes.includes("delete")) {
       const authMw = buildAuthMiddleware(fastify, permissions.delete);
-      const permMw = buildPermissionMiddleware(permissions.delete, resourceName, 'delete');
-      const deletePreHandler = [arcDecorator, authMw, permMw, ...mw.delete].filter(Boolean) as RouteHandlerMethod[];
+      const permMw = buildPermissionMiddleware(permissions.delete, resourceName, "delete");
+      const deletePreHandler = [arcDecorator, authMw, permMw, ...mw.delete].filter(
+        Boolean,
+      ) as PreHandlerHook[];
       fastify.route({
-        method: 'DELETE',
-        url: '/:id',
-        schema: buildSchema({ tags: [tag], summary: `Delete ${tag}`, params: idParamsSchema }, defaultSchemas.delete, schemas.delete as Record<string, unknown> | undefined),
-        preHandler: deletePreHandler.length > 0 ? deletePreHandler : undefined,
+        method: "DELETE",
+        url: "/:id",
+        schema: buildSchema(
+          { tags: [tag], summary: `Delete ${tag}`, params: idParamsSchema },
+          defaultSchemas.delete,
+          schemas.delete as Record<string, unknown> | undefined,
+        ),
+        preHandler: deletePreHandler.length > 0 ? (deletePreHandler as any) : undefined,
         handler: handlers.delete,
         ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
       });
@@ -584,7 +645,15 @@ export function createCrudRouter<TDoc = unknown>(
 
   // Additional routes from presets and custom
   if (additionalRoutes.length > 0) {
-    createAdditionalRoutes(fastify, additionalRoutes, controller, { tag, resourceName, arcDecorator, rateLimitConfig, cacheMw, idempotencyMw, pipeline });
+    createAdditionalRoutes(fastify, additionalRoutes, controller, {
+      tag,
+      resourceName,
+      arcDecorator,
+      rateLimitConfig,
+      cacheMw,
+      idempotencyMw,
+      pipeline,
+    });
   }
 }
 
@@ -595,7 +664,7 @@ export function createCrudRouter<TDoc = unknown>(
 export function createPermissionMiddleware(
   permission: PermissionCheck,
   resourceName: string,
-  action: string
+  action: string,
 ): RouteHandlerMethod | null {
   return buildPermissionMiddleware(permission, resourceName, action);
 }

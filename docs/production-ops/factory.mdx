@@ -56,12 +56,13 @@ const app = await createApp({
 ```typescript
 const app = await createApp({
   runtime: 'memory',       // Default — zero config, single instance
-  // runtime: 'distributed',  // Multi-instance — requires Redis stores
+  // runtime: 'distributed',  // Multi-instance — requires durable/shared stores
 
-  stores: {                // Required when runtime: 'distributed'
+  stores: {                // Events required; cache/queryCache required when enabled
     events: new RedisEventTransport({ client: redis }),
     cache: new RedisCacheStore({ client: redis }),
     queryCache: new RedisCacheStore({ client: redis, prefix: 'arc:qc:' }),
+    // idempotency: new RedisIdempotencyStore({ client: redis }), // recommended for write dedupe
   },
 });
 ```
@@ -69,9 +70,10 @@ const app = await createApp({
 | Mode | Use Case | Requirements |
 |------|----------|--------------|
 | `memory` | Development, single-instance | None |
-| `distributed` | Multi-instance production | Redis stores |
+| `distributed` | Multi-instance production | Durable events transport, plus shared stores for enabled plugins/features |
 
-Fail-fast validation: using `distributed` mode without providing required stores throws immediately.
+Fail-fast validation: using `distributed` mode without required shared stores throws immediately for enforced subsystems.
+If `stores.idempotency` is omitted, Arc starts but logs a warning because idempotent write dedupe would be instance-local.
 
 ## Arc Plugins
 
@@ -79,12 +81,14 @@ Fail-fast validation: using `distributed` mode without providing required stores
 const app = await createApp({
   arcPlugins: {
     requestId: true,         // X-Request-Id header
-    health: true,            // GET /health endpoint
+    health: true,            // GET /_health/live + /_health/ready
     gracefulShutdown: true,  // Handle SIGTERM/SIGINT
     queryCache: true,        // Server-side query caching (SWR)
     emitEvents: true,        // CRUD domain events
     sse: true,               // Server-sent events
     caching: true,           // ETag + Cache-Control
+    metrics: true,           // Prometheus /_metrics endpoint
+    versioning: { type: 'header', deprecated: ['1'] },  // API versioning
   },
 });
 ```

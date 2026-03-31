@@ -23,20 +23,18 @@
  * // UI: /docs
  */
 
+// External paths (for Better Auth, custom integrations, etc.)
+export type { ExternalOpenApiPaths } from "./externalPaths.js";
+export type { OpenApiBuildOptions, OpenApiOptions, OpenApiSpec } from "./openapi.js";
 // OpenAPI spec generator
 export {
+  buildOpenApiSpec,
   default as openApiPlugin,
   openApiPlugin as openApiPluginFn,
-  buildOpenApiSpec,
-} from './openapi.js';
-export type { OpenApiOptions, OpenApiSpec, OpenApiBuildOptions } from './openapi.js';
-
-// External paths (for Better Auth, custom integrations, etc.)
-export type { ExternalOpenApiPaths } from './externalPaths.js';
-
+} from "./openapi.js";
+export type { ScalarOptions } from "./scalar.js";
 // Scalar UI
 export {
   default as scalarPlugin,
   scalarPlugin as scalarPluginFn,
-} from './scalar.js';
-export type { ScalarOptions } from './scalar.js';
+} from "./scalar.js";

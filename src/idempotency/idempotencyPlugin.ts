@@ -36,12 +36,12 @@
  * // If same key sent again within TTL, returns cached response
  */
 
-import fp from 'fastify-plugin';
-import { createHash } from 'crypto';
-import type { FastifyInstance, FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
-import type { IdempotencyStore } from './stores/interface.js';
-import { createIdempotencyResult } from './stores/interface.js';
-import { MemoryIdempotencyStore } from './stores/memory.js';
+import { createHash } from "node:crypto";
+import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
+import fp from "fastify-plugin";
+import type { IdempotencyStore } from "./stores/interface.js";
+import { createIdempotencyResult } from "./stores/interface.js";
+import { MemoryIdempotencyStore } from "./stores/memory.js";
 
 export interface IdempotencyPluginOptions {
   /** Enable idempotency (default: false) */
@@ -64,7 +64,7 @@ export interface IdempotencyPluginOptions {
   retryAfterSeconds?: number;
 }
 
-declare module 'fastify' {
+declare module "fastify" {
   interface FastifyRequest {
     /** The idempotency key for this request (if present) */
     idempotencyKey?: string;
@@ -99,19 +99,19 @@ declare module 'fastify' {
   }
 }
 
-const HEADER_IDEMPOTENCY_REPLAYED = 'x-idempotency-replayed';
-const HEADER_IDEMPOTENCY_KEY = 'x-idempotency-key';
+const HEADER_IDEMPOTENCY_REPLAYED = "x-idempotency-replayed";
+const HEADER_IDEMPOTENCY_KEY = "x-idempotency-key";
 
 const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
   fastify: FastifyInstance,
-  opts: IdempotencyPluginOptions = {}
+  opts: IdempotencyPluginOptions = {},
 ) => {
   const {
     enabled = false,
-    headerName = 'idempotency-key',
+    headerName = "idempotency-key",
     ttlMs = 86400000, // 24 hours
     lockTimeoutMs = 30000, // 30 seconds
-    methods = ['POST', 'PUT', 'PATCH'],
+    methods = ["POST", "PUT", "PATCH"],
     include,
     exclude,
     store = new MemoryIdempotencyStore({ ttlMs }),
@@ -121,21 +121,21 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
   // Skip if not enabled
   if (!enabled) {
     // Provide no-op utilities
-    fastify.decorate('idempotency', {
+    fastify.decorate("idempotency", {
       invalidate: async () => {},
       has: async () => false,
       middleware: async () => {},
     });
-    fastify.decorateRequest('idempotencyKey', undefined);
-    fastify.decorateRequest('idempotencyReplayed', false);
-    fastify.log?.debug?.('Idempotency plugin disabled');
+    fastify.decorateRequest("idempotencyKey", undefined);
+    fastify.decorateRequest("idempotencyReplayed", false);
+    fastify.log?.debug?.("Idempotency plugin disabled");
     return;
   }
 
   const methodSet = new Set(methods.map((m) => m.toUpperCase()));
 
-  fastify.decorateRequest('idempotencyKey', undefined);
-  fastify.decorateRequest('idempotencyReplayed', false);
+  fastify.decorateRequest("idempotencyKey", undefined);
+  fastify.decorateRequest("idempotencyReplayed", false);
 
   /**
    * Check if this request should use idempotency
@@ -165,7 +165,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
    * Normalize body for consistent hashing (sort keys recursively)
    */
   function normalizeBody(obj: unknown): unknown {
-    if (obj === null || typeof obj !== 'object') {
+    if (obj === null || typeof obj !== "object") {
       return obj;
     }
 
@@ -192,36 +192,39 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
    */
   function getRequestFingerprint(request: FastifyRequest): string {
     // Combine method + URL + body hash + user identity for uniqueness
-    let bodyHash = 'nobody';
+    let bodyHash = "nobody";
 
-    if (request.body && typeof request.body === 'object') {
+    if (request.body && typeof request.body === "object") {
       // Normalize body (sort keys) for consistent hashing
       const normalized = normalizeBody(request.body);
       const bodyString = JSON.stringify(normalized);
-      bodyHash = createHash('sha256').update(bodyString).digest('hex').substring(0, 16);
+      bodyHash = createHash("sha256").update(bodyString).digest("hex").substring(0, 16);
       // SECURITY: Only log hash, never log full body (can contain secrets)
-      if (request.log && request.log.debug) {
-        request.log.debug({ bodyHash }, 'Generated body hash');
+      if (request.log?.debug) {
+        request.log.debug({ bodyHash }, "Generated body hash");
       }
     }
 
     // Scope to caller identity to prevent cross-user replay
     const user = request.user as { id?: string; _id?: string } | undefined;
-    const userId = user?.id ?? user?._id ?? 'anon';
+    const userId = user?.id ?? user?._id ?? "anon";
 
     const fingerprint = `${request.method}:${request.url}:${bodyHash}:u=${userId}`;
     return fingerprint;
   }
 
   // ---- Route-level middleware: check + lock (AFTER auth) ----
-  const idempotencyMiddleware = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  const idempotencyMiddleware = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<void> => {
     if (!shouldApplyIdempotency(request)) {
       return;
     }
 
     // Get idempotency key from header
     const keyHeader = request.headers[headerName.toLowerCase()];
-    const idempotencyKey = typeof keyHeader === 'string' ? keyHeader.trim() : undefined;
+    const idempotencyKey = typeof keyHeader === "string" ? keyHeader.trim() : undefined;
 
     if (!idempotencyKey) {
       // No key provided - proceed normally
@@ -241,12 +244,12 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
       request.idempotencyReplayed = true;
 
       // Set response headers
-      reply.header(HEADER_IDEMPOTENCY_REPLAYED, 'true');
+      reply.header(HEADER_IDEMPOTENCY_REPLAYED, "true");
       reply.header(HEADER_IDEMPOTENCY_KEY, idempotencyKey);
 
       // Replay original headers
       for (const [key, value] of Object.entries(cached.headers)) {
-        if (!key.startsWith('x-idempotency')) {
+        if (!key.startsWith("x-idempotency")) {
           reply.header(key, value);
         }
       }
@@ -259,14 +262,11 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     const lockAcquired = await store.tryLock(fullKey, request.id, lockTimeoutMs);
     if (!lockAcquired) {
       // Another request is processing this key
-      reply
-        .code(409)
-        .header('Retry-After', retryAfterSeconds.toString())
-        .send({
-          error: 'Request with this idempotency key is already in progress',
-          code: 'IDEMPOTENCY_CONFLICT',
-          retryAfter: retryAfterSeconds,
-        });
+      reply.code(409).header("Retry-After", retryAfterSeconds.toString()).send({
+        error: "Request with this idempotency key is already in progress",
+        code: "IDEMPOTENCY_CONFLICT",
+        retryAfter: retryAfterSeconds,
+      });
       return;
     }
 
@@ -275,7 +275,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
   };
 
   // Decorate with utilities + middleware
-  fastify.decorate('idempotency', {
+  fastify.decorate("idempotency", {
     invalidate: async (key: string) => {
       // Delete all entries for this raw idempotency key regardless of fingerprint
       await store.deleteByPrefix(`${key}:`);
@@ -289,7 +289,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
   });
 
   // Store response after successful request
-  fastify.addHook('onSend', async (request, reply, payload) => {
+  fastify.addHook("onSend", async (request, reply, payload) => {
     // Skip if this was a replayed response
     if (request.idempotencyReplayed) {
       return payload;
@@ -311,17 +311,17 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     // Extract headers to cache (exclude certain headers)
     const headersToCache: Record<string, string> = {};
     const excludeHeaders = new Set([
-      'content-length',
-      'transfer-encoding',
-      'connection',
-      'keep-alive',
-      'date',
-      'set-cookie',
+      "content-length",
+      "transfer-encoding",
+      "connection",
+      "keep-alive",
+      "date",
+      "set-cookie",
     ]);
 
     const rawHeaders = reply.getHeaders();
     for (const [key, value] of Object.entries(rawHeaders)) {
-      if (!excludeHeaders.has(key.toLowerCase()) && typeof value === 'string') {
+      if (!excludeHeaders.has(key.toLowerCase()) && typeof value === "string") {
         headersToCache[key] = value;
       }
     }
@@ -329,7 +329,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     // Parse body if it's a string
     let body: unknown;
     try {
-      body = typeof payload === 'string' ? JSON.parse(payload) : payload;
+      body = typeof payload === "string" ? JSON.parse(payload) : payload;
     } catch {
       body = payload;
     }
@@ -348,7 +348,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
   });
 
   // Handle errors - ensure lock is released
-  fastify.addHook('onError', async (request) => {
+  fastify.addHook("onError", async (request) => {
     const fullKey = request._idempotencyFullKey;
     if (fullKey) {
       await store.unlock(fullKey, request.id);
@@ -356,16 +356,16 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
   });
 
   // Cleanup on close
-  fastify.addHook('onClose', async () => {
+  fastify.addHook("onClose", async () => {
     await store.close?.();
   });
 
-  fastify.log?.debug?.({ headerName, ttlMs, methods }, 'Idempotency plugin enabled');
+  fastify.log?.debug?.({ headerName, ttlMs, methods }, "Idempotency plugin enabled");
 };
 
 export default fp(idempotencyPlugin, {
-  name: 'arc-idempotency',
-  fastify: '5.x',
+  name: "arc-idempotency",
+  fastify: "5.x",
 });
 
 export { idempotencyPlugin };

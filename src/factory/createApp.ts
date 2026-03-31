@@ -37,15 +37,11 @@
  * });
  */
 
-import Fastify, {
-  type FastifyInstance,
-  type FastifyReply,
-  type FastifyRequest,
-} from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import qs from "qs";
-import type { CreateAppOptions } from "./types.js";
-import { getPreset } from "./presets.js";
 import { PUBLIC_SCOPE } from "../scope/types.js";
+import { getPreset } from "./presets.js";
+import type { CreateAppOptions } from "./types.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Fastify plugin types vary per package
 type FastifyPlugin = (...args: any[]) => any;
@@ -113,9 +109,7 @@ async function loadPlugin(
 
     // For optional plugins, return null instead of throwing
     if (isModuleNotFound && entry.optional) {
-      logger?.warn(
-        `Optional plugin '${name}' skipped (${entry.package} not installed)`,
-      );
+      logger?.warn(`Optional plugin '${name}' skipped (${entry.package} not installed)`);
       return null;
     }
 
@@ -148,9 +142,7 @@ async function loadPlugin(
  * @param options - Application configuration
  * @returns Configured Fastify instance
  */
-export async function createApp(
-  options: CreateAppOptions,
-): Promise<FastifyInstance> {
+export async function createApp(options: CreateAppOptions): Promise<FastifyInstance> {
   // ============================================
   // 0. CONFIGURE ARC LOGGER
   // ============================================
@@ -179,26 +171,41 @@ export async function createApp(
   // ============================================
   // 1b. VALIDATE RUNTIME PROFILE
   // ============================================
+  const deferredWarnings: string[] = [];
   if (options.runtime === "distributed") {
     const MEMORY_NAMES = new Set(["memory", "memory-cache"]);
     const missing: string[] = [];
 
+    // Events transport is always required for distributed runtime
     const eventsTransport = options.stores?.events;
     if (!eventsTransport || MEMORY_NAMES.has(eventsTransport.name)) {
       missing.push("events transport");
     }
 
-    const cacheStore = options.stores?.cache;
-    if (!cacheStore || MEMORY_NAMES.has(cacheStore.name)) {
-      missing.push("cache store");
+    // Cache store — only validate when caching plugin is enabled
+    if (options.arcPlugins?.caching) {
+      const cacheStore = options.stores?.cache;
+      if (!cacheStore || MEMORY_NAMES.has(cacheStore.name)) {
+        missing.push("cache store");
+      }
     }
 
+    // Idempotency store — warn when memory-backed OR absent in distributed mode.
+    // Idempotency is per-resource opt-in, but horizontally scaled write paths
+    // without a shared idempotency store will have instance-local dedupe only.
     const idempotencyStore = options.stores?.idempotency;
-    if (!idempotencyStore || MEMORY_NAMES.has(idempotencyStore.name)) {
-      missing.push("idempotency store");
+    if (idempotencyStore && MEMORY_NAMES.has(idempotencyStore.name)) {
+      missing.push("idempotency store (memory-backed in distributed mode)");
+    } else if (!idempotencyStore) {
+      // Deferred — logged via Fastify logger after instance is created (see below)
+      deferredWarnings.push(
+        "runtime: 'distributed' — no idempotency store configured. " +
+          "Write-path deduplication will be instance-local. If resources use the " +
+          "idempotency plugin, provide stores.idempotency with a Redis/MongoDB store.",
+      );
     }
 
-    // QueryCache store validation (only when queryCache plugin is enabled)
+    // QueryCache store — only validate when queryCache plugin is enabled
     if (options.arcPlugins?.queryCache) {
       const qcStore = options.stores?.queryCache;
       if (!qcStore || MEMORY_NAMES.has(qcStore.name)) {
@@ -224,7 +231,7 @@ export async function createApp(
   // ============================================
   // 3. CREATE FASTIFY INSTANCE
   // ============================================
-  let fastify: FastifyInstance = Fastify({
+  const fastify: FastifyInstance = Fastify({
     logger: config.logger ?? true,
     trustProxy: config.trustProxy ?? false,
     // Use qs parser to support nested bracket notation in query strings
@@ -246,12 +253,16 @@ export async function createApp(
     },
   });
 
+  // Log deferred warnings via Fastify's logger (not console.warn)
+  for (const warning of deferredWarnings) {
+    fastify.log.warn(warning);
+  }
+
   // Apply TypeBox type provider if requested
   // This enables TypeScript type inference from TypeBox route schemas
   if (config.typeProvider === "typebox") {
     try {
-      const { TypeBoxValidatorCompiler } =
-        await import("@fastify/type-provider-typebox");
+      const { TypeBoxValidatorCompiler } = await import("@fastify/type-provider-typebox");
       fastify.setValidatorCompiler(TypeBoxValidatorCompiler);
       fastify.log.debug("TypeBox type provider enabled");
     } catch {
@@ -272,11 +283,7 @@ export async function createApp(
   fastify.addContentTypeParser(
     "application/json",
     { parseAs: "string" },
-    (
-      _req: FastifyRequest,
-      body: string,
-      done: (err: Error | null, body?: unknown) => void,
-    ) => {
+    (_req: FastifyRequest, body: string, done: (err: Error | null, body?: unknown) => void) => {
       if (!body || body.length === 0) {
         return done(null, undefined);
       }
@@ -296,10 +303,7 @@ export async function createApp(
   if (config.helmet !== false) {
     const helmet = (await loadPlugin("helmet"))!;
     // Use type assertion to handle complex helmet options
-    await fastify.register(
-      helmet,
-      (config.helmet ?? {}) as Record<string, unknown>,
-    );
+    await fastify.register(helmet, (config.helmet ?? {}) as Record<string, unknown>);
     fastify.log.debug("Helmet (security headers) enabled");
   } else {
     fastify.log.warn("Helmet disabled - security headers not applied");
@@ -310,16 +314,12 @@ export async function createApp(
     const cors = (await loadPlugin("cors"))!;
     const corsOptions = { ...(config.cors ?? {}) } as Record<string, unknown>;
 
-    // Require explicit origin in production
-    if (
-      config.preset === "production" &&
-      (!corsOptions || !("origin" in corsOptions))
-    ) {
-      throw new Error(
-        "CORS origin must be explicitly configured in production.\n" +
-          "Set cors.origin to allowed domains or set cors: false to disable.\n" +
-          "Example: cors: { origin: ['https://yourdomain.com'] }\n" +
-          "Docs: https://github.com/classytic/arc#security",
+    // Warn (not throw) when production preset has no explicit CORS origin.
+    // Users may intentionally use origin: '*' from env vars or rely on proxy/CDN CORS.
+    if (config.preset === "production" && corsOptions && !("origin" in corsOptions)) {
+      fastify.log.warn(
+        "CORS origin is not explicitly configured in production. " +
+          "Set cors.origin to allowed domains, cors: { origin: '*' }, or cors: false to disable.",
       );
     }
 
@@ -345,11 +345,21 @@ export async function createApp(
     };
     await fastify.register(rateLimit, rateLimitOpts);
 
-    // Warn if production without Redis store (in-memory = per-instance counters)
-    if (config.preset === "production") {
-      const hasStore =
-        typeof rateLimitOpts === "object" && "store" in rateLimitOpts;
-      if (!hasStore) {
+    // Enforce Redis store for rate limiting in distributed mode.
+    // In production (non-distributed), warn only.
+    const hasRateLimitStore = typeof rateLimitOpts === "object" && "store" in rateLimitOpts;
+    if (!hasRateLimitStore) {
+      if (config.runtime === "distributed") {
+        fastify.log.error(
+          "Rate limiting is using in-memory store in distributed mode. " +
+            "Each instance tracks limits independently — this breaks rate limiting. " +
+            "Configure a Redis store: rateLimit: { store: new RedisStore({ ... }) }",
+        );
+        throw new Error(
+          "[Arc] runtime: 'distributed' with rate limiting requires a shared store.\n" +
+            "Provide rateLimit: { store: new RedisStore({ ... }) } or disable rate limiting: rateLimit: false",
+        );
+      } else if (config.preset === "production") {
         fastify.log.warn(
           "Rate limiting is using in-memory store. In multi-instance deployments, " +
             "each instance tracks limits independently. Configure a Redis store for distributed rate limiting: " +
@@ -380,10 +390,7 @@ export async function createApp(
   // Under Pressure - Health monitoring
   if (config.underPressure !== false) {
     const underPressure = (await loadPlugin("underPressure"))!;
-    await fastify.register(
-      underPressure,
-      config.underPressure ?? { exposeStatusRoute: true },
-    );
+    await fastify.register(underPressure, config.underPressure ?? { exposeStatusRoute: true });
     fastify.log.debug("Health monitoring (under-pressure) enabled");
   } else {
     fastify.log.debug("Health monitoring disabled");
@@ -443,12 +450,9 @@ export async function createApp(
   // ============================================
 
   // Single dynamic import for all Arc plugins
-  const {
-    arcCorePlugin,
-    requestIdPlugin,
-    healthPlugin,
-    gracefulShutdownPlugin,
-  } = await import("../plugins/index.js");
+  const { arcCorePlugin, requestIdPlugin, healthPlugin, gracefulShutdownPlugin } = await import(
+    "../plugins/index.js"
+  );
 
   // Always register arc core first - provides fastify.arc with hooks & registry
   // This prevents global singleton leaks between app instances (e.g., in tests)
@@ -471,18 +475,13 @@ export async function createApp(
   // Transport is sourced from stores.events (defaults to MemoryEventTransport).
   if (config.arcPlugins?.events !== false) {
     const { default: eventPlugin } = await import("../events/eventPlugin.js");
-    const eventOpts =
-      typeof config.arcPlugins?.events === "object"
-        ? config.arcPlugins.events
-        : {};
+    const eventOpts = typeof config.arcPlugins?.events === "object" ? config.arcPlugins.events : {};
     await fastify.register(eventPlugin, {
       ...eventOpts,
       transport: options.stores?.events, // undefined → eventPlugin defaults to MemoryEventTransport
     });
     trackPlugin("arc-events", eventOpts as Record<string, unknown>);
-    fastify.log.debug(
-      `Arc events plugin enabled (transport: ${fastify.events.transportName})`,
-    );
+    fastify.log.debug(`Arc events plugin enabled (transport: ${fastify.events.transportName})`);
   }
 
   // ============================================
@@ -510,8 +509,7 @@ export async function createApp(
   // Caching plugin (opt-in)
   if (config.arcPlugins?.caching) {
     const { default: cachingPlugin } = await import("../plugins/caching.js");
-    const cachingOpts =
-      config.arcPlugins.caching === true ? {} : config.arcPlugins.caching;
+    const cachingOpts = config.arcPlugins.caching === true ? {} : config.arcPlugins.caching;
     await fastify.register(cachingPlugin, cachingOpts);
     trackPlugin("arc-caching", cachingOpts as Record<string, unknown>);
     fastify.log.debug("Arc caching plugin enabled");
@@ -520,11 +518,9 @@ export async function createApp(
   // QueryCache plugin (opt-in)
   if (config.arcPlugins?.queryCache) {
     const { queryCachePlugin } = await import("../cache/queryCachePlugin.js");
-    const qcOpts =
-      config.arcPlugins.queryCache === true ? {} : config.arcPlugins.queryCache;
+    const qcOpts = config.arcPlugins.queryCache === true ? {} : config.arcPlugins.queryCache;
     const store =
-      options.stores?.queryCache ??
-      new (await import("../cache/memory.js")).MemoryCacheStore();
+      options.stores?.queryCache ?? new (await import("../cache/memory.js")).MemoryCacheStore();
     await fastify.register(queryCachePlugin, { store, ...qcOpts });
     trackPlugin("arc-query-cache", qcOpts as Record<string, unknown>);
     fastify.log.debug("Arc queryCache plugin enabled");
@@ -533,17 +529,34 @@ export async function createApp(
   // SSE plugin (opt-in, requires events)
   if (config.arcPlugins?.sse) {
     if (config.arcPlugins?.events === false) {
-      fastify.log.warn(
-        "SSE plugin requires events plugin (arcPlugins.events). SSE disabled.",
-      );
+      fastify.log.warn("SSE plugin requires events plugin (arcPlugins.events). SSE disabled.");
     } else {
       const { default: ssePlugin } = await import("../plugins/sse.js");
-      const sseOpts =
-        config.arcPlugins.sse === true ? {} : config.arcPlugins.sse;
+      const sseOpts = config.arcPlugins.sse === true ? {} : config.arcPlugins.sse;
       await fastify.register(ssePlugin, sseOpts);
       trackPlugin("arc-sse", sseOpts as Record<string, unknown>);
       fastify.log.debug("Arc SSE plugin enabled");
     }
+  }
+
+  // Metrics plugin (opt-in)
+  if (config.arcPlugins?.metrics) {
+    const { default: metricsPlugin } = await import("../plugins/metrics.js");
+    const metricsOpts = config.arcPlugins.metrics === true ? {} : config.arcPlugins.metrics;
+    await fastify.register(metricsPlugin, metricsOpts);
+    trackPlugin("arc-metrics", metricsOpts as Record<string, unknown>);
+    fastify.log.debug("Arc metrics plugin enabled");
+  }
+
+  // Versioning plugin (opt-in)
+  if (config.arcPlugins?.versioning) {
+    const { default: versioningPlugin } = await import("../plugins/versioning.js");
+    await fastify.register(versioningPlugin, config.arcPlugins.versioning);
+    trackPlugin(
+      "arc-versioning",
+      config.arcPlugins.versioning as unknown as Record<string, unknown>,
+    );
+    fastify.log.debug("Arc versioning plugin enabled");
   }
 
   // ============================================
@@ -592,27 +605,18 @@ export async function createApp(
         // optionalAuthenticate is required for public routes (allowPublic) to parse auth
         // when present, enabling proper org-scoped filtering for authenticated users.
         const { authenticate, optionalAuthenticate } = authConfig as {
-          authenticate: (
-            request: FastifyRequest,
-            reply: FastifyReply,
-          ) => Promise<void>;
-          optionalAuthenticate?: (
-            request: FastifyRequest,
-            reply: FastifyReply,
-          ) => Promise<void>;
+          authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+          optionalAuthenticate?: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
         };
-        fastify.decorate(
-          "authenticate",
-          async function (request: FastifyRequest, reply: FastifyReply) {
-            await authenticate(request, reply);
-          },
-        );
+        fastify.decorate("authenticate", async (request: FastifyRequest, reply: FastifyReply) => {
+          await authenticate(request, reply);
+        });
         if (!fastify.hasDecorator("optionalAuthenticate")) {
           if (optionalAuthenticate) {
             // User provided an explicit optional auth handler
             fastify.decorate(
               "optionalAuthenticate",
-              async function (request: FastifyRequest, reply: FastifyReply) {
+              async (request: FastifyRequest, reply: FastifyReply) => {
                 await optionalAuthenticate(request, reply);
               },
             );
@@ -622,7 +626,7 @@ export async function createApp(
             // actually sending them, so the request continues as unauthenticated.
             fastify.decorate(
               "optionalAuthenticate",
-              async function (request: FastifyRequest, reply: FastifyReply) {
+              async (request: FastifyRequest, reply: FastifyReply) => {
                 let intercepted = false;
                 const proxyReply = new Proxy(reply, {
                   get(target, prop) {
@@ -740,11 +744,7 @@ export async function createApp(
   // 11. LOG SUMMARY
   // ============================================
 
-  const authMode = isAuthDisabled
-    ? "none"
-    : authConfig
-      ? authConfig.type
-      : "none";
+  const authMode = isAuthDisabled ? "none" : authConfig ? authConfig.type : "none";
   fastify.log.info(
     {
       preset: config.preset ?? "custom",
@@ -767,27 +767,21 @@ export const ArcFactory = {
   /**
    * Create production app with strict security
    */
-  async production(
-    options: Omit<CreateAppOptions, "preset">,
-  ): Promise<FastifyInstance> {
+  async production(options: Omit<CreateAppOptions, "preset">): Promise<FastifyInstance> {
     return createApp({ ...options, preset: "production" });
   },
 
   /**
    * Create development app with relaxed security
    */
-  async development(
-    options: Omit<CreateAppOptions, "preset">,
-  ): Promise<FastifyInstance> {
+  async development(options: Omit<CreateAppOptions, "preset">): Promise<FastifyInstance> {
     return createApp({ ...options, preset: "development" });
   },
 
   /**
    * Create testing app with minimal setup
    */
-  async testing(
-    options: Omit<CreateAppOptions, "preset">,
-  ): Promise<FastifyInstance> {
+  async testing(options: Omit<CreateAppOptions, "preset">): Promise<FastifyInstance> {
     return createApp({ ...options, preset: "testing" });
   },
 };

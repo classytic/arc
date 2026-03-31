@@ -29,9 +29,9 @@
  */
 
 export const CircuitState = {
-  CLOSED: 'CLOSED',
-  OPEN: 'OPEN',
-  HALF_OPEN: 'HALF_OPEN',
+  CLOSED: "CLOSED",
+  OPEN: "OPEN",
+  HALF_OPEN: "HALF_OPEN",
 } as const;
 
 export type CircuitState = (typeof CircuitState)[keyof typeof CircuitState];
@@ -95,12 +95,9 @@ export interface CircuitBreakerStats {
 export class CircuitBreakerError extends Error {
   state: CircuitState;
 
-  constructor(
-    message: string,
-    state: CircuitState
-  ) {
+  constructor(message: string, state: CircuitState) {
     super(message);
-    this.name = 'CircuitBreakerError';
+    this.name = "CircuitBreakerError";
     this.state = state;
   }
 }
@@ -125,10 +122,7 @@ export class CircuitBreaker<T extends (...args: any[]) => Promise<any>> {
 
   private readonly fn: T;
 
-  constructor(
-    fn: T,
-    options: CircuitBreakerOptions = {}
-  ) {
+  constructor(fn: T, options: CircuitBreakerOptions = {}) {
     this.fn = fn;
     this.failureThreshold = options.failureThreshold ?? 5;
     this.resetTimeout = options.resetTimeout ?? 60000;
@@ -137,7 +131,7 @@ export class CircuitBreaker<T extends (...args: any[]) => Promise<any>> {
     this.fallback = options.fallback;
     this.onStateChange = options.onStateChange;
     this.onError = options.onError;
-    this.name = options.name ?? 'CircuitBreaker';
+    this.name = options.name ?? "CircuitBreaker";
   }
 
   /**
@@ -153,7 +147,7 @@ export class CircuitBreaker<T extends (...args: any[]) => Promise<any>> {
         // Circuit still open, fail fast
         const error = new CircuitBreakerError(
           `Circuit breaker is OPEN for ${this.name}`,
-          CircuitState.OPEN
+          CircuitState.OPEN,
         );
 
         // Use fallback if available
@@ -330,7 +324,7 @@ export class CircuitBreaker<T extends (...args: any[]) => Promise<any>> {
  */
 export function createCircuitBreaker<T extends (...args: any[]) => Promise<any>>(
   fn: T,
-  options?: CircuitBreakerOptions
+  options?: CircuitBreakerOptions,
 ): CircuitBreaker<T> {
   return new CircuitBreaker(fn, options);
 }
@@ -347,7 +341,7 @@ export class CircuitBreakerRegistry {
   register<T extends (...args: any[]) => Promise<any>>(
     name: string,
     fn: T,
-    options?: Omit<CircuitBreakerOptions, 'name'>
+    options?: Omit<CircuitBreakerOptions, "name">,
   ): CircuitBreaker<T> {
     const breaker = new CircuitBreaker(fn, { ...options, name });
     this.breakers.set(name, breaker);

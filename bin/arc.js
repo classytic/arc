@@ -98,9 +98,10 @@ async function main() {
         process.exit(1);
     }
   } catch (err) {
-    console.error(`Error: ${err.message}`);
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`Error: ${message}`);
     if (process.env.DEBUG) {
-      console.error(err.stack);
+      console.error(err instanceof Error ? err.stack : err);
     }
     process.exit(1);
   }
@@ -119,9 +120,11 @@ async function handleInit(args) {
 async function handleGenerate(type, args) {
   if (!type) {
     console.error('Missing type argument');
-    console.log('\nUsage: arc generate <resource|controller|model|repository|schemas> <name>');
+    console.log('\nUsage: arc generate <resource|controller|model|repository|schemas|mcp> <name>');
     console.log('\nExamples:');
     console.log('  arc generate resource product');
+    console.log('  arc generate resource product --mcp');
+    console.log('  arc generate mcp product');
     console.log('  arc g r invoice');
     process.exit(1);
   }
@@ -133,6 +136,7 @@ async function handleGenerate(type, args) {
     m: 'model',
     repo: 'repository',
     s: 'schemas',
+    mcp: 'mcp',
     resource: 'resource',
     controller: 'controller',
     model: 'model',
@@ -184,6 +188,7 @@ async function handleDoctor(rawArgs) {
   const { doctor } = await import('../dist/cli/commands/doctor.mjs');
   await doctor(rawArgs);
 }
+
 
 // ============================================================================
 // Option Parsing
@@ -346,11 +351,14 @@ GENERATE SUBCOMMANDS
   model, m          Generate model only
   repository, repo  Generate repository only
   schemas, s        Generate schemas only
+  mcp               Generate MCP tools file only
 
 GENERATE NOTES
   - Auto-detects TypeScript/JavaScript from tsconfig.json
   - Files are created in src/resources/<name>/ directory
   - Uses prefixed filenames: <name>.model.ts, <name>.repository.ts, etc.
+  - Use --mcp flag with resource to include MCP tools file: arc g r product --mcp
+  - Set "mcp": true in .arcrc to always generate MCP tools
 
 EXAMPLES
   # Initialize a new project (interactive prompts)

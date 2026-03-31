@@ -137,7 +137,7 @@ function isDebugEnabled(module: string): boolean {
   }
 
   // Priority 2: Environment variable
-  const envDebug = typeof process !== 'undefined' ? process.env?.ARC_DEBUG : undefined;
+  const envDebug = typeof process !== "undefined" ? process.env?.ARC_DEBUG : undefined;
   if (envDebug) {
     return matchesModule(envDebug, module);
   }
@@ -147,15 +147,18 @@ function isDebugEnabled(module: string): boolean {
 
 function matchesModule(debug: boolean | string, module: string): boolean {
   if (debug === true) return true;
-  if (typeof debug === 'string') {
+  if (typeof debug === "string") {
     const normalized = debug.trim();
-    if (normalized === '1' || normalized === 'true' || normalized === '*') return true;
-    return normalized.split(',').map((s) => s.trim()).includes(module);
+    if (normalized === "1" || normalized === "true" || normalized === "*") return true;
+    return normalized
+      .split(",")
+      .map((s) => s.trim())
+      .includes(module);
   }
   return false;
 }
 
 function isSuppressed(): boolean {
-  const env = typeof process !== 'undefined' ? process.env?.ARC_SUPPRESS_WARNINGS : undefined;
-  return env === '1' || env === 'true';
+  const env = typeof process !== "undefined" ? process.env?.ARC_SUPPRESS_WARNINGS : undefined;
+  return env === "1" || env === "true";
 }

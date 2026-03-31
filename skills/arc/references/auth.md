@@ -180,20 +180,50 @@ fastify.post('/invoices', { preHandler: [fastify.authenticate, requireOrgRole('a
 
 ```typescript
 import type { RequestScope } from '@classytic/arc/scope';
+import { getUserId, getUserRoles, getOrgId, getOrgRoles, getTeamId } from '@classytic/arc/scope';
 
-// Variants:
+// Variants (userId/userRoles on all authenticated variants):
 // { kind: 'public' }
-// { kind: 'authenticated' }
-// { kind: 'member', organizationId, orgRoles: string[], teamId? }
-// { kind: 'elevated', organizationId?, elevatedBy }
+// { kind: 'authenticated', userId?, userRoles? }
+// { kind: 'member', userId?, userRoles, organizationId, orgRoles: string[], teamId? }
+// { kind: 'elevated', userId?, organizationId?, elevatedBy }
+
+const userId = getUserId(request.scope);         // string | undefined
+const globalRoles = getUserRoles(request.scope); // string[]
+const orgId = getOrgId(request.scope);           // string | undefined
+const orgRoles = getOrgRoles(request.scope);     // string[]
 ```
 
 ## Two Role Layers
 
-| Layer | Source | Checked By |
-|-------|--------|------------|
-| Platform roles | `user.role` (`string \| string[]`) | `requireRoles()`, `authorize()` |
-| Org roles | `request.scope.orgRoles` | `requireOrgRole()`, `requireOrgMembership()` |
+| Layer | Source | Scope Field | Checked By |
+|-------|--------|-------------|------------|
+| Global roles | `user.role` | `scope.userRoles` | `requireRoles()`, `authorize()` |
+| Org roles | Org membership | `scope.orgRoles` | `requireOrgRole()`, `requireOrgMembership()` |
+
+## Role Hierarchy
+
+```typescript
+import { createRoleHierarchy } from '@classytic/arc/permissions';
+
+const hierarchy = createRoleHierarchy({
+  superadmin: ['admin'],
+  admin: ['branch_manager'],
+});
+
+hierarchy.expand(['superadmin']); // → ['superadmin', 'admin', 'branch_manager']
+hierarchy.includes(['admin'], 'branch_manager'); // → true
+```
+
+## Token Extraction & Revocation
+
+```typescript
+auth: {
+  type: 'jwt', jwt: { secret },
+  tokenExtractor: (req) => req.cookies?.['auth-token'] ?? null,
+  isRevoked: async (decoded) => redis.sismember('revoked', decoded.jti),
+}
+```
 
 ## Microservice Gateway Pattern
 

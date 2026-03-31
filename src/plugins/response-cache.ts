@@ -62,13 +62,8 @@
  * ```
  */
 
+import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
-import type {
-  FastifyInstance,
-  FastifyPluginAsync,
-  FastifyReply,
-  FastifyRequest,
-} from "fastify";
 import { hasEvents } from "../utils/typeGuards.js";
 
 // ============================================================================
@@ -301,10 +296,7 @@ declare module "fastify" {
        * }, handler);
        * ```
        */
-      middleware: (
-        request: FastifyRequest,
-        reply: FastifyReply,
-      ) => Promise<void>;
+      middleware: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
     };
   }
   interface FastifyRequest {
@@ -317,9 +309,10 @@ declare module "fastify" {
 // Plugin Implementation
 // ============================================================================
 
-const responseCachePluginImpl: FastifyPluginAsync<
-  ResponseCacheOptions
-> = async (fastify: FastifyInstance, opts: ResponseCacheOptions = {}) => {
+const responseCachePluginImpl: FastifyPluginAsync<ResponseCacheOptions> = async (
+  fastify: FastifyInstance,
+  opts: ResponseCacheOptions = {},
+) => {
   const {
     maxEntries = 500,
     defaultTTL = 30,
@@ -357,9 +350,7 @@ const responseCachePluginImpl: FastifyPluginAsync<
     // User A's response to User B, or Org A's data to Org B
     const user = request.user as { id?: string; _id?: string } | undefined;
     const userId = user?.id ?? user?._id ?? "anon";
-    const scope = request.scope as
-      | { kind: string; organizationId?: string }
-      | undefined;
+    const scope = request.scope as { kind: string; organizationId?: string } | undefined;
     const orgId = scope?.organizationId ?? "no-org";
     return `${request.method}:${request.url}:u=${userId}:o=${orgId}`;
   }
@@ -380,45 +371,37 @@ const responseCachePluginImpl: FastifyPluginAsync<
   // ---- onResponse hook: invalidate cache only on successful (2xx) mutations ----
   // This runs AFTER the request completes, so failed/unauthorized mutations
   // do NOT purge the cache (prevents cache-purge DoS attacks).
-  fastify.addHook(
-    "onResponse",
-    async (request: FastifyRequest, reply: FastifyReply) => {
-      if (!invalidateMethods.has(request.method.toUpperCase())) return;
+  fastify.addHook("onResponse", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!invalidateMethods.has(request.method.toUpperCase())) return;
 
-      // Only invalidate on successful responses
-      const statusCode = reply.statusCode;
-      if (statusCode < 200 || statusCode >= 300) return;
+    // Only invalidate on successful responses
+    const statusCode = reply.statusCode;
+    if (statusCode < 200 || statusCode >= 300) return;
 
-      const path = request.url.split("?")[0]!;
-      const segments = path.split("/").filter(Boolean);
+    const path = request.url.split("?")[0]!;
+    const segments = path.split("/").filter(Boolean);
 
-      // Detect item-scoped paths by checking if the last segment looks like
-      // a resource ID (not a collection name). This handles both prefixed
-      // routes like /api/products/123 (3 segments) and non-prefixed routes
-      // like /products/123 (2 segments).
-      const lastSegment = segments[segments.length - 1];
-      const isItemScoped =
-        segments.length >= 2 &&
-        lastSegment != null &&
-        /^[0-9a-f]{8,}$|^\d+$/.test(lastSegment);
+    // Detect item-scoped paths by checking if the last segment looks like
+    // a resource ID (not a collection name). This handles both prefixed
+    // routes like /api/products/123 (3 segments) and non-prefixed routes
+    // like /products/123 (2 segments).
+    const lastSegment = segments[segments.length - 1];
+    const isItemScoped =
+      segments.length >= 2 && lastSegment != null && /^[0-9a-f]{8,}$|^\d+$/.test(lastSegment);
 
-      if (isItemScoped) {
-        // Item-level mutation — invalidate both the item and its collection
-        const resourceRoot = "/" + segments.slice(0, -1).join("/");
-        cache.invalidatePrefix(resourceRoot);
-        cache.invalidatePrefix(path);
-      } else {
-        // Collection-level mutation (e.g., POST /api/products)
-        cache.invalidatePrefix(path);
-      }
-    },
-  );
+    if (isItemScoped) {
+      // Item-level mutation — invalidate both the item and its collection
+      const resourceRoot = `/${segments.slice(0, -1).join("/")}`;
+      cache.invalidatePrefix(resourceRoot);
+      cache.invalidatePrefix(path);
+    } else {
+      // Collection-level mutation (e.g., POST /api/products)
+      cache.invalidatePrefix(path);
+    }
+  });
 
   // ---- Route-level middleware: serve from cache (AFTER auth) ----
-  const cacheMiddleware = async (
-    request: FastifyRequest,
-    reply: FastifyReply,
-  ): Promise<void> => {
+  const cacheMiddleware = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     // Only check cache for cacheable requests
     const ttl = request.__arcCacheTTL;
     if (!ttl || ttl <= 0) return;
@@ -445,56 +428,53 @@ const responseCachePluginImpl: FastifyPluginAsync<
   };
 
   // ---- onSend hook: store in cache (recompute key — user is now populated) ----
-  fastify.addHook(
-    "onSend",
-    async (request: FastifyRequest, reply: FastifyReply, payload) => {
-      const ttl = request.__arcCacheTTL;
-      if (!ttl || ttl <= 0) return payload;
+  fastify.addHook("onSend", async (request: FastifyRequest, reply: FastifyReply, payload) => {
+    const ttl = request.__arcCacheTTL;
+    if (!ttl || ttl <= 0) return payload;
 
-      if (request.method !== "GET" && request.method !== "HEAD") return payload;
+    if (request.method !== "GET" && request.method !== "HEAD") return payload;
 
-      // Only cache 2xx responses
-      const statusCode = reply.statusCode;
-      if (statusCode < 200 || statusCode >= 300) return payload;
+    // Only cache 2xx responses
+    const statusCode = reply.statusCode;
+    if (statusCode < 200 || statusCode >= 300) return payload;
 
-      // Recompute key with now-populated user identity (auth has run by this point)
-      const key = buildKey(request);
-      if (!key) return payload;
+    // Recompute key with now-populated user identity (auth has run by this point)
+    const key = buildKey(request);
+    if (!key) return payload;
 
-      if (xCacheHeader) {
-        reply.header("x-cache", "MISS");
-      }
+    if (xCacheHeader) {
+      reply.header("x-cache", "MISS");
+    }
 
-      // Store in cache — handle Buffer correctly (String(buffer) produces '[object Buffer]')
-      let body: string;
-      if (typeof payload === "string") {
-        body = payload;
-      } else if (Buffer.isBuffer(payload)) {
-        body = payload.toString("utf-8");
-      } else if (payload != null) {
-        body = JSON.stringify(payload);
-      } else {
-        body = "";
-      }
+    // Store in cache — handle Buffer correctly (String(buffer) produces '[object Buffer]')
+    let body: string;
+    if (typeof payload === "string") {
+      body = payload;
+    } else if (Buffer.isBuffer(payload)) {
+      body = payload.toString("utf-8");
+    } else if (payload != null) {
+      body = JSON.stringify(payload);
+    } else {
+      body = "";
+    }
 
-      // Capture cacheable headers
-      const headers: Record<string, string> = {};
-      const contentType = reply.getHeader("content-type");
-      if (contentType) headers["content-type"] = String(contentType);
-      const etag = reply.getHeader("etag");
-      if (etag) headers["etag"] = String(etag);
+    // Capture cacheable headers
+    const headers: Record<string, string> = {};
+    const contentType = reply.getHeader("content-type");
+    if (contentType) headers["content-type"] = String(contentType);
+    const etag = reply.getHeader("etag");
+    if (etag) headers.etag = String(etag);
 
-      cache.set(key, {
-        body,
-        statusCode,
-        headers,
-        createdAt: Date.now(),
-        ttl: ttl * 1000, // Convert to ms
-      });
+    cache.set(key, {
+      body,
+      statusCode,
+      headers,
+      createdAt: Date.now(),
+      ttl: ttl * 1000, // Convert to ms
+    });
 
-      return payload;
-    },
-  );
+    return payload;
+  });
 
   // ---- Decorator ----
   fastify.decorate("responseCache", {
@@ -514,25 +494,21 @@ const responseCachePluginImpl: FastifyPluginAsync<
   // ---- Event-driven invalidation (requires eventPlugin) ----
   const evtInv = opts.eventInvalidation;
   if (evtInv && hasEvents(fastify)) {
-    const crossResourcePatterns =
-      typeof evtInv === "object" ? (evtInv.patterns ?? {}) : {};
+    const crossResourcePatterns = typeof evtInv === "object" ? (evtInv.patterns ?? {}) : {};
 
     fastify.events
       .subscribe("*", async (event) => {
         const parts = event.type.split(".");
         if (parts.length !== 2) return;
         const [resource, action] = parts;
-        if (!resource || !["created", "updated", "deleted"].includes(action!))
-          return;
+        if (!resource || !["created", "updated", "deleted"].includes(action!)) return;
 
         // Invalidate the resource's own cache prefix (both singular and plural)
         cache.invalidatePrefix(`/${resource}s`);
         cache.invalidatePrefix(`/${resource}`);
 
         // Apply cross-resource invalidation rules
-        for (const [pattern, prefixes] of Object.entries(
-          crossResourcePatterns,
-        )) {
+        for (const [pattern, prefixes] of Object.entries(crossResourcePatterns)) {
           if (eventMatchesPattern(event.type, pattern)) {
             for (const prefix of prefixes) {
               cache.invalidatePrefix(prefix);

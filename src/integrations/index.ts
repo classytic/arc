@@ -12,29 +12,51 @@
  * Import the actual plugins from their dedicated subpaths.
  */
 
+// Event Gateway (unified SSE + WebSocket)
+export type { EventGatewayOptions } from "./event-gateway.js";
+// Jobs (background processing)
+export type {
+  JobDefinition,
+  JobDispatcher,
+  JobDispatchOptions,
+  JobMeta,
+  JobsPluginOptions,
+  QueueStats,
+} from "./jobs.js";
+// MCP (Model Context Protocol)
+// Runtime: import from '@classytic/arc/mcp'
+export type {
+  BetterAuthHandler,
+  CallToolResult,
+  CreateMcpServerConfig,
+  CrudOperation,
+  McpAuthResult,
+  McpPluginOptions,
+  McpResourceConfig,
+  PromptDefinition,
+  ToolAnnotations,
+  ToolContext,
+  ToolDefinition,
+} from "./mcp/types.js";
 // Streamline (workflow orchestration)
 export type {
   StreamlinePluginOptions,
   WorkflowLike,
   WorkflowRunLike,
-} from './streamline.js';
+} from "./streamline.js";
+// Webhooks (outbound customer subscriptions)
+// Runtime: import from '@classytic/arc/integrations/webhooks'
+export type {
+  WebhookDeliveryRecord,
+  WebhookManager,
+  WebhookPluginOptions,
+  WebhookStore,
+  WebhookSubscription,
+} from "./webhooks.js";
 
 // WebSocket (real-time communication)
 export type {
-  WebSocketPluginOptions,
   WebSocketClient,
   WebSocketMessage,
-} from './websocket.js';
-
-// Event Gateway (unified SSE + WebSocket)
-export type { EventGatewayOptions } from './event-gateway.js';
-
-// Jobs (background processing)
-export type {
-  JobsPluginOptions,
-  JobDefinition,
-  JobMeta,
-  JobDispatchOptions,
-  JobDispatcher,
-  QueueStats,
-} from './jobs.js';
+  WebSocketPluginOptions,
+} from "./websocket.js";

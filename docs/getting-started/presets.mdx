@@ -371,6 +371,43 @@ class CategoryController
 }
 ```
 
+## Bulk Operations
+
+Adds `POST /bulk`, `PATCH /bulk`, `DELETE /bulk` routes for batch CRUD. Permissions inherit from the resource's `create`/`update`/`delete`.
+
+```typescript
+defineResource({
+  name: 'product',
+  presets: ['softDelete', 'bulk'],
+  permissions: {
+    create: requireRoles(['admin']),
+    update: requireRoles(['admin']),
+    delete: requireRoles(['admin']),
+    // Bulk ops inherit these automatically
+  },
+});
+```
+
+**Routes:**
+
+| Route | Body | Repository Method |
+|-------|------|-------------------|
+| `POST /products/bulk` | `{ items: [...] }` | `repo.createMany(items)` |
+| `PATCH /products/bulk` | `{ filter: {...}, data: {...} }` | `repo.updateMany(filter, data)` |
+| `DELETE /products/bulk` | `{ filter: {...} }` | `repo.deleteMany(filter)` |
+
+DB-agnostic — works with any repository that provides `createMany`, `updateMany`, `deleteMany`. MongoKit provides these via `batchOperationsPlugin`.
+
+**Options:**
+
+```typescript
+import { bulkPreset } from '@classytic/arc/presets';
+
+presets: [
+  bulkPreset({ operations: ['createMany', 'updateMany'], maxCreateItems: 500 }),
+]
+```
+
 ## Best Practices
 
 1. **Use presets for common patterns** - Don't reinvent softDelete, multiTenant

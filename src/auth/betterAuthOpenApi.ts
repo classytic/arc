@@ -17,8 +17,8 @@
  * ```
  */
 
-import type { ExternalOpenApiPaths } from '../docs/externalPaths.js';
-import { toJsonSchema } from '../utils/schemaConverter.js';
+import type { ExternalOpenApiPaths } from "../docs/externalPaths.js";
+import { toJsonSchema } from "../utils/schemaConverter.js";
 
 // ============================================================================
 // Types
@@ -43,14 +43,17 @@ export interface BetterAuthOpenApiOptions {
    * Fields with `input: false` are excluded from request bodies
    * but still appear in the User component schema (output-only).
    */
-  userFields?: Record<string, {
-    type: string;
-    description?: string;
-    /** Whether this field is required in sign-up (default: false) */
-    required?: boolean;
-    /** Whether this field is accepted in request body (default: true). Set false for output-only fields. */
-    input?: boolean;
-  }>;
+  userFields?: Record<
+    string,
+    {
+      type: string;
+      description?: string;
+      /** Whether this field is required in sign-up (default: false) */
+      required?: boolean;
+      /** Whether this field is accepted in request body (default: true). Set false for output-only fields. */
+      input?: boolean;
+    }
+  >;
 }
 
 // ============================================================================
@@ -87,36 +90,34 @@ interface BetterAuthEndpoint {
  * Check if a value looks like a Better Auth endpoint (has .path and .options)
  */
 function isBetterAuthEndpoint(value: unknown): value is BetterAuthEndpoint {
-  if (typeof value !== 'function' && typeof value !== 'object') return false;
+  if (typeof value !== "function" && typeof value !== "object") return false;
   if (!value) return false;
 
   const v = value as Record<string, unknown>;
-  return (
-    typeof v.path === 'string' &&
-    typeof v.options === 'object' &&
-    v.options !== null
-  );
+  return typeof v.path === "string" && typeof v.options === "object" && v.options !== null;
 }
 
 /**
  * Convert Fastify-style path params (/:id) to OpenAPI-style (/{id})
  */
 function toOpenApiPath(path: string): string {
-  return path.replace(/:([^/]+)/g, '{$1}');
+  return path.replace(/:([^/]+)/g, "{$1}");
 }
 
 /**
  * Extract path parameters from a path string
  */
-function extractPathParams(path: string): Array<{ name: string; in: 'path'; required: true; schema: { type: string } }> {
-  const params: Array<{ name: string; in: 'path'; required: true; schema: { type: string } }> = [];
+function extractPathParams(
+  path: string,
+): Array<{ name: string; in: "path"; required: true; schema: { type: string } }> {
+  const params: Array<{ name: string; in: "path"; required: true; schema: { type: string } }> = [];
   const matches = path.matchAll(/:(\w+)/g);
   for (const match of matches) {
     params.push({
       name: match[1]!,
-      in: 'path',
+      in: "path",
       required: true,
-      schema: { type: 'string' },
+      schema: { type: "string" },
     });
   }
   return params;
@@ -134,15 +135,15 @@ export function extractBetterAuthOpenApi(
   options: BetterAuthOpenApiOptions = {},
 ): ExternalOpenApiPaths {
   const {
-    basePath = '/api/auth',
-    tagName = 'Authentication',
-    tagDescription = 'Better Auth authentication endpoints',
+    basePath = "/api/auth",
+    tagName = "Authentication",
+    tagDescription = "Better Auth authentication endpoints",
     excludePaths = [],
     excludeServerOnly = true,
     userFields,
   } = options;
 
-  const normalizedBase = basePath.replace(/\/+$/, '');
+  const normalizedBase = basePath.replace(/\/+$/, "");
   const paths: Record<string, Record<string, unknown>> = {};
 
   // Auto-detect active plugins by inspecting available endpoints.
@@ -179,13 +180,13 @@ export function extractBetterAuthOpenApi(
     const methods: string[] = [];
     if (endpointOpts.method) {
       if (Array.isArray(endpointOpts.method)) {
-        methods.push(...endpointOpts.method.map(m => m.toLowerCase()));
+        methods.push(...endpointOpts.method.map((m) => m.toLowerCase()));
       } else {
         methods.push(endpointOpts.method.toLowerCase());
       }
     } else {
       // Default: GET if no body, POST if body exists
-      methods.push(endpointOpts.body ? 'post' : 'get');
+      methods.push(endpointOpts.body ? "post" : "get");
     }
 
     // Extract OpenAPI metadata from endpoint
@@ -209,15 +210,15 @@ export function extractBetterAuthOpenApi(
       const parameters: unknown[] = [...pathParams];
 
       // Query parameters (for GET/DELETE)
-      if ((method === 'get' || method === 'delete') && endpointOpts.query) {
+      if ((method === "get" || method === "delete") && endpointOpts.query) {
         const querySchema = toJsonSchema(endpointOpts.query);
-        if (querySchema && querySchema.type === 'object' && querySchema.properties) {
+        if (querySchema && querySchema.type === "object" && querySchema.properties) {
           const props = querySchema.properties as Record<string, Record<string, unknown>>;
           const required = (querySchema.required as string[]) ?? [];
           for (const [name, prop] of Object.entries(props)) {
             const paramEntry: Record<string, unknown> = {
               name,
-              in: 'query',
+              in: "query",
               required: required.includes(name),
               schema: prop,
             };
@@ -234,7 +235,7 @@ export function extractBetterAuthOpenApi(
       }
 
       // Request body (for POST/PUT/PATCH)
-      if (method === 'post' || method === 'put' || method === 'patch') {
+      if (method === "post" || method === "put" || method === "patch") {
         if (openApiMeta?.requestBody) {
           // Prefer metadata.openapi.requestBody (cleaner than Zod conversion)
           operation.requestBody = structuredClone(openApiMeta.requestBody);
@@ -245,7 +246,7 @@ export function extractBetterAuthOpenApi(
             operation.requestBody = {
               required: true,
               content: {
-                'application/json': { schema: bodySchema },
+                "application/json": { schema: bodySchema },
               },
             };
           }
@@ -267,9 +268,9 @@ export function extractBetterAuthOpenApi(
       } else {
         // Default responses
         operation.responses = {
-          '200': { description: 'Success' },
-          '400': { description: 'Bad request' },
-          '401': { description: 'Unauthorized' },
+          "200": { description: "Success" },
+          "400": { description: "Bad request" },
+          "401": { description: "Unauthorized" },
         };
       }
 
@@ -282,35 +283,35 @@ export function extractBetterAuthOpenApi(
   // Build component schemas for $ref resolution (e.g. $ref: "#/components/schemas/User")
   const schemas: Record<string, Record<string, unknown>> = {
     User: {
-      type: 'object',
+      type: "object",
       properties: {
-        id: { type: 'string' },
-        name: { type: 'string' },
-        email: { type: 'string', format: 'email' },
-        emailVerified: { type: 'boolean' },
-        image: { type: 'string', nullable: true },
-        createdAt: { type: 'string', format: 'date-time' },
-        updatedAt: { type: 'string', format: 'date-time' },
+        id: { type: "string" },
+        name: { type: "string" },
+        email: { type: "string", format: "email" },
+        emailVerified: { type: "boolean" },
+        image: { type: "string", nullable: true },
+        createdAt: { type: "string", format: "date-time" },
+        updatedAt: { type: "string", format: "date-time" },
       },
     },
     Session: {
-      type: 'object',
+      type: "object",
       properties: {
-        id: { type: 'string' },
-        userId: { type: 'string' },
-        token: { type: 'string' },
-        expiresAt: { type: 'string', format: 'date-time' },
-        ipAddress: { type: 'string', nullable: true },
-        userAgent: { type: 'string', nullable: true },
-        createdAt: { type: 'string', format: 'date-time' },
-        updatedAt: { type: 'string', format: 'date-time' },
+        id: { type: "string" },
+        userId: { type: "string" },
+        token: { type: "string" },
+        expiresAt: { type: "string", format: "date-time" },
+        ipAddress: { type: "string", nullable: true },
+        userAgent: { type: "string", nullable: true },
+        createdAt: { type: "string", format: "date-time" },
+        updatedAt: { type: "string", format: "date-time" },
       },
     },
   };
 
   // Merge userFields into User component schema (all fields, including input: false)
   if (userFields) {
-    const userProps = schemas.User!.properties as Record<string, unknown>;
+    const userProps = schemas.User?.properties as Record<string, unknown>;
     for (const [name, field] of Object.entries(userFields)) {
       const prop: Record<string, unknown> = { type: field.type };
       if (field.description) prop.description = field.description;
@@ -321,19 +322,20 @@ export function extractBetterAuthOpenApi(
   // Build security schemes — always include cookieAuth, add plugin-specific schemes dynamically
   const securitySchemes: Record<string, Record<string, unknown>> = {
     cookieAuth: {
-      type: 'apiKey',
-      in: 'cookie',
-      name: 'better-auth.session_token',
-      description: 'Session cookie set by Better Auth after sign-in',
+      type: "apiKey",
+      in: "cookie",
+      name: "better-auth.session_token",
+      description: "Session cookie set by Better Auth after sign-in",
     },
   };
 
   if (detectedPlugins.apiKey) {
     securitySchemes.apiKeyAuth = {
-      type: 'apiKey',
-      in: 'header',
-      name: 'x-api-key',
-      description: 'API key for programmatic access. Pass org context via x-organization-id header.',
+      type: "apiKey",
+      in: "header",
+      name: "x-api-key",
+      description:
+        "API key for programmatic access. Pass org context via x-organization-id header.",
     };
   }
 
@@ -382,9 +384,9 @@ function detectActivePlugins(authApi: Record<string, unknown>): DetectedPlugins 
 
   return {
     // apiKey plugin registers /api-key/create
-    apiKey: endpointPaths.has('/api-key/create'),
+    apiKey: endpointPaths.has("/api-key/create"),
     // organization plugin registers /organization/create
-    organization: endpointPaths.has('/organization/create'),
+    organization: endpointPaths.has("/organization/create"),
   };
 }
 
@@ -397,7 +399,7 @@ function detectActivePlugins(authApi: Record<string, unknown>): DetectedPlugins 
  */
 function formatOperationSummary(key: string): string {
   return key
-    .replace(/([A-Z])/g, ' $1')
+    .replace(/([A-Z])/g, " $1")
     .replace(/^./, (s) => s.toUpperCase())
     .trim();
 }
@@ -406,7 +408,7 @@ function formatOperationSummary(key: string): string {
  * Check if an endpoint path should have userFields merged into its request body.
  */
 function isUserFieldEndpoint(path: string): boolean {
-  return path === '/sign-up/email' || path === '/update-user';
+  return path === "/sign-up/email" || path === "/update-user";
 }
 
 /**
@@ -415,11 +417,11 @@ function isUserFieldEndpoint(path: string): boolean {
  */
 function mergeUserFieldsIntoRequestBody(
   requestBody: Record<string, unknown>,
-  userFields: NonNullable<BetterAuthOpenApiOptions['userFields']>,
+  userFields: NonNullable<BetterAuthOpenApiOptions["userFields"]>,
   endpointPath: string,
 ): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const content = (requestBody as any)?.content?.['application/json'];
+  const content = (requestBody as any)?.content?.["application/json"];
   if (!content?.schema) return;
 
   const schema = content.schema as Record<string, unknown>;
@@ -435,7 +437,7 @@ function mergeUserFieldsIntoRequestBody(
     if (field.input === false) continue;
 
     // For updateUser, all fields are optional
-    const isRequired = endpointPath === '/update-user' ? false : (field.required ?? false);
+    const isRequired = endpointPath === "/update-user" ? false : (field.required ?? false);
 
     const prop: Record<string, unknown> = { type: field.type };
     if (field.description) prop.description = field.description;

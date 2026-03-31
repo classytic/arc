@@ -28,7 +28,7 @@
  * await runner.up(); // Run all pending migrations
  */
 
-import mongoose, { type Connection } from 'mongoose';
+import type mongoose from "mongoose";
 
 export interface Migration {
   /** Migration version (sequential number) */
@@ -77,7 +77,7 @@ export function defineMigration(migration: Migration): Migration {
  * Manages execution of migrations with tracking and rollback support.
  */
 export class MigrationRunner {
-  private readonly collectionName = '_migrations';
+  private readonly collectionName = "_migrations";
 
   private readonly db: mongoose.mongo.Db;
 
@@ -98,17 +98,17 @@ export class MigrationRunner {
       .sort((a, b) => a.version - b.version);
 
     if (pending.length === 0) {
-      console.log('No pending migrations');
+      console.log("No pending migrations");
       return;
     }
 
     console.log(`Running ${pending.length} migration(s)...\n`);
 
     for (const migration of pending) {
-      await this.runMigration(migration, 'up');
+      await this.runMigration(migration, "up");
     }
 
-    console.log('\nAll migrations completed successfully');
+    console.log("\nAll migrations completed successfully");
   }
 
   /**
@@ -117,30 +117,28 @@ export class MigrationRunner {
   async down(migrations: Migration[]): Promise<void> {
     const applied = await this.getAppliedMigrations();
     if (applied.length === 0) {
-      console.log('No migrations to rollback');
+      console.log("No migrations to rollback");
       return;
     }
 
     // Get last applied migration
     const last = applied[applied.length - 1];
     if (!last) {
-      console.log('No migrations to rollback');
+      console.log("No migrations to rollback");
       return;
     }
 
     const migration = migrations.find(
-      (m) => m.resource === last.resource && m.version === last.version
+      (m) => m.resource === last.resource && m.version === last.version,
     );
 
     if (!migration) {
-      throw new Error(
-        `Migration ${last.resource}:${last.version} not found in migration files`
-      );
+      throw new Error(`Migration ${last.resource}:${last.version} not found in migration files`);
     }
 
     console.log(`Rolling back ${migration.resource} v${migration.version}...`);
-    await this.runMigration(migration, 'down', true);
-    console.log('Rollback completed');
+    await this.runMigration(migration, "down", true);
+    console.log("Rollback completed");
   }
 
   /**
@@ -159,17 +157,17 @@ export class MigrationRunner {
 
     for (const record of toRollback) {
       const migration = migrations.find(
-        (m) => m.resource === record.resource && m.version === record.version
+        (m) => m.resource === record.resource && m.version === record.version,
       );
 
       if (!migration) {
         throw new Error(`Migration ${record.resource}:${record.version} not found`);
       }
 
-      await this.runMigration(migration, 'down', true);
+      await this.runMigration(migration, "down", true);
     }
 
-    console.log('\nRollback completed');
+    console.log("\nRollback completed");
   }
 
   /**
@@ -203,26 +201,26 @@ export class MigrationRunner {
    */
   private async runMigration(
     migration: Migration,
-    direction: 'up' | 'down',
-    isRollback = false
+    direction: "up" | "down",
+    isRollback = false,
   ): Promise<void> {
     const start = Date.now();
-    const action = direction === 'up' ? 'Applying' : 'Rolling back';
+    const action = direction === "up" ? "Applying" : "Rolling back";
 
     console.log(
-      `${action} ${migration.resource} v${migration.version}${migration.description ? `: ${migration.description}` : ''}...`
+      `${action} ${migration.resource} v${migration.version}${migration.description ? `: ${migration.description}` : ""}...`,
     );
 
     try {
       // Run migration
-      if (direction === 'up') {
+      if (direction === "up") {
         await migration.up(this.db);
 
         // Validate if provided
         if (migration.validate) {
           const valid = await migration.validate(this.db);
           if (!valid) {
-            throw new Error('Migration validation failed');
+            throw new Error("Migration validation failed");
           }
         }
 
@@ -242,7 +240,7 @@ export class MigrationRunner {
     } catch (error) {
       console.error(
         `❌ ${migration.resource} v${migration.version} failed:`,
-        (error as Error).message
+        (error as Error).message,
       );
       throw error;
     }
@@ -293,10 +291,7 @@ export interface SchemaVersion {
  *   // ... rest of resource definition
  * });
  */
-export function withSchemaVersion(
-  version: number,
-  migrations: Migration[]
-): SchemaVersion {
+export function withSchemaVersion(version: number, migrations: Migration[]): SchemaVersion {
   return { version, migrations };
 }
 
@@ -398,7 +393,7 @@ export const migrationHelpers = {
           .updateMany({ [fieldName]: { $exists: false } }, { $set: { [fieldName]: defaultValue } });
       },
       down: async (db) => {
-        await db.collection(collection).updateMany({}, { $unset: { [fieldName]: '' } });
+        await db.collection(collection).updateMany({}, { $unset: { [fieldName]: "" } });
       },
     }),
 
@@ -411,9 +406,9 @@ export const migrationHelpers = {
       resource: collection,
       description: `Remove ${fieldName} field`,
       up: async (db) => {
-        await db.collection(collection).updateMany({}, { $unset: { [fieldName]: '' } });
+        await db.collection(collection).updateMany({}, { $unset: { [fieldName]: "" } });
       },
-      down: async (db) => {
+      down: async (_db) => {
         // Cannot restore data - this is destructive
         console.warn(`Cannot restore ${fieldName} field - data was deleted`);
       },
@@ -422,16 +417,21 @@ export const migrationHelpers = {
   /**
    * Create an index
    */
-  createIndex: (collection: string, fields: Record<string, 1 | -1>, options?: Record<string, unknown>) =>
+  createIndex: (
+    collection: string,
+    fields: Record<string, 1 | -1>,
+    options?: Record<string, unknown>,
+  ) =>
     defineMigration({
       version: 0,
       resource: collection,
-      description: `Create index on ${Object.keys(fields).join(', ')}`,
+      description: `Create index on ${Object.keys(fields).join(", ")}`,
       up: async (db) => {
         await db.collection(collection).createIndex(fields, options);
       },
       down: async (db) => {
-        const indexName = typeof options?.name === 'string' ? options.name : Object.keys(fields).join('_');
+        const indexName =
+          typeof options?.name === "string" ? options.name : Object.keys(fields).join("_");
         await db.collection(collection).dropIndex(indexName);
       },
     }),

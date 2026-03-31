@@ -371,3 +371,230 @@ const app = await createApp({
 process.on('SIGTERM', () => app.close());
 process.on('SIGINT', () => app.close());
 ```
+
+## Distributed Runtime
+
+`runtime: 'distributed'` only validates stores you actually enable:
+
+- `stores.events` — always required
+- `stores.cache` — only when `arcPlugins.caching` enabled
+- `stores.queryCache` — only when `arcPlugins.queryCache` enabled
+- `stores.idempotency` — never validated (per-resource opt-in)
+
+## Under-Pressure
+
+Production preset: `maxEventLoopDelay: 3000` (avoids false 503s on Render/Railway/Fly.io). Override: `underPressure: { maxEventLoopDelay: 500 }`. Disable: `underPressure: false`.
+
+## CORS
+
+Production warns (not throws) when origin missing. `origin: '*'` from env is allowed. Smart CORS auto-converts `credentials: true` + `origin: '*'` to `origin: true`.
+
+## Metrics Plugin
+
+Prometheus-compatible metrics endpoint — zero external dependencies:
+
+```typescript
+import { metricsPlugin } from '@classytic/arc/plugins';
+
+await fastify.register(metricsPlugin, {
+  path: '/_metrics',       // default
+  prefix: 'arc',           // metric name prefix (default: 'arc')
+  onCollect: (metrics) => pushToOTLP(metrics),  // optional OTLP push
+});
+
+// GET /_metrics → Prometheus text format
+```
+
+**Built-in counters**: `arc_http_requests_total`, `arc_http_request_duration_seconds`, `arc_crud_operations_total`, `arc_cache_hits_total`, `arc_cache_misses_total`, `arc_events_published_total`, `arc_events_consumed_total`, `arc_circuit_breaker_state`.
+
+**Programmatic access**: `fastify.metrics.recordOperation(resource, op, status, durationMs)`, `.recordCacheHit(resource)`, `.recordEventPublish(type)`, `.reset()`.
+
+## API Versioning Plugin
+
+Header-based or URL prefix-based versioning with deprecation warnings:
+
+```typescript
+import { versioningPlugin } from '@classytic/arc/plugins';
+
+// Header-based: clients send Accept-Version: 2
+await fastify.register(versioningPlugin, {
+  type: 'header',
+  deprecated: ['1'],
+  sunset: '2025-12-01',
+});
+
+// Prefix-based: /v2/products
+await fastify.register(versioningPlugin, { type: 'prefix' });
+```
+
+**Headers set**: `x-api-version` on every response. `Deprecation: true` + `Sunset` for deprecated versions. Access via `request.apiVersion`.
+
+## Per-Tenant Rate Limiting
+
+Scope-aware rate limit key generator — isolates rate limits by org, user, or IP:
+
+```typescript
+import { createTenantKeyGenerator } from '@classytic/arc/scope';
+
+const app = await createApp({
+  rateLimit: {
+    max: 100,
+    timeWindow: '1 minute',
+    keyGenerator: createTenantKeyGenerator(),
+  },
+});
+```
+
+**Key resolution**: `member` → `organizationId`, `authenticated` → `userId`, `elevated` → `organizationId ?? userId`, `public` → IP. Custom strategy: `createTenantKeyGenerator({ strategy: (ctx) => ctx.ip })`.
+
+## Event Outbox
+
+Transactional outbox pattern — at-least-once delivery even if transport is down:
+
+```typescript
+import { EventOutbox, MemoryOutboxStore } from '@classytic/arc/events';
+
+const outbox = new EventOutbox({
+  store: new MemoryOutboxStore(),  // or MongoOutboxStore for production
+  transport: redisTransport,
+});
+
+// In business logic (same DB transaction)
+await outbox.store(event);
+
+// Relay cron (runs every few seconds)
+const relayed = await outbox.relay();  // publishes pending → transport
+```
+
+**OutboxStore interface**: `save(event)`, `getPending(limit)`, `acknowledge(eventId)`.
+
+## RPC Service Client — Schema Versioning
+
+The service client supports a `schemaVersion` option for contract compatibility between services:
+
+```typescript
+import { createServiceClient } from '@classytic/arc/rpc';
+
+const catalog = createServiceClient({
+  baseUrl: 'http://catalog:3000',
+  schemaVersion: '1.2.0',  // sent as x-arc-schema-version header
+  correlationId: () => request.id,
+  retry: { maxRetries: 2 },
+});
+
+const products = await catalog.resource('product').list();
+```
+
+Receiving services can check `request.headers['x-arc-schema-version']` to detect version mismatches.
+
+## Bulk Operations Preset
+
+Adds bulk CRUD routes — repository must provide `createMany`, `updateMany`, `deleteMany`:
+
+```typescript
+defineResource({
+  name: 'product',
+  adapter: createMongooseAdapter({ model, repository }),
+  presets: ['bulk'],  // adds POST/PATCH/DELETE /{resource}/bulk
+});
+
+// Or with options
+presets: [bulkPreset({ operations: ['createMany', 'updateMany'], maxCreateItems: 500 })]
+```
+
+**Routes**: `POST /bulk` (body: `{ items }`) → `createMany`, `PATCH /bulk` (body: `{ filter, data }`) → `updateMany`, `DELETE /bulk` (body: `{ filter }`) → `deleteMany`. Permissions inherit from `create`/`update`/`delete`.
+
+## Compensating Transaction
+
+In-process rollback primitive — runs steps in order, compensates in reverse on failure.
+For distributed sagas across services, use Temporal, Inngest, or Streamline.
+
+```typescript
+import { withCompensation } from '@classytic/arc/utils';
+
+const result = await withCompensation('place-order', [
+  {
+    name: 'reserve-inventory',
+    execute: async (ctx) => {
+      const res = await inventoryService.reserve(ctx.items);
+      ctx.reservationId = res.id;
+      return res;
+    },
+    compensate: async (_ctx, result) => {
+      await inventoryService.release(result.id);
+    },
+  },
+  {
+    name: 'charge-payment',
+    execute: async (ctx) => await paymentService.charge(ctx.total),
+    compensate: async (_ctx, result) => await paymentService.refund(result.chargeId),
+  },
+  {
+    name: 'send-confirmation',
+    execute: async (ctx) => await emailService.send(ctx.email),
+    // No compensate — emails can't be unsent
+  },
+], { items: cart.items, total: cart.total, email: user.email });
+
+if (!result.success) {
+  console.error(`Saga failed at ${result.failedStep}: ${result.error}`);
+  // Compensation already ran for completed steps
+}
+```
+
+**`defineCompensation()`** — reusable definition:
+
+```typescript
+const placeOrder = defineCompensation('place-order', steps);
+await placeOrder.execute({ items, total, email });
+```
+
+**Fire-and-forget steps** — don't block, don't compensate, errors swallowed:
+
+```typescript
+await withCompensation('checkout', [
+  { name: 'save-order', execute: saveOrder, compensate: cancelOrder },
+  { name: 'send-email', execute: sendEmail, fireAndForget: true }, // non-blocking
+  { name: 'charge', execute: chargeCard, compensate: refundCard },
+]);
+// 'charge' runs immediately after 'save-order' — doesn't wait for email
+```
+
+**Lifecycle hooks** — wire to Arc events, logging, or metrics:
+
+```typescript
+await withCompensation('checkout', steps, { orderId }, {
+  onStepComplete: (stepName, result) => {
+    fastify.events.publish(`checkout.${stepName}.completed`, result);
+  },
+  onStepFailed: (stepName, error) => {
+    fastify.events.publish(`checkout.${stepName}.failed`, { error: error.message });
+  },
+  onCompensate: (stepName) => {
+    fastify.log.warn(`Compensated: ${stepName}`);
+  },
+});
+```
+
+**In an additionalRoute with Arc auth:**
+
+```typescript
+defineResource({
+  name: 'order',
+  additionalRoutes: [{
+    method: 'POST',
+    path: '/:id/checkout',
+    permissions: requireAuth(),
+    wrapHandler: false,
+    handler: async (request, reply) => {
+      const result = await withCompensation('checkout', steps, { orderId: request.params.id });
+      if (!result.success) return reply.code(422).send({ error: result.error });
+      return reply.send({ success: true, data: result.results });
+    },
+  }],
+});
+```
+
+**Compensation errors**: collected in `result.compensationErrors[]` without stopping rollback. **Context**: mutable `Record<string, unknown>` shared across all steps.
+
+**Scope**: In-process primitive. Process crash = no compensation. For durable distributed workflows, use Temporal, Inngest, or `@classytic/streamline`.

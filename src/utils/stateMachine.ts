@@ -45,7 +45,7 @@ export interface StateMachine {
     action: string,
     status: string | null | undefined,
     errorFactory?: (msg: string) => Error,
-    message?: string
+    message?: string,
   ): void;
 
   /**
@@ -77,13 +77,19 @@ export interface TransitionHistoryEntry {
   metadata?: any;
 }
 
-export interface TransitionGuard {
-  (context: { from: string; to: string; action: string; data?: any }): boolean | Promise<boolean>;
-}
+export type TransitionGuard = (context: {
+  from: string;
+  to: string;
+  action: string;
+  data?: any;
+}) => boolean | Promise<boolean>;
 
-export interface TransitionAction {
-  (context: { from: string; to: string; action: string; data?: any }): void | Promise<void>;
-}
+export type TransitionAction = (context: {
+  from: string;
+  to: string;
+  action: string;
+  data?: any;
+}) => void | Promise<void>;
 
 export interface TransitionHook {
   before?: TransitionAction;
@@ -134,7 +140,7 @@ export type TransitionConfig = Record<
 export function createStateMachine(
   name: string,
   transitions: TransitionConfig = {},
-  options: { trackHistory?: boolean } = {}
+  options: { trackHistory?: boolean } = {},
 ): StateMachine {
   const normalized = new Map<
     string,
@@ -153,7 +159,7 @@ export function createStateMachine(
     if (Array.isArray(allowed)) {
       // Simple array format: action: ['state1', 'state2']
       normalized.set(action, { from: new Set(allowed) });
-    } else if (typeof allowed === 'object' && 'from' in allowed) {
+    } else if (typeof allowed === "object" && "from" in allowed) {
       // Object format with guards/actions
       normalized.set(action, {
         from: new Set(Array.isArray(allowed.from) ? allowed.from : [allowed.from]),
@@ -174,7 +180,7 @@ export function createStateMachine(
   const canAsync = async (
     action: string,
     status: string | null | undefined,
-    context?: any
+    context?: any,
   ): Promise<boolean> => {
     const transition = normalized.get(action);
     if (!transition || !status) return false;
@@ -187,7 +193,7 @@ export function createStateMachine(
       try {
         const guardResult = await transition.guard({
           from: status,
-          to: transition.to || '',
+          to: transition.to || "",
           action,
           data: context,
         });
@@ -204,14 +210,14 @@ export function createStateMachine(
     action: string,
     status: string | null | undefined,
     errorFactory?: (msg: string) => Error,
-    message?: string
+    message?: string,
   ): void => {
     if (can(action, status)) return;
 
     const errorMessage =
-      message || `${name} cannot '${action}' when status is '${status || 'unknown'}'`;
+      message || `${name} cannot '${action}' when status is '${status || "unknown"}'`;
 
-    if (typeof errorFactory === 'function') {
+    if (typeof errorFactory === "function") {
       throw errorFactory(errorMessage);
     }
     throw new Error(errorMessage);
@@ -283,7 +289,7 @@ export async function executeTransition(
   action: string,
   from: string,
   to: string,
-  context?: any
+  context?: any,
 ): Promise<{ success: boolean; error?: string }> {
   try {
     // Check if transition is allowed (use canAsync for guard evaluation)
@@ -304,7 +310,7 @@ export async function executeTransition(
   } catch (error: any) {
     return {
       success: false,
-      error: error.message || 'Transition failed',
+      error: error.message || "Transition failed",
     };
   }
 }

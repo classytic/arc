@@ -4,15 +4,15 @@ description: |
   @classytic/arc — Resource-oriented backend framework for Fastify.
   Use when building REST APIs with Fastify, resource CRUD, defineResource, createApp,
   permissions, presets, database adapters, hooks, events, QueryCache, authentication,
-  multi-tenant SaaS, OpenAPI, job queues, WebSocket, or production deployment.
+  multi-tenant SaaS, OpenAPI, job queues, WebSocket, MCP tools, or production deployment.
   Triggers: arc, fastify resource, defineResource, createApp, BaseController, arc preset,
-  arc auth, arc events, arc jobs, arc websocket, arc plugin, arc testing, arc cli,
+  arc auth, arc events, arc jobs, arc websocket, arc mcp, arc plugin, arc testing, arc cli,
   arc permissions, arc hooks, arc pipeline, arc factory, arc cache, arc QueryCache.
-version: 2.3.0
+version: 2.4.0
 license: MIT
 metadata:
   author: Classytic
-  version: "2.3.0"
+  version: "2.4.0"
 tags:
   - fastify
   - rest-api
@@ -37,11 +37,15 @@ progressive_disclosure:
 
 Resource-oriented backend framework for Fastify. Database-agnostic, tree-shakable, production-ready.
 
-**Requires:** Fastify `^5.0.0` | Node.js `>=22` | ESM only
+**Requires:** Fastify `^5.7.4` | Node.js `>=22` | ESM only
 
 ## Install
 
 ```bash
+# Install the Arc agent skill (Claude Code / AI agents)
+npx skills add classytic/arc
+
+# Install the npm package
 npm install @classytic/arc fastify
 npm install @classytic/mongokit mongoose    # MongoDB adapter
 ```
@@ -180,9 +184,11 @@ permissions: { list: acl.canAction('product', 'read') }
 | `ownedByUser` | none (middleware) | — | `{ ownerField }` |
 | `multiTenant` | none (middleware) | — | `{ tenantField }` |
 | `audited` | none (middleware) | — | — |
+| `bulk` | POST/PATCH/DELETE /bulk | — | `{ operations?, maxCreateItems? }` |
 
 ```typescript
 presets: ['softDelete', { name: 'multiTenant', tenantField: 'organizationId' }]
+// Bulk: presets: ['bulk'] or bulkPreset({ operations: ['createMany', 'updateMany'] })
 ```
 
 ## QueryCache
@@ -324,13 +330,44 @@ defineResource({
 
 ## Query Parsing
 
+Arc's default parser handles filters, sort, select, populate, and pagination. Swap in MongoKit's `QueryParser` for $lookup joins.
+
 ```
 GET /products?page=2&limit=20&sort=-createdAt&select=name,price
 GET /products?price[gte]=100&status[in]=active,featured&search=keyword
-GET /products?populate=category,brand
+GET /products?after=<cursor_id>&limit=20                     # keyset pagination
+GET /products?populate=category                               # ref-based populate
+GET /products?populate[category][select]=name,slug            # populate with field select
+GET /products?populate[category][select]=-internal            # exclude fields
+GET /products?populate[category][match][isActive]=true        # populate with filter
+```
+
+**Lookup/join (no refs — $lookup via MongoKit QueryParser):**
+
+```
+GET /products?lookup[cat][from]=categories&lookup[cat][localField]=categorySlug&lookup[cat][foreignField]=slug&lookup[cat][single]=true
+GET /products?lookup[cat][from]=categories&...&lookup[cat][select]=name,slug
 ```
 
 Operators: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `nin`, `like`, `regex`, `exists`
+
+**Custom query parser (e.g., MongoKit for $lookup support):**
+
+```typescript
+import { QueryParser } from '@classytic/mongokit';
+
+defineResource({
+  name: 'product',
+  adapter: createMongooseAdapter({ model: ProductModel, repository: productRepo }),
+  queryParser: new QueryParser(),  // enables lookup, advanced populate, keyset pagination
+  schemaOptions: {
+    query: {
+      allowedPopulate: ['category', 'brand'],     // whitelist populate paths
+      allowedLookups: ['categories', 'brands'],   // whitelist lookup collections
+    },
+  },
+});
+```
 
 ## Error Classes
 
@@ -339,15 +376,82 @@ import { ArcError, NotFoundError, ValidationError, UnauthorizedError, ForbiddenE
 throw new NotFoundError('Product not found');  // 404
 ```
 
+## Compensating Transaction
+
+In-process rollback for multi-step operations. Not a distributed saga — use Temporal/Streamline for that.
+
+```typescript
+import { withCompensation } from '@classytic/arc/utils';
+
+const result = await withCompensation('checkout', [
+  { name: 'reserve', execute: reserveStock, compensate: releaseStock },
+  { name: 'charge', execute: chargeCard, compensate: refundCard },
+  { name: 'notify', execute: sendEmail, fireAndForget: true },  // non-blocking
+], { orderId }, {
+  onStepComplete: (name, res) => fastify.events.publish(`checkout.${name}.done`, res),
+});
+// result: { success, completedSteps, results, failedStep?, error?, compensationErrors? }
+```
+
 ## CLI
 
 ```bash
 arc init my-api --mongokit --better-auth --ts
-arc generate resource product
+arc generate resource product              # standard resource
+arc generate resource product --mcp        # resource + MCP tools file
+arc generate mcp analytics                 # standalone MCP tools file
 arc docs ./openapi.json --entry ./dist/index.js
 arc introspect --entry ./dist/index.js
 arc doctor
 ```
+
+Set `"mcp": true` in `.arcrc` to always generate `.mcp.ts` files with resources.
+
+## MCP (AI Agent Tools)
+
+Expose Arc resources as MCP tools for AI agents. Stateless by default — fresh server per request, zero session overhead.
+
+See [mcp reference](references/mcp.md) for full details.
+
+```typescript
+import { mcpPlugin } from '@classytic/arc/mcp';
+
+// Stateless (default) — production-ready, scalable
+await app.register(mcpPlugin, {
+  resources: [productResource, orderResource],
+  auth: false,                              // or: getAuth() | custom function
+  exclude: ['credential'],
+  overrides: { product: { operations: ['list', 'get'] } },
+});
+
+// Stateful — when you need server-initiated messages
+await app.register(mcpPlugin, { resources, stateful: true, sessionTtlMs: 600000 });
+```
+
+Connect Claude CLI: `claude mcp add --transport http my-api http://localhost:3000/mcp`
+
+**Auth** — three modes, user chooses: `false` | `getAuth()` (Better Auth OAuth 2.1) | custom function:
+
+```typescript
+auth: async (headers) => {
+  if (headers['x-api-key'] !== process.env.MCP_KEY) return null;
+  return { userId: 'bot', organizationId: 'org-1', roles: ['admin'] };
+},
+```
+
+**Guards** for custom tools: `guard(requireAuth, requireOrg, requireRole('admin'), handler)`
+
+**Multi-tenancy**: `organizationId` from auth flows into BaseController org-scoping automatically.
+
+**Project structure** — custom MCP tools co-located with resources:
+
+```
+src/resources/order/
+  order.resource.ts
+  order.mcp.ts              ← defineTool('fulfill_order', { ... })
+```
+
+Generate: `arc generate resource order --mcp` | Wire: `extraTools: [fulfillOrderTool]`
 
 ## Subpath Imports
 
@@ -370,15 +474,24 @@ import { eventGatewayPlugin } from '@classytic/arc/integrations/event-gateway';
 import { createHookSystem } from '@classytic/arc/hooks';
 import { createTestApp } from '@classytic/arc/testing';
 import { Type, ArcListResponse } from '@classytic/arc/schemas';
-import { createStateMachine, CircuitBreaker } from '@classytic/arc/utils';
+import { createStateMachine, CircuitBreaker, withCompensation, defineCompensation } from '@classytic/arc/utils';
 import { defineMigration } from '@classytic/arc/migrations';
-import { isMember, isElevated, getOrgId } from '@classytic/arc/scope';
+import { isMember, isElevated, getOrgId, getUserId, getUserRoles } from '@classytic/arc/scope';
+import { createTenantKeyGenerator } from '@classytic/arc/scope';
+import { createRoleHierarchy } from '@classytic/arc/permissions';
+import { createServiceClient } from '@classytic/arc/rpc';
+import { metricsPlugin, versioningPlugin } from '@classytic/arc/plugins';
+import { webhookPlugin } from '@classytic/arc/integrations/webhooks';
+import { mcpPlugin, createMcpServer, defineTool, definePrompt, fieldRulesToZod, resourceToTools } from '@classytic/arc/mcp';
+import { EventOutbox, MemoryOutboxStore } from '@classytic/arc/events';
+import { bulkPreset } from '@classytic/arc/presets';
 ```
 
 ## References (Progressive Disclosure)
 
 - **[auth](references/auth.md)** — JWT, Better Auth, API key auth, custom auth, multi-tenant
-- **[events](references/events.md)** — Domain events, transports, retry, auto-emission
-- **[integrations](references/integrations.md)** — BullMQ jobs, WebSocket, EventGateway, Streamline workflows
-- **[production](references/production.md)** — Health, audit, idempotency, tracing, SSE, QueryCache, OpenAPI
+- **[events](references/events.md)** — Domain events, transports, retry, outbox pattern, auto-emission
+- **[integrations](references/integrations.md)** — BullMQ jobs, WebSocket, EventGateway, Streamline, Webhooks
+- **[mcp](references/mcp.md)** — MCP tools for AI agents, auto-generation from resources, custom tools, Better Auth OAuth 2.1
+- **[production](references/production.md)** — Health, audit, idempotency, tracing, metrics, versioning, SSE, QueryCache, bulk ops, saga, RPC schema versioning, tenant rate limiting
 - **[testing](references/testing.md)** — Test app, mocks, data factories, in-memory MongoDB

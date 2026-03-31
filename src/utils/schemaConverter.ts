@@ -19,7 +19,7 @@
  * ```
  */
 
-import type { OpenApiSchemas } from '../types/index.js';
+import type { OpenApiSchemas } from "../types/index.js";
 
 // ============================================================================
 // Lazy Zod Import — loaded once at module init, only if installed
@@ -31,9 +31,9 @@ let _toJSONSchema: ToJSONSchemaFn | null = null;
 // Fire-and-forget: resolve Zod at module load (async but non-blocking).
 // By the time any route handler calls toJsonSchema(), the promise will have settled.
 // Safe for both ESM and CJS (no top-level await).
-import('zod')
+import("zod")
   .then(({ z }) => {
-    if (typeof z?.toJSONSchema === 'function') {
+    if (typeof z?.toJSONSchema === "function") {
       _toJSONSchema = (schema, opts) =>
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         z.toJSONSchema(schema as any, opts as any) as Record<string, unknown>;
@@ -53,22 +53,22 @@ import('zod')
  * `allOf`, `anyOf`, `oneOf`, `items`, `enum`) and does NOT have Zod markers.
  */
 export function isJsonSchema(input: unknown): input is Record<string, unknown> {
-  if (input === null || typeof input !== 'object') return false;
+  if (input === null || typeof input !== "object") return false;
   const obj = input as Record<string, unknown>;
 
   // Zod markers — if present, this is a Zod schema, not JSON Schema
-  if ('_def' in obj || '_zod' in obj) return false;
+  if ("_def" in obj || "_zod" in obj) return false;
 
   // JSON Schema markers
   return (
-    'type' in obj ||
-    'properties' in obj ||
-    '$ref' in obj ||
-    'allOf' in obj ||
-    'anyOf' in obj ||
-    'oneOf' in obj ||
-    'items' in obj ||
-    'enum' in obj
+    "type" in obj ||
+    "properties" in obj ||
+    "$ref" in obj ||
+    "allOf" in obj ||
+    "anyOf" in obj ||
+    "oneOf" in obj ||
+    "items" in obj ||
+    "enum" in obj
   );
 }
 
@@ -76,7 +76,9 @@ export function isJsonSchema(input: unknown): input is Record<string, unknown> {
  * Check if an object is a Zod schema (has `_zod` marker from Zod v4).
  */
 export function isZodSchema(input: unknown): boolean {
-  return input !== null && typeof input === 'object' && '_zod' in (input as Record<string, unknown>);
+  return (
+    input !== null && typeof input === "object" && "_zod" in (input as Record<string, unknown>)
+  );
 }
 
 // ============================================================================
@@ -94,7 +96,7 @@ export function isZodSchema(input: unknown): boolean {
  */
 export function toJsonSchema(input: unknown): Record<string, unknown> | undefined {
   if (input == null) return undefined;
-  if (typeof input !== 'object') return undefined;
+  if (typeof input !== "object") return undefined;
 
   // Fast path: already a plain JSON Schema → passthrough
   if (isJsonSchema(input)) return input as Record<string, unknown>;
@@ -104,15 +106,14 @@ export function toJsonSchema(input: unknown): Record<string, unknown> | undefine
     if (!_toJSONSchema) {
       // Zod not installed but a Zod schema was passed — can't convert
       console.warn(
-        '[Arc] Zod schema detected but zod is not installed. ' +
-        'Install zod v4: npm install zod'
+        "[Arc] Zod schema detected but zod is not installed. " + "Install zod v4: npm install zod",
       );
       return input as Record<string, unknown>;
     }
     try {
-      return _toJSONSchema(input, { target: 'openapi-3.0' });
+      return _toJSONSchema(input, { target: "openapi-3.0" });
     } catch {
-      return { type: 'object' };
+      return { type: "object" };
     }
   }
 
@@ -130,7 +131,14 @@ export function toJsonSchema(input: unknown): Record<string, unknown> | undefine
  */
 export function convertOpenApiSchemas(schemas: OpenApiSchemas): OpenApiSchemas {
   const result: OpenApiSchemas = {};
-  const schemaFields = ['entity', 'createBody', 'updateBody', 'params', 'listQuery', 'response'] as const;
+  const schemaFields = [
+    "entity",
+    "createBody",
+    "updateBody",
+    "params",
+    "listQuery",
+    "response",
+  ] as const;
 
   for (const field of schemaFields) {
     const value = schemas[field];
@@ -141,7 +149,7 @@ export function convertOpenApiSchemas(schemas: OpenApiSchemas): OpenApiSchemas {
 
   // Copy any extra fields as-is
   for (const [key, value] of Object.entries(schemas)) {
-    if (!schemaFields.includes(key as typeof schemaFields[number])) {
+    if (!schemaFields.includes(key as (typeof schemaFields)[number])) {
       result[key] = value;
     }
   }
@@ -163,14 +171,18 @@ export function convertRouteSchema(schema: Record<string, unknown>): Record<stri
   const result: Record<string, unknown> = { ...schema };
 
   // Convert top-level schema fields (body, querystring, params, headers)
-  for (const field of ['body', 'querystring', 'params', 'headers'] as const) {
+  for (const field of ["body", "querystring", "params", "headers"] as const) {
     if (result[field] !== undefined) {
       result[field] = toJsonSchema(result[field]) ?? result[field];
     }
   }
 
   // Convert response schemas (keyed by status code, e.g. { 200: zodSchema, 201: zodSchema })
-  if (result.response !== undefined && typeof result.response === 'object' && result.response !== null) {
+  if (
+    result.response !== undefined &&
+    typeof result.response === "object" &&
+    result.response !== null
+  ) {
     const responseObj = result.response as Record<string, unknown>;
     const convertedResponse: Record<string, unknown> = {};
     for (const [statusCode, responseSchema] of Object.entries(responseObj)) {

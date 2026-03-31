@@ -185,3 +185,65 @@ await fastify.register(gracefulShutdownPlugin, {
   },
 });
 ```
+
+## Metrics Plugin
+
+Prometheus-compatible `/_metrics` endpoint. Zero external dependencies.
+
+```typescript
+import { metricsPlugin } from '@classytic/arc/plugins';
+
+await fastify.register(metricsPlugin, {
+  path: '/_metrics',       // default
+  prefix: 'arc',           // metric name prefix
+});
+```
+
+Or via `createApp`:
+
+```typescript
+const app = await createApp({
+  arcPlugins: { metrics: true },
+});
+```
+
+**Built-in metrics:** `arc_http_requests_total`, `arc_http_request_duration_seconds`, `arc_crud_operations_total`, `arc_cache_hits_total`, `arc_cache_misses_total`, `arc_events_published_total`, `arc_events_consumed_total`, `arc_circuit_breaker_state`
+
+**Programmatic recording:**
+
+```typescript
+app.metrics.recordOperation('product', 'create', 201, 15);
+app.metrics.recordCacheHit('product');
+app.metrics.recordEventPublish('order.created');
+app.metrics.reset();  // clear all metrics
+```
+
+## API Versioning Plugin
+
+Header-based or URL prefix-based versioning with deprecation warnings.
+
+```typescript
+import { versioningPlugin } from '@classytic/arc/plugins';
+
+// Header-based: clients send Accept-Version: 2
+await fastify.register(versioningPlugin, {
+  type: 'header',
+  deprecated: ['1'],
+  sunset: '2026-01-01',
+});
+
+// Prefix-based: routes under /v2/...
+await fastify.register(versioningPlugin, { type: 'prefix' });
+```
+
+Or via `createApp`:
+
+```typescript
+const app = await createApp({
+  arcPlugins: { versioning: { type: 'header', deprecated: ['1'] } },
+});
+```
+
+**Response headers:** `x-api-version` on every response. `Deprecation: true` + `Sunset` for deprecated versions.
+
+**Access in handlers:** `request.apiVersion`

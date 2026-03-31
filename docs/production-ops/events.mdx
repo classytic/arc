@@ -115,6 +115,8 @@ interface EventPluginOptions {
     save: (event) => Promise<void>;        // Persist before publish
     acknowledge?: (eventId) => Promise<void>; // Mark as delivered
   };
+  registry?: EventRegistry;    // Event registry for schema validation + introspection
+  validateMode?: 'warn' | 'reject' | 'off'; // How to handle validation failures (default: 'warn' when registry provided)
   onPublish?: (event) => void;    // Callback after successful publish (metrics)
   onPublishError?: (event, error) => void; // Callback on publish failure (alerting)
 }
@@ -218,7 +220,118 @@ await fastify.register(eventPlugin, {
 
 **When NOT to use retry:** For fire-and-forget handlers (e.g., analytics), catch errors in the handler itself. Retry is best for operations that must eventually succeed (emails, webhooks).
 
+## defineEvent — Typed Events with Schema Validation
+
+Declare events with schemas for runtime validation and introspection:
+
+```typescript
+import { defineEvent, createEventRegistry } from '@classytic/arc/events';
+
+const OrderCreated = defineEvent({
+  name: 'order.created',
+  version: 1,
+  description: 'Emitted when an order is placed',
+  schema: {
+    type: 'object',
+    properties: {
+      orderId: { type: 'string' },
+      total: { type: 'number' },
+      currency: { type: 'string' },
+    },
+    required: ['orderId', 'total'],
+  },
+});
+
+// Type-safe event creation with auto-generated metadata
+const event = OrderCreated.create(
+  { orderId: 'o-1', total: 100 },
+  { userId: 'user-1' },
+);
+await fastify.events.publish(event.type, event.payload, event.meta);
+```
+
+### Event Registry
+
+Catalog events and auto-validate payloads on publish:
+
+```typescript
+const registry = createEventRegistry();
+registry.register(OrderCreated);
+registry.register(OrderShipped);
+
+// Wire into eventPlugin
+const app = await createApp({
+  arcPlugins: {
+    events: { registry, validateMode: 'warn' },
+  },
+});
+```
+
+**Validate modes:**
+
+| Mode | Behavior |
+|------|----------|
+| `'warn'` | Log warning on invalid payload, still publish (default when registry provided) |
+| `'reject'` | Throw error on invalid payload, do NOT publish |
+| `'off'` | Skip validation — registry is introspection-only |
+
+Unregistered events always pass validation — the registry is fully opt-in.
+
+**Runtime introspection:**
+
+```typescript
+// Get event catalog at runtime
+const catalog = app.events.registry?.catalog();
+// → [{ name: 'order.created', version: 1, schema: {...}, description: '...' }]
+
+// Validate a payload manually
+const result = registry.validate('order.created', payload);
+if (!result.valid) console.error(result.errors);
+```
+
+**CLI introspection:** Export the registry from your entry file and `arc describe` auto-detects it:
+
+```typescript
+// src/events.ts
+export const eventRegistry = createEventRegistry();
+eventRegistry.register(OrderCreated);
+```
+
+```bash
+arc describe ./dist/index.js --pretty
+# Output includes: eventCatalog: [{ name, version, hasSchema, schemaFields, requiredFields }]
+```
+
+### Schema Evolution
+
+Use `version` to evolve event schemas without breaking existing consumers:
+
+```typescript
+const OrderCreatedV1 = defineEvent({
+  name: 'order.created',
+  version: 1,
+  schema: { type: 'object', properties: { orderId: { type: 'string' } }, required: ['orderId'] },
+});
+
+const OrderCreatedV2 = defineEvent({
+  name: 'order.created',
+  version: 2,
+  schema: { type: 'object', properties: { orderId: { type: 'string' }, currency: { type: 'string' } }, required: ['orderId', 'currency'] },
+});
+
+registry.register(OrderCreatedV1);
+registry.register(OrderCreatedV2); // Both coexist — validation uses latest version
+```
+
 ## Transports
+
+Arc ships three built-in transports:
+
+| Transport | Import | Ordering | Durability |
+|-----------|--------|----------|------------|
+| `MemoryEventTransport` | `@classytic/arc/events` | Sequential (awaited) | None (lost on restart) |
+| `RedisEventTransport` | `@classytic/arc/events/redis` | Unordered (fire-and-forget) | None (pub/sub) |
+| `RedisStreamTransport` | `@classytic/arc/events/redis-stream` | Ordered (consumer groups) | Durable (persisted) |
 
 ### Memory Transport (Default)
 
@@ -230,36 +343,62 @@ await fastify.register(eventPlugin, {
 });
 ```
 
-- In-process delivery
-- Events lost on restart
-- Not shared across instances
-- **Use for:** Development, testing
+- Handlers execute **sequentially** with `await`
+- One failing handler does NOT block others
+- **Use for:** Development, testing, single-instance
 
-### Custom Transport (Production)
-
-Implement `EventTransport` interface for durable transports:
+### Redis Pub/Sub Transport
 
 ```typescript
-import type { EventTransport, DomainEvent } from '@classytic/arc/events';
+import { RedisEventTransport } from '@classytic/arc/events/redis';
+import Redis from 'ioredis';
 
-class RedisEventTransport implements EventTransport {
-  readonly name = 'redis';
+const redis = new Redis(process.env.REDIS_URL);
+const transport = new RedisEventTransport(redis, { channel: 'arc-events' });
+```
+
+- Fan-out delivery to ALL connected subscribers
+- Handlers fire concurrently (unordered)
+- Events missed during subscriber downtime are lost
+- **Use for:** Real-time notifications, cache invalidation, multi-instance
+
+### Redis Streams Transport
+
+```typescript
+import { RedisStreamTransport } from '@classytic/arc/events/redis-stream';
+
+const transport = new RedisStreamTransport(redis, {
+  stream: 'arc-events',
+  consumerGroup: 'my-service',
+});
+```
+
+- Ordered delivery via consumer groups
+- Events persisted and acknowledged (at-least-once)
+- Load balancing across instances in same consumer group
+- **Use for:** Ordered processing, durable event logs
+
+### Custom Transport
+
+Implement `EventTransport` interface for any message broker (RabbitMQ, Kafka, NATS, SQS):
+
+```typescript
+import type { EventTransport, DomainEvent, EventHandler } from '@classytic/arc/events';
+
+class NatsEventTransport implements EventTransport {
+  readonly name = 'nats';
 
   async publish(event: DomainEvent): Promise<void> {
-    await this.redis.publish(event.type, JSON.stringify(event));
+    await this.nats.publish(event.type, JSON.stringify(event));
   }
 
-  async subscribe(pattern: string, handler): Promise<() => void> {
-    const client = this.redis.duplicate();
-    await client.pSubscribe(pattern, (message, channel) => {
-      handler(JSON.parse(message));
-    });
-    return () => client.pUnsubscribe(pattern);
+  async subscribe(pattern: string, handler: EventHandler): Promise<() => void> {
+    const sub = this.nats.subscribe(pattern);
+    (async () => { for await (const msg of sub) { await handler(JSON.parse(msg.data)); } })();
+    return () => sub.unsubscribe();
   }
 
-  async close(): Promise<void> {
-    await this.redis.quit();
-  }
+  async close(): Promise<void> { await this.nats.close(); }
 }
 ```
 
@@ -298,20 +437,67 @@ await fastify.events.subscribe('user.verified', async (event) => {
 
 ## Multi-Instance Deployment
 
-| Transport | Use Case |
-|-----------|----------|
-| Memory | Development, single-instance |
-| Redis Pub/Sub | Multi-instance, real-time |
-| RabbitMQ | Guaranteed delivery, queuing |
-| Kafka | High-throughput, streaming |
+| Transport | Use Case | Built-in? |
+|-----------|----------|-----------|
+| Memory | Development, single-instance | Yes |
+| Redis Pub/Sub | Multi-instance, real-time fan-out | Yes |
+| Redis Streams | Ordered, durable, consumer groups | Yes |
+| RabbitMQ | Guaranteed delivery, queuing | Custom transport |
+| Kafka | High-throughput, streaming | Custom transport |
+| NATS | Lightweight pub/sub | Custom transport |
 
-## Interface
+## Event Outbox Pattern
+
+At-least-once delivery guarantee. Store events in the same DB transaction as your write, relay to transport asynchronously.
 
 ```typescript
-interface EventTransport {
-  readonly name: string;
-  publish(event: DomainEvent): Promise<void>;
-  subscribe(pattern: string, handler: EventHandler): Promise<() => void>;
-  close?(): Promise<void>;
+import { EventOutbox, MemoryOutboxStore } from '@classytic/arc/events';
+
+const outbox = new EventOutbox({
+  store: new MemoryOutboxStore(),  // or your own DB-backed store
+  transport: redisTransport,
+});
+
+// In your business logic (same transaction as DB write)
+await outbox.store({
+  type: 'order.created',
+  payload: { orderId: '123' },
+  meta: { id: crypto.randomUUID(), timestamp: new Date() },
+});
+
+// Relay cron (runs every few seconds)
+const relayed = await outbox.relay();  // publishes pending → transport
+```
+
+**OutboxStore interface** (implement for your DB):
+
+```typescript
+interface OutboxStore {
+  save(event: DomainEvent): Promise<void>;
+  getPending(limit: number): Promise<DomainEvent[]>;
+  acknowledge(eventId: string): Promise<void>;
 }
 ```
+
+## Webhooks (Outbound)
+
+Auto-dispatch Arc events to customer webhook endpoints with HMAC-SHA256 signing.
+
+```typescript
+import { webhookPlugin } from '@classytic/arc/integrations/webhooks';
+
+await fastify.register(webhookPlugin);
+
+await app.webhooks.register({
+  id: 'wh-1',
+  url: 'https://customer.com/webhook',
+  events: ['order.created', 'order.*'],
+  secret: 'whsec_abc123',
+});
+
+// Events auto-dispatch — no manual wiring
+await app.events.publish('order.created', { orderId: '123' });
+// → POST https://customer.com/webhook with x-webhook-signature header
+```
+
+See [integrations reference](/docs/integrations) for WebhookStore, delivery log, and HMAC verification.

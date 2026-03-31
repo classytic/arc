@@ -15,10 +15,9 @@
  * }, handler);
  */
 
-import type { FastifyReply } from 'fastify';
-import type { RequestWithExtras, RouteHandler } from '../types/index.js';
-import type { RequestScope } from '../scope/types.js';
-import { isMember, isElevated, hasOrgAccess, getOrgRoles, PUBLIC_SCOPE } from '../scope/types.js';
+import type { FastifyReply } from "fastify";
+import { getOrgRoles, hasOrgAccess, isElevated, isMember, PUBLIC_SCOPE } from "../scope/types.js";
+import type { RequestWithExtras, RouteHandler } from "../types/index.js";
 
 export interface OrgGuardOptions {
   /** Require organization context (default: true) */
@@ -33,14 +32,11 @@ export interface OrgGuardOptions {
  * Elevated scope always passes.
  */
 export function orgGuard(options: OrgGuardOptions = {}): RouteHandler {
-  const {
-    requireOrgContext = true,
-    roles = [],
-  } = options;
+  const { requireOrgContext = true, roles = [] } = options;
 
   return async function orgGuardMiddleware(
     request: RequestWithExtras,
-    reply: FastifyReply
+    reply: FastifyReply,
   ): Promise<void> {
     const scope = request.scope ?? PUBLIC_SCOPE;
 
@@ -51,11 +47,11 @@ export function orgGuard(options: OrgGuardOptions = {}): RouteHandler {
     if (requireOrgContext && !hasOrgAccess(scope)) {
       reply.code(403).send({
         success: false,
-        error: 'Organization context required',
-        code: 'ORG_CONTEXT_REQUIRED',
+        error: "Organization context required",
+        code: "ORG_CONTEXT_REQUIRED",
         message:
-          'This endpoint requires an organization context. ' +
-          'Please specify organization via x-organization-id header.',
+          "This endpoint requires an organization context. " +
+          "Please specify organization via x-organization-id header.",
       });
       return;
     }
@@ -68,9 +64,9 @@ export function orgGuard(options: OrgGuardOptions = {}): RouteHandler {
       if (!hasRequiredRole) {
         reply.code(403).send({
           success: false,
-          error: 'Insufficient organization permissions',
-          code: 'ORG_ROLE_REQUIRED',
-          message: `This action requires one of these organization roles: ${roles.join(', ')}`,
+          error: "Insufficient organization permissions",
+          code: "ORG_ROLE_REQUIRED",
+          message: `This action requires one of these organization roles: ${roles.join(", ")}`,
           required: roles,
           current: userOrgRoles,
         });

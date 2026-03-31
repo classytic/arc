@@ -111,23 +111,19 @@
  * @module policies
  */
 
-export type {
-  PolicyEngine,
-  PolicyResult,
-  PolicyContext,
-  PolicyFactory,
-  AccessControlStatement,
-  AccessControlPolicyOptions,
-} from './PolicyInterface.js';
-
 export {
-  createAccessControlPolicy,
-} from './PolicyInterface.js';
-
-export {
-  createPolicyMiddleware,
-  combinePolicies,
-  anyPolicy,
   allowAll,
+  anyPolicy,
+  combinePolicies,
+  createPolicyMiddleware,
   denyAll,
-} from './helpers.js';
+} from "./helpers.js";
+export type {
+  AccessControlPolicyOptions,
+  AccessControlStatement,
+  PolicyContext,
+  PolicyEngine,
+  PolicyFactory,
+  PolicyResult,
+} from "./PolicyInterface.js";
+export { createAccessControlPolicy } from "./PolicyInterface.js";

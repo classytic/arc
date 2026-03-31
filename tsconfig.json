@@ -3,41 +3,37 @@
     "target": "ES2023",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "moduleDetection": "force", // Force ES modules detection
+    "moduleDetection": "force",
     "lib": ["ES2023"],
     "outDir": "./dist",
     "rootDir": "./src",
 
-    // Strict type checking (maximum safety)
+    // Strict type checking (maximum safety — TS 6 default is strict:true)
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
 
     // Module & interop
-    "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
-    "verbatimModuleSyntax": true, // Better tree-shaking (TS 5.0+)
+    // esModuleInterop/allowSyntheticDefaultImports removed — always-on in TS 6
+    "verbatimModuleSyntax": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "erasableSyntaxOnly": true, // Compatible with Node.js native TS execution
+    "erasableSyntaxOnly": true,
 
     // Emit options
     "declaration": true,
     "declarationMap": false,
     "sourceMap": false,
-    "noEmit": true, // tsup handles emit
+    "noEmit": true,
+
+    // Types — TS 6 changed default to [] (no longer auto-discovers @types/*)
+    "types": ["node", "qs"],
 
     // Other
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "useDefineForClassFields": true,
-
-    // Paths
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["./src/*"]
-    }
+    "useDefineForClassFields": true
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "**/*.test.ts"]

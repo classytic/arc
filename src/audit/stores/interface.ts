@@ -5,9 +5,9 @@
  * Implementations: memory (dev), mongodb, event (emit only)
  */
 
-import type { UserBase } from '../../types/index.js';
+import type { UserBase } from "../../types/index.js";
 
-export type AuditAction = 'create' | 'update' | 'delete' | 'restore' | 'custom';
+export type AuditAction = "create" | "update" | "delete" | "restore" | "custom";
 
 export interface AuditEntry {
   /** Unique audit log ID */
@@ -98,11 +98,9 @@ export function createAuditEntry(
     before?: Record<string, unknown>;
     after?: Record<string, unknown>;
     metadata?: Record<string, unknown>;
-  }
+  },
 ): AuditEntry {
-  const changes = data?.before && data?.after
-    ? detectChanges(data.before, data.after)
-    : undefined;
+  const changes = data?.before && data?.after ? detectChanges(data.before, data.after) : undefined;
 
   return {
     id: generateAuditId(),
@@ -125,16 +123,13 @@ export function createAuditEntry(
 /**
  * Detect changed fields between two objects
  */
-function detectChanges(
-  before: Record<string, unknown>,
-  after: Record<string, unknown>
-): string[] {
+function detectChanges(before: Record<string, unknown>, after: Record<string, unknown>): string[] {
   const changes: string[] = [];
   const allKeys = new Set([...Object.keys(before), ...Object.keys(after)]);
 
   for (const key of allKeys) {
     // Skip internal fields
-    if (key.startsWith('_') || key === 'updatedAt') continue;
+    if (key.startsWith("_") || key === "updatedAt") continue;
 
     const oldVal = JSON.stringify(before[key]);
     const newVal = JSON.stringify(after[key]);

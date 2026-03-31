@@ -17,12 +17,12 @@
  * ```
  */
 
-import fp from 'fastify-plugin';
-import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
-import { QueryCache, type QueryCacheConfig } from './QueryCache.js';
-import type { CacheStore } from './interface.js';
-import { MemoryCacheStore } from './memory.js';
-import { hasEvents } from '../utils/typeGuards.js';
+import type { FastifyInstance, FastifyPluginAsync } from "fastify";
+import fp from "fastify-plugin";
+import { hasEvents } from "../utils/typeGuards.js";
+import type { CacheStore } from "./interface.js";
+import { MemoryCacheStore } from "./memory.js";
+import { QueryCache } from "./QueryCache.js";
 
 export interface QueryCachePluginOptions {
   /** CacheStore instance. Default: MemoryCacheStore with default options. */
@@ -45,7 +45,7 @@ export interface CrossResourceRule {
   tags: string[];
 }
 
-declare module 'fastify' {
+declare module "fastify" {
   interface FastifyInstance {
     queryCache: QueryCache;
     queryCacheConfig: QueryCacheDefaults;
@@ -54,7 +54,7 @@ declare module 'fastify' {
   }
 }
 
-const CRUD_SUFFIXES = new Set(['created', 'updated', 'deleted']);
+const CRUD_SUFFIXES = new Set(["created", "updated", "deleted"]);
 
 const queryCachePluginImpl: FastifyPluginAsync<QueryCachePluginOptions> = async (
   fastify: FastifyInstance,
@@ -68,23 +68,23 @@ const queryCachePluginImpl: FastifyPluginAsync<QueryCachePluginOptions> = async 
     gcTime: opts.defaults?.gcTime ?? 60,
   };
 
-  fastify.decorate('queryCache', queryCache);
-  fastify.decorate('queryCacheConfig', defaults);
+  fastify.decorate("queryCache", queryCache);
+  fastify.decorate("queryCacheConfig", defaults);
 
   // Collect cross-resource rules from defineResource calls
   const crossResourceRules: CrossResourceRule[] = [];
-  fastify.decorate('registerCacheInvalidationRule', (rule: CrossResourceRule) => {
+  fastify.decorate("registerCacheInvalidationRule", (rule: CrossResourceRule) => {
     crossResourceRules.push(rule);
   });
 
   // Wire event-driven invalidation after all resources are registered
-  fastify.addHook('onReady', async () => {
+  fastify.addHook("onReady", async () => {
     if (!hasEvents(fastify)) return;
 
     // Auto-invalidate on CRUD events (product.created → bump product version)
-    await fastify.events.subscribe('*', async (event) => {
+    await fastify.events.subscribe("*", async (event) => {
       const type = (event as { type: string }).type;
-      const dotIdx = type.lastIndexOf('.');
+      const dotIdx = type.lastIndexOf(".");
       if (dotIdx === -1) return;
 
       const suffix = type.slice(dotIdx + 1);
@@ -105,14 +105,14 @@ const queryCachePluginImpl: FastifyPluginAsync<QueryCachePluginOptions> = async 
   });
 
   // Cleanup on close
-  fastify.addHook('onClose', async () => {
-    if ('close' in store && typeof store.close === 'function') {
+  fastify.addHook("onClose", async () => {
+    if ("close" in store && typeof store.close === "function") {
       await store.close();
     }
   });
 };
 
 export const queryCachePlugin = fp(queryCachePluginImpl, {
-  name: 'arc-query-cache',
-  fastify: '5.x',
+  name: "arc-query-cache",
+  fastify: "5.x",
 });

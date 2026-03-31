@@ -28,7 +28,7 @@
  * ```
  */
 
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { AsyncLocalStorage } from "node:async_hooks";
 
 /**
  * Shape of the request-scoped context store.

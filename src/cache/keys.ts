@@ -16,8 +16,8 @@ export function buildQueryKey(
   orgId?: string,
 ): string {
   const hash = hashParams(params);
-  const uid = userId ?? 'anon';
-  const oid = orgId ?? 'pub';
+  const uid = userId ?? "anon";
+  const oid = orgId ?? "pub";
   return `arc:${resource}:${resourceVersion}:${operation}:${hash}:u=${uid}:o=${oid}`;
 }
 
@@ -42,12 +42,16 @@ export function hashParams(params: Record<string, unknown>): string {
 }
 
 function stableStringify(value: unknown): string {
-  if (value === null || value === undefined) return '';
-  if (typeof value !== 'object') return String(value);
-  if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']';
+  if (value === null || value === undefined) return "";
+  if (typeof value !== "object") return String(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
 
   const sorted = Object.keys(value as Record<string, unknown>).sort();
-  return '{' + sorted.map(k => k + ':' + stableStringify((value as Record<string, unknown>)[k])).join(',') + '}';
+  return (
+    "{" +
+    sorted.map((k) => `${k}:${stableStringify((value as Record<string, unknown>)[k])}`).join(",") +
+    "}"
+  );
 }
 
 function djb2(str: string): number {

@@ -17,35 +17,44 @@
  * });
  */
 
+export type {
+  EventDefinitionInput,
+  EventDefinitionOutput,
+  EventRegistry,
+  EventSchema,
+  ValidationResult,
+} from "./defineEvent.js";
+// Typed event definitions & registry
+export { createEventRegistry, defineEvent } from "./defineEvent.js";
 export {
-  MemoryEventTransport,
   createEvent,
-  type EventTransport,
   type DomainEvent,
   type EventHandler,
   type EventLogger,
+  type EventTransport,
+  MemoryEventTransport,
   type MemoryEventTransportOptions,
-} from './EventTransport.js';
-
-export { eventPlugin, type EventPluginOptions } from './eventPlugin.js';
-
+} from "./EventTransport.js";
+export { type EventPluginOptions, eventPlugin } from "./eventPlugin.js";
 // Event type constants and helpers
 export {
-  CRUD_EVENT_SUFFIXES,
-  crudEventType,
   ARC_LIFECYCLE_EVENTS,
-  CACHE_EVENTS,
-  type CrudEventSuffix,
   type ArcLifecycleEvent,
+  CACHE_EVENTS,
   type CacheEvent,
-} from './eventTypes.js';
-
+  CRUD_EVENT_SUFFIXES,
+  type CrudEventSuffix,
+  crudEventType,
+} from "./eventTypes.js";
+export type { EventOutboxOptions, OutboxStore } from "./outbox.js";
+// Transactional Outbox pattern
+export { EventOutbox, MemoryOutboxStore } from "./outbox.js";
+export type { RetryOptions } from "./retry.js";
 // Retry & Dead Letter Queue (transport-agnostic)
-export { withRetry, createDeadLetterPublisher } from './retry.js';
-export type { RetryOptions } from './retry.js';
+export { createDeadLetterPublisher, withRetry } from "./retry.js";
 
 // Redis transports — use dedicated subpaths to avoid pulling ioredis:
 //   import { RedisEventTransport } from '@classytic/arc/events/redis';
 //   import { RedisStreamTransport } from '@classytic/arc/events/redis-stream';
-export type { RedisLike, RedisEventTransportOptions } from './transports/redis.js';
-export type { RedisStreamLike, RedisStreamTransportOptions } from './transports/redis-stream.js';
+export type { RedisEventTransportOptions, RedisLike } from "./transports/redis.js";
+export type { RedisStreamLike, RedisStreamTransportOptions } from "./transports/redis-stream.js";

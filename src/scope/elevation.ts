@@ -29,13 +29,13 @@
  * ```
  */
 
-import fp from 'fastify-plugin';
-import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
-import type { RequestScope } from './types.js';
-import { getUserRoles } from '../permissions/types.js';
-import { arcLog } from '../logger/index.js';
+import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
+import fp from "fastify-plugin";
+import { arcLog } from "../logger/index.js";
+import { getUserRoles } from "../permissions/types.js";
+import type { RequestScope } from "./types.js";
 
-const log = arcLog('elevation');
+const log = arcLog("elevation");
 
 // ============================================================================
 // Types
@@ -68,17 +68,17 @@ const elevationPlugin: FastifyPluginAsync<ElevationOptions> = async (
   opts: ElevationOptions = {},
 ) => {
   const {
-    platformRoles = ['superadmin'],
-    scopeHeader = 'x-arc-scope',
-    orgHeader = 'x-organization-id',
+    platformRoles = ["superadmin"],
+    scopeHeader = "x-arc-scope",
+    orgHeader = "x-organization-id",
     onElevation,
   } = opts;
 
   // Elevation requires auth — wrap the authenticate decorator
-  if (!fastify.hasDecorator('authenticate')) {
+  if (!fastify.hasDecorator("authenticate")) {
     log.warn(
-      'authenticate decorator not found. ' +
-      'Register auth before elevation. Elevation will not function.',
+      "authenticate decorator not found. " +
+        "Register auth before elevation. Elevation will not function.",
     );
     return;
   }
@@ -98,49 +98,50 @@ const elevationPlugin: FastifyPluginAsync<ElevationOptions> = async (
 
     // Step 2: Check elevation header
     const headerValue = request.headers[scopeHeader] as string | undefined;
-    if (headerValue !== 'platform') return;
+    if (headerValue !== "platform") return;
 
     // Step 3: Validate user for elevation
     const user = request.user;
     if (!user) {
-      log.debug('Elevation requested but no user after auth');
+      log.debug("Elevation requested but no user after auth");
       reply.code(401).send({
         success: false,
-        error: 'Unauthorized',
-        message: 'Authentication required for platform elevation',
-        code: 'ELEVATION_AUTH_REQUIRED',
+        error: "Unauthorized",
+        message: "Authentication required for platform elevation",
+        code: "ELEVATION_AUTH_REQUIRED",
       });
       return;
     }
 
     const userRoles = getUserRoles(user);
     if (!platformRoles.some((r) => userRoles.includes(r))) {
-      log.debug('Elevation rejected — insufficient roles', {
+      log.debug("Elevation rejected — insufficient roles", {
         userId: user.id ?? user._id,
         userRoles,
         required: platformRoles,
       });
       reply.code(403).send({
         success: false,
-        error: 'Forbidden',
-        message: 'Insufficient privileges for platform elevation',
-        code: 'ELEVATION_FORBIDDEN',
+        error: "Forbidden",
+        message: "Insufficient privileges for platform elevation",
+        code: "ELEVATION_FORBIDDEN",
       });
       return;
     }
 
     // Step 4: Build elevated scope
     const orgId = request.headers[orgHeader] as string | undefined;
-    const userId = String(user.id ?? user._id ?? 'unknown');
+    const userId = String(user.id ?? user._id ?? "unknown");
 
     const scope: RequestScope = {
-      kind: 'elevated',
+      kind: "elevated",
+      userId,
       organizationId: orgId || undefined,
       elevatedBy: userId,
     };
 
     request.scope = scope;
-    log.debug('Scope elevated', { userId, organizationId: orgId });
+    log.debug("Scope elevated", { userId, organizationId: orgId });
 
     // Step 5: Fire audit callback
     if (onElevation) {
@@ -153,7 +154,7 @@ const elevationPlugin: FastifyPluginAsync<ElevationOptions> = async (
         });
       } catch {
         // Don't fail the request if audit logging fails
-        log.warn('onElevation callback threw — continuing request');
+        log.warn("onElevation callback threw — continuing request");
       }
     }
   };
@@ -161,12 +162,12 @@ const elevationPlugin: FastifyPluginAsync<ElevationOptions> = async (
   // Overwrite the authenticate decorator
   fastify.authenticate = authenticateWithElevation;
 
-  log.debug('Plugin registered', { platformRoles, scopeHeader });
+  log.debug("Plugin registered", { platformRoles, scopeHeader });
 };
 
 export default fp(elevationPlugin, {
-  name: 'arc-elevation',
-  fastify: '5.x',
+  name: "arc-elevation",
+  fastify: "5.x",
 });
 
 export { elevationPlugin };

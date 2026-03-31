@@ -32,14 +32,14 @@
  * ```
  */
 
-import type { MiddlewareConfig, MiddlewareHandler, RequestWithExtras } from '../types/index.js';
-import { CRUD_OPERATIONS } from '../constants.js';
+import { CRUD_OPERATIONS } from "../constants.js";
+import type { MiddlewareConfig, MiddlewareHandler, RequestWithExtras } from "../types/index.js";
 
 export interface NamedMiddleware {
   /** Unique name for debugging/introspection */
   readonly name: string;
   /** Operations this middleware applies to (default: all) */
-  readonly operations?: Array<'list' | 'get' | 'create' | 'update' | 'delete' | string>;
+  readonly operations?: Array<"list" | "get" | "create" | "update" | "delete" | string>;
   /** Priority — lower numbers run first (default: 10) */
   readonly priority: number;
   /** Conditional execution — return true to run, false to skip */
@@ -49,19 +49,16 @@ export interface NamedMiddleware {
 }
 
 interface MiddlewareOptions {
-  operations?: NamedMiddleware['operations'];
+  operations?: NamedMiddleware["operations"];
   priority?: number;
-  when?: NamedMiddleware['when'];
+  when?: NamedMiddleware["when"];
   handler: MiddlewareHandler;
 }
 
 /**
  * Create a named middleware with priority and conditions.
  */
-export function middleware(
-  name: string,
-  options: MiddlewareOptions,
-): NamedMiddleware {
+export function middleware(name: string, options: MiddlewareOptions): NamedMiddleware {
   return {
     name,
     operations: options.operations,
@@ -90,7 +87,7 @@ export function sortMiddlewares(middlewares: NamedMiddleware[]): MiddlewareConfi
         if (!m.when) return m.handler;
         // Wrap with conditional check
         const wrapped: MiddlewareHandler = async (request, reply) => {
-          const shouldRun = await m.when!(request);
+          const shouldRun = await m.when?.(request);
           if (shouldRun) {
             return m.handler(request, reply);
           }

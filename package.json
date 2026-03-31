@@ -1,6 +1,6 @@
 {
   "name": "@classytic/arc",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "Resource-oriented backend framework for Fastify — clean, minimal, powerful, tree-shakable",
   "type": "module",
   "exports": {
@@ -108,6 +108,10 @@
       "types": "./dist/events/transports/redis-stream-entry.d.mts",
       "default": "./dist/events/transports/redis-stream-entry.mjs"
     },
+    "./dynamic": {
+      "types": "./dist/dynamic/index.d.mts",
+      "default": "./dist/dynamic/index.mjs"
+    },
     "./testing": {
       "types": "./dist/testing/index.d.mts",
       "default": "./dist/testing/index.mjs"
@@ -144,6 +148,10 @@
       "types": "./dist/integrations/websocket.d.mts",
       "default": "./dist/integrations/websocket.mjs"
     },
+    "./integrations/websocket-redis": {
+      "types": "./dist/integrations/websocket-redis.d.mts",
+      "default": "./dist/integrations/websocket-redis.mjs"
+    },
     "./integrations/jobs": {
       "types": "./dist/integrations/jobs.d.mts",
       "default": "./dist/integrations/jobs.mjs"
@@ -151,6 +159,10 @@
     "./integrations/event-gateway": {
       "types": "./dist/integrations/event-gateway.d.mts",
       "default": "./dist/integrations/event-gateway.mjs"
+    },
+    "./integrations/webhooks": {
+      "types": "./dist/integrations/webhooks.d.mts",
+      "default": "./dist/integrations/webhooks.mjs"
     },
     "./auth/redis": {
       "types": "./dist/auth/redis-session.d.mts",
@@ -163,6 +175,14 @@
     "./scope": {
       "types": "./dist/scope/index.d.mts",
       "default": "./dist/scope/index.mjs"
+    },
+    "./rpc": {
+      "types": "./dist/rpc/index.d.mts",
+      "default": "./dist/rpc/index.mjs"
+    },
+    "./mcp": {
+      "types": "./dist/integrations/mcp/index.d.mts",
+      "default": "./dist/integrations/mcp/index.mjs"
     }
   },
   "main": "./dist/index.mjs",
@@ -173,26 +193,31 @@
   "sideEffects": false,
   "files": [
     "dist",
-    "bin"
+    "bin",
+    "skills"
   ],
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
     "typecheck": "tsc --noEmit",
+    "lint": "biome check src/",
+    "lint:fix": "biome check --fix src/",
+    "lint:all": "biome check src/ tests/",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run tests/e2e",
     "test:unit": "vitest run tests/core tests/hooks tests/utils tests/plugins",
-    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+    "smoke": "node scripts/smoke-test.mjs",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build && npm run smoke"
   },
   "engines": {
     "node": ">=22"
   },
   "peerDependencies": {
-    "@classytic/mongokit": ">=3.3.2",
-    "@classytic/streamline": ">=1.0.0",
+    "@classytic/mongokit": ">=3.4.2",
+    "@classytic/streamline": ">=2.0.0",
     "@fastify/cors": "^11.0.0",
     "@fastify/helmet": "^13.0.0",
     "@fastify/jwt": "^10.0.0",
@@ -202,14 +227,14 @@
     "@fastify/type-provider-typebox": "^6.0.0",
     "@fastify/under-pressure": "^9.0.0",
     "@fastify/websocket": "^11.0.0",
-    "@opentelemetry/api": "^1.0.0",
+    "@modelcontextprotocol/sdk": ">=1.28.0",
     "@opentelemetry/auto-instrumentations-node": ">=0.40.0",
     "@opentelemetry/exporter-trace-otlp-http": ">=0.50.0",
     "@opentelemetry/instrumentation-http": ">=0.50.0",
     "@opentelemetry/instrumentation-mongodb": ">=0.40.0",
     "@opentelemetry/sdk-node": ">=0.50.0",
     "@sinclair/typebox": "^0.34.0",
-    "better-auth": ">=1.0.0",
+    "better-auth": ">=1.5.5",
     "bullmq": "^5.0.0",
     "fastify": "^5.7.4",
     "fastify-raw-body": "^5.0.0",
@@ -297,6 +322,9 @@
     },
     "zod": {
       "optional": true
+    },
+    "@modelcontextprotocol/sdk": {
+      "optional": true
     }
   },
   "dependencies": {
@@ -304,11 +332,13 @@
     "qs": "^6.14.1"
   },
   "devDependencies": {
-    "@classytic/mongokit": "^3.3.2",
+    "@biomejs/biome": "^2.4.10",
+    "@classytic/mongokit": "^3.4.2",
     "@fastify/jwt": "^10.0.0",
     "@fastify/multipart": "^9.0.0",
     "@fastify/type-provider-typebox": "^6.0.0",
     "@fastify/websocket": "^11.0.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@sinclair/typebox": "^0.34.0",
     "@types/node": "^22.10.0",
     "@types/qs": "^6.14.0",
@@ -317,8 +347,8 @@
     "jsonwebtoken": "^9.0.0",
     "mongodb": "^7.1.0",
     "mongodb-memory-server": "^11.0.1",
-    "tsdown": "^0.20.3",
-    "typescript": "^5.7.2",
+    "tsdown": "^0.21.7",
+    "typescript": "^6.0.2",
     "vitest": "^3.0.0",
     "ws": "^8.0.0",
     "zod": "^4.3.6"

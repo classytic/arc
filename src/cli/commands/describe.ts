@@ -13,30 +13,40 @@
  * ```
  */
 
-import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
-import type { ResourceDefinition } from '../../core/defineResource.js';
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { CRUD_OPERATIONS } from "../../constants.js";
+import type { ResourceDefinition } from "../../core/defineResource.js";
+import type { FieldPermissionMap } from "../../permissions/fields.js";
+import type { PermissionCheck } from "../../permissions/types.js";
+import type { PipelineConfig, PipelineStep } from "../../pipeline/types.js";
 import type {
   AnyRecord,
+  EventDefinition,
+  MiddlewareConfig,
+  RateLimitConfig,
   ResourcePermissions,
   RouteSchemaOptions,
-  EventDefinition,
-  RateLimitConfig,
-  MiddlewareConfig,
-} from '../../types/index.js';
-import type { PermissionCheck } from '../../permissions/types.js';
-import type { FieldPermissionMap, FieldPermission } from '../../permissions/fields.js';
-import type { PipelineConfig, PipelineStep } from '../../pipeline/types.js';
-import { CRUD_OPERATIONS } from '../../constants.js';
+} from "../../types/index.js";
 
 // ---------------------------------------------------------------------------
 // Output Schema
 // ---------------------------------------------------------------------------
 
+interface EventCatalogEntry {
+  name: string;
+  version: number;
+  description?: string;
+  hasSchema: boolean;
+  schemaFields: string[];
+  requiredFields: string[];
+}
+
 interface DescribeOutput {
-  $schema: 'arc-describe/v1';
+  $schema: "arc-describe/v1";
   generatedAt: string;
   resources: DescribedResource[];
+  eventCatalog?: EventCatalogEntry[];
   stats: DescribeStats;
 }
 
@@ -63,7 +73,7 @@ interface DescribedResource {
 }
 
 interface PermissionDescription {
-  type: 'public' | 'requireAuth' | 'requireRoles' | 'custom';
+  type: "public" | "requireAuth" | "requireRoles" | "custom";
   roles?: readonly string[];
 }
 
@@ -97,12 +107,14 @@ interface EventDescription {
   name: string;
   description?: string;
   hasSchema: boolean;
+  hasHandler: boolean;
 }
 
 interface DescribeStats {
   totalResources: number;
   totalRoutes: number;
   totalEvents: number;
+  totalCatalogedEvents: number;
   totalFields: number;
   presetUsage: Record<string, number>;
   pipelineSteps: number;
@@ -113,30 +125,30 @@ interface DescribeStats {
 // ---------------------------------------------------------------------------
 
 function describePermission(check: unknown): PermissionDescription {
-  if (!check || typeof check !== 'function') {
-    return { type: 'custom' };
+  if (!check || typeof check !== "function") {
+    return { type: "custom" };
   }
 
   const fn = check as PermissionCheck;
 
   // allowPublic() sets _isPublic = true
   if (fn._isPublic === true) {
-    return { type: 'public' };
+    return { type: "public" };
   }
 
   // requireRoles() sets _roles = [...]
   if (Array.isArray(fn._roles)) {
-    return { type: 'requireRoles', roles: fn._roles as string[] };
+    return { type: "requireRoles", roles: fn._roles as string[] };
   }
 
   // requireAuth() — function that checks ctx.user
   // Infer from function source as a best-effort heuristic
   const src = check.toString();
-  if (src.includes('ctx.user') && !src.includes('roles') && src.length < 200) {
-    return { type: 'requireAuth' };
+  if (src.includes("ctx.user") && !src.includes("roles") && src.length < 200) {
+    return { type: "requireAuth" };
   }
 
-  return { type: 'custom' };
+  return { type: "custom" };
 }
 
 function describePermissions(perms?: ResourcePermissions): Record<string, PermissionDescription> {
@@ -157,7 +169,9 @@ function describePermissions(perms?: ResourcePermissions): Record<string, Permis
 // Field Permission Introspection
 // ---------------------------------------------------------------------------
 
-function describeFields(fieldPerms?: FieldPermissionMap): Record<string, FieldDescription> | undefined {
+function describeFields(
+  fieldPerms?: FieldPermissionMap,
+): Record<string, FieldDescription> | undefined {
   if (!fieldPerms || Object.keys(fieldPerms).length === 0) return undefined;
 
   const result: Record<string, FieldDescription> = {};
@@ -208,9 +222,15 @@ function describePipeline(pipe?: PipelineConfig): PipelineDescription | undefine
     if (step.operations?.length) desc.operations = [...step.operations];
 
     switch (step._type) {
-      case 'guard': guards.push(desc); break;
-      case 'transform': transforms.push(desc); break;
-      case 'interceptor': interceptors.push(desc); break;
+      case "guard":
+        guards.push(desc);
+        break;
+      case "transform":
+        transforms.push(desc);
+        break;
+      case "interceptor":
+        interceptors.push(desc);
+        break;
     }
   }
 
@@ -228,11 +248,11 @@ function describeRoutes(resource: ResourceDefinition<unknown>): RouteDescription
   if (!resource.disableDefaultRoutes) {
     const disabled = new Set(resource.disabledRoutes ?? []);
     const crudOps = [
-      { method: 'GET', suffix: '', op: 'list' },
-      { method: 'GET', suffix: '/:id', op: 'get' },
-      { method: 'POST', suffix: '', op: 'create' },
-      { method: 'PATCH', suffix: '/:id', op: 'update' },
-      { method: 'DELETE', suffix: '/:id', op: 'delete' },
+      { method: "GET", suffix: "", op: "list" },
+      { method: "GET", suffix: "/:id", op: "get" },
+      { method: "POST", suffix: "", op: "create" },
+      { method: "PATCH", suffix: "/:id", op: "update" },
+      { method: "DELETE", suffix: "/:id", op: "delete" },
     ] as const;
 
     for (const { method, suffix, op } of crudOps) {
@@ -254,7 +274,7 @@ function describeRoutes(resource: ResourceDefinition<unknown>): RouteDescription
     routes.push({
       method: ar.method,
       path: `${resource.prefix}${ar.path}`,
-      operation: typeof ar.handler === 'string' ? ar.handler : 'custom',
+      operation: typeof ar.handler === "string" ? ar.handler : "custom",
       summary: ar.summary,
       description: ar.description,
       permission: describePermission(ar.permissions),
@@ -278,6 +298,7 @@ function describeEvents(
     name: `${resourceName}:${action}`,
     description: def.description,
     hasSchema: !!def.schema,
+    hasHandler: !!def.handler,
   }));
 }
 
@@ -312,9 +333,7 @@ function describeResource(
     tag: resource.tag,
     module,
 
-    adapter: resource.adapter
-      ? { type: resource.adapter.type, name: resource.adapter.name }
-      : null,
+    adapter: resource.adapter ? { type: resource.adapter.type, name: resource.adapter.name } : null,
 
     permissions: describePermissions(resource.permissions),
     presets: resource._appliedPresets ?? [],
@@ -325,9 +344,8 @@ function describeResource(
     routes: describeRoutes(resource),
     events: describeEvents(resource.name, resource.events),
 
-    schemaOptions: Object.keys(resource.schemaOptions ?? {}).length > 0
-      ? resource.schemaOptions
-      : undefined,
+    schemaOptions:
+      Object.keys(resource.schemaOptions ?? {}).length > 0 ? resource.schemaOptions : undefined,
     rateLimit: resource.rateLimit,
     middlewares: describeMiddlewares(resource.middlewares),
   };
@@ -340,22 +358,23 @@ function describeResource(
 export async function describe(args: string[]): Promise<void> {
   try {
     // Parse flags
-    const flags = new Set(args.filter(a => a.startsWith('--')));
-    const positional = args.filter(a => !a.startsWith('--'));
-    const pretty = flags.has('--pretty') || !flags.has('--json');
+    const flags = new Set(args.filter((a) => a.startsWith("--")));
+    const positional = args.filter((a) => !a.startsWith("--"));
+    const pretty =
+      flags.has("--pretty") || (!flags.has("--json") && (process.stdout.isTTY ?? true));
     const filterResource = positional[1]; // optional resource name filter
 
     const entryPath = positional[0];
     if (!entryPath) {
-      console.log('Usage: arc describe <entry-file> [resource-name] [--json] [--pretty]\n');
-      console.log('Outputs machine-readable JSON metadata for AI agents.\n');
-      console.log('Options:');
-      console.log('  --json     Output compact JSON (default if piped)');
-      console.log('  --pretty   Output formatted JSON (default if terminal)');
-      console.log('\nExamples:');
-      console.log('  arc describe ./src/resources.js');
-      console.log('  arc describe ./src/resources.js product');
-      console.log('  arc describe ./src/resources.js --json | jq .');
+      console.log("Usage: arc describe <entry-file> [resource-name] [--json] [--pretty]\n");
+      console.log("Outputs machine-readable JSON metadata for AI agents.\n");
+      console.log("Options:");
+      console.log("  --json     Output compact JSON (default if piped)");
+      console.log("  --pretty   Output formatted JSON (default if terminal)");
+      console.log("\nExamples:");
+      console.log("  arc describe ./src/resources.js");
+      console.log("  arc describe ./src/resources.js product");
+      console.log("  arc describe ./src/resources.js --json | jq .");
       return;
     }
 
@@ -363,19 +382,42 @@ export async function describe(args: string[]): Promise<void> {
     const entryFileUrl = pathToFileURL(resolve(process.cwd(), entryPath)).href;
     const entryModule = await import(entryFileUrl);
 
-    // Collect ResourceDefinition objects
+    // Collect ResourceDefinition objects and EventRegistry instances
     // Also handles arrays of resources (e.g. `export const resources = [r1, r2]`)
     const resources: ResourceDefinition<unknown>[] = [];
+    let eventRegistry:
+      | {
+          catalog: () => ReadonlyArray<{
+            name: string;
+            version: number;
+            description?: string;
+            schema?: Record<string, unknown>;
+          }>;
+        }
+      | undefined;
 
     function tryCollect(value: unknown): void {
       if (
         value &&
-        typeof value === 'object' &&
-        'name' in value &&
-        '_registryMeta' in value &&
-        'toPlugin' in value
+        typeof value === "object" &&
+        "name" in value &&
+        "_registryMeta" in value &&
+        "toPlugin" in value
       ) {
         resources.push(value as ResourceDefinition<unknown>);
+      }
+    }
+
+    function tryCollectRegistry(value: unknown): void {
+      if (
+        value &&
+        typeof value === "object" &&
+        "catalog" in value &&
+        "register" in value &&
+        "validate" in value &&
+        typeof (value as Record<string, unknown>).catalog === "function"
+      ) {
+        eventRegistry = value as typeof eventRegistry;
       }
     }
 
@@ -384,28 +426,29 @@ export async function describe(args: string[]): Promise<void> {
         exported.forEach(tryCollect);
       } else {
         tryCollect(exported);
+        tryCollectRegistry(exported);
       }
     }
 
     if (resources.length === 0) {
       throw new Error(
-        'No resource definitions found in entry file.\nMake sure your file exports defineResource() results:\n  export const productResource = defineResource({ ... });',
+        "No resource definitions found in entry file.\nMake sure your file exports defineResource() results:\n  export const productResource = defineResource({ ... });",
       );
     }
 
     // Filter to single resource if requested
     const filtered = filterResource
-      ? resources.filter(r => r.name === filterResource)
+      ? resources.filter((r) => r.name === filterResource)
       : resources;
 
     if (filterResource && filtered.length === 0) {
       throw new Error(
-        `Resource '${filterResource}' not found.\nAvailable: ${resources.map(r => r.name).join(', ')}`,
+        `Resource '${filterResource}' not found.\nAvailable: ${resources.map((r) => r.name).join(", ")}`,
       );
     }
 
     // Build described resources
-    const described = filtered.map(r =>
+    const described = filtered.map((r) =>
       describeResource(r, (r._registryMeta as AnyRecord | undefined)?.module as string | undefined),
     );
 
@@ -419,23 +462,42 @@ export async function describe(args: string[]): Promise<void> {
         presetCounts[preset] = (presetCounts[preset] ?? 0) + 1;
       }
       if (res.pipeline) {
-        totalPipelineSteps += res.pipeline.guards.length
-          + res.pipeline.transforms.length
-          + res.pipeline.interceptors.length;
+        totalPipelineSteps +=
+          res.pipeline.guards.length +
+          res.pipeline.transforms.length +
+          res.pipeline.interceptors.length;
       }
       if (res.fields) {
         totalFields += Object.keys(res.fields).length;
       }
     }
 
+    // Build event catalog from registry (if found)
+    let eventCatalog: EventCatalogEntry[] | undefined;
+    if (eventRegistry) {
+      const raw = eventRegistry.catalog();
+      eventCatalog = raw.map((e) => ({
+        name: e.name,
+        version: e.version,
+        description: e.description,
+        hasSchema: !!e.schema,
+        schemaFields: e.schema?.properties
+          ? Object.keys(e.schema.properties as Record<string, unknown>)
+          : [],
+        requiredFields: (e.schema?.required as string[]) ?? [],
+      }));
+    }
+
     const output: DescribeOutput = {
-      $schema: 'arc-describe/v1',
+      $schema: "arc-describe/v1",
       generatedAt: new Date().toISOString(),
       resources: described,
+      ...(eventCatalog?.length ? { eventCatalog } : {}),
       stats: {
         totalResources: described.length,
         totalRoutes: described.reduce((sum, r) => sum + r.routes.length, 0),
         totalEvents: described.reduce((sum, r) => sum + r.events.length, 0),
+        totalCatalogedEvents: eventCatalog?.length ?? 0,
         totalFields,
         presetUsage: presetCounts,
         pipelineSteps: totalPipelineSteps,
@@ -443,9 +505,7 @@ export async function describe(args: string[]): Promise<void> {
     };
 
     // Output
-    const json = pretty
-      ? JSON.stringify(output, null, 2)
-      : JSON.stringify(output);
+    const json = pretty ? JSON.stringify(output, null, 2) : JSON.stringify(output);
 
     console.log(json);
   } catch (error: unknown) {

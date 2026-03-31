@@ -22,27 +22,22 @@
  * });
  */
 
-import fp from 'fastify-plugin';
 import type {
   FastifyInstance,
   FastifyPluginAsync,
   FastifyReply,
   FastifyRequest,
   RouteHandlerMethod,
-} from 'fastify';
-import type {
-  OrgAdapter,
-  OrgRole,
-  OrganizationPluginOptions,
-  MemberDoc,
-} from './types.js';
-import type { UserBase } from '../permissions/types.js';
+} from "fastify";
+import fp from "fastify-plugin";
+import type { UserBase } from "../permissions/types.js";
+import type { MemberDoc, OrganizationPluginOptions, OrgRole } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Fastify type augmentations
 // ---------------------------------------------------------------------------
 
-declare module 'fastify' {
+declare module "fastify" {
   interface FastifyInstance {
     /** Middleware: require the caller to hold one of the listed org roles */
     requireOrgRole: (roles: string[]) => RouteHandlerMethod;
@@ -55,21 +50,21 @@ declare module 'fastify' {
 
 const DEFAULT_ROLES: OrgRole[] = [
   {
-    name: 'owner',
-    permissions: [{ resource: '*', action: ['*'] }],
+    name: "owner",
+    permissions: [{ resource: "*", action: ["*"] }],
   },
   {
-    name: 'admin',
+    name: "admin",
     permissions: [
-      { resource: 'org', action: ['read', 'update'] },
-      { resource: 'members', action: ['*'] },
+      { resource: "org", action: ["read", "update"] },
+      { resource: "members", action: ["*"] },
     ],
   },
   {
-    name: 'member',
+    name: "member",
     permissions: [
-      { resource: 'org', action: ['read'] },
-      { resource: 'members', action: ['read'] },
+      { resource: "org", action: ["read"] },
+      { resource: "members", action: ["read"] },
     ],
   },
 ];
@@ -90,12 +85,7 @@ function getUserId(user: UserBase): string | undefined {
 }
 
 /** Standard JSON error reply. */
-function sendError(
-  reply: FastifyReply,
-  statusCode: number,
-  code: string,
-  message: string,
-): void {
+function sendError(reply: FastifyReply, statusCode: number, code: string, message: string): void {
   void reply.code(statusCode).send({ success: false, code, error: message });
 }
 
@@ -110,7 +100,7 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
   const {
     adapter,
     roles = DEFAULT_ROLES,
-    basePath = '/api/organizations',
+    basePath = "/api/organizations",
     enableInvitations = false,
   } = opts;
 
@@ -128,7 +118,7 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
    * 3. Verifies the caller holds one of the required roles
    */
   fastify.decorate(
-    'requireOrgRole',
+    "requireOrgRole",
     function requireOrgRole(requiredRoles: string[]): RouteHandlerMethod {
       return async function requireOrgRoleHandler(
         request: FastifyRequest,
@@ -136,25 +126,25 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
       ): Promise<void> {
         const user = getUser(request);
         if (!user) {
-          sendError(reply, 401, 'UNAUTHORIZED', 'Authentication required');
+          sendError(reply, 401, "UNAUTHORIZED", "Authentication required");
           return;
         }
 
         const userId = getUserId(user);
         if (!userId) {
-          sendError(reply, 401, 'UNAUTHORIZED', 'Unable to determine user identity');
+          sendError(reply, 401, "UNAUTHORIZED", "Unable to determine user identity");
           return;
         }
 
         const { orgId } = request.params as { orgId?: string };
         if (!orgId) {
-          sendError(reply, 400, 'MISSING_ORG_ID', 'Organization ID is required');
+          sendError(reply, 400, "MISSING_ORG_ID", "Organization ID is required");
           return;
         }
 
         const member = await adapter.getMember(orgId, userId);
         if (!member) {
-          sendError(reply, 403, 'NOT_A_MEMBER', 'You are not a member of this organization');
+          sendError(reply, 403, "NOT_A_MEMBER", "You are not a member of this organization");
           return;
         }
 
@@ -163,8 +153,8 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
           sendError(
             reply,
             403,
-            'INSUFFICIENT_ROLE',
-            `This action requires one of these roles: ${requiredRoles.join(', ')}`,
+            "INSUFFICIENT_ROLE",
+            `This action requires one of these roles: ${requiredRoles.join(", ")}`,
           );
           return;
         }
@@ -177,10 +167,12 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
   // --------------------------------------------------
 
   /** Wrap preHandlers so that authenticate is called first (if available). */
-  function withAuth(...extra: RouteHandlerMethod[]): RouteHandlerMethod[] {
+  // Return type is `any` to satisfy Fastify 5.8+'s tightened preHandler types.
+  // All middleware conforms at runtime (returns void/Promise<void>).
+  function withAuth(...extra: RouteHandlerMethod[]): any {
     const handlers: RouteHandlerMethod[] = [];
     const inst = fastify as FastifyInstance & { authenticate?: RouteHandlerMethod };
-    if (typeof inst.authenticate === 'function') {
+    if (typeof inst.authenticate === "function") {
       handlers.push(inst.authenticate);
     }
     handlers.push(...extra);
@@ -195,10 +187,10 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
     return name
       .toLowerCase()
       .trim()
-      .replace(/[^\w\s-]/g, '')
-      .replace(/[\s_]+/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '');
+      .replace(/[^\w\s-]/g, "")
+      .replace(/[\s_]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
   }
 
   // --------------------------------------------------
@@ -217,19 +209,21 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
     async (request: FastifyRequest, reply: FastifyReply) => {
       const user = getUser(request);
       if (!user) {
-        sendError(reply, 401, 'UNAUTHORIZED', 'Authentication required');
+        sendError(reply, 401, "UNAUTHORIZED", "Authentication required");
         return;
       }
 
       const userId = getUserId(user);
       if (!userId) {
-        sendError(reply, 401, 'UNAUTHORIZED', 'Unable to determine user identity');
+        sendError(reply, 401, "UNAUTHORIZED", "Unable to determine user identity");
         return;
       }
 
-      const body = request.body as { name?: string; slug?: string; [key: string]: unknown } | undefined;
+      const body = request.body as
+        | { name?: string; slug?: string; [key: string]: unknown }
+        | undefined;
       if (!body?.name) {
-        sendError(reply, 400, 'VALIDATION_ERROR', 'Organization name is required');
+        sendError(reply, 400, "VALIDATION_ERROR", "Organization name is required");
         return;
       }
 
@@ -238,14 +232,14 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
       // Check slug uniqueness
       const existing = await adapter.getOrgBySlug(slug);
       if (existing) {
-        sendError(reply, 409, 'SLUG_TAKEN', `An organization with slug '${slug}' already exists`);
+        sendError(reply, 409, "SLUG_TAKEN", `An organization with slug '${slug}' already exists`);
         return;
       }
 
       const org = await adapter.createOrg({ ...body, name: body.name, slug, ownerId: userId });
 
       // Auto-add creator as owner
-      await adapter.addMember(org.id, userId, 'owner');
+      await adapter.addMember(org.id, userId, "owner");
 
       void reply.code(201).send({ success: true, data: org });
     },
@@ -260,13 +254,13 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
     async (request: FastifyRequest, reply: FastifyReply) => {
       const user = getUser(request);
       if (!user) {
-        sendError(reply, 401, 'UNAUTHORIZED', 'Authentication required');
+        sendError(reply, 401, "UNAUTHORIZED", "Authentication required");
         return;
       }
 
       const userId = getUserId(user);
       if (!userId) {
-        sendError(reply, 401, 'UNAUTHORIZED', 'Unable to determine user identity');
+        sendError(reply, 401, "UNAUTHORIZED", "Unable to determine user identity");
         return;
       }
 
@@ -280,13 +274,13 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
    */
   fastify.get(
     `${basePath}/:orgId`,
-    { preHandler: withAuth(fastify.requireOrgRole(['owner', 'admin', 'member'])) },
+    { preHandler: withAuth(fastify.requireOrgRole(["owner", "admin", "member"])) },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { orgId } = request.params as { orgId: string };
       const org = await adapter.getOrg(orgId);
 
       if (!org) {
-        sendError(reply, 404, 'NOT_FOUND', 'Organization not found');
+        sendError(reply, 404, "NOT_FOUND", "Organization not found");
         return;
       }
 
@@ -299,13 +293,13 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
    */
   fastify.patch(
     `${basePath}/:orgId`,
-    { preHandler: withAuth(fastify.requireOrgRole(['owner', 'admin'])) },
+    { preHandler: withAuth(fastify.requireOrgRole(["owner", "admin"])) },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { orgId } = request.params as { orgId: string };
       const body = request.body as Partial<Record<string, unknown>> | undefined;
 
       if (!body || Object.keys(body).length === 0) {
-        sendError(reply, 400, 'VALIDATION_ERROR', 'Request body must not be empty');
+        sendError(reply, 400, "VALIDATION_ERROR", "Request body must not be empty");
         return;
       }
 
@@ -314,7 +308,7 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
 
       const org = await adapter.updateOrg(orgId, updates);
       if (!org) {
-        sendError(reply, 404, 'NOT_FOUND', 'Organization not found');
+        sendError(reply, 404, "NOT_FOUND", "Organization not found");
         return;
       }
 
@@ -327,18 +321,18 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
    */
   fastify.delete(
     `${basePath}/:orgId`,
-    { preHandler: withAuth(fastify.requireOrgRole(['owner'])) },
+    { preHandler: withAuth(fastify.requireOrgRole(["owner"])) },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { orgId } = request.params as { orgId: string };
 
       const org = await adapter.getOrg(orgId);
       if (!org) {
-        sendError(reply, 404, 'NOT_FOUND', 'Organization not found');
+        sendError(reply, 404, "NOT_FOUND", "Organization not found");
         return;
       }
 
       await adapter.deleteOrg(orgId);
-      void reply.send({ success: true, message: 'Organization deleted' });
+      void reply.send({ success: true, message: "Organization deleted" });
     },
   );
 
@@ -351,7 +345,7 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
    */
   fastify.get(
     `${basePath}/:orgId/members`,
-    { preHandler: withAuth(fastify.requireOrgRole(['owner', 'admin', 'member'])) },
+    { preHandler: withAuth(fastify.requireOrgRole(["owner", "admin", "member"])) },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { orgId } = request.params as { orgId: string };
       const members = await adapter.listMembers(orgId);
@@ -366,13 +360,13 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
    */
   fastify.post(
     `${basePath}/:orgId/members`,
-    { preHandler: withAuth(fastify.requireOrgRole(['owner', 'admin'])) },
+    { preHandler: withAuth(fastify.requireOrgRole(["owner", "admin"])) },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { orgId } = request.params as { orgId: string };
       const body = request.body as { userId?: string; role?: string } | undefined;
 
       if (!body?.userId || !body.role) {
-        sendError(reply, 400, 'VALIDATION_ERROR', 'userId and role are required');
+        sendError(reply, 400, "VALIDATION_ERROR", "userId and role are required");
         return;
       }
 
@@ -380,8 +374,8 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
         sendError(
           reply,
           400,
-          'INVALID_ROLE',
-          `Invalid role '${body.role}'. Valid roles: ${[...validRoleNames].join(', ')}`,
+          "INVALID_ROLE",
+          `Invalid role '${body.role}'. Valid roles: ${[...validRoleNames].join(", ")}`,
         );
         return;
       }
@@ -389,7 +383,7 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
       // Prevent duplicate membership
       const existing = await adapter.getMember(orgId, body.userId);
       if (existing) {
-        sendError(reply, 409, 'ALREADY_MEMBER', 'User is already a member of this organization');
+        sendError(reply, 409, "ALREADY_MEMBER", "User is already a member of this organization");
         return;
       }
 
@@ -405,13 +399,13 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
    */
   fastify.patch(
     `${basePath}/:orgId/members/:userId`,
-    { preHandler: withAuth(fastify.requireOrgRole(['owner', 'admin'])) },
+    { preHandler: withAuth(fastify.requireOrgRole(["owner", "admin"])) },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { orgId, userId } = request.params as { orgId: string; userId: string };
       const body = request.body as { role?: string } | undefined;
 
       if (!body?.role) {
-        sendError(reply, 400, 'VALIDATION_ERROR', 'role is required');
+        sendError(reply, 400, "VALIDATION_ERROR", "role is required");
         return;
       }
 
@@ -419,8 +413,8 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
         sendError(
           reply,
           400,
-          'INVALID_ROLE',
-          `Invalid role '${body.role}'. Valid roles: ${[...validRoleNames].join(', ')}`,
+          "INVALID_ROLE",
+          `Invalid role '${body.role}'. Valid roles: ${[...validRoleNames].join(", ")}`,
         );
         return;
       }
@@ -428,19 +422,19 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
       // Prevent demoting the last owner
       const currentMember = await adapter.getMember(orgId, userId);
       if (!currentMember) {
-        sendError(reply, 404, 'NOT_FOUND', 'Member not found');
+        sendError(reply, 404, "NOT_FOUND", "Member not found");
         return;
       }
 
-      if (currentMember.role === 'owner' && body.role !== 'owner') {
+      if (currentMember.role === "owner" && body.role !== "owner") {
         const members = await adapter.listMembers(orgId);
-        const ownerCount = members.filter((m: MemberDoc) => m.role === 'owner').length;
+        const ownerCount = members.filter((m: MemberDoc) => m.role === "owner").length;
         if (ownerCount <= 1) {
           sendError(
             reply,
             400,
-            'LAST_OWNER',
-            'Cannot change the role of the last owner. Transfer ownership first.',
+            "LAST_OWNER",
+            "Cannot change the role of the last owner. Transfer ownership first.",
           );
           return;
         }
@@ -448,7 +442,7 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
 
       const member = await adapter.updateMemberRole(orgId, userId, body.role);
       if (!member) {
-        sendError(reply, 404, 'NOT_FOUND', 'Member not found');
+        sendError(reply, 404, "NOT_FOUND", "Member not found");
         return;
       }
 
@@ -461,33 +455,33 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
    */
   fastify.delete(
     `${basePath}/:orgId/members/:userId`,
-    { preHandler: withAuth(fastify.requireOrgRole(['owner', 'admin'])) },
+    { preHandler: withAuth(fastify.requireOrgRole(["owner", "admin"])) },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { orgId, userId } = request.params as { orgId: string; userId: string };
 
       const member = await adapter.getMember(orgId, userId);
       if (!member) {
-        sendError(reply, 404, 'NOT_FOUND', 'Member not found');
+        sendError(reply, 404, "NOT_FOUND", "Member not found");
         return;
       }
 
       // Prevent removing the last owner
-      if (member.role === 'owner') {
+      if (member.role === "owner") {
         const members = await adapter.listMembers(orgId);
-        const ownerCount = members.filter((m: MemberDoc) => m.role === 'owner').length;
+        const ownerCount = members.filter((m: MemberDoc) => m.role === "owner").length;
         if (ownerCount <= 1) {
           sendError(
             reply,
             400,
-            'LAST_OWNER',
-            'Cannot remove the last owner. Transfer ownership or delete the organization.',
+            "LAST_OWNER",
+            "Cannot remove the last owner. Transfer ownership or delete the organization.",
           );
           return;
         }
       }
 
       await adapter.removeMember(orgId, userId);
-      void reply.send({ success: true, message: 'Member removed' });
+      void reply.send({ success: true, message: "Member removed" });
     },
   );
 
@@ -505,20 +499,22 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
      */
     fastify.post(
       `${basePath}/:orgId/invitations`,
-      { preHandler: withAuth(fastify.requireOrgRole(['owner', 'admin'])) },
+      { preHandler: withAuth(fastify.requireOrgRole(["owner", "admin"])) },
       async (request: FastifyRequest, reply: FastifyReply) => {
         const user = getUser(request);
         const userId = user ? getUserId(user) : undefined;
         if (!userId) {
-          sendError(reply, 401, 'UNAUTHORIZED', 'Authentication required');
+          sendError(reply, 401, "UNAUTHORIZED", "Authentication required");
           return;
         }
 
         const { orgId } = request.params as { orgId: string };
-        const body = request.body as { email?: string; role?: string; expiresAt?: string } | undefined;
+        const body = request.body as
+          | { email?: string; role?: string; expiresAt?: string }
+          | undefined;
 
         if (!body?.email || !body.role) {
-          sendError(reply, 400, 'VALIDATION_ERROR', 'email and role are required');
+          sendError(reply, 400, "VALIDATION_ERROR", "email and role are required");
           return;
         }
 
@@ -526,8 +522,8 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
           sendError(
             reply,
             400,
-            'INVALID_ROLE',
-            `Invalid role '${body.role}'. Valid roles: ${[...validRoleNames].join(', ')}`,
+            "INVALID_ROLE",
+            `Invalid role '${body.role}'. Valid roles: ${[...validRoleNames].join(", ")}`,
           );
           return;
         }
@@ -540,7 +536,7 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
           email: body.email,
           role: body.role,
           invitedBy: userId,
-          status: 'pending',
+          status: "pending",
           expiresAt,
         });
 
@@ -553,7 +549,7 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
      */
     fastify.get(
       `${basePath}/:orgId/invitations`,
-      { preHandler: withAuth(fastify.requireOrgRole(['owner', 'admin'])) },
+      { preHandler: withAuth(fastify.requireOrgRole(["owner", "admin"])) },
       async (request: FastifyRequest, reply: FastifyReply) => {
         const { orgId } = request.params as { orgId: string };
         const invitations = await inv.listPending(orgId);
@@ -570,7 +566,7 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
       async (request: FastifyRequest, reply: FastifyReply) => {
         const { invitationId } = request.params as { invitationId: string };
         await inv.accept(invitationId);
-        void reply.send({ success: true, message: 'Invitation accepted' });
+        void reply.send({ success: true, message: "Invitation accepted" });
       },
     );
 
@@ -583,20 +579,20 @@ const organizationPlugin: FastifyPluginAsync<OrganizationPluginOptions> = async 
       async (request: FastifyRequest, reply: FastifyReply) => {
         const { invitationId } = request.params as { invitationId: string };
         await inv.reject(invitationId);
-        void reply.send({ success: true, message: 'Invitation rejected' });
+        void reply.send({ success: true, message: "Invitation rejected" });
       },
     );
   }
 
   fastify.log?.debug?.(
     { basePath, roles: [...validRoleNames], invitations: enableInvitations },
-    'Organization plugin registered',
+    "Organization plugin registered",
   );
 };
 
 export default fp(organizationPlugin, {
-  name: 'arc-organization',
-  fastify: '5.x',
+  name: "arc-organization",
+  fastify: "5.x",
 });
 
 export { organizationPlugin };

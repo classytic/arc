@@ -31,7 +31,7 @@
  * ```
  */
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance } from "fastify";
 
 // ============================================================================
 // Types
@@ -56,10 +56,21 @@ export interface OrgResponse {
 }
 
 export interface BetterAuthTestHelpers {
-  signUp(app: FastifyInstance, data: { email: string; password: string; name: string }): Promise<AuthResponse>;
+  signUp(
+    app: FastifyInstance,
+    data: { email: string; password: string; name: string },
+  ): Promise<AuthResponse>;
   signIn(app: FastifyInstance, data: { email: string; password: string }): Promise<AuthResponse>;
-  createOrg(app: FastifyInstance, token: string, data: { name: string; slug: string }): Promise<OrgResponse>;
-  setActiveOrg(app: FastifyInstance, token: string, orgId: string): Promise<{ statusCode: number; body: any }>;
+  createOrg(
+    app: FastifyInstance,
+    token: string,
+    data: { name: string; slug: string },
+  ): Promise<OrgResponse>;
+  setActiveOrg(
+    app: FastifyInstance,
+    token: string,
+    orgId: string,
+  ): Promise<{ statusCode: number; body: any }>;
   authHeaders(token: string, orgId?: string): Record<string, string>;
 }
 
@@ -99,7 +110,11 @@ export interface SetupBetterAuthOrgOptions {
    * Callback to add a member to the org.
    * Apps wire Better Auth differently — some use auth.api.addMember, others use HTTP.
    */
-  addMember: (data: { organizationId: string; userId: string; role: string }) => Promise<{ statusCode: number }>;
+  addMember: (data: {
+    organizationId: string;
+    userId: string;
+    role: string;
+  }) => Promise<{ statusCode: number }>;
   /**
    * Optional hook for app-specific initialization after all users are set up.
    * Use this for things like recruiter→account manager hierarchy.
@@ -138,20 +153,20 @@ export function safeParseBody(body: string): any {
 export function createBetterAuthTestHelpers(
   options: BetterAuthTestHelpersOptions = {},
 ): BetterAuthTestHelpers {
-  const basePath = options.basePath ?? '/api/auth';
+  const basePath = options.basePath ?? "/api/auth";
 
   return {
     async signUp(app, data) {
       const res = await app.inject({
-        method: 'POST',
+        method: "POST",
         url: `${basePath}/sign-up/email`,
         payload: data,
       });
-      const token = res.headers['set-auth-token'] as string | undefined;
+      const token = res.headers["set-auth-token"] as string | undefined;
       const body = safeParseBody(res.body);
       return {
         statusCode: res.statusCode,
-        token: token || '',
+        token: token || "",
         user: body?.user || body,
         body,
       };
@@ -159,15 +174,15 @@ export function createBetterAuthTestHelpers(
 
     async signIn(app, data) {
       const res = await app.inject({
-        method: 'POST',
+        method: "POST",
         url: `${basePath}/sign-in/email`,
         payload: data,
       });
-      const token = res.headers['set-auth-token'] as string | undefined;
+      const token = res.headers["set-auth-token"] as string | undefined;
       const body = safeParseBody(res.body);
       return {
         statusCode: res.statusCode,
-        token: token || '',
+        token: token || "",
         user: body?.user || body,
         body,
       };
@@ -175,7 +190,7 @@ export function createBetterAuthTestHelpers(
 
     async createOrg(app, token, data) {
       const res = await app.inject({
-        method: 'POST',
+        method: "POST",
         url: `${basePath}/organization/create`,
         headers: { authorization: `Bearer ${token}` },
         payload: data,
@@ -190,7 +205,7 @@ export function createBetterAuthTestHelpers(
 
     async setActiveOrg(app, token, orgId) {
       const res = await app.inject({
-        method: 'POST',
+        method: "POST",
         url: `${basePath}/organization/set-active`,
         headers: { authorization: `Bearer ${token}` },
         payload: { organizationId: orgId },
@@ -203,7 +218,7 @@ export function createBetterAuthTestHelpers(
 
     authHeaders(token, orgId?) {
       const h: Record<string, string> = { authorization: `Bearer ${token}` };
-      if (orgId) h['x-organization-id'] = orgId;
+      if (orgId) h["x-organization-id"] = orgId;
       return h;
     },
   };
@@ -292,9 +307,7 @@ export async function setupBetterAuthOrg(
   const creatorSignup = signups.get(creatorConfig.key)!;
   const orgResult = await helpers.createOrg(app, creatorSignup.token, org);
   if (orgResult.statusCode !== 200) {
-    throw new Error(
-      `setupBetterAuthOrg: Failed to create org (status ${orgResult.statusCode})`,
-    );
+    throw new Error(`setupBetterAuthOrg: Failed to create org (status ${orgResult.statusCode})`);
   }
   const orgId = orgResult.orgId;
 
@@ -335,7 +348,7 @@ export async function setupBetterAuthOrg(
       await helpers.setActiveOrg(app, login.token, orgId);
       users[userConfig.key] = {
         token: login.token,
-        userId: signups.get(userConfig.key)!.user?.id,
+        userId: signups.get(userConfig.key)?.user?.id,
         email: userConfig.email,
       };
     }

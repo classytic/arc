@@ -16,7 +16,7 @@
  * });
  */
 
-import type { IdempotencyStore, IdempotencyResult } from './interface.js';
+import type { IdempotencyResult, IdempotencyStore } from "./interface.js";
 
 export interface MongoConnection {
   db: {
@@ -27,7 +27,11 @@ export interface MongoConnection {
 interface MongoCollection {
   findOne(filter: object): Promise<IdempotencyDocument | null>;
   insertOne(doc: object): Promise<{ acknowledged: boolean }>;
-  updateOne(filter: object, update: object, options?: object): Promise<{ acknowledged: boolean; matchedCount: number; modifiedCount: number }>;
+  updateOne(
+    filter: object,
+    update: object,
+    options?: object,
+  ): Promise<{ acknowledged: boolean; matchedCount: number; modifiedCount: number }>;
   deleteOne(filter: object): Promise<{ deletedCount: number }>;
   deleteMany(filter: object): Promise<{ deletedCount: number }>;
   createIndex(spec: object, options?: object): Promise<string>;
@@ -60,7 +64,7 @@ export interface MongoIdempotencyStoreOptions {
 }
 
 export class MongoIdempotencyStore implements IdempotencyStore {
-  readonly name = 'mongodb';
+  readonly name = "mongodb";
   private connection: MongoConnection;
   private collectionName: string;
   private ttlMs: number;
@@ -68,12 +72,12 @@ export class MongoIdempotencyStore implements IdempotencyStore {
 
   constructor(options: MongoIdempotencyStoreOptions) {
     this.connection = options.connection;
-    this.collectionName = options.collection ?? 'arc_idempotency';
+    this.collectionName = options.collection ?? "arc_idempotency";
     this.ttlMs = options.ttlMs ?? 86400000;
 
     if (options.createIndex !== false) {
       this.ensureIndex().catch((err) => {
-        console.warn('[MongoIdempotencyStore] Failed to create index:', err);
+        console.warn("[MongoIdempotencyStore] Failed to create index:", err);
       });
     }
   }
@@ -86,10 +90,7 @@ export class MongoIdempotencyStore implements IdempotencyStore {
     if (this.indexCreated) return;
     try {
       // TTL index for automatic cleanup
-      await this.collection.createIndex(
-        { expiresAt: 1 },
-        { expireAfterSeconds: 0 }
-      );
+      await this.collection.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
       this.indexCreated = true;
     } catch {
       // Index might already exist
@@ -99,7 +100,7 @@ export class MongoIdempotencyStore implements IdempotencyStore {
 
   async get(key: string): Promise<IdempotencyResult | undefined> {
     const doc = await this.collection.findOne({ _id: key });
-    if (!doc || !doc.result) return undefined;
+    if (!doc?.result) return undefined;
 
     // Check expiration
     if (new Date(doc.expiresAt) < new Date()) {
@@ -116,7 +117,7 @@ export class MongoIdempotencyStore implements IdempotencyStore {
     };
   }
 
-  async set(key: string, result: Omit<IdempotencyResult, 'key'>): Promise<void> {
+  async set(key: string, result: Omit<IdempotencyResult, "key">): Promise<void> {
     await this.collection.updateOne(
       { _id: key },
       {
@@ -129,9 +130,9 @@ export class MongoIdempotencyStore implements IdempotencyStore {
           createdAt: result.createdAt,
           expiresAt: result.expiresAt,
         },
-        $unset: { lock: '' },
+        $unset: { lock: "" },
       },
-      { upsert: true }
+      { upsert: true },
     );
   }
 
@@ -147,10 +148,7 @@ export class MongoIdempotencyStore implements IdempotencyStore {
       const result = await this.collection.updateOne(
         {
           _id: key,
-          $or: [
-            { lock: { $exists: false } },
-            { 'lock.expiresAt': { $lt: now } },
-          ],
+          $or: [{ lock: { $exists: false } }, { "lock.expiresAt": { $lt: now } }],
         },
         {
           $set: {
@@ -178,14 +176,14 @@ export class MongoIdempotencyStore implements IdempotencyStore {
   async unlock(key: string, requestId: string): Promise<void> {
     // Only unlock if we hold the lock
     await this.collection.updateOne(
-      { _id: key, 'lock.requestId': requestId },
-      { $unset: { lock: '' } }
+      { _id: key, "lock.requestId": requestId },
+      { $unset: { lock: "" } },
     );
   }
 
   async isLocked(key: string): Promise<boolean> {
     const doc = await this.collection.findOne({ _id: key });
-    if (!doc || !doc.lock) return false;
+    if (!doc?.lock) return false;
     return new Date(doc.lock.expiresAt) > new Date();
   }
 
@@ -195,7 +193,7 @@ export class MongoIdempotencyStore implements IdempotencyStore {
 
   async deleteByPrefix(prefix: string): Promise<number> {
     const result = await this.collection.deleteMany({
-      _id: { $regex: `^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}` },
+      _id: { $regex: `^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}` },
     });
     return result.deletedCount;
   }
@@ -204,11 +202,11 @@ export class MongoIdempotencyStore implements IdempotencyStore {
     // Filter expired docs at the query level so MongoDB doesn't return a stale
     // entry when a valid one exists further down the index.
     const doc = await this.collection.findOne({
-      _id: { $regex: `^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}` },
+      _id: { $regex: `^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}` },
       result: { $exists: true },
       expiresAt: { $gt: new Date() },
     });
-    if (!doc || !doc.result) return undefined;
+    if (!doc?.result) return undefined;
 
     return {
       key: doc._id,

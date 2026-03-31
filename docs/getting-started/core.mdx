@@ -150,100 +150,134 @@ async list(req: IRequestContext): Promise<IControllerResponse> {
 Arc parses query parameters automatically:
 
 ```bash
-# Operators
+# Filters (operators)
 GET /products?price[gte]=100&price[lte]=500
+GET /products?status=active&category[in]=electronics,clothing
 
-# Sorting
+# Sorting (- prefix = descending)
 GET /products?sort=-createdAt,name
+
+# Field selection
+GET /products?select=name,price,-description
 
 # Search
 GET /products?search=keyword
 
-# Pagination
+# Offset pagination
 GET /products?page=2&limit=20
 
-# Relations (simple)
-GET /products?populate=category,brand
+# Keyset/cursor pagination (no-skip, efficient for large datasets)
+GET /products?after=<last_id>&limit=20
 
-# Relations with field selection (advanced)
-GET /products?populate[author][select]=name,email
+# Populate (ref-based — Mongoose .populate())
+GET /products?populate=category,brand
+GET /products?populate[category][select]=name,slug
+GET /products?populate[category][select]=-internal,-__v
+GET /products?populate[category][match][isActive]=true
+
+# Lookup/join (no refs — $lookup aggregation, requires MongoKit QueryParser)
+GET /products?lookup[cat][from]=categories&lookup[cat][localField]=categorySlug&lookup[cat][foreignField]=slug&lookup[cat][single]=true
+GET /products?lookup[cat][from]=categories&...&lookup[cat][select]=name,slug
 ```
+
+**Filter operators:** `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `nin`, `like`, `contains`, `regex`, `exists`
 
 ### Query Parsers
 
-Arc includes a built-in `ArcQueryParser` and supports pluggable parsers from database kits.
+Arc includes a built-in `ArcQueryParser` and supports pluggable parsers from any database kit.
 
 #### Built-in ArcQueryParser
 
 The default parser handles standard REST patterns with security built-in:
 
-**Supported filter operators:** `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `nin`, `like`, `contains`, `regex`, `exists`
-
 **Security features:**
-- ReDoS protection — dangerous regex patterns (nested quantifiers, backreferences) are auto-escaped
+- ReDoS protection — dangerous regex patterns (nested quantifiers, backreferences) are blocked
 - Field name validation — rejects `$`-prefixed keys to prevent MongoDB injection
 - Configurable limits — max regex length (500), max search length (200), max filter depth (10)
-
-```typescript
-import { createQueryParser } from '@classytic/arc/utils';
-
-// Custom configuration
-const parser = createQueryParser({
-  maxLimit: 100,        // Max items per page (default: 1000)
-  defaultLimit: 20,     // Default items per page
-  maxRegexLength: 500,  // Max regex pattern length
-  maxSearchLength: 200, // Max search query length
-  maxFilterDepth: 10,   // Max nesting depth for filters
-});
-```
-
-**Value coercion:** String values are automatically coerced — `"true"` → `true`, `"false"` → `false`, `"null"` → `null`, numeric strings → numbers.
+- Value coercion — `"true"` → `true`, `"false"` → `false`, `"null"` → `null`, numeric strings → numbers
 
 #### MongoKit QueryParser (Advanced)
 
-For advanced MongoDB features, swap in MongoKit's QueryParser:
+For MongoDB apps, swap in MongoKit's QueryParser for $lookup joins, advanced populate, and keyset pagination:
 
 ```typescript
-import { defineResource } from '@classytic/arc';
+import { defineResource, createMongooseAdapter } from '@classytic/arc';
 import { QueryParser } from '@classytic/mongokit';
 
 const productResource = defineResource({
   name: 'product',
   adapter: createMongooseAdapter({ model: ProductModel, repository: productRepo }),
-  queryParser: new QueryParser(),  // MongoKit parser
-  // ...
+  queryParser: new QueryParser(),
+  schemaOptions: {
+    query: {
+      allowedPopulate: ['category', 'brand'],       // whitelist populate paths
+      allowedLookups: ['categories', 'brands'],     // whitelist lookup collections
+    },
+  },
 });
 ```
 
-**MongoKit QueryParser additions:**
-- Advanced MongoDB operators ($lookup, $regex, etc.)
-- Nested populate with field selection (`populateOptions`)
-- Search across multiple fields
-- Cursor-based pagination
+**MongoKit QueryParser additions over the built-in parser:**
+- `$lookup` joins (join collections by slug/code without refs)
+- Populate with `select`, `match` (filter populated docs)
+- Keyset/cursor pagination (`?after=<id>`)
+- Select as object projection (db-agnostic format)
 
-### Advanced Populate (populateOptions)
+### Populate (ref-based)
 
-When using MongoKit's QueryParser, you can select specific fields from populated documents:
+Select specific fields from populated documents:
 
 ```bash
-# Select only name and email from the author relation
+# Include only name and email from author
 GET /posts?populate[author][select]=name,email
 
-# Multiple populations with different selections
-GET /orders?populate[customer][select]=name,phone&populate[items][select]=name,price
+# Exclude internal fields
+GET /posts?populate[author][select]=-password,-internal
+
+# Filter populated docs
+GET /posts?populate[comments][match][status]=approved
+
+# Multiple populations
+GET /orders?populate[customer][select]=name&populate[items][select]=name,price
 ```
 
-This generates Mongoose-compatible populate options:
+### Lookup/Join (no refs)
+
+Join collections by any field (slug, code, SKU) without ObjectId refs. Requires MongoKit QueryParser.
+
+```bash
+# Join products with categories by slug
+GET /products?lookup[cat][from]=categories&lookup[cat][localField]=categorySlug&lookup[cat][foreignField]=slug&lookup[cat][single]=true
+
+# With field selection on joined collection
+GET /products?lookup[cat][from]=categories&...&lookup[cat][select]=name,slug
+
+# Combined: filter + sort + lookup + pagination
+GET /products?status=active&sort=-price&limit=20&lookup[cat][from]=categories&lookup[cat][localField]=categorySlug&lookup[cat][foreignField]=slug&lookup[cat][single]=true
+```
+
+### Query Security
+
+Control which populate paths and lookup collections are allowed:
 
 ```typescript
-// URL: ?populate[author][select]=name,email
-// Generates: { path: 'author', select: 'name email' }
+defineResource({
+  schemaOptions: {
+    query: {
+      // Only these populate paths are allowed (others silently ignored)
+      allowedPopulate: ['category', 'brand', 'author'],
+      // Only these collections can be joined via lookup (others silently ignored)
+      allowedLookups: ['categories', 'brands'],
+    },
+    fieldRules: {
+      password: { hidden: true },      // blocked from select
+      internalScore: { systemManaged: true }, // blocked from select
+    },
+  },
+});
 ```
 
-**Supported populate options:**
-- `select` - Fields to include (space or comma separated)
-- `match` - Filter conditions for populated docs
-- Nested `populate` - Up to 5 levels deep
+If `allowedPopulate` / `allowedLookups` are not set, all paths/collections are allowed (open by default).
 
 ### Custom Query Parsers
 

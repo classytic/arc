@@ -10,21 +10,18 @@
  */
 
 export type {
-  IdempotencyResult,
   IdempotencyLock,
+  IdempotencyResult,
   IdempotencyStore,
-} from './interface.js';
+} from "./interface.js";
 
-export { createIdempotencyResult } from './interface.js';
-
+export { createIdempotencyResult } from "./interface.js";
+export type { MemoryIdempotencyStoreOptions } from "./memory.js";
 // In-memory store (default, development)
-export { MemoryIdempotencyStore } from './memory.js';
-export type { MemoryIdempotencyStoreOptions } from './memory.js';
-
-// Redis store (production, multi-instance)
-export { RedisIdempotencyStore } from './redis.js';
-export type { RedisIdempotencyStoreOptions, RedisClient } from './redis.js';
-
+export { MemoryIdempotencyStore } from "./memory.js";
+export type { MongoIdempotencyStoreOptions } from "./mongodb.js";
 // MongoDB store (production, multi-instance)
-export { MongoIdempotencyStore } from './mongodb.js';
-export type { MongoIdempotencyStoreOptions } from './mongodb.js';
+export { MongoIdempotencyStore } from "./mongodb.js";
+export type { RedisClient, RedisIdempotencyStoreOptions } from "./redis.js";
+// Redis store (production, multi-instance)
+export { RedisIdempotencyStore } from "./redis.js";

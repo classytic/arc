@@ -4,9 +4,9 @@
  * Create Fastify test instances with Arc configuration
  */
 
-import Fastify, { type FastifyInstance } from 'fastify';
-import type { CreateAppOptions } from '../factory/types.js';
-import { InMemoryDatabase } from './dbHelpers.js';
+import Fastify, { type FastifyInstance } from "fastify";
+import type { CreateAppOptions } from "../factory/types.js";
+import { InMemoryDatabase } from "./dbHelpers.js";
 
 export interface CreateTestAppOptions extends Partial<CreateAppOptions> {
   /**
@@ -86,14 +86,12 @@ export interface TestAppResult {
  * await mongoose.connect(testApp.mongoUri); // Connect your models
  * ```
  */
-export async function createTestApp(
-  options: CreateTestAppOptions = {}
-): Promise<TestAppResult> {
-  const { createApp } = await import('../factory/createApp.js');
+export async function createTestApp(options: CreateTestAppOptions = {}): Promise<TestAppResult> {
+  const { createApp } = await import("../factory/createApp.js");
   const { useInMemoryDb = true, mongoUri: providedMongoUri, ...appOptions } = options;
 
   // Default auth config for tests
-  const defaultAuth = { type: 'jwt' as const, jwt: { secret: 'test-secret-32-chars-minimum-len' } };
+  const defaultAuth = { type: "jwt" as const, jwt: { secret: "test-secret-32-chars-minimum-len" } };
 
   let inMemoryDb: InMemoryDatabase | null = null;
   let mongoUri: string | undefined = providedMongoUri;
@@ -105,15 +103,15 @@ export async function createTestApp(
       mongoUri = await inMemoryDb.start();
     } catch (err) {
       console.warn(
-        '[createTestApp] Failed to start in-memory MongoDB:',
+        "[createTestApp] Failed to start in-memory MongoDB:",
         (err as Error).message,
-        '\nFalling back to external MongoDB or no DB connection.'
+        "\nFalling back to external MongoDB or no DB connection.",
       );
     }
   }
 
   const testDefaults: Partial<CreateAppOptions> = {
-    preset: 'testing',
+    preset: "testing",
     logger: false, // Disable logging in tests
     helmet: false,
     cors: false,
@@ -172,8 +170,8 @@ export function createMinimalTestApp(options: Partial<any> = {}): FastifyInstanc
  * expect(response.statusCode).toBe(200);
  */
 export class TestRequestBuilder {
-  private method: string = 'GET';
-  private url: string = '/';
+  private method: string = "GET";
+  private url: string = "/";
   private body?: any;
   private query?: Record<string, any>;
   private headers: Record<string, string> = {};
@@ -184,31 +182,31 @@ export class TestRequestBuilder {
   }
 
   get(url: string) {
-    this.method = 'GET';
+    this.method = "GET";
     this.url = url;
     return this;
   }
 
   post(url: string) {
-    this.method = 'POST';
+    this.method = "POST";
     this.url = url;
     return this;
   }
 
   put(url: string) {
-    this.method = 'PUT';
+    this.method = "PUT";
     this.url = url;
     return this;
   }
 
   patch(url: string) {
-    this.method = 'PATCH';
+    this.method = "PATCH";
     this.url = url;
     return this;
   }
 
   delete(url: string) {
-    this.method = 'DELETE';
+    this.method = "DELETE";
     this.url = url;
     return this;
   }
@@ -229,23 +227,23 @@ export class TestRequestBuilder {
   }
 
   withAuth(userOrHeaders: Record<string, unknown>) {
-    if ('authorization' in userOrHeaders || 'Authorization' in userOrHeaders) {
+    if ("authorization" in userOrHeaders || "Authorization" in userOrHeaders) {
       // Pre-built headers (Better Auth tokens, external auth)
       for (const [key, value] of Object.entries(userOrHeaders)) {
-        if (typeof value === 'string') {
+        if (typeof value === "string") {
           this.headers[key] = value;
         }
       }
     } else {
       // JWT payload — sign with app's JWT plugin
-      const token = this.app.jwt?.sign?.(userOrHeaders) || 'mock-token';
-      this.headers['Authorization'] = `Bearer ${token}`;
+      const token = this.app.jwt?.sign?.(userOrHeaders) || "mock-token";
+      this.headers.Authorization = `Bearer ${token}`;
     }
     return this;
   }
 
   withContentType(type: string) {
-    this.headers['Content-Type'] = type;
+    this.headers["Content-Type"] = type;
     return this;
   }
 
@@ -277,7 +275,7 @@ export function createTestAuth(app: FastifyInstance) {
      */
     generateToken(user: any): string {
       if (!app.jwt) {
-        throw new Error('JWT plugin not registered');
+        throw new Error("JWT plugin not registered");
       }
       return app.jwt.sign(user);
     },
@@ -287,7 +285,7 @@ export function createTestAuth(app: FastifyInstance) {
      */
     decodeToken(token: string): any {
       if (!app.jwt) {
-        throw new Error('JWT plugin not registered');
+        throw new Error("JWT plugin not registered");
       }
       return app.jwt.decode(token);
     },
@@ -297,7 +295,7 @@ export function createTestAuth(app: FastifyInstance) {
      */
     async verifyToken(token: string): Promise<any> {
       if (!app.jwt) {
-        throw new Error('JWT plugin not registered');
+        throw new Error("JWT plugin not registered");
       }
       return app.jwt.verify(token);
     },
@@ -321,7 +319,7 @@ export function createSnapshotMatcher() {
         return response.length === expected.length;
       }
 
-      if (typeof response === 'object' && response !== null) {
+      if (typeof response === "object" && response !== null) {
         const responseKeys = Object.keys(response).sort();
         const expectedKeys = Object.keys(expected).sort();
 
@@ -347,7 +345,7 @@ export function createSnapshotMatcher() {
  * Bulk test data loader
  */
 export class TestDataLoader {
-  private data: Map<string, any[]> = new Map();
+  private data: Map<string, unknown[]> = new Map();
   private app: FastifyInstance;
 
   constructor(app: FastifyInstance) {
@@ -370,7 +368,7 @@ export class TestDataLoader {
    * Clear all loaded test data
    */
   async cleanup() {
-    for (const [collection, items] of this.data.entries()) {
+    for (const [_collection, _items] of this.data.entries()) {
       // Cleanup logic here
       // e.g., await Model.deleteMany({ _id: { $in: items.map(i => i._id) } })
     }

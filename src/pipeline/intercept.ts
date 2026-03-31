@@ -28,8 +28,8 @@
  * ```
  */
 
-import type { PipelineContext, NextFunction, Interceptor, OperationFilter } from './types.js';
-import type { IControllerResponse } from '../types/index.js';
+import type { IControllerResponse } from "../types/index.js";
+import type { Interceptor, NextFunction, OperationFilter, PipelineContext } from "./types.js";
 
 interface InterceptOptions {
   operations?: OperationFilter;
@@ -44,14 +44,15 @@ interface InterceptOptions {
  */
 export function intercept(
   name: string,
-  handlerOrOptions: ((ctx: PipelineContext, next: NextFunction) => Promise<IControllerResponse<unknown>>) | InterceptOptions,
+  handlerOrOptions:
+    | ((ctx: PipelineContext, next: NextFunction) => Promise<IControllerResponse<unknown>>)
+    | InterceptOptions,
 ): Interceptor {
-  const opts = typeof handlerOrOptions === 'function'
-    ? { handler: handlerOrOptions }
-    : handlerOrOptions;
+  const opts =
+    typeof handlerOrOptions === "function" ? { handler: handlerOrOptions } : handlerOrOptions;
 
   return {
-    _type: 'interceptor' as const,
+    _type: "interceptor" as const,
     name,
     operations: opts.operations,
     handler: opts.handler,

@@ -18,17 +18,12 @@
  * });
  */
 
+import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
-import type {
-  FastifyInstance,
-  FastifyPluginAsync,
-  FastifyRequest,
-  FastifyReply,
-} from "fastify";
 import type { DomainEvent } from "../events/EventTransport.js";
-import { getOrgId, PUBLIC_SCOPE } from "../scope/types.js";
-import type { RequestScope } from "../scope/types.js";
 import { arcLog } from "../logger/index.js";
+import type { RequestScope } from "../scope/types.js";
+import { getOrgId, PUBLIC_SCOPE } from "../scope/types.js";
 
 const log = arcLog("sse");
 
@@ -81,10 +76,7 @@ const ssePlugin: FastifyPluginAsync<SSEOptions> = async (
     method: "GET";
     url: string;
     schema: Record<string, unknown>;
-    preHandler?: (
-      request: FastifyRequest,
-      reply: FastifyReply,
-    ) => Promise<void>;
+    preHandler?: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
     handler: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
   } = {
     method: "GET",
@@ -100,10 +92,7 @@ const ssePlugin: FastifyPluginAsync<SSEOptions> = async (
         },
       },
     },
-    handler: async (
-      request: FastifyRequest,
-      reply: FastifyReply,
-    ): Promise<void> => {
+    handler: async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
       // 1. Tell Fastify we are taking over the socket
       reply.hijack();
 
@@ -134,13 +123,11 @@ const ssePlugin: FastifyPluginAsync<SSEOptions> = async (
           async (event: DomainEvent<unknown>) => {
             // Org-scoped filtering: only forward events for the user's org
             if (orgScoped) {
-              const eventOrgId = (event.meta as Record<string, unknown>)
-                ?.organizationId;
+              const eventOrgId = (event.meta as Record<string, unknown>)?.organizationId;
               // If caller has no org, drop any event that carries an orgId
               if (dropOrgEvents && eventOrgId) return;
               // If caller has an org, only forward events matching their org
-              if (requestOrgId && eventOrgId && eventOrgId !== requestOrgId)
-                return;
+              if (requestOrgId && eventOrgId && eventOrgId !== requestOrgId) return;
             }
 
             // Custom filter
@@ -152,17 +139,11 @@ const ssePlugin: FastifyPluginAsync<SSEOptions> = async (
               payload: event.payload,
               meta: { id: event.meta.id, timestamp: event.meta.timestamp },
             });
-            const success = reply.raw.write(
-              `event: ${event.type}\ndata: ${data}\n\n`,
-            );
+            const success = reply.raw.write(`event: ${event.type}\ndata: ${data}\n\n`);
             if (!success) {
               // TCP Backpressure / Slow Client Check:
               // Terminate connection if buffer is full to prevent unbounded memory leaks via L7 proxies
-              request.raw.destroy(
-                new Error(
-                  "SSE connection terminated: slow client backpressure",
-                ),
-              );
+              request.raw.destroy(new Error("SSE connection terminated: slow client backpressure"));
               cleanup();
             }
           },
@@ -174,9 +155,7 @@ const ssePlugin: FastifyPluginAsync<SSEOptions> = async (
       const heartbeatTimer = setInterval(() => {
         const success = reply.raw.write(": heartbeat\n\n");
         if (!success) {
-          request.raw.destroy(
-            new Error("SSE connection terminated: heartbeat backpressure"),
-          );
+          request.raw.destroy(new Error("SSE connection terminated: heartbeat backpressure"));
           cleanup();
         }
       }, heartbeat);

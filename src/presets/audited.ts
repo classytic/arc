@@ -12,8 +12,8 @@
  * });
  */
 
-import type { FastifyReply } from 'fastify';
-import type { PresetResult, RequestWithExtras, MiddlewareHandler } from '../types/index.js';
+import type { FastifyReply } from "fastify";
+import type { MiddlewareHandler, PresetResult, RequestWithExtras } from "../types/index.js";
 
 export interface AuditedPresetOptions {
   /** Field name for creator (default: 'createdBy') */
@@ -26,11 +26,11 @@ export interface AuditedPresetOptions {
  * Audited preset - adds createdBy/updatedBy tracking
  */
 export function auditedPreset(options: AuditedPresetOptions = {}): PresetResult {
-  const { createdByField = 'createdBy', updatedByField = 'updatedBy' } = options;
+  const { createdByField = "createdBy", updatedByField = "updatedBy" } = options;
 
   const injectCreatedBy: MiddlewareHandler = async (
     request: RequestWithExtras,
-    _reply: FastifyReply
+    _reply: FastifyReply,
   ): Promise<unknown> => {
     const userWithId = request.user as { _id?: string; id?: string };
     if (userWithId?._id || userWithId?.id) {
@@ -43,7 +43,7 @@ export function auditedPreset(options: AuditedPresetOptions = {}): PresetResult 
 
   const injectUpdatedBy: MiddlewareHandler = async (
     request: RequestWithExtras,
-    _reply: FastifyReply
+    _reply: FastifyReply,
   ): Promise<unknown> => {
     const userWithId = request.user as { _id?: string; id?: string };
     if (userWithId?._id || userWithId?.id) {
@@ -53,7 +53,7 @@ export function auditedPreset(options: AuditedPresetOptions = {}): PresetResult 
   };
 
   return {
-    name: 'audited',
+    name: "audited",
     schemaOptions: {
       fieldRules: {
         [createdByField]: { systemManaged: true },

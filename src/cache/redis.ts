@@ -1,4 +1,4 @@
-import type { CacheSetOptions, CacheStats, CacheStore } from './interface.js';
+import type { CacheSetOptions, CacheStats, CacheStore } from "./interface.js";
 
 export interface RedisCacheClient {
   get(key: string): Promise<string | null>;
@@ -10,7 +10,7 @@ export interface RedisCacheClient {
       PX?: number;
       NX?: boolean;
       XX?: boolean;
-    }
+    },
   ): Promise<string | null | unknown>;
   del(key: string | string[]): Promise<number>;
   /**
@@ -48,7 +48,7 @@ export interface RedisCacheStoreOptions {
  * Uses pipeline batching when available for bulk operations.
  */
 export class RedisCacheStore<TValue = unknown> implements CacheStore<TValue> {
-  readonly name = 'redis-cache';
+  readonly name = "redis-cache";
 
   private readonly client: RedisCacheClient;
   private readonly prefix: string;
@@ -60,7 +60,7 @@ export class RedisCacheStore<TValue = unknown> implements CacheStore<TValue> {
 
   constructor(options: RedisCacheStoreOptions) {
     this.client = options.client;
-    this.prefix = options.prefix ?? 'arc:cache:';
+    this.prefix = options.prefix ?? "arc:cache:";
     this.defaultTtlMs = options.defaultTtlMs ?? 60_000;
     this.maxEntryBytes = options.maxEntryBytes ?? 0; // 0 = no limit
   }
@@ -88,7 +88,7 @@ export class RedisCacheStore<TValue = unknown> implements CacheStore<TValue> {
 
     const payload = JSON.stringify(value);
 
-    if (this.maxEntryBytes > 0 && Buffer.byteLength(payload, 'utf8') > this.maxEntryBytes) {
+    if (this.maxEntryBytes > 0 && Buffer.byteLength(payload, "utf8") > this.maxEntryBytes) {
       return; // skip oversized entry
     }
 
@@ -122,12 +122,16 @@ export class RedisCacheStore<TValue = unknown> implements CacheStore<TValue> {
     if (!this.client.scan) return 0;
 
     const BATCH_SIZE = 200;
-    let cursor: string | number = '0';
+    let cursor: string | number = "0";
     let deleted = 0;
 
     do {
       const [nextCursor, keys] = await this.client.scan(
-        cursor, 'MATCH', pattern, 'COUNT', BATCH_SIZE,
+        cursor,
+        "MATCH",
+        pattern,
+        "COUNT",
+        BATCH_SIZE,
       );
       cursor = nextCursor;
       if (keys.length > 0) {
@@ -140,7 +144,7 @@ export class RedisCacheStore<TValue = unknown> implements CacheStore<TValue> {
         }
         deleted += keys.length;
       }
-    } while (String(cursor) !== '0');
+    } while (String(cursor) !== "0");
 
     return deleted;
   }

@@ -18,28 +18,25 @@
  * // fastify.auth.issueTokens(payload) - Issue access + refresh tokens with TTLs
  */
 
-export { default as authPlugin, authPlugin as authPluginFn } from './authPlugin.js';
-export type { AuthPluginOptions } from './authPlugin.js';
-
-// Better Auth adapter
-export { createBetterAuthAdapter } from './betterAuth.js';
+export type { AuthPluginOptions } from "./authPlugin.js";
+export { authPlugin as authPluginFn, default as authPlugin } from "./authPlugin.js";
 export type {
   BetterAuthAdapterOptions,
   BetterAuthAdapterResult,
   BetterAuthHandler,
-} from './betterAuth.js';
-
+} from "./betterAuth.js";
+// Better Auth adapter
+export { createBetterAuthAdapter } from "./betterAuth.js";
+export type { BetterAuthOpenApiOptions } from "./betterAuthOpenApi.js";
 // Better Auth OpenAPI extractor
-export { extractBetterAuthOpenApi } from './betterAuthOpenApi.js';
-export type { BetterAuthOpenApiOptions } from './betterAuthOpenApi.js';
-
-// Session Manager
-export { createSessionManager, MemorySessionStore } from './sessionManager.js';
+export { extractBetterAuthOpenApi } from "./betterAuthOpenApi.js";
 export type {
-  SessionData,
-  SessionStore,
+  MemorySessionStoreOptions,
   SessionCookieOptions,
+  SessionData,
   SessionManagerOptions,
   SessionManagerResult,
-  MemorySessionStoreOptions,
-} from './sessionManager.js';
+  SessionStore,
+} from "./sessionManager.js";
+// Session Manager
+export { createSessionManager, MemorySessionStore } from "./sessionManager.js";

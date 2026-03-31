@@ -26,7 +26,7 @@
  * ```
  */
 
-import type { EventTransport, DomainEvent, EventHandler, EventLogger } from '../EventTransport.js';
+import type { DomainEvent, EventHandler, EventLogger, EventTransport } from "../EventTransport.js";
 
 // ---------------------------------------------------------------------------
 // Minimal Redis-like interface for Streams support
@@ -35,7 +35,7 @@ import type { EventTransport, DomainEvent, EventHandler, EventLogger } from '../
 export interface RedisStreamLike {
   xadd(key: string, id: string, ...fieldValues: string[]): Promise<string | null>;
   xreadgroup(
-    command: 'GROUP',
+    command: "GROUP",
     group: string,
     consumer: string,
     ...args: (string | number)[]
@@ -134,7 +134,7 @@ export interface RedisStreamTransportOptions {
 // ---------------------------------------------------------------------------
 
 export class RedisStreamTransport implements EventTransport {
-  readonly name = 'redis-stream';
+  readonly name = "redis-stream";
 
   private redis: RedisStreamLike;
   private stream: string;
@@ -156,14 +156,14 @@ export class RedisStreamTransport implements EventTransport {
 
   constructor(redis: RedisStreamLike, options: RedisStreamTransportOptions = {}) {
     this.redis = redis;
-    this.stream = options.stream ?? 'arc:events';
-    this.group = options.group ?? 'default';
+    this.stream = options.stream ?? "arc:events";
+    this.group = options.group ?? "default";
     this.consumer = options.consumer ?? `consumer-${crypto.randomUUID().slice(0, 8)}`;
     this.blockTimeMs = options.blockTimeMs ?? 5000;
     this.batchSize = options.batchSize ?? 10;
     this.maxRetries = options.maxRetries ?? 5;
     this.claimTimeoutMs = options.claimTimeoutMs ?? 30_000;
-    this.deadLetterStream = options.deadLetterStream ?? 'arc:events:dlq';
+    this.deadLetterStream = options.deadLetterStream ?? "arc:events:dlq";
     this.maxLen = options.maxLen ?? 10_000;
     this.logger = options.logger ?? console;
   }
@@ -175,10 +175,12 @@ export class RedisStreamTransport implements EventTransport {
   async publish(event: DomainEvent): Promise<void> {
     const args: string[] = [
       this.stream,
-      ...(this.maxLen > 0 ? ['MAXLEN', '~', String(this.maxLen)] : []),
-      '*',
-      'type', event.type,
-      'data', JSON.stringify(event),
+      ...(this.maxLen > 0 ? ["MAXLEN", "~", String(this.maxLen)] : []),
+      "*",
+      "type",
+      event.type,
+      "data",
+      JSON.stringify(event),
     ];
 
     // Use spread to call xadd with dynamic args
@@ -193,7 +195,7 @@ export class RedisStreamTransport implements EventTransport {
     if (!this.handlers.has(pattern)) {
       this.handlers.set(pattern, new Set());
     }
-    this.handlers.get(pattern)!.add(handler);
+    this.handlers.get(pattern)?.add(handler);
 
     // Start the consumer loop if not already running
     if (!this.running) {
@@ -240,10 +242,10 @@ export class RedisStreamTransport implements EventTransport {
     try {
       // Create the consumer group, starting from new messages ('$')
       // Use MKSTREAM to auto-create the stream if it doesn't exist
-      await this.redis.xgroup('CREATE', this.stream, this.group, '$', 'MKSTREAM');
+      await this.redis.xgroup("CREATE", this.stream, this.group, "$", "MKSTREAM");
     } catch (err: unknown) {
       // BUSYGROUP = group already exists, which is fine
-      if (err instanceof Error && !err.message.includes('BUSYGROUP')) {
+      if (err instanceof Error && !err.message.includes("BUSYGROUP")) {
         throw err;
       }
     }
@@ -265,7 +267,7 @@ export class RedisStreamTransport implements EventTransport {
         await this.readNewMessages();
       } catch (err) {
         if (this.running) {
-          this.logger.error('[RedisStreamTransport] Poll error:', err);
+          this.logger.error("[RedisStreamTransport] Poll error:", err);
           // Brief pause before retrying on error
           await this.sleep(1000);
         }
@@ -276,10 +278,16 @@ export class RedisStreamTransport implements EventTransport {
   private async readNewMessages(): Promise<void> {
     // XREADGROUP GROUP <group> <consumer> COUNT <n> BLOCK <ms> STREAMS <key> >
     const result = await this.redis.xreadgroup(
-      'GROUP', this.group, this.consumer,
-      'COUNT', this.batchSize,
-      'BLOCK', this.blockTimeMs,
-      'STREAMS', this.stream, '>',
+      "GROUP",
+      this.group,
+      this.consumer,
+      "COUNT",
+      this.batchSize,
+      "BLOCK",
+      this.blockTimeMs,
+      "STREAMS",
+      this.stream,
+      ">",
     );
 
     if (!result) return; // Timeout, no new messages
@@ -295,8 +303,11 @@ export class RedisStreamTransport implements EventTransport {
     try {
       // Check for pending entries across all consumers that have been idle
       const pending = await this.redis.xpending(
-        this.stream, this.group,
-        '-', '+', 10, // Check up to 10 pending entries
+        this.stream,
+        this.group,
+        "-",
+        "+",
+        10, // Check up to 10 pending entries
       );
 
       if (!pending || pending.length === 0) return;
@@ -323,8 +334,11 @@ export class RedisStreamTransport implements EventTransport {
       // Claim stale entries
       if (staleIds.length > 0) {
         const claimed = await this.redis.xclaim(
-          this.stream, this.group, this.consumer,
-          this.claimTimeoutMs, ...staleIds,
+          this.stream,
+          this.group,
+          this.consumer,
+          this.claimTimeoutMs,
+          ...staleIds,
         );
 
         for (const [messageId, fields] of claimed) {
@@ -347,8 +361,8 @@ export class RedisStreamTransport implements EventTransport {
       fieldMap.set(fields[i]!, fields[i + 1]!);
     }
 
-    const eventType = fieldMap.get('type');
-    const rawData = fieldMap.get('data');
+    const eventType = fieldMap.get("type");
+    const rawData = fieldMap.get("data");
     if (!eventType || !rawData) {
       // Malformed entry — ack and skip
       await this.redis.xack(this.stream, this.group, messageId);
@@ -358,7 +372,7 @@ export class RedisStreamTransport implements EventTransport {
     let event: DomainEvent;
     try {
       event = JSON.parse(rawData, (key, value) => {
-        if (key === 'timestamp' && typeof value === 'string') return new Date(value);
+        if (key === "timestamp" && typeof value === "string") return new Date(value);
         return value;
       }) as DomainEvent;
     } catch {
@@ -401,11 +415,11 @@ export class RedisStreamTransport implements EventTransport {
   }
 
   private matchesPattern(pattern: string, eventType: string): boolean {
-    if (pattern === '*') return true;
+    if (pattern === "*") return true;
     if (pattern === eventType) return true;
-    if (pattern.endsWith('.*')) {
+    if (pattern.endsWith(".*")) {
       const prefix = pattern.slice(0, -2);
-      return eventType.startsWith(prefix + '.');
+      return eventType.startsWith(`${prefix}.`);
     }
     return false;
   }
@@ -428,11 +442,15 @@ export class RedisStreamTransport implements EventTransport {
       try {
         await (this.redis as any).xadd(
           this.deadLetterStream,
-          '*',
-          'originalStream', this.stream,
-          'originalId', id,
-          'group', this.group,
-          'failedAt', new Date().toISOString(),
+          "*",
+          "originalStream",
+          this.stream,
+          "originalId",
+          id,
+          "group",
+          this.group,
+          "failedAt",
+          new Date().toISOString(),
         );
         await this.redis.xack(this.stream, this.group, id);
       } catch (err) {

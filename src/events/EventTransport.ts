@@ -98,7 +98,7 @@ export interface MemoryEventTransportOptions {
  * Not suitable for multi-instance deployments.
  */
 export class MemoryEventTransport implements EventTransport {
-  readonly name = 'memory';
+  readonly name = "memory";
   private handlers = new Map<string, Set<EventHandler>>();
   private logger: EventLogger;
 
@@ -111,15 +111,15 @@ export class MemoryEventTransport implements EventTransport {
     const exactHandlers = this.handlers.get(event.type) ?? new Set();
 
     // Wildcard handlers
-    const wildcardHandlers = this.handlers.get('*') ?? new Set();
+    const wildcardHandlers = this.handlers.get("*") ?? new Set();
 
     // Pattern match handlers (e.g., 'product.*' matches 'product.created')
     const patternHandlers = new Set<EventHandler>();
     for (const [pattern, handlers] of this.handlers.entries()) {
-      if (pattern.endsWith('.*')) {
+      if (pattern.endsWith(".*")) {
         const prefix = pattern.slice(0, -2);
-        if (event.type.startsWith(prefix + '.')) {
-          handlers.forEach((h) => patternHandlers.add(h));
+        if (event.type.startsWith(`${prefix}.`)) {
+          for (const h of handlers) patternHandlers.add(h);
         }
       }
     }
@@ -140,10 +140,17 @@ export class MemoryEventTransport implements EventTransport {
     if (!this.handlers.has(pattern)) {
       this.handlers.set(pattern, new Set());
     }
-    this.handlers.get(pattern)!.add(handler);
+    this.handlers.get(pattern)?.add(handler);
 
     return () => {
-      this.handlers.get(pattern)?.delete(handler);
+      const set = this.handlers.get(pattern);
+      if (set) {
+        set.delete(handler);
+        // Clean up empty sets to prevent memory leaks from dynamic subscriptions
+        if (set.size === 0) {
+          this.handlers.delete(pattern);
+        }
+      }
     };
   }
 
@@ -158,7 +165,7 @@ export class MemoryEventTransport implements EventTransport {
 export function createEvent<T>(
   type: string,
   payload: T,
-  meta?: Partial<DomainEvent['meta']>
+  meta?: Partial<DomainEvent["meta"]>,
 ): DomainEvent<T> {
   return {
     type,

@@ -35,6 +35,17 @@
  * });
  */
 
+import type { RepositoryLike } from "../adapters/interface.js";
+import { buildQueryKey } from "../cache/keys.js";
+import type { QueryCacheConfig } from "../cache/QueryCache.js";
+import {
+  DEFAULT_ID_FIELD,
+  DEFAULT_LIMIT,
+  DEFAULT_SORT,
+  DEFAULT_TENANT_FIELD,
+} from "../constants.js";
+import type { HookSystem } from "../hooks/HookSystem.js";
+import { getOrgId as getOrgIdFromScope } from "../scope/types.js";
 import type {
   AnyRecord,
   ArcInternalMetadata,
@@ -50,20 +61,9 @@ import type {
   UserLike,
 } from "../types/index.js";
 import { getUserId } from "../types/index.js";
-import {
-  DEFAULT_LIMIT,
-  DEFAULT_SORT,
-  DEFAULT_ID_FIELD,
-  DEFAULT_TENANT_FIELD,
-} from "../constants.js";
-import { HookSystem } from "../hooks/HookSystem.js";
-import { getOrgId as getOrgIdFromScope } from "../scope/types.js";
 import { AccessControl } from "./AccessControl.js";
 import { BodySanitizer } from "./BodySanitizer.js";
-import { QueryResolver, getDefaultQueryParser } from "./QueryResolver.js";
-import type { RepositoryLike } from "../adapters/interface.js";
-import { buildQueryKey } from "../cache/keys.js";
-import type { QueryCacheConfig } from "../cache/QueryCache.js";
+import { getDefaultQueryParser, QueryResolver } from "./QueryResolver.js";
 
 // ============================================================================
 // Controller Options
@@ -123,10 +123,9 @@ export interface BaseControllerOptions {
  * @template TDoc - The document type
  * @template TRepository - The repository type (defaults to RepositoryLike)
  */
-export class BaseController<
-  TDoc = AnyRecord,
-  TRepository extends RepositoryLike = RepositoryLike,
-> implements IController<TDoc> {
+export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike = RepositoryLike>
+  implements IController<TDoc>
+{
   protected repository: TRepository;
   protected schemaOptions: RouteSchemaOptions;
   protected queryParser: QueryParserInterface;
@@ -144,10 +143,7 @@ export class BaseController<
   /** Composable query resolution (parsing, pagination, sort, select/populate) */
   readonly queryResolver: QueryResolver;
 
-  private _matchesFilter?: (
-    item: unknown,
-    filters: Record<string, unknown>,
-  ) => boolean;
+  private _matchesFilter?: (item: unknown, filters: Record<string, unknown>) => boolean;
   private _presetFields: { slugField?: string; parentField?: string } = {};
   private _cacheConfig?: ResourceCacheConfig;
 
@@ -159,7 +155,8 @@ export class BaseController<
     this.defaultLimit = options.defaultLimit ?? DEFAULT_LIMIT;
     this.defaultSort = options.defaultSort ?? DEFAULT_SORT;
     this.resourceName = options.resourceName;
-    this.tenantField = options.tenantField !== undefined ? options.tenantField : DEFAULT_TENANT_FIELD;
+    this.tenantField =
+      options.tenantField !== undefined ? options.tenantField : DEFAULT_TENANT_FIELD;
     this.idField = options.idField ?? DEFAULT_ID_FIELD;
     this._matchesFilter = options.matchesFilter;
     if (options.cache) this._cacheConfig = options.cache;
@@ -221,9 +218,7 @@ export class BaseController<
   // ============================================================================
 
   /** Resolve cache config for a specific operation, merging per-op overrides */
-  private resolveCacheConfig(
-    operation: "list" | "byId",
-  ): QueryCacheConfig | null {
+  private resolveCacheConfig(operation: "list" | "byId"): QueryCacheConfig | null {
     const cfg = this._cacheConfig;
     if (!cfg || cfg.disabled) return null;
 
@@ -235,15 +230,25 @@ export class BaseController<
     };
   }
 
-  /** Extract user/org IDs from request for cache key scoping */
+  /**
+   * Extract user/org IDs from request for cache key scoping.
+   * Only includes orgId when this resource uses tenant-scoped data (tenantField is set).
+   * Universal resources (tenantField: false) get shared cache keys to avoid fragmentation.
+   */
   private cacheScope(req: IRequestContext): {
     userId?: string;
     orgId?: string;
   } {
     const userId = getUserId(req.user as UserLike | undefined);
-    const arcContext = this.meta(req);
-    const scope = arcContext?._scope;
-    const orgId = scope ? getOrgIdFromScope(scope) : undefined;
+    // Only scope cache by org when resource uses tenant-scoped data.
+    // Universal resources (tenantField: false) should share cache across orgs.
+    const orgId = this.tenantField
+      ? (() => {
+          const arcContext = this.meta(req);
+          const scope = arcContext?._scope;
+          return scope ? getOrgIdFromScope(scope) : undefined;
+        })()
+      : undefined;
     return { userId, orgId };
   }
 
@@ -251,9 +256,7 @@ export class BaseController<
   // CRUD Operations
   // ============================================================================
 
-  async list(
-    req: IRequestContext,
-  ): Promise<IControllerResponse<PaginatedResult<TDoc>>> {
+  async list(req: IRequestContext): Promise<IControllerResponse<PaginatedResult<TDoc>>> {
     const options = this.queryResolver.resolve(req, this.meta(req));
     const cacheConfig = this.resolveCacheConfig("list");
     const qc = req.server?.queryCache;
@@ -318,8 +321,7 @@ export class BaseController<
     req: IRequestContext,
   ): Promise<PaginatedResult<TDoc>> {
     const hooks = this.getHooks(req);
-    const repoGetAll = async () =>
-      this.repository.getAll(options as PaginationParams<TDoc>);
+    const repoGetAll = async () => this.repository.getAll(options as PaginationParams<TDoc>);
     const result =
       hooks && this.resourceName
         ? await hooks.executeAround<unknown>(
@@ -435,12 +437,7 @@ export class BaseController<
   ): Promise<TDoc | null> {
     const hooks = this.getHooks(req);
     const fetchItem = async () =>
-      this.accessControl.fetchWithAccessControl<TDoc>(
-        id,
-        req,
-        this.repository,
-        options,
-      );
+      this.accessControl.fetchWithAccessControl<TDoc>(id, req, this.repository, options);
     const item =
       hooks && this.resourceName
         ? await hooks.executeAround<TDoc | null>(
@@ -484,15 +481,10 @@ export class BaseController<
     let processedData = data;
     if (hooks && this.resourceName) {
       try {
-        processedData = await hooks.executeBefore(
-          this.resourceName,
-          "create",
-          data,
-          {
-            user,
-            context: arcContext,
-          },
-        );
+        processedData = await hooks.executeBefore(this.resourceName, "create", data, {
+          user,
+          context: arcContext,
+        });
       } catch (err) {
         return {
           success: false,
@@ -514,16 +506,10 @@ export class BaseController<
 
     let item: unknown;
     if (hooks && this.resourceName) {
-      item = await hooks.executeAround(
-        this.resourceName,
-        "create",
-        processedData,
-        repoCreate,
-        {
-          user,
-          context: arcContext,
-        },
-      );
+      item = await hooks.executeAround(this.resourceName, "create", processedData, repoCreate, {
+        user,
+        context: arcContext,
+      });
       await hooks.executeAfter(this.resourceName, "create", item as AnyRecord, {
         user,
         context: arcContext,
@@ -583,16 +569,11 @@ export class BaseController<
     let processedData = data;
     if (hooks && this.resourceName) {
       try {
-        processedData = await hooks.executeBefore(
-          this.resourceName,
-          "update",
-          data,
-          {
-            user,
-            context: arcContext,
-            meta: { id, existing },
-          },
-        );
+        processedData = await hooks.executeBefore(this.resourceName, "update", data, {
+          user,
+          context: arcContext,
+          meta: { id, existing },
+        });
       } catch (err) {
         return {
           success: false,
@@ -614,28 +595,17 @@ export class BaseController<
 
     let item: unknown;
     if (hooks && this.resourceName) {
-      item = await hooks.executeAround(
-        this.resourceName,
-        "update",
-        processedData,
-        repoUpdate,
-        {
+      item = await hooks.executeAround(this.resourceName, "update", processedData, repoUpdate, {
+        user,
+        context: arcContext,
+        meta: { id, existing },
+      });
+      if (item) {
+        await hooks.executeAfter(this.resourceName, "update", item as AnyRecord, {
           user,
           context: arcContext,
           meta: { id, existing },
-        },
-      );
-      if (item) {
-        await hooks.executeAfter(
-          this.resourceName,
-          "update",
-          item as AnyRecord,
-          {
-            user,
-            context: arcContext,
-            meta: { id, existing },
-          },
-        );
+        });
       }
     } else {
       item = await repoUpdate();
@@ -686,16 +656,11 @@ export class BaseController<
     const hooks = this.getHooks(req);
     if (hooks && this.resourceName) {
       try {
-        await hooks.executeBefore(
-          this.resourceName,
-          "delete",
-          existing as AnyRecord,
-          {
-            user,
-            context: arcContext,
-            meta: { id },
-          },
-        );
+        await hooks.executeBefore(this.resourceName, "delete", existing as AnyRecord, {
+          user,
+          context: arcContext,
+          meta: { id },
+        });
       } catch (err) {
         return {
           success: false,
@@ -717,17 +682,11 @@ export class BaseController<
 
     let result: unknown;
     if (hooks && this.resourceName) {
-      result = await hooks.executeAround(
-        this.resourceName,
-        "delete",
-        existing,
-        repoDelete,
-        {
-          user,
-          context: arcContext,
-          meta: { id },
-        },
-      );
+      result = await hooks.executeAround(this.resourceName, "delete", existing, repoDelete, {
+        user,
+        context: arcContext,
+        meta: { id },
+      });
     } else {
       result = await repoDelete();
     }
@@ -741,19 +700,15 @@ export class BaseController<
     }
 
     if (hooks && this.resourceName) {
-      await hooks.executeAfter(
-        this.resourceName,
-        "delete",
-        existing as AnyRecord,
-        {
-          user,
-          context: arcContext,
-          meta: { id },
-        },
-      );
+      await hooks.executeAfter(this.resourceName, "delete", existing as AnyRecord, {
+        user,
+        context: arcContext,
+        meta: { id },
+      });
     }
 
-    const deleteResult = typeof result === "object" && result !== null ? result as Record<string, unknown> : {};
+    const deleteResult =
+      typeof result === "object" && result !== null ? (result as Record<string, unknown>) : {};
     return {
       success: true,
       data: {
@@ -794,13 +749,9 @@ export class BaseController<
     return { success: true, data: item as TDoc, status: 200 };
   }
 
-  async getDeleted(
-    req: IRequestContext,
-  ): Promise<IControllerResponse<PaginatedResult<TDoc>>> {
+  async getDeleted(req: IRequestContext): Promise<IControllerResponse<PaginatedResult<TDoc>>> {
     const repo = this.repository as TRepository & {
-      getDeleted?: (
-        options?: unknown,
-      ) => Promise<TDoc[] | PaginatedResult<TDoc>>;
+      getDeleted?: (options?: unknown) => Promise<TDoc[] | PaginatedResult<TDoc>>;
     };
     if (!repo.getDeleted) {
       return {
@@ -852,11 +803,7 @@ export class BaseController<
 
     // Pre-restore access control: fetch the (soft-deleted) item and validate
     // org scope, policy filters, and ownership — same as DELETE /:id
-    const existing = await this.accessControl.fetchWithAccessControl<TDoc>(
-      id,
-      req,
-      repo,
-    );
+    const existing = await this.accessControl.fetchWithAccessControl<TDoc>(id, req, repo);
 
     if (!existing) {
       return { success: false, error: "Resource not found", status: 404 };
@@ -902,9 +849,7 @@ export class BaseController<
     return { success: true, data: tree as TDoc[], status: 200 };
   }
 
-  async getChildren(
-    req: IRequestContext,
-  ): Promise<IControllerResponse<TDoc[]>> {
+  async getChildren(req: IRequestContext): Promise<IControllerResponse<TDoc[]>> {
     const repo = this.repository as TRepository & {
       getChildren?: (parentId: string, options?: unknown) => Promise<TDoc[]>;
     };
@@ -917,13 +862,79 @@ export class BaseController<
     }
 
     const parentField = this._presetFields.parentField ?? "parent";
-    const parentId = (req.params[parentField] ??
-      req.params.parent ??
-      req.params.id) as string;
+    const parentId = (req.params[parentField] ?? req.params.parent ?? req.params.id) as string;
     const options = this.queryResolver.resolve(req, this.meta(req));
     const children = await repo.getChildren(parentId, options);
 
     return { success: true, data: children as TDoc[], status: 200 };
+  }
+
+  // ==========================================================================
+  // Bulk Operations (preset: 'bulk')
+  // ==========================================================================
+
+  async bulkCreate(req: IRequestContext): Promise<IControllerResponse<TDoc[]>> {
+    const repo = this.repository as TRepository & {
+      createMany?: (items: unknown[]) => Promise<TDoc[]>;
+    };
+    if (!repo.createMany) {
+      return { success: false, error: "Repository does not support createMany", status: 501 };
+    }
+
+    const items = (req.body as { items?: unknown[] })?.items;
+    if (!items || items.length === 0) {
+      return { success: false, error: "Bulk create requires a non-empty items array", status: 400 };
+    }
+
+    const created = await repo.createMany(items);
+    return {
+      success: true,
+      data: created,
+      status: 201,
+      meta: { count: created.length },
+    };
+  }
+
+  async bulkUpdate(
+    req: IRequestContext,
+  ): Promise<IControllerResponse<{ matchedCount: number; modifiedCount: number }>> {
+    const repo = this.repository as TRepository & {
+      updateMany?: (
+        filter: Record<string, unknown>,
+        data: Record<string, unknown>,
+      ) => Promise<{ matchedCount: number; modifiedCount: number }>;
+    };
+    if (!repo.updateMany) {
+      return { success: false, error: "Repository does not support updateMany", status: 501 };
+    }
+
+    const body = req.body as { filter?: Record<string, unknown>; data?: Record<string, unknown> };
+    if (!body.filter || Object.keys(body.filter).length === 0) {
+      return { success: false, error: "Bulk update requires a non-empty filter", status: 400 };
+    }
+    if (!body.data || Object.keys(body.data).length === 0) {
+      return { success: false, error: "Bulk update requires non-empty data", status: 400 };
+    }
+
+    const result = await repo.updateMany(body.filter, body.data);
+    return { success: true, data: result, status: 200 };
+  }
+
+  async bulkDelete(req: IRequestContext): Promise<IControllerResponse<{ deletedCount: number }>> {
+    const repo = this.repository as TRepository & {
+      deleteMany?: (filter: Record<string, unknown>) => Promise<{ deletedCount: number }>;
+    };
+    if (!repo.deleteMany) {
+      return { success: false, error: "Repository does not support deleteMany", status: 501 };
+    }
+
+    const body = req.body as { filter?: Record<string, unknown> };
+    if (!body.filter || Object.keys(body.filter).length === 0) {
+      return { success: false, error: "Bulk delete requires a non-empty filter", status: 400 };
+    }
+
+    const result = await repo.deleteMany(body.filter);
+    return { success: true, data: result, status: 200 };
   }
 }
 

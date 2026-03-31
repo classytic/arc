@@ -26,16 +26,19 @@
  * @module
  */
 
-// Re-export TypeBox core — users import Type from here instead of @sinclair/typebox directly
-export { Type } from '@sinclair/typebox';
-export type { Static, TSchema, TObject } from '@sinclair/typebox';
-
+export type {
+  FastifyPluginAsyncTypebox,
+  FastifyPluginCallbackTypebox,
+  TypeBoxTypeProvider,
+} from "@fastify/type-provider-typebox";
 // Re-export Fastify TypeBox type provider
-export { TypeBoxValidatorCompiler } from '@fastify/type-provider-typebox';
-export type { TypeBoxTypeProvider, FastifyPluginAsyncTypebox, FastifyPluginCallbackTypebox } from '@fastify/type-provider-typebox';
+export { TypeBoxValidatorCompiler } from "@fastify/type-provider-typebox";
+export type { Static, TObject, TSchema } from "@sinclair/typebox";
+// Re-export TypeBox core — users import Type from here instead of @sinclair/typebox directly
+export { Type } from "@sinclair/typebox";
 
-import { Type } from '@sinclair/typebox';
-import type { TSchema } from '@sinclair/typebox';
+import type { TSchema } from "@sinclair/typebox";
+import { Type } from "@sinclair/typebox";
 
 // ============================================================================
 // Arc Response Schemas (TypeBox versions of responseSchemas.ts)
@@ -110,11 +113,14 @@ export function ArcErrorResponse() {
  * Matches Arc's list endpoint conventions.
  */
 export function ArcPaginationQuery() {
-  return Type.Object({
-    page: Type.Optional(Type.Integer({ minimum: 1, default: 1 })),
-    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, default: 20 })),
-    sort: Type.Optional(Type.String()),
-    select: Type.Optional(Type.String()),
-    populate: Type.Optional(Type.Any()),
-  }, { additionalProperties: true });
+  return Type.Object(
+    {
+      page: Type.Optional(Type.Integer({ minimum: 1, default: 1 })),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, default: 20 })),
+      sort: Type.Optional(Type.String()),
+      select: Type.Optional(Type.String()),
+      populate: Type.Optional(Type.Any()),
+    },
+    { additionalProperties: true },
+  );
 }

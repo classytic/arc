@@ -3,38 +3,35 @@ export type {
   CacheSetOptions,
   CacheStats,
   CacheStore,
-} from './interface.js';
-
+} from "./interface.js";
+export {
+  buildQueryKey,
+  hashParams,
+  tagVersionKey,
+  versionKey,
+} from "./keys.js";
 export {
   MemoryCacheStore,
   type MemoryCacheStoreOptions,
-} from './memory.js';
+} from "./memory.js";
 
 export {
-  RedisCacheStore,
+  type CacheEnvelope,
+  type CacheResult,
+  type CacheStatus,
+  QueryCache,
+  type QueryCacheConfig,
+} from "./QueryCache.js";
+
+export {
+  type CrossResourceRule,
+  type QueryCacheDefaults,
+  type QueryCachePluginOptions,
+  queryCachePlugin,
+} from "./queryCachePlugin.js";
+export {
   type RedisCacheClient,
+  RedisCacheStore,
   type RedisCacheStoreOptions,
   type RedisPipeline,
-} from './redis.js';
-
-export {
-  QueryCache,
-  type CacheEnvelope,
-  type QueryCacheConfig,
-  type CacheStatus,
-  type CacheResult,
-} from './QueryCache.js';
-
-export {
-  queryCachePlugin,
-  type QueryCachePluginOptions,
-  type QueryCacheDefaults,
-  type CrossResourceRule,
-} from './queryCachePlugin.js';
-
-export {
-  buildQueryKey,
-  versionKey,
-  tagVersionKey,
-  hashParams,
-} from './keys.js';
+} from "./redis.js";

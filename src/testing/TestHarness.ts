@@ -23,13 +23,13 @@
  * harness.runPresets();
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import mongoose, { Model, Document } from 'mongoose';
-import type { ResourceDefinition } from '../core/defineResource.js';
-import { applyFieldReadPermissions, applyFieldWritePermissions } from '../permissions/fields.js';
-import type { FieldPermissionMap } from '../permissions/fields.js';
-import type { PipelineConfig, PipelineStep } from '../pipeline/types.js';
-import { CRUD_OPERATIONS } from '../constants.js';
+import mongoose, { type Model } from "mongoose";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { CRUD_OPERATIONS } from "../constants.js";
+import type { ResourceDefinition } from "../core/defineResource.js";
+import type { FieldPermissionMap } from "../permissions/fields.js";
+import { applyFieldReadPermissions, applyFieldWritePermissions } from "../permissions/fields.js";
+import type { PipelineConfig, PipelineStep } from "../pipeline/types.js";
 
 /**
  * Test fixtures for a resource
@@ -65,28 +65,31 @@ export interface TestHarnessOptions<T = any> {
  * - Schema validation
  * - Preset-specific functionality (softDelete, slugLookup, tree, etc.)
  */
+/** Mongoose doc with arbitrary fields accessible via index signature */
+type AnyDoc = Record<string, unknown> & { _id: unknown; __v?: number };
+
 export class TestHarness<T = unknown> {
   private resource: ResourceDefinition<unknown>;
+  private Model: Model<AnyDoc>;
   private fixtures: TestFixtures<T>;
   private setupFn?: () => Promise<void> | void;
   private teardownFn?: () => Promise<void> | void;
   private mongoUri: string;
-  private _createdIds: any[] = [];
-  private Model: Model<any>;
+  private _createdIds: unknown[] = [];
 
   constructor(resource: ResourceDefinition<unknown>, options: TestHarnessOptions<T>) {
     this.resource = resource;
     this.fixtures = options.fixtures;
     this.setupFn = options.setupFn;
     this.teardownFn = options.teardownFn;
-    this.mongoUri = options.mongoUri || process.env.MONGO_URI || 'mongodb://localhost:27017/test';
+    this.mongoUri = options.mongoUri || process.env.MONGO_URI || "mongodb://localhost:27017/test";
 
     // Extract model from adapter (Mongoose only)
     if (!resource.adapter) {
       throw new Error(`TestHarness requires a resource with a database adapter`);
     }
 
-    if (resource.adapter.type !== 'mongoose') {
+    if (resource.adapter.type !== "mongoose") {
       throw new Error(`TestHarness currently only supports Mongoose adapters`);
     }
 
@@ -95,7 +98,7 @@ export class TestHarness<T = unknown> {
       throw new Error(`Mongoose adapter for ${resource.name} does not have a model`);
     }
 
-    this.Model = model as Model<unknown>;
+    this.Model = model as Model<AnyDoc>;
   }
 
   /**
@@ -139,8 +142,8 @@ export class TestHarness<T = unknown> {
         await mongoose.disconnect();
       });
 
-      describe('Create', () => {
-        it('should create a new document with valid data', async () => {
+      describe("Create", () => {
+        it("should create a new document with valid data", async () => {
           const doc = await Model.create(fixtures.valid);
           this._createdIds.push(doc._id);
 
@@ -149,35 +152,35 @@ export class TestHarness<T = unknown> {
 
           // Verify all provided fields
           for (const [key, value] of Object.entries(fixtures.valid)) {
-            if (typeof value !== 'object') {
+            if (typeof value !== "object") {
               expect(doc[key]).toEqual(value);
             }
           }
         });
 
-        it('should have timestamps', async () => {
+        it("should have timestamps", async () => {
           const doc = await Model.findById(this._createdIds[0]);
           expect(doc).toBeDefined();
-          expect(doc!.createdAt).toBeDefined();
-          expect(doc!.updatedAt).toBeDefined();
+          expect(doc?.createdAt).toBeDefined();
+          expect(doc?.updatedAt).toBeDefined();
         });
       });
 
-      describe('Read', () => {
-        it('should find document by ID', async () => {
+      describe("Read", () => {
+        it("should find document by ID", async () => {
           const doc = await Model.findById(this._createdIds[0]);
           expect(doc).toBeDefined();
         });
 
-        it('should list documents', async () => {
+        it("should list documents", async () => {
           const docs = await Model.find({});
           expect(Array.isArray(docs)).toBe(true);
           expect(docs.length).toBeGreaterThan(0);
         });
       });
 
-      describe('Update', () => {
-        it('should update document', async () => {
+      describe("Update", () => {
+        it("should update document", async () => {
           const updateData = fixtures.update || { updatedAt: new Date() };
           const doc = await Model.findByIdAndUpdate(this._createdIds[0], updateData, {
             new: true,
@@ -186,8 +189,8 @@ export class TestHarness<T = unknown> {
         });
       });
 
-      describe('Delete', () => {
-        it('should delete document', async () => {
+      describe("Delete", () => {
+        it("should delete document", async () => {
           // Create a doc specifically for deletion
           const toDelete = await Model.create(fixtures.valid);
           await Model.findByIdAndDelete(toDelete._id);
@@ -215,12 +218,12 @@ export class TestHarness<T = unknown> {
         await mongoose.disconnect();
       });
 
-      it('should reject empty document', async () => {
+      it("should reject empty document", async () => {
         await expect(Model.create({})).rejects.toThrow();
       });
 
       if (fixtures.invalid) {
-        it('should reject invalid data', async () => {
+        it("should reject invalid data", async () => {
           await expect(Model.create(fixtures.invalid!)).rejects.toThrow();
         });
       }
@@ -253,8 +256,8 @@ export class TestHarness<T = unknown> {
       });
 
       // Soft Delete preset tests
-      if (presets.includes('softDelete')) {
-        describe('Soft Delete', () => {
+      if (presets.includes("softDelete")) {
+        describe("Soft Delete", () => {
           let testDoc: any;
 
           beforeEach(async () => {
@@ -262,37 +265,37 @@ export class TestHarness<T = unknown> {
             this._createdIds.push(testDoc._id);
           });
 
-          it('should have deletedAt field', () => {
+          it("should have deletedAt field", () => {
             expect(testDoc.deletedAt).toBeDefined();
             expect(testDoc.deletedAt).toBeNull();
           });
 
-          it('should soft delete (set deletedAt)', async () => {
+          it("should soft delete (set deletedAt)", async () => {
             await Model.findByIdAndUpdate(testDoc._id, { deletedAt: new Date() });
             const deleted = await Model.findById(testDoc._id);
-            expect(deleted!.deletedAt).not.toBeNull();
+            expect(deleted?.deletedAt).not.toBeNull();
           });
 
-          it('should restore (clear deletedAt)', async () => {
+          it("should restore (clear deletedAt)", async () => {
             await Model.findByIdAndUpdate(testDoc._id, { deletedAt: new Date() });
             await Model.findByIdAndUpdate(testDoc._id, { deletedAt: null });
             const restored = await Model.findById(testDoc._id);
-            expect(restored!.deletedAt).toBeNull();
+            expect(restored?.deletedAt).toBeNull();
           });
         });
       }
 
       // Slug preset tests
-      if (presets.includes('slugLookup')) {
-        describe('Slug Lookup', () => {
-          it('should have slug field', async () => {
+      if (presets.includes("slugLookup")) {
+        describe("Slug Lookup", () => {
+          it("should have slug field", async () => {
             const doc = await Model.create(fixtures.valid);
             this._createdIds.push(doc._id);
             expect(doc.slug).toBeDefined();
           });
 
-          it('should generate slug from name', async () => {
-            const doc = await Model.create({ ...fixtures.valid, name: 'Test Slug Name' });
+          it("should generate slug from name", async () => {
+            const doc = await Model.create({ ...fixtures.valid, name: "Test Slug Name" });
             this._createdIds.push(doc._id);
             expect(doc.slug).toMatch(/test-slug-name/i);
           });
@@ -300,9 +303,9 @@ export class TestHarness<T = unknown> {
       }
 
       // Tree preset tests
-      if (presets.includes('tree')) {
-        describe('Tree Structure', () => {
-          it('should allow parent reference', async () => {
+      if (presets.includes("tree")) {
+        describe("Tree Structure", () => {
+          it("should allow parent reference", async () => {
             const parent = await Model.create(fixtures.valid);
             this._createdIds.push(parent._id);
 
@@ -312,10 +315,10 @@ export class TestHarness<T = unknown> {
             });
             this._createdIds.push(child._id);
 
-            expect(child.parent.toString()).toEqual(parent._id.toString());
+            expect(String(child.parent)).toEqual(String(parent._id));
           });
 
-          it('should support displayOrder', async () => {
+          it("should support displayOrder", async () => {
             const doc = await Model.create({
               ...fixtures.valid,
               displayOrder: 5,
@@ -327,9 +330,9 @@ export class TestHarness<T = unknown> {
       }
 
       // Multi-tenant preset tests
-      if (presets.includes('multiTenant')) {
-        describe('Multi-Tenant', () => {
-          it('should require organizationId', async () => {
+      if (presets.includes("multiTenant")) {
+        describe("Multi-Tenant", () => {
+          it("should require organizationId", async () => {
             const docWithoutOrg = { ...fixtures.valid };
             delete (docWithoutOrg as any).organizationId;
             await expect(Model.create(docWithoutOrg)).rejects.toThrow();
@@ -338,9 +341,9 @@ export class TestHarness<T = unknown> {
       }
 
       // Owned by user preset tests
-      if (presets.includes('ownedByUser')) {
-        describe('Owned By User', () => {
-          it('should require userId', async () => {
+      if (presets.includes("ownedByUser")) {
+        describe("Owned By User", () => {
+          it("should require userId", async () => {
             const docWithoutUser = { ...fixtures.valid };
             delete (docWithoutUser as any).userId;
             await expect(Model.create(docWithoutUser)).rejects.toThrow();
@@ -366,73 +369,74 @@ export class TestHarness<T = unknown> {
     if (!fieldPerms || Object.keys(fieldPerms).length === 0) return;
 
     describe(`${resource.displayName} Field Permissions`, () => {
-      for (const [field, perm] of Object.entries(fieldPerms)) {
+      for (const [field, rawPerm] of Object.entries(fieldPerms)) {
+        const perm = rawPerm as { _type: string; roles?: string[]; redactValue?: string };
         switch (perm._type) {
-          case 'hidden':
+          case "hidden":
             it(`should always hide field '${field}'`, () => {
-              const data = { [field]: 'secret', otherField: 'visible' } as Record<string, unknown>;
+              const data = { [field]: "secret", otherField: "visible" } as Record<string, unknown>;
               const result = applyFieldReadPermissions(data, fieldPerms, []);
               expect(result[field]).toBeUndefined();
-              expect(result.otherField).toBe('visible');
+              expect(result.otherField).toBe("visible");
             });
 
             it(`should strip hidden field '${field}' from writes`, () => {
-              const body = { [field]: 'attempt', name: 'test' } as Record<string, unknown>;
+              const body = { [field]: "attempt", name: "test" } as Record<string, unknown>;
               const result = applyFieldWritePermissions(body, fieldPerms, []);
               expect(result[field]).toBeUndefined();
-              expect(result.name).toBe('test');
+              expect(result.name).toBe("test");
             });
             break;
 
-          case 'visibleTo':
+          case "visibleTo":
             it(`should hide field '${field}' from non-privileged users`, () => {
-              const data = { [field]: 'sensitive' } as Record<string, unknown>;
-              const result = applyFieldReadPermissions(data, fieldPerms, ['viewer']);
+              const data = { [field]: "sensitive" } as Record<string, unknown>;
+              const result = applyFieldReadPermissions(data, fieldPerms, ["viewer"]);
               expect(result[field]).toBeUndefined();
             });
 
             if (perm.roles && perm.roles.length > 0) {
               const allowedRole = perm.roles[0]!;
-              it(`should show field '${field}' to roles: ${[...perm.roles].join(', ')}`, () => {
-                const data = { [field]: 'sensitive' } as Record<string, unknown>;
+              it(`should show field '${field}' to roles: ${[...perm.roles].join(", ")}`, () => {
+                const data = { [field]: "sensitive" } as Record<string, unknown>;
                 const result = applyFieldReadPermissions(data, fieldPerms, [allowedRole]);
-                expect(result[field]).toBe('sensitive');
+                expect(result[field]).toBe("sensitive");
               });
             }
             break;
 
-          case 'writableBy':
+          case "writableBy":
             it(`should strip field '${field}' from writes by non-privileged users`, () => {
-              const body = { [field]: 'new-value', name: 'test' } as Record<string, unknown>;
-              const result = applyFieldWritePermissions(body, fieldPerms, ['viewer']);
+              const body = { [field]: "new-value", name: "test" } as Record<string, unknown>;
+              const result = applyFieldWritePermissions(body, fieldPerms, ["viewer"]);
               expect(result[field]).toBeUndefined();
-              expect(result.name).toBe('test');
+              expect(result.name).toBe("test");
             });
 
             if (perm.roles && perm.roles.length > 0) {
               const writeRole = perm.roles[0]!;
-              it(`should allow writing field '${field}' by roles: ${[...perm.roles].join(', ')}`, () => {
-                const body = { [field]: 'new-value' } as Record<string, unknown>;
+              it(`should allow writing field '${field}' by roles: ${[...perm.roles].join(", ")}`, () => {
+                const body = { [field]: "new-value" } as Record<string, unknown>;
                 const result = applyFieldWritePermissions(body, fieldPerms, [writeRole]);
-                expect(result[field]).toBe('new-value');
+                expect(result[field]).toBe("new-value");
               });
             }
             break;
 
-          case 'redactFor':
+          case "redactFor":
             if (perm.roles && perm.roles.length > 0) {
               const redactRole = perm.roles[0]!;
-              it(`should redact field '${field}' for roles: ${[...perm.roles].join(', ')}`, () => {
-                const data = { [field]: 'real-value' } as Record<string, unknown>;
+              it(`should redact field '${field}' for roles: ${[...perm.roles].join(", ")}`, () => {
+                const data = { [field]: "real-value" } as Record<string, unknown>;
                 const result = applyFieldReadPermissions(data, fieldPerms, [redactRole]);
-                expect(result[field]).toBe(perm.redactValue ?? '***');
+                expect(result[field]).toBe(perm.redactValue ?? "***");
               });
             }
 
             it(`should show real value of field '${field}' to non-redacted roles`, () => {
-              const data = { [field]: 'real-value' } as Record<string, unknown>;
-              const result = applyFieldReadPermissions(data, fieldPerms, ['unrelated-role']);
-              expect(result[field]).toBe('real-value');
+              const data = { [field]: "real-value" } as Record<string, unknown>;
+              const result = applyFieldReadPermissions(data, fieldPerms, ["unrelated-role"]);
+              expect(result[field]).toBe("real-value");
             });
             break;
         }
@@ -459,22 +463,22 @@ export class TestHarness<T = unknown> {
     describe(`${resource.displayName} Pipeline`, () => {
       const steps = collectPipelineSteps(pipe);
 
-      it('should have at least one pipeline step', () => {
+      it("should have at least one pipeline step", () => {
         expect(steps.length).toBeGreaterThan(0);
       });
 
       for (const step of steps) {
         it(`${step._type} '${step.name}' should have a valid type`, () => {
-          expect(['guard', 'transform', 'interceptor']).toContain(step._type);
+          expect(["guard", "transform", "interceptor"]).toContain(step._type);
         });
 
         it(`${step._type} '${step.name}' should have a name`, () => {
           expect(step.name).toBeTruthy();
-          expect(typeof step.name).toBe('string');
+          expect(typeof step.name).toBe("string");
         });
 
         it(`${step._type} '${step.name}' should have a handler function`, () => {
-          expect(typeof step.handler).toBe('function');
+          expect(typeof step.handler).toBe("function");
         });
 
         if (step.operations?.length) {
@@ -503,19 +507,20 @@ export class TestHarness<T = unknown> {
     if (!events || Object.keys(events).length === 0) return;
 
     describe(`${resource.displayName} Events`, () => {
-      for (const [action, def] of Object.entries(events)) {
+      for (const [action, rawDef] of Object.entries(events)) {
+        const def = rawDef as { handler?: Function; name?: string; schema?: unknown };
         it(`event '${resource.name}:${action}' should have a handler function`, () => {
-          expect(typeof def.handler).toBe('function');
+          expect(typeof def.handler).toBe("function");
         });
 
         it(`event '${resource.name}:${action}' should have a name`, () => {
           expect(def.name).toBeTruthy();
-          expect(typeof def.name).toBe('string');
+          expect(typeof def.name).toBe("string");
         });
 
         if (def.schema) {
           it(`event '${resource.name}:${action}' schema should be an object`, () => {
-            expect(typeof def.schema).toBe('object');
+            expect(typeof def.schema).toBe("object");
             expect(def.schema).not.toBeNull();
           });
         }
@@ -569,7 +574,7 @@ function collectPipelineSteps(pipe: PipelineConfig): PipelineStep[] {
  */
 export function createTestHarness<T = any>(
   resource: ResourceDefinition,
-  options: TestHarnessOptions<T>
+  options: TestHarnessOptions<T>,
 ): TestHarness<T> {
   return new TestHarness<T>(resource, options);
 }
@@ -602,13 +607,13 @@ export interface GenerateTestFileOptions {
  */
 export function generateTestFile(
   resourceName: string,
-  options: GenerateTestFileOptions = {}
+  options: GenerateTestFileOptions = {},
 ): string {
-  const { presets = [], modulePath = '.' } = options;
+  const { presets = [], modulePath = "." } = options;
   const className = resourceName
-    .split('-')
+    .split("-")
     .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
-    .join('');
+    .join("");
   const varName = className.charAt(0).toLowerCase() + className.slice(1);
 
   return `/**
@@ -718,7 +723,7 @@ export function createConfigTestSuite(resource: ResourceDefinition<unknown>): vo
         const check = resource.permissions[op];
         if (check) {
           it(`${op} permission should be a function`, () => {
-            expect(typeof check).toBe('function');
+            expect(typeof check).toBe("function");
           });
         }
       }
@@ -730,68 +735,68 @@ function runFieldPermissionTests(displayName: string, fieldPerms: FieldPermissio
   describe(`${displayName} Field Permissions`, () => {
     for (const [field, perm] of Object.entries(fieldPerms)) {
       switch (perm._type) {
-        case 'hidden':
+        case "hidden":
           it(`should always hide field '${field}'`, () => {
-            const data = { [field]: 'secret', other: 'visible' } as Record<string, unknown>;
+            const data = { [field]: "secret", other: "visible" } as Record<string, unknown>;
             const result = applyFieldReadPermissions(data, fieldPerms, []);
             expect(result[field]).toBeUndefined();
           });
 
           it(`should strip hidden field '${field}' from writes`, () => {
-            const body = { [field]: 'attempt', name: 'test' } as Record<string, unknown>;
+            const body = { [field]: "attempt", name: "test" } as Record<string, unknown>;
             const result = applyFieldWritePermissions(body, fieldPerms, []);
             expect(result[field]).toBeUndefined();
           });
           break;
 
-        case 'visibleTo':
+        case "visibleTo":
           it(`should hide field '${field}' from non-privileged users`, () => {
-            const data = { [field]: 'sensitive' } as Record<string, unknown>;
-            const result = applyFieldReadPermissions(data, fieldPerms, ['_no_role_']);
+            const data = { [field]: "sensitive" } as Record<string, unknown>;
+            const result = applyFieldReadPermissions(data, fieldPerms, ["_no_role_"]);
             expect(result[field]).toBeUndefined();
           });
 
           if (perm.roles && perm.roles.length > 0) {
             const allowedRole = perm.roles[0]!;
-            it(`should show field '${field}' to roles: ${[...perm.roles].join(', ')}`, () => {
-              const data = { [field]: 'sensitive' } as Record<string, unknown>;
+            it(`should show field '${field}' to roles: ${[...perm.roles].join(", ")}`, () => {
+              const data = { [field]: "sensitive" } as Record<string, unknown>;
               const result = applyFieldReadPermissions(data, fieldPerms, [allowedRole]);
-              expect(result[field]).toBe('sensitive');
+              expect(result[field]).toBe("sensitive");
             });
           }
           break;
 
-        case 'writableBy':
+        case "writableBy":
           it(`should strip field '${field}' from writes by non-privileged users`, () => {
-            const body = { [field]: 'v', name: 'test' } as Record<string, unknown>;
-            const result = applyFieldWritePermissions(body, fieldPerms, ['_no_role_']);
+            const body = { [field]: "v", name: "test" } as Record<string, unknown>;
+            const result = applyFieldWritePermissions(body, fieldPerms, ["_no_role_"]);
             expect(result[field]).toBeUndefined();
           });
 
           if (perm.roles && perm.roles.length > 0) {
             const writeRole = perm.roles[0]!;
-            it(`should allow writing field '${field}' by roles: ${[...perm.roles].join(', ')}`, () => {
-              const body = { [field]: 'v' } as Record<string, unknown>;
+            it(`should allow writing field '${field}' by roles: ${[...perm.roles].join(", ")}`, () => {
+              const body = { [field]: "v" } as Record<string, unknown>;
               const result = applyFieldWritePermissions(body, fieldPerms, [writeRole]);
-              expect(result[field]).toBe('v');
+              expect(result[field]).toBe("v");
             });
           }
           break;
 
-        case 'redactFor':
+        case "redactFor":
           if (perm.roles && perm.roles.length > 0) {
             const redactRole = perm.roles[0]!;
-            it(`should redact field '${field}' for roles: ${[...perm.roles].join(', ')}`, () => {
-              const data = { [field]: 'real' } as Record<string, unknown>;
+            it(`should redact field '${field}' for roles: ${[...perm.roles].join(", ")}`, () => {
+              const data = { [field]: "real" } as Record<string, unknown>;
               const result = applyFieldReadPermissions(data, fieldPerms, [redactRole]);
-              expect(result[field]).toBe(perm.redactValue ?? '***');
+              expect(result[field]).toBe(perm.redactValue ?? "***");
             });
           }
 
           it(`should show real value of field '${field}' to non-redacted roles`, () => {
-            const data = { [field]: 'real' } as Record<string, unknown>;
-            const result = applyFieldReadPermissions(data, fieldPerms, ['_other_']);
-            expect(result[field]).toBe('real');
+            const data = { [field]: "real" } as Record<string, unknown>;
+            const result = applyFieldReadPermissions(data, fieldPerms, ["_other_"]);
+            expect(result[field]).toBe("real");
           });
           break;
       }
@@ -806,17 +811,17 @@ function runPipelineTests(displayName: string, pipe: PipelineConfig): void {
   const validOps: Set<string> = new Set(CRUD_OPERATIONS);
 
   describe(`${displayName} Pipeline`, () => {
-    it('should have at least one pipeline step', () => {
+    it("should have at least one pipeline step", () => {
       expect(steps.length).toBeGreaterThan(0);
     });
 
     for (const step of steps) {
       it(`${step._type} '${step.name}' should have a valid type`, () => {
-        expect(['guard', 'transform', 'interceptor']).toContain(step._type);
+        expect(["guard", "transform", "interceptor"]).toContain(step._type);
       });
 
       it(`${step._type} '${step.name}' should have a handler function`, () => {
-        expect(typeof step.handler).toBe('function');
+        expect(typeof step.handler).toBe("function");
       });
 
       if (step.operations?.length) {
@@ -833,12 +838,12 @@ function runPipelineTests(displayName: string, pipe: PipelineConfig): void {
 function runEventTests(
   resourceName: string,
   displayName: string,
-  events: Record<string, import('../types/index.js').EventDefinition>,
+  events: Record<string, import("../types/index.js").EventDefinition>,
 ): void {
   describe(`${displayName} Events`, () => {
     for (const [action, def] of Object.entries(events)) {
       it(`event '${resourceName}:${action}' should have a handler function`, () => {
-        expect(typeof def.handler).toBe('function');
+        expect(typeof def.handler).toBe("function");
       });
 
       it(`event '${resourceName}:${action}' should have a name`, () => {
@@ -847,7 +852,7 @@ function runEventTests(
 
       if (def.schema) {
         it(`event '${resourceName}:${action}' schema should be an object`, () => {
-          expect(typeof def.schema).toBe('object');
+          expect(typeof def.schema).toBe("object");
           expect(def.schema).not.toBeNull();
         });
       }

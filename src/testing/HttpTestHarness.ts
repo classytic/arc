@@ -36,10 +36,10 @@
  * ```
  */
 
-import { describe, it, expect, afterAll } from 'vitest';
-import type { FastifyInstance } from 'fastify';
-import type { ResourceDefinition } from '../core/defineResource.js';
-import { CRUD_OPERATIONS } from '../constants.js';
+import type { FastifyInstance } from "fastify";
+import { afterAll, describe, expect, it } from "vitest";
+import { CRUD_OPERATIONS } from "../constants.js";
+import type { ResourceDefinition } from "../core/defineResource.js";
 
 // ============================================================================
 // Auth Provider Interface
@@ -90,14 +90,16 @@ export function createJwtAuthProvider(options: {
     getHeaders(role: string): Record<string, string> {
       const user = users[role];
       if (!user) {
-        throw new Error(`createJwtAuthProvider: Unknown role '${role}'. Available: ${Object.keys(users).join(', ')}`);
+        throw new Error(
+          `createJwtAuthProvider: Unknown role '${role}'. Available: ${Object.keys(users).join(", ")}`,
+        );
       }
-      const token = (app as any).jwt?.sign?.(user.payload) || 'mock-token';
+      const token = (app as any).jwt?.sign?.(user.payload) || "mock-token";
       const headers: Record<string, string> = {
         authorization: `Bearer ${token}`,
       };
       if (user.organizationId) {
-        headers['x-organization-id'] = user.organizationId;
+        headers["x-organization-id"] = user.organizationId;
       }
       return headers;
     },
@@ -134,11 +136,13 @@ export function createBetterAuthProvider(options: {
     getHeaders(role: string): Record<string, string> {
       const token = tokens[role];
       if (!token) {
-        throw new Error(`createBetterAuthProvider: No token for role '${role}'. Available: ${Object.keys(tokens).join(', ')}`);
+        throw new Error(
+          `createBetterAuthProvider: No token for role '${role}'. Available: ${Object.keys(tokens).join(", ")}`,
+        );
       }
       return {
         authorization: `Bearer ${token}`,
-        'x-organization-id': orgId,
+        "x-organization-id": orgId,
       };
     },
     availableRoles: Object.keys(tokens),
@@ -193,27 +197,25 @@ export class HttpTestHarness<T = unknown> {
 
     // For eager mode, compute baseUrl immediately.
     // For deferred mode, baseUrl is resolved lazily from the getter options.
-    if (typeof optionsOrGetter === 'function') {
+    if (typeof optionsOrGetter === "function") {
       this.eagerBaseUrl = null;
     } else {
-      const apiPrefix = optionsOrGetter.apiPrefix ?? '/api';
+      const apiPrefix = optionsOrGetter.apiPrefix ?? "/api";
       this.eagerBaseUrl = `${apiPrefix}${resource.prefix}`;
     }
 
     // Determine which CRUD routes are enabled (from resource, not options)
     const disabled = new Set(resource.disabledRoutes ?? []);
     this.enabledRoutes = new Set(
-      resource.disableDefaultRoutes
-        ? []
-        : CRUD_OPERATIONS.filter((op) => !disabled.has(op)),
+      resource.disableDefaultRoutes ? [] : CRUD_OPERATIONS.filter((op) => !disabled.has(op)),
     );
 
-    this.updateMethod = resource.updateMethod === 'PUT' ? 'PUT' : 'PATCH';
+    this.updateMethod = resource.updateMethod === "PUT" ? "PUT" : "PATCH";
   }
 
   /** Resolve options (supports both direct and deferred) */
   private getOptions(): HttpTestHarnessOptions<T> {
-    return typeof this.optionsOrGetter === 'function'
+    return typeof this.optionsOrGetter === "function"
       ? this.optionsOrGetter()
       : this.optionsOrGetter;
   }
@@ -229,7 +231,7 @@ export class HttpTestHarness<T = unknown> {
   private getBaseUrl(): string {
     if (this.eagerBaseUrl !== null) return this.eagerBaseUrl;
     const opts = this.getOptions();
-    const apiPrefix = opts.apiPrefix ?? '';
+    const apiPrefix = opts.apiPrefix ?? "";
     return `${apiPrefix}${this.resource.prefix}`;
   }
 
@@ -262,25 +264,25 @@ export class HttpTestHarness<T = unknown> {
     describe(`${resource.displayName} HTTP CRUD`, () => {
       afterAll(async () => {
         // Cleanup: delete the created resource if still exists
-        if (createdId && enabledRoutes.has('delete')) {
+        if (createdId && enabledRoutes.has("delete")) {
           const { app, auth } = this.getOptions();
           const baseUrl = this.getBaseUrl();
           await app.inject({
-            method: 'DELETE',
+            method: "DELETE",
             url: `${baseUrl}/${createdId}`,
             headers: auth.getHeaders(auth.adminRole),
           });
         }
       });
 
-      if (enabledRoutes.has('create')) {
-        it('POST should create a resource', async () => {
+      if (enabledRoutes.has("create")) {
+        it("POST should create a resource", async () => {
           const { app, auth, fixtures } = this.getOptions();
           const baseUrl = this.getBaseUrl();
           const adminHeaders = auth.getHeaders(auth.adminRole);
 
           const res = await app.inject({
-            method: 'POST',
+            method: "POST",
             url: baseUrl,
             headers: adminHeaders,
             payload: fixtures.valid,
@@ -297,13 +299,13 @@ export class HttpTestHarness<T = unknown> {
         });
       }
 
-      if (enabledRoutes.has('list')) {
-        it('GET should list resources', async () => {
+      if (enabledRoutes.has("list")) {
+        it("GET should list resources", async () => {
           const { app, auth } = this.getOptions();
           const baseUrl = this.getBaseUrl();
 
           const res = await app.inject({
-            method: 'GET',
+            method: "GET",
             url: baseUrl,
             headers: auth.getHeaders(auth.adminRole),
           });
@@ -318,14 +320,14 @@ export class HttpTestHarness<T = unknown> {
         });
       }
 
-      if (enabledRoutes.has('get')) {
-        it('GET /:id should return the resource', async () => {
+      if (enabledRoutes.has("get")) {
+        it("GET /:id should return the resource", async () => {
           if (!createdId) return;
 
           const { app, auth } = this.getOptions();
           const baseUrl = this.getBaseUrl();
           const res = await app.inject({
-            method: 'GET',
+            method: "GET",
             url: `${baseUrl}/${createdId}`,
             headers: auth.getHeaders(auth.adminRole),
           });
@@ -337,12 +339,12 @@ export class HttpTestHarness<T = unknown> {
           expect(body.data._id).toBe(createdId);
         });
 
-        it('GET /:id with non-existent ID should return 404', async () => {
+        it("GET /:id with non-existent ID should return 404", async () => {
           const { app, auth } = this.getOptions();
           const baseUrl = this.getBaseUrl();
-          const fakeId = '000000000000000000000000';
+          const fakeId = "000000000000000000000000";
           const res = await app.inject({
-            method: 'GET',
+            method: "GET",
             url: `${baseUrl}/${fakeId}`,
             headers: auth.getHeaders(auth.adminRole),
           });
@@ -353,7 +355,7 @@ export class HttpTestHarness<T = unknown> {
         });
       }
 
-      if (enabledRoutes.has('update')) {
+      if (enabledRoutes.has("update")) {
         it(`${updateMethod} /:id should update the resource`, async () => {
           if (!createdId) return;
 
@@ -376,7 +378,7 @@ export class HttpTestHarness<T = unknown> {
         it(`${updateMethod} /:id with non-existent ID should return 404`, async () => {
           const { app, auth, fixtures } = this.getOptions();
           const baseUrl = this.getBaseUrl();
-          const fakeId = '000000000000000000000000';
+          const fakeId = "000000000000000000000000";
           const res = await app.inject({
             method: updateMethod as any,
             url: `${baseUrl}/${fakeId}`,
@@ -388,8 +390,8 @@ export class HttpTestHarness<T = unknown> {
         });
       }
 
-      if (enabledRoutes.has('delete')) {
-        it('DELETE /:id should delete the resource', async () => {
+      if (enabledRoutes.has("delete")) {
+        it("DELETE /:id should delete the resource", async () => {
           const { app, auth, fixtures } = this.getOptions();
           const baseUrl = this.getBaseUrl();
           const adminHeaders = auth.getHeaders(auth.adminRole);
@@ -397,9 +399,9 @@ export class HttpTestHarness<T = unknown> {
           // Create a separate resource for deletion to avoid affecting other tests
           let deleteId: string | undefined;
 
-          if (enabledRoutes.has('create')) {
+          if (enabledRoutes.has("create")) {
             const createRes = await app.inject({
-              method: 'POST',
+              method: "POST",
               url: baseUrl,
               headers: adminHeaders,
               payload: fixtures.valid,
@@ -410,7 +412,7 @@ export class HttpTestHarness<T = unknown> {
           if (!deleteId) return;
 
           const res = await app.inject({
-            method: 'DELETE',
+            method: "DELETE",
             url: `${baseUrl}/${deleteId}`,
             headers: adminHeaders,
           });
@@ -418,9 +420,9 @@ export class HttpTestHarness<T = unknown> {
           expect(res.statusCode).toBe(200);
 
           // Verify it's gone
-          if (enabledRoutes.has('get')) {
+          if (enabledRoutes.has("get")) {
             const getRes = await app.inject({
-              method: 'GET',
+              method: "GET",
               url: `${baseUrl}/${deleteId}`,
               headers: adminHeaders,
             });
@@ -428,12 +430,12 @@ export class HttpTestHarness<T = unknown> {
           }
         });
 
-        it('DELETE /:id with non-existent ID should return 404', async () => {
+        it("DELETE /:id with non-existent ID should return 404", async () => {
           const { app, auth } = this.getOptions();
           const baseUrl = this.getBaseUrl();
-          const fakeId = '000000000000000000000000';
+          const fakeId = "000000000000000000000000";
           const res = await app.inject({
-            method: 'DELETE',
+            method: "DELETE",
             url: `${baseUrl}/${fakeId}`,
             headers: auth.getHeaders(auth.adminRole),
           });
@@ -455,34 +457,37 @@ export class HttpTestHarness<T = unknown> {
     const { resource, enabledRoutes, updateMethod } = this;
 
     describe(`${resource.displayName} HTTP Permissions`, () => {
-      if (enabledRoutes.has('list')) {
-        it('GET list without auth should return 401', async () => {
+      if (enabledRoutes.has("list")) {
+        it("GET list without auth should return 401", async () => {
           const { app } = this.getOptions();
           const baseUrl = this.getBaseUrl();
-          const res = await app.inject({ method: 'GET', url: baseUrl });
+          const res = await app.inject({ method: "GET", url: baseUrl });
           expect(res.statusCode).toBe(401);
         });
       }
 
-      if (enabledRoutes.has('get')) {
-        it('GET get without auth should return 401', async () => {
+      if (enabledRoutes.has("get")) {
+        it("GET get without auth should return 401", async () => {
           const { app } = this.getOptions();
           const baseUrl = this.getBaseUrl();
-          const res = await app.inject({ method: 'GET', url: `${baseUrl}/000000000000000000000000` });
+          const res = await app.inject({
+            method: "GET",
+            url: `${baseUrl}/000000000000000000000000`,
+          });
           expect(res.statusCode).toBe(401);
         });
       }
 
-      if (enabledRoutes.has('create')) {
-        it('POST create without auth should return 401', async () => {
+      if (enabledRoutes.has("create")) {
+        it("POST create without auth should return 401", async () => {
           const { app, fixtures } = this.getOptions();
           const baseUrl = this.getBaseUrl();
-          const res = await app.inject({ method: 'POST', url: baseUrl, payload: fixtures.valid });
+          const res = await app.inject({ method: "POST", url: baseUrl, payload: fixtures.valid });
           expect(res.statusCode).toBe(401);
         });
       }
 
-      if (enabledRoutes.has('update')) {
+      if (enabledRoutes.has("update")) {
         it(`${updateMethod} update without auth should return 401`, async () => {
           const { app, fixtures } = this.getOptions();
           const baseUrl = this.getBaseUrl();
@@ -495,22 +500,25 @@ export class HttpTestHarness<T = unknown> {
         });
       }
 
-      if (enabledRoutes.has('delete')) {
-        it('DELETE delete without auth should return 401', async () => {
+      if (enabledRoutes.has("delete")) {
+        it("DELETE delete without auth should return 401", async () => {
           const { app } = this.getOptions();
           const baseUrl = this.getBaseUrl();
-          const res = await app.inject({ method: 'DELETE', url: `${baseUrl}/000000000000000000000000` });
+          const res = await app.inject({
+            method: "DELETE",
+            url: `${baseUrl}/000000000000000000000000`,
+          });
           expect(res.statusCode).toBe(401);
         });
       }
 
       // Admin access tests
-      if (enabledRoutes.has('list')) {
-        it('admin should access list endpoint', async () => {
+      if (enabledRoutes.has("list")) {
+        it("admin should access list endpoint", async () => {
           const { app, auth } = this.getOptions();
           const baseUrl = this.getBaseUrl();
           const res = await app.inject({
-            method: 'GET',
+            method: "GET",
             url: baseUrl,
             headers: auth.getHeaders(auth.adminRole),
           });
@@ -518,12 +526,12 @@ export class HttpTestHarness<T = unknown> {
         });
       }
 
-      if (enabledRoutes.has('create')) {
-        it('admin should access create endpoint', async () => {
+      if (enabledRoutes.has("create")) {
+        it("admin should access create endpoint", async () => {
           const { app, auth, fixtures } = this.getOptions();
           const baseUrl = this.getBaseUrl();
           const res = await app.inject({
-            method: 'POST',
+            method: "POST",
             url: baseUrl,
             headers: auth.getHeaders(auth.adminRole),
             payload: fixtures.valid,
@@ -532,9 +540,9 @@ export class HttpTestHarness<T = unknown> {
 
           // Cleanup
           const body = JSON.parse(res.body);
-          if (body.data?._id && enabledRoutes.has('delete')) {
+          if (body.data?._id && enabledRoutes.has("delete")) {
             await app.inject({
-              method: 'DELETE',
+              method: "DELETE",
               url: `${baseUrl}/${body.data._id}`,
               headers: auth.getHeaders(auth.adminRole),
             });
@@ -552,16 +560,16 @@ export class HttpTestHarness<T = unknown> {
   runValidation(): void {
     const { resource, enabledRoutes } = this;
 
-    if (!enabledRoutes.has('create')) return;
+    if (!enabledRoutes.has("create")) return;
 
     describe(`${resource.displayName} HTTP Validation`, () => {
-      it('POST with invalid payload should not return 2xx', async () => {
+      it("POST with invalid payload should not return 2xx", async () => {
         const { app, auth, fixtures } = this.getOptions();
         const baseUrl = this.getBaseUrl();
         if (!fixtures.invalid) return;
 
         const res = await app.inject({
-          method: 'POST',
+          method: "POST",
           url: baseUrl,
           headers: auth.getHeaders(auth.adminRole),
           payload: fixtures.invalid,

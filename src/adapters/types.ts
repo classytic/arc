@@ -5,8 +5,8 @@
  * Eliminates the need for 'as any' casts in application code.
  */
 
-import type { Model, Document } from 'mongoose';
-import type { CrudRepository } from '../types/index.js';
+import type { Document, Model } from "mongoose";
+import type { CrudRepository } from "../types/index.js";
 
 // ============================================================================
 // Type Inference Helpers
@@ -48,7 +48,7 @@ export type InferAdapterDoc<A> = A extends { repository: CrudRepository<infer D>
  * // Result: Product without _id, __v, save(), etc.
  */
 export type CleanDoc<T> = T extends Document
-  ? Omit<T, keyof Document | '_id' | '__v' | '$__' | '$isNew' | 'save' | 'remove'>
+  ? Omit<T, keyof Document | "_id" | "__v" | "$__" | "$isNew" | "save" | "remove">
   : T;
 
 // ============================================================================
@@ -64,11 +64,11 @@ export type MongooseDocument = Document & Record<string, unknown>;
  * Ensures type is a valid repository
  */
 export type ValidRepository<TDoc> = CrudRepository<TDoc> & {
-  getAll: CrudRepository<TDoc>['getAll'];
-  getById: CrudRepository<TDoc>['getById'];
-  create: CrudRepository<TDoc>['create'];
-  update: CrudRepository<TDoc>['update'];
-  delete: CrudRepository<TDoc>['delete'];
+  getAll: CrudRepository<TDoc>["getAll"];
+  getById: CrudRepository<TDoc>["getById"];
+  create: CrudRepository<TDoc>["create"];
+  update: CrudRepository<TDoc>["update"];
+  delete: CrudRepository<TDoc>["delete"];
 };
 
 /**
@@ -85,10 +85,7 @@ export type MatchingModel<TDoc> = Model<TDoc & Document>;
  */
 export function isMongooseModel(value: unknown): value is Model<Document> {
   return (
-    typeof value === 'function' &&
-    value.prototype &&
-    'modelName' in value &&
-    'schema' in value
+    typeof value === "function" && value.prototype && "modelName" in value && "schema" in value
   );
 }
 
@@ -97,13 +94,13 @@ export function isMongooseModel(value: unknown): value is Model<Document> {
  */
 export function isRepository(value: unknown): value is CrudRepository<unknown> {
   return (
-    typeof value === 'object' &&
+    typeof value === "object" &&
     value !== null &&
-    'getAll' in value &&
-    'getById' in value &&
-    'create' in value &&
-    'update' in value &&
-    'delete' in value
+    "getAll" in value &&
+    "getById" in value &&
+    "create" in value &&
+    "update" in value &&
+    "delete" in value
   );
 }
 

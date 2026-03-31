@@ -13,12 +13,10 @@ export type {
   AuditQueryOptions,
   AuditStore,
   AuditStoreOptions,
-} from './interface.js';
+} from "./interface.js";
 
-export { createAuditEntry } from './interface.js';
-
-export { MemoryAuditStore } from './memory.js';
-export type { MemoryAuditStoreOptions } from './memory.js';
-
-export { MongoAuditStore } from './mongodb.js';
-export type { MongoAuditStoreOptions } from './mongodb.js';
+export { createAuditEntry } from "./interface.js";
+export type { MemoryAuditStoreOptions } from "./memory.js";
+export { MemoryAuditStore } from "./memory.js";
+export type { MongoAuditStoreOptions } from "./mongodb.js";
+export { MongoAuditStore } from "./mongodb.js";

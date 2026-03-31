@@ -18,17 +18,15 @@
 
 // Re-export core transport interface and types
 export {
-  MemoryEventTransport,
   createEvent,
-  type EventTransport,
   type DomainEvent,
   type EventHandler,
-} from '../EventTransport.js';
-
+  type EventTransport,
+  MemoryEventTransport,
+} from "../EventTransport.js";
+export type { RedisEventTransportOptions, RedisLike } from "./redis.js";
 // Redis Pub/Sub transport (fire-and-forget, low latency)
-export { RedisEventTransport } from './redis.js';
-export type { RedisLike, RedisEventTransportOptions } from './redis.js';
-
+export { RedisEventTransport } from "./redis.js";
+export type { RedisStreamLike, RedisStreamTransportOptions } from "./redis-stream.js";
 // Redis Stream transport (durable, exactly-once, DLQ)
-export { RedisStreamTransport } from './redis-stream.js';
-export type { RedisStreamLike, RedisStreamTransportOptions } from './redis-stream.js';
+export { RedisStreamTransport } from "./redis-stream.js";

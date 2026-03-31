@@ -12,10 +12,11 @@
  *   exporterUrl: 'http://localhost:4318/v1/traces',
  * });
  */
+
+export type { TracingOptions } from "./tracing.js";
 export {
-  default as tracingPlugin,
   createSpan,
-  traced,
+  default as tracingPlugin,
   isTracingAvailable,
-} from './tracing.js';
-export type { TracingOptions } from './tracing.js';
+  traced,
+} from "./tracing.js";

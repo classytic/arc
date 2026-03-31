@@ -39,8 +39,8 @@
  * ```
  */
 
-import type { FastifyRequest, FastifyReply } from 'fastify';
-import type { PermissionCheck } from '../permissions/types.js';
+import type { FastifyReply, FastifyRequest } from "fastify";
+import type { PermissionCheck } from "../permissions/types.js";
 
 /**
  * Policy result returned by can() method
@@ -243,11 +243,7 @@ export interface PolicyEngine {
    * }
    * ```
    */
-  can(
-    user: any,
-    operation: string,
-    context?: PolicyContext
-  ): PolicyResult | Promise<PolicyResult>;
+  can(user: any, operation: string, context?: PolicyContext): PolicyResult | Promise<PolicyResult>;
 
   /**
    * Generate Fastify middleware for this policy
@@ -269,9 +265,7 @@ export interface PolicyEngine {
    * }, handler);
    * ```
    */
-  toMiddleware(
-    operation: string
-  ): (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  toMiddleware(operation: string): (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 }
 
 /**
@@ -377,9 +371,7 @@ export interface AccessControlPolicyOptions {
  * });
  * ```
  */
-export function createAccessControlPolicy(
-  options: AccessControlPolicyOptions
-): PermissionCheck {
+export function createAccessControlPolicy(options: AccessControlPolicyOptions): PermissionCheck {
   // Pre-compute a lookup map: resource -> Set<action> for O(1) checks
   const statementMap = new Map<string, Set<string>>();
   for (const statement of options.statements) {
@@ -398,7 +390,7 @@ export function createAccessControlPolicy(
 
     // Check if the action is allowed by any statement
     const allowedActions = statementMap.get(resource);
-    if (!allowedActions || !allowedActions.has(action)) {
+    if (!allowedActions?.has(action)) {
       return {
         granted: false,
         reason: `Action '${action}' is not permitted on resource '${resource}'`,
@@ -411,7 +403,7 @@ export function createAccessControlPolicy(
       if (!userId) {
         return {
           granted: false,
-          reason: 'Authentication required',
+          reason: "Authentication required",
         };
       }
 
@@ -430,7 +422,7 @@ export function createAccessControlPolicy(
   return permissionCheck;
 }
 
-declare module 'fastify' {
+declare module "fastify" {
   interface FastifyRequest {
     policyResult?: PolicyResult;
   }

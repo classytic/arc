@@ -13,9 +13,11 @@
  * });
  */
 
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import fp from 'fastify-plugin';
-import { createRequire } from 'node:module';
+import { createRequire } from "node:module";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import fp from "fastify-plugin";
+
+declare const __ARC_VERSION__: string;
 
 const require = createRequire(import.meta.url);
 
@@ -26,36 +28,36 @@ let SpanStatusCode: any;
 let NodeTracerProvider: any;
 let BatchSpanProcessor: any;
 let OTLPTraceExporter: any;
-let HttpInstrumentation: any;
-let MongoDBInstrumentation: any;
+let _HttpInstrumentation: any;
+let _MongoDBInstrumentation: any;
 let getNodeAutoInstrumentations: any;
 
 // Try to load OpenTelemetry (optional peer dependency)
 let isAvailable = false;
 try {
-  const api = require('@opentelemetry/api');
+  const api = require("@opentelemetry/api");
   trace = api.trace;
   context = api.context;
   SpanStatusCode = api.SpanStatusCode;
 
-  const sdkNode = require('@opentelemetry/sdk-node');
+  const sdkNode = require("@opentelemetry/sdk-node");
   NodeTracerProvider = sdkNode.NodeTracerProvider;
   BatchSpanProcessor = sdkNode.BatchSpanProcessor;
 
-  const exporterTraceOtlp = require('@opentelemetry/exporter-trace-otlp-http');
+  const exporterTraceOtlp = require("@opentelemetry/exporter-trace-otlp-http");
   OTLPTraceExporter = exporterTraceOtlp.OTLPTraceExporter;
 
-  const instrHttp = require('@opentelemetry/instrumentation-http');
-  HttpInstrumentation = instrHttp.HttpInstrumentation;
+  const instrHttp = require("@opentelemetry/instrumentation-http");
+  _HttpInstrumentation = instrHttp.HttpInstrumentation;
 
-  const instrMongo = require('@opentelemetry/instrumentation-mongodb');
-  MongoDBInstrumentation = instrMongo.MongoDBInstrumentation;
+  const instrMongo = require("@opentelemetry/instrumentation-mongodb");
+  _MongoDBInstrumentation = instrMongo.MongoDBInstrumentation;
 
-  const autoInstr = require('@opentelemetry/auto-instrumentations-node');
+  const autoInstr = require("@opentelemetry/auto-instrumentations-node");
   getNodeAutoInstrumentations = autoInstr.getNodeAutoInstrumentations;
 
   isAvailable = true;
-} catch (e) {
+} catch (_e) {
   // OpenTelemetry not installed - plugin will be no-op
 }
 
@@ -64,6 +66,12 @@ export interface TracingOptions {
    * Service name for traces
    */
   serviceName?: string;
+
+  /**
+   * Service version for trace metadata (rollout diagnostics).
+   * @default package version from build-time define
+   */
+  serviceVersion?: string;
 
   /**
    * OTLP exporter endpoint URL
@@ -89,7 +97,7 @@ interface TracerContext {
   currentSpan: any;
 }
 
-declare module 'fastify' {
+declare module "fastify" {
   interface FastifyRequest {
     tracer?: TracerContext;
   }
@@ -103,8 +111,18 @@ function createTracerProvider(options: TracingOptions) {
     return null;
   }
 
-  const { serviceName = '@classytic/arc', exporterUrl = 'http://localhost:4318/v1/traces' } =
-    options;
+  const {
+    serviceName = "@classytic/arc",
+    serviceVersion,
+    exporterUrl = "http://localhost:4318/v1/traces",
+  } = options;
+
+  // Resolve version: explicit option > build-time define > fallback
+  const resolvedVersion =
+    serviceVersion ??
+    (typeof __ARC_VERSION__ === "string" && __ARC_VERSION__ !== "__ARC_VERSION__"
+      ? __ARC_VERSION__
+      : "0.0.0");
 
   const exporter = new OTLPTraceExporter({
     url: exporterUrl,
@@ -113,8 +131,8 @@ function createTracerProvider(options: TracingOptions) {
   const provider = new NodeTracerProvider({
     resource: {
       attributes: {
-        'service.name': serviceName,
-        'service.version': '1.0.0',
+        "service.name": serviceName,
+        "service.version": resolvedVersion,
       },
     },
   });
@@ -129,16 +147,12 @@ function createTracerProvider(options: TracingOptions) {
  * OpenTelemetry Distributed Tracing Plugin
  */
 async function tracingPlugin(fastify: FastifyInstance, options: TracingOptions = {}) {
-  const {
-    serviceName = '@classytic/arc',
-    autoInstrumentation = true,
-    sampleRate = 1.0,
-  } = options;
+  const { serviceName = "@classytic/arc", autoInstrumentation = true, sampleRate = 1.0 } = options;
 
   // Skip if OpenTelemetry is not available
   if (!isAvailable) {
-    fastify.log.warn('OpenTelemetry not installed. Tracing disabled.');
-    fastify.log.warn('Install: npm install @opentelemetry/api @opentelemetry/sdk-node');
+    fastify.log.warn("OpenTelemetry not installed. Tracing disabled.");
+    fastify.log.warn("Install: npm install @opentelemetry/api @opentelemetry/sdk-node");
     return;
   }
 
@@ -151,26 +165,26 @@ async function tracingPlugin(fastify: FastifyInstance, options: TracingOptions =
   // Auto-instrumentation — enable HTTP + MongoDB tracing
   if (autoInstrumentation && getNodeAutoInstrumentations) {
     const instrumentations = getNodeAutoInstrumentations({
-      '@opentelemetry/instrumentation-http': {
+      "@opentelemetry/instrumentation-http": {
         enabled: true,
       },
-      '@opentelemetry/instrumentation-mongodb': {
+      "@opentelemetry/instrumentation-mongodb": {
         enabled: true,
       },
     });
     for (const instrumentation of instrumentations) {
       instrumentation.enable();
     }
-    fastify.log.debug('OpenTelemetry auto-instrumentation enabled');
+    fastify.log.debug("OpenTelemetry auto-instrumentation enabled");
   }
 
   const tracer = trace.getTracer(serviceName);
 
   // Add tracer to request
-  fastify.decorateRequest('tracer', undefined);
+  fastify.decorateRequest("tracer", undefined);
 
   // Create span for each HTTP request
-  fastify.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.addHook("onRequest", async (request: FastifyRequest, _reply: FastifyReply) => {
     // Sampling
     if (Math.random() > sampleRate) {
       return;
@@ -179,12 +193,12 @@ async function tracingPlugin(fastify: FastifyInstance, options: TracingOptions =
     const span = tracer.startSpan(`HTTP ${request.method} ${request.url}`, {
       kind: 1, // SpanKind.SERVER
       attributes: {
-        'http.method': request.method,
-        'http.url': request.url,
-        'http.target': request.routeOptions?.url ?? request.url,
-        'http.host': request.hostname,
-        'http.scheme': request.protocol,
-        'http.user_agent': request.headers['user-agent'],
+        "http.method": request.method,
+        "http.url": request.url,
+        "http.target": request.routeOptions?.url ?? request.url,
+        "http.host": request.hostname,
+        "http.scheme": request.protocol,
+        "http.user_agent": request.headers["user-agent"],
       },
     });
 
@@ -201,7 +215,7 @@ async function tracingPlugin(fastify: FastifyInstance, options: TracingOptions =
   });
 
   // End span after response
-  fastify.addHook('onResponse', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.addHook("onResponse", async (request: FastifyRequest, reply: FastifyReply) => {
     if (!request.tracer?.currentSpan) {
       return;
     }
@@ -210,8 +224,8 @@ async function tracingPlugin(fastify: FastifyInstance, options: TracingOptions =
 
     // Add response attributes
     span.setAttributes({
-      'http.status_code': reply.statusCode,
-      'http.response_content_length': reply.getHeader('content-length'),
+      "http.status_code": reply.statusCode,
+      "http.response_content_length": reply.getHeader("content-length"),
     });
 
     // Set span status
@@ -228,20 +242,23 @@ async function tracingPlugin(fastify: FastifyInstance, options: TracingOptions =
   });
 
   // Error tracking
-  fastify.addHook('onError', async (request: FastifyRequest, reply: FastifyReply, error: Error) => {
-    if (!request.tracer?.currentSpan) {
-      return;
-    }
+  fastify.addHook(
+    "onError",
+    async (request: FastifyRequest, _reply: FastifyReply, error: Error) => {
+      if (!request.tracer?.currentSpan) {
+        return;
+      }
 
-    const span = request.tracer.currentSpan;
-    span.recordException(error);
-    span.setStatus({
-      code: SpanStatusCode.ERROR,
-      message: error.message,
-    });
-  });
+      const span = request.tracer.currentSpan;
+      span.recordException(error);
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: error.message,
+      });
+    },
+  );
 
-  fastify.log.debug({ serviceName }, 'OpenTelemetry tracing enabled');
+  fastify.log.debug({ serviceName }, "OpenTelemetry tracing enabled");
 }
 
 /**
@@ -261,10 +278,10 @@ export function createSpan<T>(
   request: FastifyRequest,
   name: string,
   fn: (span: any) => Promise<T>,
-  attributes?: Record<string, any>
+  attributes?: Record<string, any>,
 ): Promise<T> {
-  if (!isAvailable || !request.tracer) {
-    // No tracing available, just execute function
+  if (!request.tracer) {
+    // No tracing context on this request, just execute function
     return fn(null);
   }
 
@@ -276,7 +293,7 @@ export function createSpan<T>(
       parent: currentSpan,
       attributes: attributes || {},
     },
-    trace.setSpan(context.active(), currentSpan)
+    trace.setSpan(context.active(), currentSpan),
   );
 
   return context.with(trace.setSpan(context.active(), span), async () => {
@@ -309,12 +326,12 @@ export function createSpan<T>(
  * }
  */
 export function traced(spanName?: string) {
-  return function (target: any, propertyKey: string, descriptor: PropertyDescriptor) {
+  return (target: any, propertyKey: string, descriptor: PropertyDescriptor) => {
     const originalMethod = descriptor.value;
 
     descriptor.value = async function (this: any, ...args: any[]) {
       // Extract request from args if available
-      const request = args.find((arg) => arg && arg.tracer);
+      const request = args.find((arg) => arg?.tracer);
 
       if (!request?.tracer) {
         // No tracing context, just execute
@@ -324,8 +341,8 @@ export function traced(spanName?: string) {
       const name = spanName || `${target.constructor.name}.${propertyKey}`;
       return createSpan(request, name, async (span) => {
         if (span) {
-          span.setAttribute('db.operation', propertyKey);
-          span.setAttribute('db.system', 'mongodb');
+          span.setAttribute("db.operation", propertyKey);
+          span.setAttribute("db.system", "mongodb");
         }
         return originalMethod.apply(this, args);
       });
@@ -343,6 +360,6 @@ export function isTracingAvailable(): boolean {
 }
 
 export default fp(tracingPlugin, {
-  name: 'arc-tracing',
-  fastify: '5.x',
+  name: "arc-tracing",
+  fastify: "5.x",
 });

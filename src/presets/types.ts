@@ -15,7 +15,7 @@
  * ```
  */
 
-import type { IRequestContext, IControllerResponse, PaginatedResult } from '../types/index.js';
+import type { IControllerResponse, IRequestContext, PaginatedResult } from "../types/index.js";
 
 /**
  * Soft Delete Preset Interface
@@ -217,11 +217,11 @@ export type IAuditedPreset = never;
  */
 export type IPresetController<
   TDoc = unknown,
-  TPresets extends 'softDelete' | 'slugLookup' | 'tree' | never = never,
-> = TPresets extends 'softDelete'
+  TPresets extends "softDelete" | "slugLookup" | "tree" | never = never,
+> = TPresets extends "softDelete"
   ? ISoftDeleteController<TDoc>
-  : TPresets extends 'slugLookup'
+  : TPresets extends "slugLookup"
     ? ISlugLookupController<TDoc>
-    : TPresets extends 'tree'
+    : TPresets extends "tree"
       ? ITreeController<TDoc>
       : unknown;

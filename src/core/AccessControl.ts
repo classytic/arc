@@ -7,14 +7,14 @@
  * Designed to be used standalone or composed into controllers.
  */
 
+import { MAX_REGEX_LENGTH } from "../constants.js";
+import { getOrgId as getOrgIdFromScope, isElevated } from "../scope/types.js";
 import type {
   AnyRecord,
   ArcInternalMetadata,
   IRequestContext,
   RequestContext,
-} from '../types/index.js';
-import { isElevated, isMember, getOrgId as getOrgIdFromScope } from '../scope/types.js';
-import { MAX_REGEX_LENGTH } from '../constants.js';
+} from "../types/index.js";
 
 // ============================================================================
 // Configuration
@@ -46,14 +46,18 @@ export interface AccessControlRepository {
 export class AccessControl {
   private readonly tenantField: string | false;
   private readonly idField: string;
-  private readonly _adapterMatchesFilter?: (item: unknown, filters: Record<string, unknown>) => boolean;
+  private readonly _adapterMatchesFilter?: (
+    item: unknown,
+    filters: Record<string, unknown>,
+  ) => boolean;
 
   /** Patterns that indicate dangerous regex (nested quantifiers, excessive backtracking).
    *  Uses [^...] character classes instead of .+ to avoid backtracking in the detector itself. */
-  private static readonly DANGEROUS_REGEX = /(\{[0-9]+,\}[^{]*\{[0-9]+,\})|(\+[^+]*\+)|(\*[^*]*\*)|(\.\*){3,}|\\1/;
+  private static readonly DANGEROUS_REGEX =
+    /(\{[0-9]+,\}[^{]*\{[0-9]+,\})|(\+[^+]*\+)|(\*[^*]*\*)|(\.\*){3,}|\\1/;
 
   /** Forbidden paths that could lead to prototype pollution */
-  private static readonly FORBIDDEN_PATHS = ['__proto__', 'constructor', 'prototype'];
+  private static readonly FORBIDDEN_PATHS = ["__proto__", "constructor", "prototype"];
 
   constructor(config: AccessControlConfig) {
     this.tenantField = config.tenantField;
@@ -119,7 +123,10 @@ export class AccessControl {
    * missing the tenant field are DENIED by default. This prevents legacy or
    * unscoped records from leaking across tenants.
    */
-  checkOrgScope(item: AnyRecord | null, arcContext: ArcInternalMetadata | RequestContext | undefined): boolean {
+  checkOrgScope(
+    item: AnyRecord | null,
+    arcContext: ArcInternalMetadata | RequestContext | undefined,
+  ): boolean {
     // Platform-universal resources (tenantField: false) skip org scope check entirely
     if (!this.tenantField) return true;
     const scope = (arcContext as ArcInternalMetadata | undefined)?._scope;
@@ -164,23 +171,26 @@ export class AccessControl {
     const hasCompoundFilters = Object.keys(compoundFilter).length > 1;
 
     try {
-      if (hasCompoundFilters && typeof repository.getOne === 'function') {
-        return await repository.getOne(compoundFilter, queryOptions) as TDoc | null;
+      if (hasCompoundFilters && typeof repository.getOne === "function") {
+        return (await repository.getOne(compoundFilter, queryOptions)) as TDoc | null;
       }
 
       // Fallback: getById + post-hoc security checks
-      const item = await repository.getById(id, queryOptions) as TDoc | null;
+      const item = (await repository.getById(id, queryOptions)) as TDoc | null;
       if (!item) return null;
 
       const arcContext = this._meta(req);
-      if (!this.checkOrgScope(item as AnyRecord, arcContext) || !this.checkPolicyFilters(item as AnyRecord, req)) {
+      if (
+        !this.checkOrgScope(item as AnyRecord, arcContext) ||
+        !this.checkPolicyFilters(item as AnyRecord, req)
+      ) {
         return null;
       }
 
       return item;
     } catch (error: unknown) {
       // Repositories (MongoKit, etc.) may throw "not found" errors instead of returning null
-      if (error instanceof Error && error.message?.includes('not found')) {
+      if (error instanceof Error && error.message?.includes("not found")) {
         return null;
       }
       throw error;
@@ -218,38 +228,56 @@ export class AccessControl {
     const equalsByValue = (a: unknown, b: unknown): boolean => String(a) === String(b);
 
     switch (operator) {
-      case '$eq':
+      case "$eq":
         return equalsByValue(itemValue, filterValue);
-      case '$ne':
+      case "$ne":
         return !equalsByValue(itemValue, filterValue);
-      case '$gt':
-        return typeof itemValue === 'number' && typeof filterValue === 'number' && itemValue > filterValue;
-      case '$gte':
-        return typeof itemValue === 'number' && typeof filterValue === 'number' && itemValue >= filterValue;
-      case '$lt':
-        return typeof itemValue === 'number' && typeof filterValue === 'number' && itemValue < filterValue;
-      case '$lte':
-        return typeof itemValue === 'number' && typeof filterValue === 'number' && itemValue <= filterValue;
-      case '$in':
+      case "$gt":
+        return (
+          typeof itemValue === "number" &&
+          typeof filterValue === "number" &&
+          itemValue > filterValue
+        );
+      case "$gte":
+        return (
+          typeof itemValue === "number" &&
+          typeof filterValue === "number" &&
+          itemValue >= filterValue
+        );
+      case "$lt":
+        return (
+          typeof itemValue === "number" &&
+          typeof filterValue === "number" &&
+          itemValue < filterValue
+        );
+      case "$lte":
+        return (
+          typeof itemValue === "number" &&
+          typeof filterValue === "number" &&
+          itemValue <= filterValue
+        );
+      case "$in":
         if (!Array.isArray(filterValue)) return false;
         if (Array.isArray(itemValue)) {
           return itemValue.some((v) => filterValue.some((fv) => equalsByValue(v, fv)));
         }
         return filterValue.some((fv) => equalsByValue(itemValue, fv));
-      case '$nin':
+      case "$nin":
         if (!Array.isArray(filterValue)) return false;
         if (Array.isArray(itemValue)) {
           return itemValue.every((v) => filterValue.every((fv) => !equalsByValue(v, fv)));
         }
         return filterValue.every((fv) => !equalsByValue(itemValue, fv));
-      case '$exists':
+      case "$exists":
         return filterValue ? itemValue !== undefined : itemValue === undefined;
-      case '$regex':
-        if (typeof itemValue === 'string' && (typeof filterValue === 'string' || filterValue instanceof RegExp)) {
-          const regex = typeof filterValue === 'string'
-            ? AccessControl.safeRegex(filterValue)
-            : filterValue;
-          return regex !== null && regex.test(itemValue);
+      case "$regex":
+        if (
+          typeof itemValue === "string" &&
+          (typeof filterValue === "string" || filterValue instanceof RegExp)
+        ) {
+          const regex =
+            typeof filterValue === "string" ? AccessControl.safeRegex(filterValue) : filterValue;
+          return regex?.test(itemValue) ?? false;
         }
         return false;
       default:
@@ -263,13 +291,13 @@ export class AccessControl {
    */
   private matchesFilter(item: AnyRecord, key: string, filterValue: unknown): boolean {
     // Support nested paths with dot notation
-    const itemValue = key.includes('.') ? this.getNestedValue(item, key) : item[key];
+    const itemValue = key.includes(".") ? this.getNestedValue(item, key) : item[key];
 
     // Handle MongoDB query operators
-    if (filterValue && typeof filterValue === 'object' && !Array.isArray(filterValue)) {
+    if (filterValue && typeof filterValue === "object" && !Array.isArray(filterValue)) {
       const operators = Object.keys(filterValue);
       // Check if this is an operator object (e.g., { $in: [...], $ne: ... })
-      if (operators.some(op => op.startsWith('$'))) {
+      if (operators.some((op) => op.startsWith("$"))) {
         for (const [operator, opValue] of Object.entries(filterValue as AnyRecord)) {
           if (!this.matchesOperator(itemValue, operator, opValue)) {
             return false;
@@ -283,7 +311,7 @@ export class AccessControl {
     // an array containing value. Check element-wise before falling back to
     // simple equality.
     if (Array.isArray(itemValue)) {
-      return itemValue.some(v => String(v) === String(filterValue));
+      return itemValue.some((v) => String(v) === String(filterValue));
     }
 
     // Simple equality check - convert to strings for ObjectId compatibility
@@ -320,7 +348,7 @@ export class AccessControl {
     // Check each non-logical sibling constraint (always evaluated,
     // even when $and/$or are present on the same filter object)
     for (const [key, value] of Object.entries(policyFilters)) {
-      if (key.startsWith('$')) continue;
+      if (key.startsWith("$")) continue;
 
       if (!this.matchesFilter(item, key, value)) {
         return false;
@@ -336,11 +364,11 @@ export class AccessControl {
    */
   private getNestedValue(obj: AnyRecord, path: string): unknown {
     // Security: Prevent prototype pollution attacks
-    if (AccessControl.FORBIDDEN_PATHS.some(p => path.toLowerCase().includes(p))) {
+    if (AccessControl.FORBIDDEN_PATHS.some((p) => path.toLowerCase().includes(p))) {
       return undefined;
     }
 
-    const keys = path.split('.');
+    const keys = path.split(".");
     let value: unknown = obj;
 
     for (const key of keys) {

@@ -30,14 +30,19 @@ export interface InvitationDoc {
   email: string;
   role: string;
   invitedBy: string;
-  status: 'pending' | 'accepted' | 'rejected' | 'expired';
+  status: "pending" | "accepted" | "rejected" | "expired";
   expiresAt: Date;
   createdAt?: Date;
 }
 
 /** Core organization adapter -- apps implement this */
 export interface OrgAdapter {
-  createOrg(data: { name: string; slug: string; ownerId: string; [key: string]: unknown }): Promise<OrgDoc>;
+  createOrg(data: {
+    name: string;
+    slug: string;
+    ownerId: string;
+    [key: string]: unknown;
+  }): Promise<OrgDoc>;
   getOrg(id: string): Promise<OrgDoc | null>;
   getOrgBySlug(slug: string): Promise<OrgDoc | null>;
   updateOrg(id: string, data: Partial<OrgDoc>): Promise<OrgDoc | null>;
@@ -54,7 +59,7 @@ export interface OrgAdapter {
 }
 
 export interface InvitationAdapter {
-  create(data: Omit<InvitationDoc, 'id' | 'createdAt'>): Promise<InvitationDoc>;
+  create(data: Omit<InvitationDoc, "id" | "createdAt">): Promise<InvitationDoc>;
   getByToken(token: string): Promise<InvitationDoc | null>;
   accept(id: string): Promise<void>;
   reject(id: string): Promise<void>;

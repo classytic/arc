@@ -5,14 +5,14 @@
  * Allows intercepting and modifying data at various points.
  */
 
-import type { AnyRecord, RequestContext, UserBase } from '../types/index.js';
+import type { AnyRecord, RequestContext, UserBase } from "../types/index.js";
 
 // ============================================================================
 // Hook Types
 // ============================================================================
 
-export type HookPhase = 'before' | 'around' | 'after';
-export type HookOperation = 'create' | 'update' | 'delete' | 'read' | 'list';
+export type HookPhase = "before" | "around" | "after";
+export type HookOperation = "create" | "update" | "delete" | "read" | "list";
 
 export interface HookContext<T = AnyRecord> {
   resource: string;
@@ -26,7 +26,7 @@ export interface HookContext<T = AnyRecord> {
 }
 
 export type HookHandler<T = AnyRecord> = (
-  ctx: HookContext<T>
+  ctx: HookContext<T>,
 ) => void | Promise<void> | T | Promise<T>;
 
 /**
@@ -92,19 +92,21 @@ export class HookSystem {
    * Supports both object parameter and positional arguments
    */
   register<T = AnyRecord>(
-    resourceOrOptions: string | {
-      name?: string;
-      resource: string;
-      operation: HookOperation;
-      phase: HookPhase;
-      handler: HookHandler<T>;
-      priority?: number;
-      dependsOn?: string[];
-    },
+    resourceOrOptions:
+      | string
+      | {
+          name?: string;
+          resource: string;
+          operation: HookOperation;
+          phase: HookPhase;
+          handler: HookHandler<T>;
+          priority?: number;
+          dependsOn?: string[];
+        },
     operation?: HookOperation,
     phase?: HookPhase,
     handler?: HookHandler<T>,
-    priority = 10
+    priority = 10,
   ): () => void {
     // Handle object parameter
     let hookName: string | undefined;
@@ -115,7 +117,7 @@ export class HookSystem {
     let finalPriority: number;
     let dependsOn: string[] | undefined;
 
-    if (typeof resourceOrOptions === 'object') {
+    if (typeof resourceOrOptions === "object") {
       // Object syntax: register({ name, resource, operation, phase, handler, priority, dependsOn })
       hookName = resourceOrOptions.name;
       resource = resourceOrOptions.resource;
@@ -171,9 +173,9 @@ export class HookSystem {
     resource: string,
     operation: HookOperation,
     handler: HookHandler<T>,
-    priority = 10
+    priority = 10,
   ): () => void {
-    return this.register(resource, operation, 'before', handler, priority);
+    return this.register(resource, operation, "before", handler, priority);
   }
 
   /**
@@ -183,9 +185,9 @@ export class HookSystem {
     resource: string,
     operation: HookOperation,
     handler: HookHandler<T>,
-    priority = 10
+    priority = 10,
   ): () => void {
-    return this.register(resource, operation, 'after', handler, priority);
+    return this.register(resource, operation, "after", handler, priority);
   }
 
   /**
@@ -196,9 +198,9 @@ export class HookSystem {
     resource: string,
     operation: HookOperation,
     handler: AroundHookHandler<T>,
-    priority = 10
+    priority = 10,
   ): () => void {
-    return this.register(resource, operation, 'around', handler as HookHandler, priority);
+    return this.register(resource, operation, "around", handler as HookHandler, priority);
   }
 
   /**
@@ -214,13 +216,13 @@ export class HookSystem {
       user?: UserBase;
       context?: RequestContext;
       meta?: AnyRecord;
-    }
+    },
   ): Promise<T | undefined> {
-    const key = this.getKey(resource, operation, 'around');
+    const key = this.getKey(resource, operation, "around");
     const hooks = [...(this.hooks.get(key) ?? [])];
 
     // Also check wildcard
-    const wildcardKey = this.getKey('*', operation, 'around');
+    const wildcardKey = this.getKey("*", operation, "around");
     const wildcardHooks = this.hooks.get(wildcardKey) ?? [];
     const allHooks = [...wildcardHooks, ...hooks];
     allHooks.sort((a, b) => a.priority - b.priority);
@@ -237,7 +239,7 @@ export class HookSystem {
         const ctx: HookContext<T> = {
           resource,
           operation,
-          phase: 'around',
+          phase: "around",
           data,
           user: options?.user,
           context: options?.context,
@@ -259,7 +261,7 @@ export class HookSystem {
     const hooks = this.hooks.get(key) ?? [];
 
     // Also check for wildcard hooks
-    const wildcardKey = this.getKey('*', ctx.operation, ctx.phase);
+    const wildcardKey = this.getKey("*", ctx.operation, ctx.phase);
     const wildcardHooks = this.hooks.get(wildcardKey) ?? [];
 
     let allHooks = [...wildcardHooks, ...hooks];
@@ -304,12 +306,12 @@ export class HookSystem {
       user?: UserBase;
       context?: RequestContext;
       meta?: AnyRecord;
-    }
+    },
   ): Promise<T> {
     const result = await this.execute<T>({
       resource,
       operation,
-      phase: 'before',
+      phase: "before",
       data,
       user: options?.user,
       context: options?.context,
@@ -331,13 +333,13 @@ export class HookSystem {
       user?: UserBase;
       context?: RequestContext;
       meta?: AnyRecord;
-    }
+    },
   ): Promise<void> {
     try {
       await this.execute({
         resource,
         operation,
-        phase: 'after',
+        phase: "after",
         result,
         user: options?.user,
         context: options?.context,
@@ -345,10 +347,7 @@ export class HookSystem {
       });
     } catch (error) {
       // Log error but don't fail the request
-      this.logger.error(
-        `[HookSystem] Error in after hook for ${resource}:${operation}:`,
-        error
-      );
+      this.logger.error(`[HookSystem] Error in after hook for ${resource}:${operation}:`, error);
     }
   }
 
@@ -378,11 +377,11 @@ export class HookSystem {
           if (byName.has(dep)) {
             resolvedDeps++;
             if (!dependents.has(dep)) dependents.set(dep, []);
-            dependents.get(dep)!.push(hook);
+            dependents.get(dep)?.push(hook);
           } else {
             this.warn(
-              `[HookSystem] Hook '${hook.name ?? '<unnamed>'}' depends on '${dep}' which is not registered ` +
-              'in the same phase/resource. Dependency will be ignored.'
+              `[HookSystem] Hook '${hook.name ?? "<unnamed>"}' depends on '${dep}' which is not registered ` +
+                "in the same phase/resource. Dependency will be ignored.",
             );
           }
         }
@@ -428,10 +427,10 @@ export class HookSystem {
     // Detect cycles: if result doesn't contain all hooks, there's a cycle
     if (result.length < hooks.length) {
       const missing = hooks.filter((h) => !result.includes(h));
-      const names = missing.map((h) => h.name ?? '<unnamed>').join(', ');
+      const names = missing.map((h) => h.name ?? "<unnamed>").join(", ");
       this.logger.error(
         `[HookSystem] Circular dependency detected in hooks: ${names}. ` +
-        'These hooks will be appended in priority order.',
+          "These hooks will be appended in priority order.",
       );
       // Append cycled hooks in priority order (best effort)
       missing.sort((a, b) => a.priority - b.priority);
@@ -486,9 +485,7 @@ export class HookSystem {
   }): HookRegistration[] {
     let results = this.getAll();
     if (filter?.resource) {
-      results = results.filter(
-        (h) => h.resource === filter.resource || h.resource === '*',
-      );
+      results = results.filter((h) => h.resource === filter.resource || h.resource === "*");
     }
     if (filter?.operation) {
       results = results.filter((h) => h.operation === filter.operation);
@@ -661,9 +658,9 @@ export function beforeCreate<T = AnyRecord>(
   hooks: HookSystem,
   resource: string,
   handler: HookHandler<T>,
-  priority = 10
+  priority = 10,
 ): () => void {
-  return hooks.before(resource, 'create', handler, priority);
+  return hooks.before(resource, "create", handler, priority);
 }
 
 /**
@@ -673,9 +670,9 @@ export function afterCreate<T = AnyRecord>(
   hooks: HookSystem,
   resource: string,
   handler: HookHandler<T>,
-  priority = 10
+  priority = 10,
 ): () => void {
-  return hooks.after(resource, 'create', handler, priority);
+  return hooks.after(resource, "create", handler, priority);
 }
 
 /**
@@ -685,9 +682,9 @@ export function beforeUpdate<T = AnyRecord>(
   hooks: HookSystem,
   resource: string,
   handler: HookHandler<T>,
-  priority = 10
+  priority = 10,
 ): () => void {
-  return hooks.before(resource, 'update', handler, priority);
+  return hooks.before(resource, "update", handler, priority);
 }
 
 /**
@@ -697,9 +694,9 @@ export function afterUpdate<T = AnyRecord>(
   hooks: HookSystem,
   resource: string,
   handler: HookHandler<T>,
-  priority = 10
+  priority = 10,
 ): () => void {
-  return hooks.after(resource, 'update', handler, priority);
+  return hooks.after(resource, "update", handler, priority);
 }
 
 /**
@@ -709,9 +706,9 @@ export function beforeDelete<T = AnyRecord>(
   hooks: HookSystem,
   resource: string,
   handler: HookHandler<T>,
-  priority = 10
+  priority = 10,
 ): () => void {
-  return hooks.before(resource, 'delete', handler, priority);
+  return hooks.before(resource, "delete", handler, priority);
 }
 
 /**
@@ -721,7 +718,7 @@ export function afterDelete<T = AnyRecord>(
   hooks: HookSystem,
   resource: string,
   handler: HookHandler<T>,
-  priority = 10
+  priority = 10,
 ): () => void {
-  return hooks.after(resource, 'delete', handler, priority);
+  return hooks.after(resource, "delete", handler, priority);
 }

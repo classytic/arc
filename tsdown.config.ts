@@ -18,6 +18,9 @@ export default defineConfig({
     // Scope
     "src/scope/index.ts",
 
+    // RPC
+    "src/rpc/index.ts",
+
     // Auth & Org
     "src/auth/index.ts",
     "src/org/index.ts",
@@ -56,6 +59,9 @@ export default defineConfig({
     // Docs
     "src/docs/index.ts",
 
+    // Dynamic Loader
+    "src/dynamic/index.ts",
+
     // Testing
     "src/testing/index.ts",
 
@@ -75,13 +81,19 @@ export default defineConfig({
     "src/cli/commands/generate.ts",
     "src/cli/commands/introspect.ts",
     "src/cli/commands/init.ts",
+    "src/cli/commands/doctor.ts",
 
     // Integrations — each is opt-in, separate entry point
     "src/integrations/index.ts",
     "src/integrations/streamline.ts",
     "src/integrations/websocket.ts",
+    "src/integrations/websocket-redis.ts",
     "src/integrations/jobs.ts",
     "src/integrations/event-gateway.ts",
+    "src/integrations/webhooks.ts",
+
+    // MCP — Model Context Protocol integration
+    "src/integrations/mcp/index.ts",
 
     // Discovery — auto-discovery plugin
     "src/discovery/index.ts",
@@ -97,58 +109,48 @@ export default defineConfig({
   define: {
     __ARC_VERSION__: JSON.stringify(version),
   },
-  external: [
-    // Core
-    "fastify",
-    "fastify-plugin",
+  deps: {
+    neverBundle: [
+      // Core
+      "fastify",
+      "fastify-plugin",
+      "qs",
 
-    // Database
-    "mongoose",
-    "@classytic/mongokit",
+      // Database
+      "mongoose",
+      /^@classytic\//,
 
-    // Fastify plugins (all optional peer deps)
-    "@fastify/jwt",
-    "@fastify/cors",
-    "@fastify/helmet",
-    "@fastify/rate-limit",
-    "@fastify/compress",
-    "@fastify/type-provider-typebox",
-    "@fastify/under-pressure",
-    "@fastify/sensible",
-    "@fastify/multipart",
-    "@fastify/websocket",
-    "fastify-raw-body",
+      // Fastify plugins (all optional peer deps)
+      /^@fastify\//,
+      "fastify-raw-body",
 
-    // Schema
-    "@sinclair/typebox",
+      // Schema
+      "@sinclair/typebox",
 
-    // Auth
-    "better-auth",
+      // Auth
+      "better-auth",
 
-    // Redis
-    "ioredis",
+      // Redis
+      "ioredis",
 
-    // Observability
-    "@opentelemetry/api",
-    "@opentelemetry/sdk-node",
-    "@opentelemetry/exporter-trace-otlp-http",
-    "@opentelemetry/instrumentation-http",
-    "@opentelemetry/instrumentation-mongodb",
-    "@opentelemetry/auto-instrumentations-node",
-    "pino-pretty",
+      // Observability
+      /^@opentelemetry\//,
+      "pino-pretty",
 
-    // Job queue
-    "bullmq",
+      // Job queue
+      "bullmq",
 
-    // Workflow
-    "@classytic/streamline",
+      // Testing (dev only)
+      "vitest",
+      /^mongodb-memory-server/,
 
-    // Testing (dev only)
-    "vitest",
-    "mongodb-memory-server",
-    "mongodb-memory-server-core",
+      // Validation
+      "zod",
+      /^zod\//,
 
-    // Serverless
-    "@fastify/aws-lambda",
-  ],
+      // MCP
+      "@modelcontextprotocol/sdk",
+      /^@modelcontextprotocol\//,
+    ],
+  },
 });

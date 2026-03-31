@@ -21,17 +21,17 @@
  * });
  */
 
-import fp from 'fastify-plugin';
-import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
-import { HookSystem } from '../hooks/HookSystem.js';
-import { ResourceRegistry } from '../registry/ResourceRegistry.js';
-import { requestContext } from '../context/requestContext.js';
-import type { RequestStore } from '../context/requestContext.js';
-import type { ExternalOpenApiPaths } from '../docs/externalPaths.js';
-import type { RequestScope } from '../scope/types.js';
-import { getOrgId } from '../scope/types.js';
-import { MUTATION_OPERATIONS } from '../constants.js';
-import { hasEvents } from '../utils/typeGuards.js';
+import type { FastifyInstance, FastifyPluginAsync } from "fastify";
+import fp from "fastify-plugin";
+import { MUTATION_OPERATIONS } from "../constants.js";
+import type { RequestStore } from "../context/requestContext.js";
+import { requestContext } from "../context/requestContext.js";
+import type { ExternalOpenApiPaths } from "../docs/externalPaths.js";
+import { HookSystem } from "../hooks/HookSystem.js";
+import { ResourceRegistry } from "../registry/ResourceRegistry.js";
+import type { RequestScope } from "../scope/types.js";
+import { getOrgId } from "../scope/types.js";
+import { hasEvents } from "../utils/typeGuards.js";
 
 export interface ArcCorePluginOptions {
   /** Enable event emission for CRUD operations (requires eventPlugin) */
@@ -62,7 +62,7 @@ export interface ArcCore {
   plugins: Map<string, PluginMeta>;
 }
 
-declare module 'fastify' {
+declare module "fastify" {
   interface FastifyInstance {
     arc: ArcCore;
   }
@@ -70,20 +70,16 @@ declare module 'fastify' {
 
 const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
   fastify: FastifyInstance,
-  opts: ArcCorePluginOptions = {}
+  opts: ArcCorePluginOptions = {},
 ) => {
-  const {
-    emitEvents = true,
-    hookSystem,
-    registry,
-  } = opts;
+  const { emitEvents = true, hookSystem, registry } = opts;
 
   // Always use instance-scoped systems — no global singletons
   const actualHookSystem = hookSystem ?? new HookSystem();
   const actualRegistry = registry ?? new ResourceRegistry();
 
   // Decorate with instance-scoped Arc core
-  fastify.decorate('arc', {
+  fastify.decorate("arc", {
     hooks: actualHookSystem,
     registry: actualRegistry,
     emitEvents,
@@ -94,7 +90,7 @@ const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
   // Request context via AsyncLocalStorage — zero-cost per request.
   // storage.run(store, done) wraps the ENTIRE remaining request lifecycle
   // so any code in the call stack can access user/org/requestId.
-  fastify.addHook('onRequest', (request, _reply, done) => {
+  fastify.addHook("onRequest", (request, _reply, done) => {
     const store: RequestStore = {
       requestId: request.id,
       startTime: performance.now(),
@@ -103,14 +99,17 @@ const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
   });
 
   // Populate user/org after auth middleware runs (user isn't set during onRequest)
-  fastify.addHook('preHandler', (request, _reply, done) => {
+  fastify.addHook("preHandler", (request, _reply, done) => {
     const store = requestContext.get();
     if (store) {
       const req = request as unknown as Record<string, unknown>;
-      store.user = req.user as RequestStore['user'] ?? null;
-      store.organizationId = request.scope?.kind === 'member' ? request.scope.organizationId
-        : request.scope?.kind === 'elevated' ? request.scope.organizationId
-        : undefined;
+      store.user = (req.user as RequestStore["user"]) ?? null;
+      store.organizationId =
+        request.scope?.kind === "member"
+          ? request.scope.organizationId
+          : request.scope?.kind === "elevated"
+            ? request.scope.organizationId
+            : undefined;
     }
     done();
   });
@@ -121,7 +120,7 @@ const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
     const eventOperations = MUTATION_OPERATIONS;
 
     for (const operation of eventOperations) {
-      actualHookSystem.after('*', operation, async (ctx) => {
+      actualHookSystem.after("*", operation, async (ctx) => {
         // Check if events plugin is registered using type guard
         if (!hasEvents(fastify)) return;
 
@@ -150,20 +149,17 @@ const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
           });
         } catch (error) {
           // Log but don't fail the request
-          fastify.log?.warn?.(
-            { eventType, error },
-            'Failed to emit event'
-          );
+          fastify.log?.warn?.({ eventType, error }, "Failed to emit event");
         }
       });
     }
   }
 
   // Emit arc.ready lifecycle event when all resources are registered
-  fastify.addHook('onReady', async () => {
+  fastify.addHook("onReady", async () => {
     if (!hasEvents(fastify)) return;
     try {
-      await fastify.events.publish('arc.ready', {
+      await fastify.events.publish("arc.ready", {
         resources: actualRegistry.getAll().length,
         hooks: actualHookSystem.getAll().length,
         timestamp: new Date().toISOString(),
@@ -174,25 +170,25 @@ const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
   });
 
   // Cleanup on close
-  fastify.addHook('onClose', async () => {
+  fastify.addHook("onClose", async () => {
     actualHookSystem.clear();
     actualRegistry._clear();
   });
 
-  fastify.log?.debug?.('Arc core plugin enabled (instance-scoped hooks & registry)');
+  fastify.log?.debug?.("Arc core plugin enabled (instance-scoped hooks & registry)");
 };
 
 /** Extract document ID from a result (handles Mongoose docs and plain objects) */
 function extractId(doc: unknown): string | undefined {
-  if (!doc || typeof doc !== 'object') return undefined;
+  if (!doc || typeof doc !== "object") return undefined;
   const d = doc as Record<string, unknown>;
   const rawId = d._id ?? d.id;
   return rawId ? String(rawId) : undefined;
 }
 
 export default fp(arcCorePlugin, {
-  name: 'arc-core',
-  fastify: '5.x',
+  name: "arc-core",
+  fastify: "5.x",
 });
 
 export { arcCorePlugin };

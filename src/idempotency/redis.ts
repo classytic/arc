@@ -10,5 +10,6 @@
  *
  * const store = new RedisIdempotencyStore({ client: new Redis() });
  */
-export { RedisIdempotencyStore } from './stores/redis.js';
-export type { RedisIdempotencyStoreOptions, RedisClient } from './stores/redis.js';
+
+export type { RedisClient, RedisIdempotencyStoreOptions } from "./stores/redis.js";
+export { RedisIdempotencyStore } from "./stores/redis.js";

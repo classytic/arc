@@ -5,11 +5,16 @@
  * Proper generics eliminate the need for 'as any' casts.
  */
 
-import type { Model } from 'mongoose';
-import type { DataAdapter, SchemaMetadata, RepositoryLike } from './interface.js';
-import type { CrudRepository, RouteSchemaOptions, OpenApiSchemas, AnyRecord } from '../types/index.js';
-import { SYSTEM_FIELDS } from '../constants.js';
-import { isMongooseModel, isRepository } from './types.js';
+import type { Model } from "mongoose";
+import { SYSTEM_FIELDS } from "../constants.js";
+import type {
+  AnyRecord,
+  CrudRepository,
+  OpenApiSchemas,
+  RouteSchemaOptions,
+} from "../types/index.js";
+import type { DataAdapter, RepositoryLike, SchemaMetadata } from "./interface.js";
+import { isMongooseModel, isRepository } from "./types.js";
 
 /**
  * Mongoose SchemaType internal shape (not fully exposed by @types/mongoose)
@@ -65,7 +70,10 @@ export interface MongooseAdapterOptions<TDoc = unknown> {
    * });
    * ```
    */
-  schemaGenerator?: (model: Model<TDoc>, options?: RouteSchemaOptions) => OpenApiSchemas;
+  schemaGenerator?: (
+    model: Model<TDoc>,
+    options?: RouteSchemaOptions,
+  ) => OpenApiSchemas | Record<string, unknown>;
 }
 
 // ============================================================================
@@ -78,25 +86,28 @@ export interface MongooseAdapterOptions<TDoc = unknown> {
  * @typeParam TDoc - The document type
  */
 export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
-  readonly type = 'mongoose' as const;
+  readonly type = "mongoose" as const;
   readonly name: string;
   readonly model: Model<TDoc>;
   readonly repository: CrudRepository<TDoc> | RepositoryLike;
-  private readonly schemaGenerator?: (model: Model<TDoc>, options?: RouteSchemaOptions) => OpenApiSchemas;
+  private readonly schemaGenerator?: (
+    model: Model<TDoc>,
+    options?: RouteSchemaOptions,
+  ) => OpenApiSchemas | Record<string, unknown>;
 
   constructor(options: MongooseAdapterOptions<TDoc>) {
     // Runtime validation
     if (!isMongooseModel(options.model)) {
       throw new TypeError(
-        'MongooseAdapter: Invalid model. Expected Mongoose Model instance.\n' +
-        'Usage: createMongooseAdapter({ model: YourModel, repository: yourRepo })'
+        "MongooseAdapter: Invalid model. Expected Mongoose Model instance.\n" +
+          "Usage: createMongooseAdapter({ model: YourModel, repository: yourRepo })",
       );
     }
 
     if (!isRepository(options.repository)) {
       throw new TypeError(
-        'MongooseAdapter: Invalid repository. Expected CrudRepository instance.\n' +
-        'Usage: createMongooseAdapter({ model: YourModel, repository: yourRepo })'
+        "MongooseAdapter: Invalid repository. Expected CrudRepository instance.\n" +
+          "Usage: createMongooseAdapter({ model: YourModel, repository: yourRepo })",
       );
     }
 
@@ -112,31 +123,34 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
   getSchemaMetadata(): SchemaMetadata {
     const schema = this.model.schema;
     const paths = schema.paths;
-    const fields: SchemaMetadata['fields'] = {};
+    const fields: SchemaMetadata["fields"] = {};
 
     for (const [fieldName, schemaType] of Object.entries(paths)) {
       // Skip internal fields
-      if (fieldName.startsWith('_') && fieldName !== '_id') continue;
+      if (fieldName.startsWith("_") && fieldName !== "_id") continue;
 
       const typeInfo = schemaType as MongooseSchemaType;
-      const mongooseType = typeInfo.instance || 'Mixed';
+      const mongooseType = typeInfo.instance || "Mixed";
 
       // Map Mongoose types to our FieldMetadata types
-      const typeMap: Record<string, 'string' | 'number' | 'boolean' | 'date' | 'object' | 'array' | 'objectId' | 'enum'> = {
-        String: 'string',
-        Number: 'number',
-        Boolean: 'boolean',
-        Date: 'date',
-        ObjectID: 'objectId',
-        ObjectId: 'objectId',
-        Array: 'array',
-        Mixed: 'object',
-        Buffer: 'object',
-        Embedded: 'object',
+      const typeMap: Record<
+        string,
+        "string" | "number" | "boolean" | "date" | "object" | "array" | "objectId" | "enum"
+      > = {
+        String: "string",
+        Number: "number",
+        Boolean: "boolean",
+        Date: "date",
+        ObjectID: "objectId",
+        ObjectId: "objectId",
+        Array: "array",
+        Mixed: "object",
+        Buffer: "object",
+        Embedded: "object",
       };
 
       fields[fieldName] = {
-        type: typeMap[mongooseType] ?? 'object',
+        type: typeMap[mongooseType] ?? "object",
         required: !!typeInfo.isRequired,
         ref: typeInfo.options?.ref,
       };
@@ -155,7 +169,9 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
    * If a `schemaGenerator` plugin was provided (e.g. MongoKit's buildCrudSchemasFromModel),
    * it is used instead of the built-in basic conversion.
    */
-  generateSchemas(schemaOptions?: RouteSchemaOptions): OpenApiSchemas | null {
+  generateSchemas(
+    schemaOptions?: RouteSchemaOptions,
+  ): OpenApiSchemas | Record<string, unknown> | null {
     try {
       // Delegate to external schema generator plugin when available
       if (this.schemaGenerator) {
@@ -173,12 +189,12 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
       const blockedFields = new Set<string>(
         Object.entries(fieldRules)
           .filter(([, rules]) => rules.systemManaged || rules.hidden)
-          .map(([field]) => field)
+          .map(([field]) => field),
       );
 
       for (const [fieldName, schemaType] of Object.entries(paths)) {
         // Skip internal and blocked fields
-        if (fieldName.startsWith('__')) continue;
+        if (fieldName.startsWith("__")) continue;
         if (blockedFields.has(fieldName)) continue;
 
         const typeInfo = schemaType as MongooseSchemaType;
@@ -194,28 +210,24 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
       // and already absent from input schemas).
       const systemFieldSet = new Set<string>(SYSTEM_FIELDS);
       const inputProperties = Object.fromEntries(
-        Object.entries(properties).filter(
-          ([field]) => !systemFieldSet.has(field)
-        )
+        Object.entries(properties).filter(([field]) => !systemFieldSet.has(field)),
       );
 
-      const inputRequired = required.filter(
-        (field) => !systemFieldSet.has(field)
-      );
+      const inputRequired = required.filter((field) => !systemFieldSet.has(field));
 
       return {
         createBody: {
-          type: 'object',
+          type: "object",
           properties: inputProperties,
           required: inputRequired.length > 0 ? inputRequired : undefined,
         },
         updateBody: {
-          type: 'object',
+          type: "object",
           properties: inputProperties,
           // All fields optional for PATCH
         },
         response: {
-          type: 'object',
+          type: "object",
           properties,
         },
       };
@@ -228,14 +240,17 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
   /**
    * Extract relation metadata
    */
-  private extractRelations(paths: Record<string, unknown>): SchemaMetadata['relations'] {
-    const relations: Record<string, { type: 'one-to-one' | 'one-to-many' | 'many-to-many'; target: string; foreignKey?: string }> = {};
+  private extractRelations(paths: Record<string, unknown>): SchemaMetadata["relations"] {
+    const relations: Record<
+      string,
+      { type: "one-to-one" | "one-to-many" | "many-to-many"; target: string; foreignKey?: string }
+    > = {};
 
     for (const [fieldName, schemaType] of Object.entries(paths)) {
       const ref = (schemaType as MongooseSchemaType).options?.ref;
       if (ref) {
         relations[fieldName] = {
-          type: 'one-to-one', // Mongoose refs are typically one-to-one
+          type: "one-to-one", // Mongoose refs are typically one-to-one
           target: ref,
           foreignKey: fieldName,
         };
@@ -255,35 +270,35 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
     const baseType: AnyRecord = {};
 
     switch (instance) {
-      case 'String':
-        baseType.type = 'string';
+      case "String":
+        baseType.type = "string";
         if (options.enum) baseType.enum = options.enum;
         if (options.minlength) baseType.minLength = options.minlength;
         if (options.maxlength) baseType.maxLength = options.maxlength;
         break;
-      case 'Number':
-        baseType.type = 'number';
+      case "Number":
+        baseType.type = "number";
         if (options.min !== undefined) baseType.minimum = options.min;
         if (options.max !== undefined) baseType.maximum = options.max;
         break;
-      case 'Boolean':
-        baseType.type = 'boolean';
+      case "Boolean":
+        baseType.type = "boolean";
         break;
-      case 'Date':
-        baseType.type = 'string';
-        baseType.format = 'date-time';
+      case "Date":
+        baseType.type = "string";
+        baseType.format = "date-time";
         break;
-      case 'ObjectID':
-      case 'ObjectId':
-        baseType.type = 'string';
-        baseType.pattern = '^[a-f\\d]{24}$';
+      case "ObjectID":
+      case "ObjectId":
+        baseType.type = "string";
+        baseType.pattern = "^[a-f\\d]{24}$";
         break;
-      case 'Array':
-        baseType.type = 'array';
-        baseType.items = { type: 'string' }; // Default, can be improved
+      case "Array":
+        baseType.type = "array";
+        baseType.items = { type: "string" }; // Default, can be improved
         break;
       default:
-        baseType.type = 'object';
+        baseType.type = "object";
     }
 
     return baseType;
@@ -324,8 +339,8 @@ export function createMongooseAdapter<TDoc = unknown>(
   if (isMongooseModel(modelOrOptions)) {
     if (!repository) {
       throw new TypeError(
-        'createMongooseAdapter: repository is required when using 2-arg form.\n' +
-        'Usage: createMongooseAdapter(Model, repository)'
+        "createMongooseAdapter: repository is required when using 2-arg form.\n" +
+          "Usage: createMongooseAdapter(Model, repository)",
       );
     }
     return new MongooseAdapter<TDoc>({ model: modelOrOptions as Model<TDoc>, repository });

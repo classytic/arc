@@ -5,8 +5,8 @@
  * Uses Vitest for mocking (compatible with Jest API).
  */
 
-import { vi, type Mock } from 'vitest';
-import type { CrudRepository, AnyRecord, PaginatedResult } from '../types/index.js';
+import { type Mock, vi } from "vitest";
+import type { AnyRecord, CrudRepository, PaginatedResult } from "../types/index.js";
 
 /**
  * Extended repository interface for testing (includes optional preset methods)
@@ -33,7 +33,7 @@ export interface MockRepository<T> extends CrudRepository<T> {
  * await mockRepo.getById('1'); // Returns mocked product
  */
 export function createMockRepository<T extends AnyRecord = AnyRecord>(
-  overrides: Partial<MockRepository<T>> = {}
+  overrides: Partial<MockRepository<T>> = {},
 ): MockRepository<T> {
   const defaultMock: MockRepository<T> = {
     // MongoKit-compatible CRUD methods
@@ -49,15 +49,19 @@ export function createMockRepository<T extends AnyRecord = AnyRecord>(
 
     getById: vi.fn().mockResolvedValue(null),
 
-    create: vi.fn().mockImplementation((data: Partial<T>) =>
-      Promise.resolve({ _id: 'mock-id', ...data } as unknown as T)
-    ),
+    create: vi
+      .fn()
+      .mockImplementation((data: Partial<T>) =>
+        Promise.resolve({ _id: "mock-id", ...data } as unknown as T),
+      ),
 
-    update: vi.fn().mockImplementation((_id: string, data: Partial<T>) =>
-      Promise.resolve({ _id: 'mock-id', ...data } as unknown as T)
-    ),
+    update: vi
+      .fn()
+      .mockImplementation((_id: string, data: Partial<T>) =>
+        Promise.resolve({ _id: "mock-id", ...data } as unknown as T),
+      ),
 
-    delete: vi.fn().mockResolvedValue({ success: true, message: 'Deleted' }),
+    delete: vi.fn().mockResolvedValue({ success: true, message: "Deleted" }),
 
     // Optional preset methods
     getBySlug: vi.fn().mockResolvedValue(null),
@@ -78,10 +82,10 @@ export function createMockRepository<T extends AnyRecord = AnyRecord>(
  */
 export function createMockUser(overrides: Partial<AnyRecord> = {}) {
   return {
-    _id: 'mock-user-id',
-    id: 'mock-user-id',
-    email: 'test@example.com',
-    roles: ['user'],
+    _id: "mock-user-id",
+    id: "mock-user-id",
+    email: "test@example.com",
+    roles: ["user"],
     organizationId: null,
     ...overrides,
   };
@@ -155,7 +159,7 @@ export function createMockController(repository: CrudRepository<AnyRecord>) {
  * const products = productFactory.buildMany(10);
  */
 export function createDataFactory<T extends AnyRecord>(
-  template: Record<keyof T, (index: number) => unknown>
+  template: Record<keyof T, (index: number) => unknown>,
 ) {
   let counter = 0;
 
@@ -187,7 +191,7 @@ export function createDataFactory<T extends AnyRecord>(
  * Useful for testing side effects without full mocking
  */
 export function createSpy<T extends (...args: unknown[]) => unknown>(
-  _name = 'spy'
+  _name = "spy",
 ): Mock<T> & { getCalls(): unknown[][]; getLastCall(): unknown[] } {
   const calls: unknown[][] = [];
 
@@ -208,7 +212,7 @@ export function createSpy<T extends (...args: unknown[]) => unknown>(
  */
 export async function waitFor(
   condition: () => boolean | Promise<boolean>,
-  options: { timeout?: number; interval?: number } = {}
+  options: { timeout?: number; interval?: number } = {},
 ): Promise<void> {
   const { timeout = 5000, interval = 100 } = options;
   const startTime = Date.now();

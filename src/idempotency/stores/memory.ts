@@ -11,7 +11,7 @@
  * - Prefix-based operations for raw key invalidation
  */
 
-import type { IdempotencyResult, IdempotencyStore, IdempotencyLock } from './interface.js';
+import type { IdempotencyLock, IdempotencyResult, IdempotencyStore } from "./interface.js";
 
 export interface MemoryIdempotencyStoreOptions {
   /** Default TTL in milliseconds (default: 86400000 = 24h) */
@@ -23,7 +23,7 @@ export interface MemoryIdempotencyStoreOptions {
 }
 
 export class MemoryIdempotencyStore implements IdempotencyStore {
-  readonly name = 'memory';
+  readonly name = "memory";
   private results: Map<string, IdempotencyResult> = new Map();
   private locks: Map<string, IdempotencyLock> = new Map();
   private ttlMs: number;
@@ -59,7 +59,7 @@ export class MemoryIdempotencyStore implements IdempotencyStore {
     return result;
   }
 
-  async set(key: string, result: Omit<IdempotencyResult, 'key'>): Promise<void> {
+  async set(key: string, result: Omit<IdempotencyResult, "key">): Promise<void> {
     // Evict oldest if at capacity
     if (this.results.size >= this.maxEntries) {
       this.evictOldest();
@@ -181,8 +181,9 @@ export class MemoryIdempotencyStore implements IdempotencyStore {
   }
 
   private evictOldest(): void {
-    const entries = Array.from(this.results.entries())
-      .sort((a, b) => a[1].createdAt.getTime() - b[1].createdAt.getTime());
+    const entries = Array.from(this.results.entries()).sort(
+      (a, b) => a[1].createdAt.getTime() - b[1].createdAt.getTime(),
+    );
 
     const toRemove = Math.max(1, Math.floor(entries.length * 0.1));
     for (let i = 0; i < toRemove; i++) {

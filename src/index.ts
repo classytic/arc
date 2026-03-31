@@ -87,36 +87,38 @@
  * ```
  */
 
+export type {
+  DataAdapter,
+  FieldMetadata,
+  RelationMetadata,
+  RepositoryLike,
+  SchemaMetadata,
+  ValidationResult as AdapterValidationResult,
+} from "./adapters/index.js";
 // ============================================================================
 // Adapters (database abstraction — zero external deps at this level)
 // ============================================================================
 export {
-  MongooseAdapter,
   createMongooseAdapter,
-  PrismaAdapter,
   createPrismaAdapter,
-} from "./adapters/index.js";
-export type {
-  DataAdapter,
-  SchemaMetadata,
-  FieldMetadata,
-  RelationMetadata,
-  ValidationResult as AdapterValidationResult,
-  MongooseAdapterOptions,
-  PrismaAdapterOptions,
-  RepositoryLike,
+  MongooseAdapter,
+  PrismaAdapter,
 } from "./adapters/index.js";
 
+// Note: MongooseAdapterOptions and PrismaAdapterOptions are NOT re-exported
+// from the root barrel to avoid pulling mongoose/prisma types into consumers
+// who don't use those adapters. Import from '@classytic/arc/adapters' instead.
+
+export type { BaseControllerOptions } from "./core/index.js";
 // ============================================================================
 // Core — defineResource, BaseController
 // ============================================================================
 export {
   BaseController,
   defineResource,
-  ResourceDefinition,
   getControllerScope,
+  ResourceDefinition,
 } from "./core/index.js";
-export type { BaseControllerOptions } from "./core/index.js";
 
 /**
  * Note: Arc is database-agnostic
@@ -129,171 +131,164 @@ export type { BaseControllerOptions } from "./core/index.js";
  */
 
 // ============================================================================
-// Types — re-export all types (zero runtime cost, eliminated at compile time)
-// ============================================================================
-export type {
-  // Base types
-  AnyRecord,
-  PaginatedResult,
-  ApiResponse,
-  // Framework-agnostic controller types (MongoKit-compatible)
-  IRequestContext,
-  IControllerResponse,
-  IController,
-  ControllerLike,
-  // User & Auth
-  UserBase,
-  UserOrganization,
-  JWTPayload,
-  // Request context
-  RequestContext,
-  ArcInternalMetadata,
-  OwnershipCheck,
-  FastifyRequestExtras,
-  RequestWithExtras,
-  FastifyWithAuth,
-  FastifyWithDecorators,
-  RouteHandlerMethod,
-  // Service & Repository
-  ServiceContext,
-  QueryOptions,
-  CrudRepository,
-  // Controller
-  RouteHandler,
-  CrudController,
-  CrudRouteKey,
-  // Schema
-  RouteSchemaOptions,
-  FieldRule,
-  CrudSchemas,
-  // Routes
-  AdditionalRoute,
-  MiddlewareConfig,
-  // Presets
-  PresetResult,
-  PresetFunction,
-  // Resource
-  ResourceConfig,
-  EventDefinition,
-  ResourceMetadata,
-  // Registry
-  RegistryEntry,
-  RegistryStats,
-  IntrospectionData,
-  // Plugin options
-  AuthPluginOptions,
-  IntrospectionPluginOptions,
-  CrudRouterOptions,
-  RateLimitConfig,
-  ConfigError,
-  ValidationResult,
-  ValidateOptions,
-  HealthCheck,
-  HealthOptions,
-  GracefulShutdownOptions,
-  RequestIdOptions,
-  // Utility types for better type inference
-  InferDocType,
-  InferAdapterDoc,
-  InferResourceDoc,
-  TypedResourceConfig,
-  TypedController,
-  TypedRepository,
-} from "./types/index.js";
-
-// ============================================================================
 // Constants — single source of truth for defaults and magic values (zero deps)
 // ============================================================================
 export * from "./constants.js";
-
+export type { RequestStore } from "./context/index.js";
 // ============================================================================
-// Errors — commonly needed alongside defineResource (zero deps, pure classes)
+// Request Context — AsyncLocalStorage (zero deps)
 // ============================================================================
-export {
-  ArcError,
-  NotFoundError,
-  ValidationError,
-  UnauthorizedError,
-  ForbiddenError,
-} from "./utils/errors.js";
+export { requestContext } from "./context/index.js";
 
 // ============================================================================
 // Validation — resource config validation (zero deps, pure functions)
 // ============================================================================
 export {
-  validateResourceConfig,
-  formatValidationErrors,
   assertValidConfig,
+  formatValidationErrors,
+  validateResourceConfig,
 } from "./core/validateResourceConfig.js";
-
-// ============================================================================
-// Permission System — commonly used with defineResource (pure functions)
-// ============================================================================
-export {
-  // Permission presets (common patterns in one call)
-  permissions,
-  publicRead,
-  publicReadAdminWrite,
-  authenticated,
-  adminOnly,
-  ownerWithAdminBypass,
-  fullPublic,
-  readOnly,
-  // Low-level permission helpers
-  allowPublic,
-  requireAuth,
-  requireRoles,
-  requireOwnership,
-  allOf,
-  anyOf,
-  denyAll,
-  when,
-  // Organization permissions
-  requireOrgMembership,
-  requireOrgRole,
-  createOrgPermissions,
-  createDynamicPermissionMatrix,
-  requireTeamMembership,
-  // Field-level permissions
-  fields,
-  applyFieldReadPermissions,
-  applyFieldWritePermissions,
-} from "./permissions/index.js";
-
-export type {
-  PermissionCheck,
-  PermissionContext,
-  PermissionResult,
-  DynamicPermissionMatrixConfig,
-  DynamicPermissionMatrix,
-  FieldPermission,
-  FieldPermissionMap,
-} from "./permissions/index.js";
-
-// ============================================================================
-// Pipeline — functional guard/transform/intercept (zero deps, pure functions)
-// ============================================================================
-export { guard, transform, intercept, pipe } from "./pipeline/index.js";
-export type {
-  PipelineContext,
-  PipelineStep,
-  PipelineConfig,
-  Guard,
-  Transform,
-  Interceptor,
-} from "./pipeline/index.js";
-
+export type { NamedMiddleware } from "./middleware/index.js";
 // ============================================================================
 // Middleware — named, priority-based (zero deps, pure functions)
 // ============================================================================
 export { middleware, sortMiddlewares } from "./middleware/index.js";
-export type { NamedMiddleware } from "./middleware/index.js";
-
+export type {
+  DynamicPermissionMatrix,
+  DynamicPermissionMatrixConfig,
+  FieldPermission,
+  FieldPermissionMap,
+  PermissionCheck,
+  PermissionContext,
+  PermissionResult,
+} from "./permissions/index.js";
 // ============================================================================
-// Request Context — AsyncLocalStorage (zero deps)
+// Permission System — commonly used with defineResource (pure functions)
 // ============================================================================
-export { requestContext } from "./context/index.js";
-export type { RequestStore } from "./context/index.js";
+export {
+  adminOnly,
+  allOf,
+  // Low-level permission helpers
+  allowPublic,
+  anyOf,
+  applyFieldReadPermissions,
+  applyFieldWritePermissions,
+  authenticated,
+  createDynamicPermissionMatrix,
+  createOrgPermissions,
+  denyAll,
+  // Field-level permissions
+  fields,
+  fullPublic,
+  ownerWithAdminBypass,
+  // Permission presets (common patterns in one call)
+  permissions,
+  publicRead,
+  publicReadAdminWrite,
+  readOnly,
+  requireAuth,
+  // Organization permissions
+  requireOrgMembership,
+  requireOrgRole,
+  requireOwnership,
+  requireRoles,
+  requireTeamMembership,
+  when,
+} from "./permissions/index.js";
+export type {
+  Guard,
+  Interceptor,
+  PipelineConfig,
+  PipelineContext,
+  PipelineStep,
+  Transform,
+} from "./pipeline/index.js";
+// ============================================================================
+// Pipeline — functional guard/transform/intercept (zero deps, pure functions)
+// ============================================================================
+export { guard, intercept, pipe, transform } from "./pipeline/index.js";
+// ============================================================================
+// Types — re-export all types (zero runtime cost, eliminated at compile time)
+// ============================================================================
+export type {
+  // Routes
+  AdditionalRoute,
+  // Base types
+  AnyRecord,
+  ApiResponse,
+  ArcInternalMetadata,
+  // Plugin options
+  AuthPluginOptions,
+  ConfigError,
+  ControllerLike,
+  CrudController,
+  CrudRepository,
+  CrudRouteKey,
+  CrudRouterOptions,
+  CrudSchemas,
+  EventDefinition,
+  FastifyRequestExtras,
+  FastifyWithAuth,
+  FastifyWithDecorators,
+  FieldRule,
+  GracefulShutdownOptions,
+  HealthCheck,
+  HealthOptions,
+  IController,
+  IControllerResponse,
+  InferAdapterDoc,
+  // Utility types for better type inference
+  InferDocType,
+  InferResourceDoc,
+  IntrospectionData,
+  IntrospectionPluginOptions,
+  // Framework-agnostic controller types (MongoKit-compatible)
+  IRequestContext,
+  JWTPayload,
+  MiddlewareConfig,
+  OwnershipCheck,
+  PaginatedResult,
+  PresetFunction,
+  // Presets
+  PresetResult,
+  QueryOptions,
+  RateLimitConfig,
+  // Registry
+  RegistryEntry,
+  RegistryStats,
+  // Request context
+  RequestContext,
+  RequestIdOptions,
+  RequestWithExtras,
+  // Resource
+  ResourceConfig,
+  ResourceMetadata,
+  // Controller
+  RouteHandler,
+  RouteHandlerMethod,
+  // Schema
+  RouteSchemaOptions,
+  // Service & Repository
+  ServiceContext,
+  TypedController,
+  TypedRepository,
+  TypedResourceConfig,
+  // User & Auth
+  UserBase,
+  UserOrganization,
+  ValidateOptions,
+  ValidationResult,
+} from "./types/index.js";
+// ============================================================================
+// Errors — commonly needed alongside defineResource (zero deps, pure classes)
+// ============================================================================
+export {
+  ArcError,
+  ForbiddenError,
+  NotFoundError,
+  UnauthorizedError,
+  ValidationError,
+} from "./utils/errors.js";
 
 // ============================================================================
 // MOVED TO DEDICATED SUBPATHS (no longer re-exported from main barrel)
@@ -320,11 +315,14 @@ export type { RequestStore } from "./context/index.js";
 //   import { ResourceRegistry } from '@classytic/arc/registry';
 //
 
+export type { ArcLogger, ArcLoggerOptions, ArcLogWriter } from "./logger/index.js";
 // ============================================================================
 // Logger — centralized debug/warning system (zero deps)
 // ============================================================================
-export { configureArcLogger, arcLog } from "./logger/index.js";
-export type { ArcLoggerOptions, ArcLogWriter, ArcLogger } from "./logger/index.js";
+export { arcLog, configureArcLogger } from "./logger/index.js";
 
 // Version from package.json (injected at build time via tsdown define)
-export const version: string = "__ARC_VERSION__";
+// Replaced at build time by tsdown `define` option.
+// Falls back to 'dev' when running from source (tests, tsx).
+export const version: string = typeof __ARC_VERSION__ !== "undefined" ? __ARC_VERSION__ : "dev";
+declare const __ARC_VERSION__: string;

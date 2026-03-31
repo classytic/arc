@@ -29,7 +29,7 @@
  * // GET  /api/workflows/order/runs (list runs)
  * ```
  */
-import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 
 // ============================================================================
 // Types (defined here so we don't import streamline at module level)
@@ -93,11 +93,11 @@ export interface StreamlinePluginOptions {
 
 const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async (
   fastify: FastifyInstance,
-  options: StreamlinePluginOptions
+  options: StreamlinePluginOptions,
 ) => {
   const {
     workflows,
-    prefix = '/workflows',
+    prefix = "/workflows",
     auth = true,
     bridgeEvents = true,
     permissions: perms,
@@ -115,22 +115,21 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
   }
 
   // Decorate fastify with workflow accessor
-  if (!fastify.hasDecorator('workflows')) {
-    fastify.decorate('workflows', registry);
+  if (!fastify.hasDecorator("workflows")) {
+    fastify.decorate("workflows", registry);
   }
-  if (!fastify.hasDecorator('getWorkflow')) {
-    fastify.decorate('getWorkflow', (id: string) => registry.get(id) ?? null);
+  if (!fastify.hasDecorator("getWorkflow")) {
+    fastify.decorate("getWorkflow", (id: string) => registry.get(id) ?? null);
   }
 
   // Build auth preHandler if needed
-  const authPreHandler = auth && typeof fastify.authenticate === 'function'
-    ? [fastify.authenticate]
-    : [];
+  const authPreHandler =
+    auth && typeof fastify.authenticate === "function" ? [fastify.authenticate] : [];
 
   // Permission check helper
   const checkPerm = async (
-    op: keyof NonNullable<StreamlinePluginOptions['permissions']>,
-    request: unknown
+    op: keyof NonNullable<StreamlinePluginOptions["permissions"]>,
+    request: unknown,
   ): Promise<boolean> => {
     const check = perms?.[op];
     if (!check) return true;
@@ -142,125 +141,165 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
     const routePrefix = `${prefix}/${id}`;
 
     // POST /:workflowId/start — Start a new workflow run
-    fastify.post(`${routePrefix}/start`, {
-      preHandler: authPreHandler,
-    }, async (request, reply) => {
-      if (!(await checkPerm('start', request))) {
-        return reply.status(403).send({ success: false, error: 'Forbidden' });
-      }
-      const { input, meta } = (request.body ?? {}) as { input?: unknown; meta?: unknown };
-      const run = await wf.start(input, meta);
+    fastify.post(
+      `${routePrefix}/start`,
+      {
+        preHandler: authPreHandler,
+      },
+      async (request, reply) => {
+        if (!(await checkPerm("start", request))) {
+          return reply.status(403).send({ success: false, error: "Forbidden" });
+        }
+        const { input, meta } = (request.body ?? {}) as { input?: unknown; meta?: unknown };
+        const run = await wf.start(input, meta);
 
-      // Bridge event to Arc's event bus
-      if (bridgeEvents && fastify.events?.publish) {
-        await fastify.events.publish(`workflow.${id}.started`, {
-          runId: run._id,
-          workflowId: id,
-          status: run.status,
-        });
-      }
+        // Bridge event to Arc's event bus (fire-and-forget — never fail the HTTP response)
+        if (bridgeEvents && fastify.events?.publish) {
+          try {
+            await fastify.events.publish(`workflow.${id}.started`, {
+              runId: run._id,
+              workflowId: id,
+              status: run.status,
+            });
+          } catch (err) {
+            fastify.log.warn({ err, workflowId: id }, "Failed to publish workflow.started event");
+          }
+        }
 
-      return reply.status(201).send({ success: true, data: run });
-    });
+        return reply.status(201).send({ success: true, data: run });
+      },
+    );
 
     // GET /:workflowId/runs/:runId — Get a workflow run
-    fastify.get(`${routePrefix}/runs/:runId`, {
-      preHandler: authPreHandler,
-    }, async (request, reply) => {
-      if (!(await checkPerm('get', request))) {
-        return reply.status(403).send({ success: false, error: 'Forbidden' });
-      }
-      const { runId } = request.params as { runId: string };
-      const run = await wf.get(runId);
-      if (!run) {
-        return reply.status(404).send({ success: false, error: 'Workflow run not found' });
-      }
-      return { success: true, data: run };
-    });
+    fastify.get(
+      `${routePrefix}/runs/:runId`,
+      {
+        preHandler: authPreHandler,
+      },
+      async (request, reply) => {
+        if (!(await checkPerm("get", request))) {
+          return reply.status(403).send({ success: false, error: "Forbidden" });
+        }
+        const { runId } = request.params as { runId: string };
+        const run = await wf.get(runId);
+        if (!run) {
+          return reply.status(404).send({ success: false, error: "Workflow run not found" });
+        }
+        return { success: true, data: run };
+      },
+    );
 
     // POST /:workflowId/runs/:runId/resume — Resume a waiting workflow
-    fastify.post(`${routePrefix}/runs/:runId/resume`, {
-      preHandler: authPreHandler,
-    }, async (request, reply) => {
-      if (!(await checkPerm('resume', request))) {
-        return reply.status(403).send({ success: false, error: 'Forbidden' });
-      }
-      const { runId } = request.params as { runId: string };
-      const { payload } = (request.body ?? {}) as { payload?: unknown };
-      const run = await wf.resume(runId, payload);
+    fastify.post(
+      `${routePrefix}/runs/:runId/resume`,
+      {
+        preHandler: authPreHandler,
+      },
+      async (request, reply) => {
+        if (!(await checkPerm("resume", request))) {
+          return reply.status(403).send({ success: false, error: "Forbidden" });
+        }
+        const { runId } = request.params as { runId: string };
+        const { payload } = (request.body ?? {}) as { payload?: unknown };
+        const run = await wf.resume(runId, payload);
 
-      if (bridgeEvents && fastify.events?.publish) {
-        await fastify.events.publish(`workflow.${id}.resumed`, {
-          runId: run._id,
-          workflowId: id,
-          status: run.status,
-        });
-      }
+        if (bridgeEvents && fastify.events?.publish) {
+          try {
+            await fastify.events.publish(`workflow.${id}.resumed`, {
+              runId: run._id,
+              workflowId: id,
+              status: run.status,
+            });
+          } catch (err) {
+            fastify.log.warn({ err, workflowId: id }, "Failed to publish workflow.resumed event");
+          }
+        }
 
-      return { success: true, data: run };
-    });
+        return { success: true, data: run };
+      },
+    );
 
     // POST /:workflowId/runs/:runId/cancel — Cancel a workflow run
-    fastify.post(`${routePrefix}/runs/:runId/cancel`, {
-      preHandler: authPreHandler,
-    }, async (request, reply) => {
-      if (!(await checkPerm('cancel', request))) {
-        return reply.status(403).send({ success: false, error: 'Forbidden' });
-      }
-      const { runId } = request.params as { runId: string };
-      const run = await wf.cancel(runId);
+    fastify.post(
+      `${routePrefix}/runs/:runId/cancel`,
+      {
+        preHandler: authPreHandler,
+      },
+      async (request, reply) => {
+        if (!(await checkPerm("cancel", request))) {
+          return reply.status(403).send({ success: false, error: "Forbidden" });
+        }
+        const { runId } = request.params as { runId: string };
+        const run = await wf.cancel(runId);
 
-      if (bridgeEvents && fastify.events?.publish) {
-        await fastify.events.publish(`workflow.${id}.cancelled`, {
-          runId: run._id,
-          workflowId: id,
-        });
-      }
+        if (bridgeEvents && fastify.events?.publish) {
+          try {
+            await fastify.events.publish(`workflow.${id}.cancelled`, {
+              runId: run._id,
+              workflowId: id,
+            });
+          } catch (err) {
+            fastify.log.warn({ err, workflowId: id }, "Failed to publish workflow.cancelled event");
+          }
+        }
 
-      return { success: true, data: run };
-    });
+        return { success: true, data: run };
+      },
+    );
 
     // POST /:workflowId/runs/:runId/pause — Pause a running workflow (if supported)
     if (wf.engine.pause) {
-      fastify.post(`${routePrefix}/runs/:runId/pause`, {
-        preHandler: authPreHandler,
-      }, async (request, reply) => {
-        const { runId } = request.params as { runId: string };
-        const run = await wf.engine.pause!(runId);
-        return { success: true, data: run };
-      });
+      fastify.post(
+        `${routePrefix}/runs/:runId/pause`,
+        {
+          preHandler: authPreHandler,
+        },
+        async (request, _reply) => {
+          const { runId } = request.params as { runId: string };
+          const run = await wf.engine.pause?.(runId);
+          return { success: true, data: run };
+        },
+      );
     }
 
     // POST /:workflowId/runs/:runId/rewind — Rewind to a step (if supported)
     if (wf.engine.rewindTo) {
-      fastify.post(`${routePrefix}/runs/:runId/rewind`, {
-        preHandler: authPreHandler,
-      }, async (request, reply) => {
-        const { runId } = request.params as { runId: string };
-        const { stepId } = (request.body ?? {}) as { stepId: string };
-        if (!stepId) {
-          return reply.status(400).send({ success: false, error: 'stepId is required' });
-        }
-        const run = await wf.engine.rewindTo!(runId, stepId);
-        return { success: true, data: run };
-      });
+      fastify.post(
+        `${routePrefix}/runs/:runId/rewind`,
+        {
+          preHandler: authPreHandler,
+        },
+        async (request, reply) => {
+          const { runId } = request.params as { runId: string };
+          const { stepId } = (request.body ?? {}) as { stepId: string };
+          if (!stepId) {
+            return reply.status(400).send({ success: false, error: "stepId is required" });
+          }
+          const run = await wf.engine.rewindTo?.(runId, stepId);
+          return { success: true, data: run };
+        },
+      );
     }
   }
 
   // List all registered workflows
-  fastify.get(prefix, {
-    preHandler: authPreHandler,
-  }, async () => {
-    const list = Array.from(registry.entries()).map(([id, wf]) => ({
-      id,
-      name: wf.definition.name ?? id,
-      steps: Object.keys(wf.definition.steps),
-    }));
-    return { success: true, data: list };
-  });
+  fastify.get(
+    prefix,
+    {
+      preHandler: authPreHandler,
+    },
+    async () => {
+      const list = Array.from(registry.entries()).map(([id, wf]) => ({
+        id,
+        name: wf.definition.name ?? id,
+        steps: Object.keys(wf.definition.steps),
+      }));
+      return { success: true, data: list };
+    },
+  );
 
   // Graceful shutdown
-  fastify.addHook('onClose', async () => {
+  fastify.addHook("onClose", async () => {
     for (const wf of registry.values()) {
       wf.shutdown?.();
     }

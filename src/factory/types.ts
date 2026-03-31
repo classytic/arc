@@ -2,16 +2,32 @@
  * Types for createApp factory
  */
 
-import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest, FastifyServerOptions } from 'fastify';
-import type { FastifyCorsOptions } from '@fastify/cors';
-import type { FastifyHelmetOptions } from '@fastify/helmet';
-import type { RateLimitOptions } from '@fastify/rate-limit';
-import type { Authenticator } from '../types/index.js';
-import type { ElevationOptions } from '../scope/elevation.js';
-import type { ExternalOpenApiPaths } from '../docs/externalPaths.js';
-import type { EventTransport } from '../events/EventTransport.js';
-import type { CacheStore } from '../cache/interface.js';
-import type { IdempotencyStore } from '../idempotency/stores/interface.js';
+import type {
+  FastifyInstance,
+  FastifyPluginAsync,
+  FastifyReply,
+  FastifyRequest,
+  FastifyServerOptions,
+} from "fastify";
+
+// These types are inlined to avoid forcing consumers to install optional peer deps.
+// @fastify/cors, @fastify/helmet, @fastify/rate-limit are optional — their types
+// should not leak into our declaration files.
+type CorsOptions = Record<string, unknown> & {
+  origin?: unknown;
+  credentials?: boolean;
+  methods?: string[];
+  allowedHeaders?: string[];
+};
+type HelmetOptions = Record<string, unknown>;
+type RateLimitOpts = Record<string, unknown> & { max?: number; timeWindow?: string | number };
+
+import type { CacheStore } from "../cache/interface.js";
+import type { ExternalOpenApiPaths } from "../docs/externalPaths.js";
+import type { EventTransport } from "../events/EventTransport.js";
+import type { IdempotencyStore } from "../idempotency/stores/interface.js";
+import type { ElevationOptions } from "../scope/elevation.js";
+import type { Authenticator } from "../types/index.js";
 
 // ============================================================================
 // Auth Strategy Types (Discriminated Union with `type` field)
@@ -48,7 +64,7 @@ import type { IdempotencyStore } from '../idempotency/stores/interface.js';
  * ```
  */
 export interface JwtAuthOption {
-  type: 'jwt';
+  type: "jwt";
 
   /**
    * JWT configuration (optional but recommended)
@@ -83,11 +99,7 @@ export interface JwtAuthOption {
    * Custom auth failure handler
    * Customize the 401 response when authentication fails
    */
-  onFailure?: (
-    request: FastifyRequest,
-    reply: FastifyReply,
-    error?: Error
-  ) => void | Promise<void>;
+  onFailure?: (request: FastifyRequest, reply: FastifyReply, error?: Error) => void | Promise<void>;
 
   /**
    * Expose detailed auth error messages in 401 responses.
@@ -120,7 +132,7 @@ export interface JwtAuthOption {
  * ```
  */
 export interface BetterAuthOption {
-  type: 'betterAuth';
+  type: "betterAuth";
   /** Better Auth adapter — pass the result of createBetterAuthAdapter() */
   betterAuth: { plugin: FastifyPluginAsync; openapi?: ExternalOpenApiPaths };
 }
@@ -144,7 +156,7 @@ export interface BetterAuthOption {
  * ```
  */
 export interface CustomPluginAuthOption {
-  type: 'custom';
+  type: "custom";
   /** Custom Fastify plugin that sets up authentication */
   plugin: FastifyPluginAsync;
 }
@@ -170,7 +182,7 @@ export interface CustomPluginAuthOption {
  * ```
  */
 export interface CustomAuthenticatorOption {
-  type: 'authenticator';
+  type: "authenticator";
   /** Authenticate function — decorates fastify.authenticate directly */
   authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
   /**
@@ -245,15 +257,18 @@ export interface CreateAppOptions {
   // ============================================
 
   /** Environment preset: 'production', 'development', 'testing', or 'edge' */
-  preset?: 'production' | 'development' | 'testing' | 'edge';
+  preset?: "production" | "development" | "testing" | "edge";
 
   /**
    * Runtime profile for store backends.
    * - 'memory' (default): Uses in-memory stores. Suitable for single-instance deployments.
-   * - 'distributed': Requires Redis-compatible adapters for cache, events, idempotency.
-   *   Startup fails fast if any required distributed adapter is missing.
+   * - 'distributed': Requires durable adapters for events, and for any enabled
+   *   shared subsystems such as caching/queryCache/rate limiting.
+   *   Idempotency remains per-resource opt-in: memory-backed stores are rejected,
+   *   while a missing idempotency store emits a startup warning because dedupe
+   *   would be instance-local.
    */
-  runtime?: 'memory' | 'distributed';
+  runtime?: "memory" | "distributed";
 
   /**
    * Store and transport instances for runtime profile validation.
@@ -272,7 +287,7 @@ export interface CreateAppOptions {
   };
 
   /** Fastify logger configuration */
-  logger?: FastifyServerOptions['logger'];
+  logger?: FastifyServerOptions["logger"];
 
   /**
    * Enable Arc debug logging.
@@ -386,13 +401,13 @@ export interface CreateAppOptions {
   // ============================================
 
   /** Helmet security headers. Set to false to disable. */
-  helmet?: FastifyHelmetOptions | false;
+  helmet?: HelmetOptions | false;
 
   /** CORS configuration. Set to false to disable. */
-  cors?: FastifyCorsOptions | false;
+  cors?: CorsOptions | false;
 
   /** Rate limiting. Set to false to disable. */
-  rateLimit?: RateLimitOptions | false;
+  rateLimit?: RateLimitOpts | false;
 
   // ============================================
   // Performance Plugins (opt-out)
@@ -458,24 +473,34 @@ export interface CreateAppOptions {
      * });
      * ```
      */
-    events?: Omit<import('../events/eventPlugin.js').EventPluginOptions, 'transport'> | boolean;
+    events?: Omit<import("../events/eventPlugin.js").EventPluginOptions, "transport"> | boolean;
     /**
      * Caching headers (ETag + Cache-Control). Default: false (opt-in).
      * Set to true for defaults, or pass CachingOptions for fine control.
      */
-    caching?: import('../plugins/caching.js').CachingOptions | boolean;
+    caching?: import("../plugins/caching.js").CachingOptions | boolean;
     /**
      * SSE event streaming. Default: false (opt-in).
      * Set to true for defaults, or pass SSEOptions for fine control.
      * Requires emitEvents to be enabled (or events plugin registered).
      */
-    sse?: import('../plugins/sse.js').SSEOptions | boolean;
+    sse?: import("../plugins/sse.js").SSEOptions | boolean;
     /**
      * QueryCache — TanStack Query-inspired server cache with SWR.
      * Default: false (opt-in). Set to true for memory store defaults.
      * Requires per-resource `cache` config on defineResource().
      */
-    queryCache?: import('../cache/queryCachePlugin.js').QueryCachePluginOptions | boolean;
+    queryCache?: import("../cache/queryCachePlugin.js").QueryCachePluginOptions | boolean;
+    /**
+     * Metrics endpoint (Prometheus-compatible). Default: false (opt-in).
+     * Set to true for defaults (/_metrics), or pass MetricsOptions for custom path/prefix.
+     */
+    metrics?: import("../plugins/metrics.js").MetricsOptions | boolean;
+    /**
+     * API versioning (header or prefix-based). Default: false (opt-in).
+     * Pass VersioningOptions to enable.
+     */
+    versioning?: import("../plugins/versioning.js").VersioningOptions;
   };
 
   /**
@@ -497,14 +522,14 @@ export interface CreateAppOptions {
    * // Now route schemas built with Type.* give full TS inference
    * ```
    */
-  typeProvider?: 'typebox';
+  typeProvider?: "typebox";
 
   /**
    * Error handler plugin. Normalizes AJV, Mongoose, and ArcError responses
    * into a consistent JSON envelope. Enabled by default.
    * Set to false to disable, or pass ErrorHandlerOptions for fine control.
    */
-  errorHandler?: import('../plugins/errorHandler.js').ErrorHandlerOptions | false;
+  errorHandler?: import("../plugins/errorHandler.js").ErrorHandlerOptions | false;
 
   /**
    * Custom AJV keywords to allow in route schemas.

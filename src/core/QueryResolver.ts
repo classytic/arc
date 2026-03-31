@@ -8,18 +8,19 @@
  * Designed to be used standalone or composed into controllers.
  */
 
+import { DEFAULT_LIMIT, DEFAULT_SORT, DEFAULT_TENANT_FIELD } from "../constants.js";
+import { getOrgId as getOrgIdFromScope } from "../scope/types.js";
 import type {
   AnyRecord,
   ArcInternalMetadata,
   ControllerQueryOptions,
   IRequestContext,
+  LookupOption,
   QueryParserInterface,
   RouteSchemaOptions,
   UserLike,
-} from '../types/index.js';
-import { getOrgId as getOrgIdFromScope } from '../scope/types.js';
-import { DEFAULT_LIMIT, DEFAULT_SORT, DEFAULT_TENANT_FIELD } from '../constants.js';
-import { ArcQueryParser } from '../utils/queryParser.js';
+} from "../types/index.js";
+import { ArcQueryParser } from "../utils/queryParser.js";
 
 // ============================================================================
 // Configuration
@@ -85,17 +86,18 @@ export class QueryResolver {
     // Enforce limits
     const limit = Math.min(Math.max(1, parsed.limit || this.defaultLimit), this.maxLimit);
     // Only set page if not using keyset pagination (after/cursor)
-    const page = parsed.after ? undefined : (parsed.page ? Math.max(1, parsed.page) : 1);
+    const page = parsed.after ? undefined : parsed.page ? Math.max(1, parsed.page) : 1;
 
     // Convert sort object to string if needed
     const sortString = parsed.sort
       ? Object.entries(parsed.sort)
           .map(([k, v]) => (v === -1 ? `-${k}` : k))
-          .join(',')
+          .join(",")
       : this.defaultSort;
 
-    // Use parsed.select if available, otherwise fall back to raw query string
-    const selectString = this.selectToString(parsed.select) ?? (req.query?.select as string);
+    // Preserve parsed select format (object from MongoKit, string from Arc parser)
+    // Sanitize blocked fields regardless of format
+    const rawSelect = parsed.select ?? (req.query?.select as string | undefined);
 
     // Build filters with org + policy scope applied
     const filters = { ...(parsed.filters as AnyRecord) };
@@ -119,10 +121,12 @@ export class QueryResolver {
       page,
       limit,
       sort: sortString,
-      select: this.sanitizeSelect(selectString, this.schemaOptions),
+      select: this.sanitizeSelectAny(rawSelect, this.schemaOptions),
       populate: this.sanitizePopulate(parsed.populate, this.schemaOptions),
-      // Advanced populate options from MongoKit QueryParser (takes precedence over simple populate)
-      populateOptions: parsed.populateOptions,
+      // Advanced populate options — sanitized against allowedPopulate
+      populateOptions: this.sanitizePopulateOptions(parsed.populateOptions, this.schemaOptions),
+      // Lookup/join options from MongoKit 3.4+ QueryParser (maps to $lookup / SQL JOIN)
+      lookups: this.sanitizeLookups(parsed.lookups, this.schemaOptions),
       filters,
       // MongoKit features
       search: parsed.search,
@@ -132,60 +136,63 @@ export class QueryResolver {
     };
   }
 
-  // ============================================================================
-  // Private Helpers
-  // ============================================================================
-
   /**
-   * Convert parsed select object to string format
-   * Converts { name: 1, email: 1, password: 0 } -> 'name email -password'
+   * Sanitize select — preserves the input format (string, array, or object).
+   * This is critical for db-agnostic support: MongoKit returns object projections,
+   * Mongoose uses space-separated strings, SQL adapters may use arrays.
    */
-  private selectToString(select: string | string[] | Record<string, 0 | 1> | undefined): string | undefined {
-    if (!select) return undefined;
-
-    // Already a string
-    if (typeof select === 'string') return select;
-
-    // Array of fields
-    if (Array.isArray(select)) return select.join(' ');
-
-    // Object projection
-    if (Object.keys(select).length === 0) return undefined;
-    return Object.entries(select)
-      .map(([field, include]) => (include === 0 ? `-${field}` : field))
-      .join(' ');
-  }
-
-  /** Sanitize select fields */
-  private sanitizeSelect(
-    select: string | undefined,
-    schemaOptions: RouteSchemaOptions
-  ): string | undefined {
+  private sanitizeSelectAny(
+    select: string | string[] | Record<string, 0 | 1> | undefined,
+    schemaOptions: RouteSchemaOptions,
+  ): string | string[] | Record<string, 0 | 1> | undefined {
     if (!select) return undefined;
 
     const blockedFields = this.getBlockedFields(schemaOptions);
     if (blockedFields.length === 0) return select;
 
+    // Object projection: { name: 1, email: 1, password: 0 }
+    if (typeof select === "object" && !Array.isArray(select)) {
+      const sanitized: Record<string, 0 | 1> = {};
+      for (const [field, val] of Object.entries(select)) {
+        if (!blockedFields.includes(field)) sanitized[field] = val;
+      }
+      return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+    }
+
+    // Array: ['name', 'email', '-password']
+    if (Array.isArray(select)) {
+      const sanitized = select.filter((f) => {
+        const fieldName = f.replace(/^-/, "");
+        return !blockedFields.includes(fieldName);
+      });
+      return sanitized.length > 0 ? sanitized : undefined;
+    }
+
+    // String: "name email -password" or "name,email,-password"
     const fields = select.split(/[\s,]+/).filter(Boolean);
     const sanitized = fields.filter((f) => {
-      const fieldName = f.replace(/^-/, '');
+      const fieldName = f.replace(/^-/, "");
       return !blockedFields.includes(fieldName);
     });
-
-    return sanitized.length > 0 ? sanitized.join(' ') : undefined;
+    return sanitized.length > 0 ? sanitized.join(" ") : undefined;
   }
 
   /** Sanitize populate fields */
   private sanitizePopulate(
     populate: unknown,
-    schemaOptions: RouteSchemaOptions
+    schemaOptions: RouteSchemaOptions,
   ): string[] | undefined {
     if (!populate) return undefined;
 
-    const allowedPopulate = (schemaOptions.query as AnyRecord | undefined)?.allowedPopulate as string[] | undefined;
-    const requested = typeof populate === 'string'
-      ? populate.split(',').map((p) => p.trim())
-      : Array.isArray(populate) ? populate.map(String) : [];
+    const allowedPopulate = (schemaOptions.query as AnyRecord | undefined)?.allowedPopulate as
+      | string[]
+      | undefined;
+    const requested =
+      typeof populate === "string"
+        ? populate.split(",").map((p) => p.trim())
+        : Array.isArray(populate)
+          ? populate.map(String)
+          : [];
 
     if (requested.length === 0) return undefined;
 
@@ -193,6 +200,57 @@ export class QueryResolver {
     if (!allowedPopulate) return requested;
 
     const sanitized = requested.filter((p) => allowedPopulate.includes(p));
+    return sanitized.length > 0 ? sanitized : undefined;
+  }
+
+  /** Sanitize advanced populate options against allowedPopulate */
+  private sanitizePopulateOptions(
+    options: import("../types/index.js").PopulateOption[] | undefined,
+    schemaOptions: RouteSchemaOptions,
+  ): import("../types/index.js").PopulateOption[] | undefined {
+    if (!options || options.length === 0) return undefined;
+
+    const allowedPopulate = (schemaOptions.query as AnyRecord | undefined)?.allowedPopulate as
+      | string[]
+      | undefined;
+
+    // If no allowlist, allow all
+    if (!allowedPopulate) return options;
+
+    const sanitized = options.filter((opt) => allowedPopulate.includes(opt.path));
+    return sanitized.length > 0 ? sanitized : undefined;
+  }
+
+  /**
+   * Sanitize lookup/join options.
+   * If schemaOptions.query.allowedLookups is set, only those collections are allowed.
+   * Validates lookup structure to prevent injection.
+   */
+  private sanitizeLookups(
+    lookups: LookupOption[] | undefined,
+    schemaOptions: RouteSchemaOptions,
+  ): LookupOption[] | undefined {
+    if (!lookups || lookups.length === 0) return undefined;
+
+    const allowedLookups = (schemaOptions.query as AnyRecord | undefined)?.allowedLookups as
+      | string[]
+      | undefined;
+
+    const validFieldName = /^[a-zA-Z_][a-zA-Z0-9_.]*$/;
+
+    const sanitized = lookups.filter((lookup) => {
+      // Validate required fields exist and are safe strings
+      if (!lookup.from || !lookup.localField || !lookup.foreignField) return false;
+      if (!validFieldName.test(lookup.from)) return false;
+      if (!validFieldName.test(lookup.localField)) return false;
+      if (!validFieldName.test(lookup.foreignField)) return false;
+
+      // If allowlist is set, enforce it
+      if (allowedLookups && !allowedLookups.includes(lookup.from)) return false;
+
+      return true;
+    });
+
     return sanitized.length > 0 ? sanitized : undefined;
   }
 
