@@ -62,9 +62,10 @@ export interface CircuitBreakerOptions {
   successThreshold?: number;
 
   /**
-   * Fallback function when circuit is open
+   * Fallback function when circuit is open.
+   * Receives the same arguments as the wrapped function.
    */
-  fallback?: (...args: any[]) => Promise<any>;
+  fallback?: (...args: unknown[]) => Promise<unknown>;
 
   /**
    * Callback when state changes
@@ -102,6 +103,7 @@ export class CircuitBreakerError extends Error {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic constraint must accept any async fn
 export class CircuitBreaker<T extends (...args: any[]) => Promise<any>> {
   private state: CircuitState = CircuitState.CLOSED;
   private failures: number = 0;
@@ -115,7 +117,7 @@ export class CircuitBreaker<T extends (...args: any[]) => Promise<any>> {
   private readonly resetTimeout: number;
   private readonly timeout: number;
   private readonly successThreshold: number;
-  private readonly fallback?: (...args: any[]) => Promise<any>;
+  private readonly fallback?: (...args: unknown[]) => Promise<unknown>;
   private readonly onStateChange?: (from: CircuitState, to: CircuitState) => void;
   private readonly onError?: (error: Error) => void;
   private readonly name: string;
@@ -152,7 +154,7 @@ export class CircuitBreaker<T extends (...args: any[]) => Promise<any>> {
 
         // Use fallback if available
         if (this.fallback) {
-          return this.fallback(...args);
+          return this.fallback(...args) as ReturnType<T>;
         }
 
         throw error;
@@ -169,10 +171,10 @@ export class CircuitBreaker<T extends (...args: any[]) => Promise<any>> {
       // Success
       this.onSuccess();
       return result;
-    } catch (error) {
+    } catch (err) {
       // Failure
-      this.onFailure(error as Error);
-      throw error;
+      this.onFailure(err instanceof Error ? err : new Error(String(err)));
+      throw err;
     }
   }
 
@@ -322,6 +324,7 @@ export class CircuitBreaker<T extends (...args: any[]) => Promise<any>> {
  *   { name: 'email-service' }
  * );
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic constraint must accept any async fn
 export function createCircuitBreaker<T extends (...args: any[]) => Promise<any>>(
   fn: T,
   options?: CircuitBreakerOptions,

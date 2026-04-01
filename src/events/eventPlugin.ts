@@ -34,8 +34,16 @@ export interface EventPluginOptions {
   logEvents?: boolean;
   /**
    * Fail-open mode for runtime resilience (default: true).
-   * - true: publish/subscribe/close errors are logged and suppressed
-   * - false: errors are thrown to caller
+   * - true: publish/subscribe/close errors are logged and suppressed — the
+   *   request still succeeds even if event delivery fails. Safe for analytics
+   *   and non-critical side effects.
+   * - false: errors are thrown to caller — use this for business-critical
+   *   events where silent loss is unacceptable (e.g. billing, notifications).
+   *
+   * **Important:** With `failOpen: true` (default), a transport outage will
+   * silently drop events while requests continue succeeding. Pair with the
+   * `onPublishError` callback to monitor failures, or use `wal` for
+   * at-least-once delivery guarantees.
    */
   failOpen?: boolean;
   /**
@@ -129,6 +137,17 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
       payload: T,
       meta?: Partial<DomainEvent["meta"]>,
     ): Promise<void> => {
+      // Validate event type — reject reserved prefixes and obviously invalid types
+      if (!type || typeof type !== "string") {
+        throw new Error("[Arc Events] Event type must be a non-empty string");
+      }
+      if (type.startsWith("$") && type !== "$deadLetter") {
+        throw new Error(`[Arc Events] Event type '${type}' uses reserved '$' prefix`);
+      }
+      if (type.length > 256) {
+        throw new Error("[Arc Events] Event type exceeds 256 characters");
+      }
+
       // Auto-inject correlationId from request context if not already set
       const store = requestContext.get();
       const enrichedMeta: Partial<DomainEvent["meta"]> = {

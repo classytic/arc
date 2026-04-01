@@ -113,6 +113,19 @@ export interface JwtAuthOption {
    * Property name to store user on request (default: 'user')
    */
   userProperty?: string;
+
+  /**
+   * Token revocation check — called after JWT verification.
+   * Return `true` to reject the token (fail-closed: errors also reject).
+   *
+   * @example
+   * ```typescript
+   * isRevoked: async (decoded) => {
+   *   return revokedTokens.has(decoded.jti as string);
+   * },
+   * ```
+   */
+  isRevoked?: (decoded: Record<string, unknown>) => boolean | Promise<boolean>;
 }
 
 /**
@@ -562,22 +575,32 @@ export interface CreateAppOptions {
 // Plugin-specific options
 
 export interface UnderPressureOptions {
+  /** Expose `/_status` route for health checks (default: false) */
   exposeStatusRoute?: boolean;
+  /** Event loop lag threshold in ms — requests rejected above this (default: 1000) */
   maxEventLoopDelay?: number;
+  /** V8 heap usage threshold in bytes — requests rejected above this */
   maxHeapUsedBytes?: number;
+  /** RSS memory threshold in bytes — requests rejected above this */
   maxRssBytes?: number;
 }
 
 export interface MultipartOptions {
   limits?: {
+    /** Max file size in bytes (default: Fastify default ~1MB) */
     fileSize?: number;
+    /** Max number of files per request */
     files?: number;
   };
 }
 
 export interface RawBodyOptions {
+  /** Body field name to store raw body on (default: 'rawBody') */
   field?: string;
+  /** Apply to all routes globally (default: false) */
   global?: boolean;
+  /** Encoding for raw body string (default: 'utf8') */
   encoding?: string;
+  /** Parse raw body before other parsers (default: false) */
   runFirst?: boolean;
 }

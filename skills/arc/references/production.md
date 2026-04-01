@@ -346,13 +346,23 @@ Arc's Better Auth adapter (`extractBetterAuthOpenApi`) auto-populates `resourceS
 
 ## Deployment
 
-| Environment | Plugins | Notes |
-|-------------|---------|-------|
-| Docker/K8s | health + gracefulShutdown + tracing | Full production |
-| AWS Lambda | edge preset (no heavy plugins) | Use @fastify/aws-lambda |
-| Google Cloud Run | health + gracefulShutdown | Set min-instances > 0 for WebSocket |
-| Vercel | edge preset | Serverless functions adapter |
-| Railway/Render | production preset | Works with zero config |
+Arc requires Node.js APIs (`node:crypto`, `AsyncLocalStorage`). Use `toFetchHandler()` for serverless/edge.
+
+| Environment | Preset | Handler | Notes |
+|-------------|--------|---------|-------|
+| Docker/K8s | `production` | `app.listen()` | Full production |
+| Google Cloud Run | `production` | `app.listen()` | Set min-instances > 0 for WebSocket |
+| Railway/Render/Fly.io | `production` | `app.listen()` | Works with zero config |
+| AWS Lambda | `edge` | `toFetchHandler()` | Node.js runtime |
+| Vercel Serverless | `edge` | `toFetchHandler()` | Node.js runtime |
+| Cloudflare Workers | `edge` | `toFetchHandler()` | Enable `nodejs_compat` in wrangler.toml |
+
+**Edge handler:**
+```typescript
+import { createApp, toFetchHandler } from '@classytic/arc/factory';
+const app = await createApp({ preset: 'edge', auth: { type: 'jwt', jwt: { secret } } });
+export default { fetch: toFetchHandler(app) };  // Cloudflare Workers / any fetch-based runtime
+```
 
 **Production checklist:**
 

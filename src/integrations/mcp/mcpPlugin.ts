@@ -30,12 +30,17 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
-import { isBetterAuth, registerOAuthDiscovery, resolveMcpAuth } from "./authBridge.js";
+import {
+  isBetterAuth,
+  McpAuthCache,
+  registerOAuthDiscovery,
+  resolveMcpAuth,
+} from "./authBridge.js";
 import { type AuthRef, createMcpServer, type McpServerInstance } from "./createMcpServer.js";
 import { resourceToTools } from "./resourceToTools.js";
 import { registerSchemaResources } from "./schemaResources.js";
 import { McpSessionCache } from "./sessionCache.js";
-import type { CrudOperation, McpPluginOptions, SessionEntry } from "./types.js";
+import type { CrudOperation, McpAuthResult, McpPluginOptions, SessionEntry } from "./types.js";
 
 // ============================================================================
 // Fastify type augmentation
@@ -73,15 +78,25 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
     );
   }
 
-  // ── 2. Filter resources ──
-  const excludeSet = new Set(options.exclude ?? []);
-  const enabledResources = options.resources.filter((r) => !excludeSet.has(r.name));
+  // ── 2. Filter resources — include takes priority over exclude ──
+  let enabledResources: typeof options.resources;
+  if (options.include) {
+    const includeSet = new Set(options.include);
+    enabledResources = options.resources.filter((r) => includeSet.has(r.name));
+  } else {
+    const excludeSet = new Set(options.exclude ?? []);
+    enabledResources = options.resources.filter((r) => !excludeSet.has(r.name));
+  }
 
   // ── 3. Generate tool definitions ──
   const overrides = options.overrides ?? {};
-  const allTools = enabledResources.flatMap((r) =>
-    resourceToTools(r, { ...overrides[r.name], toolNamePrefix: options.toolNamePrefix }),
-  );
+  const allTools = enabledResources.flatMap((r) => {
+    const resOverrides = overrides[r.name] ?? {};
+    return resourceToTools(r, {
+      ...resOverrides,
+      toolNamePrefix: resOverrides.toolNamePrefix ?? options.toolNamePrefix,
+    });
+  });
   if (options.extraTools) allTools.push(...options.extraTools);
 
   fastify.log.info(`mcpPlugin: ${allTools.length} tools from ${enabledResources.length} resources`);
@@ -122,6 +137,18 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
   // ── 8. MCP HTTP routes ──
   const prefix = options.prefix ?? "/mcp";
 
+  // ── Health endpoint (both modes) — no MCP protocol needed ──
+  fastify.get(`${prefix}/health`, async (_request, reply) => {
+    reply.send({
+      status: "ok",
+      mode: stateful ? "stateful" : "stateless",
+      tools: allTools.length,
+      resources: enabledResources.length,
+      toolNames: allTools.map((t) => t.name),
+      sessions: cache?.size ?? null,
+    });
+  });
+
   if (stateful) {
     // ────────────────────────────────────────────────────────────
     // STATEFUL MODE — session-cached, reused across requests
@@ -139,12 +166,17 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
     // STATELESS MODE — fresh server per request, no session tracking
     // Best for production, horizontal scaling, serverless
     // ────────────────────────────────────────────────────────────
+    const authCache =
+      options.auth && options.authCacheTtlMs !== 0
+        ? new McpAuthCache({ ttlMs: options.authCacheTtlMs })
+        : undefined;
     registerStatelessRoutes(
       fastify,
       prefix,
       options,
       createServerInstance,
       StreamableHTTPServerTransport,
+      authCache,
     );
   }
 
@@ -176,14 +208,17 @@ function registerStatelessRoutes(
   Transport: new (
     opts: Record<string, unknown>,
   ) => SessionEntry["transport"] & { sessionId: string },
+  authCache?: McpAuthCache,
 ): void {
   // POST /mcp — each request gets a fresh server + transport
   fastify.post(prefix, async (request, reply) => {
     const authResult = await resolveMcpAuth(
       request.headers as Record<string, string | undefined>,
       options.auth ?? false,
+      authCache,
     );
     if (!authResult && options.auth) {
+      fastify.log.warn("mcpPlugin: auth failed — returning 401 (client may silently drop server)");
       return reply
         .code(401)
         .send({ jsonrpc: "2.0", error: { code: -32000, message: "Unauthorized" } });
@@ -228,6 +263,15 @@ function registerStatefulRoutes(
     opts: Record<string, unknown>,
   ) => SessionEntry["transport"] & { sessionId: string },
 ): void {
+  /** Check if the requesting user owns the session */
+  function isSessionOwner(entry: SessionEntry, authResult: McpAuthResult | null): boolean {
+    if (!options.auth || !entry.auth || !authResult) return true;
+    return (
+      entry.auth.userId === authResult.userId &&
+      entry.auth.organizationId === authResult.organizationId
+    );
+  }
+
   // POST /mcp — reuse session or create new one
   fastify.post(prefix, async (request, reply) => {
     const authResult = await resolveMcpAuth(
@@ -235,6 +279,7 @@ function registerStatefulRoutes(
       options.auth ?? false,
     );
     if (!authResult && options.auth) {
+      fastify.log.warn("mcpPlugin: auth failed — returning 401 (client may silently drop server)");
       return reply
         .code(401)
         .send({ jsonrpc: "2.0", error: { code: -32000, message: "Unauthorized" } });
@@ -242,10 +287,17 @@ function registerStatefulRoutes(
 
     const sessionId = request.headers["mcp-session-id"] as string | undefined;
 
-    // Existing session
+    // Existing session — verify ownership before reuse
     if (sessionId) {
       const entry = cache.get(sessionId);
       if (entry) {
+        // Reject if the session belongs to a different user/org (prevents session fixation)
+        if (!isSessionOwner(entry, authResult)) {
+          return reply.code(403).send({
+            jsonrpc: "2.0",
+            error: { code: -32000, message: "Session ownership mismatch" },
+          });
+        }
         cache.touch(sessionId);
         entry.auth = authResult;
         entry.authRef.current = authResult;
@@ -277,17 +329,45 @@ function registerStatefulRoutes(
     if (!sessionId) return reply.code(400).send({ error: "Missing Mcp-Session-Id header" });
 
     const entry = cache.get(sessionId);
-    if (!entry) return reply.code(404).send({ error: "Session not found" });
+    // Return 403 (not 404) to prevent session enumeration
+    if (!entry) return reply.code(403).send({ error: "Unauthorized" });
+
+    // Re-verify auth — prevent session hijacking via stolen session ID
+    if (options.auth) {
+      const authResult = await resolveMcpAuth(
+        request.headers as Record<string, string | undefined>,
+        options.auth,
+      );
+      if (!isSessionOwner(entry, authResult)) {
+        return reply.code(403).send({ error: "Unauthorized" });
+      }
+    }
 
     cache.touch(sessionId);
     await entry.transport.handleRequest(request.raw, reply.raw);
   });
 
-  // DELETE /mcp — session termination
+  // DELETE /mcp — session termination (requires ownership proof)
   fastify.delete(prefix, async (request, reply) => {
     const sessionId = request.headers["mcp-session-id"] as string | undefined;
-    if (sessionId) cache.remove(sessionId);
-    reply.code(200).send();
+    if (!sessionId) return reply.code(400).send({ error: "Missing Mcp-Session-Id header" });
+
+    const entry = cache.get(sessionId);
+    if (!entry) return reply.code(204).send();
+
+    // Verify the requester owns the session before termination
+    if (options.auth) {
+      const authResult = await resolveMcpAuth(
+        request.headers as Record<string, string | undefined>,
+        options.auth,
+      );
+      if (!isSessionOwner(entry, authResult)) {
+        return reply.code(403).send({ error: "Unauthorized" });
+      }
+    }
+
+    cache.remove(sessionId);
+    reply.code(204).send();
   });
 }
 

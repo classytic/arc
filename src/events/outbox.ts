@@ -27,6 +27,9 @@
 
 import type { DomainEvent, EventTransport } from "./EventTransport.js";
 
+/** Default outbox retention — acknowledged events older than this are eligible for purge */
+const DEFAULT_OUTBOX_RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
 // ============================================================================
 // Outbox Store Interface
 // ============================================================================
@@ -38,6 +41,23 @@ export interface OutboxStore {
   getPending(limit: number): Promise<DomainEvent[]>;
   /** Mark event as successfully relayed */
   acknowledge(eventId: string): Promise<void>;
+  /**
+   * Purge old acknowledged events (optional, DB-agnostic contract).
+   *
+   * Arc does **not** ship a concrete implementation — your store owns the
+   * cleanup strategy that fits your database:
+   *
+   * - **MongoDB:** TTL index on `acknowledgedAt` (automatic, zero-code)
+   * - **SQL:** Scheduled `DELETE FROM outbox WHERE acknowledged_at < :cutoff`
+   * - **Redis:** Key expiry (`EXPIRE`) on acknowledged entries
+   *
+   * Called by {@link EventOutbox.purge}. If not implemented, cleanup is
+   * entirely the app's responsibility via native DB tools.
+   *
+   * @param olderThanMs - Remove events acknowledged more than this many ms ago
+   * @returns Number of purged events
+   */
+  purge?(olderThanMs: number): Promise<number>;
 }
 
 // ============================================================================
@@ -71,7 +91,11 @@ export class EventOutbox {
 
   /**
    * Relay pending events to transport.
-   * Returns number of successfully relayed events.
+   *
+   * Processes events in FIFO order up to `batchSize`. Stops on the first
+   * transport failure — remaining events stay pending for the next relay call.
+   *
+   * @returns Number of successfully published events in this batch
    */
   async relay(): Promise<number> {
     if (!this._transport) return 0;
@@ -80,6 +104,12 @@ export class EventOutbox {
     let relayed = 0;
 
     for (const event of pending) {
+      // Skip malformed events — ack so they don't block the queue
+      if (!event.type || !event.meta?.id) {
+        if (event.meta?.id) await this._store.acknowledge(event.meta.id);
+        continue;
+      }
+
       try {
         await this._transport.publish(event);
         await this._store.acknowledge(event.meta.id);
@@ -91,6 +121,17 @@ export class EventOutbox {
     }
 
     return relayed;
+  }
+
+  /**
+   * Purge old acknowledged events from the outbox store.
+   * Delegates to `store.purge()` if implemented; no-op otherwise.
+   * @param olderThanMs - Remove events acknowledged more than this many ms ago (default: 7 days)
+   * @returns Number of purged events, or 0 if store doesn't support purge
+   */
+  async purge(olderThanMs = DEFAULT_OUTBOX_RETENTION_MS): Promise<number> {
+    if (!this._store.purge) return 0;
+    return this._store.purge(olderThanMs);
   }
 }
 

@@ -1,12 +1,17 @@
 /**
  * Redis Stream Event Transport — Durable Event Delivery
  *
- * Uses Redis Streams (`XADD`/`XREADGROUP`) for persistent, exactly-once event
+ * Uses Redis Streams (`XADD`/`XREADGROUP`) for persistent, at-least-once event
  * delivery across multiple service instances. Unlike Pub/Sub, events are stored
  * in Redis and survive crashes/restarts.
  *
+ * **Delivery guarantee:** at-least-once. Failed messages are left unacked and
+ * reclaimed after `claimTimeoutMs`, which can result in duplicate handler
+ * execution. Consumers must be idempotent (e.g. use `event.meta.id` as a
+ * deduplication key) to achieve effectively-once processing.
+ *
  * Key features:
- * - Consumer groups: each event processed by exactly one consumer per group
+ * - Consumer groups: each event delivered to exactly one consumer per group
  * - Crash recovery: pending entries are auto-claimed after `claimTimeoutMs`
  * - Dead letter stream: events exceeding `maxRetries` are moved to a DLQ
  * - Backpressure: configurable block time and batch size
@@ -123,6 +128,13 @@ export interface RedisStreamTransportOptions {
   maxLen?: number;
 
   /**
+   * Max event payload size in bytes. Publish rejects events exceeding this limit
+   * to prevent Redis memory exhaustion from oversized payloads.
+   * @default 1_000_000 (1 MB)
+   */
+  maxPayloadBytes?: number;
+
+  /**
    * Logger for error messages (default: console).
    * Pass `fastify.log` to integrate with your application logger.
    */
@@ -146,6 +158,7 @@ export class RedisStreamTransport implements EventTransport {
   private claimTimeoutMs: number;
   private deadLetterStream: string | false;
   private maxLen: number;
+  private maxPayloadBytes: number;
 
   private logger: EventLogger;
 
@@ -165,6 +178,7 @@ export class RedisStreamTransport implements EventTransport {
     this.claimTimeoutMs = options.claimTimeoutMs ?? 30_000;
     this.deadLetterStream = options.deadLetterStream ?? "arc:events:dlq";
     this.maxLen = options.maxLen ?? 10_000;
+    this.maxPayloadBytes = options.maxPayloadBytes ?? 1_000_000;
     this.logger = options.logger ?? console;
   }
 
@@ -173,6 +187,16 @@ export class RedisStreamTransport implements EventTransport {
   // -----------------------------------------------------------------------
 
   async publish(event: DomainEvent): Promise<void> {
+    const serialized = JSON.stringify(event);
+
+    // Guard against oversized payloads that could exhaust Redis memory
+    if (serialized.length > this.maxPayloadBytes) {
+      throw new Error(
+        `[RedisStreamTransport] Event payload (${serialized.length} bytes) exceeds limit (${this.maxPayloadBytes}). ` +
+          "Consider breaking into smaller events or increasing maxPayloadBytes.",
+      );
+    }
+
     const args: string[] = [
       this.stream,
       ...(this.maxLen > 0 ? ["MAXLEN", "~", String(this.maxLen)] : []),
@@ -180,7 +204,7 @@ export class RedisStreamTransport implements EventTransport {
       "type",
       event.type,
       "data",
-      JSON.stringify(event),
+      serialized,
     ];
 
     // Use spread to call xadd with dynamic args
@@ -201,7 +225,10 @@ export class RedisStreamTransport implements EventTransport {
     if (!this.running) {
       await this.ensureGroup();
       this.running = true;
-      this.pollPromise = this.pollLoop();
+      this.pollPromise = this.pollLoop().catch((err) => {
+        this.logger.error("[RedisStreamTransport] Poll loop crashed:", err);
+        this.running = false;
+      });
     }
 
     return () => {
@@ -371,10 +398,24 @@ export class RedisStreamTransport implements EventTransport {
 
     let event: DomainEvent;
     try {
-      event = JSON.parse(rawData, (key, value) => {
+      const parsed = JSON.parse(rawData, (key, value) => {
         if (key === "timestamp" && typeof value === "string") return new Date(value);
         return value;
-      }) as DomainEvent;
+      });
+      // Validate required structure — reject malformed events
+      if (
+        !parsed ||
+        typeof parsed !== "object" ||
+        typeof parsed.type !== "string" ||
+        !parsed.meta?.id
+      ) {
+        this.logger.warn(
+          "[RedisStreamTransport] Malformed event — missing type or meta.id, acking and skipping",
+        );
+        await this.redis.xack(this.stream, this.group, messageId);
+        return;
+      }
+      event = parsed as DomainEvent;
     } catch {
       // Unparseable — ack and skip
       await this.redis.xack(this.stream, this.group, messageId);

@@ -24,3 +24,9 @@ types/
 # package-lock.json  <- Keep this for reproducible builds
 yarn.lock
 pnpm-lock.yaml
+
+# Local MCP config
+.mcp.json
+
+# Manual test scripts
+tests/integrations/mcp/test-mcp-server.mts

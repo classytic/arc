@@ -97,7 +97,8 @@ export function registerSchemaResources(
 
 function getOps(r: ResourceDefinition, override?: CrudOperation[]): CrudOperation[] {
   const all: CrudOperation[] = ["list", "get", "create", "update", "delete"];
-  let ops = all.filter((op) => !r.disableDefaultRoutes && !r.disabledRoutes?.includes(op));
+  // Only disabledRoutes matters — disableDefaultRoutes is for HTTP routes, not MCP
+  let ops = all.filter((op) => !r.disabledRoutes?.includes(op));
   if (override) ops = ops.filter((op) => override.includes(op));
   return ops;
 }

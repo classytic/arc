@@ -53,6 +53,7 @@ describe("Public API Contract", () => {
       "./integrations/websocket",
       "./integrations/websocket-redis",
       "./mcp",
+      "./mcp/testing",
       "./migrations",
       "./org",
       "./org/types",

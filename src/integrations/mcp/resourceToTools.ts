@@ -8,9 +8,10 @@
  */
 
 import { z } from "zod";
-import { pluralize } from "../../cli/utils/pluralize.js";
+import { BaseController } from "../../core/BaseController.js";
 import type { ResourceDefinition } from "../../core/defineResource.js";
 import type { IControllerResponse, IRequestContext } from "../../types/index.js";
+import { pluralize } from "../../utils/pluralize.js";
 import { buildRequestContext, type McpOperation } from "./buildRequestContext.js";
 import { type FieldRuleEntry, fieldRulesToZod } from "./fieldRulesToZod.js";
 import type {
@@ -27,6 +28,8 @@ import type {
 
 export interface ResourceToToolsConfig extends McpResourceConfig {
   toolNamePrefix?: string;
+  /** Per-operation tool name overrides: `{ get: 'get_job_by_id' }` */
+  names?: Partial<Record<CrudOperation, string>>;
 }
 
 // ============================================================================
@@ -50,14 +53,23 @@ const ANNOTATIONS: Record<CrudOperation, ToolAnnotations> = {
 /**
  * Convert a ResourceDefinition into MCP ToolDefinitions.
  *
+ * MCP tools call BaseController directly — they bypass HTTP routes entirely.
+ * Therefore `disableDefaultRoutes` does NOT affect MCP tool generation;
+ * only `disabledRoutes` (the per-operation array) controls which ops are skipped.
+ *
+ * If the resource has an adapter but no controller (e.g. `disableDefaultRoutes: true`),
+ * a lightweight BaseController is auto-created from the adapter for MCP use.
+ *
  * @param resource - Arc resource definition
- * @param config - Optional overrides (operations, descriptions, hideFields, prefix)
+ * @param config - Optional overrides (operations, descriptions, hideFields, prefix, names)
  */
 export function resourceToTools(
   resource: ResourceDefinition,
   config: ResourceToToolsConfig = {},
 ): ToolDefinition[] {
-  const controller = resource.controller;
+  // Use existing controller, or auto-create one from adapter for MCP
+  const controller =
+    resource.controller ?? (resource.adapter ? createMcpController(resource) : undefined);
   if (!controller) return [];
 
   const fieldRules = resource.schemaOptions?.fieldRules as
@@ -65,14 +77,17 @@ export function resourceToTools(
     | undefined;
   const hiddenFields = resource.schemaOptions?.hiddenFields;
   const readonlyFields = resource.schemaOptions?.readonlyFields;
-  const filterableFields = (resource.schemaOptions as Record<string, unknown>)?.filterableFields as
-    | string[]
-    | undefined;
+
+  // Auto-derive from QueryParser when schemaOptions doesn't have the fields
+  const filterableFields =
+    resource.schemaOptions?.filterableFields ?? resource.queryParser?.allowedFilterFields;
+  const sortableFields = resource.queryParser?.allowedSortFields;
+  const allowedOperators = resource.queryParser?.allowedOperators;
+
   const hasSoftDelete = resource._appliedPresets?.includes("softDelete") ?? false;
 
-  // Determine enabled operations
+  // Determine enabled operations — only disabledRoutes matters, NOT disableDefaultRoutes
   let ops = ALL_CRUD_OPS.filter((op) => {
-    if (resource.disableDefaultRoutes) return false;
     if (resource.disabledRoutes?.includes(op)) return false;
     return true;
   });
@@ -82,15 +97,22 @@ export function resourceToTools(
   const prefix = config.toolNamePrefix;
 
   for (const op of ops) {
+    // Support per-operation name overrides: names: { get: 'get_job_by_id' }
     const name =
-      op === "list"
+      config.names?.[op] ??
+      (op === "list"
         ? `${prefix ? `${prefix}_` : ""}list_${pluralize(resource.name)}`
-        : `${prefix ? `${prefix}_` : ""}${op}_${resource.name}`;
+        : `${prefix ? `${prefix}_` : ""}${op}_${resource.name}`);
 
     tools.push({
       name,
       description:
-        config.descriptions?.[op] ?? defaultDescription(op, resource.displayName, hasSoftDelete),
+        config.descriptions?.[op] ??
+        defaultDescription(op, resource.displayName, hasSoftDelete, {
+          filterableFields,
+          allowedOperators,
+          sortableFields,
+        }),
       annotations: ANNOTATIONS[op],
       inputSchema: buildInputSchema(op, fieldRules, {
         hiddenFields,
@@ -102,10 +124,13 @@ export function resourceToTools(
     });
   }
 
-  // Additional routes with wrapHandler: true become extra tools
+  // Additional routes with wrapHandler: true OR mcpHandler become extra tools
   for (const route of resource.additionalRoutes ?? []) {
-    if (!route.wrapHandler) continue;
-    if (!["POST", "PUT", "PATCH", "DELETE"].includes(route.method)) continue;
+    const mcpHandler = route.mcpHandler as
+      | ((input: Record<string, unknown>) => Promise<CallToolResult>)
+      | undefined;
+    if (!route.wrapHandler && !mcpHandler) continue;
+    if (!mcpHandler && !["POST", "PUT", "PATCH", "DELETE"].includes(route.method)) continue;
 
     const opName = route.operation ?? slugifyRoute(route.method, route.path);
     const hasId = route.path.includes(":id");
@@ -113,13 +138,31 @@ export function resourceToTools(
     const inputShape: Record<string, z.ZodTypeAny> = {};
     if (hasId) inputShape.id = z.string().describe("Resource ID");
 
-    tools.push({
-      name: prefix ? `${prefix}_${opName}_${resource.name}` : `${opName}_${resource.name}`,
-      description: route.summary ?? route.description ?? `${opName} on ${resource.displayName}`,
-      annotations: { openWorldHint: true },
-      inputSchema: inputShape,
-      handler: createAdditionalRouteHandler(route, controller, hasId),
-    });
+    if (mcpHandler) {
+      // Direct MCP handler — no controller wrapping needed
+      tools.push({
+        name: prefix ? `${prefix}_${opName}_${resource.name}` : `${opName}_${resource.name}`,
+        description: route.summary ?? route.description ?? `${opName} on ${resource.displayName}`,
+        annotations: { openWorldHint: true },
+        inputSchema: inputShape,
+        handler: async (input, _ctx) => {
+          try {
+            return await mcpHandler(input);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
+          }
+        },
+      });
+    } else {
+      tools.push({
+        name: prefix ? `${prefix}_${opName}_${resource.name}` : `${opName}_${resource.name}`,
+        description: route.summary ?? route.description ?? `${opName} on ${resource.displayName}`,
+        annotations: { openWorldHint: true },
+        inputSchema: inputShape,
+        handler: createAdditionalRouteHandler(route, controller, hasId),
+      });
+    }
   }
 
   return tools;
@@ -136,7 +179,7 @@ function buildInputSchema(
     hiddenFields?: string[];
     readonlyFields?: string[];
     extraHideFields?: string[];
-    filterableFields?: string[];
+    filterableFields?: readonly string[];
   },
 ): Record<string, z.ZodTypeAny> {
   switch (op) {
@@ -229,11 +272,33 @@ function toCallToolResult(result: IControllerResponse): CallToolResult {
   return { content: [{ type: "text", text: JSON.stringify(output, null, 2) }] };
 }
 
-function defaultDescription(op: CrudOperation, displayName: string, softDelete: boolean): string {
+function defaultDescription(
+  op: CrudOperation,
+  displayName: string,
+  softDelete: boolean,
+  queryMeta?: {
+    filterableFields?: readonly string[];
+    allowedOperators?: readonly string[];
+    sortableFields?: readonly string[];
+  },
+): string {
   const name = displayName.toLowerCase();
   switch (op) {
-    case "list":
-      return `List ${pluralize(name)} with optional filters and pagination`;
+    case "list": {
+      const parts = [`List ${pluralize(name)} with optional filters and pagination.`];
+      if (queryMeta?.filterableFields?.length) {
+        parts.push(`Filterable fields: ${queryMeta.filterableFields.join(", ")}.`);
+      }
+      if (queryMeta?.allowedOperators?.length) {
+        parts.push(
+          `Filter operators: ${queryMeta.allowedOperators.join(", ")} (use field[op]=value syntax).`,
+        );
+      }
+      if (queryMeta?.sortableFields?.length) {
+        parts.push(`Sortable fields: ${queryMeta.sortableFields.join(", ")}.`);
+      }
+      return parts.join(" ");
+    }
     case "get":
       return `Get a single ${name} by ID`;
     case "create":
@@ -253,4 +318,22 @@ function slugifyRoute(method: string, path: string): string {
     .replace(/^\/+|\/+$/g, "")
     .replace(/\//g, "_");
   return clean ? `${method.toLowerCase()}_${clean}` : method.toLowerCase();
+}
+
+/**
+ * Auto-create a BaseController from the resource's adapter for MCP use.
+ * Called when the resource has an adapter but no controller
+ * (e.g. `disableDefaultRoutes: true` skips controller creation in defineResource).
+ */
+function createMcpController(resource: ResourceDefinition): unknown {
+  const repository = resource.adapter?.repository;
+  if (!repository) return undefined;
+
+  return new BaseController(repository, {
+    resourceName: resource.name,
+    schemaOptions: resource.schemaOptions,
+    tenantField: resource.tenantField,
+    idField: resource.idField,
+    matchesFilter: resource.adapter?.matchesFilter,
+  });
 }

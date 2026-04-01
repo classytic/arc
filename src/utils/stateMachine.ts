@@ -32,7 +32,11 @@ export interface StateMachine {
    * Asynchronously check if action can be performed, including guard evaluation.
    * Falls back to simple transition check when no guard is defined.
    */
-  canAsync(action: string, status: string | null | undefined, context?: any): Promise<boolean>;
+  canAsync(
+    action: string,
+    status: string | null | undefined,
+    context?: Record<string, unknown>,
+  ): Promise<boolean>;
 
   /**
    * Assert action can be performed, throw error if invalid
@@ -56,7 +60,12 @@ export interface StateMachine {
   /**
    * Record a transition
    */
-  recordTransition?(from: string, to: string, action: string, metadata?: any): void;
+  recordTransition?(
+    from: string,
+    to: string,
+    action: string,
+    metadata?: Record<string, unknown>,
+  ): void;
 
   /**
    * Clear history
@@ -74,22 +83,20 @@ export interface TransitionHistoryEntry {
   to: string;
   action: string;
   timestamp: Date;
-  metadata?: any;
+  metadata?: Record<string, unknown>;
 }
 
-export type TransitionGuard = (context: {
+/** Context passed to transition guards and actions */
+export interface TransitionContext {
   from: string;
   to: string;
   action: string;
-  data?: any;
-}) => boolean | Promise<boolean>;
+  data?: Record<string, unknown>;
+}
 
-export type TransitionAction = (context: {
-  from: string;
-  to: string;
-  action: string;
-  data?: any;
-}) => void | Promise<void>;
+export type TransitionGuard = (context: TransitionContext) => boolean | Promise<boolean>;
+
+export type TransitionAction = (context: TransitionContext) => void | Promise<void>;
 
 export interface TransitionHook {
   before?: TransitionAction;
@@ -180,7 +187,7 @@ export function createStateMachine(
   const canAsync = async (
     action: string,
     status: string | null | undefined,
-    context?: any,
+    context?: Record<string, unknown>,
   ): Promise<boolean> => {
     const transition = normalized.get(action);
     if (!transition || !status) return false;
@@ -223,7 +230,12 @@ export function createStateMachine(
     throw new Error(errorMessage);
   };
 
-  const recordTransition = (from: string, to: string, action: string, metadata?: any): void => {
+  const recordTransition = (
+    from: string,
+    to: string,
+    action: string,
+    metadata?: Record<string, unknown>,
+  ): void => {
     if (history) {
       history.push({
         from,
@@ -289,7 +301,7 @@ export async function executeTransition(
   action: string,
   from: string,
   to: string,
-  context?: any,
+  context?: Record<string, unknown>,
 ): Promise<{ success: boolean; error?: string }> {
   try {
     // Check if transition is allowed (use canAsync for guard evaluation)
@@ -307,10 +319,10 @@ export async function executeTransition(
     }
 
     return { success: true };
-  } catch (error: any) {
+  } catch (err) {
     return {
       success: false,
-      error: error.message || "Transition failed",
+      error: err instanceof Error ? err.message : "Transition failed",
     };
   }
 }

@@ -1,0 +1,358 @@
+# Workflows & Compensation
+
+Arc provides a layered approach to multi-step operations — from simple in-process
+rollbacks to durable distributed workflows. Pick the right tool for the scope.
+
+## When to Use What
+
+| Scope | Tool | Persistence | Retries | Visibility |
+|-------|------|-------------|---------|------------|
+| Same process, 2-5 steps | `withCompensation` | None | No | Return value |
+| Same service, durable | `@classytic/streamline` | DB-backed | Yes | REST API + dashboard |
+| Cross-service, enterprise | Temporal / Inngest | External | Yes | Full observability |
+
+**Rule of thumb:**
+- Can you hold it in one `async function`? → `withCompensation`
+- Does it need to survive restarts or wait for external input? → Streamline
+- Does it span multiple independently deployed services? → Temporal
+
+## withCompensation — In-Process Rollback
+
+Run steps in order. If any step fails, compensating actions run in reverse for
+already-completed steps. Zero dependencies, zero persistence.
+
+```typescript
+import { withCompensation } from '@classytic/arc/utils';
+
+interface CheckoutCtx {
+  orderId: string;
+  reservationId?: string;
+  chargeId?: string;
+}
+
+const result = await withCompensation<CheckoutCtx>('checkout', [
+  {
+    name: 'reserve-inventory',
+    execute: async (ctx) => {
+      const res = await inventoryService.reserve(ctx.orderId);
+      ctx.reservationId = res.id;
+      return res;
+    },
+    compensate: async (ctx) => {
+      await inventoryService.release(ctx.reservationId!);
+    },
+  },
+  {
+    name: 'charge-payment',
+    execute: async (ctx) => {
+      const charge = await paymentService.charge(ctx.orderId);
+      ctx.chargeId = charge.id;
+      return charge;
+    },
+    compensate: async (ctx) => {
+      await paymentService.refund(ctx.chargeId!);
+    },
+  },
+  {
+    name: 'send-confirmation',
+    execute: async (ctx) => sendEmail(ctx.orderId),
+    fireAndForget: true,  // don't block, don't rollback
+  },
+], { orderId: 'ord-123' });
+
+if (result.success) {
+  console.log('Checkout complete:', result.results);
+} else {
+  console.error(`Failed at ${result.failedStep}:`, result.error);
+  // Steps before failedStep were already compensated
+}
+```
+
+### Step Options
+
+```typescript
+interface CompensationStep<TCtx> {
+  name: string;                                    // Step identifier
+  execute: (ctx: TCtx) => Promise<unknown>;        // The action
+  compensate?: (ctx: TCtx, result) => Promise<void>; // Rollback action
+  fireAndForget?: boolean;                         // Don't await, swallow errors, skip in rollback
+}
+```
+
+### Result Type
+
+Discriminated union — TypeScript enforces you check `success` before accessing error fields:
+
+```typescript
+// Success
+{ success: true, completedSteps: ['reserve', 'charge'], results: { reserve: {...}, charge: {...} } }
+
+// Failure
+{ success: false, failedStep: 'charge', error: 'Insufficient funds',
+  completedSteps: ['reserve'], results: { reserve: {...} },
+  compensationErrors?: [{ step: 'reserve', error: 'Release failed' }] }
+```
+
+### Lifecycle Hooks
+
+Wire to your logging, metrics, or Arc events:
+
+```typescript
+const result = await withCompensation('checkout', steps, ctx, {
+  onStepComplete: (name, result) => fastify.log.info({ step: name }, 'Step completed'),
+  onStepFailed: (name, error) => fastify.log.error({ step: name, error }, 'Step failed'),
+  onCompensate: (name) => fastify.log.warn({ step: name }, 'Compensating'),
+});
+```
+
+### Reusable Definitions
+
+Pre-define compensation sequences and reuse them:
+
+```typescript
+import { defineCompensation } from '@classytic/arc/utils';
+
+const checkout = defineCompensation<CheckoutCtx>('checkout', [
+  reserveStep,
+  chargeStep,
+  notifyStep,
+]);
+
+// Later — call with different contexts
+const result = await checkout.execute({ orderId: 'ord-456' });
+```
+
+### When NOT to Use
+
+- **Steps that must survive process restarts** — use Streamline
+- **Steps that wait for external callbacks** (payment webhooks, approvals) — use Streamline
+- **Cross-service orchestration** — use Temporal
+- **Simple sequential calls with no rollback** — just use `try/catch`
+
+## Streamline Integration — Durable Workflows
+
+For workflows that need persistence, retries, pause/resume, and visibility,
+use `@classytic/streamline` with Arc's built-in integration plugin.
+
+```bash
+npm install @classytic/streamline
+```
+
+### Setup
+
+```typescript
+import { streamlinePlugin } from '@classytic/arc/integrations/streamline';
+import { createWorkflow } from '@classytic/streamline';
+
+const orderWorkflow = createWorkflow({
+  id: 'order-fulfillment',
+  steps: {
+    validate: async (ctx) => { /* ... */ },
+    charge: async (ctx) => { /* ... */ },
+    fulfill: async (ctx) => { /* ... */ },
+    notify: async (ctx) => { /* ... */ },
+  },
+});
+
+await fastify.register(streamlinePlugin, {
+  workflows: [orderWorkflow],
+  prefix: '/api/workflows',
+  auth: true,
+  bridgeEvents: true,  // auto-publish workflow.*.started/resumed/cancelled to Arc events
+});
+```
+
+### REST Endpoints (Auto-Generated)
+
+| Method | Endpoint | Action |
+|--------|----------|--------|
+| `GET` | `/api/workflows` | List all registered workflows |
+| `POST` | `/api/workflows/:id/start` | Start a new workflow run |
+| `GET` | `/api/workflows/:id/runs/:runId` | Get run status |
+| `POST` | `/api/workflows/:id/runs/:runId/resume` | Resume a waiting run |
+| `POST` | `/api/workflows/:id/runs/:runId/cancel` | Cancel a run |
+| `POST` | `/api/workflows/:id/runs/:runId/pause` | Pause a running workflow (if supported) |
+| `POST` | `/api/workflows/:id/runs/:runId/rewind` | Rewind to a step (if supported) |
+
+### Event Bridge
+
+When `bridgeEvents: true` (default), workflow lifecycle events auto-publish to Arc's event bus:
+
+```typescript
+// These events fire automatically:
+// workflow.order-fulfillment.started  → { runId, workflowId, status }
+// workflow.order-fulfillment.resumed  → { runId, workflowId, status }
+// workflow.order-fulfillment.cancelled → { runId, workflowId }
+
+// Subscribe like any Arc event
+await fastify.events.subscribe('workflow.*.started', async (event) => {
+  await auditLog.create(event);
+});
+```
+
+### Permissions
+
+```typescript
+await fastify.register(streamlinePlugin, {
+  workflows: [orderWorkflow],
+  auth: true,
+  permissions: {
+    start: async (request) => request.user?.role === 'admin',
+    cancel: async (request) => request.user?.role === 'admin',
+    list: async (request) => true,  // anyone authenticated
+    get: async (request) => true,
+  },
+});
+```
+
+## Escalation Path
+
+As your system grows, you'll naturally move operations up the stack:
+
+```
+Simple monolith           →  withCompensation
+                               ↓ needs persistence/retries?
+Single service, durable   →  @classytic/streamline
+                               ↓ needs cross-service orchestration?
+Distributed, enterprise   →  Temporal / Inngest
+```
+
+### Mixing Approaches
+
+In practice, most apps use multiple levels simultaneously:
+
+```typescript
+// Level 1: In-process compensation for fast, synchronous operations
+app.post('/checkout', async (request, reply) => {
+  const result = await withCompensation('checkout', [
+    reserveStep, chargeStep, notifyStep,
+  ], { orderId: request.body.orderId });
+
+  if (!result.success) return reply.status(400).send(result);
+  return { success: true, data: result.results };
+});
+
+// Level 2: Streamline for durable, multi-step fulfillment
+await fastify.register(streamlinePlugin, {
+  workflows: [fulfillmentWorkflow],  // survives restarts, has retry logic
+});
+
+// Level 3: Arc events bridge to external saga orchestrator
+await fastify.events.subscribe('order.created', async (event) => {
+  await temporalClient.workflow.start('order-saga', {
+    args: [event.payload],
+  });
+});
+```
+
+### How Arc Events Connect Everything
+
+Arc's event system is the glue between all layers:
+
+```
+withCompensation (sync)
+  ↓ publishes event on success
+Arc Event Bus (outbox + transport)
+  ↓ delivers reliably
+Streamline / External orchestrator
+  ↓ manages long-running workflow
+Arc Event Bus (workflow lifecycle events)
+  ↓ notifies subscribers
+Downstream services
+```
+
+The outbox guarantees events leave your service. The transport delivers them.
+The orchestrator (Streamline or Temporal) manages the workflow state.
+Arc doesn't try to be the orchestrator — it provides the integration points.
+
+## Arc's Boundary — What Ships vs What You Build
+
+Arc is DB-agnostic. It provides **interfaces and in-memory implementations** for
+development, not production-ready stores tied to a specific database.
+
+| Concern | Arc provides | You provide |
+|---------|-------------|-------------|
+| Event transport | `MemoryEventTransport`, `RedisEventTransport`, `RedisStreamTransport` | Custom transports (Kafka, NATS, RabbitMQ) |
+| Outbox store | `OutboxStore` interface + `MemoryOutboxStore` | DB-specific store (Mongoose, Drizzle, Knex, etc.) |
+| Outbox cleanup | `purge()` contract on `OutboxStore` | DB-native cleanup (TTL index, pg_cron, key expiry) |
+| In-process rollback | `withCompensation` | — |
+| Durable workflows | Streamline integration plugin | `@classytic/streamline` or Temporal/Inngest |
+| Cross-service sagas | Arc events as the glue layer | Saga orchestrator (Streamline, Temporal, Inngest) |
+
+> **Rule of thumb:** If it's an interface in Arc, you own the implementation.
+> If it's a class, Arc owns it. This keeps the framework portable across
+> MongoDB, PostgreSQL, MySQL, SQLite, or any other data store.
+
+## Deployment Compatibility
+
+Arc works anywhere Node.js APIs are available — including edge runtimes with
+Node.js compat flags. Use `toFetchHandler()` for serverless/edge platforms
+that use the Web Standards `Request`/`Response` model.
+
+| Platform | Preset | Handler | Notes |
+|----------|--------|---------|-------|
+| Docker / Kubernetes | `production` | `app.listen()` | Native fit |
+| Google Cloud Run | `production` | `app.listen()` | Set `min-instances > 0` for WebSocket |
+| Fly.io / Render / Railway | `production` | `app.listen()` | Zero config |
+| AWS Lambda | `edge` | `toFetchHandler()` or `@fastify/aws-lambda` | Node.js runtime |
+| Vercel Serverless | `edge` | `toFetchHandler()` | Node.js runtime |
+| Google Cloud Functions | `edge` | `toFetchHandler()` | Node.js runtime |
+| Cloudflare Workers | `edge` | `toFetchHandler()` | Requires `nodejs_compat` in wrangler.toml |
+
+### How `toFetchHandler()` works
+
+Arc ships a zero-config adapter that converts a Fastify app into a Web Standards
+`fetch` handler. It uses Fastify's `.inject()` internally — **no TCP server, no
+`app.listen()` needed.**
+
+```typescript
+import { createApp, toFetchHandler } from '@classytic/arc/factory';
+
+const app = await createApp({
+  preset: 'edge',
+  auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
+});
+await app.register(productResource.toPlugin());
+```
+
+**Cloudflare Workers:**
+```typescript
+// src/worker.ts
+export default { fetch: toFetchHandler(app) };
+```
+
+```toml
+# wrangler.toml
+compatibility_flags = ["nodejs_compat"]
+```
+
+**AWS Lambda:**
+```typescript
+// src/handler.ts
+const handler = toFetchHandler(app);
+export { handler };
+```
+
+**Vercel Serverless:**
+```typescript
+// api/index.ts
+const handler = toFetchHandler(app);
+export const GET = handler;
+export const POST = handler;
+```
+
+### Edge runtime requirements
+
+Arc uses `node:crypto` and `AsyncLocalStorage` from `node:async_hooks`.
+Both are supported by modern edge runtimes with Node.js compatibility flags:
+
+| API | Cloudflare Workers | Vercel | AWS Lambda |
+|-----|-------------------|--------|------------|
+| `node:crypto` | `nodejs_compat` flag | Native | Native |
+| `AsyncLocalStorage` | `nodejs_compat` flag | Native | Native |
+| TCP server (`app.listen()`) | Not available | Not available | Not available |
+| `toFetchHandler()` | Works | Works | Works |
+
+> **Key insight:** Arc itself has zero imports of `node:net`, `node:http`, or
+> `node:stream`. The only TCP dependency is Fastify's `.listen()` method.
+> `toFetchHandler()` bypasses it entirely via `.inject()`.

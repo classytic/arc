@@ -123,8 +123,14 @@ interface EventPluginOptions {
 ```
 
 **`failOpen` behavior:**
-- `true` (default): transport errors are logged and suppressed — publish/subscribe never throw
-- `false`: transport errors propagate to caller
+- `true` (default): transport errors are logged and suppressed — publish/subscribe never throw.
+  Safe for analytics and non-critical side effects. **Warning:** a transport outage silently
+  drops events while requests continue succeeding. Pair with `onPublishError` for monitoring.
+- `false`: transport errors propagate to caller — use for business-critical events (billing,
+  notifications) where silent loss is unacceptable.
+
+> **Best practice:** Set `failOpen: false` for business events and use `wal` for at-least-once
+> delivery. Use `failOpen: true` (default) only for fire-and-forget analytics.
 
 ## Publishing Events
 
@@ -331,7 +337,7 @@ Arc ships three built-in transports:
 |-----------|--------|----------|------------|
 | `MemoryEventTransport` | `@classytic/arc/events` | Sequential (awaited) | None (lost on restart) |
 | `RedisEventTransport` | `@classytic/arc/events/redis` | Unordered (fire-and-forget) | None (pub/sub) |
-| `RedisStreamTransport` | `@classytic/arc/events/redis-stream` | Ordered (consumer groups) | Durable (persisted) |
+| `RedisStreamTransport` | `@classytic/arc/events/redis-stream` | Ordered (consumer groups) | Durable (at-least-once) |
 
 ### Memory Transport (Default)
 
@@ -374,7 +380,9 @@ const transport = new RedisStreamTransport(redis, {
 ```
 
 - Ordered delivery via consumer groups
-- Events persisted and acknowledged (at-least-once)
+- Events persisted and acknowledged (**at-least-once** — not exactly-once)
+- Failed messages are auto-reclaimed after `claimTimeoutMs`, which can cause duplicate delivery
+- Consumers **must be idempotent** — use `event.meta.id` as a deduplication key
 - Load balancing across instances in same consumer group
 - **Use for:** Ordered processing, durable event logs
 
@@ -444,7 +452,59 @@ await fastify.events.subscribe('user.verified', async (event) => {
 | Redis Streams | Ordered, durable, consumer groups | Yes |
 | RabbitMQ | Guaranteed delivery, queuing | Custom transport |
 | Kafka | High-throughput, streaming | Custom transport |
+| AWS SQS/SNS | Serverless, managed queuing | Custom transport |
 | NATS | Lightweight pub/sub | Custom transport |
+
+### Custom Transport — Kafka / RabbitMQ / SQS
+
+Arc's `EventTransport` interface has 3 methods. Implement it for any broker:
+
+```typescript
+import type { EventTransport, DomainEvent, EventHandler } from '@classytic/arc/events';
+
+// Example: Kafka transport (~100 lines for a production implementation)
+class KafkaEventTransport implements EventTransport {
+  readonly name = 'kafka';
+
+  constructor(
+    private producer: KafkaProducer,
+    private consumer: KafkaConsumer,
+  ) {}
+
+  async publish(event: DomainEvent): Promise<void> {
+    await this.producer.send({
+      topic: 'arc-events',
+      messages: [{ key: event.type, value: JSON.stringify(event) }],
+    });
+  }
+
+  async subscribe(pattern: string, handler: EventHandler): Promise<() => void> {
+    await this.consumer.subscribe({ topic: pattern.replace('*', '.*'), fromBeginning: false });
+    await this.consumer.run({
+      eachMessage: async ({ message }) => {
+        const event = JSON.parse(message.value!.toString());
+        await handler(event);
+      },
+    });
+    return () => this.consumer.disconnect();
+  }
+
+  async close(): Promise<void> {
+    await this.producer.disconnect();
+    await this.consumer.disconnect();
+  }
+}
+
+// Wire it in — no other code changes needed
+const app = await createApp({
+  runtime: 'distributed',
+  stores: { events: new KafkaEventTransport(producer, consumer) },
+});
+```
+
+The same pattern works for RabbitMQ (`amqplib`), AWS SQS/SNS (`@aws-sdk/client-sqs`),
+NATS (`nats.js`), or any message broker. Arc routes all CRUD events, outbox relay,
+and manual `publish()` calls through your transport — zero framework changes.
 
 ## Event Outbox Pattern
 
@@ -469,15 +529,45 @@ await outbox.store({
 const relayed = await outbox.relay();  // publishes pending → transport
 ```
 
-**OutboxStore interface** (implement for your DB):
+**OutboxStore interface** — Arc is DB-agnostic; you implement this for your database:
 
 ```typescript
 interface OutboxStore {
   save(event: DomainEvent): Promise<void>;
   getPending(limit: number): Promise<DomainEvent[]>;
   acknowledge(eventId: string): Promise<void>;
+  /** Optional — purge old acknowledged events. DB-specific cleanup. */
+  purge?(olderThanMs: number): Promise<number>;
 }
 ```
+
+Arc ships only `MemoryOutboxStore` (for dev/testing). Production stores are implemented
+by you — this keeps the framework DB-agnostic and avoids coupling to any ORM or driver.
+
+### Outbox Cleanup
+
+Acknowledged events accumulate over time. Arc provides `purge()` as an **optional contract**
+on `OutboxStore` — implement it using your DB's native cleanup mechanism:
+
+| Database | Recommended Cleanup | Notes |
+|----------|-------------------|-------|
+| MongoDB | TTL index on `acknowledgedAt` | Automatic, zero-code once index is created |
+| PostgreSQL/MySQL | Scheduled `DELETE FROM outbox WHERE acknowledged_at < NOW() - INTERVAL '7 days'` | Use pg_cron or app-level scheduler |
+| Redis | Key expiry (`EXPIRE`) on acknowledged entries | Built-in, no scheduler needed |
+
+```typescript
+// Option A: Use Arc's purge() contract (if your store implements it)
+const purged = await outbox.purge(7 * 24 * 60 * 60 * 1000); // 7 days
+console.log(`Purged ${purged} old outbox events`);
+
+// Option B: Use your DB's native cleanup (no Arc involvement)
+// MongoDB: db.outbox.createIndex({ acknowledgedAt: 1 }, { expireAfterSeconds: 604800 })
+// PostgreSQL: CREATE EXTENSION pg_cron; SELECT cron.schedule('0 3 * * *', $$DELETE FROM ...$$);
+```
+
+> **Arc's boundary:** Arc defines the interface and calls `store.purge()` if implemented.
+> It does **not** ship DB-specific outbox stores — that's your app's responsibility, using
+> whichever database and cleanup strategy fits your stack.
 
 ## Webhooks (Outbound)
 

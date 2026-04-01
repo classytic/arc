@@ -79,8 +79,8 @@ describe("resourceToTools", () => {
     expect(tools[1].name).toBe("crm_get_product");
   });
 
-  it("returns empty array if no controller", () => {
-    const tools = resourceToTools(mockResource({ controller: undefined }));
+  it("returns empty array if no controller and no adapter", () => {
+    const tools = resourceToTools(mockResource({ controller: undefined, adapter: undefined }));
     expect(tools).toEqual([]);
   });
 
@@ -96,6 +96,210 @@ describe("resourceToTools", () => {
     });
     expect(tools[0].description).toBe("Browse all items");
   });
+
+  // ============================================================================
+  // Bug fix: disableDefaultRoutes should NOT block MCP tools
+  // ============================================================================
+
+  describe("disableDefaultRoutes (bug fix)", () => {
+    it("generates MCP tools even with disableDefaultRoutes: true", () => {
+      const tools = resourceToTools(mockResource({ disableDefaultRoutes: true }));
+      expect(tools).toHaveLength(5);
+      expect(tools.map((t) => t.name)).toEqual([
+        "list_products",
+        "get_product",
+        "create_product",
+        "update_product",
+        "delete_product",
+      ]);
+    });
+
+    it("still respects disabledRoutes with disableDefaultRoutes: true", () => {
+      const tools = resourceToTools(
+        mockResource({ disableDefaultRoutes: true, disabledRoutes: ["delete" as any] }),
+      );
+      expect(tools).toHaveLength(4);
+      expect(tools.map((t) => t.name)).not.toContain("delete_product");
+    });
+  });
+
+  // ============================================================================
+  // Auto-create controller from adapter
+  // ============================================================================
+
+  describe("auto-create controller from adapter", () => {
+    it("creates controller from adapter when controller is missing", () => {
+      const mockAdapter = {
+        repository: {
+          find: vi.fn(),
+          findById: vi.fn(),
+          create: vi.fn(),
+          updateById: vi.fn(),
+          deleteById: vi.fn(),
+        },
+        type: "mongoose" as const,
+        name: "product",
+      };
+      const tools = resourceToTools(
+        mockResource({ controller: undefined, adapter: mockAdapter as any }),
+      );
+      // BaseController is auto-created — tools should be generated
+      expect(tools.length).toBeGreaterThan(0);
+      expect(tools.map((t) => t.name)).toContain("list_products");
+    });
+  });
+
+  // ============================================================================
+  // Per-operation name overrides
+  // ============================================================================
+
+  describe("per-operation name overrides", () => {
+    it("supports names config to override specific tool names", () => {
+      const tools = resourceToTools(mockResource(), {
+        names: { get: "get_product_by_id" },
+      });
+      expect(tools.find((t) => t.name === "get_product_by_id")).toBeDefined();
+      expect(tools.find((t) => t.name === "get_product")).toBeUndefined();
+    });
+
+    it("uses default names for operations not in names config", () => {
+      const tools = resourceToTools(mockResource(), {
+        names: { get: "get_product_by_id" },
+      });
+      expect(tools.find((t) => t.name === "list_products")).toBeDefined();
+      expect(tools.find((t) => t.name === "create_product")).toBeDefined();
+    });
+
+    it("combines prefix with names (names takes priority)", () => {
+      const tools = resourceToTools(mockResource(), {
+        toolNamePrefix: "crm",
+        names: { get: "fetch_product" },
+      });
+      // Named op uses exact name, not prefixed
+      expect(tools.find((t) => t.name === "fetch_product")).toBeDefined();
+      // Other ops use prefix
+      expect(tools.find((t) => t.name === "crm_list_products")).toBeDefined();
+    });
+  });
+
+  // ============================================================================
+  // Auto-derive filterableFields from QueryParser
+  // ============================================================================
+
+  describe("auto-derive filterableFields", () => {
+    it("uses queryParser.allowedFilterFields when schemaOptions.filterableFields is not set", () => {
+      const resource = mockResource({
+        schemaOptions: {
+          fieldRules: {
+            name: { type: "string", required: true },
+            status: { type: "string", enum: ["active", "inactive"] },
+            companyId: { type: "string" },
+          },
+          hiddenFields: [],
+          readonlyFields: [],
+          // No filterableFields set
+        },
+        queryParser: {
+          allowedFilterFields: ["status", "companyId"],
+        },
+      } as any);
+
+      const tools = resourceToTools(resource);
+      const listTool = tools.find((t) => t.name === "list_products")!;
+
+      // Should have status and companyId from queryParser, plus pagination fields
+      expect(listTool.inputSchema).toHaveProperty("status");
+      expect(listTool.inputSchema).toHaveProperty("companyId");
+      expect(listTool.inputSchema).toHaveProperty("page");
+    });
+
+    it("prefers explicit filterableFields over queryParser.allowedFilterFields", () => {
+      const resource = mockResource({
+        schemaOptions: {
+          fieldRules: {
+            name: { type: "string", required: true },
+            status: { type: "string" },
+            companyId: { type: "string" },
+          },
+          filterableFields: ["status"], // Explicit
+          hiddenFields: [],
+          readonlyFields: [],
+        },
+        queryParser: {
+          allowedFilterFields: ["status", "companyId"], // Would add companyId
+        },
+      } as any);
+
+      const tools = resourceToTools(resource);
+      const listTool = tools.find((t) => t.name === "list_products")!;
+
+      // Should only have status (from explicit filterableFields), not companyId
+      expect(listTool.inputSchema).toHaveProperty("status");
+      expect(listTool.inputSchema).not.toHaveProperty("companyId");
+    });
+  });
+
+  // ============================================================================
+  // mcpHandler on additional routes
+  // ============================================================================
+
+  describe("mcpHandler on additional routes", () => {
+    it("picks up mcpHandler from wrapHandler:false routes", async () => {
+      const mcpHandler = vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: '{"count": 42}' }],
+      });
+
+      const tools = resourceToTools(
+        mockResource({
+          additionalRoutes: [
+            {
+              method: "GET",
+              path: "/stats",
+              handler: () => {},
+              wrapHandler: false,
+              permissions: () => ({ allowed: true }),
+              operation: "stats",
+              summary: "Get product stats",
+              mcpHandler,
+            } as any,
+          ],
+        }),
+      );
+
+      const statsTool = tools.find((t) => t.name === "stats_product");
+      expect(statsTool).toBeDefined();
+      expect(statsTool!.description).toBe("Get product stats");
+
+      const result = await statsTool!.handler(
+        { filter: "active" },
+        { session: null, log: vi.fn().mockResolvedValue(undefined), extra: {} },
+      );
+      expect(result.isError).toBeFalsy();
+      expect(mcpHandler).toHaveBeenCalledWith({ filter: "active" });
+    });
+
+    it("ignores wrapHandler:false routes without mcpHandler", () => {
+      const tools = resourceToTools(
+        mockResource({
+          additionalRoutes: [
+            {
+              method: "GET",
+              path: "/stats",
+              handler: () => {},
+              wrapHandler: false,
+              permissions: () => ({ allowed: true }),
+            } as any,
+          ],
+        }),
+      );
+      // Should only have 5 CRUD tools, not the stats route
+      expect(tools).toHaveLength(5);
+    });
+  });
+
+  // ============================================================================
+  // Tool handlers
+  // ============================================================================
 
   describe("tool handlers", () => {
     it("list handler calls controller.list with IRequestContext", async () => {

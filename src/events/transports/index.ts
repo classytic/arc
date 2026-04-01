@@ -28,5 +28,5 @@ export type { RedisEventTransportOptions, RedisLike } from "./redis.js";
 // Redis Pub/Sub transport (fire-and-forget, low latency)
 export { RedisEventTransport } from "./redis.js";
 export type { RedisStreamLike, RedisStreamTransportOptions } from "./redis-stream.js";
-// Redis Stream transport (durable, exactly-once, DLQ)
+// Redis Stream transport (durable, at-least-once, DLQ)
 export { RedisStreamTransport } from "./redis-stream.js";

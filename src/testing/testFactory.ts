@@ -4,7 +4,7 @@
  * Create Fastify test instances with Arc configuration
  */
 
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastify";
 import type { CreateAppOptions } from "../factory/types.js";
 import { InMemoryDatabase } from "./dbHelpers.js";
 
@@ -150,7 +150,7 @@ export async function createTestApp(options: CreateTestAppOptions = {}): Promise
  * const response = await app.inject({ method: 'GET', url: '/test' });
  * expect(response.json()).toEqual({ success: true });
  */
-export function createMinimalTestApp(options: Partial<any> = {}): FastifyInstance {
+export function createMinimalTestApp(options: FastifyServerOptions = {}): FastifyInstance {
   return Fastify({
     logger: false,
     ...options,
@@ -170,10 +170,10 @@ export function createMinimalTestApp(options: Partial<any> = {}): FastifyInstanc
  * expect(response.statusCode).toBe(200);
  */
 export class TestRequestBuilder {
-  private method: string = "GET";
+  private method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS" = "GET";
   private url: string = "/";
-  private body?: any;
-  private query?: Record<string, any>;
+  private body?: Record<string, unknown>;
+  private query?: Record<string, string | string[]>;
   private headers: Record<string, string> = {};
   private app: FastifyInstance;
 
@@ -211,12 +211,12 @@ export class TestRequestBuilder {
     return this;
   }
 
-  withBody(body: any) {
+  withBody(body: Record<string, unknown>) {
     this.body = body;
     return this;
   }
 
-  withQuery(query: Record<string, any>) {
+  withQuery(query: Record<string, string | string[]>) {
     this.query = query;
     return this;
   }
@@ -249,7 +249,7 @@ export class TestRequestBuilder {
 
   async send() {
     return this.app.inject({
-      method: this.method as any,
+      method: this.method,
       url: this.url,
       payload: this.body,
       query: this.query,
@@ -273,7 +273,7 @@ export function createTestAuth(app: FastifyInstance) {
     /**
      * Generate a JWT token for testing
      */
-    generateToken(user: any): string {
+    generateToken(user: Record<string, unknown>): string {
       if (!app.jwt) {
         throw new Error("JWT plugin not registered");
       }
@@ -283,7 +283,7 @@ export function createTestAuth(app: FastifyInstance) {
     /**
      * Decode a JWT token
      */
-    decodeToken(token: string): any {
+    decodeToken(token: string): Record<string, unknown> | null {
       if (!app.jwt) {
         throw new Error("JWT plugin not registered");
       }
@@ -293,7 +293,7 @@ export function createTestAuth(app: FastifyInstance) {
     /**
      * Verify a JWT token
      */
-    async verifyToken(token: string): Promise<any> {
+    async verifyToken(token: string): Promise<Record<string, unknown>> {
       if (!app.jwt) {
         throw new Error("JWT plugin not registered");
       }
@@ -310,7 +310,7 @@ export function createSnapshotMatcher() {
     /**
      * Match response structure (ignores dynamic values like timestamps)
      */
-    matchStructure(response: any, expected: any): boolean {
+    matchStructure(response: unknown, expected: unknown): boolean {
       if (typeof response !== typeof expected) {
         return false;
       }
@@ -319,16 +319,23 @@ export function createSnapshotMatcher() {
         return response.length === expected.length;
       }
 
-      if (typeof response === "object" && response !== null) {
-        const responseKeys = Object.keys(response).sort();
-        const expectedKeys = Object.keys(expected).sort();
+      if (
+        typeof response === "object" &&
+        response !== null &&
+        typeof expected === "object" &&
+        expected !== null
+      ) {
+        const r = response as Record<string, unknown>;
+        const e = expected as Record<string, unknown>;
+        const responseKeys = Object.keys(r).sort();
+        const expectedKeys = Object.keys(e).sort();
 
         if (JSON.stringify(responseKeys) !== JSON.stringify(expectedKeys)) {
           return false;
         }
 
         for (const key of responseKeys) {
-          if (!this.matchStructure(response[key], expected[key])) {
+          if (!this.matchStructure(r[key], e[key])) {
             return false;
           }
         }
@@ -346,16 +353,11 @@ export function createSnapshotMatcher() {
  */
 export class TestDataLoader {
   private data: Map<string, unknown[]> = new Map();
-  private app: FastifyInstance;
-
-  constructor(app: FastifyInstance) {
-    this.app = app;
-  }
 
   /**
    * Load test data into database
    */
-  async load(collection: string, items: any[]) {
+  async load(collection: string, items: Record<string, unknown>[]) {
     // Store for cleanup
     this.data.set(collection, items);
 

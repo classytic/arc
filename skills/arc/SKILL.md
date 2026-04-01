@@ -102,8 +102,13 @@ await fastify.register(productResource.toPlugin());
 Auth uses a **discriminated union** with `type` field:
 
 ```typescript
-// Arc JWT
-auth: { type: 'jwt', jwt: { secret, expiresIn: '15m', refreshSecret, refreshExpiresIn: '7d' } }
+// Arc JWT (with optional token extraction and revocation)
+auth: {
+  type: 'jwt',
+  jwt: { secret, expiresIn: '15m', refreshSecret, refreshExpiresIn: '7d' },
+  tokenExtractor: (req) => req.cookies?.['auth-token'] ?? null,  // optional
+  isRevoked: async (decoded) => redis.sismember('revoked', decoded.jti),  // optional
+}
 
 // Better Auth (recommended for SaaS with orgs)
 import { createBetterAuthAdapter } from '@classytic/arc/auth';
@@ -235,7 +240,7 @@ class ProductController extends BaseController<Product> {
 }
 ```
 
-**IRequestContext:** `{ params, query, body, user, headers, context, metadata, server }`
+**IRequestContext:** `{ params, query, body, user, headers, context, metadata, server }` — `user` is `Record<string, unknown> | undefined` (guard with `if (req.user)` on public routes)
 
 **IControllerResponse:** `{ success, data?, error?, status?, meta?, headers? }`
 
@@ -277,6 +282,10 @@ await app.events.subscribe('order.*', async (event) => { ... });
 ```
 
 CRUD events auto-emit: `{resource}.created`, `{resource}.updated`, `{resource}.deleted`.
+
+**Transports:** Memory (default) | Redis Pub/Sub (fire-and-forget) | Redis Streams (durable, at-least-once, consumer groups, DLQ)
+
+**Event Outbox** — at-least-once delivery via transactional outbox pattern. Arc ships `OutboxStore` interface + `MemoryOutboxStore` (dev). You implement the store for your DB (Mongoose, Drizzle, Knex, etc.). Cleanup via optional `purge()` contract or native DB tools (TTL index, pg_cron, key expiry).
 
 ## Factory — createApp()
 
