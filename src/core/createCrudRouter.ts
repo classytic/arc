@@ -188,10 +188,13 @@ function buildPermissionMiddleware(
     // Handle PermissionResult
     const permResult = result as PermissionResult;
     if (!permResult.granted) {
+      // Sanitize reason — prevent leaking internals in long or unexpected messages
+      const defaultMsg = context.user ? "Permission denied" : "Authentication required";
+      const reason =
+        permResult.reason && permResult.reason.length <= 100 ? permResult.reason : defaultMsg;
       reply.code(context.user ? 403 : 401).send({
         success: false,
-        error:
-          permResult.reason ?? (context.user ? "Permission denied" : "Authentication required"),
+        error: reason,
       });
       return;
     }

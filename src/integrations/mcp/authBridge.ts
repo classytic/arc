@@ -9,6 +9,7 @@
  * 3. `McpAuthResolver` — custom function (API key, JWT, gateway headers, etc.)
  */
 
+import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { BetterAuthHandler, McpAuthResolver, McpAuthResult } from "./types.js";
 
@@ -30,40 +31,120 @@ function isBetterAuth(auth: BetterAuthHandler | McpAuthResolver): auth is Better
  *
  * @param headers - HTTP request headers
  * @param auth - false | BetterAuthHandler | McpAuthResolver
+ * @param authCache - Optional short-lived cache to avoid redundant auth lookups
  */
 export async function resolveMcpAuth(
   headers: Record<string, string | undefined>,
   auth: BetterAuthHandler | McpAuthResolver | false,
+  authCache?: McpAuthCache,
 ): Promise<McpAuthResult | null> {
   // No-auth mode
   if (auth === false) {
     return { userId: "anonymous" };
   }
 
+  // Compute cache key once (avoids double SHA-256 hash)
+  const cacheKey = authCache ? extractAuthCacheKey(headers) : null;
+
+  // Check cache first (stateless mode optimization)
+  if (cacheKey && authCache) {
+    const cached = authCache.get(cacheKey);
+    if (cached !== undefined) return cached;
+  }
+
+  let result: McpAuthResult | null = null;
+
   // Custom resolver function
   if (typeof auth === "function") {
     try {
-      return await auth(headers);
+      result = await auth(headers);
     } catch {
-      return null;
+      result = null;
     }
   }
-
   // Better Auth mode
-  if (isBetterAuth(auth)) {
+  else if (isBetterAuth(auth)) {
     try {
       const session = await auth.api.getMcpSession({ headers });
-      if (!session?.userId) return null;
-      return {
-        userId: session.userId,
-        organizationId: session.activeOrganizationId,
-      };
+      if (!session?.userId) {
+        result = null;
+      } else {
+        result = {
+          userId: session.userId,
+          organizationId: session.activeOrganizationId,
+        };
+      }
     } catch {
-      return null;
+      result = null;
     }
   }
 
+  // Cache the result
+  if (cacheKey && authCache) {
+    authCache.set(cacheKey, result);
+  }
+
+  return result;
+}
+
+// ============================================================================
+// Auth Cache (short-lived, for stateless mode)
+// ============================================================================
+
+const DEFAULT_AUTH_CACHE_TTL_MS = 5_000; // 5 seconds
+const DEFAULT_AUTH_CACHE_MAX = 500;
+
+/** Short-lived auth cache to avoid redundant auth resolver calls in stateless mode */
+export class McpAuthCache {
+  private cache = new Map<string, { result: McpAuthResult | null; expires: number }>();
+  private readonly ttlMs: number;
+  private readonly maxEntries: number;
+
+  constructor(opts?: { ttlMs?: number; maxEntries?: number }) {
+    this.ttlMs = opts?.ttlMs ?? DEFAULT_AUTH_CACHE_TTL_MS;
+    this.maxEntries = opts?.maxEntries ?? DEFAULT_AUTH_CACHE_MAX;
+  }
+
+  get(key: string): McpAuthResult | null | undefined {
+    const entry = this.cache.get(key);
+    if (!entry) return undefined;
+    if (Date.now() > entry.expires) {
+      this.cache.delete(key);
+      return undefined;
+    }
+    return entry.result;
+  }
+
+  set(key: string, result: McpAuthResult | null): void {
+    // Evict expired + enforce capacity
+    if (this.cache.size >= this.maxEntries) {
+      const now = Date.now();
+      for (const [k, v] of this.cache) {
+        if (now > v.expires) this.cache.delete(k);
+      }
+      // If still at capacity, evict oldest
+      if (this.cache.size >= this.maxEntries) {
+        const firstKey = this.cache.keys().next().value;
+        if (firstKey) this.cache.delete(firstKey);
+      }
+    }
+    this.cache.set(key, { result, expires: Date.now() + this.ttlMs });
+  }
+}
+
+/**
+ * Extract a cache key from auth-related headers.
+ * Uses SHA-256 hash of header values to prevent cache key collisions
+ * and avoid storing raw credentials in memory.
+ */
+function extractAuthCacheKey(headers: Record<string, string | undefined>): string | null {
+  if (headers.authorization) return `authz:${hashForCache(headers.authorization)}`;
+  if (headers["x-api-key"]) return `apikey:${hashForCache(headers["x-api-key"])}`;
   return null;
+}
+
+function hashForCache(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 32);
 }
 
 // ============================================================================

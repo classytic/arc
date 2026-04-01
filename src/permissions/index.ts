@@ -255,7 +255,7 @@ export function requireRoles(
  * }
  * ```
  */
-export function requireOwnership<TDoc = any>(
+export function requireOwnership<TDoc = Record<string, unknown>>(
   ownerField: Extract<keyof TDoc, string> | string = "userId",
   options?: { bypassRoles?: readonly string[] },
 ): PermissionCheck<TDoc> {
@@ -386,7 +386,7 @@ export function denyAll(reason = "Access denied"): PermissionCheck {
  * }
  * ```
  */
-export function when<TDoc = any>(
+export function when<TDoc = Record<string, unknown>>(
   condition: (ctx: PermissionContext<TDoc>) => boolean | Promise<boolean>,
 ): PermissionCheck<TDoc> {
   return async (ctx) => {
@@ -421,7 +421,7 @@ function getScope(request: FastifyRequest): RequestScope {
  * }
  * ```
  */
-export function requireOrgMembership<TDoc = any>(): PermissionCheck<TDoc> {
+export function requireOrgMembership<TDoc = Record<string, unknown>>(): PermissionCheck<TDoc> {
   const check: PermissionCheck<TDoc> = (ctx) => {
     if (!ctx.user) {
       return { granted: false, reason: "Authentication required" };
@@ -452,7 +452,7 @@ export function requireOrgMembership<TDoc = any>(): PermissionCheck<TDoc> {
  * }
  * ```
  */
-export function requireOrgRole<TDoc = any>(
+export function requireOrgRole<TDoc = Record<string, unknown>>(
   ...args: string[] | [readonly string[]]
 ): PermissionCheck<TDoc> {
   // Support both: requireOrgRole('admin', 'owner') and requireOrgRole(['admin', 'owner'])
@@ -896,7 +896,7 @@ export function createDynamicPermissionMatrix(
  * }
  * ```
  */
-export function requireTeamMembership<TDoc = any>(): PermissionCheck<TDoc> {
+export function requireTeamMembership<TDoc = Record<string, unknown>>(): PermissionCheck<TDoc> {
   const check: PermissionCheck<TDoc> = (ctx) => {
     if (!ctx.user) {
       return { granted: false, reason: "Authentication required" };

@@ -156,18 +156,29 @@ export const testingPreset: Partial<CreateAppOptions> = {
 };
 
 /**
- * Edge/Serverless preset - minimal cold-start overhead
+ * Edge/Serverless preset — minimal cold-start overhead
  *
- * Optimized for AWS Lambda, Vercel, Cloudflare Workers, and similar environments.
- * Disables all heavy plugins that add cold-start latency:
- * - Security headers (handled by API Gateway / CDN)
- * - Rate limiting (handled by API Gateway / CDN)
- * - Health monitoring (Lambda has its own health checks)
- * - File uploads (use pre-signed URLs instead)
- * - Raw body parsing (register per-route if needed)
+ * Strips non-essential plugins to reduce startup time. Designed for:
+ * - Cloudflare Workers (requires `nodejs_compat` flag + `toFetchHandler()`)
+ * - AWS Lambda via `@fastify/aws-lambda` or `toFetchHandler()`
+ * - Vercel Serverless Functions (Node.js runtime)
+ * - Google Cloud Functions (Node.js runtime)
+ * - Any environment where the platform handles security, rate limiting, and health checks
  *
- * Arc core plugins (requestId, health, gracefulShutdown) are also disabled
- * since the serverless runtime manages request lifecycle.
+ * Use with `toFetchHandler()` from `@classytic/arc/factory` for edge runtimes:
+ * ```typescript
+ * import { createApp, toFetchHandler } from '@classytic/arc/factory';
+ * const app = await createApp({ preset: 'edge' });
+ * export default { fetch: toFetchHandler(app) };
+ * ```
+ *
+ * **Edge runtime requirements:**
+ * - Cloudflare Workers: enable `nodejs_compat` in wrangler.toml
+ * - Vercel: use Node.js runtime (not Edge Runtime) or enable nodejs compat
+ *
+ * Arc uses `node:crypto` and `AsyncLocalStorage` — both supported by
+ * modern edge runtimes with Node.js compat flags. No TCP server is needed
+ * when using `toFetchHandler()` (routes through Fastify's `.inject()`).
  */
 export const edgePreset: Partial<CreateAppOptions> = {
   logger: {

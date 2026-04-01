@@ -35,10 +35,27 @@ export interface ToolContext {
   extra: Record<string, unknown>;
 }
 
-/** MCP CallToolResult — return type from tool handlers */
+/**
+ * MCP CallToolResult — return type from tool handlers.
+ *
+ * `content` follows the MCP spec: at minimum a text item, optionally other
+ * resource/image content types. The fallback union member allows future
+ * MCP spec additions without breaking existing handlers.
+ *
+ * @example
+ * ```typescript
+ * return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+ * return { content: [{ type: 'text', text: 'Not found' }], isError: true };
+ * ```
+ */
 export interface CallToolResult {
-  content: Array<{ type: "text"; text: string } | { type: string; [key: string]: unknown }>;
+  content: Array<
+    | { type: "text"; text: string }
+    | { type: "resource"; resource: { uri: string; mimeType?: string; text?: string } }
+    | { type: string; [key: string]: unknown }
+  >;
   isError?: boolean;
+  /** Structured output for typed tool results (MCP spec extension) */
   structuredContent?: unknown;
 }
 
@@ -90,6 +107,10 @@ export interface McpResourceConfig {
   descriptions?: Partial<Record<CrudOperation, string>>;
   /** Fields to hide from MCP tool schemas (beyond schemaOptions.hiddenFields) */
   hideFields?: string[];
+  /** Per-operation tool name overrides: `{ get: 'get_job_by_id' }` */
+  names?: Partial<Record<CrudOperation, string>>;
+  /** Per-resource tool name prefix (overrides global `toolNamePrefix`): `'db'` → `db_list_jobs` */
+  toolNamePrefix?: string;
 }
 
 /**
@@ -157,11 +178,13 @@ export interface McpPluginOptions {
   serverVersion?: string;
   /** Instructions for the LLM — guidance on tool usage, constraints */
   instructions?: string;
-  /** Resources to exclude by name */
+  /** Resources to exclude by name (ignored if `include` is set) */
   exclude?: string[];
+  /** Resources to include by name — only these get MCP tools. Takes priority over `exclude`. */
+  include?: string[];
   /** Tool name prefix: 'crm' → 'crm_list_products' */
   toolNamePrefix?: string;
-  /** Per-resource overrides */
+  /** Per-resource overrides (operations, descriptions, hideFields, names, toolNamePrefix) */
   overrides?: Record<string, McpResourceConfig>;
   /** Hand-written tools added alongside auto-generated ones */
   extraTools?: ToolDefinition[];
@@ -177,6 +200,13 @@ export interface McpPluginOptions {
   sessionTtlMs?: number;
   /** Max concurrent sessions (default: 1000). Only used when stateful: true. */
   maxSessions?: number;
+  /**
+   * Auth cache TTL in ms for stateless mode (default: 5000 = 5 sec).
+   * Caches auth resolver results briefly to avoid redundant DB lookups
+   * across initialize → tools/list → tools/call sequences.
+   * Set to `0` to disable.
+   */
+  authCacheTtlMs?: number;
 }
 
 // ============================================================================

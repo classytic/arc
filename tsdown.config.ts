@@ -94,6 +94,7 @@ export default defineConfig({
 
     // MCP — Model Context Protocol integration
     "src/integrations/mcp/index.ts",
+    "src/integrations/mcp/testing.ts",
 
     // Discovery — auto-discovery plugin
     "src/discovery/index.ts",

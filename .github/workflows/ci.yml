@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Node.js — primary runtime
+  # ─────────────────────────────────────────────
+  test-node:
+    name: Node ${{ matrix.node-version }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [22]
+
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npx biome check src/
+
+      - name: Test
+        run: npx vitest run
+        env:
+          MONGO_URI: mongodb://localhost:27017/test
+
+      - name: Build
+        run: npm run build
+
+      - name: Smoke test
+        run: npm run smoke
+
+  # ─────────────────────────────────────────────
+  # Bun — secondary runtime
+  # ─────────────────────────────────────────────
+  test-bun:
+    name: Bun
+    runs-on: ubuntu-latest
+
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # Bun needs Node for some dev tooling (tsc, vitest)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install deps (npm for lockfile compat)
+        run: npm ci
+
+      - name: Build (tsdown uses Node)
+        run: npx tsdown
+
+      - name: Test with Bun runtime
+        run: bun run vitest run
+        env:
+          MONGO_URI: mongodb://localhost:27017/test
+
+      - name: Bun import check
+        run: |
+          bun -e "
+            const arc = await import('./dist/index.mjs');
+            const mcp = await import('./dist/integrations/mcp/index.mjs');
+            const perms = await import('./dist/permissions/index.mjs');
+            const utils = await import('./dist/utils/index.mjs');
+            console.log('✓ Core exports:', Object.keys(arc).length);
+            console.log('✓ MCP exports:', Object.keys(mcp).length);
+            console.log('✓ Permissions exports:', Object.keys(perms).length);
+            console.log('✓ Utils exports:', Object.keys(utils).length);
+          "

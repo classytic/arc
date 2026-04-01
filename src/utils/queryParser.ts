@@ -65,6 +65,24 @@ export interface ArcQueryParserOptions {
   maxSearchLength?: number;
   /** Maximum filter nesting depth (default: 10) */
   maxFilterDepth?: number;
+  /**
+   * Whitelist of fields that can be filtered on.
+   * When set, only these fields are accepted as filters — all others are silently dropped.
+   * Also used by MCP to auto-derive filterable fields in tool schemas.
+   */
+  allowedFilterFields?: string[];
+  /**
+   * Whitelist of fields that can be sorted on.
+   * When set, sort fields not in this list are silently dropped.
+   * Also used by MCP to describe available sort options.
+   */
+  allowedSortFields?: string[];
+  /**
+   * Whitelist of filter operators (e.g. ['eq', 'ne', 'gt', 'lt', 'in']).
+   * When set, only these operators are accepted — all others are dropped.
+   * Also used by MCP to enrich list tool descriptions.
+   */
+  allowedOperators?: string[];
 }
 
 /**
@@ -87,6 +105,16 @@ export class ArcQueryParser implements QueryParserInterface {
   private readonly maxRegexLength: number;
   private readonly maxSearchLength: number;
   private readonly maxFilterDepth: number;
+  private readonly _allowedFilterFields?: Set<string>;
+  private readonly _allowedSortFields?: Set<string>;
+  private readonly _allowedOperators?: Set<string>;
+
+  /** Allowed filter fields (used by MCP for auto-derive) */
+  readonly allowedFilterFields?: readonly string[];
+  /** Allowed sort fields (used by MCP for sort descriptions) */
+  readonly allowedSortFields?: readonly string[];
+  /** Allowed operators (used by MCP for operator descriptions) */
+  readonly allowedOperators?: readonly string[];
 
   /** Supported filter operators */
   private readonly operators: Record<string, string> = {
@@ -110,6 +138,19 @@ export class ArcQueryParser implements QueryParserInterface {
     this.maxRegexLength = options.maxRegexLength ?? MAX_REGEX_LENGTH;
     this.maxSearchLength = options.maxSearchLength ?? MAX_SEARCH_LENGTH;
     this.maxFilterDepth = options.maxFilterDepth ?? MAX_FILTER_DEPTH;
+
+    if (options.allowedFilterFields) {
+      this._allowedFilterFields = new Set(options.allowedFilterFields);
+      this.allowedFilterFields = options.allowedFilterFields;
+    }
+    if (options.allowedSortFields) {
+      this._allowedSortFields = new Set(options.allowedSortFields);
+      this.allowedSortFields = options.allowedSortFields;
+    }
+    if (options.allowedOperators) {
+      this._allowedOperators = new Set(options.allowedOperators);
+      this.allowedOperators = options.allowedOperators;
+    }
   }
 
   /**
@@ -239,10 +280,15 @@ export class ArcQueryParser implements QueryParserInterface {
       // Validate field name (prevent injection)
       if (!/^-?[a-zA-Z_][a-zA-Z0-9_.]*$/.test(trimmed)) continue;
 
+      const fieldName = trimmed.startsWith("-") ? trimmed.slice(1) : trimmed;
+
+      // Enforce sort field whitelist
+      if (this._allowedSortFields && !this._allowedSortFields.has(fieldName)) continue;
+
       if (trimmed.startsWith("-")) {
-        result[trimmed.slice(1)] = -1;
+        result[fieldName] = -1;
       } else {
-        result[trimmed] = 1;
+        result[fieldName] = 1;
       }
     }
 
@@ -310,6 +356,9 @@ export class ArcQueryParser implements QueryParserInterface {
       // Validate field name (prevent injection)
       if (!/^[a-zA-Z_][a-zA-Z0-9_.]*$/.test(key)) continue;
 
+      // Enforce filter field whitelist
+      if (this._allowedFilterFields && !this._allowedFilterFields.has(key)) continue;
+
       // Enforce max filter depth (prevents filter bombs)
       if (this.exceedsDepth(value)) continue;
 
@@ -319,11 +368,16 @@ export class ArcQueryParser implements QueryParserInterface {
         const operatorObj = value as Record<string, unknown>;
         const operatorKeys = Object.keys(operatorObj);
 
-        // Check if all keys are known operators
-        const allOperators = operatorKeys.every((op) => this.operators[op]);
+        // Check if all keys are known operators (respecting operator whitelist)
+        const allOperators = operatorKeys.every(
+          (op) => this.operators[op] && (!this._allowedOperators || this._allowedOperators.has(op)),
+        );
+
+        // Check if all keys are known operators (ignoring whitelist)
+        const allKnownOperators = operatorKeys.every((op) => this.operators[op]);
 
         if (allOperators && operatorKeys.length > 0) {
-          // Convert operator object: { gte: '40', lte: '100' } → { $gte: 40, $lte: 100 }
+          // All operators known and allowed — convert: { gte: '40', lte: '100' } → { $gte: 40, $lte: 100 }
           const mongoFilters: Record<string, unknown> = {};
           for (const [op, opValue] of Object.entries(operatorObj)) {
             const mongoOp = this.operators[op];
@@ -332,6 +386,11 @@ export class ArcQueryParser implements QueryParserInterface {
             }
           }
           filters[key] = mongoFilters;
+          continue;
+        }
+
+        // Keys are known operators but blocked by whitelist — drop the field entirely
+        if (allKnownOperators && this._allowedOperators) {
           continue;
         }
       }
@@ -343,7 +402,11 @@ export class ArcQueryParser implements QueryParserInterface {
       const [, fieldName, operator] = match;
       if (!fieldName) continue;
 
-      if (operator && this.operators[operator]) {
+      if (
+        operator &&
+        this.operators[operator] &&
+        (!this._allowedOperators || this._allowedOperators.has(operator))
+      ) {
         // Operator filter: status[ne]=deleted → { status: { $ne: 'deleted' } }
         const mongoOp = this.operators[operator];
         const parsedValue = this.parseFilterValue(value, operator);

@@ -35,7 +35,7 @@ export interface FieldRulesToZodOptions {
   /** Extra fields to hide (e.g., from McpResourceConfig.hideFields) */
   extraHideFields?: string[];
   /** Filterable fields — only used in list mode */
-  filterableFields?: string[];
+  filterableFields?: readonly string[];
 }
 
 /** Single field rule entry from Arc's schemaOptions.fieldRules */

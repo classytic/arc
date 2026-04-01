@@ -228,10 +228,10 @@ export class RedisEventTransport implements EventTransport {
     for (const handler of handlers) {
       try {
         const result = handler(event);
-        // If the handler returns a promise, catch rejections so one failing
-        // handler doesn't prevent the rest from executing.
-        if (result && typeof (result as Promise<void>).catch === "function") {
-          (result as Promise<void>).catch((err) => {
+        // If handler returns a promise, attach a catch so one failing
+        // handler doesn't prevent the rest from executing or crash the process.
+        if (result && typeof result === "object" && "catch" in result) {
+          (result as Promise<void>).catch((err: unknown) => {
             this.logger.error(`[RedisEventTransport] Handler error for ${event.type}:`, err);
           });
         }

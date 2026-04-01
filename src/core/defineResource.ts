@@ -312,6 +312,13 @@ export class ResourceDefinition<TDoc = AnyRecord> {
   // Cache config
   readonly cache?: ResourceCacheConfig;
 
+  // Multi-tenant / ID config (stored for MCP auto-controller creation)
+  readonly tenantField?: string | false;
+  readonly idField?: string;
+
+  // Query parser (stored for MCP auto-derivation of filterableFields)
+  readonly queryParser?: QueryParserInterface;
+
   // Presets tracking
   readonly _appliedPresets: string[];
 
@@ -369,6 +376,13 @@ export class ResourceDefinition<TDoc = AnyRecord> {
 
     // Cache config
     this.cache = config.cache;
+
+    // Multi-tenant / ID config
+    this.tenantField = config.tenantField;
+    this.idField = config.idField;
+
+    // Query parser (stored for MCP auto-derivation)
+    this.queryParser = config.queryParser as QueryParserInterface | undefined;
 
     // Presets tracking
     this._appliedPresets = config._appliedPresets ?? [];

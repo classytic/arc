@@ -52,7 +52,7 @@ export function getUserRoles(user: UserBase | null | undefined): string[] {
 /**
  * Context passed to permission check functions
  */
-export interface PermissionContext<TDoc = any> {
+export interface PermissionContext<TDoc = Record<string, unknown>> {
   /** Authenticated user or null if unauthenticated */
   user: UserBase | null;
   /** Fastify request object */
@@ -105,7 +105,7 @@ export interface PermissionResult {
  * };
  * ```
  */
-export type PermissionCheck<TDoc = any> = ((
+export type PermissionCheck<TDoc = Record<string, unknown>> = ((
   context: PermissionContext<TDoc>,
 ) => boolean | PermissionResult | Promise<boolean | PermissionResult>) &
   PermissionCheckMeta;

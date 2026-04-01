@@ -6,7 +6,6 @@
  */
 
 import type { FastifyInstance, FastifyReply, FastifyRequest, RouteHandlerMethod } from 'fastify';
-import type { Types } from 'mongoose';
 import type { DataAdapter } from '../adapters/interface.js';
 import type { PermissionCheck, UserBase } from '../permissions/types.js';
 import type { RequestScope } from '../scope/types.js';
@@ -35,8 +34,17 @@ declare module 'fastify' {
     scope: RequestScope;
 
     // ---- Auth / identity ----
-    /** Current user — set by auth adapter (Better Auth, JWT, custom) */
-    user: Record<string, unknown>;
+    /**
+     * Current user — set by auth adapter (Better Auth, JWT, custom).
+     * `undefined` on public routes (`auth: false`) or unauthenticated requests.
+     * Guard with `if (request.user)` on routes that allow anonymous access.
+     *
+     * Note: kept as required (not `user?`) because `@fastify/jwt` declares it
+     * as required — declaration merges must have identical modifiers.
+     * The `| undefined` in the type achieves the same DX: TypeScript will
+     * flag unguarded access like `request.user.id` as possibly undefined.
+     */
+    user: Record<string, unknown> | undefined;
 
     // ---- Policy middleware ----
     /** Policy-injected query filters (e.g. ownership, org-scoping) */
@@ -83,7 +91,8 @@ export type {
 // ============================================================================
 
 export type AnyRecord = Record<string, unknown>;
-export type ObjectId = Types.ObjectId | string;
+/** MongoDB ObjectId — accepts string or any object with a `toString()` (e.g. mongoose ObjectId). */
+export type ObjectId = string | { toString(): string };
 
 /**
  * Flexible user type that accepts any object with id/ID properties.
@@ -308,6 +317,26 @@ export interface QueryParserInterface {
     properties: Record<string, unknown>;
     required?: string[];
   };
+
+  /**
+   * Optional: Allowed filter fields whitelist.
+   * When set, MCP auto-derives `filterableFields` from this
+   * if `schemaOptions.filterableFields` is not explicitly configured.
+   */
+  allowedFilterFields?: readonly string[];
+
+  /**
+   * Optional: Allowed filter operators whitelist.
+   * Used by MCP to enrich list tool descriptions with available operators.
+   * Values are human-readable keys: 'eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'nin', etc.
+   */
+  allowedOperators?: readonly string[];
+
+  /**
+   * Optional: Allowed sort fields whitelist.
+   * Used by MCP to describe available sort options in list tool descriptions.
+   */
+  allowedSortFields?: readonly string[];
 }
 
 export interface FastifyRequestExtras {
@@ -597,6 +626,30 @@ export interface AdditionalRoute {
 
   /** Fastify route schema */
   schema?: Record<string, unknown>;
+
+  /**
+   * MCP handler for routes with `wrapHandler: false`.
+   * When set, this route becomes an MCP tool without needing `wrapHandler: true`.
+   * The HTTP handler stays a plain Fastify handler; MCP gets a parallel entry point.
+   *
+   * @example
+   * ```typescript
+   * additionalRoutes: [{
+   *   method: 'GET',
+   *   path: '/stats',
+   *   handler: (req, reply) => reply.send(getStats()),
+   *   wrapHandler: false,
+   *   permissions: isAuthenticated,
+   *   mcpHandler: async (input) => ({
+   *     content: [{ type: 'text', text: JSON.stringify(await getStats()) }],
+   *   }),
+   * }]
+   * ```
+   */
+  mcpHandler?: (input: Record<string, unknown>) => Promise<{
+    content: Array<{ type: string; text: string }>;
+    isError?: boolean;
+  }>;
 }
 
 export interface RouteSchemaOptions {
@@ -605,6 +658,12 @@ export interface RouteSchemaOptions {
   requiredFields?: string[];
   optionalFields?: string[];
   excludeFields?: string[];
+  /**
+   * Fields allowed for filtering in list operations.
+   * Used by MCP tool generation to build the list tool's input schema.
+   * If not set and using a QueryParser with `allowedFilterFields`, MCP auto-derives from it.
+   */
+  filterableFields?: string[];
   fieldRules?: Record<string, {
     systemManaged?: boolean;
     immutable?: boolean;
