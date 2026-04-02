@@ -7,4 +7,5 @@ export default {
   idempotency: 'Idempotency',
   audit: 'Audit',
   openapi: 'OpenAPI',
+  mcp: 'MCP (AI Agent Tools)',
 };

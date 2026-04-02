@@ -55,7 +55,7 @@ describe("buildRequestContext", () => {
   describe("auth context", () => {
     it("sets member scope with org", () => {
       const ctx = buildRequestContext({}, auth, "list");
-      expect(ctx.user).toEqual({ id: "user-1", _id: "user-1" });
+      expect(ctx.user).toMatchObject({ id: "user-1", _id: "user-1" });
       expect((ctx.metadata as Record<string, unknown>)._scope).toEqual({
         kind: "member",
         userId: "user-1",

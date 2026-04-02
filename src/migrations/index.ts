@@ -4,6 +4,10 @@
  * Manages database schema changes over time with version tracking.
  * Supports forward migrations, rollbacks, and schema compatibility layers.
  *
+ * DB-agnostic: the `db` parameter is typed as `unknown` — the user passes
+ * whatever connection object their adapter uses (Mongoose db, Prisma client,
+ * Knex instance, etc.) and their `up`/`down` functions cast it internally.
+ *
  * @example
  * import { defineMigration, MigrationRunner } from '@classytic/arc/migrations';
  *
@@ -11,24 +15,30 @@
  *   version: 2,
  *   resource: 'product',
  *   up: async (db) => {
- *     await db.collection('products').updateMany(
+ *     const mongo = db as import('mongoose').mongo.Db;
+ *     await mongo.collection('products').updateMany(
  *       {},
  *       { $rename: { 'oldField': 'newField' } }
  *     );
  *   },
  *   down: async (db) => {
- *     await db.collection('products').updateMany(
+ *     const mongo = db as import('mongoose').mongo.Db;
+ *     await mongo.collection('products').updateMany(
  *       {},
  *       { $rename: { 'newField': 'oldField' } }
  *     );
  *   },
  * });
  *
- * const runner = new MigrationRunner(mongoose.connection.db);
- * await runner.up(); // Run all pending migrations
+ * const runner = new MigrationRunner(mongoose.connection.db, {
+ *   store: new MongoMigrationStore(mongoose.connection.db),
+ * });
+ * await runner.up(migrations);
  */
 
-import type mongoose from "mongoose";
+// ============================================================================
+// Types
+// ============================================================================
 
 export interface Migration {
   /** Migration version (sequential number) */
@@ -41,19 +51,20 @@ export interface Migration {
   description?: string;
 
   /**
-   * Forward migration (apply schema change)
+   * Forward migration (apply schema change).
+   * The `db` parameter is whatever connection object you pass to the runner.
    */
-  up: (db: mongoose.mongo.Db) => Promise<void>;
+  up: (db: unknown) => Promise<void>;
 
   /**
-   * Backward migration (revert schema change)
+   * Backward migration (revert schema change).
    */
-  down: (db: mongoose.mongo.Db) => Promise<void>;
+  down: (db: unknown) => Promise<void>;
 
   /**
    * Optional validation that data is compatible after migration
    */
-  validate?: (db: mongoose.mongo.Db) => Promise<boolean>;
+  validate?: (db: unknown) => Promise<boolean>;
 }
 
 export interface MigrationRecord {
@@ -62,6 +73,94 @@ export interface MigrationRecord {
   description?: string;
   appliedAt: Date;
   executionTime: number;
+}
+
+/**
+ * DB-agnostic migration store interface.
+ *
+ * Users implement this for their database:
+ * - MongoMigrationStore (uses a `_migrations` collection)
+ * - PrismaMigrationStore (uses a `_migrations` table)
+ * - or any custom store
+ */
+export interface MigrationStore {
+  /** Get all applied migration records, sorted by appliedAt ascending */
+  getApplied(): Promise<MigrationRecord[]>;
+  /** Record a completed migration */
+  record(migration: Migration, executionTime: number): Promise<void>;
+  /** Remove a migration record (for rollback) */
+  remove(migration: Migration): Promise<void>;
+}
+
+/**
+ * Minimal logger interface — matches Fastify's logger, pino, console, etc.
+ */
+export interface MigrationLogger {
+  info(msg: string): void;
+  error(msg: string): void;
+}
+
+/** Default logger that writes to stdout/stderr */
+const defaultLogger: MigrationLogger = {
+  info: (msg: string) => process.stdout.write(`${msg}\n`),
+  error: (msg: string) => process.stderr.write(`${msg}\n`),
+};
+
+// ============================================================================
+// Built-in MongoDB Migration Store
+// ============================================================================
+
+/**
+ * MongoDB-backed migration store.
+ *
+ * Uses a `_migrations` collection in the same database.
+ * The `db` parameter accepts any object with a `.collection()` method
+ * (Mongoose db, native MongoDB Db, etc.)
+ */
+export class MongoMigrationStore implements MigrationStore {
+  private readonly collectionName: string;
+  private readonly db: { collection(name: string): any };
+
+  constructor(db: { collection(name: string): any }, opts?: { collectionName?: string }) {
+    this.db = db;
+    this.collectionName = opts?.collectionName ?? "_migrations";
+  }
+
+  async getApplied(): Promise<MigrationRecord[]> {
+    const collection = this.db.collection(this.collectionName);
+    const records = await collection.find({}).sort({ appliedAt: 1 }).toArray();
+    return records as MigrationRecord[];
+  }
+
+  async record(migration: Migration, executionTime: number): Promise<void> {
+    const collection = this.db.collection(this.collectionName);
+    await collection.insertOne({
+      version: migration.version,
+      resource: migration.resource,
+      description: migration.description,
+      appliedAt: new Date(),
+      executionTime,
+    });
+  }
+
+  async remove(migration: Migration): Promise<void> {
+    const collection = this.db.collection(this.collectionName);
+    await collection.deleteOne({
+      version: migration.version,
+      resource: migration.resource,
+    });
+  }
+}
+
+// ============================================================================
+// Migration Runner
+// ============================================================================
+
+export interface MigrationRunnerOptions {
+  /** Migration store (required — use MongoMigrationStore or implement your own) */
+  store: MigrationStore;
+  /** Logger (defaults to process.stdout/stderr) */
+  logger?: MigrationLogger;
 }
 
 /**
@@ -74,57 +173,74 @@ export function defineMigration(migration: Migration): Migration {
 /**
  * Migration Runner
  *
- * Manages execution of migrations with tracking and rollback support.
+ * DB-agnostic. Manages execution of migrations with tracking and rollback.
+ * The `db` parameter is passed through to migration `up`/`down` functions
+ * as-is — the runner never touches it directly.
+ *
+ * @example
+ * ```typescript
+ * // MongoDB
+ * const runner = new MigrationRunner(mongoose.connection.db, {
+ *   store: new MongoMigrationStore(mongoose.connection.db),
+ * });
+ *
+ * // Prisma
+ * const runner = new MigrationRunner(prisma, {
+ *   store: new PrismaMigrationStore(prisma), // user-implemented
+ * });
+ *
+ * await runner.up(migrations);
+ * ```
  */
 export class MigrationRunner {
-  private readonly collectionName = "_migrations";
+  private readonly db: unknown;
+  private readonly store: MigrationStore;
+  private readonly log: MigrationLogger;
 
-  private readonly db: mongoose.mongo.Db;
-
-  constructor(db: mongoose.mongo.Db) {
+  constructor(db: unknown, opts: MigrationRunnerOptions) {
     this.db = db;
+    this.store = opts.store;
+    this.log = opts.logger ?? defaultLogger;
   }
 
   /**
    * Run all pending migrations
    */
   async up(migrations: Migration[]): Promise<void> {
-    const applied = await this.getAppliedMigrations();
+    const applied = await this.store.getApplied();
     const appliedVersions = new Set(applied.map((m) => `${m.resource}:${m.version}`));
 
-    // Sort migrations by version
     const pending = migrations
       .filter((m) => !appliedVersions.has(`${m.resource}:${m.version}`))
       .sort((a, b) => a.version - b.version);
 
     if (pending.length === 0) {
-      console.log("No pending migrations");
+      this.log.info("No pending migrations");
       return;
     }
 
-    console.log(`Running ${pending.length} migration(s)...\n`);
+    this.log.info(`Running ${pending.length} migration(s)...`);
 
     for (const migration of pending) {
       await this.runMigration(migration, "up");
     }
 
-    console.log("\nAll migrations completed successfully");
+    this.log.info("All migrations completed successfully");
   }
 
   /**
    * Rollback last migration
    */
   async down(migrations: Migration[]): Promise<void> {
-    const applied = await this.getAppliedMigrations();
+    const applied = await this.store.getApplied();
     if (applied.length === 0) {
-      console.log("No migrations to rollback");
+      this.log.info("No migrations to rollback");
       return;
     }
 
-    // Get last applied migration
     const last = applied[applied.length - 1];
     if (!last) {
-      console.log("No migrations to rollback");
+      this.log.info("No migrations to rollback");
       return;
     }
 
@@ -136,24 +252,24 @@ export class MigrationRunner {
       throw new Error(`Migration ${last.resource}:${last.version} not found in migration files`);
     }
 
-    console.log(`Rolling back ${migration.resource} v${migration.version}...`);
+    this.log.info(`Rolling back ${migration.resource} v${migration.version}...`);
     await this.runMigration(migration, "down", true);
-    console.log("Rollback completed");
+    this.log.info("Rollback completed");
   }
 
   /**
    * Rollback to specific version
    */
   async downTo(migrations: Migration[], targetVersion: number): Promise<void> {
-    const applied = await this.getAppliedMigrations();
+    const applied = await this.store.getApplied();
     const toRollback = applied.filter((m) => m.version > targetVersion).reverse();
 
     if (toRollback.length === 0) {
-      console.log(`Already at or below version ${targetVersion}`);
+      this.log.info(`Already at or below version ${targetVersion}`);
       return;
     }
 
-    console.log(`Rolling back ${toRollback.length} migration(s)...\n`);
+    this.log.info(`Rolling back ${toRollback.length} migration(s)...`);
 
     for (const record of toRollback) {
       const migration = migrations.find(
@@ -167,23 +283,21 @@ export class MigrationRunner {
       await this.runMigration(migration, "down", true);
     }
 
-    console.log("\nRollback completed");
+    this.log.info("Rollback completed");
   }
 
   /**
    * Get all applied migrations
    */
   async getAppliedMigrations(): Promise<MigrationRecord[]> {
-    const collection = this.db.collection(this.collectionName);
-    const records = await collection.find({}).sort({ appliedAt: 1 }).toArray();
-    return records as unknown as MigrationRecord[];
+    return this.store.getApplied();
   }
 
   /**
    * Get pending migrations
    */
   async getPendingMigrations(migrations: Migration[]): Promise<Migration[]> {
-    const applied = await this.getAppliedMigrations();
+    const applied = await this.store.getApplied();
     const appliedVersions = new Set(applied.map((m) => `${m.resource}:${m.version}`));
     return migrations.filter((m) => !appliedVersions.has(`${m.resource}:${m.version}`));
   }
@@ -206,17 +320,15 @@ export class MigrationRunner {
   ): Promise<void> {
     const start = Date.now();
     const action = direction === "up" ? "Applying" : "Rolling back";
+    const label = `${migration.resource} v${migration.version}`;
+    const desc = migration.description ? `: ${migration.description}` : "";
 
-    console.log(
-      `${action} ${migration.resource} v${migration.version}${migration.description ? `: ${migration.description}` : ""}...`,
-    );
+    this.log.info(`${action} ${label}${desc}...`);
 
     try {
-      // Run migration
       if (direction === "up") {
         await migration.up(this.db);
 
-        // Validate if provided
         if (migration.validate) {
           const valid = await migration.validate(this.db);
           if (!valid) {
@@ -224,53 +336,27 @@ export class MigrationRunner {
           }
         }
 
-        // Record migration
-        await this.recordMigration(migration, Date.now() - start);
+        await this.store.record(migration, Date.now() - start);
       } else {
         await migration.down(this.db);
 
-        // Remove record
         if (isRollback) {
-          await this.removeMigration(migration);
+          await this.store.remove(migration);
         }
       }
 
       const duration = Date.now() - start;
-      console.log(`✅ ${migration.resource} v${migration.version} (${duration}ms)`);
+      this.log.info(`${label} completed (${duration}ms)`);
     } catch (error) {
-      console.error(
-        `❌ ${migration.resource} v${migration.version} failed:`,
-        (error as Error).message,
-      );
+      this.log.error(`${label} failed: ${(error as Error).message}`);
       throw error;
     }
   }
-
-  /**
-   * Record a completed migration
-   */
-  private async recordMigration(migration: Migration, executionTime: number): Promise<void> {
-    const collection = this.db.collection(this.collectionName);
-    await collection.insertOne({
-      version: migration.version,
-      resource: migration.resource,
-      description: migration.description,
-      appliedAt: new Date(),
-      executionTime,
-    });
-  }
-
-  /**
-   * Remove a migration record
-   */
-  private async removeMigration(migration: Migration): Promise<void> {
-    const collection = this.db.collection(this.collectionName);
-    await collection.deleteOne({
-      version: migration.version,
-      resource: migration.resource,
-    });
-  }
 }
+
+// ============================================================================
+// Schema Versioning
+// ============================================================================
 
 /**
  * Schema version definition for resources
@@ -294,6 +380,10 @@ export interface SchemaVersion {
 export function withSchemaVersion(version: number, migrations: Migration[]): SchemaVersion {
   return { version, migrations };
 }
+
+// ============================================================================
+// Migration Registry
+// ============================================================================
 
 /**
  * Global migration registry
@@ -353,86 +443,3 @@ export class MigrationRegistry {
     this.migrations.clear();
   }
 }
-
-/**
- * Global migration registry instance
- */
-export const migrationRegistry = new MigrationRegistry();
-
-/**
- * Common migration helpers
- */
-export const migrationHelpers = {
-  /**
-   * Rename a field across all documents
-   */
-  renameField: (collection: string, oldName: string, newName: string) =>
-    defineMigration({
-      version: 0,
-      resource: collection,
-      description: `Rename ${oldName} to ${newName}`,
-      up: async (db) => {
-        await db.collection(collection).updateMany({}, { $rename: { [oldName]: newName } });
-      },
-      down: async (db) => {
-        await db.collection(collection).updateMany({}, { $rename: { [newName]: oldName } });
-      },
-    }),
-
-  /**
-   * Add a new field with default value
-   */
-  addField: (collection: string, fieldName: string, defaultValue: unknown) =>
-    defineMigration({
-      version: 0,
-      resource: collection,
-      description: `Add ${fieldName} field`,
-      up: async (db) => {
-        await db
-          .collection(collection)
-          .updateMany({ [fieldName]: { $exists: false } }, { $set: { [fieldName]: defaultValue } });
-      },
-      down: async (db) => {
-        await db.collection(collection).updateMany({}, { $unset: { [fieldName]: "" } });
-      },
-    }),
-
-  /**
-   * Remove a field
-   */
-  removeField: (collection: string, fieldName: string) =>
-    defineMigration({
-      version: 0,
-      resource: collection,
-      description: `Remove ${fieldName} field`,
-      up: async (db) => {
-        await db.collection(collection).updateMany({}, { $unset: { [fieldName]: "" } });
-      },
-      down: async (_db) => {
-        // Cannot restore data - this is destructive
-        console.warn(`Cannot restore ${fieldName} field - data was deleted`);
-      },
-    }),
-
-  /**
-   * Create an index
-   */
-  createIndex: (
-    collection: string,
-    fields: Record<string, 1 | -1>,
-    options?: Record<string, unknown>,
-  ) =>
-    defineMigration({
-      version: 0,
-      resource: collection,
-      description: `Create index on ${Object.keys(fields).join(", ")}`,
-      up: async (db) => {
-        await db.collection(collection).createIndex(fields, options);
-      },
-      down: async (db) => {
-        const indexName =
-          typeof options?.name === "string" ? options.name : Object.keys(fields).join("_");
-        await db.collection(collection).dropIndex(indexName);
-      },
-    }),
-};

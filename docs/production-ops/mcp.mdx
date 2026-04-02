@@ -1,0 +1,321 @@
+# MCP (AI Agent Tools)
+
+Expose Arc resources as [Model Context Protocol](https://modelcontextprotocol.io) tools for AI agents. Stateless by default — fresh server per request, zero session overhead.
+
+**Requires:** `@modelcontextprotocol/sdk` and `zod` as peer dependencies.
+
+```bash
+npm install @modelcontextprotocol/sdk zod
+```
+
+## Quick Start
+
+```typescript
+import { mcpPlugin } from '@classytic/arc/mcp';
+
+await app.register(mcpPlugin, {
+  resources: [productResource, orderResource],
+  auth: false,
+});
+```
+
+This auto-generates up to 5 tools per resource: `list_{plural}`, `get_{name}`, `create_{name}`, `update_{name}`, `delete_{name}`.
+
+Connect an AI agent:
+
+```bash
+claude mcp add --transport http my-api http://localhost:3000/mcp
+echo "List all products" | claude -p --allowedTools "mcp__my-api__*"
+```
+
+## Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `resources` | `ResourceDefinition[]` | required | Resources to expose as tools |
+| `auth` | `false \| McpAuthResolver \| BetterAuthHandler` | `false` | Auth mode |
+| `prefix` | `string` | `'/mcp'` | MCP endpoint path |
+| `include` | `string[]` | — | Only these resources get tools |
+| `exclude` | `string[]` | — | Resource names to skip |
+| `toolNamePrefix` | `string` | — | Global prefix: `'crm'` → `crm_list_products` |
+| `overrides` | `Record<string, McpResourceConfig>` | — | Per-resource config |
+| `extraTools` | `ToolDefinition[]` | — | Custom tools alongside auto-generated |
+| `extraPrompts` | `PromptDefinition[]` | — | Custom prompts |
+| `instructions` | `string` | — | LLM guidance text |
+| `authCacheTtlMs` | `number` | — | Cache auth results for N ms (stateless mode) |
+| `stateful` | `boolean` | `false` | Enable session persistence |
+| `sessionTtlMs` | `number` | `1800000` | Session TTL (stateful only) |
+| `maxSessions` | `number` | `1000` | Max concurrent sessions (stateful only) |
+
+## Per-Resource Overrides
+
+```typescript
+await app.register(mcpPlugin, {
+  resources,
+  include: ['job', 'project'],
+  overrides: {
+    job: {
+      operations: ['list', 'get'],
+      toolNamePrefix: 'db',                    // db_list_jobs, db_get_job
+      names: { get: 'get_job_by_id' },         // rename specific tool
+      hideFields: ['internalScore'],
+      descriptions: { list: 'Browse open positions' },
+    },
+  },
+});
+```
+
+## Auth
+
+Three modes — you choose what fits.
+
+### No Auth
+
+```typescript
+await app.register(mcpPlugin, { resources, auth: false });
+```
+
+### Custom Function
+
+Return `{ userId, organizationId?, roles? }` to allow, `null` to reject:
+
+```typescript
+await app.register(mcpPlugin, {
+  resources,
+  auth: async (headers) => {
+    if (headers['x-api-key'] !== process.env.MCP_KEY) return null;
+    return { userId: 'bot', organizationId: 'org-1', roles: ['admin'] };
+  },
+});
+```
+
+### Better Auth OAuth 2.1
+
+```typescript
+import { mcp } from 'better-auth/plugins';
+
+// In Better Auth config
+betterAuth({ plugins: [mcp({ loginPage: '/login' })] });
+
+// In Arc
+await app.register(mcpPlugin, { resources, auth: getAuth() });
+```
+
+Auto-registers OAuth discovery endpoints (`/.well-known/oauth-authorization-server`).
+
+## Permissions
+
+Resource permissions work identically in REST and MCP — define once, enforced everywhere:
+
+```typescript
+defineResource({
+  name: 'job',
+  permissions: {
+    list: (ctx) => {
+      if (!ctx.user) return false;
+      return {
+        granted: true,
+        filters: { orgId: ctx.user.orgId, branchId: ctx.user.branchId },
+      };
+    },
+    create: (ctx) => ctx.user?.roles?.includes('admin'),
+    delete: (ctx) => ctx.user?.roles?.includes('admin'),
+  },
+});
+```
+
+`PermissionResult.filters` flow into `_policyFilters` → `BaseController.AccessControl` applies them to DB queries. No MCP-specific code needed.
+
+## Multi-Tenancy
+
+The `organizationId` from auth flows into BaseController org-scoping automatically:
+
+```
+auth returns { userId: 'alice', organizationId: 'org-a' }
+  → _scope: { kind: 'member', organizationId: 'org-a' }
+  → QueryResolver adds { organizationId: 'org-a' } to every query
+  → Agent only sees org-a's data
+```
+
+## Custom Tools
+
+```typescript
+import { defineTool } from '@classytic/arc/mcp';
+import { z } from 'zod';
+
+const analyticsTool = defineTool('sales_report', {
+  description: 'Generate sales report for a period',
+  input: {
+    period: z.enum(['7d', '30d', '90d']),
+    region: z.string().optional(),
+  },
+  annotations: { readOnlyHint: true },
+  handler: async ({ period, region }, ctx) => {
+    const data = await analyticsService.report(period, region);
+    return { content: [{ type: 'text', text: JSON.stringify(data) }] };
+  },
+});
+
+await app.register(mcpPlugin, {
+  resources,
+  extraTools: [analyticsTool],
+});
+```
+
+### Guards for Custom Tools
+
+```typescript
+import { guard, requireAuth, requireOrg, requireRole } from '@classytic/arc/mcp';
+
+defineTool('delete_all', {
+  description: 'Delete all records',
+  handler: guard(requireAuth, requireOrg, requireRole('admin'), async (input, ctx) => {
+    return { content: [{ type: 'text', text: 'Deleted' }] };
+  }),
+});
+```
+
+## Custom Prompts
+
+```typescript
+import { definePrompt } from '@classytic/arc/mcp';
+import { z } from 'zod';
+
+const plannerPrompt = definePrompt('content_calendar', {
+  description: 'Plan a content calendar',
+  args: { platforms: z.string(), theme: z.string().optional() },
+  handler: ({ platforms, theme }) => ({
+    messages: [{
+      role: 'user',
+      content: { type: 'text', text: `Plan content for ${platforms}${theme ? ` about ${theme}` : ''}` },
+    }],
+  }),
+});
+
+await app.register(mcpPlugin, {
+  resources,
+  extraPrompts: [plannerPrompt],
+});
+```
+
+## Multiple Endpoints
+
+Mount separate MCP servers scoped to different resource groups:
+
+```typescript
+await app.register(mcpPlugin, { resources: catalogResources, prefix: '/mcp/catalog' });
+await app.register(mcpPlugin, { resources: orderResources, prefix: '/mcp/orders' });
+```
+
+## Project Structure
+
+Custom MCP tools co-locate with their resource:
+
+```
+src/resources/
+  product/
+    product.resource.ts
+    product.mcp.ts          ← defineTool('analyze_product', { ... })
+  order/
+    order.resource.ts
+    order.mcp.ts            ← defineTool('fulfill_order', { ... })
+```
+
+Generate with CLI: `arc generate resource order --mcp`
+
+## Transport Modes
+
+### Stateless (default)
+
+Fresh server per request. No session tracking. Best for horizontal scaling, serverless, edge.
+
+```typescript
+await app.register(mcpPlugin, { resources, auth: false });
+```
+
+### Stateful
+
+Sessions cached with TTL. Use when you need server-initiated notifications.
+
+```typescript
+await app.register(mcpPlugin, {
+  resources,
+  stateful: true,
+  sessionTtlMs: 600000,
+  maxSessions: 500,
+});
+```
+
+## Health Endpoint
+
+Both modes expose `GET /mcp/health` (no MCP protocol needed):
+
+```bash
+curl http://localhost:3000/mcp/health
+# {"status":"ok","mode":"stateless","tools":10,"resources":2,"toolNames":[...]}
+```
+
+## Testing
+
+### Unit Tests with InMemoryTransport
+
+```typescript
+import { createTestMcpClient } from '@classytic/arc/mcp/testing';
+
+const { client, cleanup } = await createTestMcpClient({
+  resources: [productResource],
+  auth: false,
+});
+
+const tools = await client.listTools();
+expect(tools.tools).toHaveLength(5);
+
+const result = await client.callTool('list_products', {});
+expect(result.content[0].text).toContain('docs');
+
+await cleanup();
+```
+
+### E2E with Claude CLI
+
+```bash
+# Start your app
+npm run dev
+
+# Add MCP server
+claude mcp add --transport http my-api http://localhost:3000/mcp
+
+# Test with auth headers via config file
+cat > mcp.json << 'EOF'
+{
+  "mcpServers": {
+    "my-api": {
+      "type": "http",
+      "url": "http://localhost:3000/mcp",
+      "headers": { "x-api-key": "your-key" }
+    }
+  }
+}
+EOF
+
+echo "List all products" | claude -p --mcp-config mcp.json --allowedTools "mcp__my-api__*"
+
+# Cleanup
+claude mcp remove my-api
+```
+
+## Schema Discovery
+
+Auto-registered MCP resources for agent discovery:
+
+- `arc://schemas` — list all resources with field counts, operations, presets
+- `arc://schemas/{name}` — full schema for a specific resource
+
+## Subpath Imports
+
+```typescript
+import { mcpPlugin, defineTool, definePrompt, resourceToTools, fieldRulesToZod, createMcpServer } from '@classytic/arc/mcp';
+import { createTestMcpClient } from '@classytic/arc/mcp/testing';
+import { guard, requireAuth, requireOrg, requireRole, customGuard } from '@classytic/arc/mcp';
+import { isAuthenticated, hasOrg, getUserId, getOrgId, denied } from '@classytic/arc/mcp';
+```

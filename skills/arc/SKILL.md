@@ -8,11 +8,11 @@ description: |
   Triggers: arc, fastify resource, defineResource, createApp, BaseController, arc preset,
   arc auth, arc events, arc jobs, arc websocket, arc mcp, arc plugin, arc testing, arc cli,
   arc permissions, arc hooks, arc pipeline, arc factory, arc cache, arc QueryCache.
-version: 2.4.0
+version: 2.4.2
 license: MIT
 metadata:
   author: Classytic
-  version: "2.4.0"
+  version: "2.4.1"
 tags:
   - fastify
   - rest-api
@@ -451,6 +451,18 @@ auth: async (headers) => {
 **Guards** for custom tools: `guard(requireAuth, requireOrg, requireRole('admin'), handler)`
 
 **Multi-tenancy**: `organizationId` from auth flows into BaseController org-scoping automatically.
+
+**Permission filters**: `PermissionResult.filters` from resource permissions flow into MCP tools — same as REST. Define once, works everywhere:
+
+```typescript
+permissions: {
+  list: (ctx) => ({
+    granted: !!ctx.user,
+    filters: { orgId: ctx.user?.orgId, branchId: ctx.user?.branchId },
+  }),
+}
+// MCP tools automatically scope queries by orgId + branchId
+```
 
 **Project structure** — custom MCP tools co-located with resources:
 

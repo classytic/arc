@@ -35,9 +35,11 @@ Tool handlers call `BaseController` — same pipeline as REST (auth, org-scoping
 | `serverName` | `string` | `'arc-mcp'` | Server identity |
 | `serverVersion` | `string` | `'1.0.0'` | Server version |
 | `instructions` | `string` | — | LLM guidance on tool usage |
+| `include` | `string[]` | — | Only these resources get tools (overrides `exclude`) |
 | `exclude` | `string[]` | — | Resource names to exclude |
-| `toolNamePrefix` | `string` | — | Prefix: `'crm'` → `crm_list_products` |
-| `overrides` | `Record<string, McpResourceConfig>` | — | Per-resource operation/field overrides |
+| `toolNamePrefix` | `string` | — | Global prefix: `'crm'` → `crm_list_products` |
+| `overrides` | `Record<string, McpResourceConfig>` | — | Per-resource overrides (see below) |
+| `authCacheTtlMs` | `number` | — | Cache auth results for N ms in stateless mode |
 | `extraTools` | `ToolDefinition[]` | — | Hand-written tools alongside auto-generated |
 | `extraPrompts` | `PromptDefinition[]` | — | Custom prompts |
 | `stateful` | `boolean` | `false` | `false` = stateless (default, scalable). `true` = session-cached. |
@@ -51,6 +53,49 @@ Tool handlers call `BaseController` — same pipeline as REST (auth, org-scoping
 | `list`, `get` | `readOnlyHint: true` |
 | `create` | `destructiveHint: false` |
 | `update`, `delete` | `destructiveHint: true, idempotentHint: true` |
+
+### Per-Resource Overrides
+
+```typescript
+await app.register(mcpPlugin, {
+  resources,
+  include: ['job', 'project'],                // only expose these
+  overrides: {
+    job: {
+      operations: ['list', 'get'],             // restrict ops
+      toolNamePrefix: 'db',                    // db_list_jobs, db_get_job
+      names: { get: 'get_job_by_id' },         // custom name for specific op
+      hideFields: ['internalScore'],           // strip from schema
+      descriptions: { list: 'Browse jobs' },   // custom descriptions
+    },
+  },
+});
+```
+
+### Permission Filters (v2.4.2)
+
+Resource permissions with `filters` are automatically enforced in MCP tools — same as REST:
+
+```typescript
+defineResource({
+  name: 'task',
+  permissions: {
+    list: (ctx) => ({
+      granted: !!ctx.user,
+      filters: { orgId: ctx.user?.orgId, branchId: ctx.user?.branchId },
+    }),
+    create: (ctx) => !!ctx.user,                    // boolean works too
+    delete: (ctx) => ({ granted: false, reason: 'Read-only' }),  // deny
+  },
+});
+
+// MCP tools automatically:
+// - list_tasks scopes by orgId + branchId from permission filters
+// - create_task allowed if user is authenticated
+// - delete_task returns "Permission denied: delete on task"
+```
+
+No extra config. `PermissionResult.filters` flow into `_policyFilters` → `BaseController.AccessControl`.
 
 ### Multiple MCP Endpoints
 

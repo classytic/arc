@@ -35,15 +35,16 @@ export function buildRequestContext(
   input: Record<string, unknown>,
   auth: McpAuthResult | null,
   operation: McpOperation,
+  policyFilters?: Record<string, unknown>,
 ): IRequestContext {
   const scope = buildScope(auth);
-  const user = auth ? { id: auth.userId, _id: auth.userId } : null;
+  const user = auth ? { id: auth.userId, _id: auth.userId, ...auth } : null;
 
   const base = {
     user: user as IRequestContext["user"],
     headers: {} as Record<string, string | undefined>,
     context: {},
-    metadata: { _scope: scope, _policyFilters: {} },
+    metadata: { _scope: scope, _policyFilters: policyFilters ?? {} },
   };
 
   switch (operation) {
