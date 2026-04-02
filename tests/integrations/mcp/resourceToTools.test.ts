@@ -301,6 +301,131 @@ describe("resourceToTools", () => {
   // Tool handlers
   // ============================================================================
 
+  // ============================================================================
+  // Permission filters carried into _policyFilters (bug fix)
+  // ============================================================================
+
+  describe("permission filters → _policyFilters", () => {
+    it("passes PermissionResult.filters into controller request context", async () => {
+      const resource = mockResource({
+        permissions: {
+          list: (() => ({
+            granted: true,
+            filters: { projectId: "proj-123", userId: "user-456" },
+          })) as any,
+        },
+      });
+      const tools = resourceToTools(resource);
+      const listTool = tools.find((t) => t.name === "list_products")!;
+
+      await listTool.handler(
+        { page: 1 },
+        { session: { userId: "user-456" }, log: vi.fn().mockResolvedValue(undefined), extra: {} },
+      );
+
+      const ctrl = resource.controller as any;
+      expect(ctrl.list).toHaveBeenCalled();
+      const ctx = ctrl.list.mock.calls[0][0];
+      expect(ctx.metadata._policyFilters).toEqual({
+        projectId: "proj-123",
+        userId: "user-456",
+      });
+    });
+
+    it("denies access when permission check returns granted: false", async () => {
+      const resource = mockResource({
+        permissions: {
+          create: (() => ({
+            granted: false,
+            reason: "Not authorized",
+          })) as any,
+        },
+      });
+      const tools = resourceToTools(resource);
+      const createTool = tools.find((t) => t.name === "create_product")!;
+
+      const result = await createTool.handler(
+        { name: "Widget" },
+        { session: { userId: "u1" }, log: vi.fn().mockResolvedValue(undefined), extra: {} },
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Permission denied");
+      expect((resource.controller as any).create).not.toHaveBeenCalled();
+    });
+
+    it("denies access when permission check returns false", async () => {
+      const resource = mockResource({
+        permissions: {
+          delete: (() => false) as any,
+        },
+      });
+      const tools = resourceToTools(resource);
+      const deleteTool = tools.find((t) => t.name === "delete_product")!;
+
+      const result = await deleteTool.handler(
+        { id: "123" },
+        { session: null, log: vi.fn().mockResolvedValue(undefined), extra: {} },
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Permission denied");
+    });
+
+    it("allows access with empty _policyFilters when permission returns true", async () => {
+      const resource = mockResource({
+        permissions: {
+          get: (() => true) as any,
+        },
+      });
+      const tools = resourceToTools(resource);
+      const getTool = tools.find((t) => t.name === "get_product")!;
+
+      await getTool.handler(
+        { id: "abc" },
+        { session: { userId: "u1" }, log: vi.fn().mockResolvedValue(undefined), extra: {} },
+      );
+
+      const ctx = (resource.controller as any).get.mock.calls[0][0];
+      expect(ctx.metadata._policyFilters).toEqual({});
+    });
+
+    it("handles async permission checks", async () => {
+      const resource = mockResource({
+        permissions: {
+          list: (async () => ({
+            granted: true,
+            filters: { ownerId: "async-user" },
+          })) as any,
+        },
+      });
+      const tools = resourceToTools(resource);
+      const listTool = tools.find((t) => t.name === "list_products")!;
+
+      await listTool.handler(
+        {},
+        { session: { userId: "async-user" }, log: vi.fn().mockResolvedValue(undefined), extra: {} },
+      );
+
+      const ctx = (resource.controller as any).list.mock.calls[0][0];
+      expect(ctx.metadata._policyFilters).toEqual({ ownerId: "async-user" });
+    });
+
+    it("works without permissions defined (no restriction)", async () => {
+      const resource = mockResource({ permissions: {} });
+      const tools = resourceToTools(resource);
+      const listTool = tools.find((t) => t.name === "list_products")!;
+
+      await listTool.handler(
+        {},
+        { session: null, log: vi.fn().mockResolvedValue(undefined), extra: {} },
+      );
+
+      const ctx = (resource.controller as any).list.mock.calls[0][0];
+      expect(ctx.metadata._policyFilters).toEqual({});
+    });
+  });
+
   describe("tool handlers", () => {
     it("list handler calls controller.list with IRequestContext", async () => {
       const resource = mockResource();

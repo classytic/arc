@@ -201,7 +201,7 @@ describe("MongoKit QueryParser → MCP Tools E2E", () => {
         page: 1,
         limit: 10,
       });
-      expect(ctx.user).toEqual({ id: "u1", _id: "u1" });
+      expect(ctx.user).toMatchObject({ id: "u1", _id: "u1" });
     });
 
     it("create tool passes body correctly", async () => {

@@ -394,7 +394,203 @@ describe("Auth rejection scenarios", () => {
 });
 
 // ============================================================================
-// 5. Mixed Tools — Auto-Generated + Custom with Auth
+// 5. Permission Filters — PermissionResult.filters → _policyFilters
+// ============================================================================
+
+describe("Permission filters flow into _policyFilters", () => {
+  // Simulates: user defines permissions that scope by orgId + branchId
+  // MCP tools should respect these filters just like REST routes do.
+
+  const TaskSchema = new mongoose.Schema(
+    {
+      title: { type: String, required: true },
+      orgId: { type: String },
+      branchId: { type: String },
+      status: { type: String, enum: ["open", "closed"], default: "open" },
+    },
+    { timestamps: true },
+  );
+  const TaskModel = mongoose.models.McpPermTask || mongoose.model("McpPermTask", TaskSchema);
+
+  function createTaskResource(
+    permissions: Record<string, unknown>,
+  ) {
+    const repo = new Repository(TaskModel);
+    const parser = new QueryParser({ allowedFilterFields: ["status"] });
+
+    return defineResource({
+      name: "task",
+      displayName: "Task",
+      adapter: createMongooseAdapter({ model: TaskModel, repository: repo }),
+      controller: new BaseController(repo, {
+        resourceName: "task",
+        queryParser: parser,
+        tenantField: false, // no auto-tenant — permissions handle scoping
+      }),
+      queryParser: parser,
+      permissions: permissions as any,
+      schemaOptions: {
+        fieldRules: {
+          title: { type: "string", required: true },
+          orgId: { type: "string", systemManaged: true },
+          branchId: { type: "string", systemManaged: true },
+          status: { type: "string", enum: ["open", "closed"] },
+          createdAt: { type: "date", systemManaged: true },
+          updatedAt: { type: "date", systemManaged: true },
+        },
+        filterableFields: ["status"],
+      },
+    });
+  }
+
+  it("orgId + branchId scoped permission filters data in MCP list", async () => {
+    await TaskModel.create([
+      { title: "Task A1", orgId: "org-a", branchId: "br-1", status: "open" },
+      { title: "Task A2", orgId: "org-a", branchId: "br-1", status: "closed" },
+      { title: "Task A3", orgId: "org-a", branchId: "br-2", status: "open" },
+      { title: "Task B1", orgId: "org-b", branchId: "br-1", status: "open" },
+    ]);
+
+    // Permission: user can only see tasks in their org + branch
+    const scopedPermission = (ctx: { user: { id?: string } | null }) => ({
+      granted: !!ctx.user,
+      filters: { orgId: "org-a", branchId: "br-1" },
+    });
+
+    const resource = createTaskResource({
+      list: scopedPermission,
+      get: scopedPermission,
+      create: scopedPermission,
+      update: scopedPermission,
+      delete: scopedPermission,
+    });
+
+    const tools = resourceToTools(resource);
+    const authRef: AuthRef = { current: { userId: "alice" } };
+    const server = await createMcpServer({ name: "test-perm", tools }, authRef);
+    const client = await connectInMemory(server);
+
+    const result = await client.callTool({ name: "list_tasks", arguments: {} });
+    const data = JSON.parse((result.content[0] as { text: string }).text);
+
+    // Only tasks in org-a + br-1 should be visible
+    expect(data.docs.length).toBe(2);
+    expect(data.docs.every((t: { orgId: string }) => t.orgId === "org-a")).toBe(true);
+    expect(data.docs.every((t: { branchId: string }) => t.branchId === "br-1")).toBe(true);
+  });
+
+  it("permission denial blocks MCP tool call entirely", async () => {
+    const resource = createTaskResource({
+      create: () => ({ granted: false, reason: "Read-only access" }),
+      list: () => true,
+    });
+
+    const tools = resourceToTools(resource);
+    const authRef: AuthRef = { current: { userId: "viewer" } };
+    const server = await createMcpServer({ name: "test-deny", tools }, authRef);
+    const client = await connectInMemory(server);
+
+    const result = await client.callTool({
+      name: "create_task",
+      arguments: { title: "Should fail" },
+    });
+    expect((result as any).isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toContain("Permission denied");
+  });
+
+  it("unauthenticated user denied by permission check", async () => {
+    const resource = createTaskResource({
+      list: (ctx: { user: unknown }) => !!ctx.user,
+    });
+
+    const tools = resourceToTools(resource);
+    // No authRef → session is null → user is null
+    const server = await createMcpServer({ name: "test-nouser", tools });
+    const client = await connectInMemory(server);
+
+    const result = await client.callTool({ name: "list_tasks", arguments: {} });
+    expect((result as any).isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toContain("Permission denied");
+  });
+
+  it("dynamic permission filters based on session user", async () => {
+    await TaskModel.create([
+      { title: "Alice Task", orgId: "org-x", branchId: "main", status: "open" },
+      { title: "Bob Task", orgId: "org-x", branchId: "dev", status: "open" },
+    ]);
+
+    // Permission returns filters based on who's calling
+    const userScopedPerm = (ctx: { user: { id?: string } | null }) => {
+      if (!ctx.user) return false;
+      if (ctx.user.id === "alice") return { granted: true, filters: { branchId: "main" } };
+      if (ctx.user.id === "bob") return { granted: true, filters: { branchId: "dev" } };
+      return { granted: false, reason: "Unknown user" };
+    };
+
+    const resource = createTaskResource({
+      list: userScopedPerm,
+      get: userScopedPerm,
+    });
+
+    const tools = resourceToTools(resource);
+
+    // Alice sees main branch
+    const authA: AuthRef = { current: { userId: "alice" } };
+    const serverA = await createMcpServer({ name: "test-alice", tools }, authA);
+    const clientA = await connectInMemory(serverA);
+
+    const resultA = await clientA.callTool({ name: "list_tasks", arguments: {} });
+    const dataA = JSON.parse((resultA.content[0] as { text: string }).text);
+    expect(dataA.docs.length).toBe(1);
+    expect(dataA.docs[0].title).toBe("Alice Task");
+    expect(dataA.docs[0].branchId).toBe("main");
+
+    // Bob sees dev branch
+    const authB: AuthRef = { current: { userId: "bob" } };
+    const serverB = await createMcpServer({ name: "test-bob", tools }, authB);
+    const clientB = await connectInMemory(serverB);
+
+    const resultB = await clientB.callTool({ name: "list_tasks", arguments: {} });
+    const dataB = JSON.parse((resultB.content[0] as { text: string }).text);
+    expect(dataB.docs.length).toBe(1);
+    expect(dataB.docs[0].title).toBe("Bob Task");
+    expect(dataB.docs[0].branchId).toBe("dev");
+  });
+
+  it("async permission check with external service simulation", async () => {
+    await TaskModel.create([
+      { title: "Permitted Task", orgId: "org-z", branchId: "release", status: "open" },
+      { title: "Forbidden Task", orgId: "org-z", branchId: "nightly", status: "open" },
+    ]);
+
+    // Simulates calling an external auth service
+    const asyncPerm = async (ctx: { user: { id?: string } | null }) => {
+      // Simulate async lookup (e.g., DB query, API call)
+      await new Promise((r) => setTimeout(r, 10));
+      if (!ctx.user) return false;
+      return {
+        granted: true,
+        filters: { orgId: "org-z", branchId: "release" },
+      };
+    };
+
+    const resource = createTaskResource({ list: asyncPerm });
+    const tools = resourceToTools(resource);
+    const authRef: AuthRef = { current: { userId: "deployer" } };
+    const server = await createMcpServer({ name: "test-async", tools }, authRef);
+    const client = await connectInMemory(server);
+
+    const result = await client.callTool({ name: "list_tasks", arguments: {} });
+    const data = JSON.parse((result.content[0] as { text: string }).text);
+
+    expect(data.docs.length).toBe(1);
+    expect(data.docs[0].title).toBe("Permitted Task");
+    expect(data.docs[0].branchId).toBe("release");
+  });
+});
+
+// ============================================================================
+// 6. Mixed Tools — Auto-Generated + Custom with Auth
 // ============================================================================
 
 describe("Mixed auto-generated + custom tools", () => {

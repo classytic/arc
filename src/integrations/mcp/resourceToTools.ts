@@ -10,13 +10,19 @@
 import { z } from "zod";
 import { BaseController } from "../../core/BaseController.js";
 import type { ResourceDefinition } from "../../core/defineResource.js";
-import type { IControllerResponse, IRequestContext } from "../../types/index.js";
+import type { PermissionCheck, PermissionResult } from "../../permissions/types.js";
+import type {
+  IControllerResponse,
+  IRequestContext,
+  ResourcePermissions,
+} from "../../types/index.js";
 import { pluralize } from "../../utils/pluralize.js";
 import { buildRequestContext, type McpOperation } from "./buildRequestContext.js";
 import { type FieldRuleEntry, fieldRulesToZod } from "./fieldRulesToZod.js";
 import type {
   CallToolResult,
   CrudOperation,
+  McpAuthResult,
   McpResourceConfig,
   ToolAnnotations,
   ToolDefinition,
@@ -120,7 +126,7 @@ export function resourceToTools(
         extraHideFields: config.hideFields,
         filterableFields,
       }),
-      handler: createHandler(op, controller, resource.name),
+      handler: createHandler(op, controller, resource.name, resource.permissions),
     });
   }
 
@@ -209,6 +215,7 @@ function createHandler(
   op: CrudOperation,
   controller: unknown,
   resourceName: string,
+  permissions?: ResourcePermissions,
 ): ToolDefinition["handler"] {
   const ctrl = controller as unknown as Record<string, ControllerMethod>;
 
@@ -221,7 +228,28 @@ function createHandler(
           isError: true,
         };
       }
-      const reqCtx = buildRequestContext(input, ctx.session, op as McpOperation);
+
+      // Evaluate permission check → extract policy filters
+      const policyFilters = await evaluatePermission(
+        permissions?.[op as keyof ResourcePermissions],
+        ctx.session,
+        resourceName,
+        op,
+        input,
+      );
+      if (policyFilters === false) {
+        return {
+          content: [{ type: "text", text: `Permission denied: ${op} on ${resourceName}` }],
+          isError: true,
+        };
+      }
+
+      const reqCtx = buildRequestContext(
+        input,
+        ctx.session,
+        op as McpOperation,
+        policyFilters || undefined,
+      );
       return toCallToolResult(await method(reqCtx));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -263,6 +291,53 @@ function createAdditionalRouteHandler(
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/**
+ * Evaluate a resource's permission check in MCP context.
+ *
+ * Returns:
+ * - `false` if permission denied
+ * - `Record<string, unknown>` if granted with filters (ownership patterns)
+ * - `null` if granted without filters (or no permission check defined)
+ */
+async function evaluatePermission(
+  check: PermissionCheck | undefined,
+  session: McpAuthResult | null,
+  resource: string,
+  action: string,
+  input: Record<string, unknown>,
+): Promise<Record<string, unknown> | false | null> {
+  if (!check) return null; // no permission defined = allow
+
+  // Build PermissionContext for MCP — spread full session so permission
+  // functions can access orgId, branchId, roles, etc. from the auth result
+  const user = session ? { id: session.userId, _id: session.userId, ...session } : null;
+  const fakeRequest = {
+    user,
+    headers: {},
+    params: {},
+    query: {},
+    body: input,
+  } as unknown as import("fastify").FastifyRequest;
+
+  const result = await check({
+    user,
+    request: fakeRequest,
+    resource,
+    action,
+    resourceId: typeof input.id === "string" ? input.id : undefined,
+    params: {},
+    data: input,
+  });
+
+  // Boolean result
+  if (typeof result === "boolean") return result ? null : false;
+
+  // PermissionResult
+  const permResult = result as PermissionResult;
+  if (!permResult.granted) return false;
+  return permResult.filters ?? null;
+}
 
 function toCallToolResult(result: IControllerResponse): CallToolResult {
   if (!result.success) {
