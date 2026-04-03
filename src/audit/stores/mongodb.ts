@@ -167,4 +167,3 @@ export class MongoAuditStore implements AuditStore {
   }
 }
 
-export default MongoAuditStore;

@@ -663,4 +663,3 @@ export const websocketPlugin = fp(websocketPluginImpl, {
   name: "arc-websocket",
   fastify: "5.x",
 }) as FastifyPluginAsync<WebSocketPluginOptions>;
-export default websocketPlugin;

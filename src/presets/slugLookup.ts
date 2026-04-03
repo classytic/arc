@@ -34,4 +34,3 @@ export function slugLookupPreset(options: SlugLookupOptions = {}): PresetResult 
   };
 }
 
-export default slugLookupPreset;

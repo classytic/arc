@@ -74,4 +74,3 @@ export function ownedByUserPreset(options: OwnedByUserOptions = {}): PresetResul
   };
 }
 
-export default ownedByUserPreset;

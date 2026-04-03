@@ -509,4 +509,3 @@ export class RedisStreamTransport implements EventTransport {
   }
 }
 
-export default RedisStreamTransport;

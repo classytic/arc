@@ -352,4 +352,3 @@ export function createMongooseAdapter<TDoc = unknown>(
 // Exports
 // ============================================================================
 
-export default createMongooseAdapter;

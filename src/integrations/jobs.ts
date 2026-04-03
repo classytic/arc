@@ -363,4 +363,3 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
 
 /** Pluggable BullMQ job queue integration for Arc */
 export const jobsPlugin: FastifyPluginAsync<JobsPluginOptions> = jobsPluginImpl;
-export default jobsPlugin;

@@ -672,4 +672,3 @@ export function createPermissionMiddleware(
   return buildPermissionMiddleware(permission, resourceName, action);
 }
 
-export default createCrudRouter;

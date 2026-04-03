@@ -43,4 +43,3 @@ export function treePreset(options: TreeOptions = {}): PresetResult {
   };
 }
 
-export default treePreset;

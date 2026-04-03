@@ -111,4 +111,3 @@ export async function introspect(args: string[]): Promise<void> {
   }
 }
 
-export default introspect;

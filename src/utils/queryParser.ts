@@ -574,4 +574,3 @@ export function createQueryParser(options?: ArcQueryParserOptions): ArcQueryPars
   return new ArcQueryParser(options);
 }
 
-export default ArcQueryParser;

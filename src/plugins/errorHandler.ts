@@ -119,6 +119,11 @@ async function errorHandlerPluginFn(
         statusCode = (error as FastifyError).statusCode!;
         response.code = statusCodeToCode(statusCode);
       }
+      // Handle errors with .status (MongoKit, http-errors, etc.)
+      else if ("status" in error && typeof (error as { status: unknown }).status === "number") {
+        statusCode = (error as { status: number }).status;
+        response.code = statusCodeToCode(statusCode);
+      }
       // Handle mapped error types
       else if (error.name && errorMap[error.name]) {
         const mapping = errorMap[error.name]!;
@@ -210,4 +215,3 @@ export const errorHandlerPlugin = fp(errorHandlerPluginFn, {
   fastify: "5.x",
 });
 
-export default errorHandlerPlugin;

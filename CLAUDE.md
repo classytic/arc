@@ -102,16 +102,31 @@ src/
 - Always use `mongodb-memory-server` for MongoDB tests — never a real DB
 - OTel tests use `describe.skip` when `@opentelemetry/api` is not installed
 - Run: `npx vitest run` (all), `npx vitest run tests/path` (specific)
-- Current: 161 files, 2375 passed, 4 skipped, 0 failures
+- Current: 161 files, 2378 passed, 4 skipped, 0 failures
 
 ## Build & Publish
 
 - `npm run build` → tsdown (output to `dist/`)
 - `npm run typecheck` → `tsc --noEmit`
-- `npm run lint` → `biome check src/`
+- `npm run lint` → `biome check src/` (Biome only — no ESLint, no Prettier)
 - `npm run smoke` → `node scripts/smoke-test.mjs` (checks dist artifacts, CLI, imports)
+- `npx knip` → dead code detection (config in `knip.config.ts`)
 - `prepublishOnly` gates: typecheck → test → build → smoke
 - Version is injected at build time via `tsdown.config.ts` define: `__ARC_VERSION__`
+
+### Pre-publish checklist (run in order)
+
+1. `npx tsc --noEmit` — zero type errors
+2. `npx biome check src/ --diagnostic-level=error` — zero lint errors
+3. `npx vitest run` — all tests pass
+4. `npx knip` — review unused exports, no new dead code
+5. `npm run build` — dist/ output clean (166 files)
+6. Verify all 46 subpath exports resolve:
+   - Every `package.json` exports entry has matching `.mjs` + `.d.mts` in `dist/`
+   - Type-only subpaths (`./org/types`, `./integrations`) produce `export {}` at runtime — this is correct (interfaces erased)
+   - `./testing` requires Vitest runtime — cannot be imported outside tests
+7. `npm run smoke` — CLI works, critical imports resolve
+8. `npx knip` reports only intentional public API (adapter types, consumer utilities)
 
 ## Skills & Documentation
 
@@ -125,7 +140,7 @@ src/
 | Peer | Min Version | Required? |
 |------|-------------|-----------|
 | fastify | >=5.0.0 | Yes |
-| @classytic/mongokit | >=3.4.2 | No (recommended) |
+| @classytic/mongokit | >=3.4.5 | No (recommended) |
 | better-auth | >=1.5.5 | No |
 | @classytic/streamline | >=2.0.0 | No |
 | ioredis | >=5.0.0 | No |

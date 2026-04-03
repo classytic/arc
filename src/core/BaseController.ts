@@ -938,4 +938,3 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
   }
 }
 
-export default BaseController;

@@ -85,4 +85,3 @@ export class MemoryAuditStore implements AuditStore {
   }
 }
 
-export default MemoryAuditStore;

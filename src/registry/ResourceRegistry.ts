@@ -265,7 +265,6 @@ export class ResourceRegistry {
   }
 }
 
-export default ResourceRegistry;
 
 // ---------------------------------------------------------------------------
 // Helpers for extracting v2.0 metadata

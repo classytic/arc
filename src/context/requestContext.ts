@@ -91,4 +91,3 @@ export const requestContext = {
   storage,
 };
 
-export default requestContext;

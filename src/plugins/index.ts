@@ -36,7 +36,7 @@ export type { ErrorHandlerOptions } from "./errorHandler.js";
 
 // Global error handling
 export {
-  default as errorHandlerPlugin,
+  errorHandlerPlugin,
   errorHandlerPlugin as errorHandlerPluginFn,
 } from "./errorHandler.js";
 export type { GracefulShutdownOptions } from "./gracefulShutdown.js";

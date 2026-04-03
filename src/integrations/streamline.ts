@@ -308,4 +308,3 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
 
 /** Pluggable streamline integration for Arc */
 export const streamlinePlugin: FastifyPluginAsync<StreamlinePluginOptions> = streamlinePluginImpl;
-export default streamlinePlugin;

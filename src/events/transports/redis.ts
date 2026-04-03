@@ -263,4 +263,3 @@ export class RedisEventTransport implements EventTransport {
   }
 }
 
-export default RedisEventTransport;

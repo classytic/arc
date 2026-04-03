@@ -267,4 +267,3 @@ const discoveryPluginImpl: FastifyPluginAsync<DiscoveryPluginOptions> = async (
 
 /** Auto-discovery plugin for Arc resources */
 export const discoveryPlugin: FastifyPluginAsync<DiscoveryPluginOptions> = discoveryPluginImpl;
-export default discoveryPlugin;

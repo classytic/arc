@@ -424,4 +424,3 @@ export function assertValidConfig(config: ResourceConfig, options?: ValidateOpti
   }
 }
 
-export default validateResourceConfig;

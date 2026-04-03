@@ -145,4 +145,3 @@ export const eventGatewayPlugin = fp(eventGatewayPluginImpl, {
   fastify: "5.x",
 }) as FastifyPluginAsync<EventGatewayOptions>;
 
-export default eventGatewayPlugin;

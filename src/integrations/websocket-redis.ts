@@ -105,4 +105,3 @@ export class RedisWebSocketAdapter implements WebSocketAdapter {
   }
 }
 
-export default RedisWebSocketAdapter;
