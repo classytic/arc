@@ -178,4 +178,3 @@ export function createEvent<T>(
   };
 }
 
-export default MemoryEventTransport;

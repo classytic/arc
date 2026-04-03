@@ -180,4 +180,3 @@ export function multiTenantPreset(options: MultiTenantOptions = {}): PresetResul
   };
 }
 
-export default multiTenantPreset;

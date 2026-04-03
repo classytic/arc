@@ -135,6 +135,59 @@ describe('Error Handler Plugin', () => {
   });
 
   // ========================================================================
+  // .status errors (MongoKit, http-errors, etc.) → correct status code
+  // ========================================================================
+
+  describe('Errors with .status property (MongoKit pattern)', () => {
+    it('should handle .status = 404 (MongoKit "Document not found")', async () => {
+      await createApp({}, (app) => {
+        app.get('/status-404', async () => {
+          const err = new Error('Document not found') as Error & { status: number };
+          err.status = 404;
+          throw err;
+        });
+      });
+
+      const res = await app.inject({ method: 'GET', url: '/status-404' });
+      expect(res.statusCode).toBe(404);
+      const body = JSON.parse(res.body);
+      expect(body.code).toBe('NOT_FOUND');
+      expect(body.error).toBe('Document not found');
+    });
+
+    it('should handle .status = 400', async () => {
+      await createApp({}, (app) => {
+        app.get('/status-400', async () => {
+          const err = new Error('Invalid input') as Error & { status: number };
+          err.status = 400;
+          throw err;
+        });
+      });
+
+      const res = await app.inject({ method: 'GET', url: '/status-400' });
+      expect(res.statusCode).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.code).toBe('BAD_REQUEST');
+    });
+
+    it('should prefer .statusCode over .status (Fastify takes priority)', async () => {
+      await createApp({}, (app) => {
+        app.get('/both', async () => {
+          const err = new Error('Conflict') as Error & { statusCode: number; status: number };
+          err.statusCode = 409;
+          err.status = 500;
+          throw err;
+        });
+      });
+
+      const res = await app.inject({ method: 'GET', url: '/both' });
+      expect(res.statusCode).toBe(409);
+      const body = JSON.parse(res.body);
+      expect(body.code).toBe('CONFLICT');
+    });
+  });
+
+  // ========================================================================
   // CastError → 400
   // ========================================================================
 

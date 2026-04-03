@@ -360,7 +360,7 @@ GET /products?lookup[cat][from]=categories&...&lookup[cat][select]=name,slug
 
 Operators: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `nin`, `like`, `regex`, `exists`
 
-**Custom query parser (e.g., MongoKit for $lookup support):**
+**Custom query parser (e.g., MongoKit >=3.4.5 for $lookup, whitelists, MCP auto-derive):**
 
 ```typescript
 import { QueryParser } from '@classytic/mongokit';
@@ -368,11 +368,16 @@ import { QueryParser } from '@classytic/mongokit';
 defineResource({
   name: 'product',
   adapter: createMongooseAdapter({ model: ProductModel, repository: productRepo }),
-  queryParser: new QueryParser(),  // enables lookup, advanced populate, keyset pagination
+  queryParser: new QueryParser({
+    allowedFilterFields: ['status', 'category', 'orgId'],  // whitelist filter fields
+    allowedSortFields: ['createdAt', 'price'],              // whitelist sort fields
+    allowedOperators: ['eq', 'gte', 'lte', 'in'],          // whitelist operators
+  }),
+  // MCP auto-derives filterableFields from queryParser — no duplication needed
   schemaOptions: {
     query: {
-      allowedPopulate: ['category', 'brand'],     // whitelist populate paths
-      allowedLookups: ['categories', 'brands'],   // whitelist lookup collections
+      allowedPopulate: ['category', 'brand'],
+      allowedLookups: ['categories', 'brands'],
     },
   },
 });
@@ -384,6 +389,8 @@ defineResource({
 import { ArcError, NotFoundError, ValidationError, UnauthorizedError, ForbiddenError } from '@classytic/arc';
 throw new NotFoundError('Product not found');  // 404
 ```
+
+Error handler catches: `ArcError` → `.statusCode` (Fastify) → `.status` (MongoKit, http-errors) → `errorMap` → Mongoose/MongoDB → fallback 500. DB-agnostic — any error with `.status` or `.statusCode` gets the correct HTTP response.
 
 ## Compensating Transaction
 

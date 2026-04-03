@@ -154,4 +154,3 @@ export class RedisCacheStore<TValue = unknown> implements CacheStore<TValue> {
   }
 }
 
-export default RedisCacheStore;

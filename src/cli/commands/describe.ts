@@ -514,4 +514,3 @@ export async function describe(args: string[]): Promise<void> {
   }
 }
 
-export default describe;

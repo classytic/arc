@@ -104,9 +104,11 @@ describe('Bulk Preset + MongoKit E2E', () => {
     it('fails validation for invalid documents', async () => {
       const { controller, makeCtx } = await createBulkController();
 
-      await expect(
-        controller.bulkCreate(makeCtx({ items: [{ price: 10 }] })),
-      ).rejects.toThrow();
+      // MongoKit 3.4.5+: ordered defaults to false (partial inserts).
+      // Invalid docs are skipped rather than throwing — result is success with empty data.
+      const result = await controller.bulkCreate(makeCtx({ items: [{ price: 10 }] }));
+      expect(result.success).toBe(true);
+      expect(result.data).toHaveLength(0);
 
       const dbCount = await ProductModel.countDocuments();
       expect(dbCount).toBe(0);

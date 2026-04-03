@@ -90,4 +90,3 @@ export function requireOrgRole(...roles: string[]): RouteHandler {
   return orgGuard({ requireOrgContext: true, roles });
 }
 
-export default orgGuard;

@@ -35,4 +35,3 @@ export function softDeletePreset(): PresetResult {
   };
 }
 
-export default softDeletePreset;

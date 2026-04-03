@@ -223,4 +223,3 @@ export class MongoIdempotencyStore implements IdempotencyStore {
   }
 }
 
-export default MongoIdempotencyStore;

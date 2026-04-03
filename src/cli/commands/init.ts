@@ -3430,4 +3430,3 @@ ${dbConfig}
 `;
 }
 
-export default init;

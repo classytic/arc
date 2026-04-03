@@ -195,4 +195,3 @@ export class MemoryIdempotencyStore implements IdempotencyStore {
   }
 }
 
-export default MemoryIdempotencyStore;

@@ -69,4 +69,3 @@ export function auditedPreset(options: AuditedPresetOptions = {}): PresetResult 
   };
 }
 
-export default auditedPreset;

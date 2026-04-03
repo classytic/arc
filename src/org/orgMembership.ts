@@ -93,4 +93,4 @@ export function hasOrgRole(
   return requiredRoles.some((role) => userOrgRoles.includes(role));
 }
 
-export default { orgMembershipCheck, getUserOrgRoles, hasOrgRole };
+

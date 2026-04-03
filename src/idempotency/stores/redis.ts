@@ -174,4 +174,3 @@ export class RedisIdempotencyStore implements IdempotencyStore {
   }
 }
 
-export default RedisIdempotencyStore;

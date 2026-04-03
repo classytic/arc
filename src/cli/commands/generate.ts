@@ -574,4 +574,3 @@ async function generateFile(
   console.log(`  + Created: ${filename}`);
 }
 
-export default generate;
