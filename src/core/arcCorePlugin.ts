@@ -95,6 +95,7 @@ const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
       requestId: request.id,
       startTime: performance.now(),
     };
+
     requestContext.storage.run(store, done);
   });
 

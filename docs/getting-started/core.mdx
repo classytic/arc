@@ -42,6 +42,22 @@ const productResource = defineResource({
   // HTTP method for updates (default: 'PATCH')
   updateMethod: 'PATCH',       // 'PUT' | 'PATCH' | 'both'
 
+  // Inline lifecycle hooks
+  hooks: {
+    beforeCreate: async (ctx) => {
+      console.log('Creating:', ctx.data.name);
+    },
+    afterCreate: async (ctx) => {
+      analytics.track('product.created', { id: ctx.data._id, user: ctx.user?.id });
+    },
+    beforeUpdate: async (ctx) => {
+      console.log('Updating:', ctx.meta?.id, 'by', ctx.user?.id);
+    },
+    afterDelete: async (ctx) => {
+      await cleanupService.remove(ctx.meta?.id);
+    },
+  },
+
   // Advanced
   skipValidation: false,       // Bypass config validation
   disableDefaultRoutes: false, // Only use additionalRoutes

@@ -173,4 +173,3 @@ export class RedisIdempotencyStore implements IdempotencyStore {
     // The caller is responsible for closing it
   }
 }
-

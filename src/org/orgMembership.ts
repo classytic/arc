@@ -92,5 +92,3 @@ export function hasOrgRole(
 
   return requiredRoles.some((role) => userOrgRoles.includes(role));
 }
-
-

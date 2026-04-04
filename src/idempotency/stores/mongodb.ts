@@ -222,4 +222,3 @@ export class MongoIdempotencyStore implements IdempotencyStore {
     // Don't close the connection - it's passed in and may be shared
   }
 }
-

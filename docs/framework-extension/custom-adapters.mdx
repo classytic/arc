@@ -52,6 +52,23 @@ interface CrudRepository<TDoc> {
 }
 ```
 
+### Recommended: `getOne()`
+
+If your resource uses `idField` (custom ID like `slug`, `sku`, `code`) or permission filters with org-scoping, implement `getOne`:
+
+```typescript
+interface CrudRepository<TDoc> {
+  // ... required methods above
+
+  /** Find single doc by compound filter — used by AccessControl for idField + org scoping */
+  getOne?(filter: Record<string, unknown>, options?: QueryOptions): Promise<TDoc | null>;
+}
+```
+
+Without `getOne`, Arc falls back to `getById` + post-fetch security checks. With `getOne`, Arc sends a single compound query (`{ slug: 'laptop', organizationId: 'org-1' }`) — more efficient and secure.
+
+MongoKit's Repository already implements `getOne`. For custom adapters (Prisma, Drizzle, etc.), map it to your ORM's `findFirst`/`findUnique` with a `where` clause.
+
 ### Optional: `getSchemaMetadata()`
 
 Provides field and relation metadata for introspection:

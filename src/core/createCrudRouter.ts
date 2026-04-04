@@ -320,7 +320,11 @@ function createAdditionalRoutes<TDoc = unknown>(
           ? idempotencyMw
           : null;
 
+    // preAuth runs BEFORE auth — for token promotion (e.g., EventSource ?token= → Authorization)
+    const preAuthHandlers = (route as { preAuth?: PreHandlerHook[] }).preAuth ?? [];
+
     const preHandler = [
+      ...preAuthHandlers, // Before auth — promote tokens, set headers
       arcDecorator,
       authMw, // Authenticate first (populates request.user)
       permissionMw, // Then check permissions
@@ -328,13 +332,23 @@ function createAdditionalRoutes<TDoc = unknown>(
       ...customPreHandlers,
     ].filter(Boolean) as PreHandlerHook[];
 
+    // streamResponse: true → SSE headers + bypass Arc response wrapper
+    const isStream = (route as { streamResponse?: boolean }).streamResponse === true;
+
     fastify.route({
       method: route.method,
       url: route.path,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       schema: schema as Record<string, any>, // Fastify RouteOptions.schema requires this shape
       preHandler: preHandler.length > 0 ? (preHandler as any) : undefined,
-      handler,
+      handler: isStream
+        ? async (request, reply) => {
+            reply.raw.setHeader("Content-Type", "text/event-stream");
+            reply.raw.setHeader("Cache-Control", "no-cache");
+            reply.raw.setHeader("Connection", "keep-alive");
+            return (handler as (req: unknown, rep: unknown) => unknown)(request, reply);
+          }
+        : handler,
       ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
     });
   }
@@ -671,4 +685,3 @@ export function createPermissionMiddleware(
 ): RouteHandlerMethod | null {
   return buildPermissionMiddleware(permission, resourceName, action);
 }
-

@@ -1,5 +1,52 @@
 # Changelog
 
+## 2.5.0
+
+### MCP Integration — AI Agent Tools
+
+Expose Arc resources as MCP tools for Claude, Cursor, Copilot, and any MCP-compatible agent. Zero-config auto-generation from `defineResource()` or fully custom tools via `defineTool()`.
+
+```typescript
+import { mcpPlugin } from '@classytic/arc/mcp';
+await app.register(mcpPlugin, { resources, auth: false });
+// → list_products, get_product, create_product, update_product, delete_product
+```
+
+- **Stateless by default** — fresh server per request, scales horizontally
+- **Three auth modes** — `false` (no auth), Better Auth OAuth 2.1, custom function
+- **Multi-tenancy** — `organizationId` from auth auto-scopes all queries
+- **Permission filters** — `PermissionResult.filters` enforced in MCP (same as REST)
+- **Guards** — `guard(requireAuth, requireOrg, requireRole('admin'), handler)`
+- **Schema discovery** — `arc://schemas` and `arc://schemas/{name}` MCP resources
+- **Health endpoint** — `GET /mcp/health` for diagnostics
+- **Per-resource overrides** — `include`, `names`, `toolNamePrefix`, `hideFields`
+- **Custom tools co-located** — `order.mcp.ts` alongside `order.resource.ts`
+- **CLI** — `arc generate resource product --mcp`, `arc generate mcp analytics`
+
+### DX Improvements
+
+- **`ArcRequest`** — typed Fastify request with `user`, `scope`, `signal`
+- **`envelope(data, meta?)`** — response helper, no manual `{ success, data }` wrapping
+- **`getOrgContext(req)`** — canonical org extraction from any auth type
+- **`createDomainError(code, msg, status)`** — domain errors with auto HTTP status mapping
+- **`onRegister(fastify)`** — resource lifecycle hook for wiring singletons
+- **`preAuth`** — pre-auth handlers on routes for SSE `?token=` promotion
+- **`streamResponse`** — auto SSE headers + bypasses response wrapper
+- **`request.signal`** — Fastify 5 native AbortSignal on disconnect
+
+### Test Coverage
+
+- 2,448 tests across 166 files (up from 2,228)
+- 40 MCP permission tests (auth, multi-tenancy, guards, field-level, composite)
+- 31 MCP DX tests (include, names, prefix, disableDefaultRoutes, mcpHandler, CRUD lifecycle)
+- 17 core DX tests (envelope, getOrgContext, createDomainError, onRegister, preAuth, streamResponse)
+
+### Dependencies
+
+- `@modelcontextprotocol/sdk` — optional peer dep (required for MCP)
+- `zod` — optional peer dep (required for MCP)
+- `@classytic/mongokit` — bumped to >=3.4.3 (exposes QueryParser getters)
+
 ## 2.4.1
 
 ### New Features

@@ -42,4 +42,3 @@ export function treePreset(options: TreeOptions = {}): PresetResult {
     },
   };
 }
-

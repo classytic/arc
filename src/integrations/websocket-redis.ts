@@ -104,4 +104,3 @@ export class RedisWebSocketAdapter implements WebSocketAdapter {
     // Don't quit the pub client — it may be shared
   }
 }
-

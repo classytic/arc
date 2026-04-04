@@ -3429,4 +3429,3 @@ ${dbConfig}
 # { pattern = "api.example.com/*", zone_name = "example.com" }
 `;
 }
-

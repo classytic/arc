@@ -130,6 +130,53 @@ export function getUserRoles(scope: RequestScope): string[] {
 }
 
 // ============================================================================
+// Context Extractors
+// ============================================================================
+
+/**
+ * Org context — canonical extraction from a Fastify request.
+ *
+ * Works regardless of auth type (JWT, Better Auth, custom) by reading
+ * `request.scope` and `request.user`. Eliminates the need for each resource
+ * to re-invent org extraction from headers/user/scope.
+ *
+ * @example
+ * ```typescript
+ * import { getOrgContext } from '@classytic/arc/scope';
+ *
+ * handler: async (request, reply) => {
+ *   const { userId, organizationId, roles, orgRoles } = getOrgContext(request);
+ * }
+ * ```
+ */
+export function getOrgContext(request: {
+  scope?: RequestScope;
+  user?: Record<string, unknown> | null;
+  headers?: Record<string, string | string[] | undefined>;
+}): {
+  userId: string | undefined;
+  organizationId: string | undefined;
+  roles: string[];
+  orgRoles: string[];
+} {
+  const scope = request.scope ?? { kind: "public" as const };
+
+  // Primary: derive from scope (set by auth adapters)
+  const userId =
+    getUserId(scope) ??
+    (request.user?.id as string | undefined) ??
+    (request.user?._id as string | undefined);
+  const organizationId =
+    getOrgId(scope) ??
+    (request.user?.organizationId as string | undefined) ??
+    (request.headers?.["x-organization-id"] as string | undefined);
+  const roles = getUserRoles(scope);
+  const orgRoles = getOrgRoles(scope);
+
+  return { userId, organizationId, roles, orgRoles };
+}
+
+// ============================================================================
 // Constants
 // ============================================================================
 

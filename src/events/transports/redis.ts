@@ -262,4 +262,3 @@ export class RedisEventTransport implements EventTransport {
     return pattern.includes("*") || pattern.includes("?") || pattern.includes("[");
   }
 }
-

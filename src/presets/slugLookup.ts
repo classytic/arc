@@ -33,4 +33,3 @@ export function slugLookupPreset(options: SlugLookupOptions = {}): PresetResult 
     },
   };
 }
-

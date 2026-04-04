@@ -68,4 +68,3 @@ export function auditedPreset(options: AuditedPresetOptions = {}): PresetResult 
     },
   };
 }
-

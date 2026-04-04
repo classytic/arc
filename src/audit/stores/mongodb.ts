@@ -166,4 +166,3 @@ export class MongoAuditStore implements AuditStore {
     }));
   }
 }
-

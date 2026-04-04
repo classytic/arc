@@ -314,6 +314,26 @@ const app = await createApp({
 
 ## Hooks
 
+**Inline on resource (recommended):**
+
+```typescript
+defineResource({
+  name: 'chat',
+  hooks: {
+    beforeCreate: async (ctx) => { ctx.data.slug = slugify(ctx.data.name); },
+    afterCreate: async (ctx) => { analytics.track('created', { id: ctx.data._id, user: ctx.user?.id }); },
+    beforeUpdate: async (ctx) => { console.log('Updating', ctx.meta?.id, 'existing:', ctx.meta?.existing); },
+    afterUpdate: async (ctx) => { await invalidateCache(ctx.data._id); },
+    beforeDelete: async (ctx) => { if (ctx.data.isProtected) throw new Error('Cannot delete'); },
+    afterDelete: async (ctx) => { await cleanupFiles(ctx.meta?.id); },
+  },
+});
+```
+
+`ResourceHookContext`: `{ data, user?, meta? }` — `data` is the document, `meta` has `id` and `existing` (for update/delete).
+
+**App-level (cross-resource):**
+
 ```typescript
 import { createHookSystem, beforeCreate, afterUpdate } from '@classytic/arc/hooks';
 
@@ -386,8 +406,10 @@ defineResource({
 ## Error Classes
 
 ```typescript
-import { ArcError, NotFoundError, ValidationError, UnauthorizedError, ForbiddenError } from '@classytic/arc';
-throw new NotFoundError('Product not found');  // 404
+import { ArcError, NotFoundError, ValidationError, createDomainError } from '@classytic/arc';
+throw new NotFoundError('Product not found');                      // 404
+throw createDomainError('MEMBER_NOT_FOUND', 'Not found', 404);    // domain error with code
+throw createDomainError('SELF_REFERRAL', 'Cannot self-refer', 422, { field: 'referralCode' });
 ```
 
 Error handler catches: `ArcError` → `.statusCode` (Fastify) → `.status` (MongoKit, http-errors) → `errorMap` → Mongoose/MongoDB → fallback 500. DB-agnostic — any error with `.status` or `.statusCode` gets the correct HTTP response.
@@ -480,6 +502,35 @@ src/resources/order/
 ```
 
 Generate: `arc generate resource order --mcp` | Wire: `extraTools: [fulfillOrderTool]`
+
+**DX helpers** (v2.4.4):
+
+```typescript
+// Typed request for wrapHandler: false routes — no more (req as any).user
+import type { ArcRequest } from '@classytic/arc';
+handler: async (req: ArcRequest, reply) => { req.user?.id; req.scope; req.signal; }
+
+// Response envelope — no manual { success, data } wrapping
+import { envelope } from '@classytic/arc';
+reply.send(envelope(data, { total: 100 }));
+
+// Canonical org extraction — replaces 19 duplicated patterns
+import { getOrgContext } from '@classytic/arc/scope';
+const { userId, organizationId, roles, orgRoles } = getOrgContext(request);
+
+// Domain errors with auto HTTP status mapping
+import { createDomainError } from '@classytic/arc';
+throw createDomainError('SELF_REFERRAL', 'Cannot refer yourself', 422);
+
+// Resource lifecycle hook — wire singletons during registration
+defineResource({ name: 'notification', onRegister: (f) => setSseManager(f.sseManager) });
+
+// SSE auth — preAuth runs BEFORE auth middleware (EventSource can't set headers)
+additionalRoutes: [{ preAuth: [(req) => { req.headers.authorization = `Bearer ${req.query.token}`; }] }]
+
+// SSE streaming — auto headers + bypasses response wrapper
+additionalRoutes: [{ streamResponse: true, handler: async (req, reply) => reply.send(stream) }]
+```
 
 ## Subpath Imports
 
