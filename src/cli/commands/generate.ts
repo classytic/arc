@@ -573,4 +573,3 @@ async function generateFile(
   writeFileSync(filepath, template(name, lowerName));
   console.log(`  + Created: ${filename}`);
 }
-

@@ -245,6 +245,30 @@ export function createError(
 }
 
 /**
+ * Create a domain-specific error with automatic HTTP status mapping.
+ *
+ * Eliminates manual `if (err.code === 'X') return status` boilerplate.
+ * Arc's error handler automatically maps `statusCode` to HTTP response.
+ *
+ * @example
+ * ```typescript
+ * import { createDomainError } from '@classytic/arc';
+ *
+ * throw createDomainError('MEMBER_NOT_FOUND', 'Member does not exist', 404);
+ * throw createDomainError('SELF_REFERRAL', 'Cannot refer yourself', 422);
+ * throw createDomainError('INSUFFICIENT_BALANCE', 'Not enough credits', 402, { balance: 0 });
+ * ```
+ */
+export function createDomainError(
+  code: string,
+  message: string,
+  statusCode = 400,
+  details?: Record<string, unknown>,
+): ArcError {
+  return new ArcError(message, { code, statusCode, details });
+}
+
+/**
  * Check if error is an Arc error
  */
 export function isArcError(error: unknown): error is ArcError {

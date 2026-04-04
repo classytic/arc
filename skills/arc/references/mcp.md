@@ -429,3 +429,138 @@ await app.register(mcpPlugin, {
 - `DELETE /mcp` — terminates session
 
 Sessions: lazily created, TTL-cached, LRU-evicted at max capacity, auto-cleaned on shutdown.
+
+## Health Endpoint
+
+`GET /mcp/health` — no MCP protocol needed, plain JSON:
+
+```json
+{
+  "status": "ok",
+  "mode": "stateless",
+  "tools": 11,
+  "resources": 2,
+  "toolNames": ["list_products", "get_product", ...],
+  "sessions": null
+}
+```
+
+Use to verify the MCP server is alive before configuring Claude CLI.
+
+## DX Helpers (v2.4.4)
+
+### ArcRequest — Typed Fastify Request
+
+For `wrapHandler: false` routes, use `ArcRequest` instead of `(req as any).user`:
+
+```typescript
+import type { ArcRequest } from '@classytic/arc';
+
+handler: async (req: ArcRequest, reply) => {
+  req.user?.id;                    // typed
+  req.scope.organizationId;        // typed (when member)
+  req.signal;                      // AbortSignal (Fastify 5 built-in)
+}
+```
+
+### envelope() — Response Helper
+
+```typescript
+import { envelope } from '@classytic/arc';
+
+handler: async (req, reply) => {
+  const data = await service.getResults();
+  return reply.send(envelope(data));
+  // → { success: true, data }
+  return reply.send(envelope(data, { total: 100, page: 1 }));
+  // → { success: true, data, total: 100, page: 1 }
+}
+```
+
+### getOrgContext() — Canonical Org Extraction
+
+Eliminates duplicated `req.user.organizationId || req.headers['x-organization-id']` patterns:
+
+```typescript
+import { getOrgContext } from '@classytic/arc/scope';
+
+handler: async (req, reply) => {
+  const { userId, organizationId, roles, orgRoles } = getOrgContext(req);
+  // Works regardless of auth type (JWT, Better Auth, custom)
+}
+```
+
+### createDomainError() — Error Factory
+
+Eliminates manual `if (err.code) return status` mapping:
+
+```typescript
+import { createDomainError } from '@classytic/arc';
+
+throw createDomainError('MEMBER_NOT_FOUND', 'Member does not exist', 404);
+throw createDomainError('SELF_REFERRAL', 'Cannot refer yourself', 422);
+throw createDomainError('INSUFFICIENT_BALANCE', 'Not enough credits', 402, { balance: 0 });
+// Arc's error handler auto-maps statusCode to HTTP response
+```
+
+### onRegister — Resource Lifecycle Hook
+
+Called during plugin registration with the scoped Fastify instance:
+
+```typescript
+defineResource({
+  name: 'notification',
+  onRegister: (fastify) => {
+    setSseManager(fastify.sseManager);
+  },
+})
+```
+
+### preAuth — Pre-Auth Handlers for SSE/WebSocket
+
+Run before auth middleware. Use for promoting `?token=` to `Authorization` header (EventSource can't set headers):
+
+```typescript
+additionalRoutes: [{
+  method: 'GET',
+  path: '/stream',
+  wrapHandler: false,
+  permissions: requireAuth(),
+  preAuth: [(req) => {
+    const token = req.query?.token;
+    if (token) req.headers.authorization = `Bearer ${token}`;
+  }],
+  handler: sseHandler,
+}]
+```
+
+### streamResponse — SSE Route Flag
+
+Auto-sets SSE headers and bypasses Arc's response wrapper:
+
+```typescript
+additionalRoutes: [{
+  method: 'POST',
+  path: '/stream',
+  streamResponse: true,        // SSE headers + no { success, data } wrapper
+  permissions: requireAuth(),
+  handler: async (request, reply) => {
+    const { stream } = await generateStream({ abortSignal: request.signal });
+    return reply.send(stream);
+  },
+}]
+```
+
+## Test Coverage
+
+165 test files, 2439 tests. MCP-specific:
+
+| Test File | Tests | Covers |
+|-----------|-------|--------|
+| `mcp-auth-e2e.test.ts` | 16 | All auth modes, multi-tenancy, permission filters, async permissions |
+| `mcp-dx-features.test.ts` | 14 | include, names, prefix, disableDefaultRoutes, mcpHandler, guards, CRUD lifecycle |
+| `resourceToTools.test.ts` | 12 | Tool generation, annotations, field hiding, soft delete |
+| `createMcpServer.test.ts` | 10 | Server creation, tool registration, InMemoryTransport |
+| `guards.test.ts` | 8 | requireAuth, requireOrg, requireRole, customGuard, composition |
+| `dx-features.test.ts` | 17 | envelope, getOrgContext, createDomainError, onRegister, preAuth, streamResponse |
+| Others | 32 | fieldRulesToZod, defineTool, definePrompt, buildRequestContext, sessionCache, authCache |

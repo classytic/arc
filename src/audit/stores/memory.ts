@@ -84,4 +84,3 @@ export class MemoryAuditStore implements AuditStore {
     this.entries = [];
   }
 }
-

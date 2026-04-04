@@ -1,6 +1,6 @@
 {
   "name": "@classytic/arc",
-  "version": "2.4.3",
+  "version": "2.5.0",
   "description": "Resource-oriented backend framework for Fastify — clean, minimal, powerful, tree-shakable",
   "type": "module",
   "exports": {
@@ -220,7 +220,7 @@
     "node": ">=22"
   },
   "peerDependencies": {
-    "@classytic/mongokit": ">=3.4.5",
+    "@classytic/mongokit": ">=3.5.0",
     "@classytic/streamline": ">=2.0.0",
     "@fastify/cors": "^11.0.0",
     "@fastify/helmet": "^13.0.0",
@@ -244,7 +244,7 @@
     "fastify-raw-body": "^5.0.0",
     "ioredis": "^5.0.0",
     "mongodb": "^6.0.0 || ^7.0.0",
-    "mongoose": "^8.0.0 || ^9.0.0",
+    "mongoose": ">=9.0.0",
     "pino-pretty": "^13.0.0",
     "zod": "^4.0.0"
   },
@@ -337,7 +337,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.10",
-    "@classytic/mongokit": "^3.4.5",
+    "@classytic/mongokit": "^3.5.2",
     "@fastify/jwt": "^10.0.0",
     "@fastify/multipart": "^9.0.0",
     "@fastify/type-provider-typebox": "^6.0.0",

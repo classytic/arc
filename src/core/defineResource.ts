@@ -38,7 +38,7 @@
  * ```
  */
 
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import type { DataAdapter } from "../adapters/interface.js";
 import { CRUD_OPERATIONS } from "../constants.js";
 import { applyPresets } from "../presets/index.js";
@@ -207,6 +207,81 @@ export function defineResource<TDoc = AnyRecord>(
         priority: hook.priority ?? 10,
       })),
     );
+  }
+
+  // Wire up inline ResourceHooks from config.hooks
+  if (config.hooks) {
+    const h = config.hooks;
+    type PendingHook = {
+      operation: "create" | "update" | "delete";
+      phase: "before" | "after";
+      handler: (ctx: AnyRecord) => unknown;
+      priority: number;
+    };
+    const inlineHooks: PendingHook[] = [];
+
+    const toCtx = (ctx: AnyRecord) => ({
+      data: (ctx.data ?? ctx.result ?? {}) as AnyRecord,
+      user: ctx.user as import("../types/index.js").UserBase | undefined,
+      meta: ctx.meta as AnyRecord | undefined,
+    });
+
+    if (h.beforeCreate) {
+      const fn = h.beforeCreate;
+      inlineHooks.push({
+        operation: "create",
+        phase: "before",
+        priority: 10,
+        handler: (ctx) => fn(toCtx(ctx)),
+      });
+    }
+    if (h.afterCreate) {
+      const fn = h.afterCreate;
+      inlineHooks.push({
+        operation: "create",
+        phase: "after",
+        priority: 10,
+        handler: (ctx) => fn(toCtx(ctx)),
+      });
+    }
+    if (h.beforeUpdate) {
+      const fn = h.beforeUpdate;
+      inlineHooks.push({
+        operation: "update",
+        phase: "before",
+        priority: 10,
+        handler: (ctx) => fn(toCtx(ctx)),
+      });
+    }
+    if (h.afterUpdate) {
+      const fn = h.afterUpdate;
+      inlineHooks.push({
+        operation: "update",
+        phase: "after",
+        priority: 10,
+        handler: (ctx) => fn(toCtx(ctx)),
+      });
+    }
+    if (h.beforeDelete) {
+      const fn = h.beforeDelete;
+      inlineHooks.push({
+        operation: "delete",
+        phase: "before",
+        priority: 10,
+        handler: (ctx) => fn(toCtx(ctx)),
+      });
+    }
+    if (h.afterDelete) {
+      const fn = h.afterDelete;
+      inlineHooks.push({
+        operation: "delete",
+        phase: "after",
+        priority: 10,
+        handler: (ctx) => fn(toCtx(ctx)),
+      });
+    }
+
+    resource._pendingHooks.push(...inlineHooks);
   }
 
   // Auto-register with OpenAPI schemas
@@ -389,6 +464,13 @@ export class ResourceDefinition<TDoc = AnyRecord> {
 
     // Pending hooks from presets
     this._pendingHooks = config._pendingHooks ?? [];
+
+    // onRegister lifecycle hook (internal — called by toPlugin)
+    if ((config as ResourceConfig<TDoc>).onRegister) {
+      (
+        this as unknown as { _onRegister?: (f: FastifyInstance) => void | Promise<void> }
+      )._onRegister = (config as ResourceConfig<TDoc>).onRegister;
+    }
   }
 
   /** Get repository from adapter (if available) */
@@ -496,6 +578,14 @@ export class ResourceDefinition<TDoc = AnyRecord> {
         for (const [pattern, tags] of Object.entries(self.cache.invalidateOn)) {
           (registerRule as (rule: { pattern: string; tags: string[] }) => void)({ pattern, tags });
         }
+      }
+
+      // onRegister lifecycle hook — called with the scoped Fastify instance
+      const onRegister = (
+        self as unknown as { _onRegister?: (f: FastifyInstance) => void | Promise<void> }
+      )._onRegister;
+      if (onRegister) {
+        await onRegister(fastify);
       }
 
       await fastify.register(
@@ -705,4 +795,3 @@ function capitalize(str: string): string {
   if (!str) return "";
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
-

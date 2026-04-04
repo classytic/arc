@@ -179,4 +179,3 @@ export function multiTenantPreset(options: MultiTenantOptions = {}): PresetResul
     } as MiddlewareConfig,
   };
 }
-

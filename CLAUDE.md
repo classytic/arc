@@ -54,6 +54,14 @@ src/
 - All scopes carry `userId?: string` and `userRoles?: string[]`
 - Use `getUserId(scope)` and `getUserRoles(scope)` accessors, not direct property access
 
+### Generics & `unknown` Defaults
+- `BaseController<TDoc = AnyRecord>`, `MongooseAdapter<TDoc = unknown>`, `createMongooseAdapter<TDoc = unknown>` all default to `unknown`/`AnyRecord`
+- **This is intentional** — `TDoc` is auto-inferred from the Mongoose `Model<T>` argument. The `unknown` default only applies when no inference is possible, which forces the developer to narrow (safer than `any`)
+- **Never replace `unknown` with `any`** — it breaks type safety downstream
+- Mongoose 9 `InferSchemaType<typeof schema>` works with Arc automatically: `mongoose.model('P', schema)` creates `Model<Inferred>`, Arc infers `TDoc` from it
+- `RepositoryLike` returns `Promise<unknown>` intentionally — it's the minimum contract. `BaseController` casts internally. Developers never call `RepositoryLike` methods directly
+- `RepositoryLike` has 5 required methods + optional `getOne` (for AccessControl compound queries) + optional preset methods (bulk, softDelete, tree, slugLookup). See `src/adapters/interface.ts` for the full interface with JSDoc
+
 ### QueryResolver
 - Accepts any query parser output (MongoKit, Arc built-in, custom)
 - `select` is preserved in its original format (string, array, or object projection) — never forced to string
@@ -140,10 +148,10 @@ src/
 | Peer | Min Version | Required? |
 |------|-------------|-----------|
 | fastify | >=5.0.0 | Yes |
-| @classytic/mongokit | >=3.4.5 | No (recommended) |
+| @classytic/mongokit | >=3.5.0 | No (recommended) |
 | better-auth | >=1.5.5 | No |
 | @classytic/streamline | >=2.0.0 | No |
 | ioredis | >=5.0.0 | No |
 | bullmq | >=5.0.0 | No |
-| mongoose | >=8.0.0 | No |
+| mongoose | >=9.0.0 | No |
 | @prisma/client | >=5.0.0 | No |

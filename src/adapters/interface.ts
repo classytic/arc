@@ -13,12 +13,49 @@ import type { CrudRepository, OpenApiSchemas, RouteSchemaOptions } from "../type
  *
  * CrudRepository<TDoc> and MongoKit Repository both satisfy this interface.
  */
+/**
+ * Minimal repository interface for flexible adapter compatibility.
+ * Any repository with these method signatures is accepted.
+ *
+ * **Required** — core CRUD (every resource needs these):
+ *   getAll, getById, create, update, delete
+ *
+ * **Recommended** — used by AccessControl for compound queries:
+ *   getOne
+ *
+ * **Optional** — enabled by presets, checked at runtime:
+ *   getBySlug     — slugLookup preset
+ *   getDeleted    — softDelete preset (list soft-deleted)
+ *   restore       — softDelete preset (restore soft-deleted)
+ *   getTree       — tree preset (hierarchical queries)
+ *   getChildren   — tree preset (child nodes)
+ *   createMany    — bulk preset (batch create)
+ *   updateMany    — bulk preset (batch update by filter)
+ *   deleteMany    — bulk preset (batch delete by filter)
+ */
 export interface RepositoryLike {
+  // ── Required ──
   getAll(params?: unknown): Promise<unknown>;
   getById(id: string, options?: unknown): Promise<unknown>;
   create(data: unknown, options?: unknown): Promise<unknown>;
   update(id: string, data: unknown, options?: unknown): Promise<unknown>;
   delete(id: string, options?: unknown): Promise<unknown>;
+
+  // ── Recommended ──
+  /** Find single doc by compound filter — used by AccessControl for idField + org/policy scoping.
+   * Without this, Arc falls back to getById + post-fetch security checks. */
+  getOne?(filter: Record<string, unknown>, options?: unknown): Promise<unknown>;
+
+  // ── Optional (preset-dependent, checked at runtime) ──
+  getBySlug?(slug: string, options?: unknown): Promise<unknown>;
+  getDeleted?(options?: unknown): Promise<unknown>;
+  restore?(id: string): Promise<unknown>;
+  getTree?(options?: unknown): Promise<unknown>;
+  getChildren?(parentId: string, options?: unknown): Promise<unknown>;
+  createMany?(items: unknown[], options?: unknown): Promise<unknown>;
+  updateMany?(filter: Record<string, unknown>, data: unknown): Promise<unknown>;
+  deleteMany?(filter: Record<string, unknown>): Promise<unknown>;
+
   [key: string]: unknown;
 }
 

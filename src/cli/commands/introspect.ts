@@ -110,4 +110,3 @@ export async function introspect(args: string[]): Promise<void> {
     throw new Error(String(error));
   }
 }
-

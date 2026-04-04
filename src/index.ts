@@ -217,6 +217,8 @@ export type {
   AnyRecord,
   ApiResponse,
   ArcInternalMetadata,
+  // User & Auth / DX helpers
+  ArcRequest,
   // Plugin options
   AuthPluginOptions,
   ConfigError,
@@ -273,17 +275,19 @@ export type {
   TypedController,
   TypedRepository,
   TypedResourceConfig,
-  // User & Auth
   UserBase,
   UserOrganization,
   ValidateOptions,
   ValidationResult,
 } from "./types/index.js";
+// DX helpers (value exports from types)
+export { envelope } from "./types/index.js";
 // ============================================================================
 // Errors — commonly needed alongside defineResource (zero deps, pure classes)
 // ============================================================================
 export {
   ArcError,
+  createDomainError,
   ForbiddenError,
   NotFoundError,
   UnauthorizedError,

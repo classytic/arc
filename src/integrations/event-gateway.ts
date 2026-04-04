@@ -144,4 +144,3 @@ export const eventGatewayPlugin = fp(eventGatewayPluginImpl, {
   name: "arc-event-gateway",
   fastify: "5.x",
 }) as FastifyPluginAsync<EventGatewayOptions>;
-

@@ -874,7 +874,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
   // ==========================================================================
 
   async bulkCreate(req: IRequestContext): Promise<IControllerResponse<TDoc[]>> {
-    const repo = this.repository as TRepository & {
+    const repo = this.repository as unknown as {
       createMany?: (items: unknown[]) => Promise<TDoc[]>;
     };
     if (!repo.createMany) {
@@ -898,7 +898,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
   async bulkUpdate(
     req: IRequestContext,
   ): Promise<IControllerResponse<{ matchedCount: number; modifiedCount: number }>> {
-    const repo = this.repository as TRepository & {
+    const repo = this.repository as unknown as {
       updateMany?: (
         filter: Record<string, unknown>,
         data: Record<string, unknown>,
@@ -921,7 +921,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
   }
 
   async bulkDelete(req: IRequestContext): Promise<IControllerResponse<{ deletedCount: number }>> {
-    const repo = this.repository as TRepository & {
+    const repo = this.repository as unknown as {
       deleteMany?: (filter: Record<string, unknown>) => Promise<{ deletedCount: number }>;
     };
     if (!repo.deleteMany) {
@@ -937,4 +937,3 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     return { success: true, data: result, status: 200 };
   }
 }
-

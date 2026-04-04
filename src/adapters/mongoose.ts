@@ -40,14 +40,10 @@ interface MongooseSchemaType {
 // ============================================================================
 
 /**
- * Options for creating a Mongoose adapter
+ * Options for creating a Mongoose adapter.
+ * TDoc is auto-inferred from the Mongoose model — no explicit type needed.
  *
- * @typeParam TDoc - The document type (inferred or explicit)
- */
-/**
- * Options for creating a Mongoose adapter
- *
- * @typeParam TDoc - The document type (inferred or explicit)
+ * @typeParam TDoc - Inferred from `model: Model<TDoc>`
  */
 export interface MongooseAdapterOptions<TDoc = unknown> {
   /** Mongoose model instance — preserves document type for type safety */
@@ -243,7 +239,11 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
   private extractRelations(paths: Record<string, unknown>): SchemaMetadata["relations"] {
     const relations: Record<
       string,
-      { type: "one-to-one" | "one-to-many" | "many-to-many"; target: string; foreignKey?: string }
+      {
+        type: "one-to-one" | "one-to-many" | "many-to-many";
+        target: string;
+        foreignKey?: string;
+      }
     > = {};
 
     for (const [fieldName, schemaType] of Object.entries(paths)) {
@@ -343,7 +343,10 @@ export function createMongooseAdapter<TDoc = unknown>(
           "Usage: createMongooseAdapter(Model, repository)",
       );
     }
-    return new MongooseAdapter<TDoc>({ model: modelOrOptions as Model<TDoc>, repository });
+    return new MongooseAdapter<TDoc>({
+      model: modelOrOptions as Model<TDoc>,
+      repository,
+    });
   }
   return new MongooseAdapter<TDoc>(modelOrOptions as MongooseAdapterOptions<TDoc>);
 }
@@ -351,4 +354,3 @@ export function createMongooseAdapter<TDoc = unknown>(
 // ============================================================================
 // Exports
 // ============================================================================
-

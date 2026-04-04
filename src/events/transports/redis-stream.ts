@@ -508,4 +508,3 @@ export class RedisStreamTransport implements EventTransport {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
-

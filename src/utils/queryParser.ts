@@ -573,4 +573,3 @@ export class ArcQueryParser implements QueryParserInterface {
 export function createQueryParser(options?: ArcQueryParserOptions): ArcQueryParser {
   return new ArcQueryParser(options);
 }
-

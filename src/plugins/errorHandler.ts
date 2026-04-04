@@ -214,4 +214,3 @@ export const errorHandlerPlugin = fp(errorHandlerPluginFn, {
   name: "arc-error-handler",
   fastify: "5.x",
 });
-

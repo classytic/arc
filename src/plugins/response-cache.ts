@@ -549,4 +549,3 @@ export const responseCachePlugin: FastifyPluginAsync<ResponseCacheOptions> = fp(
     fastify: "5.x",
   },
 ) as unknown as FastifyPluginAsync<ResponseCacheOptions>;
-

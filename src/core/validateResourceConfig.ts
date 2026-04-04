@@ -423,4 +423,3 @@ export function assertValidConfig(config: ResourceConfig, options?: ValidateOpti
     );
   }
 }
-

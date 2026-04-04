@@ -60,6 +60,50 @@ declare module 'fastify' {
   }
 }
 
+/**
+ * Typed Fastify request with Arc decorations.
+ *
+ * Use this in `wrapHandler: false` handlers instead of `(req as any).user`.
+ *
+ * @example
+ * ```typescript
+ * import type { ArcRequest } from '@classytic/arc';
+ *
+ * handler: async (req: ArcRequest, reply: FastifyReply) => {
+ *   req.user?.id;                    // typed
+ *   req.scope.organizationId;        // typed (when member)
+ *   req.signal;                      // AbortSignal (Fastify 5)
+ * }
+ * ```
+ */
+export type ArcRequest = FastifyRequest & {
+  scope: RequestScope;
+  user: Record<string, unknown> | undefined;
+  signal: AbortSignal;
+};
+
+/**
+ * Response envelope helper — wraps data in Arc's standard `{ success, data }` format.
+ *
+ * @example
+ * ```typescript
+ * import { envelope } from '@classytic/arc';
+ *
+ * handler: async (req, reply) => {
+ *   const data = await getResults();
+ *   return envelope(data);
+ *   // → { success: true, data }
+ * }
+ * ```
+ */
+export function envelope<T>(data: T, meta?: Record<string, unknown>): {
+  success: true;
+  data: T;
+  [key: string]: unknown;
+} {
+  return { success: true, data, ...meta };
+}
+
 // Re-export from dedicated type modules
 export type {
   CrudRepository,
@@ -534,6 +578,22 @@ export interface ResourceConfig<TDoc = AnyRecord> {
   skipValidation?: boolean; // Skip schema validation
   skipRegistry?: boolean; // Don't register in introspection
   _appliedPresets?: string[]; // Internal: track applied presets
+  /**
+   * Called during plugin registration with the scoped Fastify instance.
+   * Use for wiring singletons, reading decorators, or setting up resource-specific
+   * services that need access to the Fastify instance.
+   *
+   * @example
+   * ```typescript
+   * defineResource({
+   *   name: 'notification',
+   *   onRegister: (fastify) => {
+   *     setSseManager(fastify.sseManager);
+   *   },
+   * })
+   * ```
+   */
+  onRegister?: (fastify: FastifyInstance) => void | Promise<void>;
   /** HTTP method for update routes. Default: 'PATCH' */
   updateMethod?: 'PUT' | 'PATCH' | 'both';
   /**
@@ -562,13 +622,54 @@ export interface ResourcePermissions {
   delete?: PermissionCheck;
 }
 
+/**
+ * Hook context passed to resource-level hook handlers.
+ * Mirrors HookSystem's HookContext but with a simpler API for inline use.
+ */
+export interface ResourceHookContext {
+  /** The document data (create/update body, or existing doc for delete) */
+  data: AnyRecord;
+  /** Authenticated user or null */
+  user?: UserBase;
+  /** Additional metadata (e.g. `{ id, existing }` for update/delete) */
+  meta?: AnyRecord;
+}
+
+/**
+ * Inline lifecycle hooks on a resource definition.
+ * These are wired into the HookSystem automatically — same pipeline as presets and app-level hooks.
+ *
+ * @example
+ * ```typescript
+ * defineResource({
+ *   name: 'chat',
+ *   hooks: {
+ *     afterCreate: async (ctx) => {
+ *       analytics.track('chat.created', { chatId: ctx.data._id, userId: ctx.user?.id });
+ *     },
+ *     beforeDelete: async (ctx) => {
+ *       if (ctx.data.isProtected) throw new Error('Cannot delete protected chat');
+ *     },
+ *     afterDelete: async (ctx) => {
+ *       await notificationService.send('chat.deleted', { id: ctx.meta?.id });
+ *     },
+ *   },
+ * });
+ * ```
+ */
 export interface ResourceHooks {
-  beforeCreate?: (data: AnyRecord) => Promise<AnyRecord> | AnyRecord;
-  afterCreate?: (doc: AnyRecord) => Promise<void> | void;
-  beforeUpdate?: (id: string, data: AnyRecord) => Promise<AnyRecord> | AnyRecord;
-  afterUpdate?: (doc: AnyRecord) => Promise<void> | void;
-  beforeDelete?: (id: string) => Promise<void> | void;
-  afterDelete?: (id: string) => Promise<void> | void;
+  /** Runs before create — can modify data by returning a new object */
+  beforeCreate?: (ctx: ResourceHookContext) => Promise<AnyRecord | void> | AnyRecord | void;
+  /** Runs after create — receives the created document */
+  afterCreate?: (ctx: ResourceHookContext) => Promise<void> | void;
+  /** Runs before update — ctx.meta.id has the resource ID, ctx.meta.existing has the current doc */
+  beforeUpdate?: (ctx: ResourceHookContext) => Promise<AnyRecord | void> | AnyRecord | void;
+  /** Runs after update — receives the updated document */
+  afterUpdate?: (ctx: ResourceHookContext) => Promise<void> | void;
+  /** Runs before delete — ctx.data is the existing doc, ctx.meta.id has the resource ID */
+  beforeDelete?: (ctx: ResourceHookContext) => Promise<void> | void;
+  /** Runs after delete — ctx.data is the deleted doc, ctx.meta.id has the resource ID */
+  afterDelete?: (ctx: ResourceHookContext) => Promise<void> | void;
 }
 
 /**
@@ -623,6 +724,43 @@ export interface AdditionalRoute {
    * preHandler: (fastify) => [fastify.customerContext({ required: true })]
    */
   preHandler?: RouteHandlerMethod[] | ((fastify: FastifyInstance) => RouteHandlerMethod[]);
+
+  /**
+   * Pre-auth handlers — run BEFORE authentication middleware.
+   * Use for promoting query params to headers (e.g., EventSource ?token= → Authorization).
+   *
+   * @example
+   * ```typescript
+   * preAuth: [(req) => {
+   *   const token = (req.query as Record<string, string>)?.token;
+   *   if (token) req.headers.authorization = `Bearer ${token}`;
+   * }]
+   * ```
+   */
+  preAuth?: RouteHandlerMethod[];
+
+  /**
+   * Streaming response mode — designed for SSE and AI streaming routes.
+   * When `true`:
+   * - Forces `wrapHandler: false` (no `{ success, data }` wrapper)
+   * - Sets SSE headers: `Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`
+   * - `request.signal` (Fastify 5 built-in) is available for abort-on-disconnect
+   *
+   * @example
+   * ```typescript
+   * {
+   *   method: 'POST',
+   *   path: '/stream',
+   *   streamResponse: true,
+   *   permissions: requireAuth(),
+   *   handler: async (request, reply) => {
+   *     const { stream } = await generateStream({ abortSignal: request.signal });
+   *     return reply.send(stream);
+   *   },
+   * }
+   * ```
+   */
+  streamResponse?: boolean;
 
   /** Fastify route schema */
   schema?: Record<string, unknown>;

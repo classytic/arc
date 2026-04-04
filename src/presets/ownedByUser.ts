@@ -73,4 +73,3 @@ export function ownedByUserPreset(options: OwnedByUserOptions = {}): PresetResul
     } as MiddlewareConfig,
   };
 }
-
