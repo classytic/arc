@@ -125,6 +125,7 @@ export function resourceToTools(
         readonlyFields,
         extraHideFields: config.hideFields,
         filterableFields,
+        allowedOperators,
       }),
       handler: createHandler(op, controller, resource.name, resource.permissions),
     });
@@ -186,6 +187,7 @@ function buildInputSchema(
     readonlyFields?: string[];
     extraHideFields?: string[];
     filterableFields?: readonly string[];
+    allowedOperators?: readonly string[];
   },
 ): Record<string, z.ZodTypeAny> {
   switch (op) {

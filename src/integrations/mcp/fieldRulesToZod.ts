@@ -36,6 +36,8 @@ export interface FieldRulesToZodOptions {
   extraHideFields?: string[];
   /** Filterable fields — only used in list mode */
   filterableFields?: readonly string[];
+  /** Allowed filter operators — generates `field[op]` entries in list mode (e.g., price[gt], price[lte]) */
+  allowedOperators?: readonly string[];
 }
 
 /** Single field rule entry from Arc's schemaOptions.fieldRules */
@@ -171,26 +173,81 @@ function typeToZod(type: string | undefined): z.ZodTypeAny {
   }
 }
 
-/** Build list/query shape with filterable fields + pagination */
+/** Operators that apply to numeric/date fields */
+const COMPARISON_OPS = new Set(["gt", "gte", "lt", "lte"]);
+/** Map operator to a human-readable description suffix */
+function opDescription(op: string, fieldName: string): string {
+  switch (op) {
+    case "gt":
+      return `${fieldName} greater than`;
+    case "gte":
+      return `${fieldName} greater than or equal`;
+    case "lt":
+      return `${fieldName} less than`;
+    case "lte":
+      return `${fieldName} less than or equal`;
+    case "ne":
+      return `${fieldName} not equal to`;
+    case "in":
+      return `${fieldName} in comma-separated list`;
+    case "nin":
+      return `${fieldName} not in comma-separated list`;
+    case "exists":
+      return `${fieldName} exists (true/false)`;
+    default:
+      return `${fieldName} ${op}`;
+  }
+}
+
+/** Build list/query shape with filterable fields, operators, and pagination */
 function buildListShape(
   fieldRules: Record<string, FieldRuleEntry> | undefined,
   options: FieldRulesToZodOptions,
 ): Record<string, z.ZodTypeAny> {
-  const { filterableFields = [], hiddenFields = [], extraHideFields = [] } = options;
+  const {
+    filterableFields = [],
+    hiddenFields = [],
+    extraHideFields = [],
+    allowedOperators,
+  } = options;
   const allHidden = new Set([...hiddenFields, ...extraHideFields]);
 
   // Start with pagination fields
   const shape: Record<string, z.ZodTypeAny> = { ...PAGINATION_SHAPE };
 
-  // Add filterable fields
-  if (fieldRules) {
-    for (const name of filterableFields) {
-      if (allHidden.has(name)) continue;
-      const rule = fieldRules[name];
-      if (!rule) continue;
+  if (!fieldRules) return shape;
 
-      const filterField = buildFieldSchema(rule);
-      shape[name] = filterField.optional();
+  for (const name of filterableFields) {
+    if (allHidden.has(name)) continue;
+    const rule = fieldRules[name];
+    if (!rule) continue;
+
+    // Exact-match field (always present)
+    const filterField = buildFieldSchema(rule);
+    shape[name] = filterField.optional();
+
+    // Operator-suffixed fields: field[gt], field[lte], etc.
+    if (allowedOperators?.length) {
+      const isNumericOrDate = rule.type === "number" || rule.type === "date";
+
+      for (const op of allowedOperators) {
+        // Skip comparison ops for non-numeric fields (string[gt] is meaningless)
+        if (COMPARISON_OPS.has(op) && !isNumericOrDate) continue;
+        // Skip 'eq' — exact match is already the base field
+        if (op === "eq") continue;
+        // exists is always boolean
+        if (op === "exists") {
+          shape[`${name}_${op}`] = z.boolean().optional().describe(opDescription(op, name));
+          continue;
+        }
+        // in/nin accept comma-separated strings
+        if (op === "in" || op === "nin") {
+          shape[`${name}_${op}`] = z.string().optional().describe(opDescription(op, name));
+          continue;
+        }
+        // Comparison ops use the same type as the field
+        shape[`${name}_${op}`] = filterField.optional().describe(opDescription(op, name));
+      }
     }
   }
 

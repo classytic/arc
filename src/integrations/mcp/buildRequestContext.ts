@@ -49,7 +49,7 @@ export function buildRequestContext(
 
   switch (operation) {
     case "list":
-      return { ...base, params: {}, query: { ...input }, body: undefined };
+      return { ...base, params: {}, query: expandOperatorKeys(input), body: undefined };
 
     case "get":
       return { ...base, params: { id: String(input.id ?? "") }, query: {}, body: undefined };
@@ -71,6 +71,35 @@ export function buildRequestContext(
 // ============================================================================
 // Internal
 // ============================================================================
+
+/** Convert MCP operator keys (`price_gt`) to MongoKit bracket notation (`price[gt]`). */
+const OPERATOR_SUFFIXES = new Set(["eq", "ne", "gt", "gte", "lt", "lte", "in", "nin", "exists"]);
+
+function expandOperatorKeys(input: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input)) {
+    const lastUnderscore = key.lastIndexOf("_");
+    if (lastUnderscore > 0) {
+      const op = key.slice(lastUnderscore + 1);
+      if (OPERATOR_SUFFIXES.has(op)) {
+        const field = key.slice(0, lastUnderscore);
+        // Nest into bracket notation: { price: { gt: value } }
+        const existing = out[field];
+        if (existing && typeof existing === "object" && existing !== null) {
+          (existing as Record<string, unknown>)[op] = value;
+        } else if (existing === undefined) {
+          out[field] = { [op]: value };
+        } else {
+          // Exact match already set — keep it, add operator alongside
+          out[field] = { eq: existing, [op]: value };
+        }
+        continue;
+      }
+    }
+    out[key] = value;
+  }
+  return out;
+}
 
 function buildScope(auth: McpAuthResult | null): RequestScope {
   if (!auth) return { kind: "public" };
