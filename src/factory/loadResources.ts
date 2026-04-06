@@ -81,46 +81,47 @@ export async function loadResources(
   const includeSet = include ? new Set(include) : null;
   const excludeSet = exclude ? new Set(exclude) : null;
 
-  const resources: ResourceLike[] = [];
-
   const skipped: string[] = [];
   const failed: string[] = [];
 
-  for (const file of files) {
-    let mod: Record<string, unknown>;
-    try {
-      // Try raw path first — works with vitest, tsx, ts-node, and other
-      // transform-based runtimes that hook into Node's module loader.
-      // Falls back to pathToFileURL only for specifier-format errors
-      // (ERR_UNSUPPORTED_ESM_URL_SCHEME on Windows absolute paths).
-      // Module evaluation errors (syntax, runtime throws) are NOT retried
-      // to avoid double side effects.
+  // Import all files in parallel (like Next.js Promise.all pattern).
+  // Each import is independent — one failure doesn't block others.
+  const results = await Promise.all(
+    files.map(async (file) => {
       try {
-        mod = (await import(file)) as Record<string, unknown>;
-      } catch (importErr) {
-        // Only retry with pathToFileURL for specifier-format errors:
-        // Windows absolute paths (D:\...) aren't valid ESM specifiers in Node.js,
-        // but work fine in vitest/tsx. The retry converts to file:/// URL.
-        // ERR_MODULE_NOT_FOUND is NOT retried — it means a dependency inside
-        // the module graph is missing, which pathToFileURL won't fix.
-        const code = (importErr as { code?: string }).code;
-        if (code === "ERR_UNSUPPORTED_ESM_URL_SCHEME") {
-          mod = (await import(pathToFileURL(file).href)) as Record<string, unknown>;
-        } else {
-          throw importErr;
+        let mod: Record<string, unknown>;
+        try {
+          mod = (await import(file)) as Record<string, unknown>;
+        } catch (importErr) {
+          // Only retry with pathToFileURL for specifier-format errors:
+          // Windows absolute paths (D:\...) aren't valid ESM specifiers in Node.js,
+          // but work fine in vitest/tsx. The retry converts to file:/// URL.
+          const code = (importErr as { code?: string }).code;
+          if (code === "ERR_UNSUPPORTED_ESM_URL_SCHEME") {
+            mod = (await import(pathToFileURL(file).href)) as Record<string, unknown>;
+          } else {
+            throw importErr;
+          }
         }
+        return { file, mod };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        failed.push(`${file}: ${msg}`);
+        return null;
       }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      failed.push(`${file}: ${msg}`);
-      continue;
-    }
+    }),
+  );
 
-    // Accept default export or named 'resource' export
-    const resource = (mod.default ?? mod.resource) as ResourceLike | undefined;
+  // Filter and validate — deterministic order preserved (files were pre-sorted)
+  const resources: ResourceLike[] = [];
+
+  for (const result of results) {
+    if (!result) continue;
+
+    const resource = (result.mod.default ?? result.mod.resource) as ResourceLike | undefined;
 
     if (!resource || typeof resource.toPlugin !== "function") {
-      skipped.push(file);
+      skipped.push(result.file);
       continue;
     }
 
