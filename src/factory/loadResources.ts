@@ -59,8 +59,6 @@ export interface ResourceLike {
   displayName?: string;
   /** Applied preset names */
   _appliedPresets?: string[];
-  /** Allow additional properties from ResourceDefinition without casting */
-  [key: string]: unknown;
 }
 
 export interface LoadResourcesOptions {
