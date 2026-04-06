@@ -7,4 +7,5 @@ export default {
   presets: 'Presets',
   org: 'Organization / Multi-tenant',
   'tree-shaking': 'Tree-Shaking',
+  examples: 'Examples',
 };

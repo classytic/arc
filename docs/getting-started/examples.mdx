@@ -1,0 +1,179 @@
+# Examples
+
+Arc ships with runnable examples in the `examples/` directory. Each demonstrates a specific pattern with working code and tests.
+
+## Full App — JWT Auth + Two Resources
+
+The `examples/full-app/` directory is a complete application showing how real-world Arc apps are structured.
+
+```
+examples/full-app/
+├── app.ts                    # createApp with JWT auth
+├── resources/
+│   ├── user.resource.ts      # Admin-managed users (softDelete preset)
+│   └── post.resource.ts      # Owner-writable posts (ownedByUser preset)
+└── tests/
+    ├── setup.ts              # MongoDB in-memory + Fastify bootstrap
+    ├── user.test.ts          # 10 tests: CRUD, permissions, hooks
+    └── post.test.ts          # 10 tests: CRUD, ownership, pagination, custom actions
+```
+
+### What it demonstrates
+
+**App Bootstrap** (`app.ts`)
+
+```typescript
+import { createApp } from '@classytic/arc/factory';
+
+const app = await createApp({
+  auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
+  resources: [userResource, postResource],
+});
+```
+
+**Resource with Presets and Permissions** (`user.resource.ts`)
+
+```typescript
+import { defineResource } from '@classytic/arc/core';
+import { createMongooseAdapter } from '@classytic/arc/adapters';
+import { allowPublic, requireRoles } from '@classytic/arc/permissions';
+
+export const userResource = defineResource({
+  name: 'user',
+  adapter: createMongooseAdapter(UserModel, userRepository),
+  presets: ['softDelete'],
+  permissions: {
+    list: allowPublic(),
+    get: allowPublic(),
+    create: requireRoles(['admin']),
+    update: requireRoles(['admin']),
+    delete: requireRoles(['admin']),
+  },
+  hooks: {
+    beforeCreate: async (ctx) => {
+      ctx.data.email = ctx.data.email.toLowerCase().trim();
+    },
+  },
+});
+```
+
+**Owner-Writable Resource with Custom Action** (`post.resource.ts`)
+
+```typescript
+export const postResource = defineResource({
+  name: 'post',
+  adapter: createMongooseAdapter(PostModel, postRepository),
+  presets: ['ownedByUser'],
+  permissions: {
+    list: allowPublic(),
+    get: allowPublic(),
+    create: requireAuth(),
+    update: requireAuth(),    // ownedByUser enforces ownership
+    delete: requireRoles(['admin']),
+  },
+  additionalRoutes: [
+    {
+      method: 'POST',
+      path: '/:id/publish',
+      wrapHandler: false,
+      permissions: requireAuth(),
+      handler: async (req, reply) => {
+        const post = await PostModel.findByIdAndUpdate(
+          req.params.id,
+          { status: 'published' },
+          { new: true },
+        ).lean();
+        return reply.send({ success: true, data: post });
+      },
+    },
+  ],
+});
+```
+
+### Running the tests
+
+```bash
+npx vitest run examples/full-app/tests/
+```
+
+**20 tests** covering:
+- Public read access (no auth required)
+- Admin-only write operations (401 without auth, 403 without role)
+- Owner-based update permissions (ownedByUser preset)
+- Field validation (required fields rejected when missing)
+- Lifecycle hooks (email normalization)
+- Pagination (page, limit, total, hasNext)
+- Filtering by field values
+- Sorting by field
+
+## Quick Examples (single-file)
+
+### Minimal — Zero-Config CRUD
+
+```typescript
+import { defineResource } from '@classytic/arc/core';
+import { createMongooseAdapter } from '@classytic/arc/adapters';
+import { permissions } from '@classytic/arc/permissions';
+
+const todoResource = defineResource({
+  name: 'todo',
+  adapter: createMongooseAdapter(Todo, new Repository(Todo)),
+  permissions: permissions.fullPublic(),
+});
+
+// Auto-generates: GET/POST /todos, GET/PATCH/DELETE /todos/:id
+```
+
+### Multi-Tenant — Org-Scoped Resources
+
+```typescript
+const invoiceResource = defineResource({
+  name: 'invoice',
+  adapter: createMongooseAdapter(Invoice, invoiceRepository),
+  presets: ['multiTenant', 'softDelete'],
+  permissions: {
+    list: requireRoles(['member', 'admin']),
+    create: requireRoles(['admin', 'finance']),
+    delete: requireRoles(['admin']),
+  },
+});
+
+// Requests with x-organization-id header are automatically scoped
+```
+
+## Testing Pattern
+
+All examples use the same pattern for tests:
+
+```typescript
+import { MongoMemoryServer } from 'mongodb-memory-server';
+import mongoose from 'mongoose';
+import { createApp } from '@classytic/arc/factory';
+
+let app, mongo;
+
+beforeAll(async () => {
+  mongo = await MongoMemoryServer.create();
+  await mongoose.connect(mongo.getUri());
+  app = await createApp({ auth: { type: 'jwt', jwt: { secret } }, resources });
+  await app.ready();
+});
+
+afterAll(async () => {
+  await app.close();
+  await mongoose.disconnect();
+  await mongo.stop();
+});
+
+it('creates a resource', async () => {
+  const res = await app.inject({
+    method: 'POST',
+    url: '/resources',
+    headers: { authorization: `Bearer ${token}` },
+    payload: { name: 'Test' },
+  });
+  expect(res.statusCode).toBe(201);
+});
+```
+
+This pattern uses `app.inject()` for HTTP-level testing without starting a real server — fast, isolated, and no port conflicts.
