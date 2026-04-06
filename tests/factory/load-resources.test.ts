@@ -6,7 +6,7 @@
  * they integrate correctly with createApp.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import mongoose from "mongoose";
@@ -190,6 +190,94 @@ describe("loadResources()", () => {
 
     // Clean up
     rm(throwDir, { recursive: true, force: true });
+  });
+
+  // ── Error scenarios with isolated tmp dirs ──
+
+  it("file with missing dependency gives actionable .js hint", async () => {
+    const tmpDir = join(import.meta.dirname, "__fixtures_missing_dep__");
+    const { mkdirSync: mk, writeFileSync: wf, rmSync: rm, existsSync: ex } = await import("node:fs");
+    if (ex(tmpDir)) rm(tmpDir, { recursive: true, force: true });
+    mk(tmpDir, { recursive: true });
+
+    // Resource that imports a non-existent .js file (common TS ESM pattern)
+    wf(
+      join(tmpDir, "broken.resource.mjs"),
+      `import { something } from './nonexistent.js';\nexport default { toPlugin: () => {} };`,
+    );
+
+    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const resources = await loadResources(tmpDir);
+    expect(resources.length).toBe(0);
+
+    // Should warn with .js hint
+    const warnings = consoleSpy.mock.calls.flat().join("\n");
+    expect(warnings).toContain("failed to import");
+    consoleSpy.mockRestore();
+    rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("empty resource file (no exports) is skipped", async () => {
+    const tmpDir = join(import.meta.dirname, "__fixtures_empty__");
+    const { mkdirSync: mk, writeFileSync: wf, rmSync: rm, existsSync: ex } = await import("node:fs");
+    if (ex(tmpDir)) rm(tmpDir, { recursive: true, force: true });
+    mk(tmpDir, { recursive: true });
+
+    wf(join(tmpDir, "empty.resource.mjs"), "// empty file\n");
+
+    const resources = await loadResources(tmpDir);
+    expect(resources.length).toBe(0);
+    rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("resource exporting named 'resource' instead of default works", async () => {
+    const tmpDir = join(import.meta.dirname, "__fixtures_named__");
+    const { mkdirSync: mk, writeFileSync: wf, rmSync: rm, existsSync: ex } = await import("node:fs");
+    if (ex(tmpDir)) rm(tmpDir, { recursive: true, force: true });
+    mk(tmpDir, { recursive: true });
+
+    wf(
+      join(tmpDir, "named.resource.mjs"),
+      `export const resource = { name: 'named', toPlugin: () => ({}) };`,
+    );
+
+    const resources = await loadResources(tmpDir);
+    expect(resources.length).toBe(1);
+    expect((resources[0] as { name: string }).name).toBe("named");
+    rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("deeply nested resources discovered", async () => {
+    const tmpDir = join(import.meta.dirname, "__fixtures_deep__");
+    const { mkdirSync: mk, writeFileSync: wf, rmSync: rm, existsSync: ex } = await import("node:fs");
+    if (ex(tmpDir)) rm(tmpDir, { recursive: true, force: true });
+    mk(join(tmpDir, "a", "b", "c"), { recursive: true });
+
+    wf(
+      join(tmpDir, "a", "b", "c", "deep.resource.mjs"),
+      `export default { name: 'deep', toPlugin: () => ({}) };`,
+    );
+
+    const resources = await loadResources(tmpDir);
+    expect(resources.length).toBe(1);
+    expect((resources[0] as { name: string }).name).toBe("deep");
+    rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("multiple extensions discovered (.mjs, .js)", async () => {
+    const tmpDir = join(import.meta.dirname, "__fixtures_exts__");
+    const { mkdirSync: mk, writeFileSync: wf, rmSync: rm, existsSync: ex } = await import("node:fs");
+    if (ex(tmpDir)) rm(tmpDir, { recursive: true, force: true });
+    mk(tmpDir, { recursive: true });
+
+    wf(join(tmpDir, "a.resource.mjs"), `export default { name: 'a', toPlugin: () => ({}) };`);
+    wf(join(tmpDir, "b.resource.js"), `export default { name: 'b', toPlugin: () => ({}) };`);
+
+    const resources = await loadResources(tmpDir);
+    expect(resources.length).toBe(2);
+    const names = resources.map((r) => (r as { name: string }).name).sort();
+    expect(names).toEqual(["a", "b"]);
+    rm(tmpDir, { recursive: true, force: true });
   });
 
   // ── Integration with createApp ──
