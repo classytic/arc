@@ -1,157 +1,136 @@
-# CLAUDE.md — Agent Context for @classytic/arc
+# CLAUDE.md — @classytic/arc Quick Reference
 
-## What is Arc
+> **Full guide:** See [@file AGENTS.md](AGENTS.md) for architecture details, gotchas, test mapping, patterns, and security checklist.
+> **v3 plans:** See [@file v3.md](v3.md) for design notes and migration path.
 
-Arc is a **resource-oriented backend framework** built on Fastify. It turns resource definitions into production-ready REST APIs with auth, permissions, events, caching, OpenAPI docs, and MCP (AI tool) generation.
+## Identity
 
-**Version:** 2.5.2
-**Runtime:** Node.js 22+ (ESM-only)
-**Language:** TypeScript 6+
-**Build:** tsdown (not tsc, not esbuild directly)
-**Test:** Vitest + mongodb-memory-server
-**Lint:** Biome (not ESLint, not Prettier)
-**Package manager:** npm (lockfile committed)
+**@classytic/arc** — Resource-oriented backend framework on Fastify.
+One `defineResource()` → REST API + auth + permissions + events + caching + OpenAPI + MCP.
 
-## Core Philosophy
+**v2.5.3** | Node.js 22+ | TypeScript 6+ | ESM-only | Fastify 5+
 
-1. **Resource-oriented** — everything is a `defineResource()`. CRUD, schemas, auth, permissions, hooks, events all hang off the resource definition.
-2. **DB-agnostic** — Arc never imports mongoose, prisma, or any database directly. Adapters implement `RepositoryLike`. MongoKit is the recommended adapter but is an optional peer dep.
-3. **Primitives not opinions** — Arc provides building blocks (outbox, hooks, role hierarchy, scope). It does NOT provide workflow engines, saga orchestrators, or email senders. Those are app-level or use Streamline/Temporal.
-4. **Optional peer deps, never bundled** — Every integration (mongoose, better-auth, ioredis, bullmq, @opentelemetry/*) is an optional peer dep. Arc's dist must never force-install anything.
-5. **Tree-shakable** — 88+ subpath exports. Users import `@classytic/arc/factory`, `@classytic/arc/auth`, etc. Never import from the root barrel in production code.
-6. **No hardcoding** — Different users use different databases, auth systems, message brokers, and deployment targets. Arc must not assume any specific ecosystem.
-7. **No console.log in runtime** — Use `fastify.log.warn/info/error` or injectable logger interfaces. CLI commands may use `process.stdout.write`.
+## Commands
 
-## Architecture
+```bash
+npx tsc --noEmit                                  # Typecheck
+npx biome check src/ --diagnostic-level=error      # Lint (Biome only, no ESLint)
+npx vitest run                                     # Full test suite
+npx vitest run tests/core/base-controller.test.ts  # Targeted test
+npx knip                                           # Dead code detection
+npm run build                                      # tsdown → dist/
+npm run smoke                                      # Verify CLI + imports
+```
+
+## Rules (non-negotiable)
+
+- **No `console.log`** in `src/` (except `cli/`) — use logger injection
+- **No mongoose/prisma imports** in core — only in adapter files
+- **No `any`** — use `unknown` (intentional for type safety)
+- **No `@ts-ignore`** — fix the type
+- **No default exports** — named exports only
+- **No bundling peer deps** — check `tsdown.config.ts` neverBundle
+- **No enums** — `as const` objects or string literal unions
+- **No ESLint/Prettier** — Biome only
+- **Prefer Node.js built-ins** — `node:crypto`, `structuredClone()`, `URL` over third-party
+
+## Type Conventions
+
+- `request.user: Record<string, unknown> | undefined` (required property, NOT optional `?:`)
+- `RequestScope`: discriminated union on `kind` — use `getUserId(scope)` / `getUserRoles(scope)`
+- `RepositoryLike` returns `Promise<unknown>` — intentional minimum contract
+- `BaseController<TDoc = AnyRecord>` — `TDoc` inferred from Model, `unknown` default forces narrowing
+
+## Test Mapping (run the right tests)
+
+| Changed | Run |
+|---------|-----|
+| `src/core/*` | `npx vitest run tests/core/` |
+| `src/auth/*` | `npx vitest run tests/auth/` |
+| `src/permissions/*` | `npx vitest run tests/permissions/ tests/e2e/rbac-permissions.test.ts` |
+| `src/scope/*` | `npx vitest run tests/scope/ tests/e2e/elevation-plugin.test.ts` |
+| `src/hooks/*` | `npx vitest run tests/hooks/` |
+| `src/events/*` | `npx vitest run tests/events/` |
+| `src/cache/*` | `npx vitest run tests/cache/` |
+| `src/plugins/*` | `npx vitest run tests/plugins/` |
+| `src/presets/*` | `npx vitest run tests/presets/` |
+| `src/integrations/mcp/*` | `npx vitest run tests/integrations/mcp/` |
+| `src/factory/*` | `npx vitest run tests/factory/ tests/e2e/full-app.test.ts` |
+| `src/docs/*` | `npx vitest run tests/docs/` |
+| `src/cli/*` | `npx vitest run tests/cli/` |
+| `src/utils/*` | `npx vitest run tests/utils/` |
+| `src/org/*` | `npx vitest run tests/e2e/org-scope-plugin.test.ts` |
+| `src/policies/*` | `npx vitest run tests/security/policy-filter-*.test.ts` |
+| `src/rpc/*` | `npx vitest run tests/rpc/` |
+
+**Never run the full suite during dev** — use targeted tests. CI catches cross-cutting issues.
+
+## Architecture (32 modules)
 
 ```
 src/
-  core/          — defineResource, BaseController, QueryResolver, createCrudRouter
-  factory/       — createApp (the main entry point users call)
+  core/          — defineResource, BaseController (939L), QueryResolver, createCrudRouter
+  factory/       — createApp (main entry point)
   adapters/      — RepositoryLike interface + mongoose/prisma adapters
-  auth/          — authPlugin (JWT), betterAuth adapter, sessionManager
-  permissions/   — RBAC, role hierarchy, field-level permissions
-  scope/         — RequestScope discriminated union (public|authenticated|member|elevated)
+  auth/          — JWT, Better Auth, sessions
+  permissions/   — RBAC (989L), role hierarchy, field-level
+  scope/         — RequestScope discriminated union
   events/        — EventPlugin, transports (memory, redis pub/sub, redis streams)
-  hooks/         — HookSystem (before/after lifecycle on resources)
-  cache/         — QueryCache (adapter-backed query result caching)
-  plugins/       — health, tracing, requestId, response-cache, versioning, rate-limit
-  policies/      — PolicyInterface (row-level security, field masking)
-  integrations/  — jobs (BullMQ), streamline, websocket, SSE, MCP
-  migrations/    — MigrationRunner + MigrationStore interface (DB-agnostic)
-  cli/           — arc init, generate, doctor, describe, introspect, docs
-  testing/       — HttpTestHarness, mock helpers, createJwtAuthProvider
-  docs/          — OpenAPI spec generator, Scalar UI
+  hooks/         — HookSystem (724L), before/after lifecycle
+  cache/         — QueryCache, stores, SWR
+  plugins/       — health, tracing, requestId, response-cache, versioning, rate-limit, metrics, SSE
+  policies/      — row-level security, field masking
+  integrations/  — jobs (BullMQ), websocket, SSE, MCP, webhooks
+  migrations/    — MigrationRunner + MigrationStore (DB-agnostic)
+  cli/           — init (3434L), generate, doctor, describe, introspect, docs
+  testing/       — HttpTestHarness, mocks, auth helpers
+  docs/          — OpenAPI (924L), Scalar UI
   utils/         — queryParser, stateMachine, compensate, retry, circuitBreaker
-  types/         — shared type definitions, Fastify declaration merges
+  types/         — shared types (1443L), Fastify declaration merges
+  schemas/       — JSON Schema from field rules
+  pipeline/      — guard, pipe, intercept, transform
+  middleware/    — request-level middleware
+  org/           — organization plugin, membership
+  audit/         — audit trail plugin + stores
+  idempotency/   — idempotency plugin + stores
+  context/       — async request context
+  registry/      — resource registry, introspection
+  discovery/     — dynamic resource loading
+  dynamic/       — ArcDynamicLoader
+  logger/        — injectable logger interface
+  rpc/           — inter-service client
+  presets/       — bulk, softDelete, ownedByUser, slugLookup, tree, multiTenant, audited
 ```
 
-## Key Conventions
+## Gotchas
 
-### Types
-- `request.user` is `Record<string, unknown> | undefined` (not optional property — matches @fastify/jwt's required declaration)
-- `RequestScope` is a discriminated union on `kind`: public | authenticated | member | elevated
-- All scopes carry `userId?: string` and `userRoles?: string[]`
-- Use `getUserId(scope)` and `getUserRoles(scope)` accessors, not direct property access
+1. `request.user` is `undefined` on public routes — always guard
+2. `isRevoked` is fail-closed — errors = access denied (by design)
+3. Redis Streams are at-least-once — handlers must be idempotent
+4. `select` is never normalized to string — preserved as-is for DB agnosticism
+5. Type-only subpaths (`./org/types`) produce `export {}` at runtime — correct
+6. Event publishing is fire-and-forget (`failOpen: true`) — use outbox for guaranteed delivery
+7. Presets compose but order matters — test combinations
 
-### Generics & `unknown` Defaults
-- `BaseController<TDoc = AnyRecord>`, `MongooseAdapter<TDoc = unknown>`, `createMongooseAdapter<TDoc = unknown>` all default to `unknown`/`AnyRecord`
-- **This is intentional** — `TDoc` is auto-inferred from the Mongoose `Model<T>` argument. The `unknown` default only applies when no inference is possible, which forces the developer to narrow (safer than `any`)
-- **Never replace `unknown` with `any`** — it breaks type safety downstream
-- Mongoose 9 `InferSchemaType<typeof schema>` works with Arc automatically: `mongoose.model('P', schema)` creates `Model<Inferred>`, Arc infers `TDoc` from it
-- `RepositoryLike` returns `Promise<unknown>` intentionally — it's the minimum contract. `BaseController` casts internally. Developers never call `RepositoryLike` methods directly
-- `RepositoryLike` has 5 required methods + optional `getOne` (for AccessControl compound queries) + optional preset methods (bulk, softDelete, tree, slugLookup). See `src/adapters/interface.ts` for the full interface with JSDoc
+## Peer Deps (never bundle)
 
-### QueryResolver
-- Accepts any query parser output (MongoKit, Arc built-in, custom)
-- `select` is preserved in its original format (string, array, or object projection) — never forced to string
-- `allowedPopulate` and `allowedLookups` on RouteSchemaOptions control what users can query
-- `lookups` map to `$lookup` in MongoDB or `JOIN` in SQL — DB-agnostic interface
-
-### Events
-- Redis Streams transport is **at-least-once** (not exactly-once)
-- Event publishing defaults to fire-and-forget (`failOpen: true`)
-- Outbox pattern available for guaranteed delivery
-- Cleanup is the user's responsibility (TTL index, cron job, etc.)
-
-### Auth
-- `isRevoked` on JwtAuthOption — fail-closed (errors = revoked)
-- `tokenExtractor` for custom token sources (cookies, headers)
-- Better Auth adapter bridges Fetch API ↔ Fastify
-- `request.user` is undefined on public routes — always guard with `if (request.user)`
-
-### MCP Integration
-- `resourceToTools()` generates CRUD tool definitions from resource definitions
-- Tools are security-scoped via auth bridge and guards
-- Schema validation uses Zod generated from field rules
-
-### CLI
-- `arc doctor` is CLI tooling, not a runtime module. Primary: `npx @classytic/arc doctor`. Secondary: `import { doctor } from '@classytic/arc/cli'`
-- `arc init` scaffolds full project with env validation, auth, and resource examples
-- `arc generate resource <name>` creates model, repo, controller, schemas, resource files
-
-## What NOT to do
-
-- **Don't add console.log** to any file in `src/` outside `cli/`. Use logger injection.
-- **Don't import mongoose/prisma** in core modules. Only in adapter files.
-- **Don't add features "just in case"** — no speculative abstractions.
-- **Don't create Dockerfile, Helm charts, or K8s manifests** — those are app-level.
-- **Don't make Arc an ESM+CJS dual package** — it's ESM-only, intentionally.
-- **Don't add `@ts-ignore`** — fix the type instead.
-- **Don't bundle optional peer deps** — check `tsdown.config.ts` `deps.neverBundle`.
-- **Don't use enums** — use `as const` objects or string literal unions.
-- **Don't add features that belong in Streamline/Temporal** (saga orchestration, durable workflows).
-
-## Testing
-
-- **Unit tests** go in `tests/<module>/` mirroring `src/<module>/`
-- **E2E tests** go in `tests/e2e/` — full Fastify + in-memory MongoDB
-- **MCP tests** go in `tests/integrations/mcp/`
-- Always use `mongodb-memory-server` for MongoDB tests — never a real DB
-- OTel tests use `describe.skip` when `@opentelemetry/api` is not installed
-- Run: `npx vitest run` (all), `npx vitest run tests/path` (specific)
-- Current: 170 files, 2539 passed, 4 skipped, 0 failures
-
-## Build & Publish
-
-- `npm run build` → tsdown (output to `dist/`)
-- `npm run typecheck` → `tsc --noEmit`
-- `npm run lint` → `biome check src/` (Biome only — no ESLint, no Prettier)
-- `npm run smoke` → `node scripts/smoke-test.mjs` (checks dist artifacts, CLI, imports)
-- `npx knip` → dead code detection (config in `knip.config.ts`)
-- `prepublishOnly` gates: typecheck → test → build → smoke
-- Version is injected at build time via `tsdown.config.ts` define: `__ARC_VERSION__`
-
-### Pre-publish checklist (run in order)
-
-1. `npx tsc --noEmit` — zero type errors
-2. `npx biome check src/ --diagnostic-level=error` — zero lint errors
-3. `npx vitest run` — all tests pass
-4. `npx knip` — review unused exports, no new dead code
-5. `npm run build` — dist/ output clean (166 files)
-6. Verify all 46 subpath exports resolve:
-   - Every `package.json` exports entry has matching `.mjs` + `.d.mts` in `dist/`
-   - Type-only subpaths (`./org/types`, `./integrations`) produce `export {}` at runtime — this is correct (interfaces erased)
-   - `./testing` requires Vitest runtime — cannot be imported outside tests
-7. `npm run smoke` — CLI works, critical imports resolve
-8. `npx knip` reports only intentional public API (adapter types, consumer utilities)
-
-## Skills & Documentation
-
-- **Skills directory:** `skills/arc/` (in the repo, NOT in `~/.claude/skills/`)
-- **Nextra docs:** `docs/` (getting-started, production-ops, framework-extension, ecosystem, testing)
-- **Skill references:** `skills/arc/references/` (auth.md, production.md, integrations.md, events.md, mcp.md)
-- Skills are installed via `npx skills add classytic/arc`
-
-## Peer Dependencies (minimum versions)
-
-| Peer | Min Version | Required? |
-|------|-------------|-----------|
-| fastify | >=5.0.0 | Yes |
-| @classytic/mongokit | >=3.5.0 | No (recommended) |
+| Peer | Min | Required? |
+|------|-----|-----------|
+| fastify | >=5.0.0 | **Yes** |
+| @classytic/mongokit | >=3.5.0 | No |
+| mongoose | >=9.0.0 | No |
 | better-auth | >=1.5.5 | No |
-| @classytic/streamline | >=2.0.0 | No |
 | ioredis | >=5.0.0 | No |
 | bullmq | >=5.0.0 | No |
-| mongoose | >=9.0.0 | No |
 | @prisma/client | >=5.0.0 | No |
+
+## Files
+
+- [AGENTS.md](AGENTS.md) — Full agent guide (architecture, gotchas, patterns, security)
+- [v3.md](v3.md) — v3 design notes
+- [knip.config.ts](knip.config.ts) — Dead code detection config
+- [biome.json](biome.json) — Lint/format config
+- [tsdown.config.ts](tsdown.config.ts) — Build config
+- [vitest.config.ts](vitest.config.ts) — Test config
+- `skills/arc/` — Claude Code skill definitions
+- `docs/` — Nextra documentation site
