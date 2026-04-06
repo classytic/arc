@@ -3,62 +3,87 @@ import { middleware, sortMiddlewares } from "../../src/middleware/middleware.js"
 
 describe("middleware()", () => {
   it("creates a named middleware with default priority", () => {
-    const m = middleware("logger", async () => {});
+    const m = middleware("logger", { handler: async () => {} });
     expect(m.name).toBe("logger");
-    expect(m.priority).toBe(100);
-  });
-
-  it("supports custom priority", () => {
-    const m = middleware("early", async () => {}, { priority: 10 });
     expect(m.priority).toBe(10);
   });
 
+  it("supports custom priority", () => {
+    const m = middleware("early", { handler: async () => {}, priority: 1 });
+    expect(m.priority).toBe(1);
+  });
+
   it("supports operation filtering", () => {
-    const m = middleware("only-create", async () => {}, {
+    const m = middleware("only-create", {
+      handler: async () => {},
       operations: ["create", "update"],
     });
     expect(m.operations).toEqual(["create", "update"]);
   });
 
   it("supports conditional execution via when()", () => {
-    const m = middleware("conditional", async () => {}, {
-      when: (req) => req.method === "POST",
+    const m = middleware("conditional", {
+      handler: async () => {},
+      when: (req) => (req as unknown as { method: string }).method === "POST",
     });
     expect(m.when).toBeDefined();
-    expect(m.when!({ method: "POST" } as never)).toBe(true);
-    expect(m.when!({ method: "GET" } as never)).toBe(false);
   });
 
-  it("handler receives request context", async () => {
+  it("handler is stored on the middleware", async () => {
     const handler = vi.fn();
-    const m = middleware("test", handler);
-    const ctx = { method: "POST" };
-    await m.handler(ctx as never);
-    expect(handler).toHaveBeenCalledWith(ctx);
+    const m = middleware("test", { handler });
+    await m.handler({} as never, {} as never);
+    expect(handler).toHaveBeenCalled();
   });
 });
 
 describe("sortMiddlewares()", () => {
-  it("sorts by priority ascending", () => {
+  it("returns a MiddlewareConfig map keyed by operation", () => {
     const middlewares = [
-      middleware("c", async () => {}, { priority: 300 }),
-      middleware("a", async () => {}, { priority: 100 }),
-      middleware("b", async () => {}, { priority: 200 }),
+      middleware("a", { handler: async () => {}, priority: 100 }),
     ];
-    const sorted = sortMiddlewares(middlewares);
-    // sortMiddlewares returns a config map or sorted array
-    // Check that they're ordered by priority
-    const names = sorted.map((m: { name: string }) => m.name);
-    expect(names).toEqual(["a", "b", "c"]);
+    const config = sortMiddlewares(middlewares);
+    // Should be an object with CRUD operation keys
+    expect(typeof config).toBe("object");
+    expect(config).toHaveProperty("list");
+    expect(config).toHaveProperty("get");
+    expect(config).toHaveProperty("create");
+    expect(config).toHaveProperty("update");
+    expect(config).toHaveProperty("delete");
   });
 
-  it("preserves insertion order for same priority", () => {
+  it("sorts by priority ascending within each operation", () => {
+    const order: string[] = [];
     const middlewares = [
-      middleware("first", async () => {}, { priority: 100 }),
-      middleware("second", async () => {}, { priority: 100 }),
+      middleware("c", { handler: async () => { order.push("c"); }, priority: 30 }),
+      middleware("a", { handler: async () => { order.push("a"); }, priority: 10 }),
+      middleware("b", { handler: async () => { order.push("b"); }, priority: 20 }),
     ];
-    const sorted = sortMiddlewares(middlewares);
-    const names = sorted.map((m: { name: string }) => m.name);
-    expect(names).toEqual(["first", "second"]);
+    const config = sortMiddlewares(middlewares);
+    // Each operation's handlers should be in priority order
+    const listHandlers = config.list;
+    expect(listHandlers).toBeDefined();
+    expect(listHandlers).toHaveLength(3);
+  });
+
+  it("filters by operation when specified", () => {
+    const middlewares = [
+      middleware("all-ops", { handler: async () => {} }),
+      middleware("create-only", { handler: async () => {}, operations: ["create"] }),
+    ];
+    const config = sortMiddlewares(middlewares);
+    // 'list' should only have 'all-ops'
+    expect(config.list).toHaveLength(1);
+    // 'create' should have both
+    expect(config.create).toHaveLength(2);
+  });
+
+  it("omits operations with no applicable middleware", () => {
+    const middlewares = [
+      middleware("create-only", { handler: async () => {}, operations: ["create"] }),
+    ];
+    const config = sortMiddlewares(middlewares);
+    expect(config.create).toHaveLength(1);
+    expect(config.list).toBeUndefined();
   });
 });

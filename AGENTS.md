@@ -153,7 +153,7 @@ v3 (planned): `fields: { name: field.string().required() }` (type-safe builder)
 ### Structure
 
 ```
-tests/                         173 test files
+tests/                         184 test files, 2700+ tests
   core/                        BaseController, QueryResolver, ActionRouter, lifecycle, schemas
   auth/                        JWT, Better Auth, sessions, tokens, revocation
   permissions/                 RBAC, field permissions, dynamic matrix
@@ -180,24 +180,19 @@ tests/                         173 test files
   setup.ts                     shared Vitest setup
 ```
 
-### Test Coverage Gaps (no dedicated test directory)
+### Test Coverage Gaps (remaining)
 
-These 12 modules have source files but no `tests/<module>/` directory. Some are tested indirectly via e2e/scenario tests, but dedicated unit tests are needed:
+Most modules now have dedicated tests. These still rely on indirect coverage only:
 
 | Module | Source files | Notes |
 |--------|-------------|-------|
 | `context/` | 2 | AsyncLocalStorage — tested indirectly via `request-context.test.ts` |
 | `discovery/` | 1 | `loadResources()` — tested via `factory/load-resources.test.ts` |
-| `idempotency/` | 9 | Plugin + stores — tested via `security/idempotency-body-hash.test.ts` only |
-| `logger/` | 1 | Logger interface — small, tested indirectly |
-| `middleware/` | 2 | Middleware system — tested via e2e scenarios |
-| `migrations/` | 1 | MigrationRunner — **no tests at all** |
-| `org/` | 5 | orgMembership, organizationPlugin — tested via `e2e/org-scope-plugin.test.ts` |
-| `pipeline/` | 6 | guard/pipe/intercept/transform — tested via `security/` and scenarios |
-| `policies/` | 3 | PolicyInterface — tested via `security/policy-*.test.ts` |
+| `idempotency/` | 9 | Plugin + stores — tested via `security/idempotency-body-hash.test.ts` |
 | `registry/` | 3 | Resource registry — tested via `plugins/plugin-registry.test.ts` |
-| `schemas/` | 1 | Schema generation — tested via `core/auto-schema-generation.test.ts` |
 | `testing/` | 7 | Test utilities — used everywhere but not self-tested |
+
+**Recently added dedicated tests:** pipeline/ (4 files), org/, policies/, middleware/, cache/keys, schemas/, logger/, migrations/
 
 ### Which Tests to Run (by file changed)
 
@@ -226,8 +221,12 @@ These 12 modules have source files but no `tests/<module>/` directory. Some are 
 | `src/utils/*` | `npx vitest run tests/utils/` |
 | `src/adapters/*` | `npx vitest run tests/adapters/ tests/core/base-controller.test.ts` |
 | `src/org/*` | `npx vitest run tests/e2e/org-scope-plugin.test.ts tests/scenarios/jwt-org-scoping.test.ts` |
-| `src/policies/*` | `npx vitest run tests/security/policy-filter-*.test.ts` |
-| `src/pipeline/*` | `npx vitest run tests/security/ tests/core/base-controller.test.ts` |
+| `src/policies/*` | `npx vitest run tests/policies/ tests/security/policy-filter-*.test.ts` |
+| `src/pipeline/*` | `npx vitest run tests/pipeline/ tests/core/base-controller.test.ts` |
+| `src/middleware/*` | `npx vitest run tests/middleware/` |
+| `src/migrations/*` | `npx vitest run tests/migrations/` |
+| `src/schemas/*` | `npx vitest run tests/schemas/ tests/core/auto-schema-generation.test.ts` |
+| `src/logger/*` | `npx vitest run tests/logger/` |
 | `src/idempotency/*` | `npx vitest run tests/security/idempotency-body-hash.test.ts` |
 | `src/rpc/*` | `npx vitest run tests/rpc/` |
 | `src/dynamic/*` | `npx vitest run tests/dynamic/` |
@@ -375,7 +374,7 @@ npx knip            # dead code detection
 
 1. `npx tsc --noEmit` — zero type errors
 2. `npx biome check src/ --diagnostic-level=error` — zero lint errors
-3. `npx vitest run` — all tests pass (173 files, 2539+ assertions, 0 failures)
+3. `npx vitest run` — all tests pass (184 files, 2700+ tests, 0 failures)
 4. `npx knip` — review unused exports, no new dead code
 5. `npm run build` — dist/ output clean
 6. Verify subpath exports resolve:

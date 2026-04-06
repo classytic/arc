@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.5.3
+
+### Security Fixes
+
+- **`roles()` no longer leaks held roles in denial messages** — action routes previously exposed `Had platform:[user] org:[member]` to clients
+- **`loadResources()` no longer double-executes modules on error** — retries only on `ERR_UNSUPPORTED_ESM_URL_SCHEME` (Windows path format), not evaluation errors
+
+### Schema & Validation
+
+- **Subdocument arrays generate proper object schemas** — `[{ account: ObjectId, debit: Number }]` now produces `{ items: { type: 'object', properties: {...} } }` instead of `{ items: { type: 'string' } }`
+- **AJV strict-mode warnings fixed** — pagination/search fields keep their types, only filter fields stripped
+- **Date fields no longer enforce `format: "date-time"`** — `"2026-01-15"` passes Fastify validation; Mongoose handles parsing
+- **`LookupOption.select` accepts projection objects** — `string | Record<string, 0 | 1>` (matches MongoKit)
+
+### Performance
+
+- **`loadResources()` imports in parallel** — `Promise.all()` instead of sequential `for...of await`
+
+### Test Coverage
+
+- 2,586 tests across 173 files (up from 2,539 / 170)
+- 16 multi-tenant hierarchy tests (org isolation, cross-org denial, team scoping, `roles()` at both levels)
+- 10 route prefix tests (custom, hyphenated, nested, conflicts, 404s)
+- 14 business scenario tests (accounting subdocs, mixed tenant, plugin-added fields, date handling)
+- 3 denial message security tests (no role leakage)
+- Partial fieldRules regression test (required fields preserved)
+
 ## 2.5.2
 
 ### Auth & Permissions

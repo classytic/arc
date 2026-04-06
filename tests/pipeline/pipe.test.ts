@@ -112,10 +112,13 @@ describe("executePipeline()", () => {
 
   it("skips steps filtered by operation", async () => {
     const order: string[] = [];
-    const g = guard("only-delete", async () => {
-      order.push("guard");
-      return true;
-    }, { operations: ["delete"] });
+    const g = guard("only-delete", {
+      operations: ["delete"],
+      handler: async () => {
+        order.push("guard");
+        return true;
+      },
+    });
     const handler = vi.fn().mockImplementation(async () => {
       order.push("handler");
       return {};

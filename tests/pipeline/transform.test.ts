@@ -8,8 +8,11 @@ describe("transform()", () => {
     expect(t.name).toBe("sanitize");
   });
 
-  it("supports operation filter", () => {
-    const t = transform("trim", async (ctx) => ctx, { operations: ["create"] });
+  it("supports operation filter via options object", () => {
+    const t = transform("trim", {
+      operations: ["create"],
+      handler: async (ctx) => ctx,
+    });
     expect(t.operations).toEqual(["create"]);
   });
 
