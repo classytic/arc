@@ -578,7 +578,7 @@ export interface CreateAppOptions {
    * });
    * ```
    */
-  resources?: Array<{ toPlugin: () => unknown }>;
+  resources?: Array<import("./loadResources.js").ResourceLike>;
 
   /**
    * URL prefix for all auto-registered resources.

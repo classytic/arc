@@ -2084,7 +2084,7 @@ export default exampleResource;
 }
 
 function exampleControllerTemplate(config: ProjectConfig): string {
-  const ts = config.typescript;
+  const _ts = config.typescript;
 
   return `/**
  * Example Controller
