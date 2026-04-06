@@ -1,33 +1,6 @@
 # Changelog
 
-## 2.5.3
-
-### Security Fixes
-
-- **`roles()` no longer leaks held roles in denial messages** — action routes previously exposed `Had platform:[user] org:[member]` to clients
-- **`loadResources()` no longer double-executes modules on error** — retries only on `ERR_UNSUPPORTED_ESM_URL_SCHEME` (Windows path format), not evaluation errors
-
-### Schema & Validation
-
-- **Subdocument arrays generate proper object schemas** — `[{ account: ObjectId, debit: Number }]` now produces `{ items: { type: 'object', properties: {...} } }` instead of `{ items: { type: 'string' } }`
-- **AJV strict-mode warnings fixed** — pagination/search fields keep their types, only filter fields stripped
-- **Date fields no longer enforce `format: "date-time"`** — `"2026-01-15"` passes Fastify validation; Mongoose handles parsing
-- **`LookupOption.select` accepts projection objects** — `string | Record<string, 0 | 1>` (matches MongoKit)
-
-### Performance
-
-- **`loadResources()` imports in parallel** — `Promise.all()` instead of sequential `for...of await`
-
-### Test Coverage
-
-- 2,586 tests across 173 files (up from 2,539 / 170)
-- 16 multi-tenant hierarchy tests (org isolation, cross-org denial, team scoping, `roles()` at both levels)
-- 10 route prefix tests (custom, hyphenated, nested, conflicts, 404s)
-- 14 business scenario tests (accounting subdocs, mixed tenant, plugin-added fields, date handling)
-- 3 denial message security tests (no role leakage)
-- Partial fieldRules regression test (required fields preserved)
-
-## 2.5.2
+## 2.5.5
 
 ### Auth & Permissions
 
@@ -36,64 +9,65 @@
   import { roles } from '@classytic/arc/permissions';
   permissions: { create: roles('admin', 'editor') }  // checks both levels
   ```
-- **`requireRoles({ includeOrgRoles: true })`** — backward-compatible option to also check org roles
-- **`AdditionalRoute.handler` type** — now accepts `ControllerHandler` when `wrapHandler: true` (no more `as any` casts)
+- **`requireRoles({ includeOrgRoles: true })`** — backward-compatible option for existing code
+- **`AdditionalRoute.handler` type** — now accepts `ControllerHandler` when `wrapHandler: true` (no more `as any`)
+- **Denial messages do not leak held roles** — safe for action routes that return reason to clients
 
-### Schema & Query Fixes
+### Schema & Validation
 
-- **Bracket notation filters work** — `?name[contains]=foo`, `?price[gte]=100` no longer rejected by Fastify schema validation. AJV validates structure only; QueryParser validates content.
-- **`excludeFields` respected by Mongoose adapter** — computed fields excluded from create/update body schemas
+- **Bracket notation filters work** — `?name[contains]=foo`, `?price[gte]=100` no longer rejected by Fastify. AJV validates structure; QueryParser validates content.
+- **Subdocument arrays generate proper object schemas** — `[{ account: ObjectId, debit: Number }]` → `{ items: { type: 'object', properties: {...} } }`
+- **`excludeFields` respected by Mongoose adapter** — removes from both `properties` AND `required` array
 - **`readonlyFields` excluded from body schemas** — previously only stripped at runtime
-- **`immutable` / `immutableAfterCreate` fields** — excluded from update body schema AND stripped by BodySanitizer at runtime
-- **`optionalFields` respected by Mongoose schema gen** — overrides Mongoose `isRequired`
-- **Response schema `additionalProperties: true`** — virtuals and computed fields no longer stripped by fast-json-stringify
-- **Mongoose type mapping** — Array element types detected, Mixed/Map/Buffer/Decimal128/UUID support
+- **`immutable` / `immutableAfterCreate` fields** — excluded from update body + stripped by BodySanitizer
+- **Date fields no longer enforce `format: "date-time"`** — `"2026-01-15"` passes Fastify; Mongoose handles parsing
+- **AJV strict-mode warnings fixed** — pagination/search keep types, only filter fields stripped
+- **Mongoose type mapping** — Array elements, Mixed, Map, Buffer, Decimal128, UUID, SubDocument
+- **Response schema `additionalProperties: true`** — virtuals not stripped by fast-json-stringify
+- **`LookupOption.select`** — accepts `string | Record<string, 0 | 1>` (MongoKit compat)
 
-### Factory DX
+### Factory & Resource Loading
 
 - **`createApp({ resources })`** — register resources directly, no `toPlugin()` needed
+- **`loadResources(dir)`** — auto-discover `*.resource.{ts,js,mts,mjs}` files from a directory
   ```typescript
-  const app = await createApp({ resources: [product, order], auth: false });
-  ```
-- **`loadResources(dir)`** — auto-discover `*.resource.ts` files from a directory
-  ```typescript
+  import { createApp, loadResources } from '@classytic/arc/factory';
   const app = await createApp({
     resources: await loadResources('./src/resources'),
   });
   ```
 - **`loadResources` options** — `exclude`, `include`, `suffix`, `recursive`
-- **Resource registration errors** — descriptive messages with resource name and fix hints
-- **`loadResources` diagnostics** — warns about skipped files and import failures
+- **`.js→.ts` resolution fixed in vitest** — `pathToFileURL` first ensures loader hooks intercept entire import chain
+- **Parallel imports** — `Promise.all()` for all resource files
+- **No double-execution on module errors** — evaluation errors reported once, not retried
+- **Actionable error messages** — `.js` import failures get a hint about TS ESM convention
+- **Resource registration errors** — descriptive messages with resource name
 
 ### Audit
 
-- **DB-agnostic userId extraction** — works with Mongoose ObjectId, string, number (no more `.toString()` type mismatch)
-- **`MongoConnection` docs** — clarified: pass `mongoose.connection.db`, not `mongoose.connection`
-- **MCP edits trigger auto-audit** — confirmed and tested (same BaseController → hooks → audit pipeline as REST)
-- **Manual audit from custom routes** — `fastify.audit.custom()` works in `wrapHandler: false` handlers
+- **DB-agnostic userId extraction** — Mongoose ObjectId, string, number (no `.toString()` mismatch)
+- **MCP edits trigger auto-audit** — same BaseController → hooks → audit pipeline as REST
+- **Manual audit from custom routes** — `fastify.audit.custom()` works in raw handlers
+
+### MCP Integration
+
+- Operator-suffixed filter fields (`price_gt`, `price_lte`)
+- Auto-derive `filterableFields` and `allowedOperators` from `QueryParser`
+- `GET /mcp/health` diagnostic endpoint
+- Auth failure WARN logging
 
 ### Test Coverage
 
-- 2,539 tests across 170 files (up from 2,448 / 166)
-- 17 query schema compatibility tests (bracket notation, combined filters, sort, pagination)
-- 15 loadResources tests (discovery, exclude/include, E2E with createApp)
-- 10 resources-option tests (CRUD lifecycle, mixed usage, error handling)
-- 42 org permission tests (roles(), includeOrgRoles, platform + org checks)
-- 38 audit tests (userId extraction, change detection, auto-audit, custom actions)
+- 2,791 tests across 194 files
+- 38 loadResources tests (patterns, .js→.ts, parallel, error handling)
+- 16 multi-tenant hierarchy tests (org isolation, cross-org denial, team scoping)
+- 15 query schema compatibility tests (bracket notation, combined filters)
+- 14 business scenario tests (accounting subdocs, mixed tenant, plugin-added fields)
+- 10 route prefix tests (custom, hyphenated, nested, conflicts)
+- 48 permission tests (roles(), denial security, platform + org checks)
+- 38 audit tests (userId extraction, change detection, auto-audit)
 
-## 2.5.1
-
-### MCP Operator Filters, v3 Notes
-
-- Operator-suffixed filter fields in MCP schemas (`price_gt`, `price_lte`)
-- Auto-derive `filterableFields` and `allowedOperators` from `QueryParser`
-- v3 design notes added (internal planning doc)
-
-## 2.5.0
-
-### MCP Integration — AI Agent Tools
-
-Expose Arc resources as MCP tools for Claude, Cursor, Copilot, and any MCP-compatible agent. Zero-config auto-generation from `defineResource()` or fully custom tools via `defineTool()`.
+## 2.4.3
 
 ```typescript
 import { mcpPlugin } from '@classytic/arc/mcp';

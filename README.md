@@ -15,18 +15,31 @@ npm install @classytic/mongokit mongoose   # MongoDB adapter
 
 ```typescript
 import mongoose from 'mongoose';
-import { createApp } from '@classytic/arc/factory';
+import { createApp, loadResources } from '@classytic/arc/factory';
 
 await mongoose.connect(process.env.DB_URI);
 
 const app = await createApp({
   preset: 'production',
+  resources: await loadResources('./src/resources'),  // auto-discovers *.resource.ts
   auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
   cors: { origin: process.env.ALLOWED_ORIGINS?.split(',') },
 });
 
-await app.register(productResource.toPlugin());
 await app.listen({ port: 8040, host: '0.0.0.0' });
+```
+
+Three ways to register resources:
+
+```typescript
+// Auto-discover from directory (recommended)
+resources: await loadResources('./src/resources'),
+
+// Explicit array
+resources: [productResource, orderResource],
+
+// Via plugins callback (full Fastify control)
+plugins: async (f) => { await f.register(productResource.toPlugin()); },
 ```
 
 ## defineResource
@@ -34,7 +47,7 @@ await app.listen({ port: 8040, host: '0.0.0.0' });
 Single API for a full REST resource with routes, permissions, and behaviors:
 
 ```typescript
-import { defineResource, createMongooseAdapter, allowPublic, requireRoles } from '@classytic/arc';
+import { defineResource, createMongooseAdapter, allowPublic, roles } from '@classytic/arc';
 
 const productResource = defineResource({
   name: 'product',
@@ -43,9 +56,9 @@ const productResource = defineResource({
   permissions: {
     list: allowPublic(),
     get: allowPublic(),
-    create: requireRoles(['admin']),
-    update: requireRoles(['admin']),
-    delete: requireRoles(['admin']),
+    create: roles('admin', 'editor'),  // checks platform + org roles
+    update: roles('admin', 'editor'),
+    delete: roles('admin'),
   },
   cache: { staleTime: 30, gcTime: 300, tags: ['catalog'] }, // QueryCache (opt-in)
   additionalRoutes: [

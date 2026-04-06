@@ -8,7 +8,7 @@
 **@classytic/arc** — Resource-oriented backend framework on Fastify.
 One `defineResource()` → REST API + auth + permissions + events + caching + OpenAPI + MCP.
 
-**v2.5.3** | Node.js 22+ | TypeScript 6+ | ESM-only | Fastify 5+ | 184 test files, 2700+ tests
+**v2.5.5** | Node.js 22+ | TypeScript 6+ | ESM-only | Fastify 5+ | 194 test files, 2788+ tests
 
 ## Commands
 

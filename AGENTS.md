@@ -11,7 +11,7 @@
 
 | Fact | Value |
 |------|-------|
-| Version | 2.5.3 |
+| Version | 2.5.5 |
 | Runtime | Node.js 22+ (ESM-only) |
 | Language | TypeScript 6+ (strict mode) |
 | Build | tsdown (not tsc, not esbuild directly) |

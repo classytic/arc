@@ -8,11 +8,11 @@ description: |
   Triggers: arc, fastify resource, defineResource, createApp, BaseController, arc preset,
   arc auth, arc events, arc jobs, arc websocket, arc mcp, arc plugin, arc testing, arc cli,
   arc permissions, arc hooks, arc pipeline, arc factory, arc cache, arc QueryCache.
-version: 2.5.3
+version: 2.5.5
 license: MIT
 metadata:
   author: Classytic
-  version: "2.5.3"
+  version: "2.5.5"
 tags:
   - fastify
   - rest-api
