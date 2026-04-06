@@ -105,8 +105,21 @@ export async function loadResources(
         }
         return { file, mod };
       } catch (err) {
+        const code = (err as { code?: string }).code;
         const msg = err instanceof Error ? err.message : String(err);
-        failed.push(`${file}: ${msg}`);
+        // Detect .js extension resolution failures common in TypeScript ESM projects.
+        // When running via vitest/tsx, .js→.ts resolution is handled by the loader.
+        // When running via raw Node.js, it fails. Provide actionable guidance.
+        if (code === "ERR_MODULE_NOT_FOUND" && msg.includes(".js")) {
+          failed.push(
+            `${file}: ${msg}\n` +
+              "    Hint: This file uses .js extension imports (TypeScript ESM convention).\n" +
+              "    In production, ensure your build compiles .ts→.js before loadResources() runs.\n" +
+              "    In tests, use vitest/tsx which resolves .js→.ts automatically.",
+          );
+        } else {
+          failed.push(`${file}: ${msg}`);
+        }
         return null;
       }
     }),
