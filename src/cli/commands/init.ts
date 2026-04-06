@@ -977,13 +977,13 @@ import { getAuth } from './auth.js';
  */
 
 ${typeImport}import config from '#config/index.js';
-import { createApp } from '@classytic/arc/factory';
+import { createApp, loadResources } from '@classytic/arc/factory';
 ${betterAuthImport}
 // App-specific plugins
 import { registerPlugins } from '#plugins/index.js';
 
 // Resource registry
-import { registerResources } from '#resources/index.js';
+import { resources, registerResources } from '#resources/index.js';
 
 /**
  * Create a fully configured app instance
@@ -991,9 +991,10 @@ import { registerResources } from '#resources/index.js';
  * @returns Configured Fastify instance ready to use
  */
 export async function createAppInstance()${ts ? ": Promise<FastifyInstance>" : ""} {
-  // Create Arc app with base configuration
+  // Create Arc app with resources and base configuration
   const app = await createApp({
     preset: config.env === 'production' ? (${config.edge ? "'edge'" : "'production'"}) : 'development',
+    resources,
     ${authConfig}
     cors: {
       origin: config.cors.origins,
@@ -1009,9 +1010,6 @@ export async function createAppInstance()${ts ? ": Promise<FastifyInstance>" : "
 
   // Register app-specific plugins (explicit dependency injection)
   await registerPlugins(app, { config });
-
-  // Register all resources
-  await registerResources(app);
 
   return app;
 }
@@ -1607,6 +1605,7 @@ import {
   requireRoles,
   requireOwnership,
   allowPublic,
+  roles,
   anyOf,
   allOf,
   denyAll,
@@ -1619,6 +1618,7 @@ export {
   requireAuth,
   requireRoles,
   requireOwnership,
+  roles,
   allOf,
   anyOf,
   denyAll,
@@ -1659,11 +1659,14 @@ export const requireSuperadmin = ()${returnType} =>
 /**
  * Organization-level guards (per-org member.role):
  *
- * - requireOrgRole(['admin','owner'])  — checks member.role in active org
+ * - roles('admin')                     — checks BOTH user.role AND org member.role (recommended)
+ * - requireOrgRole(['admin','owner'])  — checks member.role in active org ONLY
  * - requireOrgMembership()             — just checks if user is in the org (any role)
  * - requireTeamMembership()            — checks if user is in the active team
  *
- * These are DIFFERENT from platform-level helpers above (requireRoles checks user.role).
+ * RECOMMENDED: Use roles() for most cases — it checks platform + org roles automatically.
+ * Use requireOrgRole() when you ONLY want org-level checks (exclude platform admins).
+ *
  * Platform superadmin automatically bypasses all org role checks.
  *
  * IMPORTANT: When using Better Auth's Access Control (ac) with custom roles,

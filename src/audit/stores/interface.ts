@@ -107,7 +107,7 @@ export function createAuditEntry(
     resource,
     documentId,
     action,
-    userId: context.user?._id?.toString() ?? context.user?.id,
+    userId: extractUserId(context.user),
     organizationId: context.organizationId,
     before: data?.before,
     after: data?.after,
@@ -118,6 +118,17 @@ export function createAuditEntry(
     metadata: data?.metadata,
     timestamp: new Date(),
   };
+}
+
+/**
+ * Extract userId from a user object — DB-agnostic.
+ * Handles Mongoose ObjectId, string, number, or any type with toString().
+ */
+function extractUserId(user: UserBase | undefined): string | undefined {
+  if (!user) return undefined;
+  const raw = user._id ?? user.id;
+  if (raw == null) return undefined;
+  return typeof raw === "string" ? raw : String(raw);
 }
 
 /**

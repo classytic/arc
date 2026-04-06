@@ -58,10 +58,14 @@ export class BodySanitizer {
       delete sanitized[field];
     }
 
-    // Strip fields marked as systemManaged or readonly in fieldRules
+    // Strip fields marked as systemManaged, readonly, or immutable (on updates) in fieldRules
     const fieldRules = this.schemaOptions.fieldRules ?? {};
     for (const [field, rules] of Object.entries(fieldRules)) {
       if (rules.systemManaged || rules.readonly) {
+        delete sanitized[field];
+      }
+      // Immutable fields cannot be changed after creation
+      if (_operation === "update" && (rules.immutable || rules.immutableAfterCreate)) {
         delete sanitized[field];
       }
     }

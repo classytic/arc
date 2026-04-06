@@ -12,11 +12,34 @@ npm install @modelcontextprotocol/sdk zod
 
 ```typescript
 import { mcpPlugin } from '@classytic/arc/mcp';
+import { createApp, loadResources } from '@classytic/arc/factory';
 
-await app.register(mcpPlugin, {
+// Option A: Explicit resources
+const app = await createApp({
   resources: [productResource, taskResource],
   auth: false,
-  exclude: ['credential'],
+  plugins: async (f) => {
+    await f.register(mcpPlugin, { resources: [productResource, taskResource], auth: false });
+  },
+});
+
+// Option B: Auto-discover from directory
+const resources = await loadResources('./src/resources');
+const app = await createApp({
+  resources,
+  plugins: async (f) => {
+    await f.register(mcpPlugin, { resources, auth: false });
+  },
+});
+```
+
+Per-resource overrides:
+
+```typescript
+await app.register(mcpPlugin, {
+  resources,
+  auth: false,
+  include: ['product', 'order'],          // only these get MCP tools
   overrides: { product: { operations: ['list', 'get'] } },
 });
 ```

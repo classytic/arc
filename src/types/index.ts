@@ -681,10 +681,16 @@ export interface AdditionalRoute {
   /** Route path (relative to resource prefix) */
   path: string;
   /**
-   * Handler - string (controller method name) or function
-   * Function can be Fastify handler or (request, reply) => Promise<unknown>
+   * Handler - string (controller method name) or function.
+   *
+   * When `wrapHandler: true`:
+   * - `string` — calls controller method by name (e.g., `'approve'`)
+   * - `ControllerHandler` — receives `IRequestContext`, returns `IControllerResponse`
+   *
+   * When `wrapHandler: false`:
+   * - Fastify handler `(request, reply) => unknown`
    */
-  handler: string | RouteHandlerMethod | ((request: FastifyRequest<any>, reply: FastifyReply) => unknown);
+  handler: string | import('./handlers.js').ControllerHandler | RouteHandlerMethod | ((request: FastifyRequest<any>, reply: FastifyReply) => unknown);
 
   /** Permission check - REQUIRED */
   permissions: PermissionCheck;

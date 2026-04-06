@@ -1,5 +1,67 @@
 # Changelog
 
+## 2.5.2
+
+### Auth & Permissions
+
+- **`roles()` helper** — checks both platform `user.role` AND org `scope.orgRoles` automatically. Drop-in fix for Better Auth org plugin users where `requireRoles(['admin'])` silently denied org-level admins.
+  ```typescript
+  import { roles } from '@classytic/arc/permissions';
+  permissions: { create: roles('admin', 'editor') }  // checks both levels
+  ```
+- **`requireRoles({ includeOrgRoles: true })`** — backward-compatible option to also check org roles
+- **`AdditionalRoute.handler` type** — now accepts `ControllerHandler` when `wrapHandler: true` (no more `as any` casts)
+
+### Schema & Query Fixes
+
+- **Bracket notation filters work** — `?name[contains]=foo`, `?price[gte]=100` no longer rejected by Fastify schema validation. AJV validates structure only; QueryParser validates content.
+- **`excludeFields` respected by Mongoose adapter** — computed fields excluded from create/update body schemas
+- **`readonlyFields` excluded from body schemas** — previously only stripped at runtime
+- **`immutable` / `immutableAfterCreate` fields** — excluded from update body schema AND stripped by BodySanitizer at runtime
+- **`optionalFields` respected by Mongoose schema gen** — overrides Mongoose `isRequired`
+- **Response schema `additionalProperties: true`** — virtuals and computed fields no longer stripped by fast-json-stringify
+- **Mongoose type mapping** — Array element types detected, Mixed/Map/Buffer/Decimal128/UUID support
+
+### Factory DX
+
+- **`createApp({ resources })`** — register resources directly, no `toPlugin()` needed
+  ```typescript
+  const app = await createApp({ resources: [product, order], auth: false });
+  ```
+- **`loadResources(dir)`** — auto-discover `*.resource.ts` files from a directory
+  ```typescript
+  const app = await createApp({
+    resources: await loadResources('./src/resources'),
+  });
+  ```
+- **`loadResources` options** — `exclude`, `include`, `suffix`, `recursive`
+- **Resource registration errors** — descriptive messages with resource name and fix hints
+- **`loadResources` diagnostics** — warns about skipped files and import failures
+
+### Audit
+
+- **DB-agnostic userId extraction** — works with Mongoose ObjectId, string, number (no more `.toString()` type mismatch)
+- **`MongoConnection` docs** — clarified: pass `mongoose.connection.db`, not `mongoose.connection`
+- **MCP edits trigger auto-audit** — confirmed and tested (same BaseController → hooks → audit pipeline as REST)
+- **Manual audit from custom routes** — `fastify.audit.custom()` works in `wrapHandler: false` handlers
+
+### Test Coverage
+
+- 2,539 tests across 170 files (up from 2,448 / 166)
+- 17 query schema compatibility tests (bracket notation, combined filters, sort, pagination)
+- 15 loadResources tests (discovery, exclude/include, E2E with createApp)
+- 10 resources-option tests (CRUD lifecycle, mixed usage, error handling)
+- 42 org permission tests (roles(), includeOrgRoles, platform + org checks)
+- 38 audit tests (userId extraction, change detection, auto-audit, custom actions)
+
+## 2.5.1
+
+### MCP Operator Filters, v3 Notes
+
+- Operator-suffixed filter fields in MCP schemas (`price_gt`, `price_lte`)
+- Auto-derive `filterableFields` and `allowedOperators` from `QueryParser`
+- v3 design notes added (internal planning doc)
+
 ## 2.5.0
 
 ### MCP Integration — AI Agent Tools

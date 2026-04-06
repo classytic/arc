@@ -8,11 +8,11 @@ description: |
   Triggers: arc, fastify resource, defineResource, createApp, BaseController, arc preset,
   arc auth, arc events, arc jobs, arc websocket, arc mcp, arc plugin, arc testing, arc cli,
   arc permissions, arc hooks, arc pipeline, arc factory, arc cache, arc QueryCache.
-version: 2.4.2
+version: 2.5.2
 license: MIT
 metadata:
   author: Classytic
-  version: "2.4.1"
+  version: "2.5.2"
 tags:
   - fastify
   - rest-api
@@ -502,6 +502,29 @@ src/resources/order/
 ```
 
 Generate: `arc generate resource order --mcp` | Wire: `extraTools: [fulfillOrderTool]`
+
+**Auto-load resources** (v2.5.2) — no barrel files, no manual `toPlugin()`:
+
+```typescript
+import { createApp, loadResources } from '@classytic/arc/factory';
+
+const app = await createApp({
+  resources: await loadResources('./src/resources'),  // discovers *.resource.ts
+  auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
+});
+// loadResources options: exclude, include, suffix, recursive
+```
+
+**Unified role check** (v2.5.2) — checks both platform AND org roles:
+
+```typescript
+import { roles } from '@classytic/arc/permissions';
+permissions: {
+  create: roles('admin', 'editor'),  // works with BA org roles + platform roles
+  delete: roles('admin'),
+}
+// Also: requireRoles(['admin'], { includeOrgRoles: true }) for backward compat
+```
 
 **DX helpers** (v2.4.4):
 

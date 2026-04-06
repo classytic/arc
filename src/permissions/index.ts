@@ -211,7 +211,19 @@ export function requireAuth(): PermissionCheck {
  */
 export function requireRoles(
   roles: readonly string[],
-  options?: { bypassRoles?: readonly string[] },
+  options?: {
+    bypassRoles?: readonly string[];
+    /**
+     * Also check org membership roles (`scope.orgRoles`) when in org context.
+     * Default: `false` — only checks platform roles (`user.role`).
+     *
+     * Set to `true` when using Better Auth organization plugin where roles like
+     * 'admin' are assigned at the org level, not the user level.
+     *
+     * For org-only role checks, prefer `requireOrgRole('admin')` instead.
+     */
+    includeOrgRoles?: boolean;
+  },
 ): PermissionCheck {
   const check: PermissionCheck = (ctx) => {
     if (!ctx.user) {
@@ -225,9 +237,17 @@ export function requireRoles(
       return true;
     }
 
-    // Check required roles (any match)
+    // Check platform roles (user.role)
     if (roles.some((r) => userRoles.includes(r))) {
       return true;
+    }
+
+    // Optionally check org roles when in org context
+    if (options?.includeOrgRoles) {
+      const scope = getScope(ctx.request);
+      if (isMember(scope) && roles.some((r) => scope.orgRoles.includes(r))) {
+        return true;
+      }
     }
 
     return {
@@ -236,6 +256,47 @@ export function requireRoles(
     };
   };
   check._roles = roles;
+  return check;
+}
+
+/**
+ * Unified role check — checks both platform roles AND org roles.
+ *
+ * This is the recommended helper for Better Auth organization plugin users.
+ * It checks `user.role` (platform) first, then `scope.orgRoles` (org membership).
+ * Elevated scope always passes.
+ *
+ * For platform-only checks: use `requireRoles(['admin'])`
+ * For org-only checks: use `requireOrgRole('admin')`
+ *
+ * @example
+ * ```typescript
+ * permissions: {
+ *   create: roles('admin', 'editor'),  // passes if user has role at either level
+ *   delete: roles('admin'),
+ * }
+ * ```
+ */
+export function roles(...args: string[] | [readonly string[]]): PermissionCheck {
+  const roleList: readonly string[] = Array.isArray(args[0]) ? args[0] : (args as string[]);
+
+  const check: PermissionCheck = (ctx) => {
+    if (!ctx.user) {
+      return { granted: false, reason: "Authentication required" };
+    }
+
+    // Platform roles
+    const userRoles = getUserRoles(ctx.user);
+    if (roleList.some((r) => userRoles.includes(r))) return true;
+
+    // Org roles (when in org context)
+    const scope = getScope(ctx.request);
+    if (isElevated(scope)) return true;
+    if (isMember(scope) && roleList.some((r) => scope.orgRoles.includes(r))) return true;
+
+    return { granted: false, reason: `Required roles: ${roleList.join(", ")}` };
+  };
+  check._roles = roleList;
   return check;
 }
 

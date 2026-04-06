@@ -182,11 +182,19 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
 
       // Extract field rules from schema options
       const fieldRules = schemaOptions?.fieldRules || {};
-      const blockedFields = new Set<string>(
-        Object.entries(fieldRules)
+      const blockedFields = new Set<string>([
+        // Fields marked systemManaged or hidden in fieldRules
+        ...Object.entries(fieldRules)
           .filter(([, rules]) => rules.systemManaged || rules.hidden)
           .map(([field]) => field),
-      );
+        // Explicit excludeFields from schemaOptions
+        ...(schemaOptions?.excludeFields ?? []),
+        // Hidden fields from schemaOptions
+        ...(schemaOptions?.hiddenFields ?? []),
+      ]);
+
+      const readonlySet = new Set(schemaOptions?.readonlyFields ?? []);
+      const optionalSet = new Set(schemaOptions?.optionalFields ?? []);
 
       for (const [fieldName, schemaType] of Object.entries(paths)) {
         // Skip internal and blocked fields
@@ -196,20 +204,38 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
         const typeInfo = schemaType as MongooseSchemaType;
         properties[fieldName] = this.mongooseTypeToOpenApi(typeInfo);
 
-        if (typeInfo.isRequired) {
+        // Mark as required unless overridden by optionalFields or fieldRules.optional
+        if (
+          typeInfo.isRequired &&
+          !optionalSet.has(fieldName) &&
+          !fieldRules[fieldName]?.optional
+        ) {
           required.push(fieldName);
         }
       }
 
-      // Filter out system-managed fields for input schemas.
-      // Uses SYSTEM_FIELDS from constants (excludes __v which is Mongoose-internal
-      // and already absent from input schemas).
-      const systemFieldSet = new Set<string>(SYSTEM_FIELDS);
+      // Build input properties — exclude system fields AND readonly fields from body schemas
+      const readonlyForInput = new Set([...readonlySet]);
+      for (const [field, rules] of Object.entries(fieldRules)) {
+        if (rules.immutable || rules.immutableAfterCreate) readonlyForInput.add(field);
+      }
+
+      // Filter out system-managed and readonly fields for input schemas.
+      const inputBlockedSet = new Set<string>([...SYSTEM_FIELDS, ...readonlyForInput]);
       const inputProperties = Object.fromEntries(
-        Object.entries(properties).filter(([field]) => !systemFieldSet.has(field)),
+        Object.entries(properties).filter(([field]) => !inputBlockedSet.has(field)),
       );
 
-      const inputRequired = required.filter((field) => !systemFieldSet.has(field));
+      const inputRequired = required.filter((field) => !inputBlockedSet.has(field));
+
+      // Build update properties — additionally exclude immutable fields
+      const immutableSet = new Set<string>();
+      for (const [field, rules] of Object.entries(fieldRules)) {
+        if (rules.immutable || rules.immutableAfterCreate) immutableSet.add(field);
+      }
+      const updateProperties = Object.fromEntries(
+        Object.entries(inputProperties).filter(([field]) => !immutableSet.has(field)),
+      );
 
       return {
         createBody: {
@@ -219,12 +245,13 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
         },
         updateBody: {
           type: "object",
-          properties: inputProperties,
-          // All fields optional for PATCH
+          properties: updateProperties,
+          // All fields optional for PATCH — immutable fields excluded
         },
         response: {
           type: "object",
           properties,
+          additionalProperties: true, // Don't strip virtuals, computed fields, or DB-internal fields
         },
       };
     } catch {
@@ -293,12 +320,49 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
         baseType.type = "string";
         baseType.pattern = "^[a-f\\d]{24}$";
         break;
-      case "Array":
+      case "Array": {
         baseType.type = "array";
-        baseType.items = { type: "string" }; // Default, can be improved
+        // Detect array element type from schema definition
+        const caster = (typeInfo as AnyRecord).caster as MongooseSchemaType | undefined;
+        if (caster?.instance) {
+          baseType.items = this.mongooseTypeToOpenApi(caster);
+        } else {
+          // Mixed array — accept any type
+          baseType.items = {};
+        }
+        break;
+      }
+      case "Mixed":
+        // Schema.Types.Mixed — accept any value
+        baseType.type = ["string", "number", "boolean", "object", "array"];
+        break;
+      case "Map":
+        // Map<string, V> — object with string keys
+        baseType.type = "object";
+        baseType.additionalProperties = true;
+        break;
+      case "Embedded":
+      case "SubDocument":
+        // Nested schema — object with flexible properties
+        baseType.type = "object";
+        baseType.additionalProperties = true;
+        break;
+      case "Buffer":
+        baseType.type = "string";
+        baseType.format = "binary";
+        break;
+      case "Decimal128":
+        baseType.type = "string";
+        baseType.description = "Decimal128 (high-precision number as string)";
+        break;
+      case "UUID":
+        baseType.type = "string";
+        baseType.format = "uuid";
         break;
       default:
+        // Unknown type — accept any structure
         baseType.type = "object";
+        baseType.additionalProperties = true;
     }
 
     return baseType;

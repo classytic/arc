@@ -16,7 +16,16 @@ export interface MongoAuditStoreOptions {
   ttlDays?: number;
 }
 
-// Minimal MongoDB types to avoid mongoose dependency
+/**
+ * Minimal MongoDB connection interface — DB-agnostic.
+ *
+ * Accepts:
+ * - Native MongoDB `Db` instance (has `.collection()`)
+ * - Mongoose `connection.db` (has `.collection()`)
+ * - Any object with `.collection(name)` method
+ *
+ * For Mongoose users: pass `mongoose.connection.db`, not `mongoose.connection`.
+ */
 export interface MongoConnection {
   collection: (name: string) => MongoCollection;
 }
