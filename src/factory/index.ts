@@ -27,7 +27,13 @@ export { ArcFactory, createApp } from "./createApp.js";
 export type { FetchHandlerOptions } from "./edge.js";
 export { toFetchHandler } from "./edge.js";
 export { type LoadResourcesOptions, loadResources } from "./loadResources.js";
-export { developmentPreset, getPreset, productionPreset, testingPreset } from "./presets.js";
+export {
+  developmentPreset,
+  edgePreset,
+  getPreset,
+  productionPreset,
+  testingPreset,
+} from "./presets.js";
 export type {
   AuthOption,
   BetterAuthOption,

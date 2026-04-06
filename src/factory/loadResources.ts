@@ -8,9 +8,15 @@
  * ```ts
  * import { createApp, loadResources } from '@classytic/arc/factory';
  *
+ * // Recommended: import.meta.url — works in both src/ (dev) and dist/ (prod)
  * const app = await createApp({
- *   resources: await loadResources('./src/resources'),
+ *   resources: await loadResources(import.meta.url),
  *   auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
+ * });
+ *
+ * // Or explicit path (must match runtime layout)
+ * const app2 = await createApp({
+ *   resources: await loadResources('./src/resources'),
  * });
  * ```
  *
@@ -23,8 +29,8 @@
  */
 
 import { readdir } from "node:fs/promises";
-import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 /** Minimal resource interface — anything with toPlugin() */
 interface ResourceLike {
@@ -58,21 +64,48 @@ export interface LoadResourcesOptions {
    * ```
    */
   include?: string[];
+  /**
+   * Suppress warning logs for skipped/failed files.
+   * Useful when your resources directory contains factory files or helpers
+   * that don't export a resource (e.g., `account.resource.ts` exporting a factory).
+   *
+   * @default false
+   */
+  silent?: boolean;
 }
 
 /**
  * Scan a directory for resource files and import their default exports.
  *
- * @param dir - Directory path (relative to cwd or absolute)
+ * Accepts a directory path OR `import.meta.url` (file:// URL).
+ * When given a URL, resolves to the directory containing that file —
+ * so `loadResources(import.meta.url)` works in both dev (`src/`) and
+ * production (`dist/`) without path gymnastics.
+ *
+ * @param dir - Directory path, or `import.meta.url` (file:// URL resolved to its dirname)
  * @param options - Pattern and recursion options
  * @returns Array of resource definitions (anything with `.toPlugin()`)
+ *
+ * @example
+ * ```ts
+ * // Works from both src/ and dist/ — resolves relative to the calling file
+ * await loadResources(import.meta.url);
+ *
+ * // Subdirectory relative to the calling file
+ * await loadResources(import.meta.url, { suffix: '.resource' });
+ *
+ * // Explicit path (must match runtime layout)
+ * await loadResources('./src/resources');
+ * ```
  */
 export async function loadResources(
   dir: string,
   options: LoadResourcesOptions = {},
 ): Promise<ResourceLike[]> {
-  const { suffix = ".resource", recursive = true, exclude, include } = options;
-  const absDir = resolve(dir);
+  const { suffix = ".resource", recursive = true, exclude, include, silent = false } = options;
+  // Accept import.meta.url (file:// URL) — resolve to its parent directory
+  const resolvedDir = dir.startsWith("file://") ? dirname(fileURLToPath(dir)) : dir;
+  const absDir = resolve(resolvedDir);
   const pattern = new RegExp(`${escapeRegex(suffix)}\\.(ts|js|mts|mjs)$`);
 
   const files = await collectFiles(absDir, pattern, recursive);
@@ -96,7 +129,7 @@ export async function loadResources(
           // Bare import(path) only hooks the top-level file in vitest —
           // nested .js imports fall through to Node's native resolver and fail.
           mod = (await import(pathToFileURL(file).href)) as Record<string, unknown>;
-        } catch (importErr) {
+        } catch (_importErr) {
           // Fallback to bare path for runtimes where file:// URL doesn't work
           // (e.g., some bundlers, Bun, edge runtimes).
           mod = (await import(file)) as Record<string, unknown>;
@@ -146,15 +179,17 @@ export async function loadResources(
   }
 
   // Log diagnostics to stderr (available before Fastify logger exists)
-  if (failed.length) {
-    console.warn(`[arc] loadResources: ${failed.length} file(s) failed to import:`);
-    for (const f of failed) console.warn(`  - ${f}`);
-  }
-  if (skipped.length) {
-    console.warn(
-      `[arc] loadResources: ${skipped.length} file(s) skipped (no default export with toPlugin):`,
-    );
-    for (const f of skipped) console.warn(`  - ${f}`);
+  if (!silent) {
+    if (failed.length) {
+      console.warn(`[arc] loadResources: ${failed.length} file(s) failed to import:`);
+      for (const f of failed) console.warn(`  - ${f}`);
+    }
+    if (skipped.length) {
+      console.warn(
+        `[arc] loadResources: ${skipped.length} file(s) skipped (no default export with toPlugin):`,
+      );
+      for (const f of skipped) console.warn(`  - ${f}`);
+    }
   }
 
   return resources;

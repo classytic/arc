@@ -387,6 +387,9 @@ export class ResourceDefinition<TDoc = AnyRecord> {
   // Cache config
   readonly cache?: ResourceCacheConfig;
 
+  // Prefix control
+  readonly skipGlobalPrefix: boolean;
+
   // Multi-tenant / ID config (stored for MCP auto-controller creation)
   readonly tenantField?: string | false;
   readonly idField?: string;
@@ -414,6 +417,7 @@ export class ResourceDefinition<TDoc = AnyRecord> {
     this.displayName = config.displayName ?? `${capitalize(config.name)}s`;
     this.tag = config.tag ?? this.displayName;
     this.prefix = config.prefix ?? `/${config.name}s`;
+    this.skipGlobalPrefix = config.skipGlobalPrefix ?? false;
 
     // Adapter
     this.adapter = config.adapter;
@@ -678,11 +682,27 @@ export class ResourceDefinition<TDoc = AnyRecord> {
             // The QueryParser handles validation and type coercion — AJV should only
             // enforce structure (additionalProperties), not types on querystrings.
             //
-            // The schema properties are preserved for OpenAPI documentation (descriptions,
-            // enums, min/max) — only the `type` constraint is removed.
-            // Pagination/sort/search params are never bracket-parsed — keep their types
-            // for AJV strict mode. Only filter fields need type stripping.
+            // Filter fields: strip `type` AND type-dependent keywords (minimum, maximum,
+            // minLength, maxLength, pattern, format) so AJV strict mode doesn't warn about
+            // keywords that are meaningless without a type. Keep `description` and `enum`
+            // (valid for any type, useful for OpenAPI docs).
+            // Pagination/sort/search params are never bracket-parsed — keep their types.
             const KEEP_TYPE = new Set(["page", "limit", "sort", "search", "select", "after"]);
+            const TYPE_DEPENDENT = new Set([
+              "type",
+              "minimum",
+              "maximum",
+              "minLength",
+              "maxLength",
+              "pattern",
+              "format",
+              "exclusiveMinimum",
+              "exclusiveMaximum",
+              "multipleOf",
+              "minItems",
+              "maxItems",
+              "uniqueItems",
+            ]);
             const props = (listQuerySchema as AnyRecord).properties as AnyRecord | undefined;
             const normalizedProps = props ? { ...props } : undefined;
             if (normalizedProps) {
@@ -690,8 +710,11 @@ export class ResourceDefinition<TDoc = AnyRecord> {
                 if (KEEP_TYPE.has(key)) continue;
                 const prop = normalizedProps[key];
                 if (prop && typeof prop === "object" && "type" in (prop as AnyRecord)) {
-                  const { type: _type, ...rest } = prop as AnyRecord;
-                  normalizedProps[key] = Object.keys(rest).length > 0 ? rest : {};
+                  const cleaned: AnyRecord = {};
+                  for (const [k, v] of Object.entries(prop as AnyRecord)) {
+                    if (!TYPE_DEPENDENT.has(k)) cleaned[k] = v;
+                  }
+                  normalizedProps[key] = Object.keys(cleaned).length > 0 ? cleaned : {};
                 }
               }
             }

@@ -1,0 +1,204 @@
+# Response Format
+
+Arc uses a consistent response envelope for all CRUD operations. Understanding the shape
+prevents confusion when consuming the API from frontend code.
+
+## Quick Reference
+
+| Operation | HTTP | Key | Shape |
+|-----------|------|-----|-------|
+| **List** | `GET /resources` | `docs` | `{ success, docs: [...], page, limit, total, pages, hasNext, hasPrev }` |
+| **Get** | `GET /resources/:id` | `data` | `{ success, data: {...} }` |
+| **Create** | `POST /resources` | `data` | `{ success, data: {...}, message? }` |
+| **Update** | `PATCH /resources/:id` | `data` | `{ success, data: {...} }` |
+| **Delete** | `DELETE /resources/:id` | `data` | `{ success, data: { message, id? } }` |
+| **Error** | Any | `error` | `{ success: false, error: "...", code?, message? }` |
+
+## Why `docs` for lists?
+
+List responses use `docs` (not `data`) because:
+
+1. **MongoKit compatibility** — MongoKit's `getAll()` returns `{ docs, total, page, ... }` and Arc passes it through without reshaping
+2. **Disambiguation** — `docs` is always an array, `data` is always a single object. No guessing.
+3. **Flat pagination** — Page metadata lives at the top level (not nested under `pagination`), matching Mongoose paginate conventions
+
+## List Response (GET /resources)
+
+```json
+{
+  "success": true,
+  "docs": [
+    { "_id": "...", "name": "Product A", "price": 29.99 },
+    { "_id": "...", "name": "Product B", "price": 49.99 }
+  ],
+  "page": 1,
+  "limit": 20,
+  "total": 42,
+  "pages": 3,
+  "hasNext": true,
+  "hasPrev": false
+}
+```
+
+### Frontend usage
+
+```typescript
+// React / Next.js
+const { docs, total, hasNext, page } = await fetch('/api/products').then(r => r.json());
+
+// With TanStack Query
+const { data } = useQuery({
+  queryKey: ['products', page],
+  queryFn: () => fetch(`/api/products?page=${page}`).then(r => r.json()),
+});
+// data.docs = [...], data.total = 42, data.hasNext = true
+```
+
+## Single Item Response (GET /resources/:id)
+
+```json
+{
+  "success": true,
+  "data": {
+    "_id": "507f1f77bcf86cd799439011",
+    "name": "Product A",
+    "price": 29.99,
+    "createdAt": "2026-01-01T00:00:00.000Z"
+  }
+}
+```
+
+## Create Response (POST /resources)
+
+```json
+{
+  "success": true,
+  "data": {
+    "_id": "507f1f77bcf86cd799439011",
+    "name": "New Product",
+    "price": 19.99,
+    "createdAt": "2026-04-06T00:00:00.000Z"
+  }
+}
+```
+
+Status code: **201**
+
+## Update Response (PATCH /resources/:id)
+
+```json
+{
+  "success": true,
+  "data": {
+    "_id": "507f1f77bcf86cd799439011",
+    "name": "Updated Product",
+    "price": 24.99,
+    "updatedAt": "2026-04-06T12:00:00.000Z"
+  }
+}
+```
+
+## Delete Response (DELETE /resources/:id)
+
+```json
+{
+  "success": true,
+  "data": {
+    "message": "Deleted successfully",
+    "id": "507f1f77bcf86cd799439011"
+  }
+}
+```
+
+With `softDelete` preset:
+```json
+{
+  "success": true,
+  "data": {
+    "message": "Soft deleted successfully",
+    "id": "507f1f77bcf86cd799439011",
+    "soft": true
+  }
+}
+```
+
+## Error Response (any operation)
+
+```json
+{
+  "success": false,
+  "error": "Not found",
+  "code": "NOT_FOUND",
+  "message": "Resource with ID '...' not found"
+}
+```
+
+Common error codes: `VALIDATION_ERROR`, `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`, `INTERNAL_ERROR`
+
+## TypeScript Types
+
+```typescript
+// For list endpoints
+interface ListResponse<T> {
+  success: boolean;
+  docs: T[];
+  page: number;
+  limit: number;
+  total: number;
+  pages: number;
+  hasNext: boolean;
+  hasPrev: boolean;
+}
+
+// For single-item endpoints (get, create, update)
+interface ItemResponse<T> {
+  success: boolean;
+  data: T;
+  message?: string;
+}
+
+// For delete endpoints
+interface DeleteResponse {
+  success: boolean;
+  data: {
+    message: string;
+    id?: string;
+    soft?: boolean;
+  };
+}
+
+// For errors
+interface ErrorResponse {
+  success: false;
+  error: string;
+  code?: string;
+  message?: string;
+}
+```
+
+## Unified Helper (frontend)
+
+If you prefer a consistent API client, wrap the responses:
+
+```typescript
+// api.ts — thin client that normalizes Arc responses
+async function list<T>(url: string): Promise<{ items: T[]; total: number; hasNext: boolean }> {
+  const res = await fetch(url).then(r => r.json());
+  return { items: res.docs, total: res.total, hasNext: res.hasNext };
+}
+
+async function get<T>(url: string): Promise<T> {
+  const res = await fetch(url).then(r => r.json());
+  return res.data;
+}
+
+async function create<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } }).then(r => r.json());
+  return res.data;
+}
+```
+
+## OpenAPI / Scalar
+
+All response shapes are reflected in the auto-generated OpenAPI spec at `/documentation`.
+The Scalar UI shows request/response examples for every endpoint.

@@ -12,7 +12,8 @@ await mongoose.connect(process.env.MONGO_URI);
 
 const app = await createApp({
   preset: 'production',
-  resources: await loadResources('./src/resources'),
+  resourcePrefix: '/api/v1',
+  resources: await loadResources(import.meta.url),
   auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
   cors: { origin: [process.env.FRONTEND_URL] },
 });
@@ -43,7 +44,98 @@ const app = await createApp({
 });
 ```
 
-`loadResources` options: `exclude`, `include`, `suffix` (default: `.resource`), `recursive` (default: true).
+`loadResources` options: `exclude`, `include`, `suffix` (default: `.resource`), `recursive` (default: true), `silent` (suppress warnings).
+
+### Boot Order
+
+```
+1. Arc core (security, auth, events)
+2. plugins()        ← infra (DB, SSE, docs)
+3. bootstrap[]      ← domain init (singletons, event handlers)
+4. resources[]      ← routes (under resourcePrefix, split by skipGlobalPrefix)
+5. afterResources() ← post-registration wiring
+6. onReady()        ← Fastify ready
+```
+
+```typescript
+const app = await createApp({
+  preset: 'production',
+  resourcePrefix: '/api/v1',
+
+  plugins: async (f) => {
+    await mongoose.connect(process.env.MONGO_URI);
+    await f.register(docsPlugin);
+  },
+  bootstrap: [inventoryInit, accountingInit, loyaltyInit],
+  resources: await loadResources(import.meta.url),
+  afterResources: async (f) => { subscribeEvents(f); },
+
+  auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
+});
+```
+
+### Resource Prefix & Per-Resource Override
+
+```typescript
+// All resources under /api/v1
+const app = await createApp({
+  resourcePrefix: '/api/v1',
+  resources: [productResource, orderResource, webhookResource],
+});
+// product → /api/v1/products, order → /api/v1/orders
+
+// Webhook opts out of the global prefix
+defineResource({
+  name: 'webhook',
+  prefix: '/hooks',
+  skipGlobalPrefix: true,   // → /hooks (not /api/v1/hooks)
+});
+```
+
+### Import Compatibility
+
+`loadResources()` uses dynamic `import()` at runtime. This works with **standard relative imports** and **Node.js `#` subpath imports** (defined in `package.json` `imports`), but **not** with TypeScript-only path aliases.
+
+| Import style in resource files | Works? | Why |
+|------|--------|-----|
+| `./helper.js`, `../shared/utils.js` | **Yes** | Real relative paths — `.js→.ts` resolved by vitest/tsx |
+| `#shared/utils.js`, `#lib/db.ts` | **Yes** | Node.js native — resolved via `package.json` `imports` field |
+| `@/utils/db`, `~/lib/auth` | **No** | tsconfig `paths` — compile-time only, Node.js ignores them |
+
+**If your project uses tsconfig path aliases** (`@/*`, `~/`), use explicit imports instead:
+
+```typescript
+import productResource from './resources/product/product.resource.js';
+import orderResource from './resources/order/order.resource.js';
+
+const app = await createApp({
+  resources: [productResource, orderResource],
+});
+```
+
+**Node.js `#` subpath imports** work because they're part of the ESM spec — both `.ts` and `.js` extensions resolve correctly under vitest/tsx. Configure `package.json` `imports` for your environment:
+
+```jsonc
+// package.json — development (point to source)
+{
+  "imports": {
+    "#shared/*": "./src/shared/*",
+    "#lib/*": "./src/lib/*"
+  }
+}
+```
+
+```jsonc
+// package.json — production (point to compiled output)
+{
+  "imports": {
+    "#shared/*": "./dist/shared/*",
+    "#lib/*": "./dist/lib/*"
+  }
+}
+```
+
+> **Tip:** Use [Node.js conditional exports](https://nodejs.org/api/packages.html#conditional-exports) to support both environments in a single `package.json`.
 
 ## Presets
 

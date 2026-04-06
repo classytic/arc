@@ -1,5 +1,59 @@
 # Changelog
 
+## 2.5.6
+
+### Security
+
+- **JSON parser prototype poisoning fix** — replaced plain `JSON.parse()` with `secure-json-parse` in the custom content-type parser. Fastify's built-in proto-poisoning protection (`onProtoPoisoning`, `onConstructorPoisoning`) is now preserved when handling empty-body DELETE/GET requests.
+
+### Factory & Boot Sequence
+
+- **`resourcePrefix`** — register all resources under a URL prefix (e.g., `/api/v1`)
+  ```typescript
+  const app = await createApp({
+    resourcePrefix: '/api/v1',
+    resources: await loadResources(import.meta.url),
+  });
+  // product → /api/v1/products, order → /api/v1/orders
+  ```
+- **`skipGlobalPrefix`** — per-resource opt-out of `resourcePrefix`
+  ```typescript
+  defineResource({ name: 'webhook', prefix: '/hooks', skipGlobalPrefix: true })
+  // stays at /hooks even with resourcePrefix: '/api/v1'
+  ```
+- **`bootstrap[]`** — domain init functions that run after `plugins()` but before `resources`
+  ```typescript
+  createApp({
+    plugins: async (f) => { await connectDB(); },
+    bootstrap: [inventoryInit, accountingInit],
+    resources: await loadResources(import.meta.url),
+  });
+  ```
+- **`afterResources`** — hook after resources are registered (for cross-resource wiring)
+- **Boot order** — `plugins → bootstrap → resources → afterResources → onReady`
+- **Duplicate resource detection** — warns on duplicate resource names before registration
+- **`createApp()` refactored** into 4 modules: `registerSecurity`, `registerAuth`, `registerArcPlugins`, `registerResources` — each independently testable
+- **Testing preset disables `gracefulShutdown`** — prevents `MaxListenersExceededWarning` in multi-app test processes
+
+### Resource Loading
+
+- **`loadResources(import.meta.url)`** — resolves dirname internally, works in both `src/` (dev) and `dist/` (prod)
+- **`loadResources({ silent: true })`** — suppresses skip/failure warnings for factory files
+- **Import compatibility** — works with relative imports, Node.js `#` subpath imports. tsconfig path aliases (`@/*`, `~/`) require explicit `resources: [...]`
+
+### Schema & Validation
+
+- **AJV strict-mode warnings fixed** — filter field normalization now strips all type-dependent keywords (`minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `format`, etc.) not just `type`
+
+### Test Coverage
+
+- 7 JSON parser security tests (prototype poisoning, empty body, malformed)
+- 58 factory module unit tests (registerSecurity, registerAuth, registerArcPlugins, registerResources)
+- 25 import compatibility tests (relative, `#` subpath, tsconfig aliases, `import.meta.url`)
+- 14 boot sequence tests (order, bootstrap, afterResources, resourcePrefix)
+- 11 resourcePrefix + skipGlobalPrefix E2E tests
+- 7 full app E2E tests (complete boot simulation)
+
 ## 2.5.5
 
 ### Auth & Permissions
@@ -37,6 +91,7 @@
   });
   ```
 - **`loadResources` options** — `exclude`, `include`, `suffix`, `recursive`
+- **`loadResources` import compatibility** — works with relative imports and Node.js `#` subpath imports (`package.json` `imports`). tsconfig path aliases (`@/*`, `~/`) require explicit `resources: [...]` instead.
 - **`.js→.ts` resolution fixed in vitest** — `pathToFileURL` first ensures loader hooks intercept entire import chain
 - **Parallel imports** — `Promise.all()` for all resource files
 - **No double-execution on module errors** — evaluation errors reported once, not retried
