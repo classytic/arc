@@ -5,19 +5,45 @@ Secure, production-ready Fastify app creation with sensible defaults and **opt-o
 ## Quick Start
 
 ```typescript
-import { createApp } from '@classytic/arc/factory';
+import { createApp, loadResources } from '@classytic/arc/factory';
 import mongoose from 'mongoose';
 
 await mongoose.connect(process.env.MONGO_URI);
 
 const app = await createApp({
   preset: 'production',
+  resources: await loadResources('./src/resources'),
   auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
   cors: { origin: [process.env.FRONTEND_URL] },
 });
 
 await app.listen({ port: 3000, host: '0.0.0.0' });
 ```
+
+### Resource Registration
+
+Three ways to register resources (pick one):
+
+```typescript
+// Auto-discover from directory (recommended for large apps)
+const app = await createApp({
+  resources: await loadResources('./src/resources'),
+});
+
+// Explicit array (clear for small apps)
+const app = await createApp({
+  resources: [productResource, orderResource],
+});
+
+// Via plugins callback (full Fastify control)
+const app = await createApp({
+  plugins: async (fastify) => {
+    await fastify.register(productResource.toPlugin());
+  },
+});
+```
+
+`loadResources` options: `exclude`, `include`, `suffix` (default: `.resource`), `recursive` (default: true).
 
 ## Presets
 

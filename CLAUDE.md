@@ -4,7 +4,7 @@
 
 Arc is a **resource-oriented backend framework** built on Fastify. It turns resource definitions into production-ready REST APIs with auth, permissions, events, caching, OpenAPI docs, and MCP (AI tool) generation.
 
-**Version:** 2.4.0
+**Version:** 2.5.2
 **Runtime:** Node.js 22+ (ESM-only)
 **Language:** TypeScript 6+
 **Build:** tsdown (not tsc, not esbuild directly)
@@ -110,7 +110,7 @@ src/
 - Always use `mongodb-memory-server` for MongoDB tests — never a real DB
 - OTel tests use `describe.skip` when `@opentelemetry/api` is not installed
 - Run: `npx vitest run` (all), `npx vitest run tests/path` (specific)
-- Current: 161 files, 2378 passed, 4 skipped, 0 failures
+- Current: 170 files, 2539 passed, 4 skipped, 0 failures
 
 ## Build & Publish
 

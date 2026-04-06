@@ -13,15 +13,13 @@
  * import mongoose from 'mongoose';
  * await mongoose.connect(process.env.MONGO_URI);
  *
- * // 2. Create Arc app (no database config needed)
+ * // 2. Create Arc app with resources
  * const app = await createApp({
  *   preset: 'production',
  *   auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
  *   cors: { origin: ['https://example.com'] },
+ *   resources: [productResource, orderResource],
  * });
- *
- * // 3. Register resources with your adapters
- * await app.register(productResource.toPlugin());
  *
  * @example
  * // Multiple databases example
@@ -716,8 +714,27 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   }
 
   // ============================================
-  // 10. REGISTER CUSTOM PLUGINS
+  // 10. REGISTER RESOURCES + CUSTOM PLUGINS
   // ============================================
+
+  if (config.resources?.length) {
+    for (const resource of config.resources) {
+      const name = (resource as { name?: string }).name ?? "unknown";
+      try {
+        await fastify.register(resource.toPlugin() as FastifyPlugin);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        fastify.log.error(`Failed to register resource "${name}": ${msg}`);
+        throw new Error(
+          `Resource "${name}" failed to register: ${msg}. ` +
+            "Check the resource definition, adapter, and permissions.",
+        );
+      }
+    }
+    fastify.log.info(
+      `${config.resources.length} resource(s) registered: ${config.resources.map((r) => (r as { name?: string }).name ?? "?").join(", ")}`,
+    );
+  }
 
   if (config.plugins) {
     await config.plugins(fastify);

@@ -667,14 +667,27 @@ export class ResourceDefinition<TDoc = AnyRecord> {
           //    but qs bracket notation produces objects that AJV would then reject.
           const listQuerySchema = self._registryMeta?.openApiSchemas?.listQuery;
           if (listQuerySchema) {
-            const FLEXIBLE_PARAMS = ["populate", "select", "lookup", "aggregate"];
+            // Strip type constraints from ALL querystring properties.
+            //
+            // Why: The `qs` parser transforms bracket notation into nested objects/arrays:
+            //   ?name[contains]=foo  → { name: { contains: "foo" } }  (object, not string)
+            //   ?tags[]=a&tags[]=b   → { tags: ["a", "b"] }           (array, not string)
+            //   ?populate[author][select]=name → deep nested object
+            //
+            // AJV rejects these because the schema declares them as type:"string".
+            // The QueryParser handles validation and type coercion — AJV should only
+            // enforce structure (additionalProperties), not types on querystrings.
+            //
+            // The schema properties are preserved for OpenAPI documentation (descriptions,
+            // enums, min/max) — only the `type` constraint is removed.
             const props = (listQuerySchema as AnyRecord).properties as AnyRecord | undefined;
             const normalizedProps = props ? { ...props } : undefined;
             if (normalizedProps) {
-              for (const key of FLEXIBLE_PARAMS) {
-                if (normalizedProps[key] && typeof normalizedProps[key] === "object") {
-                  const { type: _type, ...rest } = normalizedProps[key] as AnyRecord;
-                  normalizedProps[key] = rest;
+              for (const key of Object.keys(normalizedProps)) {
+                const prop = normalizedProps[key];
+                if (prop && typeof prop === "object" && "type" in (prop as AnyRecord)) {
+                  const { type: _type, ...rest } = prop as AnyRecord;
+                  normalizedProps[key] = Object.keys(rest).length > 0 ? rest : {};
                 }
               }
             }

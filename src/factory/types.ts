@@ -563,6 +563,21 @@ export interface CreateAppOptions {
   };
 
   /** Custom plugin registration function */
+  /**
+   * Resources to register automatically.
+   * Each resource's `.toPlugin()` is called and registered for you.
+   *
+   * @example
+   * ```ts
+   * const app = await createApp({
+   *   resources: [productResource, orderResource, userResource],
+   *   auth: { type: 'jwt', jwt: { secret: 'xxx' } },
+   * });
+   * // No app.register(resource.toPlugin()) needed!
+   * ```
+   */
+  resources?: Array<{ toPlugin: () => unknown }>;
+
   plugins?: (fastify: FastifyInstance) => Promise<void>;
 
   /** Hook called after all plugins are loaded and the app is ready */
