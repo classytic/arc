@@ -285,16 +285,23 @@ export function roles(...args: string[] | [readonly string[]]): PermissionCheck 
       return { granted: false, reason: "Authentication required" };
     }
 
-    // Platform roles
+    // Platform roles (user.role)
     const userRoles = getUserRoles(ctx.user);
-    if (roleList.some((r) => userRoles.includes(r))) return true;
+    if (roleList.some((r) => userRoles.includes(r))) {
+      return true;
+    }
 
-    // Org roles (when in org context)
+    // Org roles (scope.orgRoles — when in org context)
     const scope = getScope(ctx.request);
     if (isElevated(scope)) return true;
-    if (isMember(scope) && roleList.some((r) => scope.orgRoles.includes(r))) return true;
+    if (isMember(scope) && roleList.some((r) => scope.orgRoles.includes(r))) {
+      return true;
+    }
 
-    return { granted: false, reason: `Required roles: ${roleList.join(", ")}` };
+    return {
+      granted: false,
+      reason: `Required roles: ${roleList.join(", ")}`,
+    };
   };
   check._roles = roleList;
   return check;

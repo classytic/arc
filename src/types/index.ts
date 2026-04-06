@@ -276,8 +276,8 @@ export interface LookupOption {
   as?: string;
   /** Return a single object instead of array (default: false) */
   single?: boolean;
-  /** Field selection on the joined collection (comma-separated) */
-  select?: string;
+  /** Field selection on the joined collection (comma-separated string or projection object) */
+  select?: string | Record<string, 0 | 1>;
 }
 
 /**

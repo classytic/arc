@@ -204,7 +204,7 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
         const typeInfo = schemaType as MongooseSchemaType;
         properties[fieldName] = this.mongooseTypeToOpenApi(typeInfo);
 
-        // Mark as required unless overridden by optionalFields or fieldRules.optional
+        // Mark as required unless overridden
         if (
           typeInfo.isRequired &&
           !optionalSet.has(fieldName) &&
@@ -226,7 +226,9 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
         Object.entries(properties).filter(([field]) => !inputBlockedSet.has(field)),
       );
 
-      const inputRequired = required.filter((field) => !inputBlockedSet.has(field));
+      const inputRequired = required.filter(
+        (field) => !inputBlockedSet.has(field) && !blockedFields.has(field),
+      );
 
       // Build update properties — additionally exclude immutable fields
       const immutableSet = new Set<string>();
@@ -313,7 +315,9 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
         break;
       case "Date":
         baseType.type = "string";
-        baseType.format = "date-time";
+        // Don't enforce date-time format — Mongoose accepts ISO dates, timestamps,
+        // and date strings. AJV format: "date-time" rejects "2026-01-15" which
+        // Mongoose would happily accept. Let Mongoose handle date validation.
         break;
       case "ObjectID":
       case "ObjectId":
@@ -322,12 +326,31 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
         break;
       case "Array": {
         baseType.type = "array";
-        // Detect array element type from schema definition
-        const caster = (typeInfo as AnyRecord).caster as MongooseSchemaType | undefined;
-        if (caster?.instance) {
-          baseType.items = this.mongooseTypeToOpenApi(caster);
-        } else {
-          // Mixed array — accept any type
+        const ti = typeInfo as AnyRecord;
+
+        // Subdocument array: [{ field: Type, ... }] — has nested schema
+        if (ti.$isMongooseDocumentArray && ti.schema) {
+          const subSchema = ti.schema as { paths: Record<string, MongooseSchemaType> };
+          const subProps: AnyRecord = {};
+          const subRequired: string[] = [];
+          for (const [subField, subType] of Object.entries(subSchema.paths)) {
+            if (subField.startsWith("_")) continue;
+            subProps[subField] = this.mongooseTypeToOpenApi(subType);
+            if (subType.isRequired) subRequired.push(subField);
+          }
+          baseType.items = {
+            type: "object",
+            properties: subProps,
+            ...(subRequired.length > 0 ? { required: subRequired } : {}),
+            additionalProperties: true,
+          };
+        }
+        // Simple typed array: [String], [Number] — has embeddedSchemaType
+        else if ((ti.embeddedSchemaType as MongooseSchemaType | undefined)?.instance) {
+          baseType.items = this.mongooseTypeToOpenApi(ti.embeddedSchemaType as MongooseSchemaType);
+        }
+        // Mixed array — accept any type
+        else {
           baseType.items = {};
         }
         break;

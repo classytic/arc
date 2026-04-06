@@ -196,6 +196,30 @@ presets: ['softDelete', { name: 'multiTenant', tenantField: 'organizationId' }]
 // Bulk: presets: ['bulk'] or bulkPreset({ operations: ['createMany', 'updateMany'] })
 ```
 
+### tenantField — When to Use and When to Disable
+
+Arc defaults `tenantField` to `'organizationId'` on BaseController. This silently adds `{ organizationId: scope.organizationId }` to every query when the user has an org context. Correct for per-org resources, wrong for company-wide resources.
+
+```typescript
+// Per-org resource (default) — each org sees only its own data
+defineResource({ name: 'invoice', ... });
+// → queries auto-scoped: { organizationId: 'org-123' }
+
+// Company-wide resource — ALL orgs share the same data
+defineResource({ name: 'account-type', tenantField: false, ... });
+// → no org filter applied, all users see all records
+
+// Custom tenant field — your schema uses a different name
+defineResource({ name: 'workspace-item', tenantField: 'workspaceId', ... });
+// → queries scoped by workspaceId instead of organizationId
+```
+
+When to use `tenantField: false`:
+- Lookup tables (account types, categories, currencies)
+- Platform-wide settings or config
+- Cross-org reports or analytics
+- Single-tenant apps where org scoping isn't needed
+
 ## QueryCache
 
 TanStack Query-inspired server cache with stale-while-revalidate and auto-invalidation on mutations.

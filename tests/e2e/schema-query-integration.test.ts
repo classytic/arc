@@ -305,6 +305,101 @@ describe("Schema + Query Integration E2E", () => {
   });
 
   // ============================================================================
+  // Subdocument array schema
+  // ============================================================================
+
+  describe("subdocument array schema generation", () => {
+    it("subdoc arrays generate object items, not string items", async () => {
+      // Create a model with subdocument array
+      const JournalSchema = new mongoose.Schema({
+        description: { type: String, required: true },
+        entries: [{
+          account: { type: mongoose.Schema.Types.ObjectId, required: true },
+          debit: { type: Number, default: 0 },
+          credit: { type: Number, default: 0 },
+        }],
+        tags: [String],
+      }, { timestamps: true });
+      const JM = mongoose.models.SchemaTestJournal || mongoose.model("SchemaTestJournal", JournalSchema);
+
+      const { Repository } = await import("@classytic/mongokit");
+      const { MongooseAdapter } = await import("../../src/adapters/mongoose.js");
+      const adapter = new MongooseAdapter({ model: JM, repository: new Repository(JM) });
+      const schemas = adapter.generateSchemas({}) as any;
+
+      // entries should be array of objects with properties, not array of strings
+      const entriesSchema = schemas.response.properties.entries;
+      expect(entriesSchema.type).toBe("array");
+      expect(entriesSchema.items.type).toBe("object");
+      expect(entriesSchema.items.properties).toBeDefined();
+      expect(entriesSchema.items.properties.account).toBeDefined();
+      expect(entriesSchema.items.properties.debit).toBeDefined();
+      expect(entriesSchema.items.properties.credit).toBeDefined();
+      expect(entriesSchema.items.properties.account.type).toBe("string"); // ObjectId → string
+
+      // tags should be array of strings
+      const tagsSchema = schemas.response.properties.tags;
+      expect(tagsSchema.type).toBe("array");
+      expect(tagsSchema.items.type).toBe("string");
+    });
+
+    it("partial fieldRules does NOT suppress required for unlisted fields", async () => {
+      // REGRESSION: when fieldRules has only some fields, ALL Mongoose required fields
+      // must still appear in createBody.required — not just fields in fieldRules.
+      const PartialSchema = new mongoose.Schema({
+        title: { type: String, required: true },
+        amount: { type: Number, required: true },
+        notes: String,
+        internalStatus: { type: String, default: "pending" },
+      });
+      const PM = mongoose.models.SchemaPartialRules || mongoose.model("SchemaPartialRules", PartialSchema);
+
+      const { Repository } = await import("@classytic/mongokit");
+      const { MongooseAdapter } = await import("../../src/adapters/mongoose.js");
+      const adapter = new MongooseAdapter({ model: PM, repository: new Repository(PM) });
+
+      // Only mark internalStatus as systemManaged — title and amount are NOT in fieldRules
+      const schemas = adapter.generateSchemas({
+        fieldRules: { internalStatus: { systemManaged: true } },
+      }) as any;
+
+      // title and amount MUST still be required despite not being in fieldRules
+      expect(schemas.createBody.required).toContain("title");
+      expect(schemas.createBody.required).toContain("amount");
+      // internalStatus should be excluded (systemManaged)
+      expect(schemas.createBody.properties.internalStatus).toBeUndefined();
+      expect(schemas.createBody.required ?? []).not.toContain("internalStatus");
+    });
+
+    it("excludeFields removes fields from required array too", async () => {
+      const TestSchema = new mongoose.Schema({
+        name: { type: String, required: true },
+        orgId: { type: String, required: true },
+        status: { type: String, required: true },
+      });
+      const TM = mongoose.models.SchemaTestExclude || mongoose.model("SchemaTestExclude", TestSchema);
+
+      const { Repository } = await import("@classytic/mongokit");
+      const { MongooseAdapter } = await import("../../src/adapters/mongoose.js");
+      const adapter = new MongooseAdapter({ model: TM, repository: new Repository(TM) });
+      const schemas = adapter.generateSchemas({
+        excludeFields: ["orgId"],
+        fieldRules: { status: { systemManaged: true } },
+      }) as any;
+
+      // orgId should NOT be in properties or required
+      expect(schemas.createBody.properties.orgId).toBeUndefined();
+      expect(schemas.createBody.required ?? []).not.toContain("orgId");
+      // status should NOT be in properties or required (systemManaged)
+      expect(schemas.createBody.properties.status).toBeUndefined();
+      expect(schemas.createBody.required ?? []).not.toContain("status");
+      // name should still be required
+      expect(schemas.createBody.properties.name).toBeDefined();
+      expect(schemas.createBody.required).toContain("name");
+    });
+  });
+
+  // ============================================================================
   // Query does not strip unknown params (permissive)
   // ============================================================================
 

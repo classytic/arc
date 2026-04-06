@@ -318,6 +318,7 @@ describe('roles() — unified platform + org check', () => {
       orgId: 'org1',
       orgRoles: ['member'],
     }));
+    // Reason must NOT expose held roles (security: action routes return this to clients)
     expect(result).toEqual({ granted: false, reason: 'Required roles: admin' });
   });
 
@@ -354,6 +355,46 @@ describe('roles() — unified platform + org check', () => {
     // No org, just platform role
     const result = check(makeCtx({ user: { id: 'u1', role: 'admin' } }));
     expect(result).toBe(true);
+  });
+});
+
+// ============================================================================
+// Security: denial messages must not leak role inventories
+// ============================================================================
+
+describe('denial messages do not expose held roles', () => {
+  it('roles() denial does not contain platform role names', () => {
+    const check = roles('superadmin');
+    const result = check(makeCtx({
+      user: { id: 'u1', role: 'editor' },
+      orgId: 'org1',
+      orgRoles: ['member', 'reviewer'],
+    }));
+    const reason = (result as { reason: string }).reason;
+    expect(reason).not.toContain('editor');
+    expect(reason).not.toContain('member');
+    expect(reason).not.toContain('reviewer');
+    expect(reason).not.toContain('platform:');
+    expect(reason).not.toContain('org:');
+  });
+
+  it('requireRoles() denial does not contain held roles', () => {
+    const check = requireRoles(['admin']);
+    const result = check(makeCtx({ user: { id: 'u1', role: 'viewer' } }));
+    const reason = (result as { reason: string }).reason;
+    expect(reason).not.toContain('viewer');
+  });
+
+  it('requireOrgRole() denial does not contain held roles', () => {
+    const check = requireOrgRole('owner');
+    const result = check(makeCtx({
+      user: { id: 'u1', role: 'user' },
+      orgId: 'org1',
+      orgRoles: ['member'],
+    }));
+    const reason = (result as { reason: string }).reason;
+    expect(reason).not.toContain('member');
+    expect(reason).not.toContain('user');
   });
 });
 
