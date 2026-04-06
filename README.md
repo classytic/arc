@@ -21,7 +21,8 @@ await mongoose.connect(process.env.DB_URI);
 
 const app = await createApp({
   preset: 'production',
-  resources: await loadResources('./src/resources'),  // auto-discovers *.resource.ts
+  resourcePrefix: '/api/v1',
+  resources: await loadResources(import.meta.url),  // auto-discovers *.resource.ts
   auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
   cors: { origin: process.env.ALLOWED_ORIGINS?.split(',') },
 });
@@ -41,6 +42,8 @@ resources: [productResource, orderResource],
 // Via plugins callback (full Fastify control)
 plugins: async (f) => { await f.register(productResource.toPlugin()); },
 ```
+
+> **Note:** `loadResources()` works with standard relative imports and Node.js `#` subpath imports (`package.json` `imports` field). It does **not** support tsconfig path aliases (`@/*`, `~/`) — use explicit `resources: [...]` instead.
 
 ## defineResource
 

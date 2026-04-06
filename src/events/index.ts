@@ -18,9 +18,11 @@
  */
 
 export type {
+  CustomValidator,
   EventDefinitionInput,
   EventDefinitionOutput,
   EventRegistry,
+  EventRegistryOptions,
   EventSchema,
   ValidationResult,
 } from "./defineEvent.js";

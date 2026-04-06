@@ -539,6 +539,8 @@ const app = await createApp({
 // loadResources options: exclude, include, suffix, recursive
 ```
 
+**Import compatibility:** `loadResources()` uses runtime `import()`. Works with relative imports (`./foo.js`) and Node.js `#` subpath imports (`#shared/utils.js` via `package.json` `imports` — both `.js` and `.ts` extensions). Does **NOT** work with tsconfig path aliases (`@/*`, `~/`) — those are compile-time only, Node.js ignores them. Projects using tsconfig aliases should use explicit `resources: [r1, r2]` instead.
+
 **Unified role check** (v2.5.2) — checks both platform AND org roles:
 
 ```typescript

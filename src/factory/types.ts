@@ -562,7 +562,10 @@ export interface CreateAppOptions {
     keywords?: string[];
   };
 
-  /** Custom plugin registration function */
+  // ============================================
+  // Resources & Lifecycle
+  // ============================================
+
   /**
    * Resources to register automatically.
    * Each resource's `.toPlugin()` is called and registered for you.
@@ -573,12 +576,66 @@ export interface CreateAppOptions {
    *   resources: [productResource, orderResource, userResource],
    *   auth: { type: 'jwt', jwt: { secret: 'xxx' } },
    * });
-   * // No app.register(resource.toPlugin()) needed!
    * ```
    */
   resources?: Array<{ toPlugin: () => unknown }>;
 
+  /**
+   * URL prefix for all auto-registered resources.
+   * Applied only to resources in the `resources` array — not to `plugins()`.
+   *
+   * @example
+   * ```ts
+   * const app = await createApp({
+   *   resourcePrefix: '/api/v1',
+   *   resources: await loadResources(import.meta.url),
+   * });
+   * // product → /api/v1/products, order → /api/v1/orders
+   * ```
+   */
+  resourcePrefix?: string;
+
+  /**
+   * Custom plugin registration — runs after Arc core (security, auth, events)
+   * but before `bootstrap` and `resources`.
+   *
+   * Use this for infrastructure setup: database connections, OpenAPI docs,
+   * webhook plugins, SSE wiring, etc.
+   */
   plugins?: (fastify: FastifyInstance) => Promise<void>;
+
+  /**
+   * Bootstrap functions — run after `plugins()` but before `resources`.
+   *
+   * Use this for domain initialization that needs infrastructure ready
+   * (DB connected, events wired, Redis available) but must complete
+   * before resources register (e.g., engine singletons, event handlers,
+   * seed data, connection verification).
+   *
+   * Boot order:
+   * ```
+   * 1. Arc core (security, auth, events)
+   * 2. plugins()      ← infra (DB, SSE, docs)
+   * 3. bootstrap[]    ← domain init (singletons, event handlers)
+   * 4. resources[]    ← auto-discovered routes
+   * ```
+   *
+   * @example
+   * ```ts
+   * const app = await createApp({
+   *   plugins: async (f) => { await connectDB(); await f.register(docsPlugin); },
+   *   bootstrap: [inventoryInit, accountingInit, loyaltyInit],
+   *   resources: await loadResources(import.meta.url),
+   * });
+   * ```
+   */
+  bootstrap?: Array<(fastify: FastifyInstance) => void | Promise<void>>;
+
+  /**
+   * Hook called after resources are registered but before the app is ready.
+   * Use for post-registration wiring (e.g., cross-resource event subscriptions).
+   */
+  afterResources?: (fastify: FastifyInstance) => void | Promise<void>;
 
   /** Hook called after all plugins are loaded and the app is ready */
   onReady?: (fastify: FastifyInstance) => void | Promise<void>;

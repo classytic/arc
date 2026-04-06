@@ -51,12 +51,10 @@ describe('Plugin Registry', () => {
     expect(requestIdPlugin?.registeredAt).toBeDefined();
   });
 
-  it('registers arc-graceful-shutdown plugin by default', async () => {
-    expect(app.arc.plugins.has('arc-graceful-shutdown')).toBe(true);
-
-    const shutdownPlugin = app.arc.plugins.get('arc-graceful-shutdown');
-    expect(shutdownPlugin?.name).toBe('arc-graceful-shutdown');
-    expect(shutdownPlugin?.registeredAt).toBeDefined();
+  it('does not register arc-graceful-shutdown in testing preset (avoids listener buildup)', async () => {
+    // Testing preset disables gracefulShutdown to prevent MaxListenersExceededWarning
+    // when tests create many app instances. Production/development presets enable it.
+    expect(app.arc.plugins.has('arc-graceful-shutdown')).toBe(false);
   });
 
   it('plugin metadata registeredAt is a valid ISO timestamp', async () => {

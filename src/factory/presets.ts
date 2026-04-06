@@ -145,6 +145,12 @@ export const testingPreset: Partial<CreateAppOptions> = {
   rateLimit: false,
   underPressure: false,
 
+  // Arc plugins — disable process-global listeners to prevent
+  // MaxListenersExceededWarning when tests create many app instances.
+  arcPlugins: {
+    gracefulShutdown: false, // Adds process.on('SIGTERM'|'SIGINT') — bad for multi-app tests
+  },
+
   // Sensible plugins still enabled
   sensible: true,
   multipart: {

@@ -518,6 +518,18 @@ export interface ResourceConfig<TDoc = AnyRecord> {
   displayName?: string;
   tag?: string;
   prefix?: string; // Defaults to `/${name}s` if not provided
+  /**
+   * Skip the global `resourcePrefix` from `createApp()`.
+   * The resource registers at its own `prefix` (or `/${name}s`) directly on root.
+   * Useful for webhooks, health, admin routes that shouldn't be under `/api/v1`.
+   *
+   * @example
+   * ```typescript
+   * defineResource({ name: 'webhook', prefix: '/webhooks', skipGlobalPrefix: true })
+   * // Registers at /webhooks even when createApp({ resourcePrefix: '/api/v1' })
+   * ```
+   */
+  skipGlobalPrefix?: boolean;
   adapter?: DataAdapter<TDoc>; // Optional for service-pattern resources
   /** Controller instance - accepts any object with CRUD methods */
   controller?: IController<TDoc> | ControllerLike;

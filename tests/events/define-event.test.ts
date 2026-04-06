@@ -240,4 +240,135 @@ describe('EventRegistry — validated publish', () => {
     });
     expect(invalid.valid).toBe(false);
   });
+
+  it('built-in validator only checks top-level types (does not recurse)', () => {
+    const registry = createEventRegistry();
+
+    const WithNested = defineEvent({
+      name: 'with.nested',
+      schema: {
+        type: 'object',
+        properties: {
+          data: {
+            type: 'object',
+            properties: {
+              value: { type: 'number' },
+            },
+            required: ['value'],
+          },
+        },
+        required: ['data'],
+      },
+    });
+    registry.register(WithNested);
+
+    // Built-in validator: checks data is an object — passes
+    // Does NOT check data.value exists or is a number
+    const result = registry.validate('with.nested', {
+      data: { wrongField: 'not a number' }, // missing required 'value'
+    });
+    // Built-in validator passes because it only checks top-level
+    expect(result.valid).toBe(true);
+  });
+});
+
+// ============================================================================
+// Custom Validator
+// ============================================================================
+
+describe('EventRegistry — custom validator', () => {
+  it('uses custom validator when provided', () => {
+    const customValidate = vi.fn().mockReturnValue({ valid: true });
+
+    const registry = createEventRegistry({ validate: customValidate });
+
+    const TestEvent = defineEvent({
+      name: 'test.event',
+      schema: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id'],
+      },
+    });
+    registry.register(TestEvent);
+
+    const result = registry.validate('test.event', { id: 'abc' });
+    expect(result.valid).toBe(true);
+    expect(customValidate).toHaveBeenCalledOnce();
+    expect(customValidate).toHaveBeenCalledWith(
+      TestEvent.schema,
+      { id: 'abc' },
+    );
+  });
+
+  it('custom validator can reject payloads the built-in passes', () => {
+    // Strict validator that checks nested required fields
+    const strictValidate = (_schema: unknown, payload: unknown) => {
+      const p = payload as Record<string, unknown>;
+      const data = p.data as Record<string, unknown> | undefined;
+      if (!data || typeof data.value !== 'number') {
+        return { valid: false, errors: ['data.value must be a number'] };
+      }
+      return { valid: true };
+    };
+
+    const registry = createEventRegistry({ validate: strictValidate });
+
+    const WithNested = defineEvent({
+      name: 'with.nested',
+      schema: {
+        type: 'object',
+        properties: { data: { type: 'object' } },
+        required: ['data'],
+      },
+    });
+    registry.register(WithNested);
+
+    // Same payload that built-in validator passes
+    const result = registry.validate('with.nested', {
+      data: { wrongField: 'not a number' },
+    });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain('data.value must be a number');
+  });
+
+  it('custom validator is not called for unknown events', () => {
+    const customValidate = vi.fn();
+    const registry = createEventRegistry({ validate: customValidate });
+
+    const result = registry.validate('unknown.event', { anything: true });
+    expect(result.valid).toBe(true);
+    expect(customValidate).not.toHaveBeenCalled();
+  });
+
+  it('custom validator is not called for events without schema', () => {
+    const customValidate = vi.fn();
+    const registry = createEventRegistry({ validate: customValidate });
+
+    const NoSchema = defineEvent({ name: 'no.schema' });
+    registry.register(NoSchema);
+
+    const result = registry.validate('no.schema', { anything: true });
+    expect(result.valid).toBe(true);
+    expect(customValidate).not.toHaveBeenCalled();
+  });
+
+  it('no custom validator = built-in used (backward compatible)', () => {
+    const registry = createEventRegistry(); // no options
+
+    const TestEvent = defineEvent({
+      name: 'test.event',
+      schema: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id'],
+      },
+    });
+    registry.register(TestEvent);
+
+    // Missing required field — built-in catches this
+    const result = registry.validate('test.event', {});
+    expect(result.valid).toBe(false);
+    expect(result.errors).toBeDefined();
+  });
 });
