@@ -137,6 +137,33 @@ const app = await createApp({
 
 > **Tip:** Use [Node.js conditional exports](https://nodejs.org/api/packages.html#conditional-exports) to support both environments in a single `package.json`.
 
+### Vitest Limitation: `node_modules` Dynamic Imports
+
+`loadResources()` uses `import()` at runtime, which works in production and in vitest for **your own files**. However, vitest does not transform dynamic imports from `node_modules` — this is a [vitest fundamental limitation](https://vitest.dev/guide/common-errors.html), not an Arc issue.
+
+If your resource files import from `node_modules` packages that need transformation (e.g., ESM-only packages without CJS fallback), vitest may fail. The workaround is a static fallback:
+
+```typescript
+// src/resources/index.ts — static fallback for vitest
+import productResource from './product/product.resource.js';
+import orderResource from './order/order.resource.js';
+
+export const resources = [productResource, orderResource];
+```
+
+```typescript
+// src/app.ts — use loadResources in prod, static in test
+import { createApp, loadResources } from '@classytic/arc/factory';
+
+const resources = process.env.VITEST
+  ? (await import('./resources/index.js')).resources
+  : await loadResources(import.meta.url);
+
+const app = await createApp({ resources });
+```
+
+This is **3 lines of boilerplate** and only needed when vitest can't resolve your resource's transitive `node_modules` imports. Most projects won't hit this.
+
 ## Presets
 
 | Preset | Logging | Rate Limit | Security | Notes |

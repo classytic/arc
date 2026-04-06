@@ -11,9 +11,9 @@ import type { CreateAppOptions } from "./types.js";
 /** Register a single resource with descriptive error on failure. */
 async function registerOne(
   parent: FastifyInstance,
-  resource: { toPlugin: () => unknown },
+  resource: import("./loadResources.js").ResourceLike,
 ): Promise<void> {
-  const name = (resource as { name?: string }).name ?? "unknown";
+  const name = resource.name ?? "unknown";
   try {
     await parent.register(resource.toPlugin() as FastifyPlugin);
   } catch (err) {
@@ -57,15 +57,14 @@ export async function registerResources(
     // Detect duplicate resource names early — a common mistake with loadResources + manual array
     const seen = new Set<string>();
     for (const resource of config.resources) {
-      const name = (resource as { name?: string }).name;
-      if (name) {
-        if (seen.has(name)) {
+      if (resource.name) {
+        if (seen.has(resource.name)) {
           fastify.log.warn(
-            `Duplicate resource name "${name}" detected. ` +
+            `Duplicate resource name "${resource.name}" detected. ` +
               "This will cause route conflicts. Check your resources array and loadResources() output.",
           );
         }
-        seen.add(name);
+        seen.add(resource.name);
       }
     }
 
@@ -73,7 +72,7 @@ export async function registerResources(
     const root: typeof config.resources = [];
 
     for (const resource of config.resources) {
-      if ((resource as { skipGlobalPrefix?: boolean }).skipGlobalPrefix) {
+      if (resource.skipGlobalPrefix) {
         root.push(resource);
       } else {
         prefixed.push(resource);
@@ -103,7 +102,7 @@ export async function registerResources(
       }
     }
 
-    const names = config.resources.map((r) => (r as { name?: string }).name ?? "?").join(", ");
+    const names = config.resources.map((r) => r.name ?? "?").join(", ");
     const prefix = config.resourcePrefix ? ` (prefix: ${config.resourcePrefix})` : "";
     fastify.log.info(`${config.resources.length} resource(s) registered${prefix}: ${names}`);
   }

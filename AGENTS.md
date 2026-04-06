@@ -11,7 +11,7 @@
 
 | Fact | Value |
 |------|-------|
-| Version | 2.5.5 |
+| Version | 2.6.0 |
 | Runtime | Node.js 22+ (ESM-only) |
 | Language | TypeScript 6+ (strict mode) |
 | Build | tsdown (not tsc, not esbuild directly) |
@@ -374,7 +374,7 @@ npx knip            # dead code detection
 
 1. `npx tsc --noEmit` — zero type errors
 2. `npx biome check src/ --diagnostic-level=error` — zero lint errors
-3. `npx vitest run` — all tests pass (184 files, 2700+ tests, 0 failures)
+3. `npx vitest run` — all tests pass (210+ files, 2900+ tests, 0 failures)
 4. `npx knip` — review unused exports, no new dead code
 5. `npm run build` — dist/ output clean
 6. Verify subpath exports resolve:

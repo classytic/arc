@@ -32,10 +32,35 @@ import { readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-/** Minimal resource interface — anything with toPlugin() */
-interface ResourceLike {
+/**
+ * Resource interface — the contract between `loadResources`/`createApp` and resource definitions.
+ *
+ * Matches the shape of `ResourceDefinition` from `defineResource()` without requiring
+ * the import. All properties except `toPlugin` are optional so plain objects work too:
+ *
+ * ```typescript
+ * // Full resource (from defineResource)
+ * const product = defineResource({ name: 'product', ... }); // satisfies ResourceLike
+ *
+ * // Minimal resource (plain object)
+ * const simple: ResourceLike = { name: 'ping', toPlugin: () => () => {} };
+ * ```
+ */
+export interface ResourceLike {
+  /** Plugin factory — called by createApp to register routes */
   toPlugin: () => unknown;
+  /** Resource name (used for route generation, logging, duplicate detection) */
   name?: string;
+  /** Route prefix (default: `/${name}s`) */
+  prefix?: string;
+  /** Skip the global `resourcePrefix` from createApp — register at root */
+  skipGlobalPrefix?: boolean;
+  /** Display name for docs/OpenAPI */
+  displayName?: string;
+  /** Applied preset names */
+  _appliedPresets?: string[];
+  /** Allow additional properties from ResourceDefinition without casting */
+  [key: string]: unknown;
 }
 
 export interface LoadResourcesOptions {

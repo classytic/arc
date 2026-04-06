@@ -26,7 +26,7 @@
 export { ArcFactory, createApp } from "./createApp.js";
 export type { FetchHandlerOptions } from "./edge.js";
 export { toFetchHandler } from "./edge.js";
-export { type LoadResourcesOptions, loadResources } from "./loadResources.js";
+export { type LoadResourcesOptions, loadResources, type ResourceLike } from "./loadResources.js";
 export {
   developmentPreset,
   edgePreset,
