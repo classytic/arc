@@ -91,17 +91,15 @@ export async function loadResources(
       try {
         let mod: Record<string, unknown>;
         try {
-          mod = (await import(file)) as Record<string, unknown>;
+          // file:// URL goes through vitest/tsx loader hooks which resolve
+          // .js→.ts for the ENTIRE import chain (nested imports included).
+          // Bare import(path) only hooks the top-level file in vitest —
+          // nested .js imports fall through to Node's native resolver and fail.
+          mod = (await import(pathToFileURL(file).href)) as Record<string, unknown>;
         } catch (importErr) {
-          // Only retry with pathToFileURL for specifier-format errors:
-          // Windows absolute paths (D:\...) aren't valid ESM specifiers in Node.js,
-          // but work fine in vitest/tsx. The retry converts to file:/// URL.
-          const code = (importErr as { code?: string }).code;
-          if (code === "ERR_UNSUPPORTED_ESM_URL_SCHEME") {
-            mod = (await import(pathToFileURL(file).href)) as Record<string, unknown>;
-          } else {
-            throw importErr;
-          }
+          // Fallback to bare path for runtimes where file:// URL doesn't work
+          // (e.g., some bundlers, Bun, edge runtimes).
+          mod = (await import(file)) as Record<string, unknown>;
         }
         return { file, mod };
       } catch (err) {
