@@ -680,10 +680,14 @@ export class ResourceDefinition<TDoc = AnyRecord> {
             //
             // The schema properties are preserved for OpenAPI documentation (descriptions,
             // enums, min/max) — only the `type` constraint is removed.
+            // Pagination/sort/search params are never bracket-parsed — keep their types
+            // for AJV strict mode. Only filter fields need type stripping.
+            const KEEP_TYPE = new Set(["page", "limit", "sort", "search", "select", "after"]);
             const props = (listQuerySchema as AnyRecord).properties as AnyRecord | undefined;
             const normalizedProps = props ? { ...props } : undefined;
             if (normalizedProps) {
               for (const key of Object.keys(normalizedProps)) {
+                if (KEEP_TYPE.has(key)) continue;
                 const prop = normalizedProps[key];
                 if (prop && typeof prop === "object" && "type" in (prop as AnyRecord)) {
                   const { type: _type, ...rest } = prop as AnyRecord;

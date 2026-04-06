@@ -163,6 +163,35 @@ describe("loadResources()", () => {
     expect(resources.length).toBe(0);
   });
 
+  // ── Module evaluation errors: single attempt, no double-execution ──
+
+  it("module that throws during evaluation is imported exactly once", async () => {
+    // Isolated dir — not inside FIXTURE_DIR so it doesn't pollute other tests
+    const throwDir = join(import.meta.dirname, "__fixtures_throw__");
+    const { mkdirSync: mk, writeFileSync: wf, rmSync: rm, existsSync: ex } = await import("node:fs");
+
+    // Clean up from any previous run
+    if (ex(throwDir)) rm(throwDir, { recursive: true, force: true });
+    mk(throwDir, { recursive: true });
+
+    wf(
+      join(throwDir, "boom.resource.mjs"),
+      `
+      globalThis.__boomLoadCount = (globalThis.__boomLoadCount || 0) + 1;
+      throw new Error('intentional evaluation error');
+      `,
+    );
+
+    (globalThis as any).__boomLoadCount = 0;
+    const resources = await loadResources(throwDir);
+    expect(resources.length).toBe(0);
+    // Must be exactly 1 — not retried, not 0 (skipped)
+    expect((globalThis as any).__boomLoadCount).toBe(1);
+
+    // Clean up
+    rm(throwDir, { recursive: true, force: true });
+  });
+
   // ── Integration with createApp ──
 
   it("works end-to-end with createApp({ resources })", async () => {

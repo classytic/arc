@@ -87,10 +87,29 @@ export async function loadResources(
   const failed: string[] = [];
 
   for (const file of files) {
-    const fileUrl = pathToFileURL(file).href;
     let mod: Record<string, unknown>;
     try {
-      mod = (await import(fileUrl)) as Record<string, unknown>;
+      // Try raw path first — works with vitest, tsx, ts-node, and other
+      // transform-based runtimes that hook into Node's module loader.
+      // Falls back to pathToFileURL only for specifier-format errors
+      // (ERR_UNSUPPORTED_ESM_URL_SCHEME on Windows absolute paths).
+      // Module evaluation errors (syntax, runtime throws) are NOT retried
+      // to avoid double side effects.
+      try {
+        mod = (await import(file)) as Record<string, unknown>;
+      } catch (importErr) {
+        // Only retry with pathToFileURL for specifier-format errors:
+        // Windows absolute paths (D:\...) aren't valid ESM specifiers in Node.js,
+        // but work fine in vitest/tsx. The retry converts to file:/// URL.
+        // ERR_MODULE_NOT_FOUND is NOT retried — it means a dependency inside
+        // the module graph is missing, which pathToFileURL won't fix.
+        const code = (importErr as { code?: string }).code;
+        if (code === "ERR_UNSUPPORTED_ESM_URL_SCHEME") {
+          mod = (await import(pathToFileURL(file).href)) as Record<string, unknown>;
+        } else {
+          throw importErr;
+        }
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       failed.push(`${file}: ${msg}`);
