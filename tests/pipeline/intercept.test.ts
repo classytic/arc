@@ -8,9 +8,10 @@ describe("intercept()", () => {
     expect(i.name).toBe("logger");
   });
 
-  it("supports operation filter", () => {
-    const i = intercept("cache", async (_ctx, next) => next(), {
+  it("supports operation filter via options object", () => {
+    const i = intercept("cache", {
       operations: ["list", "get"],
+      handler: async (_ctx, next) => next(),
     });
     expect(i.operations).toEqual(["list", "get"]);
   });

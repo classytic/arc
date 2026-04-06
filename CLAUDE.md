@@ -8,7 +8,7 @@
 **@classytic/arc** — Resource-oriented backend framework on Fastify.
 One `defineResource()` → REST API + auth + permissions + events + caching + OpenAPI + MCP.
 
-**v2.5.3** | Node.js 22+ | TypeScript 6+ | ESM-only | Fastify 5+
+**v2.5.3** | Node.js 22+ | TypeScript 6+ | ESM-only | Fastify 5+ | 184 test files, 2700+ tests
 
 ## Commands
 
@@ -60,7 +60,12 @@ npm run smoke                                      # Verify CLI + imports
 | `src/cli/*` | `npx vitest run tests/cli/` |
 | `src/utils/*` | `npx vitest run tests/utils/` |
 | `src/org/*` | `npx vitest run tests/e2e/org-scope-plugin.test.ts` |
-| `src/policies/*` | `npx vitest run tests/security/policy-filter-*.test.ts` |
+| `src/pipeline/*` | `npx vitest run tests/pipeline/` |
+| `src/policies/*` | `npx vitest run tests/policies/ tests/security/policy-filter-*.test.ts` |
+| `src/middleware/*` | `npx vitest run tests/middleware/` |
+| `src/migrations/*` | `npx vitest run tests/migrations/` |
+| `src/schemas/*` | `npx vitest run tests/schemas/` |
+| `src/logger/*` | `npx vitest run tests/logger/` |
 | `src/rpc/*` | `npx vitest run tests/rpc/` |
 
 **Never run the full suite during dev** — use targeted tests. CI catches cross-cutting issues.

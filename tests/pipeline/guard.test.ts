@@ -18,8 +18,11 @@ describe("guard()", () => {
     expect(result).toBe(true);
   });
 
-  it("supports operation filter", () => {
-    const g = guard("only-create", async () => true, { operations: ["create", "update"] });
+  it("supports operation filter via options object", () => {
+    const g = guard("only-create", {
+      operations: ["create", "update"],
+      handler: async () => true,
+    });
     expect(g.operations).toEqual(["create", "update"]);
   });
 
