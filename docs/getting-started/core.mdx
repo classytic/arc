@@ -523,6 +523,33 @@ class InvoiceController extends BaseController {
 
 **Note:** The auth adapter (e.g., Better Auth with `orgContext: true`) sets `request.scope` which includes the organization ID. The `tenantField` only controls which *document field* that value maps to. Presets and BaseController read the org ID from `request.scope` via `getOrgId()`.
 
+## Custom ID Fields (`idField`)
+
+By default Arc treats `_id` as the primary key. For resources keyed by a business identifier (UUIDs, slugs, `ORD-2026-0001` style), set `idField`:
+
+```typescript
+defineResource({
+  name: 'job',
+  adapter: createMongooseAdapter(JobModel, jobRepository),
+  idField: 'jobId',        // ← lookups + params validation use this field
+  permissions: { /* ... */ },
+});
+
+// GET /jobs/job-5219f346-a4d   → BaseController runs { jobId: 'job-5219f346-a4d' }
+// GET /jobs/550e8400-e29b-...  → UUIDs work too
+// GET /orders/ORD-2026-0001    → slugs, prefixed IDs, anything
+```
+
+**What it changes:**
+- **Fastify route validation** — Arc strips any ObjectId pattern (`^[0-9a-fA-F]{24}$`) from the auto-generated `params.id` schema so custom formats aren't rejected by AJV before reaching the controller.
+- **BaseController lookups** — `get`, `update`, `delete` all query by `{ [idField]: req.params.id }` (with tenant/policy filters merged in via `AccessControl`).
+- **OpenAPI docs** — `spec.paths['/jobs/{id}']` documents `id` as a plain string with the description `"jobId (custom ID field)"`.
+- **MCP tools** — auto-generated `get_job`, `update_job`, `delete_job` tools use `idField` transparently since they go through the same `BaseController`.
+
+**URL path segment stays `:id`** — routes are still `/jobs/:id`, not `/jobs/:jobId`. This is correct REST convention: clients send the custom ID value in the `:id` slot, Arc handles the `idField` mapping on the server side.
+
+**Adapters honoring the new contract** can emit the correct `params.id` pattern from the start via the `AdapterSchemaContext` parameter on `generateSchemas(options, context?)`. Legacy adapters (or `buildCrudSchemasFromModel` outputs from older MongoKit versions) still work because Arc's defensive safety net in `defineResource` strips the ObjectId pattern when `idField !== '_id'`.
+
 ## Validation
 
 Arc validates configs at definition time (fail-fast):

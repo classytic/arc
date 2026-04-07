@@ -220,6 +220,31 @@ When to use `tenantField: false`:
 - Cross-org reports or analytics
 - Single-tenant apps where org scoping isn't needed
 
+### idField — Custom Primary Key
+
+Default is `'_id'`. Override for resources keyed by a business identifier (UUID, slug, `ORD-2026-0001`, `job-5219f346-a4d`, etc.).
+
+```typescript
+defineResource({
+  name: 'job',
+  adapter: createMongooseAdapter(JobModel, jobRepository),
+  idField: 'jobId',     // ← one line
+});
+
+// GET /jobs/job-5219f346-a4d  → controller runs { jobId: 'job-5219f346-a4d' }
+// GET /jobs/<uuid>             → accepted (no ObjectId pattern enforcement)
+```
+
+Changes all three layers:
+- **Fastify AJV** — strips any ObjectId pattern from `params.id` so custom formats aren't pre-rejected
+- **BaseController** — `get`/`update`/`delete` query by `{ [idField]: id }` (merged with tenant + policy filters)
+- **OpenAPI docs** — `spec.paths['/jobs/{id}']` emits a plain string `id` with description
+- **MCP tools** — auto-generated CRUD tools use `idField` transparently
+
+URL path segment stays `:id` (not `:jobId`) — clients send the ID value, Arc maps it server-side. User-provided `openApiSchemas.params` still overrides everything.
+
+For custom adapters, honor the new `AdapterSchemaContext` passed to `generateSchemas(options, context?)` to emit the right `params.id` pattern from the start. Legacy adapters still work — Arc's safety net strips mismatched ObjectId patterns automatically.
+
 ## QueryCache
 
 TanStack Query-inspired server cache with stale-while-revalidate and auto-invalidation on mutations.

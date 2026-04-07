@@ -108,6 +108,17 @@ const productResource = defineResource({
 // Plus preset routes: GET /deleted, POST /:id/restore, GET /slug/:slug
 ```
 
+**Custom primary key?** Use `idField` for resources keyed by UUIDs, slugs, or business identifiers:
+
+```typescript
+defineResource({
+  name: 'job',
+  adapter: createMongooseAdapter(JobModel, jobRepository),
+  idField: 'jobId',  // routes + BaseController lookups + OpenAPI + MCP tools all use this
+});
+// GET /jobs/job-5219f346-a4d  → 200 (no ObjectId pattern enforcement)
+```
+
 ## Authentication
 
 Auth uses a discriminated union — pick a `type`:

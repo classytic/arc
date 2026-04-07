@@ -582,9 +582,22 @@ export interface ResourceConfig<TDoc = AnyRecord> {
   tenantField?: string | false;
   /**
    * Primary key field name (default: '_id').
-   * Override for non-MongoDB adapters (e.g., 'id' for SQL databases).
+   *
+   * Type-narrowed to `keyof TDoc` when `defineResource<TDoc>` is called with
+   * a typed document interface — gives autocomplete for valid field names —
+   * while still accepting any string when TDoc is `unknown` / `AnyRecord` so
+   * adapters with dynamic shapes still work.
+   *
+   * @example
+   * ```ts
+   * defineResource<IJob>({ idField: 'jobId' })  // ← autocompletes from IJob fields
+   * defineResource({ idField: 'sku' })          // ← any string allowed
+   * ```
+   *
+   * Override for non-MongoDB adapters (e.g., 'id' for SQL databases) or
+   * resources keyed by a business identifier (slug, sku, orderNumber).
    */
-  idField?: string;
+  idField?: (keyof TDoc & string) | (string & {});
   module?: string; // For grouping in registry
   events?: Record<string, EventDefinition>; // Domain events
   skipValidation?: boolean; // Skip schema validation

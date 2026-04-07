@@ -45,7 +45,7 @@ import {
   DEFAULT_TENANT_FIELD,
 } from "../constants.js";
 import type { HookSystem } from "../hooks/HookSystem.js";
-import { getOrgId as getOrgIdFromScope } from "../scope/types.js";
+import { getOrgId as getOrgIdFromScope, isElevated } from "../scope/types.js";
 import type {
   AnyRecord,
   ArcInternalMetadata,
@@ -565,6 +565,15 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       };
     }
 
+    // Resolve the real repository primary key for the update call.
+    // When idField is a custom field (slug, jobId, etc.), `id` is a slug but
+    // the repository's update() expects the native PK (_id for Mongo). Pull
+    // the native PK off the already-fetched document.
+    const repoId =
+      this.idField !== DEFAULT_ID_FIELD && existing
+        ? String((existing as AnyRecord)[DEFAULT_ID_FIELD] ?? id)
+        : id;
+
     const hooks = this.getHooks(req);
     let processedData = data;
     if (hooks && this.resourceName) {
@@ -588,7 +597,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     }
 
     const repoUpdate = async () =>
-      this.repository.update(id, processedData as Partial<TDoc>, {
+      this.repository.update(repoId, processedData as Partial<TDoc>, {
         user,
         context: arcContext,
       });
@@ -653,6 +662,13 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       };
     }
 
+    // Resolve the real repository primary key for the delete call (same
+    // reason as update: custom idField → native PK mismatch).
+    const repoId =
+      this.idField !== DEFAULT_ID_FIELD && existing
+        ? String((existing as AnyRecord)[DEFAULT_ID_FIELD] ?? id)
+        : id;
+
     const hooks = this.getHooks(req);
     if (hooks && this.resourceName) {
       try {
@@ -675,7 +691,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     }
 
     const repoDelete = async () =>
-      this.repository.delete(id, {
+      this.repository.delete(repoId, {
         user,
         context: arcContext,
       });
@@ -818,7 +834,13 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       };
     }
 
-    const item = await repo.restore(id);
+    // Custom idField: derive the native PK from the fetched doc, since
+    // repo.restore() expects the repository's native primary key.
+    const repoId =
+      this.idField !== DEFAULT_ID_FIELD && existing
+        ? String((existing as AnyRecord)[DEFAULT_ID_FIELD] ?? id)
+        : id;
+    const item = await repo.restore(repoId);
     if (!item) {
       return { success: false, error: "Resource not found", status: 404 };
     }
@@ -886,13 +908,98 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       return { success: false, error: "Bulk create requires a non-empty items array", status: 400 };
     }
 
-    const created = await repo.createMany(items);
+    // SECURITY: Inject tenant field into each item when an org scope is
+    // present. Mirrors AccessControl.buildIdFilter semantics:
+    //   - No scope at all (unit tests, internal calls) → no injection
+    //   - Member scope with orgId → inject orgId into every item
+    //   - Elevated scope → no injection (admin can specify any org per item)
+    //   - Public scope on a tenant-scoped resource → deny
+    //
+    // The fail-close decision for HTTP-facing routes belongs to the middleware
+    // layer (multi-tenant preset on bulk routes). The controller stays
+    // lenient when there's no scope so it can be unit-tested directly.
+    let scopedItems = items;
+    if (this.tenantField) {
+      const arcContext = this.meta(req);
+      const scope = arcContext?._scope;
+      if (scope) {
+        if (scope.kind === "public") {
+          return {
+            success: false,
+            error: "Organization context required to bulk-create resources",
+            details: { code: "ORG_CONTEXT_REQUIRED" },
+            status: 403,
+          };
+        }
+        if (!isElevated(scope)) {
+          const orgId = getOrgIdFromScope(scope);
+          if (!orgId) {
+            return {
+              success: false,
+              error: "Organization context required to bulk-create resources",
+              details: { code: "ORG_CONTEXT_REQUIRED" },
+              status: 403,
+            };
+          }
+          const tenantField = this.tenantField;
+          scopedItems = items.map((item) => ({
+            ...(item as AnyRecord),
+            [tenantField]: orgId,
+          }));
+        }
+      }
+    }
+
+    const created = await repo.createMany(scopedItems);
     return {
       success: true,
       data: created,
       status: 201,
       meta: { count: created.length },
     };
+  }
+
+  /**
+   * Build a tenant-scoped filter for bulk update/delete.
+   *
+   * Mirrors `AccessControl.buildIdFilter` semantics for single-doc ops:
+   *   - Always merge `_policyFilters` (from permission middleware)
+   *   - When `tenantField` is set AND a `member` scope is present, add the
+   *     org filter so cross-tenant data can't be touched.
+   *   - When the scope is `elevated` (platform admin), no org filter is
+   *     applied — admins can bulk-update across orgs intentionally.
+   *   - When the scope is `public` on a tenant-scoped resource, deny.
+   *   - When NO scope is present at all (e.g., direct controller calls in
+   *     unit tests, or app routes without auth middleware), the controller
+   *     stays lenient — it's the middleware layer's job to fail-close.
+   *     Apps that want fail-close on bulk routes should run the multi-tenant
+   *     preset middleware (or equivalent) ahead of these handlers.
+   *
+   * Returns the merged filter, or `null` when access must be denied.
+   */
+  private buildBulkFilter(
+    userFilter: Record<string, unknown>,
+    req: IRequestContext,
+  ): Record<string, unknown> | null {
+    const filter: Record<string, unknown> = { ...userFilter };
+    const arcContext = this.meta(req);
+    const policyFilters = arcContext?._policyFilters;
+    if (policyFilters) Object.assign(filter, policyFilters);
+
+    if (this.tenantField) {
+      const scope = arcContext?._scope;
+      // No scope at all → leave filter unchanged (controller-level lenient).
+      if (!scope) return filter;
+      // Public scope on a tenant-scoped resource → deny.
+      if (scope.kind === "public") return null;
+      // Elevated → no org filter (admin cross-org operation).
+      if (isElevated(scope)) return filter;
+      // Member scope → enforce org filter.
+      const orgId = getOrgIdFromScope(scope);
+      if (!orgId) return null;
+      filter[this.tenantField] = orgId;
+    }
+    return filter;
   }
 
   async bulkUpdate(
@@ -916,7 +1023,18 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       return { success: false, error: "Bulk update requires non-empty data", status: 400 };
     }
 
-    const result = await repo.updateMany(body.filter, body.data);
+    // SECURITY: Merge tenant scope + policy filters into the user-supplied filter
+    const scopedFilter = this.buildBulkFilter(body.filter, req);
+    if (scopedFilter === null) {
+      return {
+        success: false,
+        error: "Organization context required for bulk update",
+        details: { code: "ORG_CONTEXT_REQUIRED" },
+        status: 403,
+      };
+    }
+
+    const result = await repo.updateMany(scopedFilter, body.data);
     return { success: true, data: result, status: 200 };
   }
 
@@ -933,7 +1051,18 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       return { success: false, error: "Bulk delete requires a non-empty filter", status: 400 };
     }
 
-    const result = await repo.deleteMany(body.filter);
+    // SECURITY: Merge tenant scope + policy filters into the user-supplied filter
+    const scopedFilter = this.buildBulkFilter(body.filter, req);
+    if (scopedFilter === null) {
+      return {
+        success: false,
+        error: "Organization context required for bulk delete",
+        details: { code: "ORG_CONTEXT_REQUIRED" },
+        status: 403,
+      };
+    }
+
+    const result = await repo.deleteMany(scopedFilter);
     return { success: true, data: result, status: 200 };
   }
 }
