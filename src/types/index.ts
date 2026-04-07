@@ -620,6 +620,32 @@ export interface ResourceConfig<TDoc = AnyRecord> {
    * Requires `queryCachePlugin` to be registered.
    */
   cache?: ResourceCacheConfig;
+  /**
+   * Per-resource audit opt-in. When `auditPlugin` is registered with
+   * `autoAudit: { perResource: true }`, only resources with this flag are audited.
+   *
+   * The cleanest pattern for apps where most resources don't need auditing —
+   * no growing exclude lists, no centralized allowlist to maintain.
+   *
+   * - `true`: Audit create/update/delete on this resource
+   * - `{ operations: ['delete'] }`: Audit only specific operations
+   * - `false` or omit: Not audited (default)
+   *
+   * @example
+   * ```ts
+   * // app.ts
+   * await fastify.register(auditPlugin, {
+   *   autoAudit: { perResource: true },
+   * });
+   *
+   * // order.resource.ts
+   * defineResource({ name: 'order', audit: true });
+   *
+   * // payment.resource.ts
+   * defineResource({ name: 'payment', audit: { operations: ['delete'] } });
+   * ```
+   */
+  audit?: boolean | { operations?: ("create" | "update" | "delete")[] };
 }
 
 /**
@@ -1358,6 +1384,8 @@ export interface RegistryEntry extends ResourceMetadata {
   disabledRoutes?: string[];
   /** Rate limit config */
   rateLimit?: RateLimitConfig | false;
+  /** Per-resource audit opt-in flag (read by auditPlugin perResource mode) */
+  audit?: boolean | { operations?: ("create" | "update" | "delete")[] };
 }
 
 export interface RegistryStats {

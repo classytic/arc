@@ -137,32 +137,69 @@ const app = await createApp({
 
 > **Tip:** Use [Node.js conditional exports](https://nodejs.org/api/packages.html#conditional-exports) to support both environments in a single `package.json`.
 
-### Vitest Limitation: `node_modules` Dynamic Imports
+### Vitest + `loadResources()`: when to use `import.meta.glob`
 
-`loadResources()` uses `import()` at runtime, which works in production and in vitest for **your own files**. However, vitest does not transform dynamic imports from `node_modules` — this is a [vitest fundamental limitation](https://vitest.dev/guide/common-errors.html), not an Arc issue.
+`loadResources()` works in production and in most vitest setups. The two cases where it can fail:
 
-If your resource files import from `node_modules` packages that need transformation (e.g., ESM-only packages without CJS fallback), vitest may fail. The workaround is a static fallback:
+1. **Resources with top-level engine dependencies** — e.g., `getAccountModel()` called at module top-level, where the engine must be initialized via `bootstrap[]` before the module can evaluate. Dynamic import doesn't compose with that ordering.
+
+2. **Deeply nested `.js→.ts` resolution through `node_modules`** — vitest's loader hooks intercept top-level dynamic imports, but resolution chains inside transitive packages may fall through to Node's native resolver.
+
+For these cases, use Vite's compile-time `import.meta.glob` to preload resources statically. Arc provides a helper:
 
 ```typescript
-// src/resources/index.ts — static fallback for vitest
-import productResource from './product/product.resource.js';
-import orderResource from './order/order.resource.js';
+// tests/setup/preload-resources.ts
+import { preloadResources } from '@classytic/arc/testing';
 
-export const resources = [productResource, orderResource];
+// Vite rewrites import.meta.glob at transform time into a static map.
+// Every match goes through vitest's transform pipeline like any other import.
+export const preloadedResources = preloadResources(
+  import.meta.glob('../../src/resources/**/*.resource.ts', {
+    eager: true,
+    import: 'default',  // omit if you use `export const fooResource`
+  }),
+);
 ```
 
 ```typescript
-// src/app.ts — use loadResources in prod, static in test
-import { createApp, loadResources } from '@classytic/arc/factory';
+// src/app.ts — accept an override for tests
+import { createApp, loadResources, type ResourceLike } from '@classytic/arc/factory';
 
-const resources = process.env.VITEST
-  ? (await import('./resources/index.js')).resources
-  : await loadResources(import.meta.url);
-
-const app = await createApp({ resources });
+export async function buildApp(opts: { resources?: ResourceLike[] } = {}) {
+  const resources = opts.resources ?? (await loadResources(import.meta.url));
+  return createApp({ resources, /* ... */ });
+}
 ```
 
-This is **3 lines of boilerplate** and only needed when vitest can't resolve your resource's transitive `node_modules` imports. Most projects won't hit this.
+```typescript
+// tests/integration/foo.test.ts
+import { buildApp } from '../../src/app.js';
+import { preloadedResources } from '../setup/preload-resources.js';
+
+const app = await buildApp({ resources: preloadedResources });
+```
+
+#### Deferred loading (when resources need bootstrap to run first)
+
+If your resources call engine init at module top-level (e.g., `getAccountModel()` from an accounting engine), use the async variant:
+
+```typescript
+import { preloadResourcesAsync } from '@classytic/arc/testing';
+import { initAccountingEngine } from '../../src/engines/accounting.js';
+
+beforeAll(async () => {
+  await initAccountingEngine(); // bootstrap FIRST
+});
+
+const resources = await preloadResourcesAsync(
+  import.meta.glob('../../src/resources/**/*.resource.ts', {
+    import: 'default',
+    // no eager: true — modules load AFTER beforeAll
+  }),
+);
+```
+
+> **Why this works:** `import.meta.glob` is rewritten by Vite at transform time into a static map of importers, so every match goes through vitest's loader chain — including nested `.js→.ts` resolution. Arc's `preloadResources()` helper just normalizes the result into the `ResourceLike[]` shape that `createApp({ resources })` expects.
 
 ## Presets
 

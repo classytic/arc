@@ -8,11 +8,11 @@ description: |
   Triggers: arc, fastify resource, defineResource, createApp, BaseController, arc preset,
   arc auth, arc events, arc jobs, arc websocket, arc mcp, arc plugin, arc testing, arc cli,
   arc permissions, arc hooks, arc pipeline, arc factory, arc cache, arc QueryCache.
-version: 2.6.0
+version: 2.6.2
 license: MIT
 metadata:
   author: Classytic
-  version: "2.6.0"
+  version: "2.6.2"
 tags:
   - fastify
   - rest-api
@@ -527,21 +527,68 @@ src/resources/order/
 
 Generate: `arc generate resource order --mcp` | Wire: `extraTools: [fulfillOrderTool]`
 
-**Auto-load resources** (v2.6.0) — no barrel files, no manual `toPlugin()`:
+**Auto-load resources** — no barrel files, no manual `toPlugin()`:
 
 ```typescript
 import { createApp, loadResources } from '@classytic/arc/factory';
 
 const app = await createApp({
-  resources: await loadResources('./src/resources'),  // discovers *.resource.ts
+  resourcePrefix: '/api/v1',                            // optional URL prefix
+  resources: await loadResources(import.meta.url),      // discovers *.resource.ts
   auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
 });
-// loadResources options: exclude, include, suffix, recursive
 ```
 
-**Import compatibility:** `loadResources()` uses runtime `import()`. Works with relative imports (`./foo.js`) and Node.js `#` subpath imports (`#shared/utils.js` via `package.json` `imports` — both `.js` and `.ts` extensions). Does **NOT** work with tsconfig path aliases (`@/*`, `~/`) — those are compile-time only, Node.js ignores them. Projects using tsconfig aliases should use explicit `resources: [r1, r2]` instead.
+`loadResources()` discovers files matching `*.resource.{ts,js,mts,mjs}`, recursively. Pass `import.meta.url` for dev/prod parity (resolves to `src/` in dev, `dist/` in prod automatically). Discovers `default` export, `export const resource`, OR any named export with `toPlugin()` (e.g., `export const userResource`).
 
-**Unified role check** (v2.6.0) — checks both platform AND org roles:
+Options: `exclude`, `include`, `suffix`, `recursive`, `silent`.
+
+**Per-resource opt-out of `resourcePrefix`** — for webhooks, admin routes:
+```typescript
+defineResource({ name: 'webhook', prefix: '/hooks', skipGlobalPrefix: true })
+// Registers at /hooks even with createApp({ resourcePrefix: '/api/v1' })
+```
+
+**Boot sequence:**
+```typescript
+const app = await createApp({
+  resourcePrefix: '/api/v1',
+  plugins: async (f) => { await connectDB(); },     // 1. infra (DB, docs)
+  bootstrap: [inventoryInit, accountingInit],        // 2. domain init (engines)
+  resources: await loadResources(import.meta.url),   // 3. routes
+  afterResources: async (f) => { subscribeEvents(f); }, // 4. post-wiring
+  onReady: async (f) => { logger.info('ready'); },   // 5. lifecycle
+});
+```
+
+**Audit per-resource opt-in** — no growing exclude lists:
+```typescript
+// Register audit plugin with perResource mode
+await fastify.register(auditPlugin, { autoAudit: { perResource: true } });
+
+// Opt-in at the resource level
+defineResource({ name: 'order', audit: true });
+defineResource({ name: 'payment', audit: { operations: ['delete'] } });
+defineResource({ name: 'product' }); // not audited
+
+// Manual custom() for MCP/additionalRoutes/read auditing
+app.post('/orders/:id/refund', async (req) => {
+  await app.audit.custom('order', req.params.id, 'refund', { reason }, { user });
+});
+```
+
+**Import compatibility:** `loadResources()` uses runtime `import()`. Works with relative imports (`./foo.js`) and Node.js `#` subpath imports (`#shared/utils.js` via `package.json` `imports`). Does **NOT** work with tsconfig path aliases (`@/*`, `~/`) — those are compile-time only.
+
+**Vitest workaround** (rare): if resources need engine bootstrap or transitive `node_modules` imports that don't compose with dynamic import:
+```typescript
+import { preloadResources } from '@classytic/arc/testing';
+
+export const preloadedResources = preloadResources(
+  import.meta.glob('../../src/resources/**/*.resource.ts', { eager: true, import: 'default' }),
+);
+```
+
+**Unified role check** — checks both platform AND org roles:
 
 ```typescript
 import { roles } from '@classytic/arc/permissions';
@@ -552,7 +599,7 @@ permissions: {
 // Also: requireRoles(['admin'], { includeOrgRoles: true }) for backward compat
 ```
 
-**DX helpers** (v2.4.4):
+**DX helpers:**
 
 ```typescript
 // Typed request for wrapHandler: false routes — no more (req as any).user

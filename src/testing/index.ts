@@ -58,6 +58,8 @@ export {
   createTestTimer,
   waitFor,
 } from "./mocks.js";
+// Vitest preload helpers (for resources that don't load via dynamic import)
+export { preloadResources, preloadResourcesAsync } from "./preloadResources.js";
 export type { GenerateTestFileOptions, TestFixtures, TestHarnessOptions } from "./TestHarness.js";
 export {
   createConfigTestSuite,
