@@ -12,14 +12,13 @@
  */
 
 import {
-  Repository,
   batchOperationsPlugin,
   methodRegistryPlugin,
-  mongoOperationsPlugin,
+  Repository,
   softDeletePlugin,
 } from "@classytic/mongokit";
 import { MongoMemoryServer } from "mongodb-memory-server";
-import mongoose, { Schema, type Model } from "mongoose";
+import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
 import { HookSystem } from "../../src/hooks/HookSystem.js";
@@ -150,8 +149,7 @@ describe("Soft-delete + bulkDelete root cause investigation", () => {
       { timestamps: true },
     );
     const ItemMTModel =
-      mongoose.models.SDInvestMT ||
-      mongoose.model<IItemMT>("SDInvestMT", ItemMTSchema);
+      mongoose.models.SDInvestMT || mongoose.model<IItemMT>("SDInvestMT", ItemMTSchema);
     await ItemMTModel.deleteMany({});
 
     const repo = new Repository<IItemMT>(ItemMTModel, [

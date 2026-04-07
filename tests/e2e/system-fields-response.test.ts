@@ -32,19 +32,19 @@
  *    - Delete: data.message = 'Deleted successfully'
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import mongoose from 'mongoose';
-import { createApp } from '../../src/factory/createApp.js';
-import { defineResource } from '../../src/core/defineResource.js';
-import { BaseController } from '../../src/core/BaseController.js';
-import { createMongooseAdapter } from '../../src/adapters/mongoose.js';
-import { requireAuth, requireOwnership, anyOf, requireRoles } from '../../src/permissions/index.js';
-import { multiTenantPreset } from '../../src/presets/multiTenant.js';
-import { setupTestDatabase, teardownTestDatabase, createMockRepository } from '../setup.js';
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import type { RequestScope } from '../../src/scope/types.js';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import mongoose from "mongoose";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
+import { BaseController } from "../../src/core/BaseController.js";
+import { defineResource } from "../../src/core/defineResource.js";
+import { createApp } from "../../src/factory/createApp.js";
+import { anyOf, requireAuth, requireOwnership, requireRoles } from "../../src/permissions/index.js";
+import { multiTenantPreset } from "../../src/presets/multiTenant.js";
+import type { RequestScope } from "../../src/scope/types.js";
+import { createMockRepository, setupTestDatabase, teardownTestDatabase } from "../setup.js";
 
-const JWT_SECRET = 'test-jwt-secret-must-be-at-least-32-chars-long!!';
+const JWT_SECRET = "test-jwt-secret-must-be-at-least-32-chars-long!!";
 
 // Pre-generate valid ObjectIds
 const ORG_A = new mongoose.Types.ObjectId().toString();
@@ -52,13 +52,15 @@ const USER_A = new mongoose.Types.ObjectId().toString();
 const USER_B = new mongoose.Types.ObjectId().toString();
 const SUPERADMIN = new mongoose.Types.ObjectId().toString();
 
-type TestApp = FastifyInstance & { auth: { issueTokens: (payload: Record<string, unknown>) => { accessToken: string } } };
+type TestApp = FastifyInstance & {
+  auth: { issueTokens: (payload: Record<string, unknown>) => { accessToken: string } };
+};
 
 /**
  * Test helper: onRequest hook that resolves `request.scope` from JWT user claims.
  * Superadmin roles get 'elevated' scope, users with organizationId get 'member' scope.
  */
-function scopeFromJwtHook(superadminRoles: string[] = ['superadmin']) {
+function scopeFromJwtHook(superadminRoles: string[] = ["superadmin"]) {
   return async (request: FastifyRequest, _reply: FastifyReply): Promise<void> => {
     const user = (request as any).user as Record<string, unknown> | undefined;
     if (!user) return;
@@ -68,9 +70,9 @@ function scopeFromJwtHook(superadminRoles: string[] = ['superadmin']) {
     if (superadminRoles.some((r) => userRoles.includes(r))) {
       const orgId = user.organizationId as string | undefined;
       (request as any).scope = {
-        kind: 'elevated',
+        kind: "elevated",
         organizationId: orgId,
-        elevatedBy: String(user.id ?? user._id ?? 'admin'),
+        elevatedBy: String(user.id ?? user._id ?? "admin"),
       } satisfies RequestScope;
       return;
     }
@@ -78,7 +80,7 @@ function scopeFromJwtHook(superadminRoles: string[] = ['superadmin']) {
     const orgId = user.organizationId as string | undefined;
     if (orgId) {
       (request as any).scope = {
-        kind: 'member',
+        kind: "member",
         organizationId: orgId,
         orgRoles: userRoles,
       } satisfies RequestScope;
@@ -119,14 +121,14 @@ async function buildTestApp(opts: {
   });
 
   const app = await createApp({
-    preset: 'development',
-    auth: { type: 'jwt', jwt: { secret: JWT_SECRET } },
+    preset: "development",
+    auth: { type: "jwt", jwt: { secret: JWT_SECRET } },
     logger: false,
     helmet: false,
     rateLimit: false,
     plugins: async (fastify) => {
       // Resolve request.scope from JWT claims (simulates auth adapter behavior)
-      fastify.addHook('onRequest', scopeFromJwtHook(['superadmin']));
+      fastify.addHook("onRequest", scopeFromJwtHook(["superadmin"]));
       await fastify.register(resource.toPlugin());
     },
   });
@@ -139,7 +141,7 @@ async function buildTestApp(opts: {
 // 1. System Field Protection + Response Format
 // ============================================================================
 
-describe('System Fields & Response Format E2E', () => {
+describe("System Fields & Response Format E2E", () => {
   let app: TestApp;
   let TaskModel: mongoose.Model<any>;
   let createdItemId: string;
@@ -152,15 +154,15 @@ describe('System Fields & Response Format E2E', () => {
       createdBy: { type: mongoose.Schema.Types.ObjectId },
       updatedBy: { type: mongoose.Schema.Types.ObjectId },
     },
-    { timestamps: true, versionKey: '__v' },
+    { timestamps: true, versionKey: "__v" },
   );
 
   beforeAll(async () => {
     await setupTestDatabase();
     const result = await buildTestApp({
-      name: 'task',
+      name: "task",
       schema: TaskSchema,
-      modelName: 'SFTask',
+      modelName: "SFTask",
     });
     app = result.app;
     TaskModel = result.model;
@@ -176,23 +178,27 @@ describe('System Fields & Response Format E2E', () => {
   // Create — status code, response envelope, auto-injected fields
   // --------------------------------------------------------------------------
 
-  it('POST /tasks returns 201 with correct response envelope', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("POST /tasks returns 201 with correct response envelope", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
 
     const res = await app.inject({
-      method: 'POST',
-      url: '/tasks',
+      method: "POST",
+      url: "/tasks",
       headers: { authorization: `Bearer ${token}` },
-      payload: { title: 'Test Task', description: 'A test item' },
+      payload: { title: "Test Task", description: "A test item" },
     });
 
     expect(res.statusCode).toBe(201);
     const body = JSON.parse(res.body);
     expect(body.success).toBe(true);
     expect(body.data).toBeDefined();
-    expect(body.data.title).toBe('Test Task');
-    expect(body.data.description).toBe('A test item');
-    expect(body.message).toBe('Created successfully');
+    expect(body.data.title).toBe("Test Task");
+    expect(body.data.description).toBe("A test item");
+    expect(body.message).toBe("Created successfully");
 
     // System fields present in response (generated by DB)
     expect(body.data._id).toBeDefined();
@@ -206,21 +212,25 @@ describe('System Fields & Response Format E2E', () => {
     createdItemId = body.data._id;
   });
 
-  it('system fields in request body are stripped (cannot override _id, __v, createdAt, updatedAt)', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("system fields in request body are stripped (cannot override _id, __v, createdAt, updatedAt)", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
     const fakeId = new mongoose.Types.ObjectId().toString();
 
     const res = await app.inject({
-      method: 'POST',
-      url: '/tasks',
+      method: "POST",
+      url: "/tasks",
       headers: { authorization: `Bearer ${token}` },
       payload: {
-        title: 'Tampered Task',
+        title: "Tampered Task",
         _id: fakeId,
         __v: 999,
-        createdAt: '2000-01-01T00:00:00.000Z',
-        updatedAt: '2000-01-01T00:00:00.000Z',
-        deletedAt: '2000-01-01T00:00:00.000Z',
+        createdAt: "2000-01-01T00:00:00.000Z",
+        updatedAt: "2000-01-01T00:00:00.000Z",
+        deletedAt: "2000-01-01T00:00:00.000Z",
       },
     });
 
@@ -238,15 +248,19 @@ describe('System Fields & Response Format E2E', () => {
     expect(body.data.__v).toBe(0);
   });
 
-  it('createdBy cannot be spoofed via request body', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("createdBy cannot be spoofed via request body", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
 
     const res = await app.inject({
-      method: 'POST',
-      url: '/tasks',
+      method: "POST",
+      url: "/tasks",
       headers: { authorization: `Bearer ${token}` },
       payload: {
-        title: 'Spoofed Creator',
+        title: "Spoofed Creator",
         createdBy: USER_B,
       },
     });
@@ -257,16 +271,20 @@ describe('System Fields & Response Format E2E', () => {
     expect(body.data.createdBy).toBe(USER_A);
   });
 
-  it('organizationId cannot be spoofed via request body', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("organizationId cannot be spoofed via request body", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
     const fakeOrg = new mongoose.Types.ObjectId().toString();
 
     const res = await app.inject({
-      method: 'POST',
-      url: '/tasks',
+      method: "POST",
+      url: "/tasks",
       headers: { authorization: `Bearer ${token}` },
       payload: {
-        title: 'Spoofed Org',
+        title: "Spoofed Org",
         organizationId: fakeOrg,
       },
     });
@@ -281,11 +299,15 @@ describe('System Fields & Response Format E2E', () => {
   // Get — status code, response envelope
   // --------------------------------------------------------------------------
 
-  it('GET /tasks/:id returns 200 with { success, data }', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("GET /tasks/:id returns 200 with { success, data }", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
 
     const res = await app.inject({
-      method: 'GET',
+      method: "GET",
       url: `/tasks/${createdItemId}`,
       headers: { authorization: `Bearer ${token}` },
     });
@@ -295,15 +317,19 @@ describe('System Fields & Response Format E2E', () => {
     expect(body.success).toBe(true);
     expect(body.data).toBeDefined();
     expect(body.data._id).toBe(createdItemId);
-    expect(body.data.title).toBe('Test Task');
+    expect(body.data.title).toBe("Test Task");
   });
 
-  it('GET /tasks/:id with non-existent ID returns 404', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("GET /tasks/:id with non-existent ID returns 404", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
     const fakeId = new mongoose.Types.ObjectId().toString();
 
     const res = await app.inject({
-      method: 'GET',
+      method: "GET",
       url: `/tasks/${fakeId}`,
       headers: { authorization: `Bearer ${token}` },
     });
@@ -311,19 +337,23 @@ describe('System Fields & Response Format E2E', () => {
     expect(res.statusCode).toBe(404);
     const body = JSON.parse(res.body);
     expect(body.success).toBe(false);
-    expect(body.error).toContain('not found');
+    expect(body.error).toContain("not found");
   });
 
   // --------------------------------------------------------------------------
   // List — paginated response envelope
   // --------------------------------------------------------------------------
 
-  it('GET /tasks returns paginated envelope { success, docs, page, limit, total, pages, hasNext, hasPrev }', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("GET /tasks returns paginated envelope { success, docs, page, limit, total, pages, hasNext, hasPrev }", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
 
     const res = await app.inject({
-      method: 'GET',
-      url: '/tasks',
+      method: "GET",
+      url: "/tasks",
       headers: { authorization: `Bearer ${token}` },
     });
 
@@ -334,12 +364,12 @@ describe('System Fields & Response Format E2E', () => {
     // Paginated fields are flat (not nested under data)
     expect(body.docs).toBeDefined();
     expect(Array.isArray(body.docs)).toBe(true);
-    expect(typeof body.page).toBe('number');
-    expect(typeof body.limit).toBe('number');
-    expect(typeof body.total).toBe('number');
-    expect(typeof body.pages).toBe('number');
-    expect(typeof body.hasNext).toBe('boolean');
-    expect(typeof body.hasPrev).toBe('boolean');
+    expect(typeof body.page).toBe("number");
+    expect(typeof body.limit).toBe("number");
+    expect(typeof body.total).toBe("number");
+    expect(typeof body.pages).toBe("number");
+    expect(typeof body.hasNext).toBe("boolean");
+    expect(typeof body.hasPrev).toBe("boolean");
 
     // No data wrapper for paginated responses
     expect(body.data).toBeUndefined();
@@ -349,58 +379,70 @@ describe('System Fields & Response Format E2E', () => {
   // Update — status code, updatedBy injection, system fields stripped
   // --------------------------------------------------------------------------
 
-  it('PATCH /tasks/:id returns 200 with updatedBy auto-injected', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("PATCH /tasks/:id returns 200 with updatedBy auto-injected", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
 
     const res = await app.inject({
-      method: 'PATCH',
+      method: "PATCH",
       url: `/tasks/${createdItemId}`,
       headers: { authorization: `Bearer ${token}` },
-      payload: { title: 'Updated Task' },
+      payload: { title: "Updated Task" },
     });
 
     const body = JSON.parse(res.body);
     expect(res.statusCode).toBe(200);
     expect(body.success).toBe(true);
-    expect(body.data.title).toBe('Updated Task');
+    expect(body.data.title).toBe("Updated Task");
     // Note: update uses itemResponse schema (no message field in serialization)
     expect(body.data.updatedBy).toBe(USER_A);
   });
 
-  it('system fields in update body are stripped', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("system fields in update body are stripped", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
 
     const res = await app.inject({
-      method: 'PATCH',
+      method: "PATCH",
       url: `/tasks/${createdItemId}`,
       headers: { authorization: `Bearer ${token}` },
       payload: {
-        title: 'Should Update Title',
+        title: "Should Update Title",
         _id: new mongoose.Types.ObjectId().toString(),
         __v: 999,
-        createdAt: '2000-01-01T00:00:00.000Z',
-        updatedAt: '2000-01-01T00:00:00.000Z',
+        createdAt: "2000-01-01T00:00:00.000Z",
+        updatedAt: "2000-01-01T00:00:00.000Z",
       },
     });
 
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.data.title).toBe('Should Update Title');
+    expect(body.data.title).toBe("Should Update Title");
     // __v should not be 999
     expect(body.data.__v).not.toBe(999);
     // createdAt should not be year 2000
     expect(new Date(body.data.createdAt).getFullYear()).toBeGreaterThan(2020);
   });
 
-  it('updatedBy cannot be spoofed via request body', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("updatedBy cannot be spoofed via request body", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
 
     const res = await app.inject({
-      method: 'PATCH',
+      method: "PATCH",
       url: `/tasks/${createdItemId}`,
       headers: { authorization: `Bearer ${token}` },
       payload: {
-        title: 'Spoof Test',
+        title: "Spoof Test",
         updatedBy: USER_B,
       },
     });
@@ -415,20 +457,24 @@ describe('System Fields & Response Format E2E', () => {
   // Delete — response format
   // --------------------------------------------------------------------------
 
-  it('DELETE /tasks/:id returns 200 with { success, data: { message } }', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("DELETE /tasks/:id returns 200 with { success, data: { message } }", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
 
     // Create an item to delete
     const createRes = await app.inject({
-      method: 'POST',
-      url: '/tasks',
+      method: "POST",
+      url: "/tasks",
       headers: { authorization: `Bearer ${token}` },
-      payload: { title: 'To Delete' },
+      payload: { title: "To Delete" },
     });
     const itemId = JSON.parse(createRes.body).data._id;
 
     const res = await app.inject({
-      method: 'DELETE',
+      method: "DELETE",
       url: `/tasks/${itemId}`,
       headers: { authorization: `Bearer ${token}` },
     });
@@ -442,12 +488,16 @@ describe('System Fields & Response Format E2E', () => {
     // This validates the framework's actual serialization behavior
   });
 
-  it('DELETE /tasks/:id with non-existent ID returns 404', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("DELETE /tasks/:id with non-existent ID returns 404", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
     const fakeId = new mongoose.Types.ObjectId().toString();
 
     const res = await app.inject({
-      method: 'DELETE',
+      method: "DELETE",
       url: `/tasks/${fakeId}`,
       headers: { authorization: `Bearer ${token}` },
     });
@@ -460,10 +510,10 @@ describe('System Fields & Response Format E2E', () => {
   // Error response envelope
   // --------------------------------------------------------------------------
 
-  it('unauthenticated request returns 401 with error envelope', async () => {
+  it("unauthenticated request returns 401 with error envelope", async () => {
     const res = await app.inject({
-      method: 'GET',
-      url: '/tasks',
+      method: "GET",
+      url: "/tasks",
     });
 
     expect(res.statusCode).toBe(401);
@@ -477,7 +527,7 @@ describe('System Fields & Response Format E2E', () => {
 // 2. FieldRules Enforcement
 // ============================================================================
 
-describe('FieldRules E2E', () => {
+describe("FieldRules E2E", () => {
   let app: TestApp;
   let ProductModel: mongoose.Model<any>;
 
@@ -485,9 +535,9 @@ describe('FieldRules E2E', () => {
     {
       name: { type: String, required: true },
       price: { type: Number, required: true },
-      internalCode: { type: String, default: 'INTERNAL-001' },
+      internalCode: { type: String, default: "INTERNAL-001" },
       costPrice: { type: Number, default: 0 },
-      sku: { type: String, default: 'SKU-DEFAULT' },
+      sku: { type: String, default: "SKU-DEFAULT" },
       organizationId: { type: mongoose.Schema.Types.ObjectId, index: true },
       createdBy: { type: mongoose.Schema.Types.ObjectId },
     },
@@ -497,9 +547,9 @@ describe('FieldRules E2E', () => {
   beforeAll(async () => {
     await setupTestDatabase();
     const result = await buildTestApp({
-      name: 'product',
+      name: "product",
       schema: ProductSchema,
-      modelName: 'SFProduct',
+      modelName: "SFProduct",
       schemaOptions: {
         fieldRules: {
           // systemManaged: stripped from both reads and writes
@@ -519,17 +569,21 @@ describe('FieldRules E2E', () => {
     await teardownTestDatabase();
   });
 
-  it('systemManaged field is stripped from create body', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("systemManaged field is stripped from create body", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
 
     const res = await app.inject({
-      method: 'POST',
-      url: '/products',
+      method: "POST",
+      url: "/products",
       headers: { authorization: `Bearer ${token}` },
       payload: {
-        name: 'Widget',
+        name: "Widget",
         price: 9.99,
-        internalCode: 'HACKED-CODE',
+        internalCode: "HACKED-CODE",
       },
     });
 
@@ -538,20 +592,24 @@ describe('FieldRules E2E', () => {
 
     // The internalCode should be the default, not the hacked value
     const doc = await ProductModel.findById(body.data._id).lean();
-    expect(doc!.internalCode).toBe('INTERNAL-001');
+    expect(doc?.internalCode).toBe("INTERNAL-001");
   });
 
-  it('readonly field is stripped from create body', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("readonly field is stripped from create body", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
 
     const res = await app.inject({
-      method: 'POST',
-      url: '/products',
+      method: "POST",
+      url: "/products",
       headers: { authorization: `Bearer ${token}` },
       payload: {
-        name: 'Gadget',
+        name: "Gadget",
         price: 19.99,
-        sku: 'CUSTOM-SKU',
+        sku: "CUSTOM-SKU",
       },
     });
 
@@ -560,61 +618,69 @@ describe('FieldRules E2E', () => {
 
     // sku should be default, not the custom value
     const doc = await ProductModel.findById(body.data._id).lean();
-    expect(doc!.sku).toBe('SKU-DEFAULT');
+    expect(doc?.sku).toBe("SKU-DEFAULT");
   });
 
-  it('readonly field is stripped from update body', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("readonly field is stripped from update body", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
 
     // Create a product first
     const createRes = await app.inject({
-      method: 'POST',
-      url: '/products',
+      method: "POST",
+      url: "/products",
       headers: { authorization: `Bearer ${token}` },
-      payload: { name: 'Doohickey', price: 5.99 },
+      payload: { name: "Doohickey", price: 5.99 },
     });
     const itemId = JSON.parse(createRes.body).data._id;
 
     // Try to update the readonly field
     const res = await app.inject({
-      method: 'PATCH',
+      method: "PATCH",
       url: `/products/${itemId}`,
       headers: { authorization: `Bearer ${token}` },
       payload: {
-        name: 'Updated Doohickey',
-        sku: 'HACKED-SKU',
+        name: "Updated Doohickey",
+        sku: "HACKED-SKU",
       },
     });
 
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.data.name).toBe('Updated Doohickey');
+    expect(body.data.name).toBe("Updated Doohickey");
 
     // sku should remain the default
     const doc = await ProductModel.findById(itemId).lean();
-    expect(doc!.sku).toBe('SKU-DEFAULT');
+    expect(doc?.sku).toBe("SKU-DEFAULT");
   });
 
-  it('systemManaged field is stripped from update body', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("systemManaged field is stripped from update body", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
 
     // Create a product first
     const createRes = await app.inject({
-      method: 'POST',
-      url: '/products',
+      method: "POST",
+      url: "/products",
       headers: { authorization: `Bearer ${token}` },
-      payload: { name: 'Thingamajig', price: 3.50 },
+      payload: { name: "Thingamajig", price: 3.5 },
     });
     const itemId = JSON.parse(createRes.body).data._id;
 
     // Try to update the systemManaged field
     const res = await app.inject({
-      method: 'PATCH',
+      method: "PATCH",
       url: `/products/${itemId}`,
       headers: { authorization: `Bearer ${token}` },
       payload: {
-        name: 'Updated Thingamajig',
-        internalCode: 'HACKED-CODE',
+        name: "Updated Thingamajig",
+        internalCode: "HACKED-CODE",
       },
     });
 
@@ -622,24 +688,28 @@ describe('FieldRules E2E', () => {
 
     // internalCode should remain the default
     const doc = await ProductModel.findById(itemId).lean();
-    expect(doc!.internalCode).toBe('INTERNAL-001');
+    expect(doc?.internalCode).toBe("INTERNAL-001");
   });
 
-  it('systemManaged fields are blocked from select queries', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("systemManaged fields are blocked from select queries", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
 
     // Create a product
     await app.inject({
-      method: 'POST',
-      url: '/products',
+      method: "POST",
+      url: "/products",
       headers: { authorization: `Bearer ${token}` },
-      payload: { name: 'Select Test', price: 1.00 },
+      payload: { name: "Select Test", price: 1.0 },
     });
 
     // Try to select the systemManaged field explicitly
     const res = await app.inject({
-      method: 'GET',
-      url: '/products?select=name,internalCode',
+      method: "GET",
+      url: "/products?select=name,internalCode",
       headers: { authorization: `Bearer ${token}` },
     });
 
@@ -654,21 +724,25 @@ describe('FieldRules E2E', () => {
     });
   });
 
-  it('readonly field is visible in read responses', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("readonly field is visible in read responses", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
 
     // Create a product with DB-set sku
     const createRes = await app.inject({
-      method: 'POST',
-      url: '/products',
+      method: "POST",
+      url: "/products",
       headers: { authorization: `Bearer ${token}` },
-      payload: { name: 'Readable SKU', price: 7.50 },
+      payload: { name: "Readable SKU", price: 7.5 },
     });
     const itemId = JSON.parse(createRes.body).data._id;
 
     // Get it — readonly fields should be visible in reads
     const res = await app.inject({
-      method: 'GET',
+      method: "GET",
       url: `/products/${itemId}`,
       headers: { authorization: `Bearer ${token}` },
     });
@@ -676,7 +750,7 @@ describe('FieldRules E2E', () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     // sku is readonly but NOT hidden, so it should appear in reads
-    expect(body.data.sku).toBe('SKU-DEFAULT');
+    expect(body.data.sku).toBe("SKU-DEFAULT");
   });
 });
 
@@ -684,7 +758,7 @@ describe('FieldRules E2E', () => {
 // 3. Auto-Injected Fields in Multi-Tenant Context
 // ============================================================================
 
-describe('Auto-Injected Fields E2E', () => {
+describe("Auto-Injected Fields E2E", () => {
   let app: TestApp;
   let NoteModel: mongoose.Model<any>;
 
@@ -701,9 +775,9 @@ describe('Auto-Injected Fields E2E', () => {
   beforeAll(async () => {
     await setupTestDatabase();
     const result = await buildTestApp({
-      name: 'note',
+      name: "note",
       schema: NoteSchema,
-      modelName: 'SFNote',
+      modelName: "SFNote",
     });
     app = result.app;
     NoteModel = result.model;
@@ -715,14 +789,18 @@ describe('Auto-Injected Fields E2E', () => {
     await teardownTestDatabase();
   });
 
-  it('create injects createdBy from authenticated user', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("create injects createdBy from authenticated user", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
 
     const res = await app.inject({
-      method: 'POST',
-      url: '/notes',
+      method: "POST",
+      url: "/notes",
       headers: { authorization: `Bearer ${token}` },
-      payload: { content: 'Hello World' },
+      payload: { content: "Hello World" },
     });
 
     expect(res.statusCode).toBe(201);
@@ -730,14 +808,18 @@ describe('Auto-Injected Fields E2E', () => {
     expect(body.data.createdBy).toBe(USER_A);
   });
 
-  it('create injects organizationId from JWT context', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("create injects organizationId from JWT context", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
 
     const res = await app.inject({
-      method: 'POST',
-      url: '/notes',
+      method: "POST",
+      url: "/notes",
       headers: { authorization: `Bearer ${token}` },
-      payload: { content: 'Org scoped note' },
+      payload: { content: "Org scoped note" },
     });
 
     expect(res.statusCode).toBe(201);
@@ -745,24 +827,28 @@ describe('Auto-Injected Fields E2E', () => {
     expect(body.data.organizationId).toBe(ORG_A);
   });
 
-  it('update injects updatedBy from authenticated user', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("update injects updatedBy from authenticated user", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
 
     // Create note
     const createRes = await app.inject({
-      method: 'POST',
-      url: '/notes',
+      method: "POST",
+      url: "/notes",
       headers: { authorization: `Bearer ${token}` },
-      payload: { content: 'Original' },
+      payload: { content: "Original" },
     });
     const noteId = JSON.parse(createRes.body).data._id;
 
     // Update note
     const res = await app.inject({
-      method: 'PATCH',
+      method: "PATCH",
       url: `/notes/${noteId}`,
       headers: { authorization: `Bearer ${token}` },
-      payload: { content: 'Updated' },
+      payload: { content: "Updated" },
     });
 
     expect(res.statusCode).toBe(200);
@@ -770,25 +856,33 @@ describe('Auto-Injected Fields E2E', () => {
     expect(body.data.updatedBy).toBe(USER_A);
   });
 
-  it('different user updating sets their own updatedBy', async () => {
+  it("different user updating sets their own updatedBy", async () => {
     // User A creates
-    const tokenA = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+    const tokenA = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
     const createRes = await app.inject({
-      method: 'POST',
-      url: '/notes',
+      method: "POST",
+      url: "/notes",
       headers: { authorization: `Bearer ${tokenA}` },
-      payload: { content: 'Created by A' },
+      payload: { content: "Created by A" },
     });
     const noteId = JSON.parse(createRes.body).data._id;
     expect(JSON.parse(createRes.body).data.createdBy).toBe(USER_A);
 
     // User B in same org updates (superadmin to bypass ownership if needed)
-    const tokenAdmin = app.auth.issueTokens({ id: USER_B, role: ['superadmin'], organizationId: ORG_A }).accessToken;
+    const tokenAdmin = app.auth.issueTokens({
+      id: USER_B,
+      role: ["superadmin"],
+      organizationId: ORG_A,
+    }).accessToken;
     const updateRes = await app.inject({
-      method: 'PATCH',
+      method: "PATCH",
       url: `/notes/${noteId}`,
       headers: { authorization: `Bearer ${tokenAdmin}` },
-      payload: { content: 'Updated by B' },
+      payload: { content: "Updated by B" },
     });
 
     expect(updateRes.statusCode).toBe(200);
@@ -797,15 +891,19 @@ describe('Auto-Injected Fields E2E', () => {
     expect(body.data.updatedBy).toBe(USER_B); // Updated by new user
   });
 
-  it('timestamps are auto-managed (createdAt set on create, updatedAt changes on update)', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("timestamps are auto-managed (createdAt set on create, updatedAt changes on update)", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
 
     // Create
     const createRes = await app.inject({
-      method: 'POST',
-      url: '/notes',
+      method: "POST",
+      url: "/notes",
       headers: { authorization: `Bearer ${token}` },
-      payload: { content: 'Timestamp test' },
+      payload: { content: "Timestamp test" },
     });
     const created = JSON.parse(createRes.body).data;
     const noteId = created._id;
@@ -820,10 +918,10 @@ describe('Auto-Injected Fields E2E', () => {
 
     // Update
     const updateRes = await app.inject({
-      method: 'PATCH',
+      method: "PATCH",
       url: `/notes/${noteId}`,
       headers: { authorization: `Bearer ${token}` },
-      payload: { content: 'Timestamp test updated' },
+      payload: { content: "Timestamp test updated" },
     });
     const updated = JSON.parse(updateRes.body).data;
 
@@ -841,7 +939,7 @@ describe('Auto-Injected Fields E2E', () => {
 // 4. Ownership Check Response Format
 // ============================================================================
 
-describe('Ownership & Access Control Response Format', () => {
+describe("Ownership & Access Control Response Format", () => {
   let app: TestApp;
   let DocModel: mongoose.Model<any>;
 
@@ -857,38 +955,38 @@ describe('Ownership & Access Control Response Format', () => {
   beforeAll(async () => {
     await setupTestDatabase();
 
-    const Model = mongoose.models['SFDoc'] || mongoose.model('SFDoc', DocSchema);
+    const Model = mongoose.models.SFDoc || mongoose.model("SFDoc", DocSchema);
     const repo = createMockRepository(Model);
     const ctrl = new BaseController(repo);
 
     const preset = multiTenantPreset();
 
     const resource = defineResource({
-      name: 'doc',
+      name: "doc",
       adapter: createMongooseAdapter({ model: Model, repository: repo }),
       controller: ctrl,
       permissions: {
         list: requireAuth(),
         get: requireAuth(),
         create: requireAuth(),
-        update: anyOf(requireRoles(['superadmin']), requireOwnership('createdBy')),
-        delete: anyOf(requireRoles(['superadmin']), requireOwnership('createdBy')),
+        update: anyOf(requireRoles(["superadmin"]), requireOwnership("createdBy")),
+        delete: anyOf(requireRoles(["superadmin"]), requireOwnership("createdBy")),
       },
       middlewares: preset.middlewares,
     });
 
-    app = await createApp({
-      preset: 'development',
-      auth: { type: 'jwt', jwt: { secret: JWT_SECRET } },
+    app = (await createApp({
+      preset: "development",
+      auth: { type: "jwt", jwt: { secret: JWT_SECRET } },
       logger: false,
       helmet: false,
       rateLimit: false,
       plugins: async (fastify) => {
         // Resolve request.scope from JWT claims (simulates auth adapter behavior)
-        fastify.addHook('onRequest', scopeFromJwtHook(['superadmin']));
+        fastify.addHook("onRequest", scopeFromJwtHook(["superadmin"]));
         await fastify.register(resource.toPlugin());
       },
-    }) as TestApp;
+    })) as TestApp;
 
     await app.ready();
     DocModel = Model;
@@ -900,45 +998,61 @@ describe('Ownership & Access Control Response Format', () => {
     await teardownTestDatabase();
   });
 
-  it('non-owner cannot update another users resource (policy filter → 404)', async () => {
+  it("non-owner cannot update another users resource (policy filter → 404)", async () => {
     // User A creates
-    const tokenA = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+    const tokenA = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
     const createRes = await app.inject({
-      method: 'POST',
-      url: '/docs',
+      method: "POST",
+      url: "/docs",
       headers: { authorization: `Bearer ${tokenA}` },
-      payload: { title: 'Owned by A' },
+      payload: { title: "Owned by A" },
     });
     const docId = JSON.parse(createRes.body).data._id;
 
     // User B tries to update (same org, but not owner)
     // requireOwnership applies policy filter { createdBy: USER_B } → doc not found
-    const tokenB = app.auth.issueTokens({ id: USER_B, role: ['user'], organizationId: ORG_A }).accessToken;
+    const tokenB = app.auth.issueTokens({
+      id: USER_B,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
     const updateRes = await app.inject({
-      method: 'PATCH',
+      method: "PATCH",
       url: `/docs/${docId}`,
       headers: { authorization: `Bearer ${tokenB}` },
-      payload: { title: 'Hacked' },
+      payload: { title: "Hacked" },
     });
 
     expect(updateRes.statusCode).toBe(404);
   });
 
-  it('non-owner cannot delete another users resource (policy filter → 404)', async () => {
+  it("non-owner cannot delete another users resource (policy filter → 404)", async () => {
     // User A creates
-    const tokenA = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+    const tokenA = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
     const createRes = await app.inject({
-      method: 'POST',
-      url: '/docs',
+      method: "POST",
+      url: "/docs",
       headers: { authorization: `Bearer ${tokenA}` },
-      payload: { title: 'Protected Doc' },
+      payload: { title: "Protected Doc" },
     });
     const docId = JSON.parse(createRes.body).data._id;
 
     // User B tries to delete — policy filter scopes query, doc invisible to B
-    const tokenB = app.auth.issueTokens({ id: USER_B, role: ['user'], organizationId: ORG_A }).accessToken;
+    const tokenB = app.auth.issueTokens({
+      id: USER_B,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
     const deleteRes = await app.inject({
-      method: 'DELETE',
+      method: "DELETE",
       url: `/docs/${docId}`,
       headers: { authorization: `Bearer ${tokenB}` },
     });
@@ -946,49 +1060,61 @@ describe('Ownership & Access Control Response Format', () => {
     expect(deleteRes.statusCode).toBe(404);
   });
 
-  it('owner can update their own resource', async () => {
-    const token = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+  it("owner can update their own resource", async () => {
+    const token = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
 
     const createRes = await app.inject({
-      method: 'POST',
-      url: '/docs',
+      method: "POST",
+      url: "/docs",
       headers: { authorization: `Bearer ${token}` },
-      payload: { title: 'My Doc' },
+      payload: { title: "My Doc" },
     });
     const docId = JSON.parse(createRes.body).data._id;
 
     const updateRes = await app.inject({
-      method: 'PATCH',
+      method: "PATCH",
       url: `/docs/${docId}`,
       headers: { authorization: `Bearer ${token}` },
-      payload: { title: 'My Updated Doc' },
+      payload: { title: "My Updated Doc" },
     });
 
     expect(updateRes.statusCode).toBe(200);
-    expect(JSON.parse(updateRes.body).data.title).toBe('My Updated Doc');
+    expect(JSON.parse(updateRes.body).data.title).toBe("My Updated Doc");
   });
 
-  it('superadmin can bypass ownership check', async () => {
+  it("superadmin can bypass ownership check", async () => {
     // User A creates
-    const tokenA = app.auth.issueTokens({ id: USER_A, role: ['user'], organizationId: ORG_A }).accessToken;
+    const tokenA = app.auth.issueTokens({
+      id: USER_A,
+      role: ["user"],
+      organizationId: ORG_A,
+    }).accessToken;
     const createRes = await app.inject({
-      method: 'POST',
-      url: '/docs',
+      method: "POST",
+      url: "/docs",
       headers: { authorization: `Bearer ${tokenA}` },
-      payload: { title: 'Admin Override Test' },
+      payload: { title: "Admin Override Test" },
     });
     const docId = JSON.parse(createRes.body).data._id;
 
     // Superadmin updates
-    const adminToken = app.auth.issueTokens({ id: SUPERADMIN, role: ['superadmin'], organizationId: ORG_A }).accessToken;
+    const adminToken = app.auth.issueTokens({
+      id: SUPERADMIN,
+      role: ["superadmin"],
+      organizationId: ORG_A,
+    }).accessToken;
     const updateRes = await app.inject({
-      method: 'PATCH',
+      method: "PATCH",
       url: `/docs/${docId}`,
       headers: { authorization: `Bearer ${adminToken}` },
-      payload: { title: 'Admin Updated' },
+      payload: { title: "Admin Updated" },
     });
 
     expect(updateRes.statusCode).toBe(200);
-    expect(JSON.parse(updateRes.body).data.title).toBe('Admin Updated');
+    expect(JSON.parse(updateRes.body).data.title).toBe("Admin Updated");
   });
 });

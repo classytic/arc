@@ -1,5 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import Fastify, { type FastifyInstance } from "fastify";
+import { describe, expect, it } from "vitest";
 
 // Metrics plugin is imported dynamically since it may have varying exports
 describe("metrics plugin", () => {

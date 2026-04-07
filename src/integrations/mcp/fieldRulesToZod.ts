@@ -68,6 +68,18 @@ const PAGINATION_SHAPE: Record<string, z.ZodTypeAny> = {
   limit: z.number().int().min(1).max(100).optional().describe("Items per page (max 100)"),
   sort: z.string().optional().describe("Sort field, prefix with - for descending"),
   search: z.string().optional().describe("Full-text search query"),
+  select: z
+    .string()
+    .optional()
+    .describe(
+      "Comma-separated field list to project (e.g. 'name,price'). Prefix with '-' to exclude (e.g. '-description').",
+    ),
+  populate: z
+    .string()
+    .optional()
+    .describe(
+      "Comma-separated relation paths to hydrate (e.g. 'supplier,category'). Follows Mongoose populate syntax when the adapter is MongoKit.",
+    ),
 };
 
 // ============================================================================
@@ -221,6 +233,13 @@ function buildListShape(
     if (allHidden.has(name)) continue;
     const rule = fieldRules[name];
     if (!rule) continue;
+
+    // Respect rule-level exclusions the same way create/update modes do.
+    // Without this, a field marked `hidden: true` or `systemManaged: true`
+    // would still appear in the MCP list tool schema if it was also listed
+    // in `filterableFields` — leaking tenant keys, internal scoring fields,
+    // or other sensitive columns into the agent-facing schema.
+    if (rule.hidden || rule.systemManaged) continue;
 
     // Exact-match field (always present)
     const filterField = buildFieldSchema(rule);

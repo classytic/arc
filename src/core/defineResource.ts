@@ -768,28 +768,36 @@ export class ResourceDefinition<TDoc = AnyRecord> {
             // keywords without a matching top-level `type`, including inside oneOf/anyOf/allOf
             // branches).
             //
-            // Our approach: only a fixed allowlist of well-known keys keeps its declared
-            // schema. Everything else (filter fields) is replaced with `{}` (accept-any).
-            // Runtime validation is the QueryParser's job — Arc just needs AJV to let
-            // requests through without false-positive warnings.
-            const KEEP_AS_IS = new Set([
-              "page",
-              "limit",
-              "sort",
-              "search",
-              "select",
-              "after",
-              "populate",
-              "lookup",
-              "aggregate",
-            ]);
+            // Our approach: replace each property with a minimal AJV-strict-mode-clean
+            // shape. Numeric pagination keys get `type: "integer"` so AJV doesn't warn
+            // about `minimum`/`maximum` without type. Everything else becomes `{}` —
+            // qs bracket notation produces objects/arrays that the QueryParser handles
+            // at runtime, so Arc just needs AJV to let requests through.
+            const NORMALIZED_PROPS: Record<string, AnyRecord> = {
+              page: { type: "integer", minimum: 1 },
+              limit: { type: "integer", minimum: 1 },
+              sort: {},
+              search: {},
+              select: {},
+              after: {},
+              populate: {},
+              lookup: {},
+              aggregate: {},
+            };
             const props = (listQuerySchema as AnyRecord).properties as AnyRecord | undefined;
             const normalizedProps = props ? { ...props } : undefined;
             if (normalizedProps) {
+              // Pull max limit from the original schema so the parser's configured
+              // maxLimit is preserved, even though we replace the rest of the shape.
+              const originalLimit = normalizedProps.limit as { maximum?: number } | undefined;
+              if (originalLimit?.maximum) {
+                NORMALIZED_PROPS.limit = {
+                  ...NORMALIZED_PROPS.limit,
+                  maximum: originalLimit.maximum,
+                };
+              }
               for (const key of Object.keys(normalizedProps)) {
-                if (KEEP_AS_IS.has(key)) continue;
-                // Filter field — accept anything, defer validation to QueryParser.
-                normalizedProps[key] = {};
+                normalizedProps[key] = NORMALIZED_PROPS[key] ?? {};
               }
             }
             const normalizedSchema = {

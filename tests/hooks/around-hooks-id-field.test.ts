@@ -17,15 +17,15 @@
  */
 
 import { Repository } from "@classytic/mongokit";
+import type { FastifyInstance } from "fastify";
 import { MongoMemoryServer } from "mongodb-memory-server";
-import mongoose, { Schema, type Model } from "mongoose";
+import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
 import { allowPublic } from "../../src/permissions/index.js";
-import type { FastifyInstance } from "fastify";
 
 interface IPost {
   slug: string;
@@ -60,9 +60,7 @@ afterEach(async () => {
   await PostModel.deleteMany({});
 });
 
-async function buildApp(
-  registerHooks?: (app: FastifyInstance) => void,
-): Promise<FastifyInstance> {
+async function buildApp(registerHooks?: (app: FastifyInstance) => void): Promise<FastifyInstance> {
   const repo = new Repository<IPost>(PostModel);
   const resource = defineResource<IPost>({
     name: "post",
@@ -107,7 +105,7 @@ describe("App-level around() hooks with custom idField", () => {
     const app = await buildApp((fastify) => {
       // biome-ignore lint: decorator
       const hooks = (fastify as any).arc.hooks;
-      hooks.around("post", "update", async (ctx: unknown, next: () => Promise<unknown>) => {
+      hooks.around("post", "update", async (_ctx: unknown, next: () => Promise<unknown>) => {
         events.push("around-start");
         const result = await next();
         observedNext = result;

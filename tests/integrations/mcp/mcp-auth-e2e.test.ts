@@ -12,22 +12,21 @@
  *   5. Mixed tools — auto-generated + custom tools with auth context
  */
 
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { z } from "zod";
-import mongoose from "mongoose";
+import { QueryParser, Repository } from "@classytic/mongokit";
 import { MongoMemoryServer } from "mongodb-memory-server";
-import { Repository, QueryParser } from "@classytic/mongokit";
-import { defineResource } from "../../../src/core/defineResource.js";
+import mongoose from "mongoose";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { z } from "zod";
 import { createMongooseAdapter } from "../../../src/adapters/mongoose.js";
 import { BaseController } from "../../../src/core/BaseController.js";
-import { allowPublic } from "../../../src/permissions/index.js";
+import { defineResource } from "../../../src/core/defineResource.js";
 import {
+  type AuthRef,
   createMcpServer,
   defineTool,
-  mcpPlugin,
   resourceToTools,
-  type AuthRef,
 } from "../../../src/integrations/mcp/index.js";
+import { allowPublic } from "../../../src/permissions/index.js";
 
 // ============================================================================
 // Test Infrastructure
@@ -258,7 +257,9 @@ describe("Multi-tenancy via org-scoped BaseController", () => {
     const dataA = JSON.parse((resultA.content[0] as { text: string }).text);
 
     expect(dataA.docs.length).toBe(2);
-    expect(dataA.docs.every((p: { organizationId: string }) => p.organizationId === "org-a")).toBe(true);
+    expect(dataA.docs.every((p: { organizationId: string }) => p.organizationId === "org-a")).toBe(
+      true,
+    );
 
     // ── Org B's session ──
     const authRefB: AuthRef = { current: { userId: "bob", organizationId: "org-b" } };
@@ -269,7 +270,9 @@ describe("Multi-tenancy via org-scoped BaseController", () => {
     const dataB = JSON.parse((resultB.content[0] as { text: string }).text);
 
     expect(dataB.docs.length).toBe(2);
-    expect(dataB.docs.every((p: { organizationId: string }) => p.organizationId === "org-b")).toBe(true);
+    expect(dataB.docs.every((p: { organizationId: string }) => p.organizationId === "org-b")).toBe(
+      true,
+    );
 
     // Org A never sees Org B's data
     const allNamesA = dataA.docs.map((p: { name: string }) => p.name);
@@ -320,7 +323,9 @@ describe("Multi-tenancy via org-scoped BaseController", () => {
 
     expect(data.docs.length).toBe(2);
     expect(data.docs.every((p: { status: string }) => p.status === "active")).toBe(true);
-    expect(data.docs.every((p: { organizationId: string }) => p.organizationId === "org-f")).toBe(true);
+    expect(data.docs.every((p: { organizationId: string }) => p.organizationId === "org-f")).toBe(
+      true,
+    );
   });
 });
 
@@ -412,9 +417,7 @@ describe("Permission filters flow into _policyFilters", () => {
   );
   const TaskModel = mongoose.models.McpPermTask || mongoose.model("McpPermTask", TaskSchema);
 
-  function createTaskResource(
-    permissions: Record<string, unknown>,
-  ) {
+  function createTaskResource(permissions: Record<string, unknown>) {
     const repo = new Repository(TaskModel);
     const parser = new QueryParser({ allowedFilterFields: ["status"] });
 

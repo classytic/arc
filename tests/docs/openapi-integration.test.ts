@@ -17,10 +17,10 @@
  *    - GET /?populate=... works
  */
 
-import Fastify, { type FastifyInstance } from "fastify";
 import { QueryParser, Repository } from "@classytic/mongokit";
+import Fastify, { type FastifyInstance } from "fastify";
 import { MongoMemoryServer } from "mongodb-memory-server";
-import mongoose, { Schema, type Model } from "mongoose";
+import mongoose, { type Model, Schema } from "mongoose";
 import qs from "qs";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
@@ -62,8 +62,7 @@ beforeAll(async () => {
   mongoServer = await MongoMemoryServer.create();
   await mongoose.connect(mongoServer.getUri());
   ProductModel =
-    mongoose.models.OpenApiProduct ||
-    mongoose.model<IProduct>("OpenApiProduct", ProductSchema);
+    mongoose.models.OpenApiProduct || mongoose.model<IProduct>("OpenApiProduct", ProductSchema);
 });
 
 afterAll(async () => {

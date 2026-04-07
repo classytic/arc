@@ -18,13 +18,13 @@
  *   - Cross-org access — org admin in Org A is NOT admin in Org B
  */
 
-import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { RepositoryLike } from "../../src/adapters/interface.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
 import { allowPublic, requireRoles, roles } from "../../src/permissions/index.js";
 import type { RequestScope } from "../../src/scope/types.js";
-import type { RepositoryLike } from "../../src/adapters/interface.js";
 
 const JWT_SECRET = "test-jwt-secret-must-be-at-least-32-chars-long!!";
 const ORG_A = "org-a-id";
@@ -195,7 +195,12 @@ describe("Multi-role user — platform + org role merging", () => {
   });
 
   it("CREATE: user with both platform admin + org viewer → allowed (platform wins)", async () => {
-    const t = token({ id: "u4", role: ["admin", "user"], organizationId: ORG_A, orgRoles: ["viewer"] });
+    const t = token({
+      id: "u4",
+      role: ["admin", "user"],
+      organizationId: ORG_A,
+      orgRoles: ["viewer"],
+    });
     const res = await app.inject({
       method: "POST",
       url: "/widgets",

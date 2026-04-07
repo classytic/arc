@@ -6,11 +6,11 @@
  * Also tests org-scoped event filtering.
  */
 
-import { describe, it, expect, afterEach } from "vitest";
+import http from "node:http";
 import Fastify, { type FastifyInstance } from "fastify";
+import { afterEach, describe, expect, it } from "vitest";
 import { eventPlugin } from "../../src/events/eventPlugin.js";
 import ssePlugin from "../../src/plugins/sse.js";
-import http from "node:http";
 
 // ============================================================================
 // Helper
@@ -98,10 +98,7 @@ describe("SSE Auth Enforcement", () => {
     await app.listen({ port: 0, host: "127.0.0.1" });
 
     const address = app.server.address() as { port: number };
-    const result = await fetchSSE(
-      `http://127.0.0.1:${address.port}/events/stream`,
-      300,
-    );
+    const result = await fetchSSE(`http://127.0.0.1:${address.port}/events/stream`, 300);
     expect(result.statusCode).toBe(200);
     expect(result.headers["content-type"]).toBe("text/event-stream");
   });
@@ -112,7 +109,7 @@ describe("SSE Auth Enforcement", () => {
 
     // Simulate an auth decorator that rejects unauthenticated requests
     app.decorate("authenticate", async (request: any, reply: any) => {
-      if (!request.headers["authorization"]) {
+      if (!request.headers.authorization) {
         reply.code(401).send({ error: "Unauthorized" });
       }
     });
@@ -165,22 +162,27 @@ describe("SSE Org-Scoped Filtering", () => {
     const address = app.server.address() as { port: number };
 
     // Start SSE, publish matching org event, then publish non-matching
-    const ssePromise = fetchSSE(
-      `http://127.0.0.1:${address.port}/events/stream`,
-      500,
-    );
+    const ssePromise = fetchSSE(`http://127.0.0.1:${address.port}/events/stream`, 500);
 
     await new Promise((r) => setTimeout(r, 100));
 
     // Matching org event
-    await app.events.publish("order.created", { orderId: "1" }, {
-      organizationId: "org-123",
-    });
+    await app.events.publish(
+      "order.created",
+      { orderId: "1" },
+      {
+        organizationId: "org-123",
+      },
+    );
 
     // Non-matching org event — should be filtered out
-    await app.events.publish("order.created", { orderId: "2" }, {
-      organizationId: "org-other",
-    });
+    await app.events.publish(
+      "order.created",
+      { orderId: "2" },
+      {
+        organizationId: "org-other",
+      },
+    );
 
     const result = await ssePromise;
     expect(result.body).toContain('"orderId":"1"');
@@ -204,15 +206,16 @@ describe("SSE Org-Scoped Filtering", () => {
     await app.listen({ port: 0, host: "127.0.0.1" });
 
     const address = app.server.address() as { port: number };
-    const ssePromise = fetchSSE(
-      `http://127.0.0.1:${address.port}/events/stream`,
-      500,
-    );
+    const ssePromise = fetchSSE(`http://127.0.0.1:${address.port}/events/stream`, 500);
 
     await new Promise((r) => setTimeout(r, 100));
-    await app.events.publish("order.created", { orderId: "1" }, {
-      organizationId: "org-123",
-    });
+    await app.events.publish(
+      "order.created",
+      { orderId: "1" },
+      {
+        organizationId: "org-123",
+      },
+    );
 
     const result = await ssePromise;
     // Event had org context but client has no org — should be dropped

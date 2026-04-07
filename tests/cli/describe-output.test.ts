@@ -5,17 +5,14 @@
  * with proper schema, permissions, routes, events, and stats.
  */
 
-import { describe, it, expect } from "vitest";
-import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
 import { describe as arcDescribe } from "../../src/cli/commands/describe.js";
 
 // Helper to capture console output from arc describe
-async function runDescribe(
-  entryContent: string,
-  extraArgs: string[] = [],
-): Promise<any> {
+async function runDescribe(entryContent: string, extraArgs: string[] = []): Promise<any> {
   const tempDir = await mkdtemp(join(tmpdir(), "arc-describe-"));
   const entryPath = join(tempDir, "resources.mjs");
 
@@ -245,18 +242,14 @@ describe("arc describe — routes", () => {
     const routes = output.resources[0].routes;
     const listRoute = routes.find((r: any) => r.operation === "list");
     expect(listRoute.permission.type).toBe("public");
-    const createRoute = routes.find(
-      (r: any) => r.operation === "create",
-    );
+    const createRoute = routes.find((r: any) => r.operation === "create");
     expect(createRoute.permission.type).toBe("requireRoles");
   });
 
   it("should include additional routes", async () => {
     const output = await runDescribe(RESOURCE_WITH_EVENTS);
     const routes = output.resources[0].routes;
-    const cancelRoute = routes.find(
-      (r: any) => r.path === "/orders/:id/cancel",
-    );
+    const cancelRoute = routes.find((r: any) => r.path === "/orders/:id/cancel");
     expect(cancelRoute).toBeDefined();
     expect(cancelRoute.method).toBe("POST");
     expect(cancelRoute.summary).toBe("Cancel an order");
@@ -373,8 +366,6 @@ export const resources = [r1];
 describe("arc describe — error handling", () => {
   it("should throw when no resources found", async () => {
     const entry = `export const notAResource = { foo: 'bar' };`;
-    await expect(runDescribe(entry)).rejects.toThrow(
-      "No resource definitions found",
-    );
+    await expect(runDescribe(entry)).rejects.toThrow("No resource definitions found");
   });
 });

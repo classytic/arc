@@ -1,5 +1,5 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { gracefulShutdownPlugin } from "../../src/plugins/gracefulShutdown.js";
 
 describe("gracefulShutdownPlugin", () => {

@@ -4,12 +4,9 @@
  * Tests the helper that normalizes import.meta.glob results into ResourceLike[].
  */
 
-import { describe, it, expect } from "vitest";
-import {
-  preloadResources,
-  preloadResourcesAsync,
-} from "../../src/testing/preloadResources.js";
+import { describe, expect, it } from "vitest";
 import type { ResourceLike } from "../../src/factory/loadResources.js";
+import { preloadResources, preloadResourcesAsync } from "../../src/testing/preloadResources.js";
 
 const make = (name: string): ResourceLike => ({
   name,

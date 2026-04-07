@@ -12,10 +12,10 @@
  * They verify the code structure, patterns, and correctness statically.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
-import * as path from "node:path";
 import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { init } from "../../src/cli/commands/init.js";
 
 let testRoot: string;
@@ -37,10 +37,7 @@ async function readJson(filePath: string): Promise<any> {
   return JSON.parse(await fs.readFile(filePath, "utf-8"));
 }
 
-async function scaffoldProject(
-  name: string,
-  options: Parameters<typeof init>[0],
-): Promise<string> {
+async function scaffoldProject(name: string, options: Parameters<typeof init>[0]): Promise<string> {
   const originalCwd = process.cwd();
   process.chdir(testRoot);
   try {
@@ -85,10 +82,7 @@ describe("Generated App — CRUD Resource Patterns (JWT + Single)", () => {
 
   it("should generate example resource with defineResource pattern", async () => {
     const content = await readText(
-      path.join(
-        projectPath,
-        "src/resources/example/example.resource.ts",
-      ),
+      path.join(projectPath, "src/resources/example/example.resource.ts"),
     );
     // Must use defineResource from arc
     expect(content).toContain("import");
@@ -104,10 +98,7 @@ describe("Generated App — CRUD Resource Patterns (JWT + Single)", () => {
 
   it("should generate example model with Mongoose schema", async () => {
     const content = await readText(
-      path.join(
-        projectPath,
-        "src/resources/example/example.model.ts",
-      ),
+      path.join(projectPath, "src/resources/example/example.model.ts"),
     );
     expect(content).toContain("mongoose");
     expect(content).toContain("Schema");
@@ -119,10 +110,7 @@ describe("Generated App — CRUD Resource Patterns (JWT + Single)", () => {
 
   it("should generate example repository with MongoKit", async () => {
     const content = await readText(
-      path.join(
-        projectPath,
-        "src/resources/example/example.repository.ts",
-      ),
+      path.join(projectPath, "src/resources/example/example.repository.ts"),
     );
     expect(content).toContain("@classytic/mongokit");
     expect(content).toContain("Repository");
@@ -133,10 +121,7 @@ describe("Generated App — CRUD Resource Patterns (JWT + Single)", () => {
 
   it("should generate example controller extending BaseController", async () => {
     const content = await readText(
-      path.join(
-        projectPath,
-        "src/resources/example/example.controller.ts",
-      ),
+      path.join(projectPath, "src/resources/example/example.controller.ts"),
     );
     expect(content).toContain("BaseController");
     expect(content).toContain("ExampleController");
@@ -146,10 +131,7 @@ describe("Generated App — CRUD Resource Patterns (JWT + Single)", () => {
 
   it("should generate example schemas with buildCrudSchemasFromModel", async () => {
     const content = await readText(
-      path.join(
-        projectPath,
-        "src/resources/example/example.schemas.ts",
-      ),
+      path.join(projectPath, "src/resources/example/example.schemas.ts"),
     );
     expect(content).toContain("buildCrudSchemasFromModel");
     expect(content).toContain("fieldRules");
@@ -157,9 +139,7 @@ describe("Generated App — CRUD Resource Patterns (JWT + Single)", () => {
   });
 
   it("should generate resources index that exports resources array", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/resources/index.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/resources/index.ts"));
     expect(content).toContain("exampleResource");
     // Should be an array export for factory consumption
     expect(content).toMatch(/resources/);
@@ -183,73 +163,44 @@ describe("Generated App — JWT Auth Setup", () => {
   });
 
   it("should generate user model with password hashing", async () => {
-    const content = await readText(
-      path.join(
-        projectPath,
-        "src/resources/user/user.model.ts",
-      ),
-    );
+    const content = await readText(path.join(projectPath, "src/resources/user/user.model.ts"));
     expect(content).toContain("mongoose");
     expect(content).toContain("password");
     expect(content).toContain("email");
   });
 
   it("should generate user repository", async () => {
-    const content = await readText(
-      path.join(
-        projectPath,
-        "src/resources/user/user.repository.ts",
-      ),
-    );
+    const content = await readText(path.join(projectPath, "src/resources/user/user.repository.ts"));
     expect(content).toContain("Repository");
     expect(content).toContain("UserRepository");
   });
 
   it("should generate auth handlers with login/register", async () => {
-    const content = await readText(
-      path.join(
-        projectPath,
-        "src/resources/auth/auth.handlers.ts",
-      ),
-    );
+    const content = await readText(path.join(projectPath, "src/resources/auth/auth.handlers.ts"));
     // Should handle registration and login flows
     expect(content).toMatch(/register|signup|sign.*up/i);
     expect(content).toMatch(/login|signin|sign.*in/i);
   });
 
   it("should generate auth resource definition", async () => {
-    const content = await readText(
-      path.join(
-        projectPath,
-        "src/resources/auth/auth.resource.ts",
-      ),
-    );
+    const content = await readText(path.join(projectPath, "src/resources/auth/auth.resource.ts"));
     expect(content).toContain("@classytic/arc");
   });
 
   it("should generate auth schemas for login/register", async () => {
-    const content = await readText(
-      path.join(
-        projectPath,
-        "src/resources/auth/auth.schemas.ts",
-      ),
-    );
+    const content = await readText(path.join(projectPath, "src/resources/auth/auth.schemas.ts"));
     expect(content).toContain("email");
     expect(content).toContain("password");
   });
 
   it("should generate auth test file", async () => {
-    const content = await readText(
-      path.join(projectPath, "tests/auth.test.ts"),
-    );
+    const content = await readText(path.join(projectPath, "tests/auth.test.ts"));
     expect(content).toContain("describe");
     expect(content).toContain("vitest");
   });
 
   it("should configure JWT in app.ts", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/app.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/app.ts"));
     expect(content).toContain("jwt");
     expect(content).toContain("createApp");
   });
@@ -272,45 +223,26 @@ describe("Generated App — Better Auth Setup", () => {
   });
 
   it("should generate auth.ts with Better Auth config", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/auth.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/auth.ts"));
     expect(content).toContain("betterAuth");
     expect(content).toContain("database");
   });
 
   it("should NOT generate manual JWT auth files", async () => {
-    expect(
-      await exists(
-        path.join(projectPath, "src/resources/user/user.model.ts"),
-      ),
-    ).toBe(false);
-    expect(
-      await exists(
-        path.join(
-          projectPath,
-          "src/resources/auth/auth.handlers.ts",
-        ),
-      ),
-    ).toBe(false);
+    expect(await exists(path.join(projectPath, "src/resources/user/user.model.ts"))).toBe(false);
+    expect(await exists(path.join(projectPath, "src/resources/auth/auth.handlers.ts"))).toBe(false);
   });
 
   it("should configure Better Auth in app.ts", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/app.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/app.ts"));
     // Uses betterAuth type and createBetterAuthAdapter
     expect(content).toContain("betterAuth");
     expect(content).toContain("createBetterAuthAdapter");
   });
 
   it("should reference BETTER_AUTH_SECRET in config", async () => {
-    const configContent = await readText(
-      path.join(projectPath, "src/config/index.ts"),
-    );
-    const envContent = await readText(
-      path.join(projectPath, ".env.example"),
-    );
+    const configContent = await readText(path.join(projectPath, "src/config/index.ts"));
+    const envContent = await readText(path.join(projectPath, ".env.example"));
     // At least one of these should reference the secret
     const combined = configContent + envContent;
     expect(combined).toContain("BETTER_AUTH_SECRET");
@@ -334,16 +266,14 @@ describe("Generated App — Config & Entry Points", () => {
   });
 
   it("should load env before other imports in index.ts", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/index.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/index.ts"));
     // Find actual import statements (not comments)
     const lines = content.split("\n");
-    const envImportLine = lines.findIndex((l) =>
-      l.startsWith("import") && l.includes("config/env"),
+    const envImportLine = lines.findIndex(
+      (l) => l.startsWith("import") && l.includes("config/env"),
     );
-    const appImportLine = lines.findIndex((l) =>
-      l.startsWith("import") && l.includes("createAppInstance"),
+    const appImportLine = lines.findIndex(
+      (l) => l.startsWith("import") && l.includes("createAppInstance"),
     );
     expect(envImportLine).toBeGreaterThan(-1);
     expect(appImportLine).toBeGreaterThan(-1);
@@ -352,40 +282,30 @@ describe("Generated App — Config & Entry Points", () => {
   });
 
   it("should export createAppInstance from app.ts", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/app.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/app.ts"));
     expect(content).toContain("createAppInstance");
     expect(content).toContain("export");
   });
 
   it("should generate config with env-based settings", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/config/index.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/config/index.ts"));
     expect(content).toContain("process.env");
     expect(content).toContain("PORT");
   });
 
   it("should generate env loader with NODE_ENV detection", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/config/env.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/config/env.ts"));
     expect(content).toContain("NODE_ENV");
   });
 
   it("should create app factory using Arc createApp", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/app.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/app.ts"));
     expect(content).toContain("@classytic/arc/factory");
     expect(content).toContain("createApp");
   });
 
   it("should connect to MongoDB in entry point", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/index.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/index.ts"));
     expect(content).toContain("mongoose");
     expect(content).toContain("connect");
   });
@@ -409,26 +329,19 @@ describe("Generated App — Multi-Tenant Patterns", () => {
 
   it("should generate flexible multi-tenant preset", async () => {
     const content = await readText(
-      path.join(
-        projectPath,
-        "src/shared/presets/flexible-multi-tenant.ts",
-      ),
+      path.join(projectPath, "src/shared/presets/flexible-multi-tenant.ts"),
     );
     // Should define a multi-tenant preset function
     expect(content).toMatch(/tenant|organization|org/i);
   });
 
   it("should export presets from presets index", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/shared/presets/index.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/shared/presets/index.ts"));
     expect(content).toContain("export");
   });
 
   it("should reference org header in config", async () => {
-    const envContent = await readText(
-      path.join(projectPath, ".env.example"),
-    );
+    const envContent = await readText(path.join(projectPath, ".env.example"));
     expect(envContent).toContain("ORG_HEADER");
   });
 });
@@ -450,32 +363,24 @@ describe("Generated App — Shared Utilities", () => {
   });
 
   it("should generate adapter module with MongoKit factory", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/shared/adapter.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/shared/adapter.ts"));
     expect(content).toContain("createMongooseAdapter");
   });
 
   it("should generate permissions module", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/shared/permissions.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/shared/permissions.ts"));
     // Should import from arc permissions
     expect(content).toContain("@classytic/arc");
     expect(content).toMatch(/permission|role|auth/i);
   });
 
   it("should generate shared index barrel", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/shared/index.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/shared/index.ts"));
     expect(content).toContain("export");
   });
 
   it("should generate plugins index", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/plugins/index.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/plugins/index.ts"));
     expect(content).toContain("export");
   });
 });
@@ -497,27 +402,21 @@ describe("Generated App — Test Files", () => {
   });
 
   it("should generate example test with Vitest imports", async () => {
-    const content = await readText(
-      path.join(projectPath, "tests/example.test.ts"),
-    );
+    const content = await readText(path.join(projectPath, "tests/example.test.ts"));
     expect(content).toContain("vitest");
     expect(content).toContain("describe");
     expect(content).toContain("expect");
   });
 
   it("should generate example test with CRUD test pattern", async () => {
-    const content = await readText(
-      path.join(projectPath, "tests/example.test.ts"),
-    );
+    const content = await readText(path.join(projectPath, "tests/example.test.ts"));
     // Should test at least list endpoint
     expect(content).toContain("GET");
     expect(content).toContain("statusCode");
   });
 
   it("should generate example test with app lifecycle", async () => {
-    const content = await readText(
-      path.join(projectPath, "tests/example.test.ts"),
-    );
+    const content = await readText(path.join(projectPath, "tests/example.test.ts"));
     // Should have setup/teardown
     expect(content).toMatch(/beforeAll|beforeEach/);
     expect(content).toMatch(/afterAll|afterEach/);
@@ -526,17 +425,13 @@ describe("Generated App — Test Files", () => {
   });
 
   it("should generate auth test when using JWT", async () => {
-    const content = await readText(
-      path.join(projectPath, "tests/auth.test.ts"),
-    );
+    const content = await readText(path.join(projectPath, "tests/auth.test.ts"));
     expect(content).toContain("vitest");
     expect(content).toContain("describe");
   });
 
   it("should generate vitest config with proper setup", async () => {
-    const content = await readText(
-      path.join(projectPath, "vitest.config.ts"),
-    );
+    const content = await readText(path.join(projectPath, "vitest.config.ts"));
     expect(content).toContain("defineConfig");
     expect(content).toContain("globals: true");
     expect(content).toContain("environment: 'node'");
@@ -616,20 +511,13 @@ describe("Generated App — JavaScript Mode", () => {
   });
 
   it("should generate .js files (not .ts)", async () => {
-    expect(
-      await exists(path.join(projectPath, "src/app.js")),
-    ).toBe(true);
-    expect(
-      await exists(path.join(projectPath, "src/app.ts")),
-    ).toBe(false);
+    expect(await exists(path.join(projectPath, "src/app.js"))).toBe(true);
+    expect(await exists(path.join(projectPath, "src/app.ts"))).toBe(false);
   });
 
   it("should generate example resource without TypeScript types", async () => {
     const content = await readText(
-      path.join(
-        projectPath,
-        "src/resources/example/example.model.js",
-      ),
+      path.join(projectPath, "src/resources/example/example.model.js"),
     );
     expect(content).not.toContain("interface");
     expect(content).not.toContain(": string");

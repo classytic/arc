@@ -5,10 +5,10 @@
  * with proper naming conventions (kebab-case files, PascalCase classes).
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
-import * as path from "node:path";
 import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { generate } from "../../src/cli/commands/generate.js";
 
 let testRoot: string;
@@ -68,10 +68,7 @@ describe("arc generate resource — TypeScript + MongoKit", () => {
     );
 
     // Also create tsconfig.json for TS detection fallback
-    await fs.writeFile(
-      path.join(projectDir, "tsconfig.json"),
-      "{}",
-    );
+    await fs.writeFile(path.join(projectDir, "tsconfig.json"), "{}");
 
     const originalCwd = process.cwd();
     process.chdir(projectDir);
@@ -83,16 +80,11 @@ describe("arc generate resource — TypeScript + MongoKit", () => {
   });
 
   it("should create resource directory", async () => {
-    expect(
-      await exists(path.join(projectDir, "src/resources/product")),
-    ).toBe(true);
+    expect(await exists(path.join(projectDir, "src/resources/product"))).toBe(true);
   });
 
   it("should create model file with correct naming", async () => {
-    const filePath = path.join(
-      projectDir,
-      "src/resources/product/product.model.ts",
-    );
+    const filePath = path.join(projectDir, "src/resources/product/product.model.ts");
     expect(await exists(filePath)).toBe(true);
 
     const content = await readText(filePath);
@@ -103,10 +95,7 @@ describe("arc generate resource — TypeScript + MongoKit", () => {
   });
 
   it("should create repository file with correct naming", async () => {
-    const filePath = path.join(
-      projectDir,
-      "src/resources/product/product.repository.ts",
-    );
+    const filePath = path.join(projectDir, "src/resources/product/product.repository.ts");
     expect(await exists(filePath)).toBe(true);
 
     const content = await readText(filePath);
@@ -117,10 +106,7 @@ describe("arc generate resource — TypeScript + MongoKit", () => {
   });
 
   it("should create resource file with defineResource", async () => {
-    const filePath = path.join(
-      projectDir,
-      "src/resources/product/product.resource.ts",
-    );
+    const filePath = path.join(projectDir, "src/resources/product/product.resource.ts");
     expect(await exists(filePath)).toBe(true);
 
     const content = await readText(filePath);
@@ -163,10 +149,7 @@ describe("arc generate resource — kebab-case naming", () => {
       path.join(projectDir, ".arcrc"),
       JSON.stringify({ adapter: "mongokit", typescript: true }),
     );
-    await fs.writeFile(
-      path.join(projectDir, "tsconfig.json"),
-      "{}",
-    );
+    await fs.writeFile(path.join(projectDir, "tsconfig.json"), "{}");
 
     const originalCwd = process.cwd();
     process.chdir(projectDir);
@@ -178,41 +161,25 @@ describe("arc generate resource — kebab-case naming", () => {
   });
 
   it("should use kebab-case for directory name", async () => {
-    expect(
-      await exists(
-        path.join(projectDir, "src/resources/org-profile"),
-      ),
-    ).toBe(true);
+    expect(await exists(path.join(projectDir, "src/resources/org-profile"))).toBe(true);
   });
 
   it("should use kebab-case for file names", async () => {
     const dir = path.join(projectDir, "src/resources/org-profile");
-    expect(
-      await exists(path.join(dir, "org-profile.model.ts")),
-    ).toBe(true);
-    expect(
-      await exists(path.join(dir, "org-profile.repository.ts")),
-    ).toBe(true);
-    expect(
-      await exists(path.join(dir, "org-profile.resource.ts")),
-    ).toBe(true);
+    expect(await exists(path.join(dir, "org-profile.model.ts"))).toBe(true);
+    expect(await exists(path.join(dir, "org-profile.repository.ts"))).toBe(true);
+    expect(await exists(path.join(dir, "org-profile.resource.ts"))).toBe(true);
   });
 
   it("should use PascalCase for class names", async () => {
     const model = await readText(
-      path.join(
-        projectDir,
-        "src/resources/org-profile/org-profile.model.ts",
-      ),
+      path.join(projectDir, "src/resources/org-profile/org-profile.model.ts"),
     );
     expect(model).toContain("IOrgProfile");
     expect(model).toContain("orgProfileSchema");
 
     const repo = await readText(
-      path.join(
-        projectDir,
-        "src/resources/org-profile/org-profile.repository.ts",
-      ),
+      path.join(projectDir, "src/resources/org-profile/org-profile.repository.ts"),
     );
     expect(repo).toContain("OrgProfileRepository");
     expect(repo).toContain("orgProfileRepository");
@@ -220,10 +187,7 @@ describe("arc generate resource — kebab-case naming", () => {
 
   it("should use correct import paths", async () => {
     const resource = await readText(
-      path.join(
-        projectDir,
-        "src/resources/org-profile/org-profile.resource.ts",
-      ),
+      path.join(projectDir, "src/resources/org-profile/org-profile.resource.ts"),
     );
     expect(resource).toContain("org-profile.model.js");
     expect(resource).toContain("org-profile.repository.js");
@@ -246,10 +210,7 @@ describe("arc generate — individual components", () => {
       path.join(projectDir, ".arcrc"),
       JSON.stringify({ adapter: "mongokit", typescript: true }),
     );
-    await fs.writeFile(
-      path.join(projectDir, "tsconfig.json"),
-      "{}",
-    );
+    await fs.writeFile(path.join(projectDir, "tsconfig.json"), "{}");
   });
 
   it("should generate only model with 'model' type", async () => {
@@ -261,23 +222,13 @@ describe("arc generate — individual components", () => {
       process.chdir(originalCwd);
     }
 
-    expect(
-      await exists(
-        path.join(
-          projectDir,
-          "src/resources/invoice/invoice.model.ts",
-        ),
-      ),
-    ).toBe(true);
+    expect(await exists(path.join(projectDir, "src/resources/invoice/invoice.model.ts"))).toBe(
+      true,
+    );
     // Should NOT create other files
-    expect(
-      await exists(
-        path.join(
-          projectDir,
-          "src/resources/invoice/invoice.repository.ts",
-        ),
-      ),
-    ).toBe(false);
+    expect(await exists(path.join(projectDir, "src/resources/invoice/invoice.repository.ts"))).toBe(
+      false,
+    );
   });
 
   it("should generate only controller with 'controller' type", async () => {
@@ -289,10 +240,7 @@ describe("arc generate — individual components", () => {
       process.chdir(originalCwd);
     }
 
-    const filePath = path.join(
-      projectDir,
-      "src/resources/payment/payment.controller.ts",
-    );
+    const filePath = path.join(projectDir, "src/resources/payment/payment.controller.ts");
     expect(await exists(filePath)).toBe(true);
     const content = await readText(filePath);
     expect(content).toContain("PaymentController");
@@ -308,14 +256,9 @@ describe("arc generate — individual components", () => {
       process.chdir(originalCwd);
     }
 
-    expect(
-      await exists(
-        path.join(
-          projectDir,
-          "src/resources/order/order.repository.ts",
-        ),
-      ),
-    ).toBe(true);
+    expect(await exists(path.join(projectDir, "src/resources/order/order.repository.ts"))).toBe(
+      true,
+    );
   });
 
   it("should generate only schemas with 'schemas' type", async () => {
@@ -327,10 +270,7 @@ describe("arc generate — individual components", () => {
       process.chdir(originalCwd);
     }
 
-    const filePath = path.join(
-      projectDir,
-      "src/resources/ticket/ticket.schemas.ts",
-    );
+    const filePath = path.join(projectDir, "src/resources/ticket/ticket.schemas.ts");
     expect(await exists(filePath)).toBe(true);
     const content = await readText(filePath);
     expect(content).toContain("buildCrudSchemasFromModel");
@@ -347,15 +287,9 @@ describe("arc generate — individual components", () => {
     }
 
     const dir = path.join(projectDir, "src/resources/category");
-    expect(
-      await exists(path.join(dir, "category.model.ts")),
-    ).toBe(true);
-    expect(
-      await exists(path.join(dir, "category.repository.ts")),
-    ).toBe(true);
-    expect(
-      await exists(path.join(dir, "category.resource.ts")),
-    ).toBe(true);
+    expect(await exists(path.join(dir, "category.model.ts"))).toBe(true);
+    expect(await exists(path.join(dir, "category.repository.ts"))).toBe(true);
+    expect(await exists(path.join(dir, "category.resource.ts"))).toBe(true);
   });
 });
 
@@ -365,21 +299,15 @@ describe("arc generate — individual components", () => {
 
 describe("arc generate — error handling", () => {
   it("should throw when type is missing", async () => {
-    await expect(generate(undefined, [])).rejects.toThrow(
-      "Missing type",
-    );
+    await expect(generate(undefined, [])).rejects.toThrow("Missing type");
   });
 
   it("should throw when name is missing", async () => {
-    await expect(generate("resource", [])).rejects.toThrow(
-      "Missing name",
-    );
+    await expect(generate("resource", [])).rejects.toThrow("Missing name");
   });
 
   it("should throw on unknown type", async () => {
-    await expect(generate("unknown", ["foo"])).rejects.toThrow(
-      "Unknown type",
-    );
+    await expect(generate("unknown", ["foo"])).rejects.toThrow("Unknown type");
   });
 
   it("should skip existing files on resource generation", async () => {
@@ -388,20 +316,11 @@ describe("arc generate — error handling", () => {
       recursive: true,
     });
     await fs.mkdir(path.join(projectDir, "tests"), { recursive: true });
-    await fs.writeFile(
-      path.join(projectDir, ".arcrc"),
-      JSON.stringify({ typescript: true }),
-    );
-    await fs.writeFile(
-      path.join(projectDir, "tsconfig.json"),
-      "{}",
-    );
+    await fs.writeFile(path.join(projectDir, ".arcrc"), JSON.stringify({ typescript: true }));
+    await fs.writeFile(path.join(projectDir, "tsconfig.json"), "{}");
 
     // Pre-create a file
-    const existingFile = path.join(
-      projectDir,
-      "src/resources/existing/existing.model.ts",
-    );
+    const existingFile = path.join(projectDir, "src/resources/existing/existing.model.ts");
     await fs.writeFile(existingFile, "// original content");
 
     const originalCwd = process.cwd();
@@ -422,30 +341,19 @@ describe("arc generate — error handling", () => {
     await fs.mkdir(path.join(projectDir, "src/resources/duplicate"), {
       recursive: true,
     });
-    await fs.writeFile(
-      path.join(projectDir, ".arcrc"),
-      JSON.stringify({ typescript: true }),
-    );
-    await fs.writeFile(
-      path.join(projectDir, "tsconfig.json"),
-      "{}",
-    );
+    await fs.writeFile(path.join(projectDir, ".arcrc"), JSON.stringify({ typescript: true }));
+    await fs.writeFile(path.join(projectDir, "tsconfig.json"), "{}");
 
     // Pre-create the file
     await fs.writeFile(
-      path.join(
-        projectDir,
-        "src/resources/duplicate/duplicate.model.ts",
-      ),
+      path.join(projectDir, "src/resources/duplicate/duplicate.model.ts"),
       "// exists",
     );
 
     const originalCwd = process.cwd();
     process.chdir(projectDir);
     try {
-      await expect(
-        generate("model", ["duplicate"]),
-      ).rejects.toThrow("already exists");
+      await expect(generate("model", ["duplicate"])).rejects.toThrow("already exists");
     } finally {
       process.chdir(originalCwd);
     }
@@ -473,10 +381,7 @@ describe("arc generate resource — multi-tenant config", () => {
         typescript: true,
       }),
     );
-    await fs.writeFile(
-      path.join(projectDir, "tsconfig.json"),
-      "{}",
-    );
+    await fs.writeFile(path.join(projectDir, "tsconfig.json"), "{}");
 
     const originalCwd = process.cwd();
     process.chdir(projectDir);
@@ -489,10 +394,7 @@ describe("arc generate resource — multi-tenant config", () => {
 
   it("should generate resource with auth permissions", async () => {
     const content = await readText(
-      path.join(
-        projectDir,
-        "src/resources/project/project.resource.ts",
-      ),
+      path.join(projectDir, "src/resources/project/project.resource.ts"),
     );
     expect(content).toContain("requireAuth");
     expect(content).toContain("requireRoles");

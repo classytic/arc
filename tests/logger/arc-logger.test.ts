@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { arcLog, configureArcLogger } from "../../src/logger/index.js";
 
 describe("arcLog()", () => {

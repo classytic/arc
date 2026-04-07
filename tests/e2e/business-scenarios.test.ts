@@ -5,16 +5,16 @@
  * mixed tenant modes, company-wide lookups, and plugin-added fields.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import mongoose from "mongoose";
-import { Repository, QueryParser } from "@classytic/mongokit";
-import { createApp } from "../../src/factory/createApp.js";
-import { defineResource } from "../../src/core/defineResource.js";
-import { BaseController } from "../../src/core/BaseController.js";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
-import { allowPublic, roles, requireOrgRole, requireAuth } from "../../src/permissions/index.js";
-import { setupTestDatabase, teardownTestDatabase } from "../setup.js";
+import { QueryParser, Repository } from "@classytic/mongokit";
 import type { FastifyInstance } from "fastify";
+import mongoose from "mongoose";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
+import { BaseController } from "../../src/core/BaseController.js";
+import { defineResource } from "../../src/core/defineResource.js";
+import { createApp } from "../../src/factory/createApp.js";
+import { allowPublic } from "../../src/permissions/index.js";
+import { setupTestDatabase, teardownTestDatabase } from "../setup.js";
 
 // ============================================================================
 // Scenario 1: Accounting App — Subdocument Arrays + excludeFields

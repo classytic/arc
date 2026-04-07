@@ -9,27 +9,27 @@
  * These are unit tests for the timeout/cleanup logic, not BullMQ integration tests.
  */
 
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // ============================================================================
 // Timeout timer cleanup
 // ============================================================================
 
-describe('job timeout timer cleanup', () => {
+describe("job timeout timer cleanup", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('should clear timeout timer when handler resolves before timeout', async () => {
-    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+  it("should clear timeout timer when handler resolves before timeout", async () => {
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
 
     // Simulate the timeout pattern from jobs.ts
     const jobTimeout = 5000;
-    const handler = async () => 'done';
+    const handler = async () => "done";
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error('timed out')), jobTimeout);
+      timer = setTimeout(() => reject(new Error("timed out")), jobTimeout);
     });
 
     try {
@@ -42,15 +42,17 @@ describe('job timeout timer cleanup', () => {
     expect(clearTimeoutSpy).toHaveBeenCalledWith(timer);
   });
 
-  it('should clear timeout timer even when handler throws', async () => {
-    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+  it("should clear timeout timer even when handler throws", async () => {
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
 
     const jobTimeout = 5000;
-    const handler = async () => { throw new Error('handler failed'); };
+    const handler = async () => {
+      throw new Error("handler failed");
+    };
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error('timed out')), jobTimeout);
+      timer = setTimeout(() => reject(new Error("timed out")), jobTimeout);
     });
 
     try {
@@ -64,8 +66,8 @@ describe('job timeout timer cleanup', () => {
     expect(clearTimeoutSpy).toHaveBeenCalledWith(timer);
   });
 
-  it('should not leave orphaned timers under rapid job completion', async () => {
-    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+  it("should not leave orphaned timers under rapid job completion", async () => {
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
     const jobTimeout = 30000; // Long timeout
 
     // Simulate 100 rapid job completions
@@ -73,7 +75,7 @@ describe('job timeout timer cleanup', () => {
       const handler = async () => `result-${i}`;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const timeoutPromise = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('timed out')), jobTimeout);
+        timer = setTimeout(() => reject(new Error("timed out")), jobTimeout);
       });
 
       try {
@@ -87,13 +89,16 @@ describe('job timeout timer cleanup', () => {
     expect(clearTimeoutSpy).toHaveBeenCalledTimes(100);
   });
 
-  it('should reject with timeout error when handler exceeds timeout', async () => {
+  it("should reject with timeout error when handler exceeds timeout", async () => {
     const jobTimeout = 50; // 50ms timeout
-    const handler = () => new Promise(resolve => setTimeout(resolve, 200)); // 200ms handler
+    const handler = () => new Promise((resolve) => setTimeout(resolve, 200)); // 200ms handler
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`Job timed out after ${jobTimeout}ms`)), jobTimeout);
+      timer = setTimeout(
+        () => reject(new Error(`Job timed out after ${jobTimeout}ms`)),
+        jobTimeout,
+      );
     });
 
     await expect(
@@ -103,7 +108,7 @@ describe('job timeout timer cleanup', () => {
         } finally {
           clearTimeout(timer);
         }
-      })()
+      })(),
     ).rejects.toThrow(/timed out/);
   });
 });
@@ -112,11 +117,11 @@ describe('job timeout timer cleanup', () => {
 // DLQ queue lifecycle
 // ============================================================================
 
-describe('DLQ queue creation and tracking', () => {
-  it('should not create DLQ queue when deadLetterQueue is not configured', () => {
+describe("DLQ queue creation and tracking", () => {
+  it("should not create DLQ queue when deadLetterQueue is not configured", () => {
     const job = {
-      name: 'simple-job',
-      handler: async () => 'done',
+      name: "simple-job",
+      handler: async () => "done",
       retries: 3,
       // No deadLetterQueue
     };
@@ -126,43 +131,55 @@ describe('DLQ queue creation and tracking', () => {
     expect(job.deadLetterQueue != null).toBe(false);
   });
 
-  it('should flag DLQ creation when deadLetterQueue is explicitly set', () => {
+  it("should flag DLQ creation when deadLetterQueue is explicitly set", () => {
     const job = {
-      name: 'email-job',
-      handler: async () => 'sent',
-      deadLetterQueue: 'email:dead',
+      name: "email-job",
+      handler: async () => "sent",
+      deadLetterQueue: "email:dead",
     };
 
     expect(job.deadLetterQueue != null).toBe(true);
-    expect(job.deadLetterQueue).toBe('email:dead');
+    expect(job.deadLetterQueue).toBe("email:dead");
   });
 
-  it('should flag DLQ creation with empty string (uses default name)', () => {
+  it("should flag DLQ creation with empty string (uses default name)", () => {
     const job = {
-      name: 'process-job',
-      handler: async () => 'done',
-      deadLetterQueue: '', // Empty string = use default name
+      name: "process-job",
+      handler: async () => "done",
+      deadLetterQueue: "", // Empty string = use default name
     };
 
     // Empty string is != null, so DLQ IS created with default name
     expect(job.deadLetterQueue != null).toBe(true);
     const dlqName = job.deadLetterQueue || `${job.name}:dead`;
-    expect(dlqName).toBe('process-job:dead');
+    expect(dlqName).toBe("process-job:dead");
   });
 });
 
-describe('dispatcher.close() cleanup contract', () => {
-  it('should close all resource types: workers, queues, and DLQ queues', async () => {
+describe("dispatcher.close() cleanup contract", () => {
+  it("should close all resource types: workers, queues, and DLQ queues", async () => {
     // Mock the close() contract that jobs.ts implements
     const closedResources: string[] = [];
 
-    const mockWorker = { close: async () => { closedResources.push('worker'); } };
-    const mockQueue = { close: async () => { closedResources.push('queue'); } };
-    const mockDlqQueue = { close: async () => { closedResources.push('dlq'); } };
+    const mockWorker = {
+      close: async () => {
+        closedResources.push("worker");
+      },
+    };
+    const mockQueue = {
+      close: async () => {
+        closedResources.push("queue");
+      },
+    };
+    const mockDlqQueue = {
+      close: async () => {
+        closedResources.push("dlq");
+      },
+    };
 
-    const workers = new Map([['job-1', mockWorker]]);
-    const queues = new Map([['job-1', mockQueue]]);
-    const dlqQueues = new Map([['job-1:dead', mockDlqQueue]]);
+    const workers = new Map([["job-1", mockWorker]]);
+    const queues = new Map([["job-1", mockQueue]]);
+    const dlqQueues = new Map([["job-1:dead", mockDlqQueue]]);
 
     // Simulate dispatcher.close()
     const closePromises: Promise<void>[] = [];
@@ -172,19 +189,40 @@ describe('dispatcher.close() cleanup contract', () => {
     await Promise.all(closePromises);
 
     // All three resource types should be closed
-    expect(closedResources).toContain('worker');
-    expect(closedResources).toContain('queue');
-    expect(closedResources).toContain('dlq');
+    expect(closedResources).toContain("worker");
+    expect(closedResources).toContain("queue");
+    expect(closedResources).toContain("dlq");
     expect(closedResources).toHaveLength(3);
   });
 
-  it('should handle multiple DLQ queues across multiple jobs', async () => {
+  it("should handle multiple DLQ queues across multiple jobs", async () => {
     const closedDlqs: string[] = [];
 
     const dlqQueues = new Map([
-      ['email:dead', { close: async () => { closedDlqs.push('email:dead'); } }],
-      ['image:dead', { close: async () => { closedDlqs.push('image:dead'); } }],
-      ['report:dead', { close: async () => { closedDlqs.push('report:dead'); } }],
+      [
+        "email:dead",
+        {
+          close: async () => {
+            closedDlqs.push("email:dead");
+          },
+        },
+      ],
+      [
+        "image:dead",
+        {
+          close: async () => {
+            closedDlqs.push("image:dead");
+          },
+        },
+      ],
+      [
+        "report:dead",
+        {
+          close: async () => {
+            closedDlqs.push("report:dead");
+          },
+        },
+      ],
     ]);
 
     const closePromises: Promise<void>[] = [];
@@ -192,10 +230,10 @@ describe('dispatcher.close() cleanup contract', () => {
     await Promise.all(closePromises);
 
     expect(closedDlqs).toHaveLength(3);
-    expect(closedDlqs).toEqual(['email:dead', 'image:dead', 'report:dead']);
+    expect(closedDlqs).toEqual(["email:dead", "image:dead", "report:dead"]);
   });
 
-  it('should not fail when no DLQ queues exist', async () => {
+  it("should not fail when no DLQ queues exist", async () => {
     const dlqQueues = new Map<string, { close: () => Promise<void> }>();
 
     const closePromises: Promise<void>[] = [];

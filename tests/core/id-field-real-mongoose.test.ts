@@ -15,10 +15,10 @@
  * arcCorePlugin + Fastify so nothing is mocked below the Arc layer.
  */
 
-import Fastify, { type FastifyInstance } from "fastify";
 import { QueryParser, Repository } from "@classytic/mongokit";
+import Fastify, { type FastifyInstance } from "fastify";
 import { MongoMemoryServer } from "mongodb-memory-server";
-import mongoose, { Schema, type Model } from "mongoose";
+import mongoose, { type Model, Schema } from "mongoose";
 import qs from "qs";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";

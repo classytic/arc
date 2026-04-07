@@ -6,15 +6,15 @@
  * Uses createApp() (the real factory) with qs parser — same as production.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { QueryParser, Repository } from "@classytic/mongokit";
+import type { FastifyInstance } from "fastify";
 import mongoose from "mongoose";
-import { Repository, QueryParser } from "@classytic/mongokit";
-import { createApp } from "../../src/factory/createApp.js";
-import { defineResource } from "../../src/core/defineResource.js";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
+import { defineResource } from "../../src/core/defineResource.js";
+import { createApp } from "../../src/factory/createApp.js";
 import { allowPublic } from "../../src/permissions/index.js";
 import { setupTestDatabase, teardownTestDatabase } from "../setup.js";
-import type { FastifyInstance } from "fastify";
 
 // ============================================================================
 // Models
@@ -105,24 +105,49 @@ async function seed() {
   const finance = await TagModel.create({ name: "Finance", slug: "finance", color: "gold" });
 
   const a1 = await ArticleModel.create({
-    title: "AI Revolution", body: "Long text about AI", status: "published",
-    views: 5000, tag: tech._id, tagSlug: "tech", authorName: "Alice",
+    title: "AI Revolution",
+    body: "Long text about AI",
+    status: "published",
+    views: 5000,
+    tag: tech._id,
+    tagSlug: "tech",
+    authorName: "Alice",
   });
   const a2 = await ArticleModel.create({
-    title: "Healthy Eating", body: "Nutrition guide", status: "published",
-    views: 3000, tag: health._id, tagSlug: "health", authorName: "Bob",
+    title: "Healthy Eating",
+    body: "Nutrition guide",
+    status: "published",
+    views: 3000,
+    tag: health._id,
+    tagSlug: "health",
+    authorName: "Bob",
   });
   const a3 = await ArticleModel.create({
-    title: "Crypto Update", body: "Bitcoin analysis", status: "draft",
-    views: 1500, tag: finance._id, tagSlug: "finance", authorName: "Carol",
+    title: "Crypto Update",
+    body: "Bitcoin analysis",
+    status: "draft",
+    views: 1500,
+    tag: finance._id,
+    tagSlug: "finance",
+    authorName: "Carol",
   });
   const a4 = await ArticleModel.create({
-    title: "React 20", body: "New features", status: "published",
-    views: 8000, tag: tech._id, tagSlug: "tech", authorName: "Alice",
+    title: "React 20",
+    body: "New features",
+    status: "published",
+    views: 8000,
+    tag: tech._id,
+    tagSlug: "tech",
+    authorName: "Alice",
   });
   const a5 = await ArticleModel.create({
-    title: "Sleep Science", body: "Why sleep matters", status: "archived",
-    views: 2000, tag: health._id, tagSlug: "health", authorName: "Dave",
+    title: "Sleep Science",
+    body: "Why sleep matters",
+    status: "archived",
+    views: 2000,
+    tag: health._id,
+    tagSlug: "health",
+    authorName: "Dave",
   });
 
   return { tech, health, finance, a1, a2, a3, a4, a5 };

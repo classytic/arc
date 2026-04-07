@@ -10,9 +10,9 @@
  * - Multiple resource files per domain directory
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadResources } from "../../src/factory/loadResources.js";
 
 const TMP = join(import.meta.dirname, "__tmp_patterns__");
@@ -20,10 +20,7 @@ const TMP = join(import.meta.dirname, "__tmp_patterns__");
 /** Write a minimal valid resource file */
 function writeResource(dir: string, filename: string, name: string) {
   mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    join(dir, filename),
-    `export default { name: '${name}', toPlugin: () => ({}) };`,
-  );
+  writeFileSync(join(dir, filename), `export default { name: '${name}', toPlugin: () => ({}) };`);
 }
 
 beforeAll(() => {
@@ -198,15 +195,9 @@ describe("Pattern: edge cases", () => {
     // Valid resource
     writeResource(dir, "valid.resource.mjs", "valid");
     // File that exports toPlugin but no name
-    writeFileSync(
-      join(dir, "noname.resource.mjs"),
-      "export default { toPlugin: () => ({}) };",
-    );
+    writeFileSync(join(dir, "noname.resource.mjs"), "export default { toPlugin: () => ({}) };");
     // File that exports null default
-    writeFileSync(
-      join(dir, "null.resource.mjs"),
-      "export default null;",
-    );
+    writeFileSync(join(dir, "null.resource.mjs"), "export default null;");
     // File that exports a class with toPlugin
     writeFileSync(
       join(dir, "classy.resource.mjs"),
@@ -231,7 +222,7 @@ describe("Pattern: edge cases", () => {
     const res = await loadResources(dir);
     const classy = res.find((r) => (r as { name?: string }).name === "classy");
     expect(classy).toBeDefined();
-    expect(typeof classy!.toPlugin).toBe("function");
+    expect(typeof classy?.toPlugin).toBe("function");
   });
 
   it("exclude by name works even for nameless resources", async () => {

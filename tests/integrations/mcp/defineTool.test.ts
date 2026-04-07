@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { defineTool } from "../../../src/integrations/mcp/defineTool.js";
 import { definePrompt } from "../../../src/integrations/mcp/definePrompt.js";
+import { defineTool } from "../../../src/integrations/mcp/defineTool.js";
 
 describe("defineTool", () => {
   it("creates a ToolDefinition with flat input shape", () => {
@@ -16,7 +16,7 @@ describe("defineTool", () => {
     expect(tool.name).toBe("greet");
     expect(tool.description).toBe("Say hello");
     expect(tool.inputSchema).toBeDefined();
-    expect(tool.inputSchema!.name).toBeDefined();
+    expect(tool.inputSchema?.name).toBeDefined();
   });
 
   it("preserves annotations", () => {
@@ -67,7 +67,7 @@ describe("definePrompt", () => {
     expect(prompt.name).toBe("summarize");
     expect(prompt.description).toBe("Summarize content");
     expect(prompt.argsSchema).toBeDefined();
-    expect(prompt.argsSchema!.topic).toBeDefined();
+    expect(prompt.argsSchema?.topic).toBeDefined();
   });
 
   it("handles no args schema", () => {

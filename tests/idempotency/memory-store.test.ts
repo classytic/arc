@@ -1,6 +1,6 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { MemoryIdempotencyStore } from "../../src/idempotency/stores/memory.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createIdempotencyResult } from "../../src/idempotency/stores/interface.js";
+import { MemoryIdempotencyStore } from "../../src/idempotency/stores/memory.js";
 
 describe("MemoryIdempotencyStore", () => {
   let store: MemoryIdempotencyStore;
@@ -15,12 +15,17 @@ describe("MemoryIdempotencyStore", () => {
 
   describe("get/set", () => {
     it("stores and retrieves a result", async () => {
-      const result = createIdempotencyResult(200, { ok: true }, { "content-type": "application/json" }, 60000);
+      const result = createIdempotencyResult(
+        200,
+        { ok: true },
+        { "content-type": "application/json" },
+        60000,
+      );
       await store.set("key1", result);
       const retrieved = await store.get("key1");
       expect(retrieved).toBeDefined();
-      expect(retrieved!.statusCode).toBe(200);
-      expect(retrieved!.body).toEqual({ ok: true });
+      expect(retrieved?.statusCode).toBe(200);
+      expect(retrieved?.body).toEqual({ ok: true });
     });
 
     it("returns undefined for missing key", async () => {
@@ -95,7 +100,7 @@ describe("MemoryIdempotencyStore", () => {
       await store.set("key:abc:2", createIdempotencyResult(201, { id: 2 }, {}, 60000));
       const found = await store.findByPrefix("key:abc:");
       expect(found).toBeDefined();
-      expect(found!.statusCode).toBe(200);
+      expect(found?.statusCode).toBe(200);
     });
 
     it("findByPrefix returns undefined for no match", async () => {

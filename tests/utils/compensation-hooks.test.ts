@@ -7,62 +7,87 @@
  * - Integration with Arc events via hooks
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from "vitest";
 
-describe('withCompensation — hooks & fire-and-forget', () => {
+describe("withCompensation — hooks & fire-and-forget", () => {
   // ==========================================================================
   // Lifecycle hooks
   // ==========================================================================
 
-  describe('lifecycle hooks', () => {
-    it('calls onStepComplete after each successful step', async () => {
-      const { withCompensation } = await import('../../src/utils/compensation.js');
+  describe("lifecycle hooks", () => {
+    it("calls onStepComplete after each successful step", async () => {
+      const { withCompensation } = await import("../../src/utils/compensation.js");
       const onStepComplete = vi.fn();
 
-      await withCompensation('test', [
-        { name: 'a', execute: async () => ({ id: 1 }) },
-        { name: 'b', execute: async () => ({ id: 2 }) },
-      ], {}, { onStepComplete });
+      await withCompensation(
+        "test",
+        [
+          { name: "a", execute: async () => ({ id: 1 }) },
+          { name: "b", execute: async () => ({ id: 2 }) },
+        ],
+        {},
+        { onStepComplete },
+      );
 
       expect(onStepComplete).toHaveBeenCalledTimes(2);
-      expect(onStepComplete).toHaveBeenCalledWith('a', { id: 1 });
-      expect(onStepComplete).toHaveBeenCalledWith('b', { id: 2 });
+      expect(onStepComplete).toHaveBeenCalledWith("a", { id: 1 });
+      expect(onStepComplete).toHaveBeenCalledWith("b", { id: 2 });
     });
 
-    it('calls onStepFailed when a step throws', async () => {
-      const { withCompensation } = await import('../../src/utils/compensation.js');
+    it("calls onStepFailed when a step throws", async () => {
+      const { withCompensation } = await import("../../src/utils/compensation.js");
       const onStepFailed = vi.fn();
 
-      await withCompensation('test', [
-        { name: 'ok', execute: async () => ({}) },
-        { name: 'bad', execute: async () => { throw new Error('boom'); } },
-      ], {}, { onStepFailed });
+      await withCompensation(
+        "test",
+        [
+          { name: "ok", execute: async () => ({}) },
+          {
+            name: "bad",
+            execute: async () => {
+              throw new Error("boom");
+            },
+          },
+        ],
+        {},
+        { onStepFailed },
+      );
 
       expect(onStepFailed).toHaveBeenCalledTimes(1);
-      expect(onStepFailed).toHaveBeenCalledWith('bad', expect.any(Error));
+      expect(onStepFailed).toHaveBeenCalledWith("bad", expect.any(Error));
     });
 
-    it('calls onCompensate for each compensated step', async () => {
-      const { withCompensation } = await import('../../src/utils/compensation.js');
+    it("calls onCompensate for each compensated step", async () => {
+      const { withCompensation } = await import("../../src/utils/compensation.js");
       const onCompensate = vi.fn();
 
-      await withCompensation('test', [
-        { name: 'a', execute: async () => ({}), compensate: async () => {} },
-        { name: 'b', execute: async () => ({}), compensate: async () => {} },
-        { name: 'c', execute: async () => { throw new Error('fail'); } },
-      ], {}, { onCompensate });
+      await withCompensation(
+        "test",
+        [
+          { name: "a", execute: async () => ({}), compensate: async () => {} },
+          { name: "b", execute: async () => ({}), compensate: async () => {} },
+          {
+            name: "c",
+            execute: async () => {
+              throw new Error("fail");
+            },
+          },
+        ],
+        {},
+        { onCompensate },
+      );
 
       expect(onCompensate).toHaveBeenCalledTimes(2);
       // Reverse order
-      expect(onCompensate).toHaveBeenNthCalledWith(1, 'b');
-      expect(onCompensate).toHaveBeenNthCalledWith(2, 'a');
+      expect(onCompensate).toHaveBeenNthCalledWith(1, "b");
+      expect(onCompensate).toHaveBeenNthCalledWith(2, "a");
     });
 
-    it('hooks are optional — works without them', async () => {
-      const { withCompensation } = await import('../../src/utils/compensation.js');
+    it("hooks are optional — works without them", async () => {
+      const { withCompensation } = await import("../../src/utils/compensation.js");
 
-      const result = await withCompensation('no-hooks', [
-        { name: 'a', execute: async () => ({ ok: true }) },
+      const result = await withCompensation("no-hooks", [
+        { name: "a", execute: async () => ({ ok: true }) },
       ]);
 
       expect(result.success).toBe(true);
@@ -73,52 +98,74 @@ describe('withCompensation — hooks & fire-and-forget', () => {
   // Fire-and-forget steps
   // ==========================================================================
 
-  describe('fire-and-forget steps', () => {
-    it('does not await fireAndForget step — continues immediately', async () => {
-      const { withCompensation } = await import('../../src/utils/compensation.js');
+  describe("fire-and-forget steps", () => {
+    it("does not await fireAndForget step — continues immediately", async () => {
+      const { withCompensation } = await import("../../src/utils/compensation.js");
       const order: string[] = [];
 
       let slowResolve: () => void;
-      const slowPromise = new Promise<void>((r) => { slowResolve = r; });
+      const slowPromise = new Promise<void>((r) => {
+        slowResolve = r;
+      });
 
-      const result = await withCompensation('ff-test', [
-        { name: 'fast', execute: async () => { order.push('fast'); return {}; } },
+      const result = await withCompensation("ff-test", [
         {
-          name: 'slow-bg',
-          execute: async () => { await slowPromise; order.push('slow'); return {}; },
+          name: "fast",
+          execute: async () => {
+            order.push("fast");
+            return {};
+          },
+        },
+        {
+          name: "slow-bg",
+          execute: async () => {
+            await slowPromise;
+            order.push("slow");
+            return {};
+          },
           fireAndForget: true,
         },
-        { name: 'next', execute: async () => { order.push('next'); return {}; } },
+        {
+          name: "next",
+          execute: async () => {
+            order.push("next");
+            return {};
+          },
+        },
       ]);
 
       // 'next' ran before 'slow' because slow is fire-and-forget
       expect(result.success).toBe(true);
-      expect(result.completedSteps).toContain('fast');
-      expect(result.completedSteps).toContain('slow-bg');
-      expect(result.completedSteps).toContain('next');
-      expect(order).toEqual(['fast', 'next']); // slow hasn't resolved yet
+      expect(result.completedSteps).toContain("fast");
+      expect(result.completedSteps).toContain("slow-bg");
+      expect(result.completedSteps).toContain("next");
+      expect(order).toEqual(["fast", "next"]); // slow hasn't resolved yet
 
       // Clean up
-      slowResolve!();
+      slowResolve?.();
       await slowPromise;
     });
 
-    it('fireAndForget step failure does NOT trigger compensation', async () => {
-      const { withCompensation } = await import('../../src/utils/compensation.js');
+    it("fireAndForget step failure does NOT trigger compensation", async () => {
+      const { withCompensation } = await import("../../src/utils/compensation.js");
       const compensated: string[] = [];
 
-      const result = await withCompensation('ff-fail', [
+      const result = await withCompensation("ff-fail", [
         {
-          name: 'important',
+          name: "important",
           execute: async () => ({ saved: true }),
-          compensate: async () => { compensated.push('undone'); },
+          compensate: async () => {
+            compensated.push("undone");
+          },
         },
         {
-          name: 'email',
-          execute: async () => { throw new Error('SMTP down'); },
+          name: "email",
+          execute: async () => {
+            throw new Error("SMTP down");
+          },
           fireAndForget: true,
         },
-        { name: 'done', execute: async () => ({ ok: true }) },
+        { name: "done", execute: async () => ({ ok: true }) },
       ]);
 
       // Saga still succeeds — email failure is swallowed
@@ -126,18 +173,36 @@ describe('withCompensation — hooks & fire-and-forget', () => {
       expect(compensated).toHaveLength(0);
     });
 
-    it('fireAndForget step is excluded from compensation rollback', async () => {
-      const { withCompensation } = await import('../../src/utils/compensation.js');
+    it("fireAndForget step is excluded from compensation rollback", async () => {
+      const { withCompensation } = await import("../../src/utils/compensation.js");
       const compensated: string[] = [];
 
-      await withCompensation('ff-no-comp', [
-        { name: 'a', execute: async () => ({}), compensate: async () => { compensated.push('a'); } },
-        { name: 'bg', execute: async () => ({}), fireAndForget: true, compensate: async () => { compensated.push('bg'); } },
-        { name: 'c', execute: async () => { throw new Error('fail'); } },
+      await withCompensation("ff-no-comp", [
+        {
+          name: "a",
+          execute: async () => ({}),
+          compensate: async () => {
+            compensated.push("a");
+          },
+        },
+        {
+          name: "bg",
+          execute: async () => ({}),
+          fireAndForget: true,
+          compensate: async () => {
+            compensated.push("bg");
+          },
+        },
+        {
+          name: "c",
+          execute: async () => {
+            throw new Error("fail");
+          },
+        },
       ]);
 
       // 'bg' should NOT be compensated — it's fire-and-forget
-      expect(compensated).toEqual(['a']);
+      expect(compensated).toEqual(["a"]);
     });
   });
 
@@ -145,9 +210,9 @@ describe('withCompensation — hooks & fire-and-forget', () => {
   // Arc events integration via hooks
   // ==========================================================================
 
-  describe('Arc events integration', () => {
-    it('hooks enable wiring to fastify.events without coupling', async () => {
-      const { withCompensation } = await import('../../src/utils/compensation.js');
+  describe("Arc events integration", () => {
+    it("hooks enable wiring to fastify.events without coupling", async () => {
+      const { withCompensation } = await import("../../src/utils/compensation.js");
 
       // Simulate Arc events
       const published: Array<{ type: string; payload: unknown }> = [];
@@ -157,21 +222,26 @@ describe('withCompensation — hooks & fire-and-forget', () => {
         },
       };
 
-      await withCompensation('checkout', [
-        { name: 'reserve', execute: async () => ({ reservationId: 'r1' }) },
-        { name: 'charge', execute: async () => ({ chargeId: 'c1' }) },
-      ], {}, {
-        onStepComplete: (stepName, result) => {
-          mockEvents.publish(`checkout.${stepName}.completed`, result);
+      await withCompensation(
+        "checkout",
+        [
+          { name: "reserve", execute: async () => ({ reservationId: "r1" }) },
+          { name: "charge", execute: async () => ({ chargeId: "c1" }) },
+        ],
+        {},
+        {
+          onStepComplete: (stepName, result) => {
+            mockEvents.publish(`checkout.${stepName}.completed`, result);
+          },
+          onStepFailed: (stepName, error) => {
+            mockEvents.publish(`checkout.${stepName}.failed`, { error: error.message });
+          },
         },
-        onStepFailed: (stepName, error) => {
-          mockEvents.publish(`checkout.${stepName}.failed`, { error: error.message });
-        },
-      });
+      );
 
       expect(published).toEqual([
-        { type: 'checkout.reserve.completed', payload: { reservationId: 'r1' } },
-        { type: 'checkout.charge.completed', payload: { chargeId: 'c1' } },
+        { type: "checkout.reserve.completed", payload: { reservationId: "r1" } },
+        { type: "checkout.charge.completed", payload: { chargeId: "c1" } },
       ]);
     });
   });

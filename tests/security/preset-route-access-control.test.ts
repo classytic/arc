@@ -9,9 +9,9 @@
  * - restore() performing no access control before mutation
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { BaseController } from '../../src/core/BaseController.js';
-import type { IRequestContext, AnyRecord } from '../../src/types/index.js';
+import { describe, expect, it, vi } from "vitest";
+import { BaseController } from "../../src/core/BaseController.js";
+import type { AnyRecord, IRequestContext } from "../../src/types/index.js";
 
 // ============================================================================
 // Helpers
@@ -34,7 +34,9 @@ function createContext(
 
 function createMockRepository(items: AnyRecord[] = []) {
   const store = new Map<string, AnyRecord>();
-  items.forEach((item) => store.set(item._id, item));
+  items.forEach((item) => {
+    store.set(item._id, item);
+  });
 
   return {
     getAll: vi.fn(async () => Array.from(store.values())),
@@ -70,25 +72,25 @@ function createMockRepository(items: AnyRecord[] = []) {
 // Tests
 // ============================================================================
 
-describe('Security: Preset Route Access Control', () => {
+describe("Security: Preset Route Access Control", () => {
   // --------------------------------------------------------------------------
   // getBySlug() access control
   // --------------------------------------------------------------------------
 
-  describe('getBySlug() - policy filter enforcement', () => {
-    it('should deny access when policy filters do not match', async () => {
+  describe("getBySlug() - policy filter enforcement", () => {
+    it("should deny access when policy filters do not match", async () => {
       const repo = createMockRepository([
-        { _id: '1', slug: 'my-item', status: 'draft', organizationId: 'org-1' },
+        { _id: "1", slug: "my-item", status: "draft", organizationId: "org-1" },
       ]);
 
       const controller = new BaseController(repo, {
-        presetFields: { slugField: 'slug' },
+        presetFields: { slugField: "slug" },
       });
 
       const ctx = createContext(
-        { params: { slug: 'my-item' } },
+        { params: { slug: "my-item" } },
         {
-          _policyFilters: { status: 'published' }, // Item is 'draft', policy requires 'published'
+          _policyFilters: { status: "published" }, // Item is 'draft', policy requires 'published'
         },
       );
 
@@ -98,19 +100,19 @@ describe('Security: Preset Route Access Control', () => {
       expect(result.status).toBe(404);
     });
 
-    it('should allow access when policy filters match', async () => {
+    it("should allow access when policy filters match", async () => {
       const repo = createMockRepository([
-        { _id: '1', slug: 'my-item', status: 'published', organizationId: 'org-1' },
+        { _id: "1", slug: "my-item", status: "published", organizationId: "org-1" },
       ]);
 
       const controller = new BaseController(repo, {
-        presetFields: { slugField: 'slug' },
+        presetFields: { slugField: "slug" },
       });
 
       const ctx = createContext(
-        { params: { slug: 'my-item' } },
+        { params: { slug: "my-item" } },
         {
-          _policyFilters: { status: 'published' },
+          _policyFilters: { status: "published" },
         },
       );
 
@@ -120,19 +122,19 @@ describe('Security: Preset Route Access Control', () => {
       expect(result.status).toBe(200);
     });
 
-    it('should deny cross-org slug access', async () => {
+    it("should deny cross-org slug access", async () => {
       const repo = createMockRepository([
-        { _id: '1', slug: 'shared-slug', organizationId: 'org-2' },
+        { _id: "1", slug: "shared-slug", organizationId: "org-2" },
       ]);
 
       const controller = new BaseController(repo, {
-        presetFields: { slugField: 'slug' },
+        presetFields: { slugField: "slug" },
       });
 
       const ctx = createContext(
-        { params: { slug: 'shared-slug' } },
+        { params: { slug: "shared-slug" } },
         {
-          _scope: { kind: 'member', organizationId: 'org-1', orgRoles: [] },
+          _scope: { kind: "member", organizationId: "org-1", orgRoles: [] },
         },
       );
 
@@ -142,20 +144,20 @@ describe('Security: Preset Route Access Control', () => {
       expect(result.status).toBe(404);
     });
 
-    it('should deny when both policy filters AND org scope fail', async () => {
+    it("should deny when both policy filters AND org scope fail", async () => {
       const repo = createMockRepository([
-        { _id: '1', slug: 'item', status: 'draft', organizationId: 'org-2' },
+        { _id: "1", slug: "item", status: "draft", organizationId: "org-2" },
       ]);
 
       const controller = new BaseController(repo, {
-        presetFields: { slugField: 'slug' },
+        presetFields: { slugField: "slug" },
       });
 
       const ctx = createContext(
-        { params: { slug: 'item' } },
+        { params: { slug: "item" } },
         {
-          _policyFilters: { status: 'published' },
-          _scope: { kind: 'member', organizationId: 'org-1', orgRoles: [] },
+          _policyFilters: { status: "published" },
+          _scope: { kind: "member", organizationId: "org-1", orgRoles: [] },
         },
       );
 
@@ -165,14 +167,14 @@ describe('Security: Preset Route Access Control', () => {
       expect(result.status).toBe(404);
     });
 
-    it('should return 404 for non-existent slug', async () => {
+    it("should return 404 for non-existent slug", async () => {
       const repo = createMockRepository([]);
 
       const controller = new BaseController(repo, {
-        presetFields: { slugField: 'slug' },
+        presetFields: { slugField: "slug" },
       });
 
-      const ctx = createContext({ params: { slug: 'does-not-exist' } });
+      const ctx = createContext({ params: { slug: "does-not-exist" } });
 
       const result = await controller.getBySlug(ctx);
 
@@ -185,18 +187,18 @@ describe('Security: Preset Route Access Control', () => {
   // restore() access control
   // --------------------------------------------------------------------------
 
-  describe('restore() - access control enforcement', () => {
-    it('should deny restore when org scope does not match', async () => {
+  describe("restore() - access control enforcement", () => {
+    it("should deny restore when org scope does not match", async () => {
       const repo = createMockRepository([
-        { _id: '1', name: 'Deleted Item', organizationId: 'org-2', deletedAt: new Date() },
+        { _id: "1", name: "Deleted Item", organizationId: "org-2", deletedAt: new Date() },
       ]);
 
       const controller = new BaseController(repo);
 
       const ctx = createContext(
-        { params: { id: '1' } },
+        { params: { id: "1" } },
         {
-          _scope: { kind: 'member', organizationId: 'org-1', orgRoles: [] },
+          _scope: { kind: "member", organizationId: "org-1", orgRoles: [] },
         },
       );
 
@@ -208,17 +210,17 @@ describe('Security: Preset Route Access Control', () => {
       expect(repo.restore).not.toHaveBeenCalled();
     });
 
-    it('should deny restore when policy filters do not match', async () => {
+    it("should deny restore when policy filters do not match", async () => {
       const repo = createMockRepository([
-        { _id: '1', name: 'Deleted Item', status: 'archived', deletedAt: new Date() },
+        { _id: "1", name: "Deleted Item", status: "archived", deletedAt: new Date() },
       ]);
 
       const controller = new BaseController(repo);
 
       const ctx = createContext(
-        { params: { id: '1' } },
+        { params: { id: "1" } },
         {
-          _policyFilters: { status: 'active' }, // Item is 'archived'
+          _policyFilters: { status: "active" }, // Item is 'archived'
         },
       );
 
@@ -229,17 +231,17 @@ describe('Security: Preset Route Access Control', () => {
       expect(repo.restore).not.toHaveBeenCalled();
     });
 
-    it('should deny restore when ownership check fails', async () => {
+    it("should deny restore when ownership check fails", async () => {
       const repo = createMockRepository([
-        { _id: '1', name: 'Deleted Item', createdBy: 'user-2', deletedAt: new Date() },
+        { _id: "1", name: "Deleted Item", createdBy: "user-2", deletedAt: new Date() },
       ]);
 
       const controller = new BaseController(repo);
 
       const ctx = createContext(
-        { params: { id: '1' } },
+        { params: { id: "1" } },
         {
-          _ownershipCheck: { field: 'createdBy', userId: 'user-1' },
+          _ownershipCheck: { field: "createdBy", userId: "user-1" },
         },
       );
 
@@ -247,18 +249,18 @@ describe('Security: Preset Route Access Control', () => {
 
       expect(result.success).toBe(false);
       expect(result.status).toBe(403);
-      expect(result.error).toContain('permission');
+      expect(result.error).toContain("permission");
       expect(repo.restore).not.toHaveBeenCalled();
     });
 
-    it('should allow restore when all access control checks pass', async () => {
+    it("should allow restore when all access control checks pass", async () => {
       const repo = createMockRepository([
         {
-          _id: '1',
-          name: 'Deleted Item',
-          organizationId: 'org-1',
-          status: 'active',
-          createdBy: 'user-1',
+          _id: "1",
+          name: "Deleted Item",
+          organizationId: "org-1",
+          status: "active",
+          createdBy: "user-1",
           deletedAt: new Date(),
         },
       ]);
@@ -266,11 +268,11 @@ describe('Security: Preset Route Access Control', () => {
       const controller = new BaseController(repo);
 
       const ctx = createContext(
-        { params: { id: '1' } },
+        { params: { id: "1" } },
         {
-          _scope: { kind: 'member', organizationId: 'org-1', orgRoles: [] },
-          _policyFilters: { status: 'active' },
-          _ownershipCheck: { field: 'createdBy', userId: 'user-1' },
+          _scope: { kind: "member", organizationId: "org-1", orgRoles: [] },
+          _policyFilters: { status: "active" },
+          _ownershipCheck: { field: "createdBy", userId: "user-1" },
         },
       );
 
@@ -278,15 +280,15 @@ describe('Security: Preset Route Access Control', () => {
 
       expect(result.success).toBe(true);
       expect(result.status).toBe(200);
-      expect(repo.restore).toHaveBeenCalledWith('1');
+      expect(repo.restore).toHaveBeenCalledWith("1");
     });
 
-    it('should return 404 for non-existent item', async () => {
+    it("should return 404 for non-existent item", async () => {
       const repo = createMockRepository([]);
 
       const controller = new BaseController(repo);
 
-      const ctx = createContext({ params: { id: 'nonexistent' } });
+      const ctx = createContext({ params: { id: "nonexistent" } });
 
       const result = await controller.restore(ctx);
 
@@ -294,7 +296,7 @@ describe('Security: Preset Route Access Control', () => {
       expect(result.status).toBe(404);
     });
 
-    it('should return 400 when ID is missing', async () => {
+    it("should return 400 when ID is missing", async () => {
       const repo = createMockRepository([]);
 
       const controller = new BaseController(repo);

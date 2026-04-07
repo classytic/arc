@@ -6,22 +6,20 @@
  * they integrate correctly with createApp.
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import mongoose from "mongoose";
-import { loadResources } from "../../src/factory/loadResources.js";
-import { createApp } from "../../src/factory/createApp.js";
-import { defineResource } from "../../src/core/defineResource.js";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
+import { defineResource } from "../../src/core/defineResource.js";
+import { createApp } from "../../src/factory/createApp.js";
+import { loadResources } from "../../src/factory/loadResources.js";
 import { allowPublic } from "../../src/permissions/index.js";
-import { Repository } from "@classytic/mongokit";
 import {
-  setupTestDatabase,
-  teardownTestDatabase,
   createMockModel,
   createMockRepository,
+  setupTestDatabase,
+  teardownTestDatabase,
 } from "../setup.js";
 
 // Resolve Arc root so fixture files can use absolute imports
@@ -73,10 +71,7 @@ describe("loadResources()", () => {
     // Not a resource file (wrong name pattern)
     writeFileSync(join(FIXTURE_DIR, "utils", "helpers.mjs"), "export const x = 1;");
     // Matches pattern but no toPlugin()
-    writeFileSync(
-      join(FIXTURE_DIR, "bad.resource.mjs"),
-      "export default { notAResource: true };",
-    );
+    writeFileSync(join(FIXTURE_DIR, "bad.resource.mjs"), "export default { notAResource: true };");
   });
 
   afterAll(async () => {
@@ -168,7 +163,12 @@ describe("loadResources()", () => {
   it("module that throws during evaluation is imported exactly once", async () => {
     // Isolated dir — not inside FIXTURE_DIR so it doesn't pollute other tests
     const throwDir = join(import.meta.dirname, "__fixtures_throw__");
-    const { mkdirSync: mk, writeFileSync: wf, rmSync: rm, existsSync: ex } = await import("node:fs");
+    const {
+      mkdirSync: mk,
+      writeFileSync: wf,
+      rmSync: rm,
+      existsSync: ex,
+    } = await import("node:fs");
 
     // Clean up from any previous run
     if (ex(throwDir)) rm(throwDir, { recursive: true, force: true });
@@ -196,7 +196,12 @@ describe("loadResources()", () => {
 
   it("file with missing dependency gives actionable .js hint", async () => {
     const tmpDir = join(import.meta.dirname, "__fixtures_missing_dep__");
-    const { mkdirSync: mk, writeFileSync: wf, rmSync: rm, existsSync: ex } = await import("node:fs");
+    const {
+      mkdirSync: mk,
+      writeFileSync: wf,
+      rmSync: rm,
+      existsSync: ex,
+    } = await import("node:fs");
     if (ex(tmpDir)) rm(tmpDir, { recursive: true, force: true });
     mk(tmpDir, { recursive: true });
 
@@ -219,7 +224,12 @@ describe("loadResources()", () => {
 
   it("empty resource file (no exports) is skipped", async () => {
     const tmpDir = join(import.meta.dirname, "__fixtures_empty__");
-    const { mkdirSync: mk, writeFileSync: wf, rmSync: rm, existsSync: ex } = await import("node:fs");
+    const {
+      mkdirSync: mk,
+      writeFileSync: wf,
+      rmSync: rm,
+      existsSync: ex,
+    } = await import("node:fs");
     if (ex(tmpDir)) rm(tmpDir, { recursive: true, force: true });
     mk(tmpDir, { recursive: true });
 
@@ -232,7 +242,12 @@ describe("loadResources()", () => {
 
   it("resource exporting named 'resource' instead of default works", async () => {
     const tmpDir = join(import.meta.dirname, "__fixtures_named__");
-    const { mkdirSync: mk, writeFileSync: wf, rmSync: rm, existsSync: ex } = await import("node:fs");
+    const {
+      mkdirSync: mk,
+      writeFileSync: wf,
+      rmSync: rm,
+      existsSync: ex,
+    } = await import("node:fs");
     if (ex(tmpDir)) rm(tmpDir, { recursive: true, force: true });
     mk(tmpDir, { recursive: true });
 
@@ -249,7 +264,12 @@ describe("loadResources()", () => {
 
   it("deeply nested resources discovered", async () => {
     const tmpDir = join(import.meta.dirname, "__fixtures_deep__");
-    const { mkdirSync: mk, writeFileSync: wf, rmSync: rm, existsSync: ex } = await import("node:fs");
+    const {
+      mkdirSync: mk,
+      writeFileSync: wf,
+      rmSync: rm,
+      existsSync: ex,
+    } = await import("node:fs");
     if (ex(tmpDir)) rm(tmpDir, { recursive: true, force: true });
     mk(join(tmpDir, "a", "b", "c"), { recursive: true });
 
@@ -266,7 +286,12 @@ describe("loadResources()", () => {
 
   it("multiple extensions discovered (.mjs, .js)", async () => {
     const tmpDir = join(import.meta.dirname, "__fixtures_exts__");
-    const { mkdirSync: mk, writeFileSync: wf, rmSync: rm, existsSync: ex } = await import("node:fs");
+    const {
+      mkdirSync: mk,
+      writeFileSync: wf,
+      rmSync: rm,
+      existsSync: ex,
+    } = await import("node:fs");
     if (ex(tmpDir)) rm(tmpDir, { recursive: true, force: true });
     mk(tmpDir, { recursive: true });
 
@@ -362,8 +387,11 @@ describe("loadResources()", () => {
       adapter: createMongooseAdapter({ model: TaskModel, repository: taskRepo }),
       controller: new BaseController(taskRepo, { resourceName: "task" }),
       permissions: {
-        list: allowPublic(), get: allowPublic(), create: allowPublic(),
-        update: allowPublic(), delete: allowPublic(),
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
       },
     });
 
@@ -373,7 +401,9 @@ describe("loadResources()", () => {
       preset: "testing",
       auth: false,
       resources: [...discovered, taskResource],
-      plugins: async () => { pluginsCalled = true; },
+      plugins: async () => {
+        pluginsCalled = true;
+      },
     });
     await app.ready();
 

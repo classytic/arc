@@ -6,13 +6,12 @@
  * and `tenantField: false` (platform-universal) correctly.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
-import { BaseController } from '../../src/core/BaseController.js';
-import { AccessControl } from '../../src/core/AccessControl.js';
-import { QueryResolver, getDefaultQueryParser } from '../../src/core/QueryResolver.js';
-import { HookSystem } from '../../src/hooks/HookSystem.js';
-import type { IRequestContext } from '../../src/types/index.js';
-import { mockUser } from '../setup.js';
+import { describe, expect, it } from "vitest";
+import { AccessControl } from "../../src/core/AccessControl.js";
+import { BaseController } from "../../src/core/BaseController.js";
+import { getDefaultQueryParser, QueryResolver } from "../../src/core/QueryResolver.js";
+import type { IRequestContext } from "../../src/types/index.js";
+import { mockUser } from "../setup.js";
 
 // Minimal mock repository
 function createMinimalRepo() {
@@ -27,9 +26,7 @@ function createMinimalRepo() {
     getById: async (id: string) => store.get(id) ?? null,
     getOne: async (filter: any) => {
       for (const doc of store.values()) {
-        const match = Object.entries(filter).every(
-          ([k, v]) => String(doc[k]) === String(v),
-        );
+        const match = Object.entries(filter).every(([k, v]) => String(doc[k]) === String(v));
         if (match) return doc;
       }
       return null;
@@ -52,7 +49,7 @@ function createMinimalRepo() {
     },
     delete: async (id: string) => {
       const existed = store.delete(id);
-      return { success: existed, message: existed ? 'Deleted' : 'Not found' };
+      return { success: existed, message: existed ? "Deleted" : "Not found" };
     },
   };
 }
@@ -69,17 +66,14 @@ function createReq(overrides: Partial<IRequestContext> = {}): IRequestContext {
   };
 }
 
-function createScopedReq(
-  orgId: string,
-  overrides: Partial<IRequestContext> = {},
-): IRequestContext {
+function createScopedReq(orgId: string, overrides: Partial<IRequestContext> = {}): IRequestContext {
   return createReq({
     ...overrides,
     metadata: {
       _scope: {
-        kind: 'member',
+        kind: "member",
         organizationId: orgId,
-        orgRoles: ['admin'],
+        orgRoles: ["admin"],
       },
       ...(overrides.metadata as any),
     },
@@ -90,62 +84,58 @@ function createScopedReq(
 // AccessControl tests
 // ============================================================================
 
-describe('AccessControl with tenantField', () => {
-  describe('tenantField: string (multi-tenant)', () => {
+describe("AccessControl with tenantField", () => {
+  describe("tenantField: string (multi-tenant)", () => {
     const ac = new AccessControl({
-      tenantField: 'organizationId',
-      idField: '_id',
+      tenantField: "organizationId",
+      idField: "_id",
     });
 
-    it('should include org filter in buildIdFilter when scoped', () => {
-      const req = createScopedReq('org-123', { params: {} });
-      const filter = ac.buildIdFilter('item-1', req);
+    it("should include org filter in buildIdFilter when scoped", () => {
+      const req = createScopedReq("org-123", { params: {} });
+      const filter = ac.buildIdFilter("item-1", req);
       expect(filter).toEqual({
-        _id: 'item-1',
-        organizationId: 'org-123',
+        _id: "item-1",
+        organizationId: "org-123",
       });
     });
 
-    it('should check org scope on documents', () => {
+    it("should check org scope on documents", () => {
       const arcContext = {
-        _scope: { kind: 'member', organizationId: 'org-123', orgRoles: ['admin'] },
+        _scope: { kind: "member", organizationId: "org-123", orgRoles: ["admin"] },
       };
-      expect(
-        ac.checkOrgScope({ organizationId: 'org-123' }, arcContext),
-      ).toBe(true);
-      expect(
-        ac.checkOrgScope({ organizationId: 'org-456' }, arcContext),
-      ).toBe(false);
+      expect(ac.checkOrgScope({ organizationId: "org-123" }, arcContext)).toBe(true);
+      expect(ac.checkOrgScope({ organizationId: "org-456" }, arcContext)).toBe(false);
     });
 
-    it('should deny documents missing the tenant field', () => {
+    it("should deny documents missing the tenant field", () => {
       const arcContext = {
-        _scope: { kind: 'member', organizationId: 'org-123', orgRoles: ['admin'] },
+        _scope: { kind: "member", organizationId: "org-123", orgRoles: ["admin"] },
       };
-      expect(ac.checkOrgScope({ name: 'no-org' }, arcContext)).toBe(false);
+      expect(ac.checkOrgScope({ name: "no-org" }, arcContext)).toBe(false);
     });
   });
 
-  describe('tenantField: false (platform-universal)', () => {
+  describe("tenantField: false (platform-universal)", () => {
     const ac = new AccessControl({
       tenantField: false,
-      idField: '_id',
+      idField: "_id",
     });
 
-    it('should NOT include org filter in buildIdFilter', () => {
-      const req = createScopedReq('org-123');
-      const filter = ac.buildIdFilter('item-1', req);
-      expect(filter).toEqual({ _id: 'item-1' });
-      expect(filter).not.toHaveProperty('organizationId');
+    it("should NOT include org filter in buildIdFilter", () => {
+      const req = createScopedReq("org-123");
+      const filter = ac.buildIdFilter("item-1", req);
+      expect(filter).toEqual({ _id: "item-1" });
+      expect(filter).not.toHaveProperty("organizationId");
     });
 
-    it('should always pass org scope check', () => {
+    it("should always pass org scope check", () => {
       const arcContext = {
-        _scope: { kind: 'member', organizationId: 'org-123', orgRoles: ['admin'] },
+        _scope: { kind: "member", organizationId: "org-123", orgRoles: ["admin"] },
       };
       // Even with an org scope present, platform-universal resources skip the check
       expect(ac.checkOrgScope({}, arcContext)).toBe(true);
-      expect(ac.checkOrgScope({ name: 'anything' }, arcContext)).toBe(true);
+      expect(ac.checkOrgScope({ name: "anything" }, arcContext)).toBe(true);
     });
   });
 });
@@ -154,35 +144,35 @@ describe('AccessControl with tenantField', () => {
 // QueryResolver tests
 // ============================================================================
 
-describe('QueryResolver with tenantField', () => {
-  it('should inject org filter when tenantField is a string', () => {
+describe("QueryResolver with tenantField", () => {
+  it("should inject org filter when tenantField is a string", () => {
     const qr = new QueryResolver({
       queryParser: getDefaultQueryParser(),
       maxLimit: 100,
       defaultLimit: 20,
-      defaultSort: '-createdAt',
+      defaultSort: "-createdAt",
       schemaOptions: {},
-      tenantField: 'organizationId',
+      tenantField: "organizationId",
     });
 
-    const req = createScopedReq('org-abc', { query: {} });
+    const req = createScopedReq("org-abc", { query: {} });
     const result = qr.resolve(req, req.metadata as any);
-    expect(result.filters).toHaveProperty('organizationId', 'org-abc');
+    expect(result.filters).toHaveProperty("organizationId", "org-abc");
   });
 
-  it('should NOT inject org filter when tenantField is false', () => {
+  it("should NOT inject org filter when tenantField is false", () => {
     const qr = new QueryResolver({
       queryParser: getDefaultQueryParser(),
       maxLimit: 100,
       defaultLimit: 20,
-      defaultSort: '-createdAt',
+      defaultSort: "-createdAt",
       schemaOptions: {},
       tenantField: false,
     });
 
-    const req = createScopedReq('org-abc', { query: {} });
+    const req = createScopedReq("org-abc", { query: {} });
     const result = qr.resolve(req, req.metadata as any);
-    expect(result.filters).not.toHaveProperty('organizationId');
+    expect(result.filters).not.toHaveProperty("organizationId");
   });
 });
 
@@ -190,43 +180,43 @@ describe('QueryResolver with tenantField', () => {
 // BaseController tests
 // ============================================================================
 
-describe('BaseController with tenantField', () => {
-  describe('tenantField: string (multi-tenant)', () => {
-    it('should inject tenant field on create', async () => {
+describe("BaseController with tenantField", () => {
+  describe("tenantField: string (multi-tenant)", () => {
+    it("should inject tenant field on create", async () => {
       const repo = createMinimalRepo();
       const controller = new BaseController(repo, {
-        tenantField: 'organizationId',
-        resourceName: 'test',
+        tenantField: "organizationId",
+        resourceName: "test",
       });
 
-      const req = createScopedReq('org-123', {
-        body: { name: 'Test Item' },
+      const req = createScopedReq("org-123", {
+        body: { name: "Test Item" },
       });
       const res = await controller.create(req);
 
       expect(res.success).toBe(true);
-      expect(res.data).toHaveProperty('organizationId', 'org-123');
+      expect(res.data).toHaveProperty("organizationId", "org-123");
     });
   });
 
-  describe('tenantField: false (platform-universal)', () => {
-    it('should NOT inject tenant field on create', async () => {
+  describe("tenantField: false (platform-universal)", () => {
+    it("should NOT inject tenant field on create", async () => {
       const repo = createMinimalRepo();
       const controller = new BaseController(repo, {
         tenantField: false,
-        resourceName: 'test',
+        resourceName: "test",
       });
 
-      const req = createScopedReq('org-123', {
-        body: { name: 'Platform Item' },
+      const req = createScopedReq("org-123", {
+        body: { name: "Platform Item" },
       });
       const res = await controller.create(req);
 
       expect(res.success).toBe(true);
-      expect(res.data).not.toHaveProperty('organizationId');
+      expect(res.data).not.toHaveProperty("organizationId");
     });
 
-    it('should return undefined from getTenantField()', () => {
+    it("should return undefined from getTenantField()", () => {
       const repo = createMinimalRepo();
 
       // Subclass to test the protected helper
@@ -240,9 +230,9 @@ describe('BaseController with tenantField', () => {
       expect(controllerFalse.exposeTenantField()).toBeUndefined();
 
       const controllerString = new TestController(repo, {
-        tenantField: 'workspaceId',
+        tenantField: "workspaceId",
       });
-      expect(controllerString.exposeTenantField()).toBe('workspaceId');
+      expect(controllerString.exposeTenantField()).toBe("workspaceId");
     });
   });
 });

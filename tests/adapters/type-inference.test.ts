@@ -8,13 +8,13 @@
  * the runtime assertions hold, the DX is correct.
  */
 
-import { describe, it, expect } from "vitest";
-import mongoose, { Schema, type Model } from "mongoose";
-import { MongoMemoryServer } from "mongodb-memory-server";
 import { Repository } from "@classytic/mongokit";
+import { MongoMemoryServer } from "mongodb-memory-server";
+import mongoose, { type Model, Schema } from "mongoose";
+import { describe, expect, it } from "vitest";
+import type { DataAdapter, RepositoryLike } from "../../src/adapters/interface.js";
 import { createMongooseAdapter, MongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
-import type { RepositoryLike, DataAdapter } from "../../src/adapters/interface.js";
 
 // ============================================================================
 // Test Model

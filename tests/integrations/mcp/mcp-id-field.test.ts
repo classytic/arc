@@ -12,7 +12,7 @@
 
 import { QueryParser, Repository } from "@classytic/mongokit";
 import { MongoMemoryServer } from "mongodb-memory-server";
-import mongoose, { Schema, type Model } from "mongoose";
+import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../../src/adapters/mongoose.js";
 import { BaseController } from "../../../src/core/BaseController.js";
@@ -201,9 +201,7 @@ describe("MCP tools with idField: 'sku' (real Mongoose + MongoKit)", () => {
       // Either isError=true or content is "not found" — both are acceptable
       const text = result.content[0]?.text ?? "";
       const isNotFound =
-        result.isError === true ||
-        text.toLowerCase().includes("not found") ||
-        text.includes("404");
+        result.isError === true || text.toLowerCase().includes("not found") || text.includes("404");
       expect(isNotFound).toBe(true);
     } finally {
       await client.close();

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { executePipeline, pipe } from "../../src/pipeline/pipe.js";
 import { guard } from "../../src/pipeline/guard.js";
-import { transform } from "../../src/pipeline/transform.js";
 import { intercept } from "../../src/pipeline/intercept.js";
+import { executePipeline, pipe } from "../../src/pipeline/pipe.js";
+import { transform } from "../../src/pipeline/transform.js";
 
 describe("pipe()", () => {
   it("composes steps into a pipeline config", () => {
@@ -49,9 +49,7 @@ describe("executePipeline()", () => {
     const g = guard("deny", async () => false);
     const handler = vi.fn();
 
-    await expect(
-      executePipeline([g], {} as never, handler, "create"),
-    ).rejects.toThrow();
+    await expect(executePipeline([g], {} as never, handler, "create")).rejects.toThrow();
     expect(handler).not.toHaveBeenCalled();
   });
 

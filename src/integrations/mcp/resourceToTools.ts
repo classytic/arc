@@ -10,6 +10,7 @@
 import { z } from "zod";
 import { BaseController } from "../../core/BaseController.js";
 import type { ResourceDefinition } from "../../core/defineResource.js";
+import { normalizePermissionResult } from "../../permissions/applyPermissionResult.js";
 import type { PermissionCheck, PermissionResult } from "../../permissions/types.js";
 import type {
   IControllerResponse,
@@ -299,17 +300,25 @@ function createHandler(
         };
       }
 
-      // Evaluate permission check → extract policy filters
-      const policyFilters = await evaluatePermission(
+      // Evaluate permission check → extract the full normalized result so
+      // BOTH filters and scope are honored (same contract as CRUD/action routes).
+      const permResult = await evaluatePermission(
         permissions?.[op as keyof ResourcePermissions],
         ctx.session,
         resourceName,
         op,
         input,
       );
-      if (policyFilters === false) {
+      if (permResult && !permResult.granted) {
         return {
-          content: [{ type: "text", text: `Permission denied: ${op} on ${resourceName}` }],
+          content: [
+            {
+              type: "text",
+              text: `Permission denied: ${op} on ${resourceName}${
+                permResult.reason ? ` — ${permResult.reason}` : ""
+              }`,
+            },
+          ],
           isError: true,
         };
       }
@@ -318,7 +327,8 @@ function createHandler(
         input,
         ctx.session,
         op as McpOperation,
-        policyFilters || undefined,
+        permResult?.filters,
+        permResult?.scope,
       );
       return toCallToolResult(await method(reqCtx));
     } catch (err) {
@@ -365,10 +375,13 @@ function createAdditionalRouteHandler(
 /**
  * Evaluate a resource's permission check in MCP context.
  *
- * Returns:
- * - `false` if permission denied
- * - `Record<string, unknown>` if granted with filters (ownership patterns)
- * - `null` if granted without filters (or no permission check defined)
+ * Returns the full normalized `PermissionResult` so the caller can honor
+ * ALL side-effects (filters + scope) consistently with CRUD/action routes.
+ * Returns `null` when no permission is defined (= allow, no side effects).
+ *
+ * Promoting booleans to `PermissionResult` via the shared `normalizePermissionResult`
+ * helper keeps the contract aligned with the rest of Arc — there is a single
+ * normalization path for every call site.
  */
 async function evaluatePermission(
   check: PermissionCheck | undefined,
@@ -376,7 +389,7 @@ async function evaluatePermission(
   resource: string,
   action: string,
   input: Record<string, unknown>,
-): Promise<Record<string, unknown> | false | null> {
+): Promise<PermissionResult | null> {
   if (!check) return null; // no permission defined = allow
 
   // Build PermissionContext for MCP — spread full session so permission
@@ -400,13 +413,7 @@ async function evaluatePermission(
     data: input,
   });
 
-  // Boolean result
-  if (typeof result === "boolean") return result ? null : false;
-
-  // PermissionResult
-  const permResult = result as PermissionResult;
-  if (!permResult.granted) return false;
-  return permResult.filters ?? null;
+  return normalizePermissionResult(result);
 }
 
 /**

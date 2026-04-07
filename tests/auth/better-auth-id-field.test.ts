@@ -12,17 +12,14 @@
 
 import { Repository } from "@classytic/mongokit";
 import { MongoMemoryServer } from "mongodb-memory-server";
-import mongoose, { Schema, type Model } from "mongoose";
+import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import {
-  type BetterAuthHandler,
-  createBetterAuthAdapter,
-} from "../../src/auth/betterAuth.js";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
+import { type BetterAuthHandler, createBetterAuthAdapter } from "../../src/auth/betterAuth.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
-import { allowPublic, requireAuth } from "../../src/permissions/index.js";
+import { requireAuth } from "../../src/permissions/index.js";
 
 const ORG_A = "org-a-id";
 const ORG_B = "org-b-id";
@@ -51,8 +48,7 @@ let ProductModel: Model<IProduct>;
 beforeAll(async () => {
   mongoServer = await MongoMemoryServer.create();
   await mongoose.connect(mongoServer.getUri());
-  ProductModel =
-    mongoose.models.BAProduct || mongoose.model<IProduct>("BAProduct", ProductSchema);
+  ProductModel = mongoose.models.BAProduct || mongoose.model<IProduct>("BAProduct", ProductSchema);
 });
 
 afterAll(async () => {

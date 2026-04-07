@@ -648,12 +648,17 @@ export function createBetterAuthAdapter(
                 const teamsResponse = await auth.handler(teamsRequest);
 
                 if (teamsResponse.ok) {
-                  const teamsData = await teamsResponse.json();
-                  teams = Array.isArray(teamsData) ? teamsData : ((teamsData as any)?.teams ?? []);
+                  const teamsData = (await teamsResponse.json()) as unknown;
+                  const teamsList = Array.isArray(teamsData)
+                    ? teamsData
+                    : (teamsData as { teams?: unknown })?.teams;
+                  teams = Array.isArray(teamsList)
+                    ? (teamsList as Array<Record<string, unknown>>)
+                    : [];
                 }
               }
 
-              if (teams?.some((t: any) => t.id === activeTeamId)) {
+              if (teams?.some((t) => normalizeId(t.id) === activeTeamId)) {
                 scope.teamId = activeTeamId;
               }
             }

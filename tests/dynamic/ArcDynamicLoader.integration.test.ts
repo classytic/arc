@@ -1,19 +1,21 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import mongoose from "mongoose";
-import { setupTestDatabase, teardownTestDatabase, clearDatabase } from "../setup.js";
-import { ArcDynamicLoader, type ArcArchitectureSchema } from "../../src/dynamic/ArcDynamicLoader.js";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
-
+import {
+  type ArcArchitectureSchema,
+  ArcDynamicLoader,
+} from "../../src/dynamic/ArcDynamicLoader.js";
 // Dummy repository mock logic since the existing createMockRepository
 // from setup.ts uses a hardcoded model that might not dynamically fit.
 // But wait, setup.ts has a createMockModel and createMockRepository. Let's use them!
-import { createMockModel, createMockRepository } from "../setup.js";
 import {
-  allowPublic,
-  adminOnly,
-  requireOwnership,
-} from "../../src/permissions/index.js";
+  clearDatabase,
+  createMockModel,
+  createMockRepository,
+  setupTestDatabase,
+  teardownTestDatabase,
+} from "../setup.js";
 
 describe("ArcDynamicLoader Integration E2E", () => {
   let app: FastifyInstance;
@@ -38,25 +40,25 @@ describe("ArcDynamicLoader Integration E2E", () => {
     // Just mocking a fake authenticate decorator so permissions don't crash
     // Use a valid ObjectId so createdBy casting doesn't fail
     const fakeUserId = new mongoose.Types.ObjectId().toString();
-    const dummyAuth = async (req: any, reply: any) => {
+    const dummyAuth = async (req: any, _reply: any) => {
       // Simulate an admin user for testing POSTs etc
       req.scope = { kind: "authenticated", userId: fakeUserId, userRoles: ["admin"] };
       req.user = { id: fakeUserId, roles: ["admin"] };
     };
     app.decorate("authenticate", dummyAuth);
     app.decorate("optionalAuthenticate", dummyAuth);
-    app.decorate("authorize", (...roles: string[]) => async (req: any, reply: any) => {
-       // do nothing
+    app.decorate("authorize", (..._roles: string[]) => async (_req: any, _reply: any) => {
+      // do nothing
     });
 
     // 2. Setup ArcDynamicLoader with real Mongoose Adapters
     const loader = new ArcDynamicLoader({
-      adapterResolver: (resourceName: string, pattern?: string) => {
+      adapterResolver: (resourceName: string, _pattern?: string) => {
         // Create a real Mongoose model + MongoKit repository for each generated resource
         const model = createMockModel(resourceName);
         const repo = createMockRepository(model);
         return createMongooseAdapter({ model, repository: repo });
-      }
+      },
     });
 
     // 3. Define the Architecture Schema (AAS)
@@ -71,9 +73,9 @@ describe("ArcDynamicLoader Integration E2E", () => {
           presets: ["softDelete"],
         },
         {
-           name: "shipment",
-           permissions: "publicRead"
-        }
+          name: "shipment",
+          permissions: "publicRead",
+        },
       ],
     };
 
@@ -130,8 +132,8 @@ describe("ArcDynamicLoader Integration E2E", () => {
     // Note: actual soft-delete DB behavior requires MongoKit's softDeletePlugin
     // in the repository layer. With a basic mock repo, DELETE = hard delete.
     const delRes = await app.inject({
-       method: "DELETE",
-       url: `/drones/${droneId}`
+      method: "DELETE",
+      url: `/drones/${droneId}`,
     });
     expect(delRes.statusCode).toBe(200);
 

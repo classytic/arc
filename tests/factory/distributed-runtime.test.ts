@@ -5,18 +5,27 @@
  * factory actually wires — events always, cache/queryCache only when enabled.
  */
 
-import { describe, it, expect } from 'vitest';
-import { createApp } from '../../src/factory/createApp.js';
+import { describe, expect, it } from "vitest";
+import { createApp } from "../../src/factory/createApp.js";
 
 // Mock durable transport/store (non-memory name)
-const mockRedisTransport = { name: 'redis', publish: async () => {}, subscribe: async () => () => {} };
-const mockRedisStore = { name: 'redis', get: async () => null, set: async () => {}, delete: async () => {} };
+const mockRedisTransport = {
+  name: "redis",
+  publish: async () => {},
+  subscribe: async () => () => {},
+};
+const mockRedisStore = {
+  name: "redis",
+  get: async () => null,
+  set: async () => {},
+  delete: async () => {},
+};
 
-describe('distributed runtime validation', () => {
-  it('should throw when events transport is missing', async () => {
+describe("distributed runtime validation", () => {
+  it("should throw when events transport is missing", async () => {
     await expect(
       createApp({
-        runtime: 'distributed',
+        runtime: "distributed",
         auth: false,
         logger: false,
         helmet: false,
@@ -27,11 +36,17 @@ describe('distributed runtime validation', () => {
     ).rejects.toThrow(/events transport/);
   });
 
-  it('should throw when events transport is memory-backed', async () => {
+  it("should throw when events transport is memory-backed", async () => {
     await expect(
       createApp({
-        runtime: 'distributed',
-        stores: { events: { name: 'memory', publish: async () => {}, subscribe: async () => () => {} } as any },
+        runtime: "distributed",
+        stores: {
+          events: {
+            name: "memory",
+            publish: async () => {},
+            subscribe: async () => () => {},
+          } as any,
+        },
         auth: false,
         logger: false,
         helmet: false,
@@ -42,10 +57,10 @@ describe('distributed runtime validation', () => {
     ).rejects.toThrow(/events transport/);
   });
 
-  it('should NOT require cache store when caching plugin is disabled', async () => {
+  it("should NOT require cache store when caching plugin is disabled", async () => {
     // This should succeed — no cache plugin, so no cache store required
     const app = await createApp({
-      runtime: 'distributed',
+      runtime: "distributed",
       stores: { events: mockRedisTransport as any },
       auth: false,
       logger: false,
@@ -60,10 +75,10 @@ describe('distributed runtime validation', () => {
     await app.close();
   });
 
-  it('should require cache store when caching plugin is enabled', async () => {
+  it("should require cache store when caching plugin is enabled", async () => {
     await expect(
       createApp({
-        runtime: 'distributed',
+        runtime: "distributed",
         stores: { events: mockRedisTransport as any },
         auth: false,
         logger: false,
@@ -76,12 +91,12 @@ describe('distributed runtime validation', () => {
     ).rejects.toThrow(/cache store/);
   });
 
-  it('should NOT block startup without idempotency store (warns via fastify.log)', async () => {
+  it("should NOT block startup without idempotency store (warns via fastify.log)", async () => {
     // Idempotency is per-resource, not factory-wide — should not block startup.
     // Warning is logged via fastify.log.warn (not console.warn).
     // With logger: false, the warning is suppressed but doesn't crash.
     const app = await createApp({
-      runtime: 'distributed',
+      runtime: "distributed",
       stores: { events: mockRedisTransport as any },
       auth: false,
       logger: false,
@@ -95,9 +110,9 @@ describe('distributed runtime validation', () => {
     await app.close();
   });
 
-  it('should NOT require queryCache store when queryCache is disabled', async () => {
+  it("should NOT require queryCache store when queryCache is disabled", async () => {
     const app = await createApp({
-      runtime: 'distributed',
+      runtime: "distributed",
       stores: { events: mockRedisTransport as any },
       auth: false,
       logger: false,
@@ -111,9 +126,9 @@ describe('distributed runtime validation', () => {
     await app.close();
   });
 
-  it('should pass with all required stores for a full distributed setup', async () => {
+  it("should pass with all required stores for a full distributed setup", async () => {
     const app = await createApp({
-      runtime: 'distributed',
+      runtime: "distributed",
       stores: {
         events: mockRedisTransport as any,
         cache: mockRedisStore as any,
@@ -132,17 +147,17 @@ describe('distributed runtime validation', () => {
   });
 });
 
-describe('under-pressure preset tolerance', () => {
-  it('production preset should use maxEventLoopDelay >= 3000ms', async () => {
+describe("under-pressure preset tolerance", () => {
+  it("production preset should use maxEventLoopDelay >= 3000ms", async () => {
     // Import preset directly to verify the value
-    const { productionPreset } = await import('../../src/factory/presets.js');
+    const { productionPreset } = await import("../../src/factory/presets.js");
     const upConfig = productionPreset.underPressure as Record<string, unknown>;
 
     expect(upConfig).toBeDefined();
     expect(upConfig.maxEventLoopDelay).toBeGreaterThanOrEqual(3000);
   });
 
-  it('should allow disabling under-pressure entirely', async () => {
+  it("should allow disabling under-pressure entirely", async () => {
     const app = await createApp({
       auth: false,
       logger: false,
@@ -156,8 +171,8 @@ describe('under-pressure preset tolerance', () => {
     await app.close();
   });
 
-  it('edge preset should have under-pressure disabled', async () => {
-    const { edgePreset } = await import('../../src/factory/presets.js');
+  it("edge preset should have under-pressure disabled", async () => {
+    const { edgePreset } = await import("../../src/factory/presets.js");
     expect(edgePreset.underPressure).toBe(false);
   });
 });

@@ -46,17 +46,60 @@ export interface ServerAccessor {
 }
 
 /**
- * Request context passed to controller handlers
+ * Request context passed to controller handlers.
+ *
+ * **Generic parameters** (all default to safe permissive types so existing code keeps working):
+ * - `TBody`     — request body shape (default: `unknown`)
+ * - `TParams`   — route param shape (default: `Record<string, string>`)
+ * - `TQuery`    — query string shape (default: `Record<string, unknown>`)
+ * - `TUser`     — authenticated user shape (default: `UserBase`)
+ * - `TMetadata` — internal metadata shape (default: `Record<string, unknown>`;
+ *   override with `ArcInternalMetadata` or your own augmentation when you
+ *   need typed access to `_scope`, `_policyFilters`, custom hook context, etc.)
+ *
+ * @example
+ * ```typescript
+ * // Untyped (default) — req.body is `unknown`, must be narrowed
+ * async create(req: IRequestContext) {
+ *   const data = req.body as Partial<Product>;
+ *   return { success: true, data: await productRepo.create(data) };
+ * }
+ *
+ * // Typed body — req.body is `CreateProductInput`, narrowing not needed
+ * async create(req: IRequestContext<CreateProductInput>) {
+ *   return { success: true, data: await productRepo.create(req.body) };
+ * }
+ *
+ * // Fully typed — body, route params, query, and metadata
+ * async update(
+ *   req: IRequestContext<
+ *     Partial<Product>,
+ *     { id: string },
+ *     { fields?: string },
+ *     ArcInternalMetadata
+ *   >,
+ * ) {
+ *   const fields = req.query.fields?.split(',');
+ *   const orgId = req.metadata?._scope ? getOrgId(req.metadata._scope) : undefined;
+ *   return { success: true, data: await productRepo.update(req.params.id, req.body) };
+ * }
+ * ```
  */
-export interface IRequestContext {
+export interface IRequestContext<
+  TBody = unknown,
+  TParams extends Record<string, string> = Record<string, string>,
+  TQuery extends Record<string, unknown> = Record<string, unknown>,
+  TUser extends UserBase = UserBase,
+  TMetadata extends Record<string, unknown> = Record<string, unknown>,
+> {
   /** Route parameters (e.g., { id: '123' }) */
-  params: Record<string, string>;
+  params: TParams;
   /** Query string parameters */
-  query: Record<string, unknown>;
+  query: TQuery;
   /** Request body */
-  body: unknown;
+  body: TBody;
   /** Authenticated user or null */
-  user: UserBase | null;
+  user: TUser | null;
   /** Request headers */
   headers: Record<string, string | undefined>;
   /** Organization ID (for multi-tenant apps) */
@@ -77,8 +120,12 @@ export interface IRequestContext {
    * ```
    */
   context?: RequestContext;
-  /** Internal metadata (includes context + Arc internals like _policyFilters, log) */
-  metadata?: Record<string, unknown>;
+  /**
+   * Internal metadata (includes context + Arc internals like `_policyFilters`,
+   * `_scope`, `log`). Type as `ArcInternalMetadata` for typed access to Arc's
+   * built-in fields, or supply your own interface to layer custom fields.
+   */
+  metadata?: TMetadata;
   /**
    * Fastify server accessor — publish events, log, and audit
    * from any handler without switching to `wrapHandler: false`.
@@ -116,16 +163,39 @@ export interface IControllerResponse<T = unknown> {
 }
 
 /**
- * Controller handler - Arc's standard pattern
+ * Controller handler — Arc's standard pattern.
  *
  * Receives a request context object, returns IControllerResponse.
  * Use with `wrapHandler: true` in additionalRoutes.
  *
+ * **Generic parameters:**
+ * - `TResponse` — shape of `IControllerResponse.data` (default: `unknown`)
+ * - `TBody`     — shape of `req.body` (default: `unknown`)
+ * - `TParams`   — shape of `req.params` (default: `Record<string, string>`)
+ * - `TQuery`    — shape of `req.query` (default: `Record<string, unknown>`)
+ *
+ * Backward-compatible: `ControllerHandler<Product>` still works (only the
+ * response data is typed); add more generics as needed when you want
+ * type-safe access to the request body, params, or query string.
+ *
  * @example
  * ```typescript
+ * // Untyped req — body is unknown, must be narrowed
  * const createProduct: ControllerHandler<Product> = async (req) => {
- *   const product = await productRepo.create(req.body);
+ *   const product = await productRepo.create(req.body as Partial<Product>);
  *   return { success: true, data: product, status: 201 };
+ * };
+ *
+ * // Fully typed — body, params, query, and response all inferred
+ * const updateProduct: ControllerHandler<
+ *   Product,
+ *   Partial<Product>,
+ *   { id: string },
+ *   { upsert?: string }
+ * > = async (req) => {
+ *   const upsert = req.query.upsert === "true";
+ *   const product = await productRepo.update(req.params.id, req.body, { upsert });
+ *   return { success: true, data: product };
  * };
  *
  * additionalRoutes: [{
@@ -137,9 +207,12 @@ export interface IControllerResponse<T = unknown> {
  * }]
  * ```
  */
-export type ControllerHandler<T = unknown> = (
-  req: IRequestContext
-) => Promise<IControllerResponse<T>>;
+export type ControllerHandler<
+  TResponse = unknown,
+  TBody = unknown,
+  TParams extends Record<string, string> = Record<string, string>,
+  TQuery extends Record<string, unknown> = Record<string, unknown>,
+> = (req: IRequestContext<TBody, TParams, TQuery>) => Promise<IControllerResponse<TResponse>>;
 
 /**
  * Fastify native handler

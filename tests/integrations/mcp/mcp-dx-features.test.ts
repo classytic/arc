@@ -11,23 +11,20 @@
  *   7. Mixed auto-gen + custom tools with guards
  */
 
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import mongoose from "mongoose";
+import { QueryParser, Repository } from "@classytic/mongokit";
 import { MongoMemoryServer } from "mongodb-memory-server";
-import { Repository, QueryParser } from "@classytic/mongokit";
-import Fastify, { type FastifyInstance } from "fastify";
-import { defineResource } from "../../../src/core/defineResource.js";
+import mongoose from "mongoose";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../../src/adapters/mongoose.js";
 import { BaseController } from "../../../src/core/BaseController.js";
-import { allowPublic, requireAuth } from "../../../src/permissions/index.js";
+import { defineResource } from "../../../src/core/defineResource.js";
 import {
+  type AuthRef,
   createMcpServer,
   defineTool,
-  mcpPlugin,
   resourceToTools,
-  type AuthRef,
 } from "../../../src/integrations/mcp/index.js";
-import { z } from "zod";
+import { allowPublic } from "../../../src/permissions/index.js";
 
 // ============================================================================
 // Setup
@@ -71,7 +68,11 @@ const SecretModel = mongoose.models.DxSecret || mongoose.model("DxSecret", Secre
 function makeResource(
   name: string,
   model: mongoose.Model<any>,
-  opts: { tenantField?: string | false; disableDefaultRoutes?: boolean; additionalRoutes?: any[] } = {},
+  opts: {
+    tenantField?: string | false;
+    disableDefaultRoutes?: boolean;
+    additionalRoutes?: any[];
+  } = {},
 ) {
   const repo = new Repository(model);
   const parser = new QueryParser({ allowedFilterFields: ["category", "status"] });
@@ -216,7 +217,13 @@ describe("disableDefaultRoutes + MCP", () => {
       name: "product",
       adapter: createMongooseAdapter({ model: ProductModel, repository: repo }),
       controller: new BaseController(repo, { resourceName: "product" }),
-      permissions: { list: allowPublic(), get: allowPublic(), create: allowPublic(), update: allowPublic(), delete: allowPublic() },
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
+      },
       disabledRoutes: ["delete"],
     });
 
@@ -251,7 +258,7 @@ describe("mcpHandler on additionalRoutes", () => {
     const tools = resourceToTools(resource);
     const statsTool = tools.find((t) => t.name.includes("stats"));
     expect(statsTool).toBeDefined();
-    expect(statsTool!.description).toContain("stats");
+    expect(statsTool?.description).toContain("stats");
   });
 
   it("mcpHandler receives input and returns result", async () => {
@@ -298,7 +305,13 @@ describe("Auto-derive filterableFields from QueryParser", () => {
       adapter: createMongooseAdapter({ model: ProductModel, repository: repo }),
       controller: new BaseController(repo, { resourceName: "product", queryParser: parser }),
       queryParser: parser,
-      permissions: { list: allowPublic(), get: allowPublic(), create: allowPublic(), update: allowPublic(), delete: allowPublic() },
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
+      },
       schemaOptions: {
         fieldRules: {
           name: { type: "string", required: true },
@@ -315,9 +328,9 @@ describe("Auto-derive filterableFields from QueryParser", () => {
     expect(listTool).toBeDefined();
 
     // Description should mention filterable fields
-    expect(listTool!.description).toContain("category");
-    expect(listTool!.description).toContain("status");
-    expect(listTool!.description).toContain("price");
+    expect(listTool?.description).toContain("category");
+    expect(listTool?.description).toContain("status");
+    expect(listTool?.description).toContain("price");
   });
 
   it("explicit filterableFields takes priority over QueryParser", () => {
@@ -329,7 +342,13 @@ describe("Auto-derive filterableFields from QueryParser", () => {
       adapter: createMongooseAdapter({ model: ProductModel, repository: repo }),
       controller: new BaseController(repo, { resourceName: "product", queryParser: parser }),
       queryParser: parser,
-      permissions: { list: allowPublic(), get: allowPublic(), create: allowPublic(), update: allowPublic(), delete: allowPublic() },
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
+      },
       schemaOptions: {
         fieldRules: {
           name: { type: "string", required: true },
@@ -341,8 +360,8 @@ describe("Auto-derive filterableFields from QueryParser", () => {
 
     const tools = resourceToTools(resource);
     const listTool = tools.find((t) => t.name === "list_products");
-    expect(listTool!.description).toContain("category");
-    expect(listTool!.description).not.toContain("price");
+    expect(listTool?.description).toContain("category");
+    expect(listTool?.description).not.toContain("price");
   });
 });
 
@@ -359,7 +378,7 @@ describe("Guard helpers on custom tools", () => {
     const protectedTool = defineTool("admin_action", {
       description: "Admin only",
       handler: guard(mcpRequireAuth, async (_input, ctx) => ({
-        content: [{ type: "text", text: `Welcome ${ctx.session!.userId}` }],
+        content: [{ type: "text", text: `Welcome ${ctx.session?.userId}` }],
       })),
     });
 
@@ -380,12 +399,12 @@ describe("Guard helpers on custom tools", () => {
   });
 
   it("requireOrg guard blocks calls without org context", async () => {
-    const { guard, requireOrg } = await import("../../../src/integrations/mcp/guards.js") as any;
+    const { guard, requireOrg } = (await import("../../../src/integrations/mcp/guards.js")) as any;
 
     const orgTool = defineTool("org_data", {
       description: "Needs org",
       handler: guard(requireOrg, async (_input, ctx) => ({
-        content: [{ type: "text", text: `Org: ${ctx.session!.organizationId}` }],
+        content: [{ type: "text", text: `Org: ${ctx.session?.organizationId}` }],
       })),
     });
 
@@ -405,7 +424,7 @@ describe("Guard helpers on custom tools", () => {
   });
 
   it("requireRole guard blocks calls without matching role", async () => {
-    const { guard, requireRole } = await import("../../../src/integrations/mcp/guards.js") as any;
+    const { guard, requireRole } = (await import("../../../src/integrations/mcp/guards.js")) as any;
 
     const adminTool = defineTool("admin_panel", {
       description: "Admin panel",

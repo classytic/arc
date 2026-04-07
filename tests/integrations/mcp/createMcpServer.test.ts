@@ -7,7 +7,12 @@
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { createMcpServer, defineTool, definePrompt, resourceToTools, fieldRulesToZod } from "../../../src/integrations/mcp/index.js";
+import {
+  createMcpServer,
+  definePrompt,
+  defineTool,
+  resourceToTools,
+} from "../../../src/integrations/mcp/index.js";
 
 // Helper: connect server + client via InMemoryTransport
 async function connectInMemory(server: unknown) {
@@ -202,7 +207,11 @@ describe("createMcpServer — InMemoryTransport integration", () => {
 
 describe("resourceToTools → createMcpServer integration", () => {
   const mockController = {
-    list: async () => ({ success: true, data: [{ _id: "1", name: "Item" }], meta: { total: 1, page: 1 } }),
+    list: async () => ({
+      success: true,
+      data: [{ _id: "1", name: "Item" }],
+      meta: { total: 1, page: 1 },
+    }),
     get: async () => ({ success: true, data: { _id: "1", name: "Item" } }),
     create: async () => ({ success: true, data: { _id: "2", name: "New" } }),
     update: async () => ({ success: true, data: { _id: "1", name: "Updated" } }),

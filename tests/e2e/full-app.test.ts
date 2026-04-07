@@ -5,20 +5,20 @@
  * CRUD operations, hooks, authentication, and more
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import type { FastifyInstance } from "fastify";
 import mongoose from "mongoose";
-import { createApp } from "../../src/factory/createApp.js";
-import { defineResource } from "../../src/core/defineResource.js";
-import { BaseController } from "../../src/core/BaseController.js";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
+import { BaseController } from "../../src/core/BaseController.js";
+import { defineResource } from "../../src/core/defineResource.js";
+import { createApp } from "../../src/factory/createApp.js";
 import { allowPublic } from "../../src/permissions/index.js";
 import {
-  setupTestDatabase,
-  teardownTestDatabase,
   createMockModel,
   createMockRepository,
+  setupTestDatabase,
+  teardownTestDatabase,
 } from "../setup.js";
-import type { FastifyInstance } from "fastify";
 
 describe("Full Application E2E", () => {
   let app: FastifyInstance;
@@ -256,9 +256,7 @@ describe("Full Application E2E", () => {
 
       // Arc/MongoKit uses 'docs' for list responses
       expect(payload.docs).toBeDefined();
-      const filteredProducts = payload.docs.filter(
-        (p: any) => p.price >= 40 && p.price <= 100,
-      );
+      const filteredProducts = payload.docs.filter((p: any) => p.price >= 40 && p.price <= 100);
       expect(filteredProducts.length).toBeGreaterThanOrEqual(1);
     });
 

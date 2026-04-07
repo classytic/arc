@@ -6,6 +6,7 @@
  */
 
 import type { FastifyRequest } from "fastify";
+import type { RequestScope } from "../scope/types.js";
 
 /**
  * User base interface - minimal shape Arc expects
@@ -70,15 +71,65 @@ export interface PermissionContext<TDoc = Record<string, unknown>> {
 }
 
 /**
- * Result from permission check
+ * Result from a permission check.
+ *
+ * Permission checks can do three things:
+ * 1. **Grant or deny** access (`granted`, `reason`)
+ * 2. **Attach row-level filters** (`filters`) — these merge into `_policyFilters`
+ *    and narrow subsequent queries (e.g. `{ userId: ctx.user.id }` for ownership)
+ * 3. **Install the request scope** (`scope`) — when a custom authenticator wants
+ *    to set tenant/identity context directly from the permission layer, without
+ *    relying on a separate auth plugin
+ *
+ * The `scope` field is the clean integration point for custom auth strategies
+ * (API keys, service accounts, gateway headers). When present, Arc writes it to
+ * `request.scope` which then flows through the normal tenant-filtering pipeline
+ * (QueryResolver + AccessControl). This is the idiomatic way to wire non-Better-Auth
+ * identity providers into Arc's multi-tenancy without touching the auth plugin layer.
+ *
+ * @example
+ * ```typescript
+ * // Custom API-key auth — grant access AND install a service scope in one step
+ * export function requireApiKey(): PermissionCheck {
+ *   return async ({ request }) => {
+ *     const apiKey = request.headers['x-api-key'] as string | undefined;
+ *     if (!apiKey) return { granted: false, reason: 'Missing API key' };
+ *
+ *     const client = await ClientModel.findOne({ apiKey });
+ *     if (!client) return { granted: false, reason: 'Invalid API key' };
+ *
+ *     return {
+ *       granted: true,
+ *       // Install service scope — Arc writes this to request.scope automatically,
+ *       // and tenantField filtering picks it up via metadata._scope
+ *       scope: {
+ *         kind: 'service',
+ *         clientId: String(client._id),
+ *         organizationId: String(client.companyId),
+ *         scopes: client.allowedScopes,
+ *       },
+ *       // Optional row-level narrowing (e.g. per-project API keys)
+ *       filters: client.projectId ? { projectId: client.projectId } : undefined,
+ *     };
+ *   };
+ * }
+ * ```
  */
 export interface PermissionResult {
   /** Whether access is granted */
   granted: boolean;
   /** Reason for denial (for error messages) */
   reason?: string;
-  /** Query filters to apply (for ownership patterns) */
+  /** Query filters to apply (for ownership / row-level security patterns) */
   filters?: Record<string, unknown>;
+  /**
+   * Install this scope on `request.scope` when granted. Flows through to
+   * `metadata._scope` and is read by QueryResolver / AccessControl for
+   * tenant-field filtering. Use this to wire custom auth (API keys, service
+   * accounts, gateway headers) into Arc's multi-tenancy without a separate
+   * auth plugin.
+   */
+  scope?: RequestScope;
 }
 
 /**

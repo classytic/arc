@@ -5,7 +5,7 @@
  * optional while preserving per-field validation constraints.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from "vitest";
 
 /**
  * Simulates the PATCH schema generation logic from defineResource.
@@ -24,16 +24,16 @@ function generatePatchSchema(createBody: Record<string, unknown>): Record<string
   return patchBody;
 }
 
-describe('PATCH Schema Generation', () => {
-  it('should remove required array from create schema', () => {
+describe("PATCH Schema Generation", () => {
+  it("should remove required array from create schema", () => {
     const createBody = {
-      type: 'object',
+      type: "object",
       properties: {
-        name: { type: 'string', minLength: 1 },
-        email: { type: 'string', format: 'email' },
-        age: { type: 'number', minimum: 0 },
+        name: { type: "string", minLength: 1 },
+        email: { type: "string", format: "email" },
+        age: { type: "number", minimum: 0 },
       },
-      required: ['name', 'email'],
+      required: ["name", "email"],
     };
 
     const patchBody = generatePatchSchema(createBody);
@@ -44,24 +44,24 @@ describe('PATCH Schema Generation', () => {
     // But field-level constraints MUST be preserved
     const props = patchBody.properties as Record<string, any>;
     expect(props.name.minLength).toBe(1);
-    expect(props.email.format).toBe('email');
+    expect(props.email.format).toBe("email");
     expect(props.age.minimum).toBe(0);
   });
 
-  it('should preserve nested object constraints', () => {
+  it("should preserve nested object constraints", () => {
     const createBody = {
-      type: 'object',
+      type: "object",
       properties: {
         address: {
-          type: 'object',
+          type: "object",
           properties: {
-            street: { type: 'string', minLength: 1 },
-            city: { type: 'string' },
+            street: { type: "string", minLength: 1 },
+            city: { type: "string" },
           },
-          required: ['street'],
+          required: ["street"],
         },
       },
-      required: ['address'],
+      required: ["address"],
     };
 
     const patchBody = generatePatchSchema(createBody);
@@ -71,19 +71,19 @@ describe('PATCH Schema Generation', () => {
 
     // Nested required preserved — when address IS sent, street is still required
     const addressSchema = (patchBody.properties as any).address;
-    expect(addressSchema.required).toEqual(['street']);
+    expect(addressSchema.required).toEqual(["street"]);
   });
 
-  it('should handle schema with no required array', () => {
+  it("should handle schema with no required array", () => {
     const createBody = {
-      type: 'object',
+      type: "object",
       properties: {
-        description: { type: 'string' },
+        description: { type: "string" },
       },
     };
 
     const patchBody = generatePatchSchema(createBody);
     expect(patchBody.required).toBeUndefined();
-    expect((patchBody.properties as any).description.type).toBe('string');
+    expect((patchBody.properties as any).description.type).toBe("string");
   });
 });

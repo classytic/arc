@@ -11,20 +11,20 @@
  *   7. streamResponse flag
  */
 
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import mongoose from "mongoose";
+import { Repository } from "@classytic/mongokit";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import { MongoMemoryServer } from "mongodb-memory-server";
-import { Repository, QueryParser } from "@classytic/mongokit";
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
-import { defineResource } from "../../src/core/defineResource.js";
+import mongoose from "mongoose";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
-import { allowPublic } from "../../src/permissions/index.js";
+import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/index.js";
+import { allowPublic } from "../../src/permissions/index.js";
 import { getOrgContext } from "../../src/scope/types.js";
-import { ArcError, createDomainError, isArcError } from "../../src/utils/errors.js";
-import { envelope } from "../../src/types/index.js";
 import type { ArcRequest } from "../../src/types/index.js";
+import { envelope } from "../../src/types/index.js";
+import { ArcError, createDomainError, isArcError } from "../../src/utils/errors.js";
 
 // ============================================================================
 // Setup
@@ -188,7 +188,13 @@ describe("onRegister lifecycle hook", () => {
       name: "item",
       adapter: createMongooseAdapter({ model: ItemModel, repository: repo }),
       controller: new BaseController(repo, { resourceName: "item" }),
-      permissions: { list: allowPublic(), get: allowPublic(), create: allowPublic(), update: allowPublic(), delete: allowPublic() },
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
+      },
       onRegister,
     });
 
@@ -321,7 +327,13 @@ describe("ArcRequest type", () => {
   it("is assignable from FastifyRequest with scope", () => {
     // Type-level test — if this compiles, ArcRequest is compatible
     const mockReq = {
-      scope: { kind: "member" as const, userId: "u-1", userRoles: [], organizationId: "org-1", orgRoles: [] },
+      scope: {
+        kind: "member" as const,
+        userId: "u-1",
+        userRoles: [],
+        organizationId: "org-1",
+        orgRoles: [],
+      },
       user: { id: "u-1" },
       signal: new AbortController().signal,
     } as unknown as ArcRequest;

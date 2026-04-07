@@ -5,12 +5,11 @@
  * in isolation with a real Fastify instance.
  */
 
-import { describe, it, expect, afterEach } from "vitest";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   decorateRequestScope,
   registerAuth,
-  registerElevation,
   registerErrorHandler,
 } from "../../src/factory/registerAuth.js";
 import { PUBLIC_SCOPE } from "../../src/scope/types.js";
@@ -105,11 +104,7 @@ describe("registerAuth", () => {
       request.user = { id: "user-1", role: "admin" };
     };
 
-    await registerAuth(
-      app,
-      { auth: { type: "authenticator", authenticate: mockAuth } },
-      noopTrack,
-    );
+    await registerAuth(app, { auth: { type: "authenticator", authenticate: mockAuth } }, noopTrack);
     await app.ready();
 
     expect(app.hasDecorator("authenticate")).toBe(true);
@@ -129,17 +124,17 @@ describe("registerAuth", () => {
     };
 
     decorateRequestScope(app);
-    await registerAuth(
-      app,
-      { auth: { type: "authenticator", authenticate: mockAuth } },
-      noopTrack,
-    );
+    await registerAuth(app, { auth: { type: "authenticator", authenticate: mockAuth } }, noopTrack);
 
-    app.get("/protected", {
-      preHandler: [app.authenticate],
-    }, async (request) => {
-      return { user: request.user };
-    });
+    app.get(
+      "/protected",
+      {
+        preHandler: [app.authenticate],
+      },
+      async (request) => {
+        return { user: request.user };
+      },
+    );
     await app.ready();
 
     // With token
@@ -170,17 +165,17 @@ describe("registerAuth", () => {
     };
 
     decorateRequestScope(app);
-    await registerAuth(
-      app,
-      { auth: { type: "authenticator", authenticate: mockAuth } },
-      noopTrack,
-    );
+    await registerAuth(app, { auth: { type: "authenticator", authenticate: mockAuth } }, noopTrack);
 
-    app.get("/public", {
-      preHandler: [app.optionalAuthenticate],
-    }, async (request) => {
-      return { user: request.user ?? null };
-    });
+    app.get(
+      "/public",
+      {
+        preHandler: [app.optionalAuthenticate],
+      },
+      async (request) => {
+        return { user: request.user ?? null };
+      },
+    );
     await app.ready();
 
     // Without token — should still succeed (optional auth)
@@ -286,11 +281,15 @@ describe("registerAuth", () => {
       noopTrack,
     );
 
-    app.get("/optional", {
-      preHandler: [app.optionalAuthenticate],
-    }, async (request) => {
-      return { authenticated: !!request.user, user: request.user ?? null };
-    });
+    app.get(
+      "/optional",
+      {
+        preHandler: [app.optionalAuthenticate],
+      },
+      async (request) => {
+        return { authenticated: !!request.user, user: request.user ?? null };
+      },
+    );
     await app.ready();
 
     // No token — optionalAuthenticate intercepts 401, request continues as public
@@ -325,11 +324,15 @@ describe("registerAuth", () => {
       noopTrack,
     );
 
-    app.get("/test", {
-      preHandler: [app.optionalAuthenticate],
-    }, async () => {
-      return { ok: true };
-    });
+    app.get(
+      "/test",
+      {
+        preHandler: [app.optionalAuthenticate],
+      },
+      async () => {
+        return { ok: true };
+      },
+    );
     await app.ready();
 
     // 403 intercepted — request proceeds
@@ -353,11 +356,15 @@ describe("registerAuth", () => {
       noopTrack,
     );
 
-    app.get("/test", {
-      preHandler: [app.optionalAuthenticate],
-    }, async () => {
-      return { ok: true };
-    });
+    app.get(
+      "/test",
+      {
+        preHandler: [app.optionalAuthenticate],
+      },
+      async () => {
+        return { ok: true };
+      },
+    );
     await app.ready();
 
     const res = await app.inject({ method: "GET", url: "/test" });

@@ -5,15 +5,15 @@
  * and fire with the correct context (data, user, meta).
  */
 
-import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest";
-import mongoose, { Schema, type Model } from "mongoose";
+import { QueryParser, Repository } from "@classytic/mongokit";
 import { MongoMemoryServer } from "mongodb-memory-server";
-import { Repository, QueryParser } from "@classytic/mongokit";
-import { defineResource } from "../../src/core/defineResource.js";
+import mongoose, { type Model, Schema } from "mongoose";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
-import { allowPublic } from "../../src/permissions/index.js";
+import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/index.js";
+import { allowPublic } from "../../src/permissions/index.js";
 import type { ResourceHookContext } from "../../src/types/index.js";
 
 // ============================================================================
@@ -254,8 +254,12 @@ describe("defineResource({ hooks }) — inline hooks", () => {
   it("multiple hooks fire in correct order", async () => {
     const order: string[] = [];
     const app = await buildApp({
-      beforeCreate: (ctx: ResourceHookContext) => { order.push("beforeCreate"); },
-      afterCreate: (ctx: ResourceHookContext) => { order.push("afterCreate"); },
+      beforeCreate: (_ctx: ResourceHookContext) => {
+        order.push("beforeCreate");
+      },
+      afterCreate: (_ctx: ResourceHookContext) => {
+        order.push("afterCreate");
+      },
     });
 
     await app.inject({
@@ -288,7 +292,9 @@ describe("defineResource({ hooks }) — inline hooks", () => {
   it("afterCreate ctx.data contains the full created document with _id", async () => {
     let captured: ResourceHookContext | null = null;
     const app = await buildApp({
-      afterCreate: (ctx: ResourceHookContext) => { captured = ctx; },
+      afterCreate: (ctx: ResourceHookContext) => {
+        captured = ctx;
+      },
     });
 
     await app.inject({
@@ -298,15 +304,17 @@ describe("defineResource({ hooks }) — inline hooks", () => {
     });
 
     expect(captured).not.toBeNull();
-    expect(captured!.data._id).toBeDefined();
-    expect(captured!.data.name).toBe("Full Doc");
-    expect(captured!.data.price).toBe(77);
+    expect(captured?.data._id).toBeDefined();
+    expect(captured?.data.name).toBe("Full Doc");
+    expect(captured?.data.price).toBe(77);
   });
 
   it("beforeUpdate ctx.meta contains id and existing document", async () => {
     let captured: ResourceHookContext | null = null;
     const app = await buildApp({
-      beforeUpdate: (ctx: ResourceHookContext) => { captured = ctx; },
+      beforeUpdate: (ctx: ResourceHookContext) => {
+        captured = ctx;
+      },
     });
 
     const createRes = await app.inject({
@@ -323,15 +331,17 @@ describe("defineResource({ hooks }) — inline hooks", () => {
     });
 
     expect(captured).not.toBeNull();
-    expect(captured!.meta?.id).toBe(id);
-    expect(captured!.meta?.existing).toBeDefined();
-    expect((captured!.meta!.existing as any).name).toBe("Before Update");
+    expect(captured?.meta?.id).toBe(id);
+    expect(captured?.meta?.existing).toBeDefined();
+    expect((captured?.meta?.existing as any).name).toBe("Before Update");
   });
 
   it("afterUpdate ctx.data contains the updated document", async () => {
     let captured: ResourceHookContext | null = null;
     const app = await buildApp({
-      afterUpdate: (ctx: ResourceHookContext) => { captured = ctx; },
+      afterUpdate: (ctx: ResourceHookContext) => {
+        captured = ctx;
+      },
     });
 
     const createRes = await app.inject({
@@ -348,13 +358,15 @@ describe("defineResource({ hooks }) — inline hooks", () => {
     });
 
     expect(captured).not.toBeNull();
-    expect(captured!.data).toBeDefined();
+    expect(captured?.data).toBeDefined();
   });
 
   it("afterDelete ctx.meta.id matches the deleted resource", async () => {
     let captured: ResourceHookContext | null = null;
     const app = await buildApp({
-      afterDelete: (ctx: ResourceHookContext) => { captured = ctx; },
+      afterDelete: (ctx: ResourceHookContext) => {
+        captured = ctx;
+      },
     });
 
     const createRes = await app.inject({
@@ -370,15 +382,17 @@ describe("defineResource({ hooks }) — inline hooks", () => {
     });
 
     expect(captured).not.toBeNull();
-    expect(captured!.meta?.id).toBe(id);
-    expect(captured!.data.name).toBe("Delete Me");
+    expect(captured?.meta?.id).toBe(id);
+    expect(captured?.data.name).toBe("Delete Me");
   });
 
   // ── Error handling ──
 
   it("async hook errors in after phase do not crash the response", async () => {
     const app = await buildApp({
-      afterCreate: async () => { throw new Error("Hook exploded"); },
+      afterCreate: async () => {
+        throw new Error("Hook exploded");
+      },
     });
 
     const res = await app.inject({
@@ -394,7 +408,9 @@ describe("defineResource({ hooks }) — inline hooks", () => {
 
   it("before hook error prevents the operation", async () => {
     const app = await buildApp({
-      beforeCreate: async () => { throw new Error("Blocked by hook"); },
+      beforeCreate: async () => {
+        throw new Error("Blocked by hook");
+      },
     });
 
     const res = await app.inject({
@@ -415,12 +431,24 @@ describe("defineResource({ hooks }) — inline hooks", () => {
   it("all 6 hooks fire during a full create → update → delete lifecycle", async () => {
     const events: string[] = [];
     const app = await buildApp({
-      beforeCreate: (ctx: ResourceHookContext) => { events.push("beforeCreate"); },
-      afterCreate: (ctx: ResourceHookContext) => { events.push("afterCreate"); },
-      beforeUpdate: (ctx: ResourceHookContext) => { events.push("beforeUpdate"); },
-      afterUpdate: (ctx: ResourceHookContext) => { events.push("afterUpdate"); },
-      beforeDelete: (ctx: ResourceHookContext) => { events.push("beforeDelete"); },
-      afterDelete: (ctx: ResourceHookContext) => { events.push("afterDelete"); },
+      beforeCreate: (_ctx: ResourceHookContext) => {
+        events.push("beforeCreate");
+      },
+      afterCreate: (_ctx: ResourceHookContext) => {
+        events.push("afterCreate");
+      },
+      beforeUpdate: (_ctx: ResourceHookContext) => {
+        events.push("beforeUpdate");
+      },
+      afterUpdate: (_ctx: ResourceHookContext) => {
+        events.push("afterUpdate");
+      },
+      beforeDelete: (_ctx: ResourceHookContext) => {
+        events.push("beforeDelete");
+      },
+      afterDelete: (_ctx: ResourceHookContext) => {
+        events.push("afterDelete");
+      },
     });
 
     // Create
@@ -448,9 +476,12 @@ describe("defineResource({ hooks }) — inline hooks", () => {
     expect(deleteRes.statusCode).toBe(200);
 
     expect(events).toEqual([
-      "beforeCreate", "afterCreate",
-      "beforeUpdate", "afterUpdate",
-      "beforeDelete", "afterDelete",
+      "beforeCreate",
+      "afterCreate",
+      "beforeUpdate",
+      "afterUpdate",
+      "beforeDelete",
+      "afterDelete",
     ]);
   });
 
@@ -488,7 +519,9 @@ describe("defineResource({ hooks }) — inline hooks", () => {
       },
       presets: ["softDelete"],
       hooks: {
-        afterCreate: (ctx: ResourceHookContext) => { afterCreateFired(ctx); },
+        afterCreate: (ctx: ResourceHookContext) => {
+          afterCreateFired(ctx);
+        },
       },
     });
 

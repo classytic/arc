@@ -8,12 +8,12 @@
  * With adapter: broadcast goes through shared backplane (Redis pub/sub)
  */
 
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, expect, it, vi } from "vitest";
 import {
+  LocalWebSocketAdapter,
   RoomManager,
   type WebSocketAdapter,
-  LocalWebSocketAdapter,
-} from '../../src/integrations/websocket.js';
+} from "../../src/integrations/websocket.js";
 
 // ============================================================================
 // Mock adapter that simulates Redis pub/sub backplane
@@ -27,7 +27,7 @@ function createMockAdapter(): WebSocketAdapter & {
   const published: Array<{ room: string; message: string }> = [];
 
   return {
-    name: 'mock',
+    name: "mock",
     published,
 
     async publish(room: string, message: string): Promise<void> {
@@ -55,14 +55,14 @@ function createMockAdapter(): WebSocketAdapter & {
 // WebSocketAdapter interface tests
 // ============================================================================
 
-describe('WebSocketAdapter — interface contract', () => {
-  it('LocalWebSocketAdapter should be a no-op (single-instance)', async () => {
+describe("WebSocketAdapter — interface contract", () => {
+  it("LocalWebSocketAdapter should be a no-op (single-instance)", async () => {
     const adapter = new LocalWebSocketAdapter();
 
-    expect(adapter.name).toBe('local');
+    expect(adapter.name).toBe("local");
 
     // publish is a no-op
-    await adapter.publish('room', 'message');
+    await adapter.publish("room", "message");
 
     // subscribe is a no-op
     await adapter.subscribe(() => {});
@@ -71,18 +71,18 @@ describe('WebSocketAdapter — interface contract', () => {
     await adapter.close();
   });
 
-  it('mock adapter should capture published messages', async () => {
+  it("mock adapter should capture published messages", async () => {
     const adapter = createMockAdapter();
 
-    await adapter.publish('products', JSON.stringify({ type: 'product.created' }));
-    await adapter.publish('orders', JSON.stringify({ type: 'order.created' }));
+    await adapter.publish("products", JSON.stringify({ type: "product.created" }));
+    await adapter.publish("orders", JSON.stringify({ type: "order.created" }));
 
     expect(adapter.published).toHaveLength(2);
-    expect(adapter.published[0]!.room).toBe('products');
-    expect(adapter.published[1]!.room).toBe('orders');
+    expect(adapter.published[0]?.room).toBe("products");
+    expect(adapter.published[1]?.room).toBe("orders");
   });
 
-  it('mock adapter should deliver messages to subscribers', async () => {
+  it("mock adapter should deliver messages to subscribers", async () => {
     const adapter = createMockAdapter();
     const received: Array<{ room: string; message: string }> = [];
 
@@ -91,10 +91,10 @@ describe('WebSocketAdapter — interface contract', () => {
     });
 
     // Simulate message from another instance
-    adapter._deliver('products', '{"type":"product.created"}');
+    adapter._deliver("products", '{"type":"product.created"}');
 
     expect(received).toHaveLength(1);
-    expect(received[0]!.room).toBe('products');
+    expect(received[0]?.room).toBe("products");
   });
 });
 
@@ -102,26 +102,26 @@ describe('WebSocketAdapter — interface contract', () => {
 // RoomManager + adapter integration
 // ============================================================================
 
-describe('RoomManager — adapter integration', () => {
-  it('should broadcast locally AND through adapter when adapter is set', async () => {
+describe("RoomManager — adapter integration", () => {
+  it("should broadcast locally AND through adapter when adapter is set", async () => {
     const adapter = createMockAdapter();
     const rooms = new RoomManager(10000, adapter);
 
     const socket1 = { send: vi.fn(), close: vi.fn(), readyState: 1 };
-    rooms.addClient({ id: 'ws_1', socket: socket1, subscriptions: new Set(), userId: 'u1' });
-    rooms.subscribe('ws_1', 'products');
+    rooms.addClient({ id: "ws_1", socket: socket1, subscriptions: new Set(), userId: "u1" });
+    rooms.subscribe("ws_1", "products");
 
-    await rooms.broadcastWithAdapter('products', '{"type":"test"}');
+    await rooms.broadcastWithAdapter("products", '{"type":"test"}');
 
     // Local client received the message
     expect(socket1.send).toHaveBeenCalledWith('{"type":"test"}');
 
     // Adapter also received the message (for other instances)
     expect(adapter.published).toHaveLength(1);
-    expect(adapter.published[0]!.room).toBe('products');
+    expect(adapter.published[0]?.room).toBe("products");
   });
 
-  it('should deliver adapter messages to local clients', async () => {
+  it("should deliver adapter messages to local clients", async () => {
     const adapter = createMockAdapter();
     const rooms = new RoomManager(10000, adapter);
 
@@ -131,55 +131,60 @@ describe('RoomManager — adapter integration', () => {
     });
 
     const socket1 = { send: vi.fn(), close: vi.fn(), readyState: 1 };
-    rooms.addClient({ id: 'ws_1', socket: socket1, subscriptions: new Set(), userId: 'u1' });
-    rooms.subscribe('ws_1', 'products');
+    rooms.addClient({ id: "ws_1", socket: socket1, subscriptions: new Set(), userId: "u1" });
+    rooms.subscribe("ws_1", "products");
 
     // Simulate message from another instance via adapter
-    adapter._deliver('products', '{"type":"product.updated"}');
+    adapter._deliver("products", '{"type":"product.updated"}');
 
     expect(socket1.send).toHaveBeenCalledWith('{"type":"product.updated"}');
   });
 
-  it('should NOT double-deliver to local clients on broadcastWithAdapter', async () => {
+  it("should NOT double-deliver to local clients on broadcastWithAdapter", async () => {
     const adapter = createMockAdapter();
     const rooms = new RoomManager(10000, adapter);
 
     const socket1 = { send: vi.fn(), close: vi.fn(), readyState: 1 };
-    rooms.addClient({ id: 'ws_1', socket: socket1, subscriptions: new Set() });
-    rooms.subscribe('ws_1', 'products');
+    rooms.addClient({ id: "ws_1", socket: socket1, subscriptions: new Set() });
+    rooms.subscribe("ws_1", "products");
 
     // broadcastWithAdapter sends locally + to adapter
     // The adapter should NOT echo back to the same instance
-    await rooms.broadcastWithAdapter('products', '{"type":"test"}');
+    await rooms.broadcastWithAdapter("products", '{"type":"test"}');
 
     // Local client should receive exactly once (from local broadcast, not from adapter echo)
     expect(socket1.send).toHaveBeenCalledTimes(1);
   });
 
-  it('should work without adapter (local-only, default behavior)', () => {
+  it("should work without adapter (local-only, default behavior)", () => {
     const rooms = new RoomManager(); // no adapter
 
     const socket1 = { send: vi.fn(), close: vi.fn(), readyState: 1 };
-    rooms.addClient({ id: 'ws_1', socket: socket1, subscriptions: new Set() });
-    rooms.subscribe('ws_1', 'products');
+    rooms.addClient({ id: "ws_1", socket: socket1, subscriptions: new Set() });
+    rooms.subscribe("ws_1", "products");
 
-    rooms.broadcast('products', '{"type":"test"}');
+    rooms.broadcast("products", '{"type":"test"}');
 
     expect(socket1.send).toHaveBeenCalledWith('{"type":"test"}');
   });
 
-  it('broadcastToOrg should also go through adapter', async () => {
+  it("broadcastToOrg should also go through adapter", async () => {
     const adapter = createMockAdapter();
     const rooms = new RoomManager(10000, adapter);
 
     const socket1 = { send: vi.fn(), close: vi.fn(), readyState: 1 };
-    rooms.addClient({ id: 'ws_1', socket: socket1, subscriptions: new Set(), organizationId: 'org-1' });
-    rooms.subscribe('ws_1', 'orders');
+    rooms.addClient({
+      id: "ws_1",
+      socket: socket1,
+      subscriptions: new Set(),
+      organizationId: "org-1",
+    });
+    rooms.subscribe("ws_1", "orders");
 
-    await rooms.broadcastToOrgWithAdapter('org-1', 'orders', '{"type":"order.created"}');
+    await rooms.broadcastToOrgWithAdapter("org-1", "orders", '{"type":"order.created"}');
 
     expect(socket1.send).toHaveBeenCalledOnce();
     expect(adapter.published).toHaveLength(1);
-    expect(adapter.published[0]!.room).toBe('org:org-1:orders');
+    expect(adapter.published[0]?.room).toBe("org:org-1:orders");
   });
 });

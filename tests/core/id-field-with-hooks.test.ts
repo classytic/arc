@@ -17,7 +17,7 @@
 
 import { QueryParser, Repository } from "@classytic/mongokit";
 import { MongoMemoryServer } from "mongodb-memory-server";
-import mongoose, { Schema, type Model } from "mongoose";
+import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
@@ -51,8 +51,7 @@ let PostModel: Model<IPost>;
 beforeAll(async () => {
   mongoServer = await MongoMemoryServer.create();
   await mongoose.connect(mongoServer.getUri());
-  PostModel =
-    mongoose.models.HookSlugPost || mongoose.model<IPost>("HookSlugPost", PostSchema);
+  PostModel = mongoose.models.HookSlugPost || mongoose.model<IPost>("HookSlugPost", PostSchema);
 });
 
 afterAll(async () => {
@@ -106,7 +105,12 @@ async function buildApp(hooks: Record<string, unknown>) {
 
 describe("Hooks integration with custom idField", () => {
   it("beforeUpdate + afterUpdate fire with full context (custom idField)", async () => {
-    const beforeCalls: Array<{ metaId: unknown; existingSlug: unknown; existingId: unknown; data: unknown }> = [];
+    const beforeCalls: Array<{
+      metaId: unknown;
+      existingSlug: unknown;
+      existingId: unknown;
+      data: unknown;
+    }> = [];
     const afterCalls: Array<{ doc: unknown }> = [];
 
     const app = await buildApp({

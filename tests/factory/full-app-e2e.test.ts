@@ -11,24 +11,23 @@
  * - Graceful shutdown disabled in testing preset
  */
 
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import mongoose from "mongoose";
-import { createApp } from "../../src/factory/createApp.js";
-import { defineResource } from "../../src/core/defineResource.js";
-import { BaseController } from "../../src/core/BaseController.js";
+import type { FastifyInstance } from "fastify";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
-import { allowPublic } from "../../src/permissions/index.js";
+import { BaseController } from "../../src/core/BaseController.js";
+import { defineResource } from "../../src/core/defineResource.js";
+import { createApp } from "../../src/factory/createApp.js";
 import { loadResources } from "../../src/factory/loadResources.js";
+import { allowPublic } from "../../src/permissions/index.js";
 import {
-  setupTestDatabase,
-  teardownTestDatabase,
   createMockModel,
   createMockRepository,
+  setupTestDatabase,
+  teardownTestDatabase,
 } from "../setup.js";
-import type { FastifyInstance } from "fastify";
 
 const ARC_ROOT = resolve(import.meta.dirname, "../..");
 

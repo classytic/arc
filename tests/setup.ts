@@ -4,10 +4,10 @@
  * Common utilities for testing Arc framework
  */
 
-import { MongoMemoryServer } from 'mongodb-memory-server';
-import mongoose from 'mongoose';
-import Fastify, { FastifyInstance } from 'fastify';
-import { beforeAll, afterAll, afterEach } from 'vitest';
+import Fastify, { type FastifyInstance } from "fastify";
+import { MongoMemoryServer } from "mongodb-memory-server";
+import mongoose from "mongoose";
+import { afterAll, afterEach, beforeAll } from "vitest";
 
 // Global MongoDB Memory Server
 let mongoServer: MongoMemoryServer;
@@ -53,18 +53,18 @@ export function createTestFastify(): FastifyInstance {
  * Mock user for testing auth (using valid ObjectId)
  */
 export const mockUser = {
-  _id: '507f1f77bcf86cd799439011', // Valid ObjectId format
-  email: 'test@example.com',
-  role: ['admin'],
+  _id: "507f1f77bcf86cd799439011", // Valid ObjectId format
+  email: "test@example.com",
+  role: ["admin"],
 };
 
 /**
  * Mock organization for multi-tenant tests (using valid ObjectId)
  */
 export const mockOrg = {
-  _id: '507f1f77bcf86cd799439012', // Valid ObjectId format
-  name: 'Test Organization',
-  slug: 'test-org',
+  _id: "507f1f77bcf86cd799439012", // Valid ObjectId format
+  name: "Test Organization",
+  slug: "test-org",
 };
 
 /**
@@ -73,7 +73,7 @@ export const mockOrg = {
 export const mockContext = {
   org: mockOrg,
   user: mockUser,
-  requestId: 'test-request-123',
+  requestId: "test-request-123",
 };
 
 /**
@@ -92,7 +92,7 @@ export function createMockModel(name: string) {
       deletedAt: Date,
       slug: String,
     },
-    { timestamps: true }
+    { timestamps: true },
   );
 
   // Check if model already exists (for test re-runs)
@@ -115,7 +115,7 @@ export function wait(ms: number): Promise<void> {
  */
 export function createMockRepository(model: any) {
   // Import Repository from @classytic/mongokit
-  const { Repository } = require('@classytic/mongokit');
+  const { Repository } = require("@classytic/mongokit");
   return new Repository(model);
 }
 

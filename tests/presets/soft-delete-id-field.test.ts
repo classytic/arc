@@ -8,13 +8,13 @@
  */
 
 import {
-  Repository,
   methodRegistryPlugin,
   mongoOperationsPlugin,
+  Repository,
   softDeletePlugin,
 } from "@classytic/mongokit";
 import { MongoMemoryServer } from "mongodb-memory-server";
-import mongoose, { Schema, type Model } from "mongoose";
+import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
@@ -88,7 +88,9 @@ async function buildApp() {
     auth: false,
     logger: false,
     helmet: false,
+    cors: false,
     rateLimit: false,
+    underPressure: false,
     plugins: async (fastify) => {
       await fastify.register(resource.toPlugin());
     },

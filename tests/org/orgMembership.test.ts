@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { orgMembershipCheck, getUserOrgRoles, hasOrgRole } from "../../src/org/orgMembership.js";
+import { getUserOrgRoles, hasOrgRole, orgMembershipCheck } from "../../src/org/orgMembership.js";
 
 describe("orgMembershipCheck()", () => {
   const makeUser = (orgs: Array<{ organizationId: string; roles?: string[] }>) => ({
@@ -29,17 +29,13 @@ describe("orgMembershipCheck()", () => {
 
   it("supports custom userOrgsPath", async () => {
     const user = { _id: "u1", teams: [{ organizationId: "t1" }] };
-    expect(
-      await orgMembershipCheck(user, "t1", { userOrgsPath: "teams" }),
-    ).toBe(true);
+    expect(await orgMembershipCheck(user, "t1", { userOrgsPath: "teams" })).toBe(true);
   });
 
   it("falls back to validateFromDb when not found in user object", async () => {
     const user = makeUser([]);
     const validateFromDb = vi.fn().mockResolvedValue(true);
-    expect(
-      await orgMembershipCheck(user, "org-1", { validateFromDb }),
-    ).toBe(true);
+    expect(await orgMembershipCheck(user, "org-1", { validateFromDb })).toBe(true);
     expect(validateFromDb).toHaveBeenCalledWith("user-1", "org-1");
   });
 
@@ -59,9 +55,7 @@ describe("orgMembershipCheck()", () => {
 
   it("compares orgId as string (handles ObjectId-like toString)", async () => {
     const user = makeUser([{ organizationId: "507f1f77bcf86cd799439011" }]);
-    expect(
-      await orgMembershipCheck(user, "507f1f77bcf86cd799439011"),
-    ).toBe(true);
+    expect(await orgMembershipCheck(user, "507f1f77bcf86cd799439011")).toBe(true);
   });
 });
 

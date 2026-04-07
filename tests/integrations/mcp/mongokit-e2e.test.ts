@@ -8,10 +8,11 @@
  * 4. MCP tools get correct input schemas and enriched descriptions
  * 5. createTestMcpClient can call the tools via InMemoryTransport
  */
-import { describe, expect, it, vi } from "vitest";
+
 import { QueryParser } from "@classytic/mongokit";
-import { resourceToTools } from "../../../src/integrations/mcp/resourceToTools.js";
+import { describe, expect, it, vi } from "vitest";
 import type { ResourceDefinition } from "../../../src/core/defineResource.js";
+import { resourceToTools } from "../../../src/integrations/mcp/resourceToTools.js";
 
 function mockResourceWithMongoKit(
   parserOpts: ConstructorParameters<typeof QueryParser>[0] = {},
@@ -194,7 +195,7 @@ describe("MongoKit QueryParser → MCP Tools E2E", () => {
       expect(ctrl.list).toHaveBeenCalledTimes(1);
 
       // Verify the request context was built correctly
-      const ctx = ctrl.list.mock.calls[0]![0];
+      const ctx = ctrl.list.mock.calls[0]?.[0];
       expect(ctx.query).toEqual({
         companyId: "org-123",
         status: "active",
@@ -222,7 +223,7 @@ describe("MongoKit QueryParser → MCP Tools E2E", () => {
       );
 
       const ctrl = resource.controller as Record<string, ReturnType<typeof vi.fn>>;
-      const ctx = ctrl.create.mock.calls[0]![0];
+      const ctx = ctrl.create.mock.calls[0]?.[0];
       expect(ctx.body).toEqual({ title: "New Job", status: "draft", companyId: "org-1" });
     });
   });

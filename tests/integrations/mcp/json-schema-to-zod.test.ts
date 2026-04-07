@@ -226,12 +226,8 @@ describe("jsonSchemaToZodShape", () => {
       },
       "create",
     );
-    expect(
-      parse(shape!, { items: [{ product: "WIDGET", quantity: 2 }] }).success,
-    ).toBe(true);
-    expect(
-      parse(shape!, { items: [{ product: "WIDGET" }] }).success,
-    ).toBe(false); // missing required quantity
+    expect(parse(shape!, { items: [{ product: "WIDGET", quantity: 2 }] }).success).toBe(true);
+    expect(parse(shape!, { items: [{ product: "WIDGET" }] }).success).toBe(false); // missing required quantity
   });
 
   it("untyped array accepts anything", () => {
@@ -275,9 +271,7 @@ describe("jsonSchemaToZodShape", () => {
     // Missing required nested field
     expect(parse(shape!, { address: { street: "123 Main" } }).success).toBe(false);
     // Bad pattern
-    expect(
-      parse(shape!, { address: { street: "X", city: "Y", zip: "abc" } }).success,
-    ).toBe(false);
+    expect(parse(shape!, { address: { street: "X", city: "Y", zip: "abc" } }).success).toBe(false);
   });
 
   it("nested object without properties accepts any record", () => {
@@ -386,7 +380,7 @@ describe("jsonSchemaToZodShape", () => {
       },
       "create",
     );
-    expect(shape!.name?.description).toBe("Product name");
+    expect(shape?.name?.description).toBe("Product name");
   });
 
   it("complex real-world e-commerce body schema converts cleanly", () => {

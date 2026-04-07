@@ -11,21 +11,21 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
-  isAuthenticated,
-  hasOrg,
-  isOrg,
-  getUserId,
-  getOrgId,
-  denied,
-  guard,
-  requireAuth,
-  requireOrg,
-  requireRole,
-  requireOrgId,
+  type AuthRef,
+  createMcpServer,
   customGuard,
   defineTool,
-  createMcpServer,
-  type AuthRef,
+  denied,
+  getOrgId,
+  getUserId,
+  guard,
+  hasOrg,
+  isAuthenticated,
+  isOrg,
+  requireAuth,
+  requireOrg,
+  requireOrgId,
+  requireRole,
 } from "../../../src/integrations/mcp/index.js";
 import type { ToolContext } from "../../../src/integrations/mcp/types.js";
 
@@ -219,21 +219,19 @@ describe("guard() wrapper", () => {
   });
 
   it("composes multiple guards", async () => {
-    const handler = guard(
-      requireAuth,
-      requireOrg,
-      requireRole("admin"),
-      async (_input, _ctx) => ({
-        content: [{ type: "text" as const, text: "admin action done" }],
-      }),
-    );
+    const handler = guard(requireAuth, requireOrg, requireRole("admin"), async (_input, _ctx) => ({
+      content: [{ type: "text" as const, text: "admin action done" }],
+    }));
 
     // All pass
     const ok = await handler({}, ctx({ userId: "u1", organizationId: "org-1", roles: ["admin"] }));
     expect(ok.isError).toBeFalsy();
 
     // Missing role
-    const noRole = await handler({}, ctx({ userId: "u1", organizationId: "org-1", roles: ["user"] }));
+    const noRole = await handler(
+      {},
+      ctx({ userId: "u1", organizationId: "org-1", roles: ["user"] }),
+    );
     expect(noRole.isError).toBe(true);
     expect((noRole.content[0] as { text: string }).text).toContain("Required role");
   });
@@ -266,7 +264,9 @@ describe("Guard integration with createMcpServer", () => {
   });
 
   it("guarded tool passes with proper auth", async () => {
-    const authRef: AuthRef = { current: { userId: "admin-1", organizationId: "org-x", roles: ["admin"] } };
+    const authRef: AuthRef = {
+      current: { userId: "admin-1", organizationId: "org-x", roles: ["admin"] },
+    };
 
     const server = await createMcpServer(
       {
@@ -275,7 +275,12 @@ describe("Guard integration with createMcpServer", () => {
           defineTool("admin_action", {
             description: "Admin only",
             handler: guard(requireAuth, requireOrg, async (_input, ctx) => ({
-              content: [{ type: "text", text: `Done by ${ctx.session?.userId} in ${ctx.session?.organizationId}` }],
+              content: [
+                {
+                  type: "text",
+                  text: `Done by ${ctx.session?.userId} in ${ctx.session?.organizationId}`,
+                },
+              ],
             })),
           }),
         ],
@@ -291,7 +296,9 @@ describe("Guard integration with createMcpServer", () => {
   });
 
   it("role-guarded tool works end-to-end", async () => {
-    const authRef: AuthRef = { current: { userId: "u1", organizationId: "org-1", roles: ["editor"] } };
+    const authRef: AuthRef = {
+      current: { userId: "u1", organizationId: "org-1", roles: ["editor"] },
+    };
 
     const server = await createMcpServer(
       {

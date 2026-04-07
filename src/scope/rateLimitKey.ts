@@ -58,6 +58,13 @@ export function createTenantKeyGenerator(
       return scope.organizationId;
     }
 
+    if (scope.kind === "service") {
+      // Service scopes are always org-bound (see RequestScope type — organizationId
+      // is required on kind: "service"). Use the org as the rate-limit key so
+      // machine-to-machine traffic shares the tenant's budget with user traffic.
+      return scope.organizationId;
+    }
+
     if (scope.kind === "elevated") {
       return scope.organizationId ?? scope.userId ?? ctx.ip;
     }

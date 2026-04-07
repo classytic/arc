@@ -5,9 +5,9 @@
  * with the business operation, then relayed to the transport.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-describe('EventOutbox', () => {
+describe("EventOutbox", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
@@ -16,36 +16,36 @@ describe('EventOutbox', () => {
   // Core Interface
   // ==========================================================================
 
-  it('should store events in outbox', async () => {
-    const { EventOutbox, MemoryOutboxStore } = await import('../../src/events/outbox.js');
+  it("should store events in outbox", async () => {
+    const { EventOutbox, MemoryOutboxStore } = await import("../../src/events/outbox.js");
     const store = new MemoryOutboxStore();
     const outbox = new EventOutbox({ store });
 
     await outbox.store({
-      type: 'order.created',
-      payload: { orderId: '123', total: 99 },
-      meta: { id: 'evt-1', timestamp: new Date() },
+      type: "order.created",
+      payload: { orderId: "123", total: 99 },
+      meta: { id: "evt-1", timestamp: new Date() },
     });
 
     const pending = await store.getPending(10);
     expect(pending).toHaveLength(1);
-    expect(pending[0].type).toBe('order.created');
+    expect(pending[0].type).toBe("order.created");
   });
 
-  it('should relay pending events to transport', async () => {
-    const { EventOutbox, MemoryOutboxStore } = await import('../../src/events/outbox.js');
-    const { MemoryEventTransport } = await import('../../src/events/EventTransport.js');
+  it("should relay pending events to transport", async () => {
+    const { EventOutbox, MemoryOutboxStore } = await import("../../src/events/outbox.js");
+    const { MemoryEventTransport } = await import("../../src/events/EventTransport.js");
 
     const store = new MemoryOutboxStore();
     const transport = new MemoryEventTransport();
-    const publishSpy = vi.spyOn(transport, 'publish');
+    const publishSpy = vi.spyOn(transport, "publish");
 
     const outbox = new EventOutbox({ store, transport });
 
     await outbox.store({
-      type: 'order.created',
-      payload: { orderId: '123' },
-      meta: { id: 'evt-1', timestamp: new Date() },
+      type: "order.created",
+      payload: { orderId: "123" },
+      meta: { id: "evt-1", timestamp: new Date() },
     });
 
     const relayed = await outbox.relay();
@@ -57,23 +57,23 @@ describe('EventOutbox', () => {
     expect(pending).toHaveLength(0);
   });
 
-  it('should mark events as relayed after successful publish', async () => {
-    const { EventOutbox, MemoryOutboxStore } = await import('../../src/events/outbox.js');
-    const { MemoryEventTransport } = await import('../../src/events/EventTransport.js');
+  it("should mark events as relayed after successful publish", async () => {
+    const { EventOutbox, MemoryOutboxStore } = await import("../../src/events/outbox.js");
+    const { MemoryEventTransport } = await import("../../src/events/EventTransport.js");
 
     const store = new MemoryOutboxStore();
     const transport = new MemoryEventTransport();
     const outbox = new EventOutbox({ store, transport });
 
     await outbox.store({
-      type: 'order.created',
-      payload: { orderId: '1' },
-      meta: { id: 'evt-1', timestamp: new Date() },
+      type: "order.created",
+      payload: { orderId: "1" },
+      meta: { id: "evt-1", timestamp: new Date() },
     });
     await outbox.store({
-      type: 'order.shipped',
-      payload: { orderId: '2' },
-      meta: { id: 'evt-2', timestamp: new Date() },
+      type: "order.shipped",
+      payload: { orderId: "2" },
+      meta: { id: "evt-2", timestamp: new Date() },
     });
 
     await outbox.relay();
@@ -82,13 +82,13 @@ describe('EventOutbox', () => {
     expect(pending).toHaveLength(0);
   });
 
-  it('should NOT mark event as relayed if transport publish fails', async () => {
-    const { EventOutbox, MemoryOutboxStore } = await import('../../src/events/outbox.js');
+  it("should NOT mark event as relayed if transport publish fails", async () => {
+    const { EventOutbox, MemoryOutboxStore } = await import("../../src/events/outbox.js");
 
     const store = new MemoryOutboxStore();
     const failingTransport = {
-      name: 'failing',
-      publish: vi.fn().mockRejectedValue(new Error('Transport down')),
+      name: "failing",
+      publish: vi.fn().mockRejectedValue(new Error("Transport down")),
       subscribe: vi.fn(),
       close: vi.fn(),
     };
@@ -96,9 +96,9 @@ describe('EventOutbox', () => {
     const outbox = new EventOutbox({ store, transport: failingTransport });
 
     await outbox.store({
-      type: 'order.created',
-      payload: { orderId: '1' },
-      meta: { id: 'evt-1', timestamp: new Date() },
+      type: "order.created",
+      payload: { orderId: "1" },
+      meta: { id: "evt-1", timestamp: new Date() },
     });
 
     const relayed = await outbox.relay();
@@ -109,9 +109,9 @@ describe('EventOutbox', () => {
     expect(pending).toHaveLength(1);
   });
 
-  it('should respect batch size during relay', async () => {
-    const { EventOutbox, MemoryOutboxStore } = await import('../../src/events/outbox.js');
-    const { MemoryEventTransport } = await import('../../src/events/EventTransport.js');
+  it("should respect batch size during relay", async () => {
+    const { EventOutbox, MemoryOutboxStore } = await import("../../src/events/outbox.js");
+    const { MemoryEventTransport } = await import("../../src/events/EventTransport.js");
 
     const store = new MemoryOutboxStore();
     const transport = new MemoryEventTransport();
@@ -119,7 +119,7 @@ describe('EventOutbox', () => {
 
     for (let i = 0; i < 5; i++) {
       await outbox.store({
-        type: 'order.created',
+        type: "order.created",
         payload: { orderId: String(i) },
         meta: { id: `evt-${i}`, timestamp: new Date() },
       });
@@ -136,38 +136,38 @@ describe('EventOutbox', () => {
   // MemoryOutboxStore
   // ==========================================================================
 
-  describe('MemoryOutboxStore', () => {
-    it('should return events in FIFO order', async () => {
-      const { MemoryOutboxStore } = await import('../../src/events/outbox.js');
+  describe("MemoryOutboxStore", () => {
+    it("should return events in FIFO order", async () => {
+      const { MemoryOutboxStore } = await import("../../src/events/outbox.js");
       const store = new MemoryOutboxStore();
 
       await store.save({
-        type: 'a',
+        type: "a",
         payload: {},
-        meta: { id: 'evt-1', timestamp: new Date() },
+        meta: { id: "evt-1", timestamp: new Date() },
       });
       await store.save({
-        type: 'b',
+        type: "b",
         payload: {},
-        meta: { id: 'evt-2', timestamp: new Date() },
+        meta: { id: "evt-2", timestamp: new Date() },
       });
 
       const pending = await store.getPending(10);
-      expect(pending[0].type).toBe('a');
-      expect(pending[1].type).toBe('b');
+      expect(pending[0].type).toBe("a");
+      expect(pending[1].type).toBe("b");
     });
 
-    it('should remove acknowledged events', async () => {
-      const { MemoryOutboxStore } = await import('../../src/events/outbox.js');
+    it("should remove acknowledged events", async () => {
+      const { MemoryOutboxStore } = await import("../../src/events/outbox.js");
       const store = new MemoryOutboxStore();
 
       await store.save({
-        type: 'a',
+        type: "a",
         payload: {},
-        meta: { id: 'evt-1', timestamp: new Date() },
+        meta: { id: "evt-1", timestamp: new Date() },
       });
 
-      await store.acknowledge('evt-1');
+      await store.acknowledge("evt-1");
       const pending = await store.getPending(10);
       expect(pending).toHaveLength(0);
     });

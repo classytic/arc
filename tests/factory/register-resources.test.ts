@@ -5,21 +5,19 @@
  * plugins → bootstrap → resources → afterResources → lifecycle hooks
  */
 
-import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import mongoose from "mongoose";
-import { registerResources } from "../../src/factory/registerResources.js";
-import { defineResource } from "../../src/core/defineResource.js";
-import { BaseController } from "../../src/core/BaseController.js";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
+import { BaseController } from "../../src/core/BaseController.js";
+import { defineResource } from "../../src/core/defineResource.js";
+import { registerResources } from "../../src/factory/registerResources.js";
 import { allowPublic } from "../../src/permissions/index.js";
 import {
-  setupTestDatabase,
-  teardownTestDatabase,
   createMockModel,
   createMockRepository,
+  setupTestDatabase,
+  teardownTestDatabase,
 } from "../setup.js";
-import type { CreateAppOptions } from "../../src/factory/types.js";
 
 function makeResource(name: string, opts: { skipGlobalPrefix?: boolean; prefix?: string } = {}) {
   const Model = createMockModel(`RegRes${name.charAt(0).toUpperCase()}${name.slice(1)}`);
@@ -72,10 +70,7 @@ describe("registerResources — unit", () => {
       plugins: async () => {
         order.push("plugins");
       },
-      bootstrap: [
-        async () => order.push("bootstrap-1"),
-        async () => order.push("bootstrap-2"),
-      ],
+      bootstrap: [async () => order.push("bootstrap-1"), async () => order.push("bootstrap-2")],
       resources: [],
       afterResources: async () => order.push("afterResources"),
       onReady: async () => order.push("onReady"),
@@ -155,9 +150,9 @@ describe("registerResources — unit", () => {
       },
     };
 
-    await expect(
-      registerResources(app, { resources: [badResource] }),
-    ).rejects.toThrow('Resource "broken" failed to register');
+    await expect(registerResources(app, { resources: [badResource] })).rejects.toThrow(
+      'Resource "broken" failed to register',
+    );
   });
 
   // ── Bootstrap ──
@@ -200,7 +195,11 @@ describe("registerResources — unit", () => {
 
     await expect(
       registerResources(app, {
-        bootstrap: [async () => { throw new Error("DB connection failed"); }],
+        bootstrap: [
+          async () => {
+            throw new Error("DB connection failed");
+          },
+        ],
       }),
     ).rejects.toThrow("DB connection failed");
   });
@@ -212,7 +211,9 @@ describe("registerResources — unit", () => {
     let closed = false;
 
     await registerResources(app, {
-      onClose: async () => { closed = true; },
+      onClose: async () => {
+        closed = true;
+      },
     });
     await app.ready();
     await app.close();

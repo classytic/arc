@@ -8,10 +8,10 @@
  * - reply.raw streaming without breaking Arc's response pipeline
  */
 
-import { describe, it, expect, afterEach, vi } from 'vitest';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance } from "fastify";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-describe('Additional Route — Streaming & Flexibility', () => {
+describe("Additional Route — Streaming & Flexibility", () => {
   let app: FastifyInstance;
 
   afterEach(async () => {
@@ -23,27 +23,27 @@ describe('Additional Route — Streaming & Flexibility', () => {
   // Raw Fastify handler (streaming)
   // ==========================================================================
 
-  describe('raw Fastify handler (wrapHandler: false)', () => {
-    it('supports NDJSON streaming via reply.raw', async () => {
+  describe("raw Fastify handler (wrapHandler: false)", () => {
+    it("supports NDJSON streaming via reply.raw", async () => {
       app = Fastify({ logger: false });
 
       app.route({
-        method: 'GET',
-        url: '/products/export',
+        method: "GET",
+        url: "/products/export",
         handler: async (_request, reply) => {
           reply.raw.writeHead(200, {
-            'content-type': 'application/x-ndjson',
-            'transfer-encoding': 'chunked',
+            "content-type": "application/x-ndjson",
+            "transfer-encoding": "chunked",
           });
 
           const items = [
-            { _id: '1', name: 'Widget' },
-            { _id: '2', name: 'Gadget' },
-            { _id: '3', name: 'Thingamajig' },
+            { _id: "1", name: "Widget" },
+            { _id: "2", name: "Gadget" },
+            { _id: "3", name: "Thingamajig" },
           ];
 
           for (const item of items) {
-            reply.raw.write(JSON.stringify(item) + '\n');
+            reply.raw.write(`${JSON.stringify(item)}\n`);
           }
           reply.raw.end();
         },
@@ -52,35 +52,35 @@ describe('Additional Route — Streaming & Flexibility', () => {
       await app.ready();
 
       const res = await app.inject({
-        method: 'GET',
-        url: '/products/export',
+        method: "GET",
+        url: "/products/export",
       });
 
       expect(res.statusCode).toBe(200);
-      expect(res.headers['content-type']).toBe('application/x-ndjson');
+      expect(res.headers["content-type"]).toBe("application/x-ndjson");
 
       // Parse NDJSON
-      const lines = res.body.trim().split('\n');
+      const lines = res.body.trim().split("\n");
       expect(lines).toHaveLength(3);
-      expect(JSON.parse(lines[0])).toEqual({ _id: '1', name: 'Widget' });
-      expect(JSON.parse(lines[2])).toEqual({ _id: '3', name: 'Thingamajig' });
+      expect(JSON.parse(lines[0])).toEqual({ _id: "1", name: "Widget" });
+      expect(JSON.parse(lines[2])).toEqual({ _id: "3", name: "Thingamajig" });
     });
 
-    it('supports SSE-style streaming via reply.raw', async () => {
+    it("supports SSE-style streaming via reply.raw", async () => {
       app = Fastify({ logger: false });
 
       app.route({
-        method: 'GET',
-        url: '/events/stream',
+        method: "GET",
+        url: "/events/stream",
         handler: async (_request, reply) => {
           reply.raw.writeHead(200, {
-            'content-type': 'text/event-stream',
-            'cache-control': 'no-cache',
-            connection: 'keep-alive',
+            "content-type": "text/event-stream",
+            "cache-control": "no-cache",
+            connection: "keep-alive",
           });
 
           reply.raw.write('event: message\ndata: {"hello":"world"}\n\n');
-          reply.raw.write('event: done\ndata: {}\n\n');
+          reply.raw.write("event: done\ndata: {}\n\n");
           reply.raw.end();
         },
       });
@@ -88,33 +88,33 @@ describe('Additional Route — Streaming & Flexibility', () => {
       await app.ready();
 
       const res = await app.inject({
-        method: 'GET',
-        url: '/events/stream',
+        method: "GET",
+        url: "/events/stream",
       });
 
       expect(res.statusCode).toBe(200);
-      expect(res.headers['content-type']).toBe('text/event-stream');
-      expect(res.body).toContain('event: message');
+      expect(res.headers["content-type"]).toBe("text/event-stream");
+      expect(res.body).toContain("event: message");
       expect(res.body).toContain('"hello":"world"');
     });
 
-    it('supports returning plain JSON (non-streaming) from raw handler', async () => {
+    it("supports returning plain JSON (non-streaming) from raw handler", async () => {
       app = Fastify({ logger: false });
 
       app.route({
-        method: 'GET',
-        url: '/health',
+        method: "GET",
+        url: "/health",
         handler: async () => {
-          return { status: 'ok', timestamp: Date.now() };
+          return { status: "ok", timestamp: Date.now() };
         },
       });
 
       await app.ready();
 
-      const res = await app.inject({ method: 'GET', url: '/health' });
+      const res = await app.inject({ method: "GET", url: "/health" });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.status).toBe('ok');
+      expect(body.status).toBe("ok");
     });
   });
 
@@ -122,17 +122,17 @@ describe('Additional Route — Streaming & Flexibility', () => {
   // Zod v4 schema auto-conversion
   // ==========================================================================
 
-  describe('Zod v4 schema conversion for additionalRoutes', () => {
-    it('converts Zod body schema to JSON Schema for route registration', async () => {
+  describe("Zod v4 schema conversion for additionalRoutes", () => {
+    it("converts Zod body schema to JSON Schema for route registration", async () => {
       // Test the converter directly since Zod is a peer dep
       const { convertRouteSchema, isZodSchema } = await import(
-        '../../src/utils/schemaConverter.js'
+        "../../src/utils/schemaConverter.js"
       );
 
       let hasZod = false;
       try {
-        const { z } = await import('zod');
-        hasZod = typeof z?.object === 'function';
+        const { z } = await import("zod");
+        hasZod = typeof z?.object === "function";
 
         if (hasZod) {
           const bodySchema = z.object({
@@ -154,12 +154,12 @@ describe('Additional Route — Streaming & Flexibility', () => {
 
           // Body should be converted to JSON Schema
           const body = converted.body as Record<string, unknown>;
-          expect(body.type).toBe('object');
+          expect(body.type).toBe("object");
           expect(body.properties).toBeDefined();
 
           // Response 200 should also be converted
           const resp = converted.response as Record<string, Record<string, unknown>>;
-          expect(resp['200'].type).toBe('object');
+          expect(resp["200"].type).toBe("object");
         }
       } catch {
         // Zod not installed — skip but don't fail
@@ -169,34 +169,32 @@ describe('Additional Route — Streaming & Flexibility', () => {
         // Verify passthrough for plain JSON Schema works
         const result = convertRouteSchema({
           body: {
-            type: 'object',
-            properties: { name: { type: 'string' } },
-            required: ['name'],
+            type: "object",
+            properties: { name: { type: "string" } },
+            required: ["name"],
           },
         });
-        expect((result.body as Record<string, unknown>).type).toBe('object');
+        expect((result.body as Record<string, unknown>).type).toBe("object");
       }
     });
 
-    it('passes plain JSON Schema through without conversion', async () => {
-      const { convertRouteSchema } = await import(
-        '../../src/utils/schemaConverter.js'
-      );
+    it("passes plain JSON Schema through without conversion", async () => {
+      const { convertRouteSchema } = await import("../../src/utils/schemaConverter.js");
 
       const plainSchema = {
         body: {
-          type: 'object',
+          type: "object",
           properties: {
-            filter: { type: 'object' },
-            data: { type: 'object' },
+            filter: { type: "object" },
+            data: { type: "object" },
           },
-          required: ['filter', 'data'],
+          required: ["filter", "data"],
         },
         response: {
           200: {
-            type: 'object',
+            type: "object",
             properties: {
-              success: { type: 'boolean' },
+              success: { type: "boolean" },
             },
           },
         },
@@ -206,8 +204,8 @@ describe('Additional Route — Streaming & Flexibility', () => {
 
       // Should pass through unchanged
       expect(result.body).toEqual(plainSchema.body);
-      expect((result.response as Record<string, unknown>)['200']).toEqual(
-        plainSchema.response['200'],
+      expect((result.response as Record<string, unknown>)["200"]).toEqual(
+        plainSchema.response["200"],
       );
     });
   });
@@ -216,29 +214,29 @@ describe('Additional Route — Streaming & Flexibility', () => {
   // Mixed handler types on same resource
   // ==========================================================================
 
-  describe('mixed handler types coexistence', () => {
-    it('supports both JSON API and streaming routes on same Fastify instance', async () => {
+  describe("mixed handler types coexistence", () => {
+    it("supports both JSON API and streaming routes on same Fastify instance", async () => {
       app = Fastify({ logger: false });
 
       // Standard JSON route
-      app.get('/products', async () => {
+      app.get("/products", async () => {
         return {
           success: true,
-          data: { docs: [{ _id: '1', name: 'Widget' }], total: 1 },
+          data: { docs: [{ _id: "1", name: "Widget" }], total: 1 },
         };
       });
 
       // Streaming NDJSON route on same resource
-      app.get('/products/export', async (_request, reply) => {
-        reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
+      app.get("/products/export", async (_request, reply) => {
+        reply.raw.writeHead(200, { "content-type": "application/x-ndjson" });
         reply.raw.write('{"_id":"1","name":"Widget"}\n');
         reply.raw.write('{"_id":"2","name":"Gadget"}\n');
         reply.raw.end();
       });
 
       // SSE route
-      app.get('/products/stream', async (_request, reply) => {
-        reply.raw.writeHead(200, { 'content-type': 'text/event-stream' });
+      app.get("/products/stream", async (_request, reply) => {
+        reply.raw.writeHead(200, { "content-type": "text/event-stream" });
         reply.raw.write('data: {"type":"product.created"}\n\n');
         reply.raw.end();
       });
@@ -246,19 +244,19 @@ describe('Additional Route — Streaming & Flexibility', () => {
       await app.ready();
 
       // JSON API works
-      const jsonRes = await app.inject({ method: 'GET', url: '/products' });
+      const jsonRes = await app.inject({ method: "GET", url: "/products" });
       expect(jsonRes.statusCode).toBe(200);
       expect(JSON.parse(jsonRes.body).success).toBe(true);
 
       // NDJSON streaming works
-      const ndjsonRes = await app.inject({ method: 'GET', url: '/products/export' });
+      const ndjsonRes = await app.inject({ method: "GET", url: "/products/export" });
       expect(ndjsonRes.statusCode).toBe(200);
-      expect(ndjsonRes.headers['content-type']).toBe('application/x-ndjson');
+      expect(ndjsonRes.headers["content-type"]).toBe("application/x-ndjson");
 
       // SSE streaming works
-      const sseRes = await app.inject({ method: 'GET', url: '/products/stream' });
+      const sseRes = await app.inject({ method: "GET", url: "/products/stream" });
       expect(sseRes.statusCode).toBe(200);
-      expect(sseRes.headers['content-type']).toBe('text/event-stream');
+      expect(sseRes.headers["content-type"]).toBe("text/event-stream");
     });
   });
 
@@ -266,28 +264,28 @@ describe('Additional Route — Streaming & Flexibility', () => {
   // Schema on streaming routes
   // ==========================================================================
 
-  describe('schema on streaming routes', () => {
-    it('allows schema definition on streaming routes for OpenAPI docs', async () => {
+  describe("schema on streaming routes", () => {
+    it("allows schema definition on streaming routes for OpenAPI docs", async () => {
       app = Fastify({ logger: false });
 
       app.route({
-        method: 'GET',
-        url: '/products/export',
+        method: "GET",
+        url: "/products/export",
         schema: {
-          description: 'Export all products as NDJSON stream',
-          tags: ['Product'],
+          description: "Export all products as NDJSON stream",
+          tags: ["Product"],
           querystring: {
-            type: 'object',
+            type: "object",
             properties: {
-              status: { type: 'string', enum: ['active', 'archived'] },
+              status: { type: "string", enum: ["active", "archived"] },
             },
           },
           // No response schema — streaming routes return raw bytes
         },
         handler: async (request, reply) => {
           const query = request.query as { status?: string };
-          reply.raw.writeHead(200, { 'content-type': 'application/x-ndjson' });
-          reply.raw.write(JSON.stringify({ filter: query.status ?? 'all' }) + '\n');
+          reply.raw.writeHead(200, { "content-type": "application/x-ndjson" });
+          reply.raw.write(`${JSON.stringify({ filter: query.status ?? "all" })}\n`);
           reply.raw.end();
         },
       });
@@ -295,13 +293,13 @@ describe('Additional Route — Streaming & Flexibility', () => {
       await app.ready();
 
       const res = await app.inject({
-        method: 'GET',
-        url: '/products/export?status=active',
+        method: "GET",
+        url: "/products/export?status=active",
       });
 
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body.trim());
-      expect(body.filter).toBe('active');
+      expect(body.filter).toBe("active");
     });
   });
 });

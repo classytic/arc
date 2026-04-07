@@ -14,16 +14,16 @@
  * - additionalProperties: true allowing flexible queries
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { QueryParser, Repository } from "@classytic/mongokit";
+import type { FastifyInstance } from "fastify";
 import mongoose from "mongoose";
-import { Repository, QueryParser } from "@classytic/mongokit";
-import { createApp } from "../../src/factory/createApp.js";
-import { defineResource } from "../../src/core/defineResource.js";
-import { BaseController } from "../../src/core/BaseController.js";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
+import { BaseController } from "../../src/core/BaseController.js";
+import { defineResource } from "../../src/core/defineResource.js";
+import { createApp } from "../../src/factory/createApp.js";
 import { allowPublic } from "../../src/permissions/index.js";
 import { setupTestDatabase, teardownTestDatabase } from "../setup.js";
-import type { FastifyInstance } from "fastify";
 
 describe("Schema + Query Integration E2E", () => {
   let app: FastifyInstance;
@@ -48,8 +48,7 @@ describe("Schema + Query Integration E2E", () => {
       { timestamps: true },
     );
     const ProductModel =
-      mongoose.models.SchemaTestProduct ||
-      mongoose.model("SchemaTestProduct", ProductSchema);
+      mongoose.models.SchemaTestProduct || mongoose.model("SchemaTestProduct", ProductSchema);
     const productRepo = new Repository(ProductModel);
 
     const qp = new QueryParser({
@@ -61,7 +60,12 @@ describe("Schema + Query Integration E2E", () => {
     const schemaOptions = {
       fieldRules: {
         name: { type: "string", required: true, description: "Product name" },
-        sku: { type: "string", required: true, immutable: true, description: "SKU — cannot be changed after creation" },
+        sku: {
+          type: "string",
+          required: true,
+          immutable: true,
+          description: "SKU — cannot be changed after creation",
+        },
         price: { type: "number", required: true, min: 0 },
         category: { type: "string", enum: ["electronics", "books", "food"] },
         inStock: { type: "boolean" },
@@ -311,16 +315,22 @@ describe("Schema + Query Integration E2E", () => {
   describe("subdocument array schema generation", () => {
     it("subdoc arrays generate object items, not string items", async () => {
       // Create a model with subdocument array
-      const JournalSchema = new mongoose.Schema({
-        description: { type: String, required: true },
-        entries: [{
-          account: { type: mongoose.Schema.Types.ObjectId, required: true },
-          debit: { type: Number, default: 0 },
-          credit: { type: Number, default: 0 },
-        }],
-        tags: [String],
-      }, { timestamps: true });
-      const JM = mongoose.models.SchemaTestJournal || mongoose.model("SchemaTestJournal", JournalSchema);
+      const JournalSchema = new mongoose.Schema(
+        {
+          description: { type: String, required: true },
+          entries: [
+            {
+              account: { type: mongoose.Schema.Types.ObjectId, required: true },
+              debit: { type: Number, default: 0 },
+              credit: { type: Number, default: 0 },
+            },
+          ],
+          tags: [String],
+        },
+        { timestamps: true },
+      );
+      const JM =
+        mongoose.models.SchemaTestJournal || mongoose.model("SchemaTestJournal", JournalSchema);
 
       const { Repository } = await import("@classytic/mongokit");
       const { MongooseAdapter } = await import("../../src/adapters/mongoose.js");
@@ -352,7 +362,8 @@ describe("Schema + Query Integration E2E", () => {
         notes: String,
         internalStatus: { type: String, default: "pending" },
       });
-      const PM = mongoose.models.SchemaPartialRules || mongoose.model("SchemaPartialRules", PartialSchema);
+      const PM =
+        mongoose.models.SchemaPartialRules || mongoose.model("SchemaPartialRules", PartialSchema);
 
       const { Repository } = await import("@classytic/mongokit");
       const { MongooseAdapter } = await import("../../src/adapters/mongoose.js");
@@ -377,7 +388,8 @@ describe("Schema + Query Integration E2E", () => {
         orgId: { type: String, required: true },
         status: { type: String, required: true },
       });
-      const TM = mongoose.models.SchemaTestExclude || mongoose.model("SchemaTestExclude", TestSchema);
+      const TM =
+        mongoose.models.SchemaTestExclude || mongoose.model("SchemaTestExclude", TestSchema);
 
       const { Repository } = await import("@classytic/mongokit");
       const { MongooseAdapter } = await import("../../src/adapters/mongoose.js");
