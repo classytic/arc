@@ -685,7 +685,7 @@ export class ResourceDefinition<TDoc = AnyRecord> {
           const openApi = self._registryMeta?.openApiSchemas;
           if (openApi && (!self.customSchemas || Object.keys(self.customSchemas).length === 0)) {
             const generated: Record<string, AnyRecord> = {};
-            const { createBody, updateBody, params, response } = openApi as AnyRecord;
+            const { createBody, updateBody, params } = openApi as AnyRecord;
 
             // Ensure body schemas allow additional properties by default
             // (prevents the built-in Mongoose extractor from rejecting unknown fields)
