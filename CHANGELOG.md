@@ -1,5 +1,55 @@
 # Changelog
 
+## 2.6.3
+
+### `idField` override works end-to-end
+
+Resources with a custom `idField` (e.g. `jobId`, `orderId`, UUID strings) no longer get their routes rejected by AJV's ObjectId pattern validation. Fixed at two layers:
+
+- **New adapter contract** — `DataAdapter.generateSchemas(options, context?)` now accepts `AdapterSchemaContext` with `idField` and `resourceName`. Adapters and schema-generator plugins (MongoKit's `buildCrudSchemasFromModel`) can produce the right `params.id` shape from the start. Backwards compatible — legacy adapters ignoring the argument still work via the safety net below.
+- **Safety net in `defineResource`** — when `idField !== '_id'` and any known ObjectId pattern is detected on `params.id`, Arc strips `pattern` / `minLength` / `maxLength` and sets a description. User-provided `openApiSchemas.params` still wins over everything.
+
+```typescript
+defineResource({
+  name: 'job',
+  adapter: createMongooseAdapter(JobModel, jobRepository),
+  idField: 'jobId',     // ← one line, now works for routes + MCP tools + OpenAPI docs
+});
+
+// GET /jobs/job-5219f346-a4d  → 200 (was 400 "must match pattern ^[0-9a-fA-F]{24}$")
+```
+
+Covers all three layers: Fastify route validation (AJV), BaseController lookups, OpenAPI docs.
+
+### List query normalization — no more AJV strict-mode warnings
+
+Rewrote the listQuery normalization in `defineResource.toPlugin()`. The old approach tried to strip `type` from filter fields but missed `populate` (with its `oneOf` composition), didn't recurse into composition keywords, and could leave orphan `minimum`/`maximum` constraints when merging with partial user schemas.
+
+New strategy: a fixed allowlist of well-known keys (`page`, `limit`, `sort`, `search`, `select`, `after`, `populate`, `lookup`, `aggregate`) preserves its parser-emitted schema. Everything else (filter fields) is replaced with `{}` (accept-any) — the `QueryParser` owns runtime validation, AJV just gets out of the way.
+
+Works with MongoKit, SQL-style parsers, composition-heavy custom parsers, or any exotic user-defined shape. The `_registryMeta.openApiSchemas.listQuery` is NOT mutated, so OpenAPI docs still show the rich parser output.
+
+### Mongoose adapter — body schemas default to `additionalProperties: true`
+
+The built-in Mongoose adapter fallback now emits `additionalProperties: true` on `createBody` and `updateBody` (previously only on `response`), so POST/PATCH requests with extra fields are no longer rejected by the built-in fallback generator. Explicit generators (MongoKit's `buildCrudSchemasFromModel`) can still override this by setting `additionalProperties: false`.
+
+### Peer dependencies use `>=` instead of `^`
+
+All peer dependency version ranges converted from `^X.Y.Z` to `>=X.Y.Z` so users upgrading to new majors don't get peer-dep warnings. Notable:
+
+- `mongodb`: `^6.0.0 || ^7.0.0` → `>=6.0.0` (MongoDB 8.x now supported)
+- `fastify`: `^5.7.4` → `>=5.0.0`
+- `zod`: `^4.0.0` → `>=4.0.0`
+- `bullmq`, `ioredis`, all `@fastify/*`, `@sinclair/typebox`, `pino-pretty`, `fastify-raw-body`
+
+### Tests
+
+- **`tests/core/id-field-params-schema.test.ts`** — 6 tests: safety net, adapter context, E2E routes with custom ID formats, user override precedence
+- **`tests/core/list-query-normalization.test.ts`** — 5 tests with MongoKit-like, SQL-style, composition-based parsers
+- **`tests/docs/openapi-integration.test.ts`** — 7 full integration tests with real `MongoMemoryServer` + MongoKit `Repository` + `arcCorePlugin` + `openApiPlugin`, AJV strict mode logger attached, verifies zero warnings + OpenAPI docs generation + real CRUD requests
+
+**Suite total: 218 files, 3053 passing, 0 failures.**
+
 ## 2.6.2
 
 ### Audit Plugin — Per-Resource Opt-In

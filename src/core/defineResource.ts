@@ -311,8 +311,55 @@ export function defineResource<TDoc = AnyRecord>(
       // Start with adapter-generated schemas (createBody, updateBody, response, params)
       let openApiSchemas: OpenApiSchemas | undefined;
       if (config.adapter?.generateSchemas) {
-        const generated = config.adapter.generateSchemas(config.schemaOptions);
+        // Pass resource-level context so adapters can shape params/response etc.
+        const adapterContext = {
+          idField: config.idField,
+          resourceName: config.name,
+        };
+        const generated = config.adapter.generateSchemas(config.schemaOptions, adapterContext);
         if (generated) openApiSchemas = generated;
+      }
+
+      // Safety net: if idField is overridden to a non-default value, strip any
+      // ObjectId pattern left on params.id by legacy adapters/plugins that
+      // didn't honor the AdapterSchemaContext.idField argument. Custom ID
+      // formats (UUIDs, slugs, ORD-2026-0001) must not be rejected by AJV
+      // before BaseController runs the actual lookup.
+      if (
+        config.idField &&
+        config.idField !== "_id" &&
+        openApiSchemas?.params &&
+        typeof openApiSchemas.params === "object"
+      ) {
+        const params = openApiSchemas.params as AnyRecord;
+        const properties = params.properties as AnyRecord | undefined;
+        const idProp = properties?.id as AnyRecord | undefined;
+        if (idProp && typeof idProp === "object") {
+          const pattern = idProp.pattern;
+          const isObjectIdPattern =
+            typeof pattern === "string" &&
+            (pattern === "^[0-9a-fA-F]{24}$" ||
+              pattern === "^[a-f\\d]{24}$" ||
+              pattern === "^[a-fA-F0-9]{24}$" ||
+              /^\^\[[a-fA-F0-9\\d]+\]\{24\}\$$/.test(pattern));
+          if (isObjectIdPattern) {
+            // Clone to avoid mutating the adapter's cached output
+            const cleanedId: AnyRecord = { ...idProp };
+            delete cleanedId.pattern;
+            delete cleanedId.minLength;
+            delete cleanedId.maxLength;
+            if (!cleanedId.description) {
+              cleanedId.description = `${config.idField} (custom ID field)`;
+            }
+            openApiSchemas = {
+              ...openApiSchemas,
+              params: {
+                ...params,
+                properties: { ...properties, id: cleanedId },
+              } as AnyRecord,
+            };
+          }
+        }
       }
 
       // Layer queryParser's listQuery on top — parser wins over adapter
@@ -710,40 +757,39 @@ export class ResourceDefinition<TDoc = AnyRecord> {
             // The QueryParser handles validation and type coercion — AJV should only
             // enforce structure (additionalProperties), not types on querystrings.
             //
-            // Filter fields: strip `type` AND type-dependent keywords (minimum, maximum,
-            // minLength, maxLength, pattern, format) so AJV strict mode doesn't warn about
-            // keywords that are meaningless without a type. Keep `description` and `enum`
-            // (valid for any type, useful for OpenAPI docs).
-            // Pagination/sort/search params are never bracket-parsed — keep their types.
-            const KEEP_TYPE = new Set(["page", "limit", "sort", "search", "select", "after"]);
-            const TYPE_DEPENDENT = new Set([
-              "type",
-              "minimum",
-              "maximum",
-              "minLength",
-              "maxLength",
-              "pattern",
-              "format",
-              "exclusiveMinimum",
-              "exclusiveMaximum",
-              "multipleOf",
-              "minItems",
-              "maxItems",
-              "uniqueItems",
+            // Normalization strategy for list query:
+            //
+            // The `qs` parser transforms bracket notation into nested values at runtime:
+            //   ?name[contains]=foo  → { name: { contains: "foo" } }
+            //   ?tags[]=a&tags[]=b   → { tags: ["a", "b"] }
+            //
+            // Any schema constraint on filter fields will fight the parser output AND
+            // confuse AJV strict mode (which rejects `additionalProperties` or `minimum`
+            // keywords without a matching top-level `type`, including inside oneOf/anyOf/allOf
+            // branches).
+            //
+            // Our approach: only a fixed allowlist of well-known keys keeps its declared
+            // schema. Everything else (filter fields) is replaced with `{}` (accept-any).
+            // Runtime validation is the QueryParser's job — Arc just needs AJV to let
+            // requests through without false-positive warnings.
+            const KEEP_AS_IS = new Set([
+              "page",
+              "limit",
+              "sort",
+              "search",
+              "select",
+              "after",
+              "populate",
+              "lookup",
+              "aggregate",
             ]);
             const props = (listQuerySchema as AnyRecord).properties as AnyRecord | undefined;
             const normalizedProps = props ? { ...props } : undefined;
             if (normalizedProps) {
               for (const key of Object.keys(normalizedProps)) {
-                if (KEEP_TYPE.has(key)) continue;
-                const prop = normalizedProps[key];
-                if (prop && typeof prop === "object" && "type" in (prop as AnyRecord)) {
-                  const cleaned: AnyRecord = {};
-                  for (const [k, v] of Object.entries(prop as AnyRecord)) {
-                    if (!TYPE_DEPENDENT.has(k)) cleaned[k] = v;
-                  }
-                  normalizedProps[key] = Object.keys(cleaned).length > 0 ? cleaned : {};
-                }
+                if (KEEP_AS_IS.has(key)) continue;
+                // Filter field — accept anything, defer validation to QueryParser.
+                normalizedProps[key] = {};
               }
             }
             const normalizedSchema = {

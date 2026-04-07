@@ -26,8 +26,21 @@ interface DataAdapter<TDoc = any> {
   /** Get schema metadata for introspection (optional) */
   getSchemaMetadata?(): SchemaMetadata;
 
-  /** Generate OpenAPI schemas (optional) */
-  generateSchemas?(schemaOptions?: RouteSchemaOptions): OpenApiSchemas | null;
+  /**
+   * Generate OpenAPI schemas (optional).
+   * `context` carries resource-level info like `idField` so the adapter can
+   * emit the right `params.id` shape (e.g. skip the ObjectId pattern for
+   * custom string IDs). Backwards compatible — ignoring `context` still works.
+   */
+  generateSchemas?(
+    schemaOptions?: RouteSchemaOptions,
+    context?: AdapterSchemaContext,
+  ): OpenApiSchemas | null;
+}
+
+interface AdapterSchemaContext {
+  idField?: string;       // Resource's idField (default "_id")
+  resourceName?: string;  // Resource name (for error messages)
 }
 ```
 
@@ -91,8 +104,34 @@ interface OpenApiSchemas {
   update?: { body: AnyRecord };
   response?: AnyRecord;
   listQuery?: AnyRecord;
+  params?: AnyRecord;
 }
 ```
+
+**Honoring `idField` via `AdapterSchemaContext`** — when the resource configures `idField: 'jobId'` (or any non-default ID field), Arc passes `{ idField: 'jobId' }` as the second argument. Shape the `params.id` schema accordingly:
+
+```typescript
+generateSchemas(schemaOptions, context) {
+  const idField = context?.idField ?? '_id';
+  const isObjectId = idField === '_id';
+  return {
+    // ... createBody, updateBody, response, listQuery
+    params: {
+      type: 'object',
+      properties: {
+        id: isObjectId
+          ? { type: 'string', pattern: '^[0-9a-fA-F]{24}$' }
+          : { type: 'string', description: `${idField} (custom)` },
+      },
+      required: ['id'],
+    },
+  };
+}
+```
+
+If your adapter ignores `context` and emits an ObjectId pattern, Arc strips it as a safety net whenever `idField !== '_id'` — so legacy adapters still work, they just lose the early AJV pre-filter for ObjectId-shaped strings.
+
+**Body schemas** should include `additionalProperties: true` unless you want strict field rejection — otherwise POST/PATCH with extra fields will return 400.
 
 ---
 

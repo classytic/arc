@@ -79,9 +79,18 @@ export interface DataAdapter<TDoc = unknown> {
    * For example, Mongoose adapter can use mongokit to generate schemas from Mongoose models.
    *
    * @param options - Schema generation options (field rules, populate settings, etc.)
+   * @param context - Resource-level context: idField (for params schema), resourceName.
+   *                  Adapters should honor `context.idField` when producing the params
+   *                  schema — e.g. skip the ObjectId pattern when idField is a custom
+   *                  string field. Backwards compatible: legacy adapters ignoring the
+   *                  context still work because Arc strips the mismatched pattern as
+   *                  a safety net.
    * @returns OpenAPI schemas for CRUD operations or null if not supported
    */
-  generateSchemas?(options?: RouteSchemaOptions): OpenApiSchemas | Record<string, unknown> | null;
+  generateSchemas?(
+    options?: RouteSchemaOptions,
+    context?: AdapterSchemaContext,
+  ): OpenApiSchemas | Record<string, unknown> | null;
 
   /** Extract schema metadata for OpenAPI/introspection */
   getSchemaMetadata?(): SchemaMetadata | null;
@@ -101,6 +110,19 @@ export interface DataAdapter<TDoc = unknown> {
 
   /** Close/cleanup resources */
   close?(): Promise<void>;
+}
+
+/**
+ * Context passed to `adapter.generateSchemas()` so adapters can shape the
+ * output to match resource-level configuration (idField overrides, etc).
+ * All fields are optional — adapters are free to ignore this argument, in
+ * which case Arc applies safety-net normalization to the generated schemas.
+ */
+export interface AdapterSchemaContext {
+  /** The idField configured on the resource. Defaults to "_id". */
+  idField?: string;
+  /** Resource name (for error messages / logging). */
+  resourceName?: string;
 }
 
 export interface SchemaMetadata {

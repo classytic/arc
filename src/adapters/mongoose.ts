@@ -13,7 +13,12 @@ import type {
   OpenApiSchemas,
   RouteSchemaOptions,
 } from "../types/index.js";
-import type { DataAdapter, RepositoryLike, SchemaMetadata } from "./interface.js";
+import type {
+  AdapterSchemaContext,
+  DataAdapter,
+  RepositoryLike,
+  SchemaMetadata,
+} from "./interface.js";
 import { isMongooseModel, isRepository } from "./types.js";
 
 /**
@@ -69,6 +74,7 @@ export interface MongooseAdapterOptions<TDoc = unknown> {
   schemaGenerator?: (
     model: Model<TDoc>,
     options?: RouteSchemaOptions,
+    context?: AdapterSchemaContext,
   ) => OpenApiSchemas | Record<string, unknown>;
 }
 
@@ -89,6 +95,7 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
   private readonly schemaGenerator?: (
     model: Model<TDoc>,
     options?: RouteSchemaOptions,
+    context?: AdapterSchemaContext,
   ) => OpenApiSchemas | Record<string, unknown>;
 
   constructor(options: MongooseAdapterOptions<TDoc>) {
@@ -167,11 +174,12 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
    */
   generateSchemas(
     schemaOptions?: RouteSchemaOptions,
+    context?: AdapterSchemaContext,
   ): OpenApiSchemas | Record<string, unknown> | null {
     try {
       // Delegate to external schema generator plugin when available
       if (this.schemaGenerator) {
-        return this.schemaGenerator(this.model, schemaOptions);
+        return this.schemaGenerator(this.model, schemaOptions, context);
       }
 
       // Built-in basic conversion (fallback)
@@ -239,16 +247,21 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
         Object.entries(inputProperties).filter(([field]) => !immutableSet.has(field)),
       );
 
+      // additionalProperties: true on bodies so the built-in fallback doesn't
+      // reject unknown fields. Explicit schema generators (MongoKit) can tighten
+      // this by setting `additionalProperties: false` in their own output.
       return {
         createBody: {
           type: "object",
           properties: inputProperties,
           required: inputRequired.length > 0 ? inputRequired : undefined,
+          additionalProperties: true,
         },
         updateBody: {
           type: "object",
           properties: updateProperties,
           // All fields optional for PATCH — immutable fields excluded
+          additionalProperties: true,
         },
         response: {
           type: "object",

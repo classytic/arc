@@ -7,7 +7,7 @@
  * Designed to be used standalone or composed into controllers.
  */
 
-import { MAX_REGEX_LENGTH } from "../constants.js";
+import { DEFAULT_ID_FIELD, MAX_REGEX_LENGTH } from "../constants.js";
 import { getOrgId as getOrgIdFromScope, isElevated } from "../scope/types.js";
 import type {
   AnyRecord,
@@ -170,12 +170,39 @@ export class AccessControl {
     const compoundFilter = this.buildIdFilter(id, req);
     const hasCompoundFilters = Object.keys(compoundFilter).length > 1;
 
+    // Prefer `getOne({ ...filter })` via compound filter whenever either:
+    //   1. The idField is NOT the repository's native primary key (`_id`),
+    //      in which case `getById(id)` would run `_id === id` and miss the
+    //      document entirely; OR
+    //   2. There are additional filters (tenant/policy) that must be merged
+    //      into the DB query for a secure single-round-trip lookup.
+    //
+    // Falls back to `getById` + post-hoc security checks when the adapter
+    // doesn't expose `getOne` and the resource uses the default idField.
+    const needsCompoundLookup = hasCompoundFilters || this.idField !== DEFAULT_ID_FIELD;
+
     try {
-      if (hasCompoundFilters && typeof repository.getOne === "function") {
+      if (needsCompoundLookup && typeof repository.getOne === "function") {
         return (await repository.getOne(compoundFilter, queryOptions)) as TDoc | null;
       }
 
-      // Fallback: getById + post-hoc security checks
+      // Fallback path — only safe for default _id lookups.
+      // If idField is non-default AND the repo doesn't implement getOne, we
+      // still try getById but the caller should configure a repository with
+      // getOne support (MongoKit's Repository has it out of the box).
+      if (this.idField !== DEFAULT_ID_FIELD) {
+        // Last-resort fallback: scan via any method the repo exposes.
+        // If there's truly no way to query by a custom field, the caller
+        // must provide `getOne`. Throwing a helpful error beats silently
+        // returning null.
+        if (typeof repository.getOne !== "function") {
+          throw new Error(
+            `Resource with idField="${this.idField}" requires repository.getOne() to look up by custom field. ` +
+              `Arc's BaseController cannot fall back to getById() because it would query by _id.`,
+          );
+        }
+      }
+
       const item = (await repository.getById(id, queryOptions)) as TDoc | null;
       if (!item) return null;
 
