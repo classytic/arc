@@ -34,7 +34,7 @@ Three ways to register resources:
 
 ```typescript
 // Auto-discover from directory (recommended)
-resources: await loadResources('./src/resources'),
+resources: await loadResources(import.meta.url),  // dev/prod parity
 
 // Explicit array
 resources: [productResource, orderResource],
@@ -43,7 +43,42 @@ resources: [productResource, orderResource],
 plugins: async (f) => { await f.register(productResource.toPlugin()); },
 ```
 
-> **Note:** `loadResources()` works with standard relative imports and Node.js `#` subpath imports (`package.json` `imports` field). It does **not** support tsconfig path aliases (`@/*`, `~/`) — use explicit `resources: [...]` instead.
+`loadResources()` discovers `default` exports, `export const resource`, OR any named export with `toPlugin()` (e.g. `export const userResource`). Per-resource opt-out of `resourcePrefix` via `skipGlobalPrefix: true` for webhooks/admin routes.
+
+> **Import compatibility:** Works with relative imports and Node.js `#` subpath imports. Does **not** support tsconfig path aliases (`@/*`, `~/`) — use explicit `resources: [...]` instead.
+
+## Boot Sequence
+
+```typescript
+const app = await createApp({
+  resourcePrefix: '/api/v1',
+  plugins: async (f) => { await connectDB(); },          // 1. infra (DB, docs)
+  bootstrap: [inventoryInit, accountingInit],             // 2. domain init
+  resources: await loadResources(import.meta.url),        // 3. routes
+  afterResources: async (f) => { subscribeEvents(f); },   // 4. post-wiring
+  onReady: async (f) => { logger.info('ready'); },
+});
+```
+
+## Audit (per-resource opt-in)
+
+Clean DX without growing exclude lists:
+
+```typescript
+// app.ts — register once with perResource mode
+await fastify.register(auditPlugin, { autoAudit: { perResource: true } });
+
+// order.resource.ts — opt in
+defineResource({ name: 'order', audit: true });
+
+// payment.resource.ts — only audit deletes
+defineResource({ name: 'payment', audit: { operations: ['delete'] } });
+
+// Manual logging from MCP tools or custom routes
+app.post('/orders/:id/refund', async (req) => {
+  await app.audit.custom('order', req.params.id, 'refund', { reason }, { user });
+});
+```
 
 ## defineResource
 

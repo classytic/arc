@@ -79,6 +79,7 @@ export class ResourceRegistry {
       fieldPermissions: extractFieldPermissions(resource.fields),
       pipelineSteps: extractPipelineSteps(resource.pipe),
       rateLimit: resource.rateLimit,
+      audit: resource.audit,
       plugin: resource.toPlugin(), // Store plugin factory
     };
 

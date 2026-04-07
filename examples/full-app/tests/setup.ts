@@ -5,13 +5,11 @@
  * and provides helper functions for authenticated requests.
  */
 
+import type { FastifyInstance } from "fastify";
+import jwt from "jsonwebtoken";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose from "mongoose";
-import jwt from "jsonwebtoken";
-import Fastify, { type FastifyInstance } from "fastify";
-import { createApp } from "../../../src/factory/index.js";
-import { userResource } from "../resources/user.resource.js";
-import { postResource } from "../resources/post.resource.js";
+import { createApp, loadResources } from "../../../src/factory/index.js";
 import { UserModel } from "../resources/user.resource.js";
 
 const JWT_SECRET = "arc-example-test-secret-must-be-at-least-32-chars-long";
@@ -28,7 +26,9 @@ export async function setupApp(): Promise<FastifyInstance> {
       type: "jwt",
       jwt: { secret: JWT_SECRET },
     },
-    resources: [userResource, postResource],
+    // Auto-discover all *.resource.ts files in the resources directory.
+    // Resolves relative to THIS file — works in src/ (dev) and dist/ (prod).
+    resources: await loadResources(new URL("../resources", import.meta.url).href),
   });
 
   await app.ready();

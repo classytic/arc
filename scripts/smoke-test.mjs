@@ -22,7 +22,7 @@ function check(label, fn) {
 console.log("=== Arc Smoke Test ===\n");
 
 // 1. Critical dist files
-console.log("[1/4] Checking dist artifacts...");
+console.log("[1/5] Checking dist artifacts...");
 const criticalFiles = [
   "dist/index.mjs",
   "dist/index.d.mts",
@@ -39,13 +39,13 @@ for (const f of criticalFiles) {
 }
 
 // 2. CLI smoke
-console.log("\n[2/4] Testing CLI...");
+console.log("\n[2/5] Testing CLI...");
 check("arc --help", () => {
   execSync("node bin/arc.js --help", { stdio: "pipe" });
 });
 
 // 3. Subpath imports
-console.log("\n[3/4] Testing subpath imports...");
+console.log("\n[3/5] Testing subpath imports...");
 const imports = [
   ["dist/index.mjs", "./dist/index.mjs"],
   ["dist/factory/index.mjs", "./dist/factory/index.mjs"],
@@ -59,12 +59,31 @@ for (const [label, path] of imports) {
 }
 
 // 4. Pack check
-console.log("\n[4/4] Checking npm pack...");
+console.log("\n[4/5] Checking npm pack...");
 check("npm pack --dry-run", () => {
   const output = execSync("npm pack --dry-run 2>&1", { encoding: "utf-8" });
   const lastLine = output.trim().split("\n").pop();
   console.log(`         ${lastLine}`);
 });
+
+// 5. Real consumer install (file:../..) — proves the published artifact actually works
+// Skipped on `npm run smoke` (fast iteration). Enforced via SMOKE_CONSUMER=1 or prepublishOnly.
+if (process.env.SMOKE_CONSUMER === "1" || process.env.npm_lifecycle_event === "prepublishOnly") {
+  console.log("\n[5/5] Running consumer install + e2e (file:../..)...");
+  check("examples/_consumer-smoke", () => {
+    // Clean install — file: deps don't update on plain `npm install` reliably
+    execSync("npm install --no-audit --no-fund --silent", {
+      cwd: "examples/_consumer-smoke",
+      stdio: "pipe",
+    });
+    execSync("npm test --silent", {
+      cwd: "examples/_consumer-smoke",
+      stdio: "inherit",
+    });
+  });
+} else {
+  console.log("\n[5/5] Skipping consumer install (set SMOKE_CONSUMER=1 to enable)");
+}
 
 console.log(`\n=== Smoke Test ${failures === 0 ? "Passed" : `Failed (${failures})`} ===`);
 if (failures > 0) process.exit(1);

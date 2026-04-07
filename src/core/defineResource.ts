@@ -284,23 +284,40 @@ export function defineResource<TDoc = AnyRecord>(
     resource._pendingHooks.push(...inlineHooks);
   }
 
-  // Auto-register with OpenAPI schemas
+  // ────────────────────────────────────────────────────────────────────────────
+  // OpenAPI Schema Resolution — clear, unified priority order
+  // ────────────────────────────────────────────────────────────────────────────
+  //
+  // Each schema slot (createBody, updateBody, response, params, listQuery) is
+  // resolved independently from these sources, in priority order:
+  //
+  //   listQuery:
+  //     1. config.openApiSchemas.listQuery   (user override — wins)
+  //     2. queryParser.getQuerySchema()      (parser is source of truth)
+  //     3. adapter.generateSchemas().listQuery (fallback — placeholder only)
+  //
+  //   createBody / updateBody / response / params:
+  //     1. config.openApiSchemas.{slot}      (user override — wins)
+  //     2. adapter.generateSchemas().{slot}  (auto-generated from DB schema)
+  //
+  // Why parser beats adapter for listQuery: the QueryParser knows the real
+  // query semantics (filter operators, max limit, sort whitelist, pagination
+  // mode). The adapter only knows the persistence shape — it can't infer
+  // operator suffixes like `name_contains` or runtime constraints like
+  // `limit.maximum`. Only the user can override the parser.
+  // ────────────────────────────────────────────────────────────────────────────
   if (!config.skipRegistry) {
     try {
-      // Get schemas: user-provided or auto-generate from adapter
-      let openApiSchemas: OpenApiSchemas | undefined = config.openApiSchemas;
-
-      // Auto-generate if not provided and adapter supports it
-      if (!openApiSchemas && config.adapter?.generateSchemas) {
+      // Start with adapter-generated schemas (createBody, updateBody, response, params)
+      let openApiSchemas: OpenApiSchemas | undefined;
+      if (config.adapter?.generateSchemas) {
         const generated = config.adapter.generateSchemas(config.schemaOptions);
-        if (generated) {
-          openApiSchemas = generated;
-        }
+        if (generated) openApiSchemas = generated;
       }
 
-      // Auto-detect listQuery schema from queryParser (if not already provided)
+      // Layer queryParser's listQuery on top — parser wins over adapter
       const queryParser = config.queryParser as QueryParserInterface | undefined;
-      if (!openApiSchemas?.listQuery && queryParser?.getQuerySchema) {
+      if (queryParser?.getQuerySchema) {
         const querySchema = queryParser.getQuerySchema();
         if (querySchema) {
           openApiSchemas = {
@@ -308,6 +325,11 @@ export function defineResource<TDoc = AnyRecord>(
             listQuery: querySchema as unknown as AnyRecord,
           };
         }
+      }
+
+      // User-provided schemas win over everything (per-slot merge)
+      if (config.openApiSchemas) {
+        openApiSchemas = { ...openApiSchemas, ...config.openApiSchemas };
       }
 
       // Auto-convert Zod schemas to JSON Schema (no-op for plain JSON Schema)
@@ -374,6 +396,9 @@ export class ResourceDefinition<TDoc = AnyRecord> {
 
   // Rate limiting
   readonly rateLimit?: RateLimitConfig | false;
+
+  // Audit (per-resource opt-in for auditPlugin perResource mode)
+  readonly audit?: boolean | { operations?: ("create" | "update" | "delete")[] };
 
   // Update method
   readonly updateMethod?: "PUT" | "PATCH" | "both";
@@ -443,6 +468,9 @@ export class ResourceDefinition<TDoc = AnyRecord> {
 
     // Rate limiting
     this.rateLimit = config.rateLimit;
+
+    // Audit
+    this.audit = config.audit;
 
     // Update method
     this.updateMethod = config.updateMethod;

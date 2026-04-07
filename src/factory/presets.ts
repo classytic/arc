@@ -82,20 +82,42 @@ export const productionPreset: Partial<CreateAppOptions> = {
 };
 
 /**
+ * Try to detect if `pino-pretty` is installed (devDep). Returns the transport
+ * config if available, or falls back to plain JSON logging. This prevents the
+ * common "pino-pretty not found" crash in production when someone uses the
+ * development preset by mistake (or via NODE_ENV-based preset selection).
+ */
+function devLoggerConfig(): CreateAppOptions["logger"] {
+  try {
+    // require.resolve throws if not installed — works in CJS and ESM
+    // biome-ignore lint: dynamic resolve check is intentional
+    const req = (eval("require") as NodeJS.Require) ?? null;
+    if (req?.resolve) {
+      req.resolve("pino-pretty");
+      return {
+        level: "debug",
+        transport: {
+          target: "pino-pretty",
+          options: {
+            colorize: true,
+            translateTime: "SYS:HH:MM:ss",
+            ignore: "pid,hostname",
+          },
+        },
+      };
+    }
+  } catch {
+    // pino-pretty not installed — fall through to JSON logging
+  }
+  // Fallback: plain JSON at debug level (no extra deps required)
+  return { level: "debug" };
+}
+
+/**
  * Development preset - relaxed security, verbose logging
  */
 export const developmentPreset: Partial<CreateAppOptions> = {
-  logger: {
-    level: "debug",
-    transport: {
-      target: "pino-pretty",
-      options: {
-        colorize: true,
-        translateTime: "SYS:HH:MM:ss",
-        ignore: "pid,hostname",
-      },
-    },
-  },
+  logger: devLoggerConfig(),
   trustProxy: true,
 
   // Security - relaxed for development

@@ -30,13 +30,16 @@ export const PostModel = mongoose.model("ExPost", postSchema);
 const postRepository = new Repository(PostModel);
 
 // Resource
-export const postResource = defineResource({
+export default defineResource({
   name: "post",
   displayName: "Posts",
 
   adapter: createMongooseAdapter(PostModel, postRepository),
 
   presets: ["ownedByUser"],
+
+  // Audit only deletes (skip noisy creates/updates for posts)
+  audit: { operations: ["delete"] },
 
   permissions: {
     list: allowPublic(),

@@ -45,6 +45,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
  * // Minimal resource (plain object)
  * const simple: ResourceLike = { name: 'ping', toPlugin: () => () => {} };
  * ```
+ *
+ * **DO NOT add an index signature** (`[key: string]: unknown`) to this interface.
+ * Class instances (like `ResourceDefinition`) don't implicitly carry index signatures,
+ * so adding one here makes `ResourceDefinition` *unassignable* to `ResourceLike` —
+ * the exact opposite of the intent. TypeScript's structural typing already allows
+ * classes with extra properties to satisfy this interface without an index signature.
  */
 export interface ResourceLike {
   /** Plugin factory — called by createApp to register routes */
@@ -142,40 +148,57 @@ export async function loadResources(
 
   // Import all files in parallel (like Next.js Promise.all pattern).
   // Each import is independent — one failure doesn't block others.
+  // Detect Windows drive letter paths — Node ESM rejects these as bare imports
+  // ("D:\..." → Node sees "d:" as a URL scheme and throws). Skip the bare-path
+  // fallback on Windows to surface the real error instead.
+  const isWindowsPath = (p: string): boolean => /^[a-z]:[\\/]/i.test(p);
+
   const results = await Promise.all(
     files.map(async (file) => {
+      let mod: Record<string, unknown>;
+      let primaryError: Error | undefined;
       try {
-        let mod: Record<string, unknown>;
-        try {
-          // file:// URL goes through vitest/tsx loader hooks which resolve
-          // .js→.ts for the ENTIRE import chain (nested imports included).
-          // Bare import(path) only hooks the top-level file in vitest —
-          // nested .js imports fall through to Node's native resolver and fail.
-          mod = (await import(pathToFileURL(file).href)) as Record<string, unknown>;
-        } catch (_importErr) {
-          // Fallback to bare path for runtimes where file:// URL doesn't work
-          // (e.g., some bundlers, Bun, edge runtimes).
-          mod = (await import(file)) as Record<string, unknown>;
-        }
+        // file:// URL goes through vitest/tsx loader hooks which resolve
+        // .js→.ts for the ENTIRE import chain (nested imports included).
+        // Bare import(path) only hooks the top-level file in vitest —
+        // nested .js imports fall through to Node's native resolver and fail.
+        mod = (await import(pathToFileURL(file).href)) as Record<string, unknown>;
         return { file, mod };
       } catch (err) {
-        const code = (err as { code?: string }).code;
-        const msg = err instanceof Error ? err.message : String(err);
-        // Detect .js extension resolution failures common in TypeScript ESM projects.
-        // When running via vitest/tsx, .js→.ts resolution is handled by the loader.
-        // When running via raw Node.js, it fails. Provide actionable guidance.
-        if (code === "ERR_MODULE_NOT_FOUND" && msg.includes(".js")) {
-          failed.push(
-            `${file}: ${msg}\n` +
-              "    Hint: This file uses .js extension imports (TypeScript ESM convention).\n" +
-              "    In production, ensure your build compiles .ts→.js before loadResources() runs.\n" +
-              "    In tests, use vitest/tsx which resolves .js→.ts automatically.",
-          );
-        } else {
-          failed.push(`${file}: ${msg}`);
-        }
-        return null;
+        primaryError = err as Error;
       }
+
+      // Fallback to bare path for runtimes where file:// URL doesn't work
+      // (e.g., some bundlers, Bun, edge runtimes).
+      // Skip on Windows: bare paths starting with "D:\..." are rejected by Node
+      // ESM as invalid URL schemes — re-throw the original file:// error instead.
+      if (!isWindowsPath(file)) {
+        try {
+          mod = (await import(file)) as Record<string, unknown>;
+          return { file, mod };
+        } catch {
+          // Fallback also failed — fall through to error reporting with primaryError
+        }
+      }
+
+      const err = primaryError;
+      const code = (err as { code?: string }).code;
+      const msg = err instanceof Error ? err.message : String(err);
+      // Detect .js extension resolution failures common in TypeScript ESM projects.
+      if (code === "ERR_MODULE_NOT_FOUND" && msg.includes(".js")) {
+        failed.push(
+          `${file}: ${msg}\n` +
+            "    Hint: This file uses .js extension imports (TypeScript ESM convention).\n" +
+            "    • Production: ensure your build compiles .ts→.js before loadResources() runs.\n" +
+            "    • Node.js: use tsx, ts-node/esm, or a build step.\n" +
+            "    • Vitest: nested .js→.ts resolution may fail through dynamic imports.\n" +
+            "      Workaround: use import.meta.glob to preload resources statically.\n" +
+            "      See: https://github.com/classytic/arc/blob/main/docs/production-ops/factory.mdx#vitest-limitation",
+        );
+      } else {
+        failed.push(`${file}: ${msg}`);
+      }
+      return null;
     }),
   );
 
@@ -185,7 +208,28 @@ export async function loadResources(
   for (const result of results) {
     if (!result) continue;
 
-    const resource = (result.mod.default ?? result.mod.resource) as ResourceLike | undefined;
+    // Resolution order:
+    //   1. default export                       (export default defineResource(...))
+    //   2. named export 'resource'              (export const resource = ...)
+    //   3. ANY named export with toPlugin()     (export const userResource = ...)
+    //
+    // The third path supports the common convention `export const fooResource`.
+    // We pick the FIRST matching export, so prefer `default` for unambiguous loading.
+    let resource = (result.mod.default ?? result.mod.resource) as ResourceLike | undefined;
+
+    if (!resource || typeof resource.toPlugin !== "function") {
+      // Scan all named exports for one with toPlugin()
+      for (const value of Object.values(result.mod)) {
+        if (
+          value &&
+          typeof value === "object" &&
+          typeof (value as ResourceLike).toPlugin === "function"
+        ) {
+          resource = value as ResourceLike;
+          break;
+        }
+      }
+    }
 
     if (!resource || typeof resource.toPlugin !== "function") {
       skipped.push(result.file);

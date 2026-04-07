@@ -47,16 +47,44 @@ export interface AuditPluginOptions {
    * Automatically audit CRUD operations via the hook system (default: true when enabled).
    * When enabled, create/update/delete operations are auto-logged without manual calls.
    *
-   * - `true`: Auto-audit all CRUD operations on all resources
-   * - `{ operations: ['create', 'delete'] }`: Only auto-audit specific operations
-   * - `{ exclude: ['health', 'metrics'] }`: Skip specific resources
-   * - `false`: Disable auto-audit (manual calls only)
+   * **Three opt-in patterns** — pick the one that matches your app:
+   *
+   * 1. **Per-resource opt-in (recommended for most apps)** — set `audit: true` on each
+   *    resource. Audit only fires for those resources. No global `include`/`exclude` needed.
+   *    ```ts
+   *    defineResource({ name: 'order', audit: true });
+   *    // auditPlugin auto-detects which resources opted in
+   *    ```
+   *
+   * 2. **Allowlist mode** — set `include: ['order', 'invoice']` for centralized config.
+   *    Only listed resources are audited.
+   *
+   * 3. **Denylist mode** — set `exclude: ['health', 'metrics']` to audit everything except
+   *    listed resources. Use sparingly — leads to growing exclude lists.
+   *
+   * Default behavior (`autoAudit: true`): denylist mode with no exclusions (audit everything).
+   * For most apps, switching to per-resource opt-in is cleaner.
+   *
+   * - `true`: Audit all CRUD operations on all resources (legacy default)
+   * - `{ operations: ['create', 'delete'] }`: Only specific operations
+   * - `{ include: ['order'] }`: Allowlist — only listed resources
+   * - `{ exclude: ['health'] }`: Denylist — all except listed
+   * - `{ perResource: true }`: Only resources with `audit: true` in their definition
+   * - `false`: Disable auto-audit (manual `fastify.audit.*()` calls only)
    */
   autoAudit?:
     | boolean
     | {
         operations?: ("create" | "update" | "delete")[];
+        /** Allowlist — only listed resources are audited (mutually exclusive with exclude) */
+        include?: string[];
+        /** Denylist — audit everything except listed resources */
         exclude?: string[];
+        /**
+         * Per-resource opt-in mode: only audit resources with `audit: true` in their
+         * `defineResource()` config. The cleanest pattern for most apps.
+         */
+        perResource?: boolean;
       };
 }
 
@@ -268,11 +296,19 @@ const auditPlugin: FastifyPluginAsync<AuditPluginOptions> = async (
   const autoAuditConfig = opts.autoAudit ?? true;
   if (autoAuditConfig !== false) {
     const defaultOps = ["create", "update", "delete"] as const;
-    const ops =
-      typeof autoAuditConfig === "object" ? (autoAuditConfig.operations ?? defaultOps) : defaultOps;
-    const excludeResources = new Set(
-      typeof autoAuditConfig === "object" ? (autoAuditConfig.exclude ?? []) : [],
-    );
+    const isObj = typeof autoAuditConfig === "object";
+    const ops = isObj ? (autoAuditConfig.operations ?? defaultOps) : defaultOps;
+    const includeResources =
+      isObj && autoAuditConfig.include ? new Set(autoAuditConfig.include) : null;
+    const excludeResources = new Set(isObj ? (autoAuditConfig.exclude ?? []) : []);
+    const perResourceMode = isObj ? autoAuditConfig.perResource === true : false;
+
+    // Validate mutually exclusive options
+    if (includeResources && excludeResources.size > 0) {
+      fastify.log?.warn?.(
+        "Audit autoAudit: both 'include' and 'exclude' specified. Using 'include' (allowlist wins).",
+      );
+    }
 
     // Wire hooks after all plugins are registered (onReady) so arc-core is available
     fastify.addHook("onReady", async () => {
@@ -283,12 +319,38 @@ const auditPlugin: FastifyPluginAsync<AuditPluginOptions> = async (
         return;
       }
 
+      // Build the set of opted-in resources for per-resource mode.
+      // Read from the resource registry — resources with `audit: true` in defineResource.
+      const optedInResources = new Set<string>();
+      const operationsByResource = new Map<string, ReadonlyArray<"create" | "update" | "delete">>();
+      if (perResourceMode && arc.registry) {
+        for (const entry of arc.registry.getAll()) {
+          const auditFlag = entry.audit;
+          if (!auditFlag) continue;
+          optedInResources.add(entry.name);
+          // Per-resource operation override (e.g., audit: { operations: ['delete'] })
+          if (typeof auditFlag === "object" && auditFlag.operations) {
+            operationsByResource.set(entry.name, auditFlag.operations);
+          }
+        }
+      }
+
       for (const op of ops) {
         arc.hooks.after(
           "*",
           op,
           async (ctx) => {
-            if (excludeResources.has(ctx.resource)) return;
+            // Filter by mode (priority: perResource > include > exclude)
+            if (perResourceMode) {
+              if (!optedInResources.has(ctx.resource)) return;
+              // Per-resource operations override
+              const allowedOps = operationsByResource.get(ctx.resource);
+              if (allowedOps && !allowedOps.includes(op)) return;
+            } else if (includeResources) {
+              if (!includeResources.has(ctx.resource)) return;
+            } else if (excludeResources.has(ctx.resource)) {
+              return;
+            }
 
             const docId = autoAuditExtractId(ctx.result);
             const scope = (ctx.context as Record<string, unknown> | undefined)?._scope;

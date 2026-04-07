@@ -31,13 +31,17 @@ export const UserModel = mongoose.model("ExUser", userSchema);
 const userRepository = new Repository(UserModel);
 
 // Resource
-export const userResource = defineResource({
+export default defineResource({
   name: "user",
   displayName: "Users",
 
   adapter: createMongooseAdapter(UserModel, userRepository),
 
   presets: ["softDelete"],
+
+  // Per-resource audit opt-in — fires only when auditPlugin is registered
+  // with `autoAudit: { perResource: true }`. No exclude list needed.
+  audit: true,
 
   permissions: {
     list: allowPublic(),

@@ -1,5 +1,62 @@
 # Changelog
 
+## 2.6.2
+
+### Audit Plugin — Per-Resource Opt-In
+
+- **`autoAudit: { perResource: true }`** — cleanest opt-in pattern. Only resources with `audit: true` in their `defineResource()` config are auto-audited. No more growing `exclude` lists.
+  ```typescript
+  // app.ts
+  await fastify.register(auditPlugin, { autoAudit: { perResource: true } });
+
+  // order.resource.ts
+  defineResource({ name: 'order', audit: true });
+
+  // payment.resource.ts — only audit deletes
+  defineResource({ name: 'payment', audit: { operations: ['delete'] } });
+  ```
+- **`autoAudit: { include: [...] }`** — allowlist mode (centralized config alternative)
+- **Distributed sink** — multiple `customStores` fan out audit entries in parallel (primary + replica + cold archive)
+- **Read auditing & MCP actions** — `fastify.audit.custom()` works from any handler (additionalRoutes, MCP tools, compliance endpoints). 8 flexibility tests cover the surface.
+
+### loadResources Improvements
+
+- **Discovers ANY named export with `toPlugin()`** — not just `default`/`resource`. The common `export const userResource = defineResource(...)` convention now works.
+- **Better error messages** — vitest hint added to `.js→.ts` failure messages. Windows drive-letter guard prevents misleading "protocol 'd:'" errors.
+
+### Test Helpers
+
+- **`preloadResources(import.meta.glob(...))`** — vitest workaround for resources that need bootstrap (engine init) or transitive `node_modules` imports. Eager and async variants.
+
+### DX Fixes
+
+- **`developmentPreset` pino-pretty fallback** — gracefully falls back to JSON logging if `pino-pretty` is not installed (common when `NODE_ENV` selects dev preset in production where dev deps are pruned).
+- **`ResourceLike` exported** from `@classytic/arc/factory` — typed wrapper for users building their own resource loaders.
+- **No index signature on `ResourceLike`** — `ResourceDefinition` is now assignable without `as any` casts.
+- **TestHarness/HttpTestHarness type fixes** — missing class property declarations added.
+
+### Security
+
+- **JSON parser prototype poisoning** — `secure-json-parse` now a direct dependency (was relying on Fastify's transitive). Fastify's `onProtoPoisoning` protection is preserved when handling empty DELETE/GET bodies.
+
+### Factory Refactor
+
+- **`createApp.ts` split into 4 modules** — `registerSecurity`, `registerAuth`, `registerArcPlugins`, `registerResources`. Each independently testable. 58 new unit tests.
+- **`resourcePrefix`** — register all resources under a URL prefix
+- **`skipGlobalPrefix`** — per-resource opt-out (webhooks, admin routes)
+- **`bootstrap[]`** — domain init after `plugins()`, before `resources`
+- **`afterResources`** — post-registration hook
+- **Duplicate resource detection** — warns before Fastify route conflicts
+- **Testing preset disables `gracefulShutdown`** — fixes `MaxListenersExceededWarning` in multi-app test processes
+
+### Test Coverage
+
+- **3009+ tests across 212 files** (was 2900+)
+- 15 audit tests (per-resource, allowlist, denylist, distributed, MCP, custom actions)
+- 6 named-export discovery tests
+- 11 preloadResources tests
+- 58 factory module unit tests
+
 ## 2.6.0
 
 ### Security
