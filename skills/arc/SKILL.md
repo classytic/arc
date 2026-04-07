@@ -8,11 +8,11 @@ description: |
   Triggers: arc, fastify resource, defineResource, createApp, BaseController, arc preset,
   arc auth, arc events, arc jobs, arc websocket, arc mcp, arc plugin, arc testing, arc cli,
   arc permissions, arc hooks, arc pipeline, arc factory, arc cache, arc QueryCache.
-version: 2.6.2
+version: 2.7.0
 license: MIT
 metadata:
   author: Classytic
-  version: "2.6.2"
+  version: "2.7.0"
 tags:
   - fastify
   - rest-api
@@ -125,6 +125,38 @@ auth: false
 ```
 
 **Decorates:** `app.authenticate`, `app.optionalAuthenticate`, `app.authorize`
+
+### Better Auth + Mongoose populate bridge (`@classytic/arc/auth/mongoose`)
+
+When BA uses `@better-auth/mongo-adapter`, it writes via the native `mongodb` driver and never registers Mongoose models. arc resources doing `Schema({ userId: { ref: 'user' } })` then throw `MissingSchemaError` on `.populate()`.
+
+```typescript
+import mongoose from 'mongoose';
+import { registerBetterAuthMongooseModels } from '@classytic/arc/auth/mongoose';
+
+// Default: core only (user/session/account/verification). Plugins are opt-in.
+registerBetterAuthMongooseModels(mongoose, {
+  plugins: ['organization', 'organization-teams', 'mcp'],
+  // For separate @better-auth/* packages (passkey, sso, api-key):
+  extraCollections: ['passkey', 'ssoProvider'],
+  // Optional:
+  usePlural: false,                                     // matches mongodbAdapter({ usePlural })
+  modelOverrides: { user: 'profile' },                  // for custom user.modelName configs
+});
+```
+
+**Plugin keys** (core BA only — separate packages use `extraCollections`):
+- `organization` → `organization`, `member`, `invitation`
+- `organization-teams` → `team`, `teamMember`
+- `twoFactor` → `twoFactor`
+- `jwt` → `jwks`
+- `oidcProvider` / `oauthProvider` (alias) → `oauthApplication`, `oauthAccessToken`, `oauthConsent`
+- `mcp` → reuses oidcProvider schema (per BA docs)
+- `deviceAuthorization` → `deviceCode`
+
+**Field-only plugins** (admin, username, phoneNumber, magicLink, emailOtp, anonymous, bearer, multiSession, siwe, lastLoginMethod, genericOAuth) need NO entry — `strict: false` stubs round-trip extra fields automatically.
+
+Lives at a dedicated subpath so non-Mongoose users (Prisma/Drizzle/Kysely) never get Mongoose pulled into their bundle. Idempotent + de-dupes overlapping plugin sets, so `plugins: ['mcp', 'oidcProvider']` won't crash.
 
 ## Permissions
 
@@ -693,5 +725,6 @@ import { bulkPreset } from '@classytic/arc/presets';
 - **[events](references/events.md)** — Domain events, transports, retry, outbox pattern, auto-emission
 - **[integrations](references/integrations.md)** — BullMQ jobs, WebSocket, EventGateway, Streamline, Webhooks
 - **[mcp](references/mcp.md)** — MCP tools for AI agents, auto-generation from resources, custom tools, Better Auth OAuth 2.1
+- **[multi-tenancy](references/multi-tenancy.md)** — Scope ladder, `tenantField` read sites, `PermissionResult.scope`, API key auth without a separate auth plugin
 - **[production](references/production.md)** — Health, audit, idempotency, tracing, metrics, versioning, SSE, QueryCache, bulk ops, saga, RPC schema versioning, tenant rate limiting
 - **[testing](references/testing.md)** — Test app, mocks, data factories, in-memory MongoDB

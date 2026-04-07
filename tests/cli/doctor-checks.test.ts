@@ -10,10 +10,10 @@
  * - Environment variables (pass/warn)
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
-import * as path from "node:path";
 import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { doctor } from "../../src/cli/commands/doctor.js";
 
 let testRoot: string;
@@ -279,10 +279,7 @@ describe("arc doctor — tsconfig validation", () => {
   it("should warn about non-recommended moduleResolution", async () => {
     const projectDir = path.join(testRoot, "bad-tsconfig");
     await fs.mkdir(projectDir, { recursive: true });
-    await fs.writeFile(
-      path.join(projectDir, "package.json"),
-      JSON.stringify({ dependencies: {} }),
-    );
+    await fs.writeFile(path.join(projectDir, "package.json"), JSON.stringify({ dependencies: {} }));
     await fs.writeFile(
       path.join(projectDir, "tsconfig.json"),
       JSON.stringify({
@@ -314,10 +311,7 @@ describe("arc doctor — tsconfig validation", () => {
   it("should warn when tsconfig.json is missing", async () => {
     const projectDir = path.join(testRoot, "no-tsconfig");
     await fs.mkdir(projectDir, { recursive: true });
-    await fs.writeFile(
-      path.join(projectDir, "package.json"),
-      JSON.stringify({ dependencies: {} }),
-    );
+    await fs.writeFile(path.join(projectDir, "package.json"), JSON.stringify({ dependencies: {} }));
 
     const originalCwd = process.cwd();
     const originalExitCode = process.exitCode;
@@ -340,10 +334,7 @@ describe("arc doctor — tsconfig validation", () => {
   it("should pass with NodeNext moduleResolution", async () => {
     const projectDir = path.join(testRoot, "good-tsconfig");
     await fs.mkdir(projectDir, { recursive: true });
-    await fs.writeFile(
-      path.join(projectDir, "package.json"),
-      JSON.stringify({ dependencies: {} }),
-    );
+    await fs.writeFile(path.join(projectDir, "package.json"), JSON.stringify({ dependencies: {} }));
     await fs.writeFile(
       path.join(projectDir, "tsconfig.json"),
       JSON.stringify({
@@ -379,10 +370,7 @@ describe("arc doctor — environment variables", () => {
   it("should warn when MONGO_URI is not set", async () => {
     const projectDir = path.join(testRoot, "no-env");
     await fs.mkdir(projectDir, { recursive: true });
-    await fs.writeFile(
-      path.join(projectDir, "package.json"),
-      JSON.stringify({ dependencies: {} }),
-    );
+    await fs.writeFile(path.join(projectDir, "package.json"), JSON.stringify({ dependencies: {} }));
 
     const originalCwd = process.cwd();
     const originalExitCode = process.exitCode;
@@ -417,10 +405,7 @@ describe("arc doctor — exit code", () => {
     const projectDir = path.join(testRoot, "failing");
     await fs.mkdir(projectDir, { recursive: true });
     // No package.json at all — fastify missing = FAIL
-    await fs.writeFile(
-      path.join(projectDir, "package.json"),
-      JSON.stringify({ dependencies: {} }),
-    );
+    await fs.writeFile(path.join(projectDir, "package.json"), JSON.stringify({ dependencies: {} }));
 
     const originalCwd = process.cwd();
     const originalExitCode = process.exitCode;

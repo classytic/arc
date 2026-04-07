@@ -5,9 +5,9 @@
  * and subscription limits.
  */
 
-import { describe, it, expect, afterEach, vi } from "vitest";
-import Fastify, { type FastifyInstance } from "fastify";
 import fastifyWebsocket from "@fastify/websocket";
+import Fastify, { type FastifyInstance } from "fastify";
+import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { websocketPlugin } from "../../src/integrations/websocket.js";
 
@@ -15,10 +15,7 @@ import { websocketPlugin } from "../../src/integrations/websocket.js";
 // Helpers
 // ============================================================================
 
-function connectWs(
-  port: number,
-  path = "/ws",
-): Promise<{ ws: WebSocket; connected: any }> {
+function connectWs(port: number, path = "/ws"): Promise<{ ws: WebSocket; connected: any }> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`);
     const timeout = setTimeout(() => {
@@ -42,10 +39,7 @@ function connectWs(
 
 function sendAndReceive(ws: WebSocket, payload: object): Promise<any> {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error("Response timeout")),
-      3000,
-    );
+    const timeout = setTimeout(() => reject(new Error("Response timeout")), 3000);
     ws.once("message", (raw) => {
       clearTimeout(timeout);
       resolve(JSON.parse(raw.toString()));

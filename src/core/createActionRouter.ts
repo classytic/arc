@@ -42,6 +42,10 @@
  */
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import {
+  applyPermissionResult,
+  normalizePermissionResult,
+} from "../permissions/applyPermissionResult.js";
 import type {
   PermissionCheck,
   PermissionContext,
@@ -287,24 +291,22 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
           });
         }
 
-        if (typeof result === "boolean") {
-          if (!result) {
-            return reply.code(context.user ? 403 : 401).send({
-              success: false,
-              error: context.user ? `Permission denied for '${action}'` : "Authentication required",
-            });
-          }
-        } else {
-          const permResult = result as PermissionResult;
-          if (!permResult.granted) {
-            return reply.code(context.user ? 403 : 401).send({
-              success: false,
-              error:
-                permResult.reason ??
-                (context.user ? `Permission denied for '${action}'` : "Authentication required"),
-            });
-          }
+        // Normalize boolean → PermissionResult via the single-source-of-truth helper
+        const permResult = normalizePermissionResult(result);
+        if (!permResult.granted) {
+          return reply.code(context.user ? 403 : 401).send({
+            success: false,
+            error:
+              permResult.reason ??
+              (context.user ? `Permission denied for '${action}'` : "Authentication required"),
+          });
         }
+
+        // Apply filters + scope via the shared helper — this is what makes
+        // action routes honor PermissionResult.scope the same way CRUD routes
+        // do. Before this, custom auth on action routes silently dropped
+        // scope + filters and handlers ran with the wrong request.scope.
+        applyPermissionResult(permResult, req);
       }
 
       try {

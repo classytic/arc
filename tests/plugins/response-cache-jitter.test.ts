@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { responseCachePlugin } from "../../src/plugins/response-cache.js";
 
 describe("Response Cache - Stale-While-Revalidate Jitter Lock", () => {
@@ -22,9 +22,7 @@ describe("Response Cache - Stale-While-Revalidate Jitter Lock", () => {
     app.get(
       "/api/products",
       {
-        preHandler: [
-          async (req, rep) => app.responseCache.middleware(req, rep),
-        ],
+        preHandler: [async (req, rep) => app.responseCache.middleware(req, rep)],
       },
       async () => {
         callCount++;

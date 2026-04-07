@@ -98,6 +98,67 @@ describe("fieldRulesToZod", () => {
       expect(shape.search).toBeDefined();
     });
 
+    it("exposes select and populate for projection + nested ref hydration", () => {
+      const shape = fieldRulesToZod(rules, { mode: "list" });
+      expect(shape.select).toBeDefined();
+      expect(shape.populate).toBeDefined();
+      // Both should be optional strings so agents can pass 'name,price' or 'supplier,category'
+      const selectParsed = (shape.select as z.ZodTypeAny).safeParse("name,price");
+      const populateParsed = (shape.populate as z.ZodTypeAny).safeParse("supplier,category");
+      expect(selectParsed.success).toBe(true);
+      expect(populateParsed.success).toBe(true);
+      // And optional — empty input should validate
+      expect((shape.select as z.ZodTypeAny).safeParse(undefined).success).toBe(true);
+      expect((shape.populate as z.ZodTypeAny).safeParse(undefined).success).toBe(true);
+    });
+
+    it("excludes fields marked rule.hidden even when listed in filterableFields", () => {
+      // Regression: list mode used to leak hidden fields because buildListShape
+      // only checked `hiddenFields` array, not `rule.hidden`. Create/update
+      // modes always honored `rule.hidden` — list mode now matches.
+      const shape = fieldRulesToZod(rules, {
+        mode: "list",
+        filterableFields: ["category", "secret"],
+      });
+      expect(shape.category).toBeDefined();
+      expect(shape.secret).toBeUndefined();
+    });
+
+    it("excludes fields marked rule.systemManaged even when listed in filterableFields", () => {
+      // Regression: tenant-key fields (companyId, organizationId) are almost
+      // always marked systemManaged — they must never leak into MCP list tool
+      // schemas because agents could abuse them as cross-tenant filters.
+      const rulesWithTenant = {
+        ...rules,
+        tenantId: { type: "string", systemManaged: true } as const,
+      };
+      const shape = fieldRulesToZod(rulesWithTenant, {
+        mode: "list",
+        filterableFields: ["category", "tenantId"],
+      });
+      expect(shape.category).toBeDefined();
+      expect(shape.tenantId).toBeUndefined();
+    });
+
+    it("does not emit operator variants for hidden/systemManaged fields", () => {
+      // Double-check the operator-suffix path (price_gt, price_lte, etc.)
+      // also respects hidden/systemManaged.
+      const rulesWithHidden = {
+        ...rules,
+        internalScore: { type: "number", hidden: true } as const,
+      };
+      const shape = fieldRulesToZod(rulesWithHidden, {
+        mode: "list",
+        filterableFields: ["internalScore"],
+        allowedOperators: ["gt", "lt", "gte", "lte"],
+      });
+      expect(shape.internalScore).toBeUndefined();
+      expect(shape.internalScore_gt).toBeUndefined();
+      expect(shape.internalScore_lt).toBeUndefined();
+      expect(shape.internalScore_gte).toBeUndefined();
+      expect(shape.internalScore_lte).toBeUndefined();
+    });
+
     it("includes filterable fields as optional", () => {
       const shape = fieldRulesToZod(rules, {
         mode: "list",

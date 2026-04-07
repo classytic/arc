@@ -8,16 +8,16 @@
  * Run with: npx vitest run tests/scenarios/custom-authenticator.test.ts
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import mongoose from 'mongoose';
-import { createApp } from '../../src/factory/createApp.js';
-import { defineResource } from '../../src/core/defineResource.js';
-import { BaseController } from '../../src/core/BaseController.js';
-import { createMongooseAdapter } from '../../src/adapters/mongoose.js';
-import { requireAuth, requireRoles, allowPublic, requireOwnership, anyOf } from '../../src/permissions/index.js';
-import { multiTenantPreset } from '../../src/presets/multiTenant.js';
-import { setupTestDatabase, teardownTestDatabase } from '../setup.js';
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import mongoose from "mongoose";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
+import { BaseController } from "../../src/core/BaseController.js";
+import { defineResource } from "../../src/core/defineResource.js";
+import { createApp } from "../../src/factory/createApp.js";
+import { anyOf, requireAuth, requireOwnership, requireRoles } from "../../src/permissions/index.js";
+import { multiTenantPreset } from "../../src/presets/multiTenant.js";
+import { setupTestDatabase, teardownTestDatabase } from "../setup.js";
 
 // ============================================================================
 // Mock session store (simulates Clerk/Auth0 session validation)
@@ -36,14 +36,14 @@ const USER_OTHER = new mongoose.Types.ObjectId().toString();
 const ORG_1 = new mongoose.Types.ObjectId().toString();
 const ORG_2 = new mongoose.Types.ObjectId().toString();
 
-sessionStore.set('admin-session', {
-  user: { id: USER_ADMIN, role: ['admin'], organizationId: ORG_1 },
+sessionStore.set("admin-session", {
+  user: { id: USER_ADMIN, role: ["admin"], organizationId: ORG_1 },
 });
-sessionStore.set('user-session', {
-  user: { id: USER_REGULAR, role: ['user'], organizationId: ORG_1 },
+sessionStore.set("user-session", {
+  user: { id: USER_REGULAR, role: ["user"], organizationId: ORG_1 },
 });
-sessionStore.set('other-session', {
-  user: { id: USER_OTHER, role: ['user'], organizationId: ORG_2 },
+sessionStore.set("other-session", {
+  user: { id: USER_OTHER, role: ["user"], organizationId: ORG_2 },
 });
 
 // ============================================================================
@@ -51,15 +51,15 @@ sessionStore.set('other-session', {
 // ============================================================================
 
 async function clerkAuthenticator(request: FastifyRequest, reply: FastifyReply) {
-  const apiKey = request.headers['x-api-key'] as string | undefined;
+  const apiKey = request.headers["x-api-key"] as string | undefined;
   if (!apiKey) {
-    reply.code(401).send({ error: 'Missing API key' });
+    reply.code(401).send({ error: "Missing API key" });
     return;
   }
 
   const session = sessionStore.get(apiKey);
   if (!session) {
-    reply.code(401).send({ error: 'Invalid or expired session' });
+    reply.code(401).send({ error: "Invalid or expired session" });
     return;
   }
 
@@ -68,12 +68,12 @@ async function clerkAuthenticator(request: FastifyRequest, reply: FastifyReply) 
   // Set request.scope based on user's org context
   if (session.user.organizationId) {
     (request as any).scope = {
-      kind: 'member',
+      kind: "member",
       organizationId: session.user.organizationId,
       orgRoles: session.user.role,
     };
   } else {
-    (request as any).scope = { kind: 'authenticated' };
+    (request as any).scope = { kind: "authenticated" };
   }
 }
 
@@ -81,44 +81,47 @@ async function clerkAuthenticator(request: FastifyRequest, reply: FastifyReply) 
 // Tests
 // ============================================================================
 
-describe('Custom Authenticator (Clerk/Auth0 Simulation)', () => {
+describe("Custom Authenticator (Clerk/Auth0 Simulation)", () => {
   let app: FastifyInstance;
 
-  const NoteSchema = new mongoose.Schema({
-    title: { type: String, required: true },
-    content: { type: String, default: '' },
-    organizationId: { type: mongoose.Schema.Types.ObjectId, index: true },
-    createdBy: { type: mongoose.Schema.Types.ObjectId },
-  }, { timestamps: true });
+  const NoteSchema = new mongoose.Schema(
+    {
+      title: { type: String, required: true },
+      content: { type: String, default: "" },
+      organizationId: { type: mongoose.Schema.Types.ObjectId, index: true },
+      createdBy: { type: mongoose.Schema.Types.ObjectId },
+    },
+    { timestamps: true },
+  );
 
   beforeAll(async () => {
     await setupTestDatabase();
 
-    const NoteModel = mongoose.models['CustomNote'] || mongoose.model('CustomNote', NoteSchema);
-    const { Repository } = require('@classytic/mongokit');
+    const NoteModel = mongoose.models.CustomNote || mongoose.model("CustomNote", NoteSchema);
+    const { Repository } = require("@classytic/mongokit");
     const repo = new Repository(NoteModel);
     const ctrl = new BaseController(repo);
 
     const preset = multiTenantPreset();
     const resource = defineResource({
-      name: 'note',
+      name: "note",
       adapter: createMongooseAdapter({ model: NoteModel, repository: repo }),
       controller: ctrl,
-      prefix: '/notes',
-      tag: 'Notes',
+      prefix: "/notes",
+      tag: "Notes",
       permissions: {
         list: requireAuth(),
         get: requireAuth(),
         create: requireAuth(),
-        update: anyOf(requireRoles(['admin']), requireOwnership('createdBy')),
-        delete: requireRoles(['admin']),
+        update: anyOf(requireRoles(["admin"]), requireOwnership("createdBy")),
+        delete: requireRoles(["admin"]),
       },
       middlewares: preset.middlewares,
     });
 
     app = await createApp({
-      preset: 'development',
-      auth: { type: 'authenticator', authenticate: clerkAuthenticator },
+      preset: "development",
+      auth: { type: "authenticator", authenticate: clerkAuthenticator },
       logger: false,
       helmet: false,
       rateLimit: false,
@@ -139,31 +142,31 @@ describe('Custom Authenticator (Clerk/Auth0 Simulation)', () => {
   // Session-based authentication
   // --------------------------------------------------------------------------
 
-  describe('Session-based authentication', () => {
-    it('should authenticate with valid API key', async () => {
+  describe("Session-based authentication", () => {
+    it("should authenticate with valid API key", async () => {
       const res = await app.inject({
-        method: 'GET',
-        url: '/notes',
-        headers: { 'x-api-key': 'admin-session' },
+        method: "GET",
+        url: "/notes",
+        headers: { "x-api-key": "admin-session" },
       });
 
       expect(res.statusCode).toBe(200);
     });
 
-    it('should return 401 with missing API key', async () => {
+    it("should return 401 with missing API key", async () => {
       const res = await app.inject({
-        method: 'GET',
-        url: '/notes',
+        method: "GET",
+        url: "/notes",
       });
 
       expect(res.statusCode).toBe(401);
     });
 
-    it('should return 401 with invalid session', async () => {
+    it("should return 401 with invalid session", async () => {
       const res = await app.inject({
-        method: 'GET',
-        url: '/notes',
-        headers: { 'x-api-key': 'expired-or-invalid' },
+        method: "GET",
+        url: "/notes",
+        headers: { "x-api-key": "expired-or-invalid" },
       });
 
       expect(res.statusCode).toBe(401);
@@ -174,76 +177,76 @@ describe('Custom Authenticator (Clerk/Auth0 Simulation)', () => {
   // Integration with Arc permissions
   // --------------------------------------------------------------------------
 
-  describe('Integration with Arc permissions', () => {
+  describe("Integration with Arc permissions", () => {
     let adminNoteId: string;
     let userNoteId: string;
 
-    it('requireAuth works — authenticated user can create', async () => {
+    it("requireAuth works — authenticated user can create", async () => {
       const res = await app.inject({
-        method: 'POST',
-        url: '/notes',
-        headers: { 'x-api-key': 'admin-session' },
-        payload: { title: 'Admin Note' },
+        method: "POST",
+        url: "/notes",
+        headers: { "x-api-key": "admin-session" },
+        payload: { title: "Admin Note" },
       });
 
       expect(res.statusCode).toBe(201);
       adminNoteId = JSON.parse(res.body).data._id;
     });
 
-    it('requireAuth works — unauthenticated cannot create', async () => {
+    it("requireAuth works — unauthenticated cannot create", async () => {
       const res = await app.inject({
-        method: 'POST',
-        url: '/notes',
-        payload: { title: 'No Auth Note' },
+        method: "POST",
+        url: "/notes",
+        payload: { title: "No Auth Note" },
       });
 
       expect(res.statusCode).toBe(401);
     });
 
-    it('requireRoles works — admin can delete', async () => {
+    it("requireRoles works — admin can delete", async () => {
       // Create then delete
       const createRes = await app.inject({
-        method: 'POST',
-        url: '/notes',
-        headers: { 'x-api-key': 'admin-session' },
-        payload: { title: 'Delete Me' },
+        method: "POST",
+        url: "/notes",
+        headers: { "x-api-key": "admin-session" },
+        payload: { title: "Delete Me" },
       });
       const deleteId = JSON.parse(createRes.body).data._id;
 
       const res = await app.inject({
-        method: 'DELETE',
+        method: "DELETE",
         url: `/notes/${deleteId}`,
-        headers: { 'x-api-key': 'admin-session' },
+        headers: { "x-api-key": "admin-session" },
       });
 
       expect(res.statusCode).toBe(200);
     });
 
-    it('requireRoles works — regular user cannot delete', async () => {
+    it("requireRoles works — regular user cannot delete", async () => {
       // Create as admin, try delete as user
       const createRes = await app.inject({
-        method: 'POST',
-        url: '/notes',
-        headers: { 'x-api-key': 'user-session' },
-        payload: { title: 'User Note' },
+        method: "POST",
+        url: "/notes",
+        headers: { "x-api-key": "user-session" },
+        payload: { title: "User Note" },
       });
       userNoteId = JSON.parse(createRes.body).data._id;
 
       const res = await app.inject({
-        method: 'DELETE',
+        method: "DELETE",
         url: `/notes/${userNoteId}`,
-        headers: { 'x-api-key': 'user-session' },
+        headers: { "x-api-key": "user-session" },
       });
 
       expect(res.statusCode).toBe(403);
     });
 
-    it('anyOf(requireRoles, requireOwnership) — admin can update any note', async () => {
+    it("anyOf(requireRoles, requireOwnership) — admin can update any note", async () => {
       const res = await app.inject({
-        method: 'PATCH',
+        method: "PATCH",
         url: `/notes/${userNoteId}`,
-        headers: { 'x-api-key': 'admin-session' },
-        payload: { title: 'Admin Edited' },
+        headers: { "x-api-key": "admin-session" },
+        payload: { title: "Admin Edited" },
       });
 
       expect(res.statusCode).toBe(200);
@@ -254,35 +257,35 @@ describe('Custom Authenticator (Clerk/Auth0 Simulation)', () => {
   // Integration with multiTenantPreset
   // --------------------------------------------------------------------------
 
-  describe('Integration with multiTenantPreset', () => {
+  describe("Integration with multiTenantPreset", () => {
     let org1NoteId: string;
     let org2NoteId: string;
 
     beforeAll(async () => {
       // Create note in org1
       const res1 = await app.inject({
-        method: 'POST',
-        url: '/notes',
-        headers: { 'x-api-key': 'admin-session' },
-        payload: { title: 'Org 1 Note' },
+        method: "POST",
+        url: "/notes",
+        headers: { "x-api-key": "admin-session" },
+        payload: { title: "Org 1 Note" },
       });
       org1NoteId = JSON.parse(res1.body).data._id;
 
       // Create note in org2
       const res2 = await app.inject({
-        method: 'POST',
-        url: '/notes',
-        headers: { 'x-api-key': 'other-session' },
-        payload: { title: 'Org 2 Note' },
+        method: "POST",
+        url: "/notes",
+        headers: { "x-api-key": "other-session" },
+        payload: { title: "Org 2 Note" },
       });
       org2NoteId = JSON.parse(res2.body).data._id;
     });
 
-    it('org scoping works from custom user.organizationId', async () => {
+    it("org scoping works from custom user.organizationId", async () => {
       const res = await app.inject({
-        method: 'GET',
-        url: '/notes',
-        headers: { 'x-api-key': 'admin-session' },
+        method: "GET",
+        url: "/notes",
+        headers: { "x-api-key": "admin-session" },
       });
 
       expect(res.statusCode).toBe(200);
@@ -292,11 +295,11 @@ describe('Custom Authenticator (Clerk/Auth0 Simulation)', () => {
       expect(ids).not.toContain(org2NoteId);
     });
 
-    it('data isolation between orgs with custom auth', async () => {
+    it("data isolation between orgs with custom auth", async () => {
       const res = await app.inject({
-        method: 'GET',
-        url: '/notes',
-        headers: { 'x-api-key': 'other-session' },
+        method: "GET",
+        url: "/notes",
+        headers: { "x-api-key": "other-session" },
       });
 
       expect(res.statusCode).toBe(200);
@@ -311,11 +314,11 @@ describe('Custom Authenticator (Clerk/Auth0 Simulation)', () => {
   // No JWT utilities
   // --------------------------------------------------------------------------
 
-  describe('No JWT utilities', () => {
-    it('app does not have issueTokens when using custom auth only', () => {
+  describe("No JWT utilities", () => {
+    it("app does not have issueTokens when using custom auth only", () => {
       // When using custom authenticator, app.auth (the JWT helper) should not be available
       // OR it should be limited. The key point is the custom authenticator works.
-      expect(app.hasDecorator('authenticate')).toBe(true);
+      expect(app.hasDecorator("authenticate")).toBe(true);
     });
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { combinePolicies, anyPolicy, allowAll, denyAll } from "../../src/policies/helpers.js";
+import { allowAll, anyPolicy, combinePolicies, denyAll } from "../../src/policies/helpers.js";
 import type { PolicyEngine, PolicyResult } from "../../src/policies/PolicyInterface.js";
 
 /** Create a simple test policy engine */
@@ -79,10 +79,7 @@ describe("combinePolicies() — AND logic", () => {
 
 describe("anyPolicy() — OR logic", () => {
   it("allows when at least one policy allows", async () => {
-    const combined = anyPolicy(
-      createPolicy({ allowed: false }),
-      createPolicy({ allowed: true }),
-    );
+    const combined = anyPolicy(createPolicy({ allowed: false }), createPolicy({ allowed: true }));
     const result = await combined.can(null, "list");
     expect(result.allowed).toBe(true);
   });

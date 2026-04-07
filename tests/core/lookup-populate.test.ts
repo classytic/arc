@@ -10,15 +10,15 @@
  * Uses in-memory MongoDB via mongodb-memory-server + MongoKit Repository.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { QueryParser, Repository } from "@classytic/mongokit";
+import type { FastifyInstance } from "fastify";
+import Fastify from "fastify";
 import mongoose from "mongoose";
-import { Repository, QueryParser } from "@classytic/mongokit";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { allowPublic } from "../../src/permissions/index.js";
 import { setupTestDatabase, teardownTestDatabase } from "../setup.js";
-import Fastify from "fastify";
-import type { FastifyInstance } from "fastify";
 
 // ============================================================================
 // Models — Category (ref-based) + Product (ref + slug-based join)
@@ -56,11 +56,8 @@ let productRepo: Repository<any>;
 
 function setupModels() {
   CategoryModel =
-    mongoose.models.LookupCategory ||
-    mongoose.model("LookupCategory", CategorySchema);
-  ProductModel =
-    mongoose.models.LookupProduct ||
-    mongoose.model("LookupProduct", ProductSchema);
+    mongoose.models.LookupCategory || mongoose.model("LookupCategory", CategorySchema);
+  ProductModel = mongoose.models.LookupProduct || mongoose.model("LookupProduct", ProductSchema);
 
   productRepo = new Repository(ProductModel);
 }
@@ -215,9 +212,7 @@ describe("Populate with select (ref-based)", () => {
     const body = res.json();
     expect(body.docs.length).toBe(3);
     // At least one should have populated category
-    const withCategory = body.docs.find(
-      (d: any) => d.category && typeof d.category === "object",
-    );
+    const withCategory = body.docs.find((d: any) => d.category && typeof d.category === "object");
     expect(withCategory).toBeDefined();
     expect(withCategory.category.name).toBeDefined();
   });

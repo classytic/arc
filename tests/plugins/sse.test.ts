@@ -8,24 +8,27 @@
  * Fastify's inject(). Tests use real HTTP connections with AbortController.
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
-import Fastify, { type FastifyInstance } from 'fastify';
-import { eventPlugin } from '../../src/events/eventPlugin.js';
-import ssePlugin from '../../src/plugins/sse.js';
-import http from 'node:http';
+import http from "node:http";
+import Fastify, { type FastifyInstance } from "fastify";
+import { afterEach, describe, expect, it } from "vitest";
+import { eventPlugin } from "../../src/events/eventPlugin.js";
+import ssePlugin from "../../src/plugins/sse.js";
 
 // ============================================================================
 // Helper: fetch SSE endpoint with timeout
 // ============================================================================
 
-function fetchSSE(url: string, timeoutMs = 500): Promise<{
+function fetchSSE(
+  url: string,
+  timeoutMs = 500,
+): Promise<{
   statusCode: number;
   headers: Record<string, string>;
   body: string;
 }> {
   return new Promise((resolve, reject) => {
     const req = http.get(url, (res) => {
-      let body = '';
+      let body = "";
       const timer = setTimeout(() => {
         res.destroy();
         resolve({
@@ -35,8 +38,10 @@ function fetchSSE(url: string, timeoutMs = 500): Promise<{
         });
       }, timeoutMs);
 
-      res.on('data', (chunk) => { body += chunk.toString(); });
-      res.on('end', () => {
+      res.on("data", (chunk) => {
+        body += chunk.toString();
+      });
+      res.on("end", () => {
         clearTimeout(timer);
         resolve({
           statusCode: res.statusCode!,
@@ -44,12 +49,12 @@ function fetchSSE(url: string, timeoutMs = 500): Promise<{
           body,
         });
       });
-      res.on('error', (err) => {
+      res.on("error", (err) => {
         clearTimeout(timer);
         reject(err);
       });
     });
-    req.on('error', reject);
+    req.on("error", reject);
   });
 }
 
@@ -57,12 +62,14 @@ function fetchSSE(url: string, timeoutMs = 500): Promise<{
 // Tests
 // ============================================================================
 
-describe('SSE Plugin', () => {
+describe("SSE Plugin", () => {
   let app: FastifyInstance;
 
   afterEach(async () => {
     if (app) {
-      try { await app.close(); } catch {}
+      try {
+        await app.close();
+      } catch {}
     }
   });
 
@@ -70,8 +77,8 @@ describe('SSE Plugin', () => {
   // Registration
   // --------------------------------------------------------------------------
 
-  describe('registration', () => {
-    it('throws when events plugin is not registered (hard dependency)', async () => {
+  describe("registration", () => {
+    it("throws when events plugin is not registered (hard dependency)", async () => {
       app = Fastify({ logger: false });
       // Do NOT register eventPlugin — SSE declares arc-events as a dependency
       // Fastify checks dependencies during boot, so the error surfaces from ready()
@@ -91,53 +98,53 @@ describe('SSE Plugin', () => {
   // SSE response headers + streaming
   // --------------------------------------------------------------------------
 
-  describe('response headers and streaming', () => {
-    it('returns correct SSE headers at default path', async () => {
+  describe("response headers and streaming", () => {
+    it("returns correct SSE headers at default path", async () => {
       app = Fastify({ logger: false });
       await app.register(eventPlugin);
       await app.register(ssePlugin, { requireAuth: false, heartbeat: 100 });
-      await app.listen({ port: 0, host: '127.0.0.1' });
+      await app.listen({ port: 0, host: "127.0.0.1" });
 
       const address = app.server.address() as { port: number };
       const result = await fetchSSE(`http://127.0.0.1:${address.port}/events/stream`, 300);
 
       expect(result.statusCode).toBe(200);
-      expect(result.headers['content-type']).toBe('text/event-stream');
-      expect(result.headers['cache-control']).toBe('no-cache');
-      expect(result.headers['connection']).toBe('keep-alive');
+      expect(result.headers["content-type"]).toBe("text/event-stream");
+      expect(result.headers["cache-control"]).toBe("no-cache");
+      expect(result.headers.connection).toBe("keep-alive");
     });
 
-    it('registers at custom path', async () => {
+    it("registers at custom path", async () => {
       app = Fastify({ logger: false });
       await app.register(eventPlugin);
-      await app.register(ssePlugin, { path: '/api/events', requireAuth: false, heartbeat: 100 });
-      await app.listen({ port: 0, host: '127.0.0.1' });
+      await app.register(ssePlugin, { path: "/api/events", requireAuth: false, heartbeat: 100 });
+      await app.listen({ port: 0, host: "127.0.0.1" });
 
       const address = app.server.address() as { port: number };
       const result = await fetchSSE(`http://127.0.0.1:${address.port}/api/events`, 300);
 
       expect(result.statusCode).toBe(200);
-      expect(result.headers['content-type']).toBe('text/event-stream');
+      expect(result.headers["content-type"]).toBe("text/event-stream");
     });
 
-    it('sends heartbeat comments', async () => {
+    it("sends heartbeat comments", async () => {
       app = Fastify({ logger: false });
       await app.register(eventPlugin);
       await app.register(ssePlugin, { requireAuth: false, heartbeat: 50 });
-      await app.listen({ port: 0, host: '127.0.0.1' });
+      await app.listen({ port: 0, host: "127.0.0.1" });
 
       const address = app.server.address() as { port: number };
       // Wait long enough for at least one heartbeat
       const result = await fetchSSE(`http://127.0.0.1:${address.port}/events/stream`, 200);
 
-      expect(result.body).toContain(': heartbeat');
+      expect(result.body).toContain(": heartbeat");
     });
 
-    it('streams published domain events', async () => {
+    it("streams published domain events", async () => {
       app = Fastify({ logger: false });
       await app.register(eventPlugin);
       await app.register(ssePlugin, { requireAuth: false, heartbeat: 60000 });
-      await app.listen({ port: 0, host: '127.0.0.1' });
+      await app.listen({ port: 0, host: "127.0.0.1" });
 
       const address = app.server.address() as { port: number };
 
@@ -146,12 +153,12 @@ describe('SSE Plugin', () => {
 
       // Wait a bit for the SSE connection to establish, then publish
       await new Promise((r) => setTimeout(r, 100));
-      await app.events.publish('order.created', { orderId: '123' });
+      await app.events.publish("order.created", { orderId: "123" });
 
       const result = await ssePromise;
 
       expect(result.statusCode).toBe(200);
-      expect(result.body).toContain('event: order.created');
+      expect(result.body).toContain("event: order.created");
       expect(result.body).toContain('"orderId":"123"');
     });
   });
@@ -160,12 +167,12 @@ describe('SSE Plugin', () => {
   // Graceful cleanup
   // --------------------------------------------------------------------------
 
-  describe('cleanup', () => {
-    it('cleans up on server close without errors', async () => {
+  describe("cleanup", () => {
+    it("cleans up on server close without errors", async () => {
       app = Fastify({ logger: false });
       await app.register(eventPlugin);
       await app.register(ssePlugin, { requireAuth: false, heartbeat: 100 });
-      await app.listen({ port: 0, host: '127.0.0.1' });
+      await app.listen({ port: 0, host: "127.0.0.1" });
 
       const address = app.server.address() as { port: number };
 

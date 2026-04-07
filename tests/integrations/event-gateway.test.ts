@@ -5,13 +5,13 @@
  * SSE/WS selective registration, and room policy propagation.
  */
 
-import { describe, it, expect, afterEach } from "vitest";
-import Fastify, { type FastifyInstance } from "fastify";
+import http from "node:http";
 import fastifyWebsocket from "@fastify/websocket";
+import Fastify, { type FastifyInstance } from "fastify";
+import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { eventPlugin } from "../../src/events/eventPlugin.js";
 import { eventGatewayPlugin } from "../../src/integrations/event-gateway.js";
-import http from "node:http";
 
 // ============================================================================
 // Helpers
@@ -64,10 +64,7 @@ function fetchSSE(
   });
 }
 
-function connectWs(
-  port: number,
-  path = "/ws",
-): Promise<{ ws: WebSocket; connected: any }> {
+function connectWs(port: number, path = "/ws"): Promise<{ ws: WebSocket; connected: any }> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`);
     const timeout = setTimeout(() => {
@@ -91,10 +88,7 @@ function connectWs(
 
 function sendAndReceive(ws: WebSocket, payload: object): Promise<any> {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error("Response timeout")),
-      3000,
-    );
+    const timeout = setTimeout(() => reject(new Error("Response timeout")), 3000);
     ws.once("message", (raw) => {
       clearTimeout(timeout);
       resolve(JSON.parse(raw.toString()));
@@ -145,10 +139,7 @@ describe("EventGateway auth", () => {
 
     // SSE should work
     const address = app.server.address() as { port: number };
-    const sseResult = await fetchSSE(
-      `http://127.0.0.1:${address.port}/events/stream`,
-      300,
-    );
+    const sseResult = await fetchSSE(`http://127.0.0.1:${address.port}/events/stream`, 300);
     expect(sseResult.statusCode).toBe(200);
 
     // WebSocket should work
@@ -203,10 +194,7 @@ describe("EventGateway selective registration", () => {
 
     // SSE should work
     const address = app.server.address() as { port: number };
-    const sseResult = await fetchSSE(
-      `http://127.0.0.1:${address.port}/events/stream`,
-      300,
-    );
+    const sseResult = await fetchSSE(`http://127.0.0.1:${address.port}/events/stream`, 300);
     expect(sseResult.statusCode).toBe(200);
   });
 });
@@ -283,10 +271,7 @@ describe("EventGateway custom paths", () => {
     const port = getPort(app);
 
     // SSE at custom path
-    const sseResult = await fetchSSE(
-      `http://127.0.0.1:${port}/api/events`,
-      300,
-    );
+    const sseResult = await fetchSSE(`http://127.0.0.1:${port}/api/events`, 300);
     expect(sseResult.statusCode).toBe(200);
     expect(sseResult.headers["content-type"]).toBe("text/event-stream");
 

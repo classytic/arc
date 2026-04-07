@@ -25,6 +25,10 @@ type PreHandlerHook = preHandlerHookHandler | RouteHandlerMethod;
 
 import { CRUD_OPERATIONS, DEFAULT_UPDATE_METHOD } from "../constants.js";
 import { requestContext } from "../context/requestContext.js";
+import {
+  applyPermissionResult,
+  normalizePermissionResult,
+} from "../permissions/applyPermissionResult.js";
 import type { PermissionCheck, PermissionContext, PermissionResult } from "../permissions/types.js";
 import { executePipeline } from "../pipeline/pipe.js";
 import type { PipelineConfig, PipelineContext, PipelineStep } from "../pipeline/types.js";
@@ -173,20 +177,9 @@ function buildPermissionMiddleware(
       return;
     }
 
-    // Handle boolean result
-    if (typeof result === "boolean") {
-      if (!result) {
-        reply.code(context.user ? 403 : 401).send({
-          success: false,
-          error: context.user ? "Permission denied" : "Authentication required",
-        });
-        return;
-      }
-      return;
-    }
+    // Normalize boolean → PermissionResult via the single-source-of-truth helper
+    const permResult = normalizePermissionResult(result);
 
-    // Handle PermissionResult
-    const permResult = result as PermissionResult;
     if (!permResult.granted) {
       // Sanitize reason — prevent leaking internals in long or unexpected messages
       const defaultMsg = context.user ? "Permission denied" : "Authentication required";
@@ -199,13 +192,12 @@ function buildPermissionMiddleware(
       return;
     }
 
-    // Apply filters from permission result (for ownership patterns)
-    if (permResult.filters) {
-      reqWithExtras._policyFilters = {
-        ...(reqWithExtras._policyFilters ?? {}),
-        ...permResult.filters,
-      };
-    }
+    // Apply filters + scope via the single-source-of-truth helper.
+    // This is the ONLY place in Arc that installs permission side-effects on
+    // a Fastify request (createActionRouter uses the same call). Keeping this
+    // centralized prevents the drift that caused action routes + MCP handlers
+    // to silently ignore `PermissionResult.scope` in earlier versions.
+    applyPermissionResult(permResult, request);
   };
 }
 

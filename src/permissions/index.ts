@@ -20,6 +20,14 @@
  * ```
  */
 
+// Framework-internal primitives — exported from the barrel because the
+// package has `sideEffects: false`, so ESM tree-shaking eliminates unused
+// re-exports for end users who don't import them. Internal call sites
+// (createCrudRouter, createActionRouter, MCP resourceToTools) import these
+// directly from "./applyPermissionResult.js" to skip the barrel entirely.
+// End users almost never need these — returning a PermissionResult from a
+// permission check is enough; Arc applies it automatically.
+export { applyPermissionResult, normalizePermissionResult } from "./applyPermissionResult.js";
 export type { RoleHierarchy } from "./roleHierarchy.js";
 export { createRoleHierarchy } from "./roleHierarchy.js";
 // Re-export types

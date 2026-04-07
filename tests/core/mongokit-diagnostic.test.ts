@@ -8,11 +8,11 @@
  * Tests marked with "MONGOKIT BUG" are issues that need fixing in MongoKit.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { QueryParser, Repository } from "@classytic/mongokit";
 import mongoose from "mongoose";
-import { Repository, QueryParser } from "@classytic/mongokit";
-import { setupTestDatabase, teardownTestDatabase } from "../setup.js";
 import qs from "qs";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { setupTestDatabase, teardownTestDatabase } from "../setup.js";
 
 // ============================================================================
 // Test Models
@@ -63,12 +63,8 @@ const parser = new QueryParser();
 beforeAll(async () => {
   await setupTestDatabase();
 
-  DeptModel =
-    mongoose.models.DiagDepartment ||
-    mongoose.model("DiagDepartment", DepartmentSchema);
-  EmpModel =
-    mongoose.models.DiagEmployee ||
-    mongoose.model("DiagEmployee", EmployeeSchema);
+  DeptModel = mongoose.models.DiagDepartment || mongoose.model("DiagDepartment", DepartmentSchema);
+  EmpModel = mongoose.models.DiagEmployee || mongoose.model("DiagEmployee", EmployeeSchema);
 
   deptRepo = new Repository(DeptModel);
   empRepo = new Repository(EmpModel);
@@ -155,8 +151,8 @@ describe("1. QueryParser output shape", () => {
   it("should parse basic filters", () => {
     const result = parseQuery("status=active&salary[gte]=100000");
     expect(result.filters).toBeDefined();
-    expect(result.filters!.status).toBe("active");
-    expect(result.filters!.salary).toEqual({ $gte: 100000 });
+    expect(result.filters?.status).toBe("active");
+    expect(result.filters?.salary).toEqual({ $gte: 100000 });
   });
 
   it("should parse sort", () => {
@@ -173,21 +169,21 @@ describe("1. QueryParser output shape", () => {
     const result = parseQuery("populate=department");
     // Fixed in MongoKit 3.4.1: simple populate is normalized into populateOptions
     expect(result.populateOptions).toBeDefined();
-    expect(result.populateOptions![0].path).toBe("department");
+    expect(result.populateOptions?.[0].path).toBe("department");
   });
 
   it("should parse populate with select", () => {
     const result = parseQuery("populate[department][select]=name,slug");
     expect(result.populateOptions).toBeDefined();
-    expect(result.populateOptions![0].path).toBe("department");
-    expect(result.populateOptions![0].select).toBe("name slug");
+    expect(result.populateOptions?.[0].path).toBe("department");
+    expect(result.populateOptions?.[0].select).toBe("name slug");
   });
 
   it("should parse populate with match", () => {
     const result = parseQuery(
       "populate[department][select]=name&populate[department][match][isActive]=true",
     );
-    expect(result.populateOptions![0].match).toBeDefined();
+    expect(result.populateOptions?.[0].match).toBeDefined();
   });
 
   it("should parse lookup", () => {
@@ -195,19 +191,19 @@ describe("1. QueryParser output shape", () => {
       "lookup[dept][from]=diagdepartments&lookup[dept][localField]=departmentSlug&lookup[dept][foreignField]=slug&lookup[dept][single]=true",
     );
     expect(result.lookups).toBeDefined();
-    expect(result.lookups!.length).toBe(1);
-    expect(result.lookups![0].from).toBe("diagdepartments");
-    expect(result.lookups![0].localField).toBe("departmentSlug");
-    expect(result.lookups![0].foreignField).toBe("slug");
-    expect(result.lookups![0].as).toBe("dept");
-    expect(result.lookups![0].single).toBe(true);
+    expect(result.lookups?.length).toBe(1);
+    expect(result.lookups?.[0].from).toBe("diagdepartments");
+    expect(result.lookups?.[0].localField).toBe("departmentSlug");
+    expect(result.lookups?.[0].foreignField).toBe("slug");
+    expect(result.lookups?.[0].as).toBe("dept");
+    expect(result.lookups?.[0].single).toBe(true);
   });
 
   it("should parse lookup with select", () => {
     const result = parseQuery(
       "lookup[dept][from]=diagdepartments&lookup[dept][localField]=departmentSlug&lookup[dept][foreignField]=slug&lookup[dept][select]=name,slug",
     );
-    expect(result.lookups![0].select).toBe("name,slug");
+    expect(result.lookups?.[0].select).toBe("name,slug");
   });
 
   it("should parse pagination", () => {
@@ -418,9 +414,7 @@ describe("4. Lookup ($lookup join — no refs)", () => {
     );
     const result = await empRepo.getAll(parsed);
     expect(result.docs.length).toBe(2); // Alice and Bob
-    expect(
-      result.docs.every((d: any) => d.dept && d.dept.name === "Engineering"),
-    ).toBe(true);
+    expect(result.docs.every((d: any) => d.dept && d.dept.name === "Engineering")).toBe(true);
   });
 
   it("should work with sort + lookup", async () => {
@@ -571,25 +565,16 @@ describe("8. Populate and Lookup in same query", () => {
       // department (populate) — may or may not work depending on MongoKit
       // Aggregation results don't go through .populate(), so this is likely an ObjectId
       // This documents the actual behavior
-      if (
-        alice.department &&
-        typeof alice.department === "object" &&
-        alice.department.name
-      ) {
+      if (alice.department && typeof alice.department === "object" && alice.department.name) {
         // MongoKit somehow handled populate in aggregation
         console.log("INFO: Populate works alongside lookup in aggregation");
       } else {
         // Expected: populate doesn't work in aggregation mode
-        console.log(
-          "INFO: Populate ignored when lookup triggers aggregation (expected)",
-        );
+        console.log("INFO: Populate ignored when lookup triggers aggregation (expected)");
       }
     } catch (err: any) {
       // If it errors, document what happens
-      console.log(
-        "INFO: Populate + lookup combination errors:",
-        err.message?.slice(0, 100),
-      );
+      console.log("INFO: Populate + lookup combination errors:", err.message?.slice(0, 100));
     }
   });
 });
@@ -661,8 +646,8 @@ describe("10. QueryParser security", () => {
   it("should block dangerous operators in filters", () => {
     const parsed = parseQuery("$where=malicious&name=safe");
     // $where should be stripped or ignored
-    expect(parsed.filters!.$where).toBeUndefined();
-    expect(parsed.filters!.name).toBe("safe");
+    expect(parsed.filters?.$where).toBeUndefined();
+    expect(parsed.filters?.name).toBe("safe");
   });
 
   it("should handle deeply nested filters safely", () => {

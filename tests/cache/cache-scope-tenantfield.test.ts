@@ -6,21 +6,15 @@
  * Tenant-scoped resources still include orgId in cache keys.
  */
 
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
-import mongoose from 'mongoose';
-import Fastify from 'fastify';
-import type { FastifyInstance } from 'fastify';
-import { defineResource } from '../../src/core/defineResource.js';
-import { BaseController } from '../../src/core/BaseController.js';
-import { createMongooseAdapter } from '../../src/adapters/mongoose.js';
-import { allowPublic } from '../../src/permissions/index.js';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { BaseController } from "../../src/core/BaseController.js";
 import {
-  setupTestDatabase,
-  teardownTestDatabase,
   clearDatabase,
   createMockModel,
   createMockRepository,
-} from '../setup.js';
+  setupTestDatabase,
+  teardownTestDatabase,
+} from "../setup.js";
 
 let mongoUri: string;
 
@@ -36,13 +30,13 @@ afterEach(async () => {
   await clearDatabase();
 });
 
-describe('Cache scope with tenantField', () => {
-  it('should not include orgId in cache keys when tenantField is false', async () => {
+describe("Cache scope with tenantField", () => {
+  it("should not include orgId in cache keys when tenantField is false", async () => {
     // Universal resource — shared across all orgs
-    const Model = createMockModel('UniversalTag' + Date.now());
+    const Model = createMockModel(`UniversalTag${Date.now()}`);
     const repo = createMockRepository(Model);
     const controller = new BaseController(repo, {
-      resourceName: 'tag',
+      resourceName: "tag",
       tenantField: false, // Universal — no tenant scoping
     });
 
@@ -51,29 +45,29 @@ describe('Cache scope with tenantField', () => {
       query: {},
       body: {},
       params: {},
-      user: { id: 'user-1' },
+      user: { id: "user-1" },
       headers: {},
       metadata: {
         _scope: {
-            kind: 'member',
-            userId: 'user-1',
-            userRoles: [],
-            organizationId: 'org-123',
-            orgRoles: ['admin'],
+          kind: "member",
+          userId: "user-1",
+          userRoles: [],
+          organizationId: "org-123",
+          orgRoles: ["admin"],
         },
       },
     });
 
     // orgId should NOT be included for universal resources
     expect(scope.orgId).toBeUndefined();
-    expect(scope.userId).toBe('user-1');
+    expect(scope.userId).toBe("user-1");
   });
 
-  it('should include orgId in cache keys when tenantField is set (default)', async () => {
-    const Model = createMockModel('TenantProduct' + Date.now());
+  it("should include orgId in cache keys when tenantField is set (default)", async () => {
+    const Model = createMockModel(`TenantProduct${Date.now()}`);
     const repo = createMockRepository(Model);
     const controller = new BaseController(repo, {
-      resourceName: 'product',
+      resourceName: "product",
       // tenantField defaults to 'organizationId'
     });
 
@@ -81,59 +75,63 @@ describe('Cache scope with tenantField', () => {
       query: {},
       body: {},
       params: {},
-      user: { id: 'user-2' },
+      user: { id: "user-2" },
       headers: {},
       metadata: {
         _scope: {
-            kind: 'member',
-            userId: 'user-2',
-            userRoles: [],
-            organizationId: 'org-456',
-            orgRoles: ['member'],
+          kind: "member",
+          userId: "user-2",
+          userRoles: [],
+          organizationId: "org-456",
+          orgRoles: ["member"],
         },
       },
     });
 
     // orgId SHOULD be included for tenant-scoped resources
-    expect(scope.orgId).toBe('org-456');
-    expect(scope.userId).toBe('user-2');
+    expect(scope.orgId).toBe("org-456");
+    expect(scope.userId).toBe("user-2");
   });
 
-  it('should not fragment cache for universal resources across different orgs', async () => {
-    const Model = createMockModel('SharedDict' + Date.now());
+  it("should not fragment cache for universal resources across different orgs", async () => {
+    const Model = createMockModel(`SharedDict${Date.now()}`);
     const repo = createMockRepository(Model);
     const controller = new BaseController(repo, {
-      resourceName: 'dictionary',
+      resourceName: "dictionary",
       tenantField: false,
     });
 
     // Same user in different orgs
     const scopeOrg1 = (controller as any).cacheScope({
-      query: {}, body: {}, params: {},
-      user: { id: 'user-3' },
+      query: {},
+      body: {},
+      params: {},
+      user: { id: "user-3" },
       headers: {},
       metadata: {
         _scope: {
-            kind: 'member',
-            userId: 'user-3',
-            userRoles: [],
-            organizationId: 'org-A',
-            orgRoles: ['admin'],
+          kind: "member",
+          userId: "user-3",
+          userRoles: [],
+          organizationId: "org-A",
+          orgRoles: ["admin"],
         },
       },
     });
 
     const scopeOrg2 = (controller as any).cacheScope({
-      query: {}, body: {}, params: {},
-      user: { id: 'user-3' },
+      query: {},
+      body: {},
+      params: {},
+      user: { id: "user-3" },
       headers: {},
       metadata: {
         _scope: {
-            kind: 'member',
-            userId: 'user-3',
-            userRoles: [],
-            organizationId: 'org-B',
-            orgRoles: ['member'],
+          kind: "member",
+          userId: "user-3",
+          userRoles: [],
+          organizationId: "org-B",
+          orgRoles: ["member"],
         },
       },
     });

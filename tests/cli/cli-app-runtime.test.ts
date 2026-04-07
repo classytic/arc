@@ -12,22 +12,22 @@
  * Uses mongodb-memory-server (same as other e2e tests) with the test DB.
  */
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import mongoose from "mongoose";
-import { MongoMemoryServer } from "mongodb-memory-server";
 import {
-  Repository,
-  QueryParser,
-  softDeletePlugin,
   methodRegistryPlugin,
   mongoOperationsPlugin,
+  QueryParser,
+  Repository,
+  softDeletePlugin,
 } from "@classytic/mongokit";
-import { defineResource } from "../../src/core/defineResource.js";
+import { MongoMemoryServer } from "mongodb-memory-server";
+import mongoose from "mongoose";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
-import { allowPublic } from "../../src/permissions/index.js";
+import { defineResource } from "../../src/core/defineResource.js";
 import { resourceToTools } from "../../src/integrations/mcp/resourceToTools.js";
 import { createTestMcpClient } from "../../src/integrations/mcp/testing.js";
+import { allowPublic } from "../../src/permissions/index.js";
 
 // ============================================================================
 // Setup — mirrors what `arc init` + `arc generate` produce
@@ -62,17 +62,12 @@ const productSchema = new mongoose.Schema<IProduct>(
 productSchema.index({ category: 1, isActive: 1 });
 
 const ProductModel =
-  mongoose.models.CLITestProduct ||
-  mongoose.model("CLITestProduct", productSchema);
+  mongoose.models.CLITestProduct || mongoose.model("CLITestProduct", productSchema);
 
 // 2. Repository (same pattern as arc generate repository template)
 class ProductRepository extends Repository<IProduct> {
   constructor() {
-    super(ProductModel, [
-      methodRegistryPlugin(),
-      softDeletePlugin(),
-      mongoOperationsPlugin(),
-    ]);
+    super(ProductModel, [methodRegistryPlugin(), softDeletePlugin(), mongoOperationsPlugin()]);
   }
 
   async findActive() {
@@ -341,14 +336,14 @@ describe("Runtime: MCP end-to-end via createTestMcpClient", () => {
   it("list_products returns all items via MCP", async () => {
     const result = await client.callTool("list_products", {});
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0]!.text);
+    const data = JSON.parse(result.content[0]?.text);
     expect(data.docs).toHaveLength(3);
   });
 
   it("list_products filters by category via MCP", async () => {
     const result = await client.callTool("list_products", { category: "books" });
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0]!.text);
+    const data = JSON.parse(result.content[0]?.text);
     expect(data.docs).toHaveLength(1);
     expect(data.docs[0].name).toBe("Novel");
   });
@@ -356,7 +351,7 @@ describe("Runtime: MCP end-to-end via createTestMcpClient", () => {
   it("list_products filters by isActive via MCP", async () => {
     const result = await client.callTool("list_products", { isActive: false });
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0]!.text);
+    const data = JSON.parse(result.content[0]?.text);
     expect(data.docs).toHaveLength(1);
     expect(data.docs[0].name).toBe("T-Shirt");
   });
@@ -368,24 +363,24 @@ describe("Runtime: MCP end-to-end via createTestMcpClient", () => {
       category: "electronics",
     });
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0]!.text);
+    const data = JSON.parse(result.content[0]?.text);
     expect(data.data?.name || data.name).toBe("Headphones");
   });
 
   it("get_product retrieves by ID via MCP", async () => {
     const listResult = await client.callTool("list_products", { category: "electronics" });
-    const docs = JSON.parse(listResult.content[0]!.text).docs;
+    const docs = JSON.parse(listResult.content[0]?.text).docs;
     const id = docs[0]._id;
 
     const result = await client.callTool("get_product", { id });
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0]!.text);
+    const data = JSON.parse(result.content[0]?.text);
     expect(data.data?._id || data._id).toBe(id);
   });
 
   it("update_product updates via MCP", async () => {
     const listResult = await client.callTool("list_products", { category: "books" });
-    const id = JSON.parse(listResult.content[0]!.text).docs[0]._id;
+    const id = JSON.parse(listResult.content[0]?.text).docs[0]._id;
 
     const result = await client.callTool("update_product", { id, price: 19.99 });
     expect(result.isError).toBeFalsy();
@@ -393,7 +388,7 @@ describe("Runtime: MCP end-to-end via createTestMcpClient", () => {
 
   it("delete_product deletes via MCP", async () => {
     const listResult = await client.callTool("list_products", { category: "clothing" });
-    const id = JSON.parse(listResult.content[0]!.text).docs[0]._id;
+    const id = JSON.parse(listResult.content[0]?.text).docs[0]._id;
 
     const result = await client.callTool("delete_product", { id });
     expect(result.isError).toBeFalsy();

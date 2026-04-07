@@ -71,10 +71,8 @@ function defineModels() {
     { timestamps: true },
   );
 
-  const ProductModel =
-    mongoose.models.DevProduct || mongoose.model("DevProduct", ProductSchema);
-  const TaskModel =
-    mongoose.models.DevTask || mongoose.model("DevTask", TaskSchema);
+  const ProductModel = mongoose.models.DevProduct || mongoose.model("DevProduct", ProductSchema);
+  const TaskModel = mongoose.models.DevTask || mongoose.model("DevTask", TaskSchema);
 
   return { ProductModel, TaskModel };
 }
@@ -83,10 +81,7 @@ function defineModels() {
 // Seed Data
 // ============================================================================
 
-async function seedData(
-  ProductModel: mongoose.Model<unknown>,
-  TaskModel: mongoose.Model<unknown>,
-) {
+async function seedData(ProductModel: mongoose.Model<unknown>, TaskModel: mongoose.Model<unknown>) {
   const productCount = await ProductModel.countDocuments();
   const taskCount = await TaskModel.countDocuments();
 
@@ -344,10 +339,7 @@ Start by listing items to see what's in the database, then create/update/delete 
   // ── 5. Seed data ──
   if (shouldSeed) {
     console.log("\n🌱 Seeding data...");
-    await seedData(
-      ProductModel as mongoose.Model<unknown>,
-      TaskModel as mongoose.Model<unknown>,
-    );
+    await seedData(ProductModel as mongoose.Model<unknown>, TaskModel as mongoose.Model<unknown>);
   }
 
   // ── 6. Start server ──

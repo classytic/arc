@@ -14,7 +14,7 @@
 
 import { Repository } from "@classytic/mongokit";
 import { MongoMemoryServer } from "mongodb-memory-server";
-import mongoose, { Schema, type Model } from "mongoose";
+import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
@@ -46,8 +46,7 @@ beforeAll(async () => {
   mongoServer = await MongoMemoryServer.create();
   await mongoose.connect(mongoServer.getUri());
   InventoryModel =
-    mongoose.models.ConcInventory ||
-    mongoose.model<IInventory>("ConcInventory", InventorySchema);
+    mongoose.models.ConcInventory || mongoose.model<IInventory>("ConcInventory", InventorySchema);
 });
 
 afterAll(async () => {
@@ -151,7 +150,6 @@ describe("Concurrent updates with custom idField", () => {
               url: `/inventories/${sku}`,
               payload: { name: `${sku}-update-${j}` },
             }),
-
           );
         }
       }

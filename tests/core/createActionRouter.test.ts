@@ -6,15 +6,15 @@
  * and edge cases.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
-import Fastify, { type FastifyInstance } from 'fastify';
-import { createActionRouter } from '../../src/core/createActionRouter.js';
+import Fastify, { type FastifyInstance } from "fastify";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { ActionRouterConfig, IdempotencyService } from "../../src/core/createActionRouter.js";
+import { createActionRouter } from "../../src/core/createActionRouter.js";
 import type {
-  ActionHandler,
-  ActionRouterConfig,
-  IdempotencyService,
-} from '../../src/core/createActionRouter.js';
-import type { PermissionCheck, PermissionContext, PermissionResult } from '../../src/types/index.js';
+  PermissionCheck,
+  PermissionContext,
+  PermissionResult,
+} from "../../src/types/index.js";
 
 // ============================================================================
 // Test Helpers
@@ -26,7 +26,9 @@ function publicAction(): PermissionCheck {
   return check;
 }
 
-function protectedAction(checker?: (ctx: PermissionContext) => boolean | PermissionResult): PermissionCheck {
+function protectedAction(
+  checker?: (ctx: PermissionContext) => boolean | PermissionResult,
+): PermissionCheck {
   const check = (checker ?? ((ctx: PermissionContext) => !!ctx.user)) as PermissionCheck;
   return check;
 }
@@ -37,9 +39,12 @@ function rolesAction(roles: string[]): PermissionCheck {
   return check;
 }
 
-async function buildApp(config: ActionRouterConfig, opts?: {
-  authenticate?: (req: any, reply: any) => Promise<void>;
-}): Promise<FastifyInstance> {
+async function buildApp(
+  config: ActionRouterConfig,
+  opts?: {
+    authenticate?: (req: any, reply: any) => Promise<void>;
+  },
+): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
 
   if (opts?.authenticate) {
@@ -51,9 +56,15 @@ async function buildApp(config: ActionRouterConfig, opts?: {
   return app;
 }
 
-function inject(app: FastifyInstance, action: string, id = 'test-id', extra: Record<string, any> = {}, headers: Record<string, string> = {}) {
+function inject(
+  app: FastifyInstance,
+  action: string,
+  id = "test-id",
+  extra: Record<string, any> = {},
+  headers: Record<string, string> = {},
+) {
   return app.inject({
-    method: 'POST',
+    method: "POST",
     url: `/${id}/action`,
     payload: { action, ...extra },
     headers,
@@ -64,12 +75,12 @@ function inject(app: FastifyInstance, action: string, id = 'test-id', extra: Rec
 // 1. Action Validation
 // ============================================================================
 
-describe('createActionRouter: Action Validation', () => {
+describe("createActionRouter: Action Validation", () => {
   let app: FastifyInstance;
 
   beforeAll(async () => {
     app = await buildApp({
-      tag: 'Test',
+      tag: "Test",
       actions: {
         approve: async (id) => ({ id, approved: true }),
         reject: async (id) => ({ id, rejected: true }),
@@ -79,39 +90,39 @@ describe('createActionRouter: Action Validation', () => {
 
   afterAll(() => app.close());
 
-  it('should return 400 for invalid action (rejected by schema enum)', async () => {
-    const res = await inject(app, 'nonexistent');
+  it("should return 400 for invalid action (rejected by schema enum)", async () => {
+    const res = await inject(app, "nonexistent");
     // Fastify's schema validation rejects values not in the enum
     expect(res.statusCode).toBe(400);
   });
 
-  it('should return 400 for empty action string', async () => {
-    const res = await inject(app, '');
+  it("should return 400 for empty action string", async () => {
+    const res = await inject(app, "");
     // Empty string not in enum → schema validation error
     expect(res.statusCode).toBe(400);
   });
 
-  it('should be case-sensitive for action names', async () => {
-    const res = await inject(app, 'Approve');
+  it("should be case-sensitive for action names", async () => {
+    const res = await inject(app, "Approve");
     // 'Approve' not in enum ['approve', 'reject'] → 400
     expect(res.statusCode).toBe(400);
   });
 
-  it('should return 400 when body has no action field', async () => {
+  it("should return 400 when body has no action field", async () => {
     const res = await app.inject({
-      method: 'POST',
-      url: '/test-id/action',
-      payload: { someData: 'value' },
+      method: "POST",
+      url: "/test-id/action",
+      payload: { someData: "value" },
     });
     // Fastify schema validation rejects (action is required)
     expect(res.statusCode).toBe(400);
   });
 
-  it('should return custom error for invalid action when schema validation is loose', async () => {
+  it("should return custom error for invalid action when schema validation is loose", async () => {
     // Test the handler-level validation by sending a valid enum value
     // that somehow bypasses (not possible with strict schema), so test
     // the error message format of valid actions listing in summary
-    const res = await inject(app, 'nonexistent');
+    const res = await inject(app, "nonexistent");
     expect(res.statusCode).toBe(400);
     // Regardless of who rejects it, 400 is the expected status
   });
@@ -121,26 +132,26 @@ describe('createActionRouter: Action Validation', () => {
 // 2. Handler Execution
 // ============================================================================
 
-describe('createActionRouter: Handler Execution', () => {
-  it('should execute handler and wrap result in success response', async () => {
+describe("createActionRouter: Handler Execution", () => {
+  it("should execute handler and wrap result in success response", async () => {
     const app = await buildApp({
       actions: {
         process: async (id, data) => ({ id, processed: true, input: data }),
       },
     });
 
-    const res = await inject(app, 'process', 'order-123', { amount: 100 });
+    const res = await inject(app, "process", "order-123", { amount: 100 });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.success).toBe(true);
-    expect(body.data.id).toBe('order-123');
+    expect(body.data.id).toBe("order-123");
     expect(body.data.processed).toBe(true);
     expect(body.data.input.amount).toBe(100);
 
     await app.close();
   });
 
-  it('should pass id, data, and request to handler', async () => {
+  it("should pass id, data, and request to handler", async () => {
     let receivedId: string | undefined;
     let receivedData: any;
     let receivedReq: any;
@@ -156,9 +167,9 @@ describe('createActionRouter: Handler Execution', () => {
       },
     });
 
-    await inject(app, 'check', 'res-456', { key: 'value' });
-    expect(receivedId).toBe('res-456');
-    expect(receivedData.key).toBe('value');
+    await inject(app, "check", "res-456", { key: "value" });
+    expect(receivedId).toBe("res-456");
+    expect(receivedData.key).toBe("value");
     expect(receivedReq).toBeDefined();
     // data should NOT include the 'action' field (destructured out)
     expect(receivedData.action).toBeUndefined();
@@ -166,14 +177,14 @@ describe('createActionRouter: Handler Execution', () => {
     await app.close();
   });
 
-  it('should handle handler returning null', async () => {
+  it("should handle handler returning null", async () => {
     const app = await buildApp({
       actions: {
         nullAction: async () => null,
       },
     });
 
-    const res = await inject(app, 'nullAction');
+    const res = await inject(app, "nullAction");
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.success).toBe(true);
@@ -182,14 +193,14 @@ describe('createActionRouter: Handler Execution', () => {
     await app.close();
   });
 
-  it('should handle handler returning undefined', async () => {
+  it("should handle handler returning undefined", async () => {
     const app = await buildApp({
       actions: {
         voidAction: async () => undefined,
       },
     });
 
-    const res = await inject(app, 'voidAction');
+    const res = await inject(app, "voidAction");
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.success).toBe(true);
@@ -197,18 +208,24 @@ describe('createActionRouter: Handler Execution', () => {
     await app.close();
   });
 
-  it('should handle handler returning complex nested objects', async () => {
+  it("should handle handler returning complex nested objects", async () => {
     const app = await buildApp({
       actions: {
         complex: async () => ({
-          order: { id: '1', items: [{ name: 'A', qty: 2 }, { name: 'B', qty: 1 }] },
+          order: {
+            id: "1",
+            items: [
+              { name: "A", qty: 2 },
+              { name: "B", qty: 1 },
+            ],
+          },
           totals: { subtotal: 100, tax: 10, total: 110 },
-          metadata: { createdAt: '2024-01-01' },
+          metadata: { createdAt: "2024-01-01" },
         }),
       },
     });
 
-    const res = await inject(app, 'complex');
+    const res = await inject(app, "complex");
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.data.order.items).toHaveLength(2);
@@ -217,12 +234,12 @@ describe('createActionRouter: Handler Execution', () => {
     await app.close();
   });
 
-  it('should handle handler returning objects with toJSON method', async () => {
+  it("should handle handler returning objects with toJSON method", async () => {
     const app = await buildApp({
       actions: {
         model: async () => ({
-          _id: '123',
-          name: 'Test',
+          _id: "123",
+          name: "Test",
           toJSON() {
             return { id: this._id, name: this.name };
           },
@@ -230,12 +247,12 @@ describe('createActionRouter: Handler Execution', () => {
       },
     });
 
-    const res = await inject(app, 'model');
+    const res = await inject(app, "model");
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     // toJSON should be honoured by JSON.stringify
-    expect(body.data.id).toBe('123');
-    expect(body.data.name).toBe('Test');
+    expect(body.data.id).toBe("123");
+    expect(body.data.name).toBe("Test");
 
     await app.close();
   });
@@ -245,107 +262,109 @@ describe('createActionRouter: Handler Execution', () => {
 // 3. Error Handling
 // ============================================================================
 
-describe('createActionRouter: Error Handling', () => {
-  it('should handle errors with statusCode property', async () => {
+describe("createActionRouter: Error Handling", () => {
+  it("should handle errors with statusCode property", async () => {
     const app = await buildApp({
       actions: {
         fail: async () => {
-          const err = new Error('Not found') as any;
+          const err = new Error("Not found") as any;
           err.statusCode = 404;
           throw err;
         },
       },
     });
 
-    const res = await inject(app, 'fail');
+    const res = await inject(app, "fail");
     expect(res.statusCode).toBe(404);
     const body = JSON.parse(res.body);
     expect(body.success).toBe(false);
-    expect(body.error).toBe('Not found');
+    expect(body.error).toBe("Not found");
 
     await app.close();
   });
 
-  it('should handle errors with status property', async () => {
+  it("should handle errors with status property", async () => {
     const app = await buildApp({
       actions: {
         fail: async () => {
-          const err = new Error('Bad request') as any;
+          const err = new Error("Bad request") as any;
           err.status = 400;
           throw err;
         },
       },
     });
 
-    const res = await inject(app, 'fail');
+    const res = await inject(app, "fail");
     expect(res.statusCode).toBe(400);
     const body = JSON.parse(res.body);
-    expect(body.error).toBe('Bad request');
+    expect(body.error).toBe("Bad request");
 
     await app.close();
   });
 
-  it('should default to 500 for errors without status', async () => {
+  it("should default to 500 for errors without status", async () => {
     const app = await buildApp({
       actions: {
         crash: async () => {
-          throw new Error('Unexpected failure');
+          throw new Error("Unexpected failure");
         },
       },
     });
 
-    const res = await inject(app, 'crash');
+    const res = await inject(app, "crash");
     expect(res.statusCode).toBe(500);
     const body = JSON.parse(res.body);
     expect(body.success).toBe(false);
-    expect(body.code).toBe('ACTION_FAILED');
+    expect(body.code).toBe("ACTION_FAILED");
 
     await app.close();
   });
 
-  it('should use error.code when available', async () => {
+  it("should use error.code when available", async () => {
     const app = await buildApp({
       actions: {
         fail: async () => {
-          const err = new Error('Conflict') as any;
+          const err = new Error("Conflict") as any;
           err.statusCode = 409;
-          err.code = 'DUPLICATE_ENTRY';
+          err.code = "DUPLICATE_ENTRY";
           throw err;
         },
       },
     });
 
-    const res = await inject(app, 'fail');
+    const res = await inject(app, "fail");
     expect(res.statusCode).toBe(409);
     const body = JSON.parse(res.body);
-    expect(body.code).toBe('DUPLICATE_ENTRY');
+    expect(body.code).toBe("DUPLICATE_ENTRY");
 
     await app.close();
   });
 
-  it('should use custom onError handler when provided', async () => {
+  it("should use custom onError handler when provided", async () => {
     const app = await buildApp({
       actions: {
-        fail: async () => { throw new Error('Something broke'); },
+        fail: async () => {
+          throw new Error("Something broke");
+        },
       },
       onError: (error, action, id) => ({
         statusCode: 422,
         error: `Custom: ${error.message} in ${action} for ${id}`,
-        code: 'CUSTOM_ERROR',
+        code: "CUSTOM_ERROR",
       }),
     });
 
-    const res = await inject(app, 'fail', 'item-1');
+    const res = await inject(app, "fail", "item-1");
     expect(res.statusCode).toBe(422);
     const body = JSON.parse(res.body);
     expect(body.success).toBe(false);
-    expect(body.error).toBe('Custom: Something broke in fail for item-1');
-    expect(body.code).toBe('CUSTOM_ERROR');
+    expect(body.error).toBe("Custom: Something broke in fail for item-1");
+    expect(body.code).toBe("CUSTOM_ERROR");
 
     await app.close();
   });
 
-  it('should fall back to default message when error has no message', async () => {
+  it("should fall back to default message when error has no message", async () => {
     const app = await buildApp({
       actions: {
         fail: async () => {
@@ -356,7 +375,7 @@ describe('createActionRouter: Error Handling', () => {
       },
     });
 
-    const res = await inject(app, 'fail');
+    const res = await inject(app, "fail");
     expect(res.statusCode).toBe(500);
     const body = JSON.parse(res.body);
     expect(body.error).toContain("Failed to execute 'fail' action");
@@ -369,22 +388,22 @@ describe('createActionRouter: Error Handling', () => {
 // 4. Permission Checks
 // ============================================================================
 
-describe('createActionRouter: Permission Checks', () => {
-  it('should allow access when no permissions defined', async () => {
+describe("createActionRouter: Permission Checks", () => {
+  it("should allow access when no permissions defined", async () => {
     const app = await buildApp({
       actions: {
-        open: async () => ({ result: 'ok' }),
+        open: async () => ({ result: "ok" }),
       },
       // No actionPermissions, no globalAuth
     });
 
-    const res = await inject(app, 'open');
+    const res = await inject(app, "open");
     expect(res.statusCode).toBe(200);
 
     await app.close();
   });
 
-  it('should check action-specific permissions (boolean true)', async () => {
+  it("should check action-specific permissions (boolean true)", async () => {
     const app = await buildApp({
       actions: {
         allowed: async () => ({ ok: true }),
@@ -394,13 +413,13 @@ describe('createActionRouter: Permission Checks', () => {
       },
     });
 
-    const res = await inject(app, 'allowed');
+    const res = await inject(app, "allowed");
     expect(res.statusCode).toBe(200);
 
     await app.close();
   });
 
-  it('should deny when permission returns false (no user → 401)', async () => {
+  it("should deny when permission returns false (no user → 401)", async () => {
     const app = await buildApp({
       actions: {
         denied: async () => ({ ok: true }),
@@ -410,7 +429,7 @@ describe('createActionRouter: Permission Checks', () => {
       },
     });
 
-    const res = await inject(app, 'denied');
+    const res = await inject(app, "denied");
     // No user → 401
     expect(res.statusCode).toBe(401);
     const body = JSON.parse(res.body);
@@ -419,23 +438,32 @@ describe('createActionRouter: Permission Checks', () => {
     await app.close();
   });
 
-  it('should deny when permission returns false (with user → 403)', async () => {
-    const app = await buildApp({
-      actions: {
-        denied: async () => ({ ok: true }),
+  it("should deny when permission returns false (with user → 403)", async () => {
+    const app = await buildApp(
+      {
+        actions: {
+          denied: async () => ({ ok: true }),
+        },
+        actionPermissions: {
+          denied: protectedAction(() => false),
+        },
       },
-      actionPermissions: {
-        denied: protectedAction(() => false),
+      {
+        authenticate: async (req: any) => {
+          req.user = { id: "u1" };
+        },
       },
-    }, {
-      authenticate: async (req: any) => { req.user = { id: 'u1' }; },
-    });
+    );
 
     // Inject with a user set
     const appWithUser = Fastify({ logger: false });
-    (appWithUser as any).authenticate = async (req: any) => { req.user = { id: 'u1' }; };
+    (appWithUser as any).authenticate = async (req: any) => {
+      req.user = { id: "u1" };
+    };
     // We need the user on the request; use preHandler
-    appWithUser.addHook('preHandler', async (req: any) => { req.user = { id: 'u1' }; });
+    appWithUser.addHook("preHandler", async (req: any) => {
+      req.user = { id: "u1" };
+    });
     createActionRouter(appWithUser, {
       actions: {
         denied: async () => ({ ok: true }),
@@ -446,13 +474,13 @@ describe('createActionRouter: Permission Checks', () => {
     });
     await appWithUser.ready();
 
-    const res = await inject(appWithUser, 'denied');
+    const res = await inject(appWithUser, "denied");
     expect(res.statusCode).toBe(403);
 
     await appWithUser.close();
   });
 
-  it('should handle PermissionResult with granted=true', async () => {
+  it("should handle PermissionResult with granted=true", async () => {
     const app = await buildApp({
       actions: {
         check: async () => ({ ok: true }),
@@ -462,34 +490,82 @@ describe('createActionRouter: Permission Checks', () => {
       },
     });
 
-    const res = await inject(app, 'check');
+    const res = await inject(app, "check");
     expect(res.statusCode).toBe(200);
 
     await app.close();
   });
 
-  it('should handle PermissionResult with granted=false and reason', async () => {
+  // Regression pin: action routes must propagate PermissionResult.scope and
+  // PermissionResult.filters to the handler. Before the unification fix,
+  // createActionRouter only inspected `granted` and silently dropped both
+  // side-effects, breaking custom-auth tenant isolation. The dedicated
+  // file `tests/core/action-router-permission-scope.test.ts` covers this in
+  // depth — this inline assertion exists so anyone reading the canonical
+  // createActionRouter test file sees the contract pinned beside the
+  // existing PermissionResult cases.
+  it("should propagate PermissionResult.scope and filters to the action handler", async () => {
+    const seen: { scope?: unknown; policyFilters?: unknown } = {};
+
     const app = Fastify({ logger: false });
-    app.addHook('preHandler', async (req: any) => { req.user = { id: 'u1' }; });
+    createActionRouter(app, {
+      actions: {
+        run: async (id: string, _data: unknown, req: any) => {
+          seen.scope = req.scope;
+          seen.policyFilters = req._policyFilters;
+          return { id, ok: true };
+        },
+      },
+      actionPermissions: {
+        run: (() => ({
+          granted: true,
+          scope: {
+            kind: "service",
+            clientId: "client-xyz",
+            organizationId: "org-acme",
+          },
+          filters: { projectId: "proj-1" },
+        })) as unknown as PermissionCheck,
+      },
+    });
+    await app.ready();
+
+    const res = await inject(app, "run");
+    expect(res.statusCode).toBe(200);
+    expect(seen.scope).toEqual({
+      kind: "service",
+      clientId: "client-xyz",
+      organizationId: "org-acme",
+    });
+    expect(seen.policyFilters).toEqual({ projectId: "proj-1" });
+
+    await app.close();
+  });
+
+  it("should handle PermissionResult with granted=false and reason", async () => {
+    const app = Fastify({ logger: false });
+    app.addHook("preHandler", async (req: any) => {
+      req.user = { id: "u1" };
+    });
     createActionRouter(app, {
       actions: {
         check: async () => ({ ok: true }),
       },
       actionPermissions: {
-        check: protectedAction(() => ({ granted: false, reason: 'Insufficient tier' })),
+        check: protectedAction(() => ({ granted: false, reason: "Insufficient tier" })),
       },
     });
     await app.ready();
 
-    const res = await inject(app, 'check');
+    const res = await inject(app, "check");
     expect(res.statusCode).toBe(403);
     const body = JSON.parse(res.body);
-    expect(body.error).toBe('Insufficient tier');
+    expect(body.error).toBe("Insufficient tier");
 
     await app.close();
   });
 
-  it('should fall back to globalAuth when action has no specific permission', async () => {
+  it("should fall back to globalAuth when action has no specific permission", async () => {
     let globalAuthCalled = false;
 
     const app = await buildApp({
@@ -499,19 +575,19 @@ describe('createActionRouter: Permission Checks', () => {
       actionPermissions: {
         // no entry for 'noSpecific'
       },
-      globalAuth: protectedAction((ctx) => {
+      globalAuth: protectedAction((_ctx) => {
         globalAuthCalled = true;
         return true;
       }),
     });
 
-    await inject(app, 'noSpecific');
+    await inject(app, "noSpecific");
     expect(globalAuthCalled).toBe(true);
 
     await app.close();
   });
 
-  it('should prefer action-specific over globalAuth', async () => {
+  it("should prefer action-specific over globalAuth", async () => {
     let specificCalled = false;
     let globalCalled = false;
 
@@ -531,44 +607,44 @@ describe('createActionRouter: Permission Checks', () => {
       }),
     });
 
-    await inject(app, 'specific');
+    await inject(app, "specific");
     expect(specificCalled).toBe(true);
     expect(globalCalled).toBe(false);
 
     await app.close();
   });
 
-  it('should catch and handle permission check that throws', async () => {
+  it("should catch and handle permission check that throws", async () => {
     const app = await buildApp({
       actions: {
         boom: async () => ({ ok: true }),
       },
       actionPermissions: {
         boom: protectedAction(() => {
-          throw new Error('Auth service down');
+          throw new Error("Auth service down");
         }),
       },
     });
 
-    const res = await inject(app, 'boom');
+    const res = await inject(app, "boom");
     // Should return 403, not 500
     expect(res.statusCode).toBe(403);
     const body = JSON.parse(res.body);
     expect(body.success).toBe(false);
-    expect(body.error).toBe('Permission denied');
+    expect(body.error).toBe("Permission denied");
 
     await app.close();
   });
 
-  it('should pass correct context to permission check', async () => {
+  it("should pass correct context to permission check", async () => {
     let capturedCtx: PermissionContext | undefined;
 
     const app = Fastify({ logger: false });
-    app.addHook('preHandler', async (req: any) => {
-      req.user = { id: 'user-42', role: 'admin' };
+    app.addHook("preHandler", async (req: any) => {
+      req.user = { id: "user-42", role: "admin" };
     });
     createActionRouter(app, {
-      tag: 'Orders',
+      tag: "Orders",
       actions: {
         approve: async () => ({ ok: true }),
       },
@@ -581,14 +657,14 @@ describe('createActionRouter: Permission Checks', () => {
     });
     await app.ready();
 
-    await inject(app, 'approve', 'order-99', { reason: 'looks good' });
+    await inject(app, "approve", "order-99", { reason: "looks good" });
 
     expect(capturedCtx).toBeDefined();
-    expect(capturedCtx!.user?.id).toBe('user-42');
-    expect(capturedCtx!.action).toBe('approve');
-    expect(capturedCtx!.resourceId).toBe('order-99');
-    expect(capturedCtx!.resource).toBe('Orders');
-    expect(capturedCtx!.data?.reason).toBe('looks good');
+    expect(capturedCtx?.user?.id).toBe("user-42");
+    expect(capturedCtx?.action).toBe("approve");
+    expect(capturedCtx?.resourceId).toBe("order-99");
+    expect(capturedCtx?.resource).toBe("Orders");
+    expect(capturedCtx?.data?.reason).toBe("looks good");
 
     await app.close();
   });
@@ -598,15 +674,15 @@ describe('createActionRouter: Permission Checks', () => {
 // 5. Auth Pre-Handler Behavior
 // ============================================================================
 
-describe('createActionRouter: Auth Pre-Handler', () => {
-  it('should apply global auth when all actions protected', async () => {
+describe("createActionRouter: Auth Pre-Handler", () => {
+  it("should apply global auth when all actions protected", async () => {
     let authCalled = false;
 
     const app = await buildApp(
       {
         actions: {
-          a: async () => 'a',
-          b: async () => 'b',
+          a: async () => "a",
+          b: async () => "b",
         },
         actionPermissions: {
           a: protectedAction(),
@@ -616,25 +692,25 @@ describe('createActionRouter: Auth Pre-Handler', () => {
       {
         authenticate: async (req: any) => {
           authCalled = true;
-          req.user = { id: 'u1' };
+          req.user = { id: "u1" };
         },
       },
     );
 
-    await inject(app, 'a');
+    await inject(app, "a");
     expect(authCalled).toBe(true);
 
     await app.close();
   });
 
-  it('should NOT apply global auth when all actions public', async () => {
+  it("should NOT apply global auth when all actions public", async () => {
     let authCalled = false;
 
     const app = await buildApp(
       {
         actions: {
-          a: async () => 'a',
-          b: async () => 'b',
+          a: async () => "a",
+          b: async () => "b",
         },
         actionPermissions: {
           a: publicAction(),
@@ -642,24 +718,26 @@ describe('createActionRouter: Auth Pre-Handler', () => {
         },
       },
       {
-        authenticate: async () => { authCalled = true; },
+        authenticate: async () => {
+          authCalled = true;
+        },
       },
     );
 
-    await inject(app, 'a');
+    await inject(app, "a");
     expect(authCalled).toBe(false);
 
     await app.close();
   });
 
-  it('should defer auth to per-action check when mixed public/protected', async () => {
+  it("should defer auth to per-action check when mixed public/protected", async () => {
     let globalAuthCalled = false;
 
     const app = await buildApp(
       {
         actions: {
           public: async () => ({ public: true }),
-          private: async (id, _data, req) => ({ by: (req.user as any)?.id }),
+          private: async (_id, _data, req) => ({ by: (req.user as any)?.id }),
         },
         actionPermissions: {
           public: publicAction(),
@@ -667,7 +745,7 @@ describe('createActionRouter: Auth Pre-Handler', () => {
         },
       },
       {
-        authenticate: async (req: any) => {
+        authenticate: async (_req: any) => {
           globalAuthCalled = true;
           // Don't set user to simulate checking without auth
         },
@@ -676,7 +754,7 @@ describe('createActionRouter: Auth Pre-Handler', () => {
 
     // Public action should NOT trigger global auth
     globalAuthCalled = false;
-    const pubRes = await inject(app, 'public');
+    const pubRes = await inject(app, "public");
     expect(pubRes.statusCode).toBe(200);
     // Global preHandler should NOT be called for mixed mode
     expect(globalAuthCalled).toBe(false);
@@ -684,14 +762,14 @@ describe('createActionRouter: Auth Pre-Handler', () => {
     await app.close();
   });
 
-  it('should authenticate per-action for protected in mixed mode', async () => {
+  it("should authenticate per-action for protected in mixed mode", async () => {
     const app = Fastify({ logger: false });
 
     (app as any).authenticate = async (req: any) => {
-      if (!req.headers['authorization']) {
-        throw new Error('No auth');
+      if (!req.headers.authorization) {
+        throw new Error("No auth");
       }
-      req.user = { id: 'authed' };
+      req.user = { id: "authed" };
     };
 
     createActionRouter(app, {
@@ -708,15 +786,15 @@ describe('createActionRouter: Auth Pre-Handler', () => {
     await app.ready();
 
     // Protected action without auth → 401
-    const res1 = await inject(app, 'private');
+    const res1 = await inject(app, "private");
     expect(res1.statusCode).toBeGreaterThanOrEqual(401);
 
     // Protected action with auth → 200
     const res2 = await app.inject({
-      method: 'POST',
-      url: '/test-id/action',
-      payload: { action: 'private' },
-      headers: { authorization: 'Bearer token' },
+      method: "POST",
+      url: "/test-id/action",
+      payload: { action: "private" },
+      headers: { authorization: "Bearer token" },
     });
     expect(res2.statusCode).toBe(200);
 
@@ -728,8 +806,8 @@ describe('createActionRouter: Auth Pre-Handler', () => {
 // 6. Idempotency
 // ============================================================================
 
-describe('createActionRouter: Idempotency', () => {
-  it('should return cached result on idempotent replay', async () => {
+describe("createActionRouter: Idempotency", () => {
+  it("should return cached result on idempotent replay", async () => {
     let callCount = 0;
     const store = new Map<string, any>();
 
@@ -757,13 +835,13 @@ describe('createActionRouter: Idempotency', () => {
     });
 
     // First call
-    const res1 = await inject(app, 'charge', 'order-1', {}, { 'idempotency-key': 'key-1' });
+    const res1 = await inject(app, "charge", "order-1", {}, { "idempotency-key": "key-1" });
     expect(res1.statusCode).toBe(200);
     const body1 = JSON.parse(res1.body);
     expect(body1.data.attempt).toBe(1);
 
     // Second call — should return cached
-    const res2 = await inject(app, 'charge', 'order-1', {}, { 'idempotency-key': 'key-1' });
+    const res2 = await inject(app, "charge", "order-1", {}, { "idempotency-key": "key-1" });
     expect(res2.statusCode).toBe(200);
     const body2 = JSON.parse(res2.body);
     expect(body2.cached).toBe(true);
@@ -773,7 +851,7 @@ describe('createActionRouter: Idempotency', () => {
     await app.close();
   });
 
-  it('should handle cached falsy result (null, 0, false)', async () => {
+  it("should handle cached falsy result (null, 0, false)", async () => {
     const store = new Map<string, any>();
 
     const idempotencyService: IdempotencyService = {
@@ -797,10 +875,10 @@ describe('createActionRouter: Idempotency', () => {
     });
 
     // First call stores null
-    await inject(app, 'nullResult', 'id', {}, { 'idempotency-key': 'null-key' });
+    await inject(app, "nullResult", "id", {}, { "idempotency-key": "null-key" });
 
     // Second call should return cached null (not treat as cache miss)
-    const res = await inject(app, 'nullResult', 'id', {}, { 'idempotency-key': 'null-key' });
+    const res = await inject(app, "nullResult", "id", {}, { "idempotency-key": "null-key" });
     const body = JSON.parse(res.body);
     expect(body.cached).toBe(true);
     expect(body.data).toBeNull();
@@ -808,11 +886,13 @@ describe('createActionRouter: Idempotency', () => {
     await app.close();
   });
 
-  it('should skip idempotency when no key header provided', async () => {
+  it("should skip idempotency when no key header provided", async () => {
     let callCount = 0;
 
     const idempotencyService: IdempotencyService = {
-      async check() { return { isNew: true }; },
+      async check() {
+        return { isNew: true };
+      },
       async complete() {},
       async fail() {},
     };
@@ -827,19 +907,21 @@ describe('createActionRouter: Idempotency', () => {
       idempotencyService,
     });
 
-    await inject(app, 'process');
-    await inject(app, 'process');
+    await inject(app, "process");
+    await inject(app, "process");
     expect(callCount).toBe(2); // Both executed
 
     await app.close();
   });
 
-  it('should call idempotencyService.fail on handler error', async () => {
+  it("should call idempotencyService.fail on handler error", async () => {
     let failCalled = false;
     let failedKey: string | undefined;
 
     const idempotencyService: IdempotencyService = {
-      async check() { return { isNew: true }; },
+      async check() {
+        return { isNew: true };
+      },
       async complete() {},
       async fail(key) {
         failCalled = true;
@@ -849,19 +931,21 @@ describe('createActionRouter: Idempotency', () => {
 
     const app = await buildApp({
       actions: {
-        crash: async () => { throw new Error('boom'); },
+        crash: async () => {
+          throw new Error("boom");
+        },
       },
       idempotencyService,
     });
 
-    await inject(app, 'crash', 'id', {}, { 'idempotency-key': 'fail-key' });
+    await inject(app, "crash", "id", {}, { "idempotency-key": "fail-key" });
     expect(failCalled).toBe(true);
-    expect(failedKey).toBe('fail-key');
+    expect(failedKey).toBe("fail-key");
 
     await app.close();
   });
 
-  it('should handle array idempotency-key header (use first)', async () => {
+  it("should handle array idempotency-key header (use first)", async () => {
     let checkedKey: string | undefined;
 
     const idempotencyService: IdempotencyService = {
@@ -883,13 +967,13 @@ describe('createActionRouter: Idempotency', () => {
     // Fastify inject doesn't support array headers directly,
     // but the code handles it: Array.isArray → use [0]
     await app.inject({
-      method: 'POST',
-      url: '/id/action',
-      payload: { action: 'test' },
-      headers: { 'idempotency-key': 'single-key' },
+      method: "POST",
+      url: "/id/action",
+      payload: { action: "test" },
+      headers: { "idempotency-key": "single-key" },
     });
 
-    expect(checkedKey).toBe('single-key');
+    expect(checkedKey).toBe("single-key");
 
     await app.close();
   });
@@ -899,12 +983,12 @@ describe('createActionRouter: Idempotency', () => {
 // 7. Empty Actions Config
 // ============================================================================
 
-describe('createActionRouter: Empty Actions', () => {
-  it('should skip route registration when no actions defined', async () => {
+describe("createActionRouter: Empty Actions", () => {
+  it("should skip route registration when no actions defined", async () => {
     const app = Fastify({ logger: false });
 
     createActionRouter(app, {
-      tag: 'Empty',
+      tag: "Empty",
       actions: {},
     });
 
@@ -912,9 +996,9 @@ describe('createActionRouter: Empty Actions', () => {
 
     // Route should not exist
     const res = await app.inject({
-      method: 'POST',
-      url: '/test-id/action',
-      payload: { action: 'anything' },
+      method: "POST",
+      url: "/test-id/action",
+      payload: { action: "anything" },
     });
     expect(res.statusCode).toBe(404);
 
@@ -926,8 +1010,8 @@ describe('createActionRouter: Empty Actions', () => {
 // 8. Action Schemas
 // ============================================================================
 
-describe('createActionRouter: Action Schemas', () => {
-  it('should accept additional body properties from action schemas', async () => {
+describe("createActionRouter: Action Schemas", () => {
+  it("should accept additional body properties from action schemas", async () => {
     const app = await buildApp({
       actions: {
         dispatch: async (id, data) => ({ id, driver: data.transport?.driver }),
@@ -935,20 +1019,20 @@ describe('createActionRouter: Action Schemas', () => {
       },
       actionSchemas: {
         dispatch: {
-          transport: { type: 'object', properties: { driver: { type: 'string' } } },
+          transport: { type: "object", properties: { driver: { type: "string" } } },
         },
         cancel: {
-          reason: { type: 'string' },
+          reason: { type: "string" },
         },
       },
     });
 
-    const res = await inject(app, 'dispatch', 'order-1', {
-      transport: { driver: 'John' },
+    const res = await inject(app, "dispatch", "order-1", {
+      transport: { driver: "John" },
     });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.data.driver).toBe('John');
+    expect(body.data.driver).toBe("John");
 
     await app.close();
   });
@@ -958,12 +1042,12 @@ describe('createActionRouter: Action Schemas', () => {
 // 9. OpenAPI / Schema
 // ============================================================================
 
-describe('createActionRouter: OpenAPI Schema', () => {
-  it('should include tag in schema', async () => {
+describe("createActionRouter: OpenAPI Schema", () => {
+  it("should include tag in schema", async () => {
     const app = Fastify({ logger: false });
 
     createActionRouter(app, {
-      tag: 'Inventory - Transfers',
+      tag: "Inventory - Transfers",
       actions: {
         approve: async () => ({}),
       },
@@ -973,17 +1057,17 @@ describe('createActionRouter: OpenAPI Schema', () => {
 
     // Check registered routes have the schema
     const routes = app.printRoutes();
-    expect(routes).toContain('action');
+    expect(routes).toContain("action");
 
     await app.close();
   });
 
-  it('should generate action enum in body schema', async () => {
+  it("should generate action enum in body schema", async () => {
     const app = Fastify({ logger: false });
 
     let capturedSchema: any;
-    app.addHook('onRoute', (routeOptions) => {
-      if (routeOptions.url === '/:id/action' && routeOptions.method === 'POST') {
+    app.addHook("onRoute", (routeOptions) => {
+      if (routeOptions.url === "/:id/action" && routeOptions.method === "POST") {
         capturedSchema = routeOptions.schema;
       }
     });
@@ -999,17 +1083,17 @@ describe('createActionRouter: OpenAPI Schema', () => {
     await app.ready();
 
     expect(capturedSchema).toBeDefined();
-    expect(capturedSchema.body.properties.action.enum).toEqual(['approve', 'reject', 'cancel']);
+    expect(capturedSchema.body.properties.action.enum).toEqual(["approve", "reject", "cancel"]);
 
     await app.close();
   });
 
-  it('should include roles in description when _roles metadata present', async () => {
+  it("should include roles in description when _roles metadata present", async () => {
     const app = Fastify({ logger: false });
 
     let capturedSchema: any;
-    app.addHook('onRoute', (routeOptions) => {
-      if (routeOptions.url === '/:id/action' && routeOptions.method === 'POST') {
+    app.addHook("onRoute", (routeOptions) => {
+      if (routeOptions.url === "/:id/action" && routeOptions.method === "POST") {
         capturedSchema = routeOptions.schema;
       }
     });
@@ -1020,16 +1104,16 @@ describe('createActionRouter: OpenAPI Schema', () => {
         view: async () => ({}),
       },
       actionPermissions: {
-        approve: rolesAction(['admin', 'manager']),
+        approve: rolesAction(["admin", "manager"]),
         view: publicAction(),
       },
     });
 
     await app.ready();
 
-    expect(capturedSchema?.description).toContain('approve');
-    expect(capturedSchema?.description).toContain('admin');
-    expect(capturedSchema?.description).toContain('manager');
+    expect(capturedSchema?.description).toContain("approve");
+    expect(capturedSchema?.description).toContain("admin");
+    expect(capturedSchema?.description).toContain("manager");
 
     await app.close();
   });
@@ -1039,68 +1123,68 @@ describe('createActionRouter: OpenAPI Schema', () => {
 // 10. Response Serialization
 // ============================================================================
 
-describe('createActionRouter: Response Serialization', () => {
-  it('should serialize dynamic response shapes without schema stripping', async () => {
+describe("createActionRouter: Response Serialization", () => {
+  it("should serialize dynamic response shapes without schema stripping", async () => {
     const app = await buildApp({
       actions: {
         detail: async () => ({
-          _id: 'abc123',
-          name: 'Test Order',
-          status: 'active',
-          items: [{ product: 'Widget', qty: 3 }],
-          subscription: { planKey: 'monthly', isActive: true },
-          createdAt: '2024-01-01T00:00:00Z',
+          _id: "abc123",
+          name: "Test Order",
+          status: "active",
+          items: [{ product: "Widget", qty: 3 }],
+          subscription: { planKey: "monthly", isActive: true },
+          createdAt: "2024-01-01T00:00:00Z",
         }),
       },
     });
 
-    const res = await inject(app, 'detail');
+    const res = await inject(app, "detail");
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
 
     // All fields should be present (not stripped by schema)
-    expect(body.data._id).toBe('abc123');
-    expect(body.data.name).toBe('Test Order');
-    expect(body.data.status).toBe('active');
+    expect(body.data._id).toBe("abc123");
+    expect(body.data.name).toBe("Test Order");
+    expect(body.data.status).toBe("active");
     expect(body.data.items).toHaveLength(1);
-    expect(body.data.subscription.planKey).toBe('monthly');
-    expect(body.data.createdAt).toBe('2024-01-01T00:00:00Z');
+    expect(body.data.subscription.planKey).toBe("monthly");
+    expect(body.data.createdAt).toBe("2024-01-01T00:00:00Z");
 
     await app.close();
   });
 
-  it('should not return empty object for complex data', async () => {
+  it("should not return empty object for complex data", async () => {
     const app = await buildApp({
       actions: {
         fetch: async () => ({
-          enrollment: { courseId: 'c1', status: 'active' },
-          transaction: { amount: 100, method: 'card' },
+          enrollment: { courseId: "c1", status: "active" },
+          transaction: { amount: 100, method: "card" },
         }),
       },
     });
 
-    const res = await inject(app, 'fetch');
+    const res = await inject(app, "fetch");
     const body = JSON.parse(res.body);
 
     // This was the critical bug — data was {} before the fix
     expect(body.data).not.toEqual({});
-    expect(body.data.enrollment.courseId).toBe('c1');
+    expect(body.data.enrollment.courseId).toBe("c1");
     expect(body.data.transaction.amount).toBe(100);
 
     await app.close();
   });
 
-  it('should handle arrays as top-level data', async () => {
+  it("should handle arrays as top-level data", async () => {
     const app = await buildApp({
       actions: {
         list: async () => [
-          { id: '1', name: 'A' },
-          { id: '2', name: 'B' },
+          { id: "1", name: "A" },
+          { id: "2", name: "B" },
         ],
       },
     });
 
-    const res = await inject(app, 'list');
+    const res = await inject(app, "list");
     const body = JSON.parse(res.body);
     expect(Array.isArray(body.data)).toBe(true);
     expect(body.data).toHaveLength(2);
@@ -1108,23 +1192,23 @@ describe('createActionRouter: Response Serialization', () => {
     await app.close();
   });
 
-  it('should handle primitive values as data', async () => {
+  it("should handle primitive values as data", async () => {
     const app = await buildApp({
       actions: {
         count: async () => 42,
         flag: async () => true,
-        label: async () => 'done',
+        label: async () => "done",
       },
     });
 
-    let res = await inject(app, 'count');
+    let res = await inject(app, "count");
     expect(JSON.parse(res.body).data).toBe(42);
 
-    res = await inject(app, 'flag');
+    res = await inject(app, "flag");
     expect(JSON.parse(res.body).data).toBe(true);
 
-    res = await inject(app, 'label');
-    expect(JSON.parse(res.body).data).toBe('done');
+    res = await inject(app, "label");
+    expect(JSON.parse(res.body).data).toBe("done");
 
     await app.close();
   });
@@ -1134,8 +1218,8 @@ describe('createActionRouter: Response Serialization', () => {
 // 11. Route Registration
 // ============================================================================
 
-describe('createActionRouter: Route Registration', () => {
-  it('should register POST /:id/action endpoint', async () => {
+describe("createActionRouter: Route Registration", () => {
+  it("should register POST /:id/action endpoint", async () => {
     const app = await buildApp({
       actions: {
         test: async () => ({}),
@@ -1143,16 +1227,16 @@ describe('createActionRouter: Route Registration', () => {
     });
 
     const res = await app.inject({
-      method: 'POST',
-      url: '/my-resource-id/action',
-      payload: { action: 'test' },
+      method: "POST",
+      url: "/my-resource-id/action",
+      payload: { action: "test" },
     });
     expect(res.statusCode).toBe(200);
 
     await app.close();
   });
 
-  it('should work with various ID formats', async () => {
+  it("should work with various ID formats", async () => {
     const app = await buildApp({
       actions: {
         echo: async (id) => ({ id }),
@@ -1160,28 +1244,28 @@ describe('createActionRouter: Route Registration', () => {
     });
 
     // MongoDB ObjectId-like
-    let res = await inject(app, 'echo', '507f1f77bcf86cd799439011');
-    expect(JSON.parse(res.body).data.id).toBe('507f1f77bcf86cd799439011');
+    let res = await inject(app, "echo", "507f1f77bcf86cd799439011");
+    expect(JSON.parse(res.body).data.id).toBe("507f1f77bcf86cd799439011");
 
     // UUID
-    res = await inject(app, 'echo', '550e8400-e29b-41d4-a716-446655440000');
-    expect(JSON.parse(res.body).data.id).toBe('550e8400-e29b-41d4-a716-446655440000');
+    res = await inject(app, "echo", "550e8400-e29b-41d4-a716-446655440000");
+    expect(JSON.parse(res.body).data.id).toBe("550e8400-e29b-41d4-a716-446655440000");
 
     // Numeric string
-    res = await inject(app, 'echo', '12345');
-    expect(JSON.parse(res.body).data.id).toBe('12345');
+    res = await inject(app, "echo", "12345");
+    expect(JSON.parse(res.body).data.id).toBe("12345");
 
     await app.close();
   });
 
-  it('should return 404 for wrong HTTP method', async () => {
+  it("should return 404 for wrong HTTP method", async () => {
     const app = await buildApp({
       actions: { test: async () => ({}) },
     });
 
     const res = await app.inject({
-      method: 'GET',
-      url: '/test-id/action',
+      method: "GET",
+      url: "/test-id/action",
     });
     expect(res.statusCode).toBe(404);
 
@@ -1193,40 +1277,40 @@ describe('createActionRouter: Route Registration', () => {
 // 12. Multiple Actions
 // ============================================================================
 
-describe('createActionRouter: Multiple Actions', () => {
+describe("createActionRouter: Multiple Actions", () => {
   let app: FastifyInstance;
 
   beforeAll(async () => {
     app = await buildApp({
-      tag: 'Workflow',
+      tag: "Workflow",
       actions: {
-        approve: async (id) => ({ id, status: 'approved' }),
-        reject: async (id, data) => ({ id, status: 'rejected', reason: data.reason }),
-        dispatch: async (id, data) => ({ id, status: 'dispatched', driver: data.driver }),
-        receive: async (id) => ({ id, status: 'received' }),
-        cancel: async (id, data) => ({ id, status: 'cancelled', reason: data.reason }),
+        approve: async (id) => ({ id, status: "approved" }),
+        reject: async (id, data) => ({ id, status: "rejected", reason: data.reason }),
+        dispatch: async (id, data) => ({ id, status: "dispatched", driver: data.driver }),
+        receive: async (id) => ({ id, status: "received" }),
+        cancel: async (id, data) => ({ id, status: "cancelled", reason: data.reason }),
       },
     });
   });
 
   afterAll(() => app.close());
 
-  it('should route to correct handler based on action', async () => {
-    const approve = await inject(app, 'approve', 'item-1');
-    expect(JSON.parse(approve.body).data.status).toBe('approved');
+  it("should route to correct handler based on action", async () => {
+    const approve = await inject(app, "approve", "item-1");
+    expect(JSON.parse(approve.body).data.status).toBe("approved");
 
-    const reject = await inject(app, 'reject', 'item-1', { reason: 'bad quality' });
-    expect(JSON.parse(reject.body).data.status).toBe('rejected');
-    expect(JSON.parse(reject.body).data.reason).toBe('bad quality');
+    const reject = await inject(app, "reject", "item-1", { reason: "bad quality" });
+    expect(JSON.parse(reject.body).data.status).toBe("rejected");
+    expect(JSON.parse(reject.body).data.reason).toBe("bad quality");
 
-    const dispatch = await inject(app, 'dispatch', 'item-1', { driver: 'John' });
-    expect(JSON.parse(dispatch.body).data.driver).toBe('John');
+    const dispatch = await inject(app, "dispatch", "item-1", { driver: "John" });
+    expect(JSON.parse(dispatch.body).data.driver).toBe("John");
 
-    const receive = await inject(app, 'receive', 'item-1');
-    expect(JSON.parse(receive.body).data.status).toBe('received');
+    const receive = await inject(app, "receive", "item-1");
+    expect(JSON.parse(receive.body).data.status).toBe("received");
 
-    const cancel = await inject(app, 'cancel', 'item-1', { reason: 'out of stock' });
-    expect(JSON.parse(cancel.body).data.reason).toBe('out of stock');
+    const cancel = await inject(app, "cancel", "item-1", { reason: "out of stock" });
+    expect(JSON.parse(cancel.body).data.reason).toBe("out of stock");
   });
 });
 
@@ -1234,15 +1318,15 @@ describe('createActionRouter: Multiple Actions', () => {
 // 13. Mixed Permission + Handler Integration
 // ============================================================================
 
-describe('createActionRouter: Permission + Handler Integration', () => {
-  it('should not execute handler when permission denied', async () => {
+describe("createActionRouter: Permission + Handler Integration", () => {
+  it("should not execute handler when permission denied", async () => {
     let handlerCalled = false;
 
     const app = await buildApp({
       actions: {
         sensitive: async () => {
           handlerCalled = true;
-          return { secret: 'data' };
+          return { secret: "data" };
         },
       },
       actionPermissions: {
@@ -1250,13 +1334,13 @@ describe('createActionRouter: Permission + Handler Integration', () => {
       },
     });
 
-    await inject(app, 'sensitive');
+    await inject(app, "sensitive");
     expect(handlerCalled).toBe(false);
 
     await app.close();
   });
 
-  it('should execute handler after permission granted', async () => {
+  it("should execute handler after permission granted", async () => {
     let handlerCalled = false;
 
     const app = await buildApp({
@@ -1271,19 +1355,19 @@ describe('createActionRouter: Permission + Handler Integration', () => {
       },
     });
 
-    const res = await inject(app, 'allowed');
+    const res = await inject(app, "allowed");
     expect(res.statusCode).toBe(200);
     expect(handlerCalled).toBe(true);
 
     await app.close();
   });
 
-  it('should check permission before idempotency', async () => {
+  it("should check permission before idempotency", async () => {
     const order: string[] = [];
 
     const idempotencyService: IdempotencyService = {
       async check() {
-        order.push('idempotency');
+        order.push("idempotency");
         return { isNew: true };
       },
       async complete() {},
@@ -1293,23 +1377,23 @@ describe('createActionRouter: Permission + Handler Integration', () => {
     const app = await buildApp({
       actions: {
         test: async () => {
-          order.push('handler');
+          order.push("handler");
           return {};
         },
       },
       actionPermissions: {
         test: protectedAction(() => {
-          order.push('permission');
+          order.push("permission");
           return true;
         }),
       },
       idempotencyService,
     });
 
-    await inject(app, 'test', 'id', {}, { 'idempotency-key': 'k1' });
+    await inject(app, "test", "id", {}, { "idempotency-key": "k1" });
 
     // Permission should be checked before idempotency
-    expect(order.indexOf('permission')).toBeLessThan(order.indexOf('idempotency'));
+    expect(order.indexOf("permission")).toBeLessThan(order.indexOf("idempotency"));
 
     await app.close();
   });
@@ -1319,12 +1403,12 @@ describe('createActionRouter: Permission + Handler Integration', () => {
 // 14. Tag and Description
 // ============================================================================
 
-describe('createActionRouter: Tag and Description', () => {
-  it('should use tag as resource in permission context when provided', async () => {
+describe("createActionRouter: Tag and Description", () => {
+  it("should use tag as resource in permission context when provided", async () => {
     let capturedResource: string | undefined;
 
     const app = await buildApp({
-      tag: 'CustomTag',
+      tag: "CustomTag",
       actions: {
         test: async () => ({}),
       },
@@ -1336,8 +1420,8 @@ describe('createActionRouter: Tag and Description', () => {
       },
     });
 
-    await inject(app, 'test');
-    expect(capturedResource).toBe('CustomTag');
+    await inject(app, "test");
+    expect(capturedResource).toBe("CustomTag");
 
     await app.close();
   });
@@ -1357,8 +1441,8 @@ describe('createActionRouter: Tag and Description', () => {
       },
     });
 
-    await inject(app, 'test');
-    expect(capturedResource).toBe('action');
+    await inject(app, "test");
+    expect(capturedResource).toBe("action");
 
     await app.close();
   });

@@ -818,8 +818,15 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     }
 
     // Pre-restore access control: fetch the (soft-deleted) item and validate
-    // org scope, policy filters, and ownership — same as DELETE /:id
-    const existing = await this.accessControl.fetchWithAccessControl<TDoc>(id, req, repo);
+    // org scope, policy filters, and ownership — same as DELETE /:id.
+    //
+    // Pass `includeDeleted: true` so the soft-delete plugin's default
+    // `deletedAt: null` filter doesn't hide the very document we're trying
+    // to restore. Adapters that don't recognize this option will simply
+    // ignore it (it's a query-level hint, not a filter clause).
+    const existing = await this.accessControl.fetchWithAccessControl<TDoc>(id, req, repo, {
+      includeDeleted: true,
+    });
 
     if (!existing) {
       return { success: false, error: "Resource not found", status: 404 };

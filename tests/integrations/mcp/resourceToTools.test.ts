@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { resourceToTools } from "../../../src/integrations/mcp/resourceToTools.js";
 import type { ResourceDefinition } from "../../../src/core/defineResource.js";
+import { resourceToTools } from "../../../src/integrations/mcp/resourceToTools.js";
 
 function mockResource(overrides?: Partial<ResourceDefinition>): ResourceDefinition {
   return {
@@ -58,8 +58,14 @@ describe("resourceToTools", () => {
     expect(byName.list_products.annotations).toEqual({ readOnlyHint: true });
     expect(byName.get_product.annotations).toEqual({ readOnlyHint: true });
     expect(byName.create_product.annotations).toEqual({ destructiveHint: false });
-    expect(byName.update_product.annotations).toEqual({ destructiveHint: true, idempotentHint: true });
-    expect(byName.delete_product.annotations).toEqual({ destructiveHint: true, idempotentHint: true });
+    expect(byName.update_product.annotations).toEqual({
+      destructiveHint: true,
+      idempotentHint: true,
+    });
+    expect(byName.delete_product.annotations).toEqual({
+      destructiveHint: true,
+      idempotentHint: true,
+    });
   });
 
   it("skips disabled routes", () => {
@@ -268,9 +274,9 @@ describe("resourceToTools", () => {
 
       const statsTool = tools.find((t) => t.name === "stats_product");
       expect(statsTool).toBeDefined();
-      expect(statsTool!.description).toBe("Get product stats");
+      expect(statsTool?.description).toBe("Get product stats");
 
-      const result = await statsTool!.handler(
+      const result = await statsTool?.handler(
         { filter: "active" },
         { session: null, log: vi.fn().mockResolvedValue(undefined), extra: {} },
       );
@@ -330,6 +336,75 @@ describe("resourceToTools", () => {
         projectId: "proj-123",
         userId: "user-456",
       });
+    });
+
+    // Regression pin: PermissionResult.scope must reach the controller as
+    // metadata._scope. Before the fix, evaluatePermission() in resourceToTools
+    // only extracted `filters` and silently dropped `scope`, breaking custom
+    // API-key auth in MCP. Dedicated regression file:
+    // tests/integrations/mcp/mcp-permission-scope.test.ts. This inline
+    // assertion exists so anyone reading the canonical resourceToTools test
+    // file sees the contract pinned beside the existing filter cases.
+    it("propagates PermissionResult.scope into controller metadata._scope", async () => {
+      const resource = mockResource({
+        permissions: {
+          list: (() => ({
+            granted: true,
+            scope: {
+              kind: "service",
+              clientId: "client-acme",
+              organizationId: "org-acme",
+            },
+          })) as any,
+        },
+      });
+      const tools = resourceToTools(resource);
+      const listTool = tools.find((t) => t.name === "list_products")!;
+
+      await listTool.handler(
+        {},
+        { session: null, log: vi.fn().mockResolvedValue(undefined), extra: {} },
+      );
+
+      const ctrl = resource.controller as any;
+      const ctx = ctrl.list.mock.calls[0][0];
+      expect(ctx.metadata._scope).toEqual({
+        kind: "service",
+        clientId: "client-acme",
+        organizationId: "org-acme",
+      });
+    });
+
+    it("does NOT downgrade an existing session-derived scope (session wins)", async () => {
+      const resource = mockResource({
+        permissions: {
+          list: (() => ({
+            granted: true,
+            scope: {
+              kind: "service",
+              clientId: "should-not-apply",
+              organizationId: "org-narrower",
+            },
+          })) as any,
+        },
+      });
+      const tools = resourceToTools(resource);
+      const listTool = tools.find((t) => t.name === "list_products")!;
+
+      await listTool.handler(
+        {},
+        {
+          session: { userId: "u1", organizationId: "org-session" },
+          log: vi.fn().mockResolvedValue(undefined),
+          extra: {},
+        },
+      );
+
+      const ctrl = resource.controller as any;
+      const ctx = ctrl.list.mock.calls[0][0];
+      // Session scope = member (auth set orgId) → must NOT be overwritten
+      expect(ctx.metadata._scope.kind).toBe("member");
+      expect(ctx.metadata._scope.organizationId).toBe("org-session");
     });
 
     it("denies access when permission check returns granted: false", async () => {

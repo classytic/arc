@@ -1,12 +1,12 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   defineMigration,
-  MigrationRunner,
-  MigrationRegistry,
-  withSchemaVersion,
-  type MigrationStore,
   type Migration,
   type MigrationRecord,
+  MigrationRegistry,
+  MigrationRunner,
+  type MigrationStore,
+  withSchemaVersion,
 } from "../../src/migrations/index.js";
 
 // Silent logger for tests
@@ -40,7 +40,12 @@ describe("defineMigration()", () => {
 
 describe("withSchemaVersion()", () => {
   it("creates a schema version with migrations", () => {
-    const m = defineMigration({ version: 1, resource: "p", up: async () => {}, down: async () => {} });
+    const m = defineMigration({
+      version: 1,
+      resource: "p",
+      up: async () => {},
+      down: async () => {},
+    });
     const sv = withSchemaVersion(2, [m]);
     expect(sv.version).toBe(2);
     expect(sv.migrations).toHaveLength(1);
@@ -50,8 +55,18 @@ describe("withSchemaVersion()", () => {
 describe("MigrationRegistry", () => {
   it("registers and retrieves migrations by resource", () => {
     const registry = new MigrationRegistry();
-    const m1 = defineMigration({ version: 1, resource: "users", up: async () => {}, down: async () => {} });
-    const m2 = defineMigration({ version: 2, resource: "users", up: async () => {}, down: async () => {} });
+    const m1 = defineMigration({
+      version: 1,
+      resource: "users",
+      up: async () => {},
+      down: async () => {},
+    });
+    const m2 = defineMigration({
+      version: 2,
+      resource: "users",
+      up: async () => {},
+      down: async () => {},
+    });
     registry.register(m1);
     registry.register(m2);
     const forUsers = registry.getForResource("users");
@@ -62,8 +77,12 @@ describe("MigrationRegistry", () => {
 
   it("getAll returns all migrations sorted by version", () => {
     const registry = new MigrationRegistry();
-    registry.register(defineMigration({ version: 3, resource: "posts", up: async () => {}, down: async () => {} }));
-    registry.register(defineMigration({ version: 1, resource: "users", up: async () => {}, down: async () => {} }));
+    registry.register(
+      defineMigration({ version: 3, resource: "posts", up: async () => {}, down: async () => {} }),
+    );
+    registry.register(
+      defineMigration({ version: 1, resource: "users", up: async () => {}, down: async () => {} }),
+    );
     const all = registry.getAll();
     expect(all).toHaveLength(2);
     expect(all[0].version).toBe(1);
@@ -72,7 +91,12 @@ describe("MigrationRegistry", () => {
 
   it("get returns specific migration", () => {
     const registry = new MigrationRegistry();
-    const m = defineMigration({ version: 1, resource: "users", up: async () => {}, down: async () => {} });
+    const m = defineMigration({
+      version: 1,
+      resource: "users",
+      up: async () => {},
+      down: async () => {},
+    });
     registry.register(m);
     expect(registry.get("users", 1)).toBe(m);
     expect(registry.get("users", 99)).toBeUndefined();
@@ -80,7 +104,9 @@ describe("MigrationRegistry", () => {
 
   it("clear removes all migrations", () => {
     const registry = new MigrationRegistry();
-    registry.register(defineMigration({ version: 1, resource: "users", up: async () => {}, down: async () => {} }));
+    registry.register(
+      defineMigration({ version: 1, resource: "users", up: async () => {}, down: async () => {} }),
+    );
     registry.clear();
     expect(registry.getAll()).toHaveLength(0);
   });
@@ -122,8 +148,22 @@ describe("MigrationRunner", () => {
   it("runs pending migrations in version order", async () => {
     const order: number[] = [];
     const migrations = [
-      defineMigration({ version: 2, resource: "users", up: async () => { order.push(2); }, down: async () => {} }),
-      defineMigration({ version: 1, resource: "users", up: async () => { order.push(1); }, down: async () => {} }),
+      defineMigration({
+        version: 2,
+        resource: "users",
+        up: async () => {
+          order.push(2);
+        },
+        down: async () => {},
+      }),
+      defineMigration({
+        version: 1,
+        resource: "users",
+        up: async () => {
+          order.push(1);
+        },
+        down: async () => {},
+      }),
     ];
 
     const runner = new MigrationRunner({}, { store, logger: silentLogger });
@@ -220,9 +260,30 @@ describe("MigrationRunner", () => {
     ];
     const order: number[] = [];
     const migrations = [
-      defineMigration({ version: 1, resource: "users", up: async () => {}, down: async () => { order.push(1); } }),
-      defineMigration({ version: 2, resource: "users", up: async () => {}, down: async () => { order.push(2); } }),
-      defineMigration({ version: 3, resource: "users", up: async () => {}, down: async () => { order.push(3); } }),
+      defineMigration({
+        version: 1,
+        resource: "users",
+        up: async () => {},
+        down: async () => {
+          order.push(1);
+        },
+      }),
+      defineMigration({
+        version: 2,
+        resource: "users",
+        up: async () => {},
+        down: async () => {
+          order.push(2);
+        },
+      }),
+      defineMigration({
+        version: 3,
+        resource: "users",
+        up: async () => {},
+        down: async () => {
+          order.push(3);
+        },
+      }),
     ];
 
     const runner = new MigrationRunner({}, { store, logger: silentLogger });
@@ -235,7 +296,8 @@ describe("MigrationRunner", () => {
     const validateFn = vi.fn().mockResolvedValue(true);
     const migrations = [
       defineMigration({
-        version: 1, resource: "users",
+        version: 1,
+        resource: "users",
         up: async () => {},
         down: async () => {},
         validate: validateFn,
@@ -250,7 +312,8 @@ describe("MigrationRunner", () => {
   it("throws if validate returns false", async () => {
     const migrations = [
       defineMigration({
-        version: 1, resource: "users",
+        version: 1,
+        resource: "users",
         up: async () => {},
         down: async () => {},
         validate: async () => false,

@@ -1,5 +1,61 @@
 # Changelog
 
+## 2.7.0
+
+### Better Auth 1.6 alignment + Mongoose populate bridge
+
+Audited the BA adapter against the Better Auth 1.6 surface (`auth.handler`, `api.getSession`, organization plugin endpoints, `getActiveMemberRole`, `listTeams`, session shape). All paths still align — no breaking changes from BA core. Bumped peer dep `better-auth: >=1.5.5` → `>=1.6.0`.
+
+Removed two `any` casts in the team-resolution branch of `betterAuth.ts`. Team id matching now uses the existing `normalizeId()` helper, so team ids stored as `{ _id: '...' }` objects (e.g. mongoose-style) match correctly.
+
+### New: `@classytic/arc/auth/mongoose` — populate against Better Auth collections
+
+When you back Better Auth with the official `@better-auth/mongo-adapter`, BA writes through the native `mongodb` driver and never registers anything with Mongoose. Any arc resource that does `Schema({ userId: { type: String, ref: 'user' } })` and calls `.populate('userId')` then throws `MissingSchemaError`.
+
+New optional helper at a dedicated subpath registers `strict: false` stub Mongoose models for BA's collections so populate works end-to-end. Lives behind a subpath export so users on Prisma/Drizzle/Kysely never get Mongoose pulled into their bundle.
+
+```typescript
+import mongoose from 'mongoose';
+import { betterAuth } from 'better-auth';
+import { mongodbAdapter } from '@better-auth/mongo-adapter';
+import { organization } from 'better-auth/plugins';
+import { registerBetterAuthMongooseModels } from '@classytic/arc/auth/mongoose';
+
+const auth = betterAuth({
+  database: mongodbAdapter(mongoose.connection.getClient().db()),
+  plugins: [organization({ teams: { enabled: true } })],
+  // ...
+});
+
+// Register stub models AFTER betterAuth() so collections are known.
+// Default is core only (`user`, `session`, `account`, `verification`) —
+// every plugin set is opt-in.
+registerBetterAuthMongooseModels(mongoose, {
+  plugins: ['organization', 'organization-teams'],
+});
+
+// Now arc resources can populate BA-owned references:
+const Post = mongoose.model('Post', new mongoose.Schema({
+  title: String,
+  authorId: { type: String, ref: 'user' },
+}));
+await Post.findOne().populate('authorId'); // resolves against BA's user collection
+```
+
+Plugin coverage (researched against BA 1.6 docs, not guesswork):
+
+- **Core BA plugins** (selectable via `plugins: [...]`): `organization`, `organization-teams`, `twoFactor`, `jwt`, `oidcProvider`, `oauthProvider` (alias for `oidcProvider`), `mcp` (reuses oidcProvider schema per docs), `deviceAuthorization`
+- **Separate `@better-auth/*` packages** (use `extraCollections` — they evolve independently of core): `@better-auth/passkey` → `'passkey'`, `@better-auth/sso` → `'ssoProvider'`, `@better-auth/api-key` → consult plugin docs
+- **Field-only plugins** (no entry needed — `strict: false` stubs round-trip extra fields): `admin`, `username`, `phoneNumber`, `magicLink`, `emailOtp`, `anonymous`, `bearer`, `multiSession`, `siwe`, `lastLoginMethod`, `genericOAuth`, etc.
+
+Other features: `usePlural` (matches `@better-auth/mongo-adapter`'s pluralization), `modelOverrides` (for custom `user: { modelName: 'profile' }` configs), `extraCollections` (for separate-package plugins or custom plugins). Idempotent — safe to call repeatedly under HMR. Deduplicates overlapping collection sets so `plugins: ['mcp', 'oidcProvider']` won't crash with `OverwriteModelError`.
+
+### New: real BA + mongo smoke test
+
+Added `tests/smoke/better-auth-mongo.smoke.test.ts` that boots a real `betterAuth()` instance against `mongodb-memory-server` via `@better-auth/mongo-adapter`. Covers signup → cookie session, createOrganization → setActiveOrganization → member scope, multi-role → `requireOrgRole` matches, createTeam → addTeamMember → setActiveTeam → `scope.teamId` populated, and the `x-organization-id` header fallback for API-key auth.
+
+This is the canary that catches BA upgrade regressions that mock-based tests can't — when BA 1.7 or 2.0 lands, this test will fail in seconds rather than waiting for a user bug report.
+
 ## 2.6.3
 
 ### `idField` override works end-to-end

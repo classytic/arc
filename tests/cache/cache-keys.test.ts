@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildQueryKey, versionKey, tagVersionKey, hashParams } from "../../src/cache/keys.js";
+import { buildQueryKey, hashParams, tagVersionKey, versionKey } from "../../src/cache/keys.js";
 
 describe("buildQueryKey()", () => {
   it("generates deterministic key with all segments", () => {

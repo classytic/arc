@@ -13,9 +13,9 @@
  *      to surface the real file:// error instead of a misleading "protocol 'd:'".
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadResources } from "../../src/factory/loadResources.js";
 import { setupTestDatabase, teardownTestDatabase } from "../setup.js";
 

@@ -28,7 +28,7 @@ describe("ResourceRegistry", () => {
     registry.register(mockResource("users"));
     expect(registry.has("users")).toBe(true);
     expect(registry.get("users")).toBeDefined();
-    expect(registry.get("users")!.name).toBe("users");
+    expect(registry.get("users")?.name).toBe("users");
   });
 
   it("prevents duplicate registration", () => {

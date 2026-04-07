@@ -39,9 +39,7 @@ describe("middleware()", () => {
 
 describe("sortMiddlewares()", () => {
   it("returns a MiddlewareConfig map keyed by operation", () => {
-    const middlewares = [
-      middleware("a", { handler: async () => {}, priority: 100 }),
-    ];
+    const middlewares = [middleware("a", { handler: async () => {}, priority: 100 })];
     const config = sortMiddlewares(middlewares);
     // Should be an object with CRUD operation keys
     expect(typeof config).toBe("object");
@@ -55,9 +53,24 @@ describe("sortMiddlewares()", () => {
   it("sorts by priority ascending within each operation", () => {
     const order: string[] = [];
     const middlewares = [
-      middleware("c", { handler: async () => { order.push("c"); }, priority: 30 }),
-      middleware("a", { handler: async () => { order.push("a"); }, priority: 10 }),
-      middleware("b", { handler: async () => { order.push("b"); }, priority: 20 }),
+      middleware("c", {
+        handler: async () => {
+          order.push("c");
+        },
+        priority: 30,
+      }),
+      middleware("a", {
+        handler: async () => {
+          order.push("a");
+        },
+        priority: 10,
+      }),
+      middleware("b", {
+        handler: async () => {
+          order.push("b");
+        },
+        priority: 20,
+      }),
     ];
     const config = sortMiddlewares(middlewares);
     // Each operation's handlers should be in priority order

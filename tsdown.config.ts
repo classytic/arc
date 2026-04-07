@@ -37,6 +37,9 @@ export default defineConfig({
     // Auth — dedicated Redis session store subpath
     "src/auth/redis-session.ts",
 
+    // Auth — dedicated Mongoose stub-models subpath (for populate() against BA collections)
+    "src/auth/mongoose.ts",
+
     // Plugins — barrel + dedicated heavy-dep subpaths
     "src/plugins/index.ts",
     "src/plugins/tracing-entry.ts",

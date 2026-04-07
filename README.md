@@ -143,6 +143,33 @@ auth: false
 
 **Decorates:** `app.authenticate`, `app.optionalAuthenticate`, `app.authorize`
 
+### Better Auth + Mongoose populate bridge
+
+When you back Better Auth with `@better-auth/mongo-adapter`, BA writes through the native `mongodb` driver and never registers anything with Mongoose. Any arc resource that does `Schema({ userId: { ref: 'user' } })` and calls `.populate('userId')` then throws `MissingSchemaError`.
+
+Optional helper at a dedicated subpath registers `strict: false` stub Mongoose models for BA's collections so populate works. Lives behind `@classytic/arc/auth/mongoose` so users on Prisma/Drizzle/Kysely never get Mongoose pulled into their bundle.
+
+```typescript
+import mongoose from 'mongoose';
+import { registerBetterAuthMongooseModels } from '@classytic/arc/auth/mongoose';
+
+// Default is core only — every plugin set is opt-in.
+registerBetterAuthMongooseModels(mongoose, {
+  plugins: ['organization', 'organization-teams'],
+  // For separate @better-auth/* packages:
+  extraCollections: ['passkey', 'ssoProvider'],
+});
+
+// Now arc resources can populate BA-owned references:
+const Post = mongoose.model('Post', new mongoose.Schema({
+  title: String,
+  authorId: { type: String, ref: 'user' },
+}));
+await Post.findOne().populate('authorId');
+```
+
+Supports `usePlural` (matches `mongodbAdapter({ usePlural: true })`) and `modelOverrides` (for custom `user: { modelName: 'profile' }` configs). Idempotent and de-dupes overlapping plugin sets.
+
 ### Token Revocation
 
 Arc provides the `isRevoked` primitive — you implement the store (Redis, DB, Better Auth):

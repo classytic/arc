@@ -10,14 +10,14 @@
  * 5. tenantField: false works in no-auth mode (platform-universal)
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import mongoose from 'mongoose';
-import { createApp } from '../../src/factory/createApp.js';
-import { defineResource } from '../../src/core/defineResource.js';
-import { createMongooseAdapter } from '../../src/adapters/mongoose.js';
-import { allowPublic, requireAuth } from '../../src/permissions/index.js';
-import { setupTestDatabase, teardownTestDatabase } from '../setup.js';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance } from "fastify";
+import mongoose from "mongoose";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
+import { defineResource } from "../../src/core/defineResource.js";
+import { createApp } from "../../src/factory/createApp.js";
+import { allowPublic, requireAuth } from "../../src/permissions/index.js";
+import { setupTestDatabase, teardownTestDatabase } from "../setup.js";
 
 // ============================================================================
 // Schemas
@@ -28,44 +28,50 @@ const PublicItemSchema = new mongoose.Schema(
     name: { type: String, required: true },
     price: { type: Number, default: 0 },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 const DefaultItemSchema = new mongoose.Schema(
   {
     title: { type: String, required: true },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 const ProtectedItemSchema = new mongoose.Schema(
   {
     secret: { type: String, required: true },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // ============================================================================
 // Tests
 // ============================================================================
 
-describe('No-Auth Mode E2E (auth: false)', () => {
+describe("No-Auth Mode E2E (auth: false)", () => {
   let app: FastifyInstance;
 
   beforeAll(async () => {
     await setupTestDatabase();
 
-    const PublicModel = mongoose.models['NoAuthPublic'] || mongoose.model('NoAuthPublic', PublicItemSchema);
-    const DefaultModel = mongoose.models['NoAuthDefault'] || mongoose.model('NoAuthDefault', DefaultItemSchema);
-    const ProtectedModel = mongoose.models['NoAuthProtected'] || mongoose.model('NoAuthProtected', ProtectedItemSchema);
+    const PublicModel =
+      mongoose.models.NoAuthPublic || mongoose.model("NoAuthPublic", PublicItemSchema);
+    const DefaultModel =
+      mongoose.models.NoAuthDefault || mongoose.model("NoAuthDefault", DefaultItemSchema);
+    const ProtectedModel =
+      mongoose.models.NoAuthProtected || mongoose.model("NoAuthProtected", ProtectedItemSchema);
 
-    const { Repository } = require('@classytic/mongokit');
+    const { Repository } = require("@classytic/mongokit");
 
     // Resource 1: explicit allowPublic() on all routes
     const publicResource = defineResource({
-      name: 'public-item',
-      adapter: createMongooseAdapter({ model: PublicModel, repository: new Repository(PublicModel) }),
-      prefix: '/public-items',
+      name: "public-item",
+      adapter: createMongooseAdapter({
+        model: PublicModel,
+        repository: new Repository(PublicModel),
+      }),
+      prefix: "/public-items",
       tenantField: false,
       permissions: {
         list: allowPublic(),
@@ -78,17 +84,23 @@ describe('No-Auth Mode E2E (auth: false)', () => {
 
     // Resource 2: no permissions defined (defaults to public)
     const defaultResource = defineResource({
-      name: 'default-item',
-      adapter: createMongooseAdapter({ model: DefaultModel, repository: new Repository(DefaultModel) }),
-      prefix: '/default-items',
+      name: "default-item",
+      adapter: createMongooseAdapter({
+        model: DefaultModel,
+        repository: new Repository(DefaultModel),
+      }),
+      prefix: "/default-items",
       tenantField: false,
     });
 
     // Resource 3: requireAuth() on all routes
     const protectedResource = defineResource({
-      name: 'protected-item',
-      adapter: createMongooseAdapter({ model: ProtectedModel, repository: new Repository(ProtectedModel) }),
-      prefix: '/protected-items',
+      name: "protected-item",
+      adapter: createMongooseAdapter({
+        model: ProtectedModel,
+        repository: new Repository(ProtectedModel),
+      }),
+      prefix: "/protected-items",
       tenantField: false,
       permissions: {
         list: requireAuth(),
@@ -100,7 +112,7 @@ describe('No-Auth Mode E2E (auth: false)', () => {
     });
 
     app = await createApp({
-      preset: 'development',
+      preset: "development",
       auth: false,
       logger: false,
       helmet: false,
@@ -124,27 +136,27 @@ describe('No-Auth Mode E2E (auth: false)', () => {
   // allowPublic() resources — full CRUD without auth
   // --------------------------------------------------------------------------
 
-  describe('allowPublic() resource — full CRUD without auth', () => {
+  describe("allowPublic() resource — full CRUD without auth", () => {
     let itemId: string;
 
-    it('should create item without authentication', async () => {
+    it("should create item without authentication", async () => {
       const res = await app.inject({
-        method: 'POST',
-        url: '/public-items',
-        payload: { name: 'Widget', price: 19.99 },
+        method: "POST",
+        url: "/public-items",
+        payload: { name: "Widget", price: 19.99 },
       });
 
       expect(res.statusCode).toBe(201);
       const body = JSON.parse(res.body);
       expect(body.success).toBe(true);
-      expect(body.data.name).toBe('Widget');
+      expect(body.data.name).toBe("Widget");
       itemId = body.data._id;
     });
 
-    it('should list items without authentication', async () => {
+    it("should list items without authentication", async () => {
       const res = await app.inject({
-        method: 'GET',
-        url: '/public-items',
+        method: "GET",
+        url: "/public-items",
       });
 
       expect(res.statusCode).toBe(200);
@@ -153,19 +165,19 @@ describe('No-Auth Mode E2E (auth: false)', () => {
       expect(body.docs.length).toBeGreaterThanOrEqual(1);
     });
 
-    it('should get item by ID without authentication', async () => {
+    it("should get item by ID without authentication", async () => {
       const res = await app.inject({
-        method: 'GET',
+        method: "GET",
         url: `/public-items/${itemId}`,
       });
 
       expect(res.statusCode).toBe(200);
-      expect(JSON.parse(res.body).data.name).toBe('Widget');
+      expect(JSON.parse(res.body).data.name).toBe("Widget");
     });
 
-    it('should update item without authentication', async () => {
+    it("should update item without authentication", async () => {
       const res = await app.inject({
-        method: 'PATCH',
+        method: "PATCH",
         url: `/public-items/${itemId}`,
         payload: { price: 24.99 },
       });
@@ -174,9 +186,9 @@ describe('No-Auth Mode E2E (auth: false)', () => {
       expect(JSON.parse(res.body).data.price).toBe(24.99);
     });
 
-    it('should delete item without authentication', async () => {
+    it("should delete item without authentication", async () => {
       const res = await app.inject({
-        method: 'DELETE',
+        method: "DELETE",
         url: `/public-items/${itemId}`,
       });
 
@@ -188,14 +200,14 @@ describe('No-Auth Mode E2E (auth: false)', () => {
   // No permissions defined — defaults to public
   // --------------------------------------------------------------------------
 
-  describe('No permissions defined — defaults to public', () => {
+  describe("No permissions defined — defaults to public", () => {
     let itemId: string;
 
-    it('should create item without authentication', async () => {
+    it("should create item without authentication", async () => {
       const res = await app.inject({
-        method: 'POST',
-        url: '/default-items',
-        payload: { title: 'Default Item' },
+        method: "POST",
+        url: "/default-items",
+        payload: { title: "Default Item" },
       });
 
       expect(res.statusCode).toBe(201);
@@ -204,10 +216,10 @@ describe('No-Auth Mode E2E (auth: false)', () => {
       itemId = body.data._id;
     });
 
-    it('should list items without authentication', async () => {
+    it("should list items without authentication", async () => {
       const res = await app.inject({
-        method: 'GET',
-        url: '/default-items',
+        method: "GET",
+        url: "/default-items",
       });
 
       expect(res.statusCode).toBe(200);
@@ -215,28 +227,28 @@ describe('No-Auth Mode E2E (auth: false)', () => {
       expect(body.docs.length).toBeGreaterThanOrEqual(1);
     });
 
-    it('should get item by ID without authentication', async () => {
+    it("should get item by ID without authentication", async () => {
       const res = await app.inject({
-        method: 'GET',
+        method: "GET",
         url: `/default-items/${itemId}`,
       });
 
       expect(res.statusCode).toBe(200);
     });
 
-    it('should update item without authentication', async () => {
+    it("should update item without authentication", async () => {
       const res = await app.inject({
-        method: 'PATCH',
+        method: "PATCH",
         url: `/default-items/${itemId}`,
-        payload: { title: 'Updated' },
+        payload: { title: "Updated" },
       });
 
       expect(res.statusCode).toBe(200);
     });
 
-    it('should delete item without authentication', async () => {
+    it("should delete item without authentication", async () => {
       const res = await app.inject({
-        method: 'DELETE',
+        method: "DELETE",
         url: `/default-items/${itemId}`,
       });
 
@@ -248,21 +260,21 @@ describe('No-Auth Mode E2E (auth: false)', () => {
   // requireAuth() resources — returns 401
   // --------------------------------------------------------------------------
 
-  describe('requireAuth() resource — enforces 401 even with auth: false', () => {
-    it('should reject list with 401', async () => {
+  describe("requireAuth() resource — enforces 401 even with auth: false", () => {
+    it("should reject list with 401", async () => {
       const res = await app.inject({
-        method: 'GET',
-        url: '/protected-items',
+        method: "GET",
+        url: "/protected-items",
       });
 
       expect(res.statusCode).toBe(401);
     });
 
-    it('should reject create with 401', async () => {
+    it("should reject create with 401", async () => {
       const res = await app.inject({
-        method: 'POST',
-        url: '/protected-items',
-        payload: { secret: 'should-fail' },
+        method: "POST",
+        url: "/protected-items",
+        payload: { secret: "should-fail" },
       });
 
       expect(res.statusCode).toBe(401);

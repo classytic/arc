@@ -12,14 +12,10 @@
  * - Policy filters combine correctly with custom idField
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, expect, it } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
-import type {
-  IRequestContext,
-  CrudRepository,
-  AnyRecord,
-} from "../../src/types/index.js";
 import type { RequestScope } from "../../src/scope/types.js";
+import type { AnyRecord, CrudRepository, IRequestContext } from "../../src/types/index.js";
 
 // --------------------------------------------------------------------------
 // Mock repository that tracks filter arguments
@@ -54,18 +50,14 @@ class FilterTrackingRepository implements CrudRepository {
     };
   }
 
-  async getById(id: string, options?: any) {
+  async getById(id: string, _options?: any) {
     return this.items.get(id) || null;
   }
 
   async getOne(filter: AnyRecord) {
     this.lastGetFilter = filter;
     const entries = Array.from(this.items.values());
-    return (
-      entries.find((item) =>
-        Object.entries(filter).every(([k, v]) => item[k] === v),
-      ) || null
-    );
+    return entries.find((item) => Object.entries(filter).every(([k, v]) => item[k] === v)) || null;
   }
 
   async create(data: AnyRecord) {
@@ -166,10 +158,7 @@ describe("Configurable idField", () => {
         req,
       );
 
-      expect(filter).toHaveProperty(
-        "uuid",
-        "550e8400-e29b-41d4-a716-446655440000",
-      );
+      expect(filter).toHaveProperty("uuid", "550e8400-e29b-41d4-a716-446655440000");
     });
   });
 

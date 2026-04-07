@@ -10,26 +10,25 @@
  *   6. Permission escalation: admin bypasses restrictions
  */
 
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import mongoose from "mongoose";
+import { QueryParser, Repository } from "@classytic/mongokit";
 import { MongoMemoryServer } from "mongodb-memory-server";
-import { Repository, QueryParser } from "@classytic/mongokit";
-import { z } from "zod";
-import { defineResource } from "../../../src/core/defineResource.js";
+import mongoose from "mongoose";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../../src/adapters/mongoose.js";
 import { BaseController } from "../../../src/core/BaseController.js";
-import { allowPublic } from "../../../src/permissions/index.js";
+import { defineResource } from "../../../src/core/defineResource.js";
 import {
+  type AuthRef,
   createMcpServer,
+  customGuard,
   defineTool,
   guard,
   requireAuth,
   requireOrg,
   requireRole,
-  customGuard,
   resourceToTools,
-  type AuthRef,
 } from "../../../src/integrations/mcp/index.js";
+import { allowPublic } from "../../../src/permissions/index.js";
 
 // ============================================================================
 // Setup
@@ -207,7 +206,13 @@ describe("Custom tools with different auth levels alongside auto-gen", () => {
       name: "post",
       adapter: createMongooseAdapter({ model: Model, repository: repo }),
       controller: new BaseController(repo, { resourceName: "post", tenantField: false }),
-      permissions: { list: allowPublic(), get: allowPublic(), create: allowPublic(), update: allowPublic(), delete: allowPublic() },
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
+      },
       schemaOptions: { fieldRules: { title: { type: "string", required: true } } },
     });
 
@@ -217,7 +222,7 @@ describe("Custom tools with different auth levels alongside auto-gen", () => {
     const adminTool = defineTool("purge_posts", {
       description: "Delete all posts (admin only)",
       handler: guard(requireAuth, requireRole("admin"), async (_input, ctx) => ({
-        content: [{ type: "text", text: `Purged by ${ctx.session!.userId}` }],
+        content: [{ type: "text", text: `Purged by ${ctx.session?.userId}` }],
       })),
     });
 
@@ -225,7 +230,7 @@ describe("Custom tools with different auth levels alongside auto-gen", () => {
     const orgTool = defineTool("org_report", {
       description: "Generate org report",
       handler: guard(requireAuth, requireOrg, async (_input, ctx) => ({
-        content: [{ type: "text", text: `Report for ${ctx.session!.organizationId}` }],
+        content: [{ type: "text", text: `Report for ${ctx.session?.organizationId}` }],
       })),
     });
 
@@ -277,7 +282,13 @@ describe("Hidden fields in MCP tool schemas", () => {
       name: "post",
       adapter: createMongooseAdapter({ model: PostModel, repository: repo }),
       controller: new BaseController(repo, { resourceName: "post", tenantField: false }),
-      permissions: { list: allowPublic(), get: allowPublic(), create: allowPublic(), update: allowPublic(), delete: allowPublic() },
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
+      },
       schemaOptions: {
         fieldRules: {
           title: { type: "string", required: true },
@@ -294,7 +305,7 @@ describe("Hidden fields in MCP tool schemas", () => {
     const updateTool = tools.find((t) => t.name === "update_post");
 
     // Create schema should have title, body — NOT internalNotes, secretScore
-    const createFields = Object.keys(createTool!.inputSchema ?? {});
+    const createFields = Object.keys(createTool?.inputSchema ?? {});
     expect(createFields).toContain("title");
     expect(createFields).toContain("body");
     expect(createFields).not.toContain("internalNotes");
@@ -302,7 +313,7 @@ describe("Hidden fields in MCP tool schemas", () => {
     expect(createFields).not.toContain("createdAt"); // systemManaged
 
     // Update schema should have id, title, body — NOT hidden fields
-    const updateFields = Object.keys(updateTool!.inputSchema ?? {});
+    const updateFields = Object.keys(updateTool?.inputSchema ?? {});
     expect(updateFields).toContain("id");
     expect(updateFields).toContain("title");
     expect(updateFields).not.toContain("internalNotes");
@@ -328,7 +339,7 @@ describe("Hidden fields in MCP tool schemas", () => {
 
     const tools = resourceToTools(resource, { hideFields: ["body", "status"] });
     const createTool = tools.find((t) => t.name === "create_post");
-    const fields = Object.keys(createTool!.inputSchema ?? {});
+    const fields = Object.keys(createTool?.inputSchema ?? {});
 
     expect(fields).toContain("title");
     expect(fields).not.toContain("body");
@@ -434,7 +445,7 @@ describe("Real-world guard composition patterns", () => {
         businessHours,
         rateLimit,
         async (_input, ctx) => ({
-          content: [{ type: "text", text: `Exported for ${ctx.session!.organizationId}` }],
+          content: [{ type: "text", text: `Exported for ${ctx.session?.organizationId}` }],
         }),
       ),
     });

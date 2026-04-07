@@ -11,23 +11,21 @@
  * Also tests: resourcePrefix, loadResources({ silent })
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
-import mongoose from "mongoose";
-import { createApp } from "../../src/factory/createApp.js";
-import { defineResource } from "../../src/core/defineResource.js";
-import { BaseController } from "../../src/core/BaseController.js";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
-import { allowPublic } from "../../src/permissions/index.js";
-import { loadResources } from "../../src/factory/loadResources.js";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
+import { BaseController } from "../../src/core/BaseController.js";
+import { defineResource } from "../../src/core/defineResource.js";
+import { createApp } from "../../src/factory/createApp.js";
+import { loadResources } from "../../src/factory/loadResources.js";
+import { allowPublic } from "../../src/permissions/index.js";
 import {
-  setupTestDatabase,
-  teardownTestDatabase,
   createMockModel,
   createMockRepository,
+  setupTestDatabase,
+  teardownTestDatabase,
 } from "../setup.js";
-import type { FastifyInstance } from "fastify";
 
 // ── Helpers ──
 
@@ -377,9 +375,7 @@ describe("loadResources — silent option", () => {
     expect((loaded[0] as { name: string }).name).toBe("valid");
 
     // No warnings logged
-    const skipMsg = warnSpy.mock.calls.find((c) =>
-      String(c[0]).includes("skipped"),
-    );
+    const skipMsg = warnSpy.mock.calls.find((c) => String(c[0]).includes("skipped"));
     expect(skipMsg).toBeUndefined();
 
     warnSpy.mockRestore();
@@ -389,18 +385,13 @@ describe("loadResources — silent option", () => {
     const dir = join(TMP, "noisy");
     mkdirSync(dir, { recursive: true });
 
-    writeFileSync(
-      join(dir, "bad.resource.ts"),
-      "export default { notAResource: true };\n",
-    );
+    writeFileSync(join(dir, "bad.resource.ts"), "export default { notAResource: true };\n");
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     await loadResources(dir);
 
-    const skipMsg = warnSpy.mock.calls.find((c) =>
-      String(c[0]).includes("skipped"),
-    );
+    const skipMsg = warnSpy.mock.calls.find((c) => String(c[0]).includes("skipped"));
     expect(skipMsg).toBeDefined();
 
     warnSpy.mockRestore();
@@ -421,9 +412,7 @@ describe("loadResources — silent option", () => {
 
     expect(loaded).toHaveLength(0);
 
-    const failMsg = warnSpy.mock.calls.find((c) =>
-      String(c[0]).includes("failed"),
-    );
+    const failMsg = warnSpy.mock.calls.find((c) => String(c[0]).includes("failed"));
     expect(failMsg).toBeUndefined();
 
     warnSpy.mockRestore();

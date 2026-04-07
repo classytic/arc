@@ -5,14 +5,14 @@
  * Regression test for the hasDlq always-true bug.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from "vitest";
 
-describe('Jobs — DLQ creation logic', () => {
-  it('should NOT create DLQ queue when deadLetterQueue is not specified', async () => {
+describe("Jobs — DLQ creation logic", () => {
+  it("should NOT create DLQ queue when deadLetterQueue is not specified", async () => {
     // We test the logic by checking the defineJob return and simulating the plugin behavior.
     // The key assertion: when deadLetterQueue is undefined, no DLQ should be created.
     const job = {
-      name: 'send-email',
+      name: "send-email",
       handler: async () => {},
       // deadLetterQueue is NOT set
     };
@@ -22,26 +22,26 @@ describe('Jobs — DLQ creation logic', () => {
     expect(hasDlq).toBe(false);
   });
 
-  it('should create DLQ queue when deadLetterQueue IS specified', async () => {
+  it("should create DLQ queue when deadLetterQueue IS specified", async () => {
     const job = {
-      name: 'send-email',
+      name: "send-email",
       handler: async () => {},
-      deadLetterQueue: 'email:dead',
+      deadLetterQueue: "email:dead",
     };
 
     const hasDlq = job.deadLetterQueue !== undefined;
     expect(hasDlq).toBe(true);
   });
 
-  it('should create DLQ with explicit empty string (user wants custom name)', async () => {
+  it("should create DLQ with explicit empty string (user wants custom name)", async () => {
     const job = {
-      name: 'process-payment',
+      name: "process-payment",
       handler: async () => {},
-      deadLetterQueue: 'payments:failed',
+      deadLetterQueue: "payments:failed",
     };
 
     const hasDlq = job.deadLetterQueue !== undefined;
     expect(hasDlq).toBe(true);
-    expect(job.deadLetterQueue).toBe('payments:failed');
+    expect(job.deadLetterQueue).toBe("payments:failed");
   });
 });

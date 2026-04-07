@@ -8,10 +8,10 @@
  * Regression test for: createActionRouter applying global auth when mixed public/protected.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import Fastify, { type FastifyInstance } from 'fastify';
-import { createActionRouter } from '../../src/core/createActionRouter.js';
-import type { PermissionCheck, PermissionContext } from '../../src/types/index.js';
+import Fastify, { type FastifyInstance } from "fastify";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createActionRouter } from "../../src/core/createActionRouter.js";
+import type { PermissionCheck, PermissionContext } from "../../src/types/index.js";
 
 /**
  * Create a public permission check (marks _isPublic = true)
@@ -32,8 +32,8 @@ function protectedAction(): PermissionCheck {
   return check;
 }
 
-describe('Security: Action Router Auth Handling', () => {
-  describe('mixed public/protected actions', () => {
+describe("Security: Action Router Auth Handling", () => {
+  describe("mixed public/protected actions", () => {
     let app: FastifyInstance;
 
     beforeAll(async () => {
@@ -42,14 +42,14 @@ describe('Security: Action Router Auth Handling', () => {
       // Simulate authenticate decorator that rejects unauthenticated requests
       (app as any).authenticate = async (req: any) => {
         if (!req.user) {
-          throw new Error('Unauthorized');
+          throw new Error("Unauthorized");
         }
       };
 
       createActionRouter(app, {
-        tag: 'Test',
+        tag: "Test",
         actions: {
-          status: async (id) => ({ id, status: 'active' }),
+          status: async (id) => ({ id, status: "active" }),
           approve: async (id, _data, req) => ({ id, approvedBy: (req.user as any)?.id }),
         },
         actionPermissions: {
@@ -65,11 +65,11 @@ describe('Security: Action Router Auth Handling', () => {
       await app.close();
     });
 
-    it('should allow unauthenticated access to public actions', async () => {
+    it("should allow unauthenticated access to public actions", async () => {
       const res = await app.inject({
-        method: 'POST',
-        url: '/test-id/action',
-        payload: { action: 'status' },
+        method: "POST",
+        url: "/test-id/action",
+        payload: { action: "status" },
         // No auth headers
       });
 
@@ -79,11 +79,11 @@ describe('Security: Action Router Auth Handling', () => {
       expect(body.success).toBe(true);
     });
 
-    it('should reject unauthenticated access to protected actions', async () => {
+    it("should reject unauthenticated access to protected actions", async () => {
       const res = await app.inject({
-        method: 'POST',
-        url: '/test-id/action',
-        payload: { action: 'approve' },
+        method: "POST",
+        url: "/test-id/action",
+        payload: { action: "approve" },
         // No auth headers, no user
       });
 
@@ -94,7 +94,7 @@ describe('Security: Action Router Auth Handling', () => {
     });
   });
 
-  describe('all protected actions', () => {
+  describe("all protected actions", () => {
     let app: FastifyInstance;
     let authCalled: boolean;
 
@@ -106,11 +106,11 @@ describe('Security: Action Router Auth Handling', () => {
       (app as any).authenticate = async (req: any) => {
         authCalled = true;
         // In this test, always pass (to check preHandler is applied)
-        req.user = { id: 'test-user' };
+        req.user = { id: "test-user" };
       };
 
       createActionRouter(app, {
-        tag: 'Test',
+        tag: "Test",
         actions: {
           approve: async (id) => ({ id, approved: true }),
           reject: async (id) => ({ id, rejected: true }),
@@ -128,13 +128,13 @@ describe('Security: Action Router Auth Handling', () => {
       await app.close();
     });
 
-    it('should apply global auth preHandler when all actions are protected', async () => {
+    it("should apply global auth preHandler when all actions are protected", async () => {
       authCalled = false;
 
       const res = await app.inject({
-        method: 'POST',
-        url: '/test-id/action',
-        payload: { action: 'approve' },
+        method: "POST",
+        url: "/test-id/action",
+        payload: { action: "approve" },
       });
 
       expect(res.statusCode).toBe(200);
@@ -142,7 +142,7 @@ describe('Security: Action Router Auth Handling', () => {
     });
   });
 
-  describe('all public actions', () => {
+  describe("all public actions", () => {
     let app: FastifyInstance;
     let authCalled: boolean;
 
@@ -155,9 +155,9 @@ describe('Security: Action Router Auth Handling', () => {
       };
 
       createActionRouter(app, {
-        tag: 'Test',
+        tag: "Test",
         actions: {
-          status: async (id) => ({ id, status: 'ok' }),
+          status: async (id) => ({ id, status: "ok" }),
           health: async () => ({ healthy: true }),
         },
         actionPermissions: {
@@ -173,13 +173,13 @@ describe('Security: Action Router Auth Handling', () => {
       await app.close();
     });
 
-    it('should NOT apply auth preHandler when all actions are public', async () => {
+    it("should NOT apply auth preHandler when all actions are public", async () => {
       authCalled = false;
 
       const res = await app.inject({
-        method: 'POST',
-        url: '/test-id/action',
-        payload: { action: 'status' },
+        method: "POST",
+        url: "/test-id/action",
+        payload: { action: "status" },
       });
 
       expect(res.statusCode).toBe(200);

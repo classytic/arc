@@ -4,13 +4,9 @@
  * Tests registerArcCore and registerArcPlugins in isolation.
  */
 
-import { describe, it, expect, afterEach } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import {
-  registerArcCore,
-  registerArcPlugins,
-  type ArcPluginModules,
-} from "../../src/factory/registerArcPlugins.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { registerArcCore, registerArcPlugins } from "../../src/factory/registerArcPlugins.js";
 import type { CreateAppOptions } from "../../src/factory/types.js";
 
 function createTestFastify(): FastifyInstance {
@@ -49,11 +45,7 @@ describe("registerArcCore", () => {
   it("skips events when events: false", async () => {
     app = createTestFastify();
     const tracked: string[] = [];
-    await registerArcCore(
-      app,
-      { arcPlugins: { events: false } },
-      (name) => tracked.push(name),
-    );
+    await registerArcCore(app, { arcPlugins: { events: false } }, (name) => tracked.push(name));
     await app.ready();
 
     expect(tracked).not.toContain("arc-events");

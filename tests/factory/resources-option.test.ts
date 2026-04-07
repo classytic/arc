@@ -5,20 +5,19 @@
  * correctly with working CRUD endpoints, same as manual toPlugin() registration.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import mongoose from "mongoose";
-import { createApp } from "../../src/factory/createApp.js";
-import { defineResource } from "../../src/core/defineResource.js";
-import { BaseController } from "../../src/core/BaseController.js";
+import type { FastifyInstance } from "fastify";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
-import { allowPublic, requireAuth } from "../../src/permissions/index.js";
+import { BaseController } from "../../src/core/BaseController.js";
+import { defineResource } from "../../src/core/defineResource.js";
+import { createApp } from "../../src/factory/createApp.js";
+import { allowPublic } from "../../src/permissions/index.js";
 import {
-  setupTestDatabase,
-  teardownTestDatabase,
   createMockModel,
   createMockRepository,
+  setupTestDatabase,
+  teardownTestDatabase,
 } from "../setup.js";
-import type { FastifyInstance } from "fastify";
 
 describe("createApp({ resources })", () => {
   let app: FastifyInstance;
@@ -160,7 +159,13 @@ describe("createApp({ resources })", () => {
       name: "item",
       adapter: createMongooseAdapter({ model: ProductModel, repository: productRepo }),
       controller: new BaseController(productRepo, { resourceName: "item" }),
-      permissions: { list: allowPublic(), get: allowPublic(), create: allowPublic(), update: allowPublic(), delete: allowPublic() },
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
+      },
     });
 
     let pluginsCalled = false;

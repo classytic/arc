@@ -6,10 +6,10 @@
  * Uses --skip-install to avoid npm install during tests.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
-import * as path from "node:path";
 import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { init } from "../../src/cli/commands/init.js";
 
 // Temp directory for all init tests
@@ -96,12 +96,8 @@ describe("arc init — JWT + Single Tenant", () => {
   });
 
   it("should create JWT-specific auth directories", async () => {
-    expect(
-      await exists(path.join(projectPath, "src/resources/user")),
-    ).toBe(true);
-    expect(
-      await exists(path.join(projectPath, "src/resources/auth")),
-    ).toBe(true);
+    expect(await exists(path.join(projectPath, "src/resources/user"))).toBe(true);
+    expect(await exists(path.join(projectPath, "src/resources/auth"))).toBe(true);
   });
 
   it("should NOT create Better Auth config file", async () => {
@@ -129,9 +125,7 @@ describe("arc init — JWT + Single Tenant", () => {
   });
 
   it("should create vitest config", async () => {
-    const content = await readText(
-      path.join(projectPath, "vitest.config.ts"),
-    );
+    const content = await readText(path.join(projectPath, "vitest.config.ts"));
     expect(content).toContain("defineConfig");
     expect(content).toContain("globals: true");
   });
@@ -147,9 +141,7 @@ describe("arc init — JWT + Single Tenant", () => {
   it("should create env files", async () => {
     expect(await exists(path.join(projectPath, ".env.example"))).toBe(true);
     expect(await exists(path.join(projectPath, ".env.dev"))).toBe(true);
-    const envExample = await readText(
-      path.join(projectPath, ".env.example"),
-    );
+    const envExample = await readText(path.join(projectPath, ".env.example"));
     expect(envExample).toContain("JWT_SECRET");
     expect(envExample).not.toContain("BETTER_AUTH_SECRET");
   });
@@ -163,21 +155,11 @@ describe("arc init — JWT + Single Tenant", () => {
 
   it("should create example resource files", async () => {
     const exampleDir = path.join(projectPath, "src/resources/example");
-    expect(
-      await exists(path.join(exampleDir, "example.model.ts")),
-    ).toBe(true);
-    expect(
-      await exists(path.join(exampleDir, "example.repository.ts")),
-    ).toBe(true);
-    expect(
-      await exists(path.join(exampleDir, "example.resource.ts")),
-    ).toBe(true);
-    expect(
-      await exists(path.join(exampleDir, "example.controller.ts")),
-    ).toBe(true);
-    expect(
-      await exists(path.join(exampleDir, "example.schemas.ts")),
-    ).toBe(true);
+    expect(await exists(path.join(exampleDir, "example.model.ts"))).toBe(true);
+    expect(await exists(path.join(exampleDir, "example.repository.ts"))).toBe(true);
+    expect(await exists(path.join(exampleDir, "example.resource.ts"))).toBe(true);
+    expect(await exists(path.join(exampleDir, "example.controller.ts"))).toBe(true);
+    expect(await exists(path.join(exampleDir, "example.schemas.ts"))).toBe(true);
   });
 
   it("should create JWT auth resource files", async () => {
@@ -197,33 +179,19 @@ describe("arc init — JWT + Single Tenant", () => {
   });
 
   it("should create config files", async () => {
-    expect(
-      await exists(path.join(projectPath, "src/config/env.ts")),
-    ).toBe(true);
-    expect(
-      await exists(path.join(projectPath, "src/config/index.ts")),
-    ).toBe(true);
+    expect(await exists(path.join(projectPath, "src/config/env.ts"))).toBe(true);
+    expect(await exists(path.join(projectPath, "src/config/index.ts"))).toBe(true);
   });
 
   it("should create shared files", async () => {
-    expect(
-      await exists(path.join(projectPath, "src/shared/adapter.ts")),
-    ).toBe(true);
-    expect(
-      await exists(path.join(projectPath, "src/shared/permissions.ts")),
-    ).toBe(true);
-    expect(
-      await exists(path.join(projectPath, "src/shared/index.ts")),
-    ).toBe(true);
+    expect(await exists(path.join(projectPath, "src/shared/adapter.ts"))).toBe(true);
+    expect(await exists(path.join(projectPath, "src/shared/permissions.ts"))).toBe(true);
+    expect(await exists(path.join(projectPath, "src/shared/index.ts"))).toBe(true);
   });
 
   it("should create test files", async () => {
-    expect(
-      await exists(path.join(projectPath, "tests/example.test.ts")),
-    ).toBe(true);
-    expect(
-      await exists(path.join(projectPath, "tests/auth.test.ts")),
-    ).toBe(true);
+    expect(await exists(path.join(projectPath, "tests/example.test.ts"))).toBe(true);
+    expect(await exists(path.join(projectPath, "tests/auth.test.ts"))).toBe(true);
   });
 
   // Content validation
@@ -234,18 +202,13 @@ describe("arc init — JWT + Single Tenant", () => {
   });
 
   it("should generate adapter with MongoKit imports", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/shared/adapter.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/shared/adapter.ts"));
     expect(content).toContain("mongokit");
   });
 
   it("should generate example resource with defineResource", async () => {
     const content = await readText(
-      path.join(
-        projectPath,
-        "src/resources/example/example.resource.ts",
-      ),
+      path.join(projectPath, "src/resources/example/example.resource.ts"),
     );
     expect(content).toContain("defineResource");
     // Uses shared adapter factory (createAdapter from #shared/adapter.js)
@@ -286,24 +249,16 @@ describe("arc init — Better Auth + Single Tenant", () => {
   });
 
   it("should NOT create JWT auth resource directories", async () => {
-    expect(
-      await exists(path.join(projectPath, "src/resources/user")),
-    ).toBe(false);
-    expect(
-      await exists(path.join(projectPath, "src/resources/auth")),
-    ).toBe(false);
+    expect(await exists(path.join(projectPath, "src/resources/user"))).toBe(false);
+    expect(await exists(path.join(projectPath, "src/resources/auth"))).toBe(false);
   });
 
   it("should NOT create auth test file (JWT-only)", async () => {
-    expect(
-      await exists(path.join(projectPath, "tests/auth.test.ts")),
-    ).toBe(false);
+    expect(await exists(path.join(projectPath, "tests/auth.test.ts"))).toBe(false);
   });
 
   it("should have BETTER_AUTH_SECRET in env example", async () => {
-    const content = await readText(
-      path.join(projectPath, ".env.example"),
-    );
+    const content = await readText(path.join(projectPath, ".env.example"));
     expect(content).toContain("BETTER_AUTH_SECRET");
     expect(content).not.toContain("JWT_SECRET");
   });
@@ -350,11 +305,7 @@ describe("arc init — JWT + Multi Tenant", () => {
     const presetsDir = path.join(projectPath, "src/shared/presets");
     expect(await exists(path.join(presetsDir, "index.ts"))).toBe(true);
     // Multi-tenant should have flexible preset
-    expect(
-      await exists(
-        path.join(presetsDir, "flexible-multi-tenant.ts"),
-      ),
-    ).toBe(true);
+    expect(await exists(path.join(presetsDir, "flexible-multi-tenant.ts"))).toBe(true);
   });
 
   it("should save multi-tenant in .arcrc", async () => {
@@ -363,9 +314,7 @@ describe("arc init — JWT + Multi Tenant", () => {
   });
 
   it("should include ORG_HEADER in env example", async () => {
-    const content = await readText(
-      path.join(projectPath, ".env.example"),
-    );
+    const content = await readText(path.join(projectPath, ".env.example"));
     expect(content).toContain("ORG_HEADER");
   });
 });
@@ -399,19 +348,12 @@ describe("arc init — Better Auth + Multi Tenant", () => {
   it("should create both Better Auth and multi-tenant files", async () => {
     expect(await exists(path.join(projectPath, "src/auth.ts"))).toBe(true);
     expect(
-      await exists(
-        path.join(
-          projectPath,
-          "src/shared/presets/flexible-multi-tenant.ts",
-        ),
-      ),
+      await exists(path.join(projectPath, "src/shared/presets/flexible-multi-tenant.ts")),
     ).toBe(true);
   });
 
   it("should have both BETTER_AUTH_SECRET and ORG_HEADER in env", async () => {
-    const content = await readText(
-      path.join(projectPath, ".env.example"),
-    );
+    const content = await readText(path.join(projectPath, ".env.example"));
     expect(content).toContain("BETTER_AUTH_SECRET");
     expect(content).toContain("ORG_HEADER");
   });
@@ -450,9 +392,7 @@ describe("arc init — Custom Adapter", () => {
   });
 
   it("should create custom adapter template", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/shared/adapter.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/shared/adapter.ts"));
     // Custom adapter should NOT contain mongokit references
     expect(content).not.toContain("@classytic/mongokit");
   });
@@ -492,9 +432,7 @@ describe("arc init — JavaScript mode", () => {
   it("should create .js files instead of .ts", async () => {
     expect(await exists(path.join(projectPath, "src/app.js"))).toBe(true);
     expect(await exists(path.join(projectPath, "src/index.js"))).toBe(true);
-    expect(
-      await exists(path.join(projectPath, "src/config/env.js")),
-    ).toBe(true);
+    expect(await exists(path.join(projectPath, "src/config/env.js"))).toBe(true);
   });
 
   it("should NOT create tsconfig.json", async () => {
@@ -518,9 +456,9 @@ describe("arc init — Error handling", () => {
     await fs.mkdir(existingDir, { recursive: true });
     process.chdir(testRoot);
     try {
-      await expect(
-        init({ name: "existing-project", skipInstall: true }),
-      ).rejects.toThrow("already exists");
+      await expect(init({ name: "existing-project", skipInstall: true })).rejects.toThrow(
+        "already exists",
+      );
     } finally {
       process.chdir(originalCwd);
     }
@@ -540,11 +478,7 @@ describe("arc init — Error handling", () => {
         skipInstall: true,
         force: true,
       });
-      expect(
-        await exists(
-          path.join(testRoot, "existing-project", "package.json"),
-        ),
-      ).toBe(true);
+      expect(await exists(path.join(testRoot, "existing-project", "package.json"))).toBe(true);
     } finally {
       process.chdir(originalCwd);
     }

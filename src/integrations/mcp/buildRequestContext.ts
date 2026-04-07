@@ -30,14 +30,27 @@ export type McpOperation = "list" | "get" | "create" | "update" | "delete";
  * | create    | {}         | {}                   | all input fields    |
  * | update    | { id }     | {}                   | input minus id      |
  * | delete    | { id }     | {}                   | undefined           |
+ *
+ * **scopeOverride** — when a permission check (e.g. `requireApiKey()`) returns
+ * `PermissionResult.scope`, the MCP tool handler must install it on the request
+ * context the same way CRUD/action routes do. This parameter follows the exact
+ * same non-downgrade rule as `applyPermissionResult`: it overrides only when
+ * the session-derived scope is `public` (i.e. MCP called with `auth: false`).
+ * An authenticated session scope is never overwritten.
  */
 export function buildRequestContext(
   input: Record<string, unknown>,
   auth: McpAuthResult | null,
   operation: McpOperation,
   policyFilters?: Record<string, unknown>,
+  scopeOverride?: RequestScope,
 ): IRequestContext {
-  const scope = buildScope(auth);
+  const sessionScope = buildScope(auth);
+  // Honor scopeOverride only when session is still public (same rule as
+  // applyPermissionResult). This prevents a permission check from downgrading
+  // an authenticated Better-Auth session to a narrower service scope.
+  const scope: RequestScope =
+    scopeOverride && sessionScope.kind === "public" ? scopeOverride : sessionScope;
   const user = auth ? { id: auth.userId, _id: auth.userId, ...auth } : null;
 
   const base = {
@@ -72,8 +85,55 @@ export function buildRequestContext(
 // Internal
 // ============================================================================
 
-/** Convert MCP operator keys (`price_gt`) to MongoKit bracket notation (`price[gt]`). */
-const OPERATOR_SUFFIXES = new Set(["eq", "ne", "gt", "gte", "lt", "lte", "in", "nin", "exists"]);
+/**
+ * Convert MCP operator keys (`price_gt`, `location_withinRadius`) to the
+ * nested object shape MongoKit's QueryParser expects (`{ price: { gt: ... } }`,
+ * `{ location: { withinRadius: ... } }`).
+ *
+ * **Comparison operators** (price_gt, age_lte, …): coerce filter values via
+ * the parser's coercion path.
+ *
+ * **Set operators** (status_in, role_nin, …): MongoKit accepts both
+ * comma-separated strings and arrays.
+ *
+ * **Existence** (deletedAt_exists): coerced to boolean by the parser.
+ *
+ * **Geo operators** (location_near, location_withinRadius, location_geoWithin,
+ * location_nearSphere): MongoKit 3.5.5+ — values are coordinate strings the
+ * parser's geo primitive handles. Without these in the allowlist, MCP agents
+ * couldn't pass geo filters at all and Arc would silently leak unfiltered docs.
+ *
+ * Keep this set in sync with MongoKit's QueryParser operators map (search for
+ * `private readonly operators` in QueryParser.ts) plus the geo operators
+ * recognized by `isGeoOperator` in primitives/geo.ts. We deliberately list
+ * them explicitly here rather than asking the parser at runtime — Arc must
+ * not import MongoKit internals just to know what an operator looks like.
+ */
+const OPERATOR_SUFFIXES = new Set([
+  // Equality + comparison
+  "eq",
+  "ne",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+  // Set
+  "in",
+  "nin",
+  // Misc
+  "exists",
+  "size",
+  "type",
+  // String
+  "like",
+  "contains",
+  "regex",
+  // Geo (MongoKit 3.5.5+)
+  "near",
+  "nearSphere",
+  "withinRadius",
+  "geoWithin",
+]);
 
 function expandOperatorKeys(input: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};

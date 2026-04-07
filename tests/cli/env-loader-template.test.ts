@@ -6,10 +6,10 @@
  * And the config/index.ts properly reads environment variables.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
-import * as path from "node:path";
 import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { init } from "../../src/cli/commands/init.js";
 
 let testRoot: string;
@@ -67,7 +67,7 @@ describe("env.ts template", () => {
     // In the candidates array, .env.local should be first
     const candidatesMatch = content.match(/const candidates[\s\S]*?\];/);
     expect(candidatesMatch).toBeDefined();
-    const candidates = candidatesMatch![0];
+    const candidates = candidatesMatch?.[0];
     const localPos = candidates.indexOf(".env.local");
     const longFormPos = candidates.indexOf("longForm");
     const envPos = candidates.indexOf("'.env'");
@@ -122,40 +122,30 @@ describe("env.ts template", () => {
 
 describe("config/index.ts template", () => {
   it("should define AppConfig interface (TypeScript)", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/config/index.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/config/index.ts"));
     expect(content).toContain("interface AppConfig");
   });
 
   it("should read PORT from env with default", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/config/index.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/config/index.ts"));
     expect(content).toContain("process.env.PORT");
     expect(content).toContain("8040");
   });
 
   it("should read HOST from env with default", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/config/index.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/config/index.ts"));
     expect(content).toContain("process.env.HOST");
     expect(content).toContain("0.0.0.0");
   });
 
   it("should have isDev and isProd helpers", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/config/index.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/config/index.ts"));
     expect(content).toContain("isDev");
     expect(content).toContain("isProd");
   });
 
   it("should handle CORS_ORIGINS with wildcard support", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/config/index.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/config/index.ts"));
     // Should check for '*' and convert to boolean true
     expect(content).toContain("CORS_ORIGINS");
     expect(content).toContain("'*'");
@@ -163,24 +153,18 @@ describe("config/index.ts template", () => {
   });
 
   it("should have Better Auth config (for BA projects)", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/config/index.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/config/index.ts"));
     expect(content).toContain("BETTER_AUTH_SECRET");
     expect(content).toContain("FRONTEND_URL");
   });
 
   it("should have database config for MongoKit projects", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/config/index.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/config/index.ts"));
     expect(content).toContain("MONGODB_URI");
   });
 
   it("should export default config", async () => {
-    const content = await readText(
-      path.join(projectPath, "src/config/index.ts"),
-    );
+    const content = await readText(path.join(projectPath, "src/config/index.ts"));
     expect(content).toContain("export default config");
   });
 });

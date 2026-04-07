@@ -12,16 +12,16 @@
  * - Tests org isolation, cross-org denial, team scoping
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { QueryParser, Repository } from "@classytic/mongokit";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import mongoose from "mongoose";
-import { Repository, QueryParser } from "@classytic/mongokit";
-import { createApp } from "../../src/factory/createApp.js";
-import { defineResource } from "../../src/core/defineResource.js";
-import { BaseController } from "../../src/core/BaseController.js";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
-import { roles, requireAuth, allowPublic, requireOrgRole } from "../../src/permissions/index.js";
+import { BaseController } from "../../src/core/BaseController.js";
+import { defineResource } from "../../src/core/defineResource.js";
+import { createApp } from "../../src/factory/createApp.js";
+import { allowPublic, requireAuth, roles } from "../../src/permissions/index.js";
 import { setupTestDatabase, teardownTestDatabase } from "../setup.js";
-import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 
 describe("Multi-Tenant Hierarchy E2E", () => {
   let app: FastifyInstance;
@@ -54,12 +54,15 @@ describe("Multi-Tenant Hierarchy E2E", () => {
     });
 
     // ── Org-scoped resource: Project ──
-    const ProjectSchema = new mongoose.Schema({
-      name: { type: String, required: true },
-      status: { type: String, enum: ["active", "archived"], default: "active" },
-      organizationId: { type: String, index: true },
-      teamId: String,
-    }, { timestamps: true });
+    const ProjectSchema = new mongoose.Schema(
+      {
+        name: { type: String, required: true },
+        status: { type: String, enum: ["active", "archived"], default: "active" },
+        organizationId: { type: String, index: true },
+        teamId: String,
+      },
+      { timestamps: true },
+    );
     const ProjectModel = mongoose.models.MTProject || mongoose.model("MTProject", ProjectSchema);
     const projectRepo = new Repository(ProjectModel);
 
@@ -104,12 +107,15 @@ describe("Multi-Tenant Hierarchy E2E", () => {
     });
 
     // ── Org-scoped resource: Task (nested under project) ──
-    const TaskSchema = new mongoose.Schema({
-      title: { type: String, required: true },
-      projectId: { type: String, index: true },
-      assignee: String,
-      organizationId: { type: String, index: true },
-    }, { timestamps: true });
+    const TaskSchema = new mongoose.Schema(
+      {
+        title: { type: String, required: true },
+        projectId: { type: String, index: true },
+        assignee: String,
+        organizationId: { type: String, index: true },
+      },
+      { timestamps: true },
+    );
     const TaskModel = mongoose.models.MTTask || mongoose.model("MTTask", TaskSchema);
     const taskRepo = new Repository(TaskModel);
 
@@ -301,7 +307,12 @@ describe("Multi-Tenant Hierarchy E2E", () => {
       const gammaId = orgB.json().docs[0]._id;
 
       // Try to access from org-a context
-      const res = await authed({ method: "GET", url: `/projects/${gammaId}`, userId: "u1", orgId: "org-a" });
+      const res = await authed({
+        method: "GET",
+        url: `/projects/${gammaId}`,
+        userId: "u1",
+        orgId: "org-a",
+      });
       expect(res.statusCode).toBe(404);
     });
 

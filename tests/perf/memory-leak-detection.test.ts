@@ -23,9 +23,9 @@
  */
 
 import { Repository } from "@classytic/mongokit";
-import { MongoMemoryServer } from "mongodb-memory-server";
-import mongoose, { Schema, type Model } from "mongoose";
 import type { FastifyInstance } from "fastify";
+import { MongoMemoryServer } from "mongodb-memory-server";
+import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";

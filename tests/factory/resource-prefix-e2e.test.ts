@@ -5,24 +5,22 @@
  * with loadResources(import.meta.url), bootstrap, prefix, and mixed resources.
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
-import mongoose from "mongoose";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { createApp } from "../../src/factory/createApp.js";
-import { defineResource } from "../../src/core/defineResource.js";
-import { BaseController } from "../../src/core/BaseController.js";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
-import { allowPublic } from "../../src/permissions/index.js";
+import { BaseController } from "../../src/core/BaseController.js";
+import { defineResource } from "../../src/core/defineResource.js";
+import { createApp } from "../../src/factory/createApp.js";
 import { loadResources } from "../../src/factory/loadResources.js";
+import { allowPublic } from "../../src/permissions/index.js";
 import {
-  setupTestDatabase,
-  teardownTestDatabase,
   createMockModel,
   createMockRepository,
+  setupTestDatabase,
+  teardownTestDatabase,
 } from "../setup.js";
-import type { FastifyInstance } from "fastify";
 
 const ARC_ROOT = resolve(import.meta.dirname, "../..");
 
@@ -254,14 +252,8 @@ export default defineResource({
 });
 `;
 
-      writeFileSync(
-        join(base, "product", "product.resource.mjs"),
-        resourceFile("product"),
-      );
-      writeFileSync(
-        join(base, "order", "order.resource.mjs"),
-        resourceFile("order"),
-      );
+      writeFileSync(join(base, "product", "product.resource.mjs"), resourceFile("product"));
+      writeFileSync(join(base, "order", "order.resource.mjs"), resourceFile("order"));
       writeFileSync(
         join(base, "webhook", "webhook.resource.mjs"),
         resourceFile("webhook", "prefix: '/webhooks', skipGlobalPrefix: true,"),
@@ -390,9 +382,7 @@ export default defineResource({
       expect(resources).toHaveLength(2);
 
       // skipGlobalPrefix should be readable from the loaded resource
-      const adminRes = resources.find(
-        (r) => (r as { name?: string }).name === "admin",
-      );
+      const adminRes = resources.find((r) => (r as { name?: string }).name === "admin");
       expect((adminRes as { skipGlobalPrefix?: boolean }).skipGlobalPrefix).toBe(true);
     });
   });

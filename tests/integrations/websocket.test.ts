@@ -8,14 +8,11 @@
  * real connections use app.listen({ port: 0 }) + ws client.
  */
 
-import { describe, it, expect, afterEach, vi } from "vitest";
-import Fastify, { type FastifyInstance } from "fastify";
 import fastifyWebsocket from "@fastify/websocket";
+import Fastify, { type FastifyInstance } from "fastify";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import {
-  websocketPlugin,
-  RoomManager,
-} from "../../src/integrations/websocket.js";
+import { RoomManager, websocketPlugin } from "../../src/integrations/websocket.js";
 
 // ============================================================================
 // Helpers
@@ -26,10 +23,7 @@ function mockSocket() {
 }
 
 /** Connect a WS client and wait for the "connected" message. */
-function connectWs(
-  port: number,
-  path = "/ws",
-): Promise<{ ws: WebSocket; connected: any }> {
+function connectWs(port: number, path = "/ws"): Promise<{ ws: WebSocket; connected: any }> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`);
     const timeout = setTimeout(() => {
@@ -54,10 +48,7 @@ function connectWs(
 /** Send a message and wait for the next response. */
 function sendAndReceive(ws: WebSocket, payload: object): Promise<any> {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error("Response timeout")),
-      3000,
-    );
+    const timeout = setTimeout(() => reject(new Error("Response timeout")), 3000);
     ws.once("message", (raw) => {
       clearTimeout(timeout);
       resolve(JSON.parse(raw.toString()));
@@ -67,11 +58,7 @@ function sendAndReceive(ws: WebSocket, payload: object): Promise<any> {
 }
 
 /** Collect messages from a ws within a timeout period. */
-function collectMessages(
-  ws: WebSocket,
-  count: number,
-  timeoutMs = 3000,
-): Promise<any[]> {
+function collectMessages(ws: WebSocket, count: number, timeoutMs = 3000): Promise<any[]> {
   return new Promise((resolve) => {
     const msgs: any[] = [];
     const timeout = setTimeout(() => resolve(msgs), timeoutMs);
@@ -88,9 +75,7 @@ function collectMessages(
 }
 
 /** Wait for a close event on a WebSocket. */
-function waitForClose(
-  ws: WebSocket,
-): Promise<{ code: number; reason: string }> {
+function waitForClose(ws: WebSocket): Promise<{ code: number; reason: string }> {
   return new Promise((resolve) => {
     ws.on("close", (code, reason) => {
       resolve({ code, reason: reason.toString() });
@@ -576,14 +561,11 @@ describe("Stats endpoint", () => {
     await app.register(fastifyWebsocket);
 
     // Simulate an auth decorator
-    app.decorate(
-      "authenticate",
-      async (request: any, reply: any) => {
-        if (!request.headers["authorization"]) {
-          reply.code(401).send({ error: "Unauthorized" });
-        }
-      },
-    );
+    app.decorate("authenticate", async (request: any, reply: any) => {
+      if (!request.headers.authorization) {
+        reply.code(401).send({ error: "Unauthorized" });
+      }
+    });
 
     await app.register(websocketPlugin, {
       auth: false,

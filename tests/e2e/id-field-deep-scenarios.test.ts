@@ -31,9 +31,9 @@
  *  12. Superadmin bypass: elevated scope sees all orgs
  */
 
-import mongoose, { Schema } from "mongoose";
-import { Repository, QueryParser } from "@classytic/mongokit";
+import { QueryParser, Repository } from "@classytic/mongokit";
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import mongoose, { Schema } from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
@@ -335,8 +335,7 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
 
   const tokenUserA = () => issueToken({ id: USER_A, role: ["user"], organizationId: ORG_A });
   const tokenUserB = () => issueToken({ id: USER_B, role: ["user"], organizationId: ORG_B });
-  const tokenSuper = () =>
-    issueToken({ id: SUPERADMIN, role: ["superadmin"] });
+  const tokenSuper = () => issueToken({ id: SUPERADMIN, role: ["superadmin"] });
 
   // --------------------------------------------------------------------------
   // Seed products
@@ -345,11 +344,45 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
   describe("seeding products across orgs", () => {
     it("Org A creates products via POST", async () => {
       for (const p of [
-        { sku: "WIDGET-001", name: "Widget Classic", price: 50, category: categoryA._id.toString(), tags: ["featured"], status: "published" },
-        { sku: "WIDGET-002", name: "Widget Pro", price: 150, category: categoryA._id.toString(), tags: ["featured", "new"], status: "published" },
-        { sku: "GADGET-A1", name: "Gadget A1", price: 299, category: categoryA._id.toString(), tags: ["premium"], status: "published" },
-        { sku: "GADGET-A2", name: "Gadget A2", price: 499, category: categoryA._id.toString(), tags: ["premium"], status: "draft" },
-        { sku: "LEGACY-999", name: "Legacy", price: 10, category: categoryA._id.toString(), status: "archived" },
+        {
+          sku: "WIDGET-001",
+          name: "Widget Classic",
+          price: 50,
+          category: categoryA._id.toString(),
+          tags: ["featured"],
+          status: "published",
+        },
+        {
+          sku: "WIDGET-002",
+          name: "Widget Pro",
+          price: 150,
+          category: categoryA._id.toString(),
+          tags: ["featured", "new"],
+          status: "published",
+        },
+        {
+          sku: "GADGET-A1",
+          name: "Gadget A1",
+          price: 299,
+          category: categoryA._id.toString(),
+          tags: ["premium"],
+          status: "published",
+        },
+        {
+          sku: "GADGET-A2",
+          name: "Gadget A2",
+          price: 499,
+          category: categoryA._id.toString(),
+          tags: ["premium"],
+          status: "draft",
+        },
+        {
+          sku: "LEGACY-999",
+          name: "Legacy",
+          price: 10,
+          category: categoryA._id.toString(),
+          status: "archived",
+        },
       ]) {
         const res = await app.inject({
           method: "POST",
@@ -367,8 +400,20 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
 
     it("Org B creates products — including the same SKU as Org A", async () => {
       for (const p of [
-        { sku: "WIDGET-001", name: "B's Widget", price: 25, category: categoryB._id.toString(), status: "published" },
-        { sku: "BOOK-XYZ", name: "Book XYZ", price: 15, category: categoryB._id.toString(), status: "published" },
+        {
+          sku: "WIDGET-001",
+          name: "B's Widget",
+          price: 25,
+          category: categoryB._id.toString(),
+          status: "published",
+        },
+        {
+          sku: "BOOK-XYZ",
+          name: "Book XYZ",
+          price: 15,
+          category: categoryB._id.toString(),
+          status: "published",
+        },
       ]) {
         const res = await app.inject({
           method: "POST",
@@ -431,7 +476,10 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
       expect(res.statusCode).toBe(404);
 
       // DB still shows original name
-      const doc = await ProductModel.findOne({ sku: "GADGET-A1", organizationId: new mongoose.Types.ObjectId(ORG_A) });
+      const doc = await ProductModel.findOne({
+        sku: "GADGET-A1",
+        organizationId: new mongoose.Types.ObjectId(ORG_A),
+      });
       expect(doc?.name).toBe("Gadget A1");
     });
 
@@ -444,7 +492,10 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
       expect(res.statusCode).toBe(404);
 
       // DB still has the document
-      const doc = await ProductModel.findOne({ sku: "GADGET-A1", organizationId: new mongoose.Types.ObjectId(ORG_A) });
+      const doc = await ProductModel.findOne({
+        sku: "GADGET-A1",
+        organizationId: new mongoose.Types.ObjectId(ORG_A),
+      });
       expect(doc).toBeTruthy();
     });
   });
@@ -568,21 +619,21 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
         {
           orderNumber: "ORD-2026-0001",
           customer: USER_A,
-          items: [{ product: productA!._id.toString(), quantity: 2, price: 299 }],
+          items: [{ product: productA?._id.toString(), quantity: 2, price: 299 }],
           total: 598,
           status: "paid",
         },
         {
           orderNumber: "ORD-2026-0002",
           customer: USER_A,
-          items: [{ product: productA!._id.toString(), quantity: 1, price: 299 }],
+          items: [{ product: productA?._id.toString(), quantity: 1, price: 299 }],
           total: 299,
           status: "pending",
         },
         {
           orderNumber: "ORD-2026-0003",
           customer: USER_A,
-          items: [{ product: productA!._id.toString(), quantity: 5, price: 299 }],
+          items: [{ product: productA?._id.toString(), quantity: 5, price: 299 }],
           total: 1495,
           status: "shipped",
         },
@@ -673,7 +724,9 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
       const body = JSON.parse(res.body);
       // 5 Org A products + 2 Org B products = 7 total
       expect(body.docs.length).toBeGreaterThanOrEqual(7);
-      const orgs = new Set(body.docs.map((p: { organizationId: string }) => String(p.organizationId)));
+      const orgs = new Set(
+        body.docs.map((p: { organizationId: string }) => String(p.organizationId)),
+      );
       expect(orgs.has(ORG_A)).toBe(true);
       expect(orgs.has(ORG_B)).toBe(true);
     });

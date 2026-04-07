@@ -10,16 +10,10 @@
  * 4. Mixed import styles in same project — partial success
  */
 
-import { describe, it, expect, afterAll, afterEach, vi } from "vitest";
-import {
-  mkdirSync,
-  writeFileSync,
-  rmSync,
-  existsSync,
-  readFileSync,
-} from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { loadResources } from "../../src/factory/loadResources.js";
 
 const TMP = join(import.meta.dirname, "__tmp_import_compat__");
@@ -57,10 +51,7 @@ describe("loadResources — relative imports", () => {
   it("resource importing ./helper.ts via .js extension works", async () => {
     mkdirSync(dir, { recursive: true });
 
-    writeFileSync(
-      join(dir, "config.ts"),
-      helper("export const DB_NAME = 'rel-test';"),
-    );
+    writeFileSync(join(dir, "config.ts"), helper("export const DB_NAME = 'rel-test';"));
     writeFileSync(
       join(dir, "app.resource.ts"),
       resource("app", "import { DB_NAME } from './config.js';"),
@@ -77,10 +68,7 @@ describe("loadResources — relative imports", () => {
     mkdirSync(shared, { recursive: true });
     mkdirSync(resources_, { recursive: true });
 
-    writeFileSync(
-      join(shared, "util.ts"),
-      helper("export const VERSION = '1.0';"),
-    );
+    writeFileSync(join(shared, "util.ts"), helper("export const VERSION = '1.0';"));
     writeFileSync(
       join(resources_, "api.resource.ts"),
       resource("api", "import { VERSION } from '../shared/util.js';"),
@@ -109,10 +97,7 @@ describe("loadResources — relative imports", () => {
     mkdirSync(srcLib, { recursive: true });
     mkdirSync(srcResources, { recursive: true });
 
-    writeFileSync(
-      join(srcLib, "core.ts"),
-      helper("export const CORE_VAL = 42;"),
-    );
+    writeFileSync(join(srcLib, "core.ts"), helper("export const CORE_VAL = 42;"));
     writeFileSync(
       join(srcLib, "helpers.ts"),
       "import { CORE_VAL } from './core.js';\nexport const DOUBLED = CORE_VAL * 2;\n",
@@ -130,10 +115,7 @@ describe("loadResources — relative imports", () => {
   it("resource importing .ts file directly (no .js extension) works", async () => {
     mkdirSync(dir, { recursive: true });
 
-    writeFileSync(
-      join(dir, "constants.ts"),
-      helper("export const MAX = 100;"),
-    );
+    writeFileSync(join(dir, "constants.ts"), helper("export const MAX = 100;"));
     // Direct .ts import (works in vitest, not standard ESM convention)
     writeFileSync(
       join(dir, "direct.resource.ts"),
@@ -269,10 +251,7 @@ describe("loadResources — Node.js #subpath imports", () => {
       join(dir, "src", "shared", "types.ts"),
       helper("export type User = { id: string };"),
     );
-    writeFileSync(
-      join(dir, "src", "config", "env.ts"),
-      helper("export const PORT = 3000;"),
-    );
+    writeFileSync(join(dir, "src", "config", "env.ts"), helper("export const PORT = 3000;"));
 
     writeFileSync(
       join(dir, "package.json"),
@@ -315,10 +294,7 @@ describe("loadResources — Node.js #subpath imports", () => {
     mkdirSync(join(dir, "dist", "resources"), { recursive: true });
 
     // Compiled .mjs file (production output)
-    writeFileSync(
-      join(dir, "dist", "lib", "db.mjs"),
-      "export const DB_NAME = 'production-db';\n",
-    );
+    writeFileSync(join(dir, "dist", "lib", "db.mjs"), "export const DB_NAME = 'production-db';\n");
 
     writeFileSync(
       join(dir, "package.json"),
@@ -371,9 +347,7 @@ describe("loadResources — tsconfig path aliases (expected failures)", () => {
     expect(loaded).toHaveLength(0);
 
     // Should log a warning about the failed import
-    const failMsg = warnSpy.mock.calls.find((c) =>
-      String(c[0]).includes("failed to import"),
-    );
+    const failMsg = warnSpy.mock.calls.find((c) => String(c[0]).includes("failed to import"));
     expect(failMsg).toBeDefined();
 
     warnSpy.mockRestore();
@@ -392,9 +366,7 @@ describe("loadResources — tsconfig path aliases (expected failures)", () => {
     const loaded = await loadResources(dir);
     expect(loaded).toHaveLength(0);
 
-    const failMsg = warnSpy.mock.calls.find((c) =>
-      String(c[0]).includes("failed to import"),
-    );
+    const failMsg = warnSpy.mock.calls.find((c) => String(c[0]).includes("failed to import"));
     expect(failMsg).toBeDefined();
 
     warnSpy.mockRestore();
@@ -404,10 +376,7 @@ describe("loadResources — tsconfig path aliases (expected failures)", () => {
     mkdirSync(dir, { recursive: true });
 
     // Valid resource with relative import
-    writeFileSync(
-      join(dir, "helper.ts"),
-      helper("export const OK = true;"),
-    );
+    writeFileSync(join(dir, "helper.ts"), helper("export const OK = true;"));
     writeFileSync(
       join(dir, "good.resource.ts"),
       resource("good", "import { OK } from './helper.js';"),
@@ -428,9 +397,7 @@ describe("loadResources — tsconfig path aliases (expected failures)", () => {
     expect((loaded[0] as { name: string }).name).toBe("good");
 
     // Warning logged for the failed one
-    const failMsg = warnSpy.mock.calls.find((c) =>
-      String(c[0]).includes("failed to import"),
-    );
+    const failMsg = warnSpy.mock.calls.find((c) => String(c[0]).includes("failed to import"));
     expect(failMsg).toBeDefined();
 
     warnSpy.mockRestore();
@@ -464,17 +431,11 @@ describe("loadResources — simulated app structures", () => {
     );
     writeFileSync(
       join(src, "resources", "product", "product.resource.ts"),
-      resource(
-        "product",
-        "import { isValid } from '../../shared/validation.js';",
-      ),
+      resource("product", "import { isValid } from '../../shared/validation.js';"),
     );
     writeFileSync(
       join(src, "resources", "order", "order.resource.ts"),
-      resource(
-        "order",
-        "import { isValid } from '../../shared/validation.js';",
-      ),
+      resource("order", "import { isValid } from '../../shared/validation.js';"),
     );
 
     const loaded = await loadResources(join(src, "resources"));
@@ -540,10 +501,7 @@ describe("loadResources — simulated app structures", () => {
     writeFileSync(join(base, "product.resource.ts"), resource("product"));
     writeFileSync(join(base, "order.resource.ts"), resource("order"));
     writeFileSync(join(base, "debug.resource.ts"), resource("debug"));
-    writeFileSync(
-      join(base, "test-only.resource.ts"),
-      resource("test-only"),
-    );
+    writeFileSync(join(base, "test-only.resource.ts"), resource("test-only"));
 
     const loaded = await loadResources(base, {
       exclude: ["debug", "test-only"],
@@ -662,14 +620,8 @@ describe("loadResources — import.meta.url support", () => {
     mkdirSync(join(base, "product"), { recursive: true });
     mkdirSync(join(base, "order"), { recursive: true });
 
-    writeFileSync(
-      join(base, "product", "product.resource.ts"),
-      resource("product"),
-    );
-    writeFileSync(
-      join(base, "order", "order.resource.ts"),
-      resource("order"),
-    );
+    writeFileSync(join(base, "product", "product.resource.ts"), resource("product"));
+    writeFileSync(join(base, "order", "order.resource.ts"), resource("order"));
 
     const fakeMetaUrl = pathToFileURL(join(base, "index.ts")).href;
 

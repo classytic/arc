@@ -9,13 +9,13 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { ArcQueryParser } from "../../src/utils/queryParser.js";
-import { defineResource } from "../../src/core/defineResource.js";
+import type { DataAdapter } from "../../src/adapters/interface.js";
 import { BaseController } from "../../src/core/BaseController.js";
-import { allowPublic } from "../../src/permissions/index.js";
+import { defineResource } from "../../src/core/defineResource.js";
 import { resourceToTools } from "../../src/integrations/mcp/resourceToTools.js";
 import { createTestMcpClient } from "../../src/integrations/mcp/testing.js";
-import type { DataAdapter } from "../../src/adapters/interface.js";
+import { allowPublic } from "../../src/permissions/index.js";
+import { ArcQueryParser } from "../../src/utils/queryParser.js";
 
 // ============================================================================
 // In-Memory Store — no external DB dependency
@@ -55,11 +55,16 @@ function createInMemoryRepository() {
               docs = docs.filter((d) => {
                 const fieldVal = (d as Record<string, unknown>)[key];
                 switch (op) {
-                  case "$eq": return fieldVal === opVal;
-                  case "$ne": return fieldVal !== opVal;
-                  case "$in": return Array.isArray(opVal) && opVal.includes(fieldVal);
-                  case "$nin": return Array.isArray(opVal) && !opVal.includes(fieldVal);
-                  default: return true;
+                  case "$eq":
+                    return fieldVal === opVal;
+                  case "$ne":
+                    return fieldVal !== opVal;
+                  case "$in":
+                    return Array.isArray(opVal) && opVal.includes(fieldVal);
+                  case "$nin":
+                    return Array.isArray(opVal) && !opVal.includes(fieldVal);
+                  default:
+                    return true;
                 }
               });
             }
@@ -274,7 +279,11 @@ describe("MCP tool schemas from ArcQueryParser", () => {
   it("generates all 5 CRUD tools", () => {
     expect(tools).toHaveLength(5);
     expect(tools.map((t) => t.name)).toEqual([
-      "list_tasks", "get_task", "create_task", "update_task", "delete_task",
+      "list_tasks",
+      "get_task",
+      "create_task",
+      "update_task",
+      "delete_task",
     ]);
   });
 
@@ -328,9 +337,24 @@ describe("MCP end-to-end with ArcQueryParser + in-memory store", () => {
     nextId = 1;
 
     // Seed data
-    await inMemoryRepo.create({ title: "Write tests", status: "open", priority: "high", assignee: "alice" });
-    await inMemoryRepo.create({ title: "Deploy app", status: "in_progress", priority: "medium", assignee: "bob" });
-    await inMemoryRepo.create({ title: "Fix bug", status: "done", priority: "low", assignee: "alice" });
+    await inMemoryRepo.create({
+      title: "Write tests",
+      status: "open",
+      priority: "high",
+      assignee: "alice",
+    });
+    await inMemoryRepo.create({
+      title: "Deploy app",
+      status: "in_progress",
+      priority: "medium",
+      assignee: "bob",
+    });
+    await inMemoryRepo.create({
+      title: "Fix bug",
+      status: "done",
+      priority: "low",
+      assignee: "alice",
+    });
 
     client = await createTestMcpClient({
       pluginOptions: {
@@ -348,14 +372,20 @@ describe("MCP end-to-end with ArcQueryParser + in-memory store", () => {
   it("lists all tools", async () => {
     const tools = await client.listTools();
     expect(tools.map((t) => t.name)).toEqual(
-      expect.arrayContaining(["list_tasks", "get_task", "create_task", "update_task", "delete_task"]),
+      expect.arrayContaining([
+        "list_tasks",
+        "get_task",
+        "create_task",
+        "update_task",
+        "delete_task",
+      ]),
     );
   });
 
   it("list_tasks returns all items", async () => {
     const result = await client.callTool("list_tasks", {});
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0]!.text);
+    const data = JSON.parse(result.content[0]?.text);
     expect(data.docs).toHaveLength(3);
     expect(data.total).toBe(3);
   });
@@ -363,7 +393,7 @@ describe("MCP end-to-end with ArcQueryParser + in-memory store", () => {
   it("list_tasks filters by status", async () => {
     const result = await client.callTool("list_tasks", { status: "open" });
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0]!.text);
+    const data = JSON.parse(result.content[0]?.text);
     expect(data.docs).toHaveLength(1);
     expect(data.docs[0].title).toBe("Write tests");
   });
@@ -371,14 +401,14 @@ describe("MCP end-to-end with ArcQueryParser + in-memory store", () => {
   it("list_tasks filters by assignee", async () => {
     const result = await client.callTool("list_tasks", { assignee: "alice" });
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0]!.text);
+    const data = JSON.parse(result.content[0]?.text);
     expect(data.docs).toHaveLength(2);
   });
 
   it("list_tasks filters by priority", async () => {
     const result = await client.callTool("list_tasks", { priority: "high" });
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0]!.text);
+    const data = JSON.parse(result.content[0]?.text);
     expect(data.docs).toHaveLength(1);
     expect(data.docs[0].title).toBe("Write tests");
   });
@@ -390,7 +420,7 @@ describe("MCP end-to-end with ArcQueryParser + in-memory store", () => {
       priority: "medium",
     });
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0]!.text);
+    const data = JSON.parse(result.content[0]?.text);
     expect(data.data?.title || data.title).toBe("Review PR");
     expect(store).toHaveLength(4);
   });
@@ -398,14 +428,14 @@ describe("MCP end-to-end with ArcQueryParser + in-memory store", () => {
   it("get_task retrieves by ID", async () => {
     const result = await client.callTool("get_task", { id: "1" });
     expect(result.isError).toBeFalsy();
-    const data = JSON.parse(result.content[0]!.text);
+    const data = JSON.parse(result.content[0]?.text);
     expect(data.data?.title || data.title).toBe("Write tests");
   });
 
   it("update_task updates via MCP", async () => {
     const result = await client.callTool("update_task", { id: "1", status: "done" });
     expect(result.isError).toBeFalsy();
-    expect(store.find((t) => t._id === "1")!.status).toBe("done");
+    expect(store.find((t) => t._id === "1")?.status).toBe("done");
   });
 
   it("delete_task deletes via MCP", async () => {

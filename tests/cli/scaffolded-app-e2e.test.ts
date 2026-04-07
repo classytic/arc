@@ -15,10 +15,10 @@
  * a Fastify app against mongodb-memory-server.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
-import * as path from "node:path";
 import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { init } from "../../src/cli/commands/init.js";
 
 let testRoot: string;
@@ -36,10 +36,7 @@ async function exists(p: string): Promise<boolean> {
   }
 }
 
-async function scaffold(
-  name: string,
-  opts: Parameters<typeof init>[0],
-): Promise<string> {
+async function scaffold(name: string, opts: Parameters<typeof init>[0]): Promise<string> {
   const cwd = process.cwd();
   process.chdir(testRoot);
   try {
@@ -61,7 +58,9 @@ beforeAll(async () => {
 afterAll(async () => {
   try {
     await fs.rm(testRoot, { recursive: true, force: true });
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 });
 
 // ============================================================================
@@ -119,26 +118,20 @@ describe("Scaffolded App — Better Auth + Multi-Tenant", () => {
   // ── Resource Pattern ────────────────────────────────────────
 
   it("example resource uses defineResource + createAdapter", async () => {
-    const content = await readText(
-      path.join(dir, "src/resources/example/example.resource.ts"),
-    );
+    const content = await readText(path.join(dir, "src/resources/example/example.resource.ts"));
     expect(content).toContain("defineResource");
     expect(content).toContain("createAdapter");
     expect(content).toContain("permissions");
   });
 
   it("example model uses mongoose.Schema", async () => {
-    const content = await readText(
-      path.join(dir, "src/resources/example/example.model.ts"),
-    );
+    const content = await readText(path.join(dir, "src/resources/example/example.model.ts"));
     expect(content).toContain("mongoose");
     expect(content).toContain("Schema");
   });
 
   it("example repository extends MongoKit Repository", async () => {
-    const content = await readText(
-      path.join(dir, "src/resources/example/example.repository.ts"),
-    );
+    const content = await readText(path.join(dir, "src/resources/example/example.repository.ts"));
     expect(content).toContain("Repository");
     expect(content).toContain("@classytic/mongokit");
   });
@@ -176,9 +169,7 @@ describe("Scaffolded App — Better Auth + Multi-Tenant", () => {
   // ── Multi-Tenant Specifics ──────────────────────────────────
 
   it("multi-tenant preset filters by organizationId", async () => {
-    const content = await readText(
-      path.join(dir, "src/shared/presets/flexible-multi-tenant.ts"),
-    );
+    const content = await readText(path.join(dir, "src/shared/presets/flexible-multi-tenant.ts"));
     expect(content).toContain("organizationId");
   });
 
@@ -272,17 +263,13 @@ describe("Scaffolded App — JWT + Single-Tenant", () => {
   });
 
   it("auth handlers have register and login endpoints", async () => {
-    const content = await readText(
-      path.join(dir, "src/resources/auth/auth.handlers.ts"),
-    );
+    const content = await readText(path.join(dir, "src/resources/auth/auth.handlers.ts"));
     expect(content).toContain("register");
     expect(content).toContain("login");
   });
 
   it("user model has password field", async () => {
-    const content = await readText(
-      path.join(dir, "src/resources/user/user.model.ts"),
-    );
+    const content = await readText(path.join(dir, "src/resources/user/user.model.ts"));
     expect(content).toContain("password");
   });
 
@@ -296,17 +283,13 @@ describe("Scaffolded App — JWT + Single-Tenant", () => {
   // ── Single-Tenant ───────────────────────────────────────────
 
   it("does NOT create multi-tenant preset", async () => {
-    expect(
-      await exists(path.join(dir, "src/shared/presets/flexible-multi-tenant.ts")),
-    ).toBe(false);
+    expect(await exists(path.join(dir, "src/shared/presets/flexible-multi-tenant.ts"))).toBe(false);
   });
 
   // ── Shared patterns (same as Better Auth) ───────────────────
 
   it("example resource uses defineResource", async () => {
-    const content = await readText(
-      path.join(dir, "src/resources/example/example.resource.ts"),
-    );
+    const content = await readText(path.join(dir, "src/resources/example/example.resource.ts"));
     expect(content).toContain("defineResource");
   });
 

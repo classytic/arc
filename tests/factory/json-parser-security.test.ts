@@ -7,9 +7,9 @@
  * 3. Rejects __proto__ and constructor.prototype payloads
  */
 
-import { describe, it, expect, afterEach } from "vitest";
-import { createApp } from "../../src/factory/createApp.js";
 import type { FastifyInstance } from "fastify";
+import { afterEach, describe, expect, it } from "vitest";
+import { createApp } from "../../src/factory/createApp.js";
 
 describe("JSON parser security", () => {
   let app: FastifyInstance;

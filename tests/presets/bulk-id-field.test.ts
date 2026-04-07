@@ -15,22 +15,22 @@
  */
 
 import {
-  Repository,
   batchOperationsPlugin,
   methodRegistryPlugin,
   mongoOperationsPlugin,
+  Repository,
   softDeletePlugin,
 } from "@classytic/mongokit";
-import { MongoMemoryServer } from "mongodb-memory-server";
-import mongoose, { Schema, type Model } from "mongoose";
 import type { FastifyRequest } from "fastify";
+import { MongoMemoryServer } from "mongodb-memory-server";
+import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
-import { multiTenantPreset } from "../../src/presets/multiTenant.js";
 import { requireAuth } from "../../src/permissions/index.js";
+import { multiTenantPreset } from "../../src/presets/multiTenant.js";
 import type { RequestScope } from "../../src/scope/types.js";
 
 const JWT_SECRET = "test-jwt-secret-must-be-at-least-32-chars-long!!";
@@ -158,10 +158,14 @@ async function buildApp(opts: { withSoftDelete?: boolean } = {}) {
 }
 
 describe("Bulk preset + custom idField + multi-tenancy", () => {
-  function tokens(app: { auth: { issueTokens(p: Record<string, unknown>): { accessToken: string } } }) {
+  function tokens(app: {
+    auth: { issueTokens(p: Record<string, unknown>): { accessToken: string } };
+  }) {
     return {
-      tokenA: app.auth.issueTokens({ id: USER_A, role: ["user"], organizationId: ORG_A }).accessToken,
-      tokenB: app.auth.issueTokens({ id: USER_B, role: ["user"], organizationId: ORG_B }).accessToken,
+      tokenA: app.auth.issueTokens({ id: USER_A, role: ["user"], organizationId: ORG_A })
+        .accessToken,
+      tokenB: app.auth.issueTokens({ id: USER_B, role: ["user"], organizationId: ORG_B })
+        .accessToken,
     };
   }
 

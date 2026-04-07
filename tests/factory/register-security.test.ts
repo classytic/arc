@@ -5,14 +5,13 @@
  * with a real Fastify instance (no full createApp boot).
  */
 
-import { describe, it, expect, afterEach } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { afterEach, describe, expect, it } from "vitest";
 import {
+  loadPlugin,
   registerSecurityPlugins,
   registerUtilityPlugins,
-  loadPlugin,
 } from "../../src/factory/registerSecurity.js";
-import type { CreateAppOptions } from "../../src/factory/types.js";
 
 function createTestFastify(): FastifyInstance {
   return Fastify({ logger: false });
@@ -137,9 +136,9 @@ describe("registerSecurityPlugins", () => {
 
   it("throws when distributed runtime + rate limit without store", async () => {
     app = createTestFastify();
-    await expect(
-      registerSecurityPlugins(app, { runtime: "distributed" }),
-    ).rejects.toThrow("distributed");
+    await expect(registerSecurityPlugins(app, { runtime: "distributed" })).rejects.toThrow(
+      "distributed",
+    );
   });
 
   it("all disabled = no security plugins", async () => {

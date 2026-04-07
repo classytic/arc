@@ -24,17 +24,25 @@
 // ============================================================================
 
 /**
- * Request scope — 4 kinds, 4 states, no ambiguity.
+ * Request scope — 5 kinds, no ambiguity.
  *
- * | Kind          | Meaning                           |
- * |---------------|-----------------------------------|
- * | public        | No authentication                 |
- * | authenticated | Logged in, no org context          |
- * | member        | In an org with specific roles      |
- * | elevated      | Platform admin, explicit elevation |
+ * | Kind          | Meaning                                          |
+ * |---------------|--------------------------------------------------|
+ * | public        | No authentication                                |
+ * | authenticated | Logged-in user, no org context                   |
+ * | member        | User in an org with specific roles               |
+ * | service       | Machine-to-machine (API key, service account)    |
+ * | elevated      | Platform admin, explicit elevation               |
  *
- * `userId` and `userRoles` are available on all authenticated variants.
- * `orgRoles` are org-level roles (from membership); `userRoles` are global roles (from user document).
+ * **Identity fields by kind:**
+ * - `userId` / `userRoles` — available on `authenticated`, `member`, `elevated` (a real human)
+ * - `clientId` — available on `service` (a machine identity, NOT a user)
+ * - `organizationId` — required on `member` and `service`, optional on `elevated`
+ * - `orgRoles` — org-level roles, only on `member` (from membership records)
+ * - `scopes` — optional OAuth-style scope strings on `service` (e.g. `['jobs:write', 'memories:read']`)
+ *
+ * Use `getUserId(scope)` / `getClientId(scope)` / `getOrgId(scope)` instead of
+ * narrowing manually — helpers return `undefined` when the field isn't present.
  */
 export type RequestScope =
   | { kind: "public" }
@@ -46,6 +54,12 @@ export type RequestScope =
       organizationId: string;
       orgRoles: string[];
       teamId?: string;
+    }
+  | {
+      kind: "service";
+      clientId: string;
+      organizationId: string;
+      scopes?: readonly string[];
     }
   | { kind: "elevated"; userId?: string; organizationId?: string; elevatedBy: string };
 
@@ -65,9 +79,16 @@ export function isElevated(
   return scope.kind === "elevated";
 }
 
-/** Check if scope has org access (member OR elevated) */
+/** Check if scope is `service` kind (machine-to-machine auth) */
+export function isService(
+  scope: RequestScope,
+): scope is Extract<RequestScope, { kind: "service" }> {
+  return scope.kind === "service";
+}
+
+/** Check if scope has org access (member, service, or elevated) */
 export function hasOrgAccess(scope: RequestScope): boolean {
-  return scope.kind === "member" || scope.kind === "elevated";
+  return scope.kind === "member" || scope.kind === "service" || scope.kind === "elevated";
 }
 
 /** Check if request is authenticated (any kind except public) */
@@ -79,11 +100,41 @@ export function isAuthenticated(scope: RequestScope): boolean {
 // Accessors
 // ============================================================================
 
-/** Get organizationId from scope (if present) */
+/** Get organizationId from scope (member, service, or elevated — undefined otherwise) */
 export function getOrgId(scope: RequestScope): string | undefined {
   if (scope.kind === "member") return scope.organizationId;
+  if (scope.kind === "service") return scope.organizationId;
   if (scope.kind === "elevated") return scope.organizationId;
   return undefined;
+}
+
+/**
+ * Get stable client identity from a service scope.
+ *
+ * Returns the `clientId` for machine-to-machine auth (API keys, service accounts),
+ * or `undefined` for any other scope kind. Use this for audit logging, rate limiting,
+ * and anywhere you need to distinguish "this specific API client" from "this user".
+ *
+ * @example
+ * ```typescript
+ * const clientId = getClientId(request.scope);
+ * if (clientId) {
+ *   auditLog.record({ actor: clientId, action: 'create' });
+ * }
+ * ```
+ */
+export function getClientId(scope: RequestScope): string | undefined {
+  if (scope.kind === "service") return scope.clientId;
+  return undefined;
+}
+
+/**
+ * Get OAuth-style scope strings from a service scope (e.g. `['jobs:write']`).
+ * Returns an empty array for any non-service kind.
+ */
+export function getServiceScopes(scope: RequestScope): readonly string[] {
+  if (scope.kind === "service") return scope.scopes ?? [];
+  return [];
 }
 
 /** Get org roles from scope (empty array if not a member) */

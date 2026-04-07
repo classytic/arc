@@ -30,6 +30,7 @@ describe("Public API Contract", () => {
       "./audit",
       "./audit/mongodb",
       "./auth",
+      "./auth/mongoose",
       "./auth/redis",
       "./cache",
       "./cli",
@@ -84,14 +85,10 @@ describe("Public API Contract", () => {
       const importEntry = (entry as any).import || entry;
       const requireEntry = (entry as any).require;
 
-      expect(
-        typeof importEntry.types,
-        `Missing "types" in exports["${subpath}"]`,
-      ).toBe("string");
-      expect(
-        typeof importEntry.default,
-        `Missing "default" in exports["${subpath}"]`,
-      ).toBe("string");
+      expect(typeof importEntry.types, `Missing "types" in exports["${subpath}"]`).toBe("string");
+      expect(typeof importEntry.default, `Missing "default" in exports["${subpath}"]`).toBe(
+        "string",
+      );
       expect(
         existsSync(resolve(packageRoot, importEntry.types)),
         `Missing file for "${subpath}" types: ${importEntry.types}`,
@@ -156,10 +153,7 @@ describe("Public API Contract", () => {
     for (const { subpath, symbols } of checks) {
       const mod = await import(subpath);
       for (const symbol of symbols) {
-        expect(
-          symbol in mod,
-          `Missing export "${symbol}" from ${subpath}`,
-        ).toBe(true);
+        expect(symbol in mod, `Missing export "${symbol}" from ${subpath}`).toBe(true);
       }
     }
   });

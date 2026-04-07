@@ -1,5 +1,5 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { versioningPlugin } from "../../src/plugins/versioning.js";
 
 describe("versioningPlugin — header mode", () => {

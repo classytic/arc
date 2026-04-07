@@ -9,10 +9,10 @@
  * Raw Node.js requires compiled .js files (production build).
  */
 
-import { describe, it, expect, afterAll, vi } from "vitest";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { loadResources } from "../../src/factory/loadResources.js";
 
 const TMP = join(import.meta.dirname, "__tmp_ts_imports__");
@@ -26,10 +26,7 @@ describe("loadResources with .ts files using .js imports", () => {
   it("discovers .ts resource that imports via .js extension (vitest resolves)", async () => {
     mkdirSync(TMP, { recursive: true });
 
-    writeFileSync(
-      join(TMP, "helper.ts"),
-      `export const DB_NAME = 'test-db';\n`,
-    );
+    writeFileSync(join(TMP, "helper.ts"), `export const DB_NAME = 'test-db';\n`);
 
     writeFileSync(
       join(TMP, "db.resource.ts"),
@@ -62,7 +59,7 @@ describe("loadResources with .ts files using .js imports", () => {
     expect(resources.length).toBeGreaterThan(0);
     const widget = resources.find((r) => (r as { name: string }).name === "widget");
     expect(widget).toBeDefined();
-    expect(typeof widget!.toPlugin).toBe("function");
+    expect(typeof widget?.toPlugin).toBe("function");
     // Verify the nested import resolved correctly
     expect((widget as { _model: { name: string } })._model.name).toBe("WidgetModel");
   });
@@ -70,9 +67,7 @@ describe("loadResources with .ts files using .js imports", () => {
   it("does not log failed imports for valid fixture resources", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     await loadResources(FIXTURES);
-    const failMsg = warnSpy.mock.calls.find((c) =>
-      String(c[0]).includes("failed to import"),
-    );
+    const failMsg = warnSpy.mock.calls.find((c) => String(c[0]).includes("failed to import"));
     expect(failMsg).toBeUndefined();
     warnSpy.mockRestore();
   });

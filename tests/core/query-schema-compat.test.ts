@@ -8,16 +8,16 @@
  * validates content (allowed fields, operators, types). No double-validation.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { QueryParser, Repository } from "@classytic/mongokit";
+import type { FastifyInstance } from "fastify";
 import mongoose from "mongoose";
-import { Repository, QueryParser } from "@classytic/mongokit";
-import { createApp } from "../../src/factory/createApp.js";
-import { defineResource } from "../../src/core/defineResource.js";
-import { BaseController } from "../../src/core/BaseController.js";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
+import { BaseController } from "../../src/core/BaseController.js";
+import { defineResource } from "../../src/core/defineResource.js";
+import { createApp } from "../../src/factory/createApp.js";
 import { allowPublic } from "../../src/permissions/index.js";
 import { setupTestDatabase, teardownTestDatabase } from "../setup.js";
-import type { FastifyInstance } from "fastify";
 
 describe("Query Schema Compatibility", () => {
   let app: FastifyInstance;
@@ -55,8 +55,11 @@ describe("Query Schema Compatibility", () => {
       }),
       queryParser: qp,
       permissions: {
-        list: allowPublic(), get: allowPublic(), create: allowPublic(),
-        update: allowPublic(), delete: allowPublic(),
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
       },
       schemaOptions: {
         fieldRules: {
@@ -74,8 +77,20 @@ describe("Query Schema Compatibility", () => {
     // Seed
     await M.deleteMany({});
     await M.create([
-      { name: "MacBook", price: 2499, category: "electronics", status: "active", tags: ["laptop", "apple"] },
-      { name: "TypeScript Book", price: 39, category: "books", status: "active", tags: ["programming"] },
+      {
+        name: "MacBook",
+        price: 2499,
+        category: "electronics",
+        status: "active",
+        tags: ["laptop", "apple"],
+      },
+      {
+        name: "TypeScript Book",
+        price: 39,
+        category: "books",
+        status: "active",
+        tags: ["programming"],
+      },
       { name: "Draft Item", price: 10, category: "other", status: "draft", tags: [] },
       { name: "Archived Widget", price: 5, category: "other", status: "archived", tags: ["old"] },
     ]);

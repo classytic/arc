@@ -9,84 +9,84 @@
  * BullMQ requires Redis, so we test the configuration/type contracts.
  */
 
-import { describe, it, expect } from 'vitest';
-import { defineJob } from '../../src/integrations/jobs.js';
-import type { JobDefinition } from '../../src/integrations/jobs.js';
+import { describe, expect, it } from "vitest";
+import type { JobDefinition } from "../../src/integrations/jobs.js";
+import { defineJob } from "../../src/integrations/jobs.js";
 
-describe('defineJob configuration', () => {
-  it('should accept timeout in job definition', () => {
+describe("defineJob configuration", () => {
+  it("should accept timeout in job definition", () => {
     const job = defineJob({
-      name: 'process-image',
-      handler: async (data: { url: string }) => ({ processed: true }),
+      name: "process-image",
+      handler: async (_data: { url: string }) => ({ processed: true }),
       timeout: 60000,
       retries: 3,
     });
 
     expect(job.timeout).toBe(60000);
     expect(job.retries).toBe(3);
-    expect(job.name).toBe('process-image');
+    expect(job.name).toBe("process-image");
   });
 
-  it('should accept deadLetterQueue in job definition', () => {
+  it("should accept deadLetterQueue in job definition", () => {
     const job = defineJob({
-      name: 'send-email',
-      handler: async (data: { to: string }) => ({ sent: true }),
-      deadLetterQueue: 'email:dead',
+      name: "send-email",
+      handler: async (_data: { to: string }) => ({ sent: true }),
+      deadLetterQueue: "email:dead",
       retries: 5,
     });
 
-    expect(job.deadLetterQueue).toBe('email:dead');
+    expect(job.deadLetterQueue).toBe("email:dead");
     expect(job.retries).toBe(5);
   });
 
-  it('should accept all job configuration fields', () => {
+  it("should accept all job configuration fields", () => {
     const job = defineJob({
-      name: 'complex-job',
+      name: "complex-job",
       handler: async () => ({}),
       retries: 3,
-      backoff: { type: 'exponential', delay: 2000 },
+      backoff: { type: "exponential", delay: 2000 },
       timeout: 30000,
       concurrency: 5,
       rateLimit: { max: 10, duration: 60000 },
-      deadLetterQueue: 'complex:failed',
+      deadLetterQueue: "complex:failed",
     });
 
     expect(job).toMatchObject({
-      name: 'complex-job',
+      name: "complex-job",
       retries: 3,
-      backoff: { type: 'exponential', delay: 2000 },
+      backoff: { type: "exponential", delay: 2000 },
       timeout: 30000,
       concurrency: 5,
       rateLimit: { max: 10, duration: 60000 },
-      deadLetterQueue: 'complex:failed',
+      deadLetterQueue: "complex:failed",
     });
   });
 
-  it('should work with minimal job definition (only name + handler)', () => {
+  it("should work with minimal job definition (only name + handler)", () => {
     const job = defineJob({
-      name: 'simple',
-      handler: async () => 'done',
+      name: "simple",
+      handler: async () => "done",
     });
 
-    expect(job.name).toBe('simple');
+    expect(job.name).toBe("simple");
     expect(job.timeout).toBeUndefined();
     expect(job.deadLetterQueue).toBeUndefined();
     expect(job.retries).toBeUndefined();
   });
 });
 
-describe('JobDefinition type safety', () => {
-  it('should type-check handler input and output', () => {
+describe("JobDefinition type safety", () => {
+  it("should type-check handler input and output", () => {
     const job: JobDefinition<{ orderId: string }, { shipped: boolean }> = {
-      name: 'ship-order',
+      name: "ship-order",
       handler: async (data) => {
         // data is typed as { orderId: string }
-        expect(typeof data.orderId).toBe('string');
+        expect(typeof data.orderId).toBe("string");
         return { shipped: true };
       },
       timeout: 10000,
     };
 
-    expect(job.name).toBe('ship-order');
+    expect(job.name).toBe("ship-order");
   });
 });

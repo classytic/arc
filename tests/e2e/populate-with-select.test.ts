@@ -10,22 +10,18 @@
  * 6. Response containing only selected fields from populated documents
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import mongoose from "mongoose";
-import { createApp } from "../../src/factory/createApp.js";
-import { defineResource } from "../../src/core/defineResource.js";
-import { BaseController } from "../../src/core/BaseController.js";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
-import { allowPublic, requireAuth } from "../../src/permissions/index.js";
-import { multiTenantPreset } from "../../src/presets/multiTenant.js";
 import { QueryParser, Repository } from "@classytic/mongokit";
-import type { RequestScope } from "../../src/scope/types.js";
-import {
-  setupTestDatabase,
-  teardownTestDatabase,
-  clearDatabase,
-} from "../setup.js";
 import type { FastifyInstance } from "fastify";
+import mongoose from "mongoose";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
+import { BaseController } from "../../src/core/BaseController.js";
+import { defineResource } from "../../src/core/defineResource.js";
+import { createApp } from "../../src/factory/createApp.js";
+import { requireAuth } from "../../src/permissions/index.js";
+import { multiTenantPreset } from "../../src/presets/multiTenant.js";
+import type { RequestScope } from "../../src/scope/types.js";
+import { clearDatabase, setupTestDatabase, teardownTestDatabase } from "../setup.js";
 
 const JWT_SECRET = "test-jwt-secret-must-be-at-least-32-chars-long";
 
@@ -49,9 +45,7 @@ describe("Populate with Select - E2E Integration", () => {
       if (!user) return;
 
       // Read org ID from header (like resolveOrgFromHeader does)
-      const headerOrgId = request.headers["x-organization-id"] as
-        | string
-        | undefined;
+      const headerOrgId = request.headers["x-organization-id"] as string | undefined;
       if (headerOrgId) {
         request.scope = {
           kind: "member",
@@ -78,8 +72,7 @@ describe("Populate with Select - E2E Integration", () => {
       },
       { timestamps: true },
     );
-    AuthorModel =
-      mongoose.models.TestAuthor || mongoose.model("TestAuthor", authorSchema);
+    AuthorModel = mongoose.models.TestAuthor || mongoose.model("TestAuthor", authorSchema);
 
     // Create Post model with ref to Author
     const postSchema = new mongoose.Schema(
@@ -95,8 +88,7 @@ describe("Populate with Select - E2E Integration", () => {
       },
       { timestamps: true },
     );
-    PostModel =
-      mongoose.models.TestPost || mongoose.model("TestPost", postSchema);
+    PostModel = mongoose.models.TestPost || mongoose.model("TestPost", postSchema);
 
     // Create repositories using MongoKit
     const postRepo = new Repository(PostModel);
@@ -230,8 +222,7 @@ describe("Populate with Select - E2E Integration", () => {
         },
       });
 
-      if (response.statusCode !== 200)
-        console.log("ERROR:", response.payload, response.statusCode);
+      if (response.statusCode !== 200) console.log("ERROR:", response.payload, response.statusCode);
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
       expect(payload.success).toBe(true);
@@ -336,8 +327,7 @@ describe("Populate with Select - E2E Integration", () => {
         organizationId: mongoose.Schema.Types.ObjectId,
       });
       CategoryModel =
-        mongoose.models.TestCategory ||
-        mongoose.model("TestCategory", categorySchema);
+        mongoose.models.TestCategory || mongoose.model("TestCategory", categorySchema);
 
       // Create MultiRefPost model with multiple refs
       const multiRefPostSchema = new mongoose.Schema({
@@ -350,8 +340,7 @@ describe("Populate with Select - E2E Integration", () => {
         organizationId: mongoose.Schema.Types.ObjectId,
       });
       MultiRefPostModel =
-        mongoose.models.TestMultiRefPost ||
-        mongoose.model("TestMultiRefPost", multiRefPostSchema);
+        mongoose.models.TestMultiRefPost || mongoose.model("TestMultiRefPost", multiRefPostSchema);
 
       // Create test data
       const category = await CategoryModel.create({
@@ -542,8 +531,8 @@ describe("Populate with Select - E2E Integration", () => {
 
       expect(parsed.populateOptions).toBeDefined();
       expect(parsed.populateOptions).toHaveLength(1);
-      expect(parsed.populateOptions![0].path).toBe("authorId");
-      expect(parsed.populateOptions![0].select).toBe("name email"); // Converted from comma to space
+      expect(parsed.populateOptions?.[0].path).toBe("authorId");
+      expect(parsed.populateOptions?.[0].select).toBe("name email"); // Converted from comma to space
     });
 
     it("should parse multiple populate options", () => {
@@ -559,12 +548,10 @@ describe("Populate with Select - E2E Integration", () => {
       const parsed = queryParser.parse(query);
 
       expect(parsed.populateOptions).toHaveLength(2);
-      expect(
-        parsed.populateOptions!.find((p) => p.path === "authorId")?.select,
-      ).toBe("name");
-      expect(
-        parsed.populateOptions!.find((p) => p.path === "categoryId")?.select,
-      ).toBe("name slug");
+      expect(parsed.populateOptions?.find((p) => p.path === "authorId")?.select).toBe("name");
+      expect(parsed.populateOptions?.find((p) => p.path === "categoryId")?.select).toBe(
+        "name slug",
+      );
     });
   });
 });

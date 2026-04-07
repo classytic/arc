@@ -10,11 +10,8 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import {
-  ArcDynamicLoader,
-  type ArcArchitectureSchema,
-} from "../../src/dynamic/ArcDynamicLoader.js";
 import type { DataAdapter } from "../../src/adapters/interface.js";
+import { ArcDynamicLoader } from "../../src/dynamic/ArcDynamicLoader.js";
 import { resourceToTools } from "../../src/integrations/mcp/resourceToTools.js";
 
 // ============================================================================
@@ -54,7 +51,9 @@ describe("ArcDynamicLoader — schema validation", () => {
   const { loader } = createLoader();
 
   it("throws on missing app name", () => {
-    expect(() => loader.load({ app: "", resources: [{ name: "x", permissions: "publicRead" }] })).toThrow("'app' name is required");
+    expect(() =>
+      loader.load({ app: "", resources: [{ name: "x", permissions: "publicRead" }] }),
+    ).toThrow("'app' name is required");
   });
 
   it("throws on empty resources array", () => {
@@ -62,11 +61,15 @@ describe("ArcDynamicLoader — schema validation", () => {
   });
 
   it("throws on resource without name", () => {
-    expect(() => loader.load({ app: "test", resources: [{ name: "", permissions: "publicRead" }] })).toThrow("must have a 'name'");
+    expect(() =>
+      loader.load({ app: "test", resources: [{ name: "", permissions: "publicRead" }] }),
+    ).toThrow("must have a 'name'");
   });
 
   it("throws on resource without permissions", () => {
-    expect(() => loader.load({ app: "test", resources: [{ name: "x" } as any] })).toThrow("must have 'permissions'");
+    expect(() => loader.load({ app: "test", resources: [{ name: "x" } as any] })).toThrow(
+      "must have 'permissions'",
+    );
   });
 
   it("throws on invalid field type", () => {
@@ -233,7 +236,12 @@ describe("ArcDynamicLoader — fields → schemaOptions", () => {
       ],
     });
     const rules = resource.schemaOptions?.fieldRules as Record<string, any>;
-    expect(rules.name).toEqual({ type: "string", required: true, maxLength: 200, description: "Product name" });
+    expect(rules.name).toEqual({
+      type: "string",
+      required: true,
+      maxLength: 200,
+      description: "Product name",
+    });
     expect(rules.price).toEqual({ type: "number", required: true, min: 0 });
     expect(rules.category.enum).toEqual(["a", "b", "c"]);
     expect(rules.createdAt.systemManaged).toBe(true);
@@ -286,8 +294,8 @@ describe("ArcDynamicLoader — queryParser wiring", () => {
       ],
     });
     expect(resource.queryParser).toBeDefined();
-    expect(resource.queryParser!.allowedFilterFields).toEqual(["status"]);
-    expect(resource.queryParser!.allowedSortFields).toEqual(["salary", "createdAt"]);
+    expect(resource.queryParser?.allowedFilterFields).toEqual(["status"]);
+    expect(resource.queryParser?.allowedSortFields).toEqual(["salary", "createdAt"]);
   });
 
   it("skips queryParser when no filterable/sortable", () => {
@@ -311,7 +319,7 @@ describe("ArcDynamicLoader — queryParser wiring", () => {
         },
       ],
     });
-    const parsed = resource.queryParser!.parse({ type: "click", secret: "hidden" });
+    const parsed = resource.queryParser?.parse({ type: "click", secret: "hidden" });
     expect(parsed.filters).toHaveProperty("type", "click");
     expect(parsed.filters).not.toHaveProperty("secret");
   });
@@ -376,9 +384,7 @@ describe("ArcDynamicLoader — resource config", () => {
     const { loader } = createLoader();
     const [resource] = loader.load({
       app: "test",
-      resources: [
-        { name: "doc", permissions: "publicRead", presets: ["softDelete", "bulk"] },
-      ],
+      resources: [{ name: "doc", permissions: "publicRead", presets: ["softDelete", "bulk"] }],
     });
     expect(resource._appliedPresets).toContain("softDelete");
     expect(resource._appliedPresets).toContain("bulk");
@@ -415,7 +421,11 @@ describe("ArcDynamicLoader → MCP tool generation", () => {
 
     // 5 CRUD tools
     expect(tools.map((t) => t.name)).toEqual([
-      "list_products", "get_product", "create_product", "update_product", "delete_product",
+      "list_products",
+      "get_product",
+      "create_product",
+      "update_product",
+      "delete_product",
     ]);
 
     // List tool has filterable fields
@@ -466,7 +476,7 @@ describe("ArcDynamicLoader → MCP tool generation", () => {
 
     const tools = resourceToTools(resource);
     expect(tools).toHaveLength(5);
-    expect(tools[0]!.name).toBe("list_pings");
+    expect(tools[0]?.name).toBe("list_pings");
   });
 });
 
@@ -480,19 +490,28 @@ describe("ArcDynamicLoader — multiple resources", () => {
     const resources = loader.load({
       app: "crm",
       resources: [
-        { name: "contact", permissions: "authenticated", fields: { email: "string" }, filterable: ["email"] },
-        { name: "deal", permissions: { list: "auth", create: "admin", delete: "admin" }, presets: ["softDelete"] },
+        {
+          name: "contact",
+          permissions: "authenticated",
+          fields: { email: "string" },
+          filterable: ["email"],
+        },
+        {
+          name: "deal",
+          permissions: { list: "auth", create: "admin", delete: "admin" },
+          presets: ["softDelete"],
+        },
         { name: "report", permissions: "readOnly", disabledRoutes: ["create", "update", "delete"] },
       ],
     });
 
     expect(resources).toHaveLength(3);
     expect(resolvedNames).toEqual(["contact", "deal", "report"]);
-    expect(resources[0]!.name).toBe("contact");
-    expect(resources[1]!.name).toBe("deal");
-    expect(resources[2]!.name).toBe("report");
-    expect(resources[0]!.queryParser).toBeDefined();
-    expect(resources[1]!._appliedPresets).toContain("softDelete");
-    expect(resources[2]!.disabledRoutes).toEqual(["create", "update", "delete"]);
+    expect(resources[0]?.name).toBe("contact");
+    expect(resources[1]?.name).toBe("deal");
+    expect(resources[2]?.name).toBe("report");
+    expect(resources[0]?.queryParser).toBeDefined();
+    expect(resources[1]?._appliedPresets).toContain("softDelete");
+    expect(resources[2]?.disabledRoutes).toEqual(["create", "update", "delete"]);
   });
 });

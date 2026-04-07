@@ -5,16 +5,16 @@
  * mounting work correctly without conflicts or 404s.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import mongoose from "mongoose";
 import { Repository } from "@classytic/mongokit";
-import { createApp } from "../../src/factory/createApp.js";
-import { defineResource } from "../../src/core/defineResource.js";
-import { BaseController } from "../../src/core/BaseController.js";
+import type { FastifyInstance } from "fastify";
+import mongoose from "mongoose";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
+import { BaseController } from "../../src/core/BaseController.js";
+import { defineResource } from "../../src/core/defineResource.js";
+import { createApp } from "../../src/factory/createApp.js";
 import { allowPublic } from "../../src/permissions/index.js";
 import { setupTestDatabase, teardownTestDatabase } from "../setup.js";
-import type { FastifyInstance } from "fastify";
 
 function makeResource(name: string, prefix?: string) {
   const S = new mongoose.Schema({ name: String, isActive: Boolean }, { timestamps: true });
@@ -27,8 +27,11 @@ function makeResource(name: string, prefix?: string) {
     adapter: createMongooseAdapter({ model: M, repository: r }),
     controller: new BaseController(r, { resourceName: name, tenantField: false }),
     permissions: {
-      list: allowPublic(), get: allowPublic(), create: allowPublic(),
-      update: allowPublic(), delete: allowPublic(),
+      list: allowPublic(),
+      get: allowPublic(),
+      create: allowPublic(),
+      update: allowPublic(),
+      delete: allowPublic(),
     },
   });
 }
