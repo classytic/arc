@@ -133,6 +133,44 @@ describe("EventOutbox", () => {
   });
 
   // ==========================================================================
+  // WAL skip for internal arc.* events
+  // ==========================================================================
+
+  it("should skip WAL for internal arc.* events but still publish them", async () => {
+    const Fastify = (await import("fastify")).default;
+    const { eventPlugin } = await import("../../src/events/eventPlugin.js");
+
+    const walSave = vi.fn().mockResolvedValue(undefined);
+    const walAcknowledge = vi.fn().mockResolvedValue(undefined);
+    const published: string[] = [];
+
+    const app = Fastify({ logger: false });
+    await app.register(eventPlugin, {
+      wal: { save: walSave, acknowledge: walAcknowledge },
+      onPublish: (event) => published.push(event.type),
+    });
+    await app.ready();
+
+    // Internal event — should skip WAL
+    await app.events.publish("arc.resource.registered", { name: "product" });
+    expect(walSave).not.toHaveBeenCalled();
+    expect(walAcknowledge).not.toHaveBeenCalled();
+    expect(published).toContain("arc.resource.registered");
+
+    // User event — should use WAL
+    await app.events.publish("order.created", { orderId: "123" });
+    expect(walSave).toHaveBeenCalledTimes(1);
+    expect(walAcknowledge).toHaveBeenCalledTimes(1);
+    expect(walSave.mock.calls[0][0].type).toBe("order.created");
+
+    // Another internal event
+    await app.events.publish("arc.app.ready", {});
+    expect(walSave).toHaveBeenCalledTimes(1); // still 1 — not called again
+
+    await app.close();
+  });
+
+  // ==========================================================================
   // MemoryOutboxStore
   // ==========================================================================
 

@@ -265,12 +265,20 @@ npx vitest run tests/auth/
 # Pattern match
 npx vitest run -t "permission"
 
-# Full suite (CI only — takes ~2 minutes)
-npx vitest run
+# Main suite (CI / release gate, excludes perf)
+npm run test:main
+
+# Perf / memory leak suite (isolated process, --expose-gc)
+npm run test:perf
+
+# Full CI gate
+npm run test:ci
 
 # Watch mode during development
 npx vitest tests/core/base-controller.test.ts
 ```
+
+`tests/perf/**` runs in its own lane on purpose. Keep leak/perf assertions out of the shared Vitest heap so GC noise from unrelated files does not create false failures.
 
 ### Writing Tests
 
@@ -355,7 +363,7 @@ npx biome check src/ --diagnostic-level=error        # Zero lint errors
 npx vitest run tests/path/to/changed-module/         # Targeted tests pass
 
 # Full validation (before publish or major changes)
-npx vitest run                                       # All 173 test files pass
+npm run test:ci                                      # Main suite + isolated perf suite
 npx knip                                             # No new dead code
 npm run build                                        # Clean dist output
 npm run smoke                                        # CLI and imports work
@@ -394,7 +402,7 @@ npx knip            # dead code detection
 
 1. `npx tsc --noEmit` — zero type errors
 2. `npx biome check src/ --diagnostic-level=error` — zero lint errors
-3. `npx vitest run` — all tests pass (210+ files, 2900+ tests, 0 failures)
+3. `npm run test:ci` — main suite passes and isolated perf/leak suite passes
 4. `npx knip` — review unused exports, no new dead code
 5. `npm run build` — dist/ output clean
 6. Verify subpath exports resolve:

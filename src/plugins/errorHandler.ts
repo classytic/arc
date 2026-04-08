@@ -20,6 +20,21 @@ import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from
 import fp from "fastify-plugin";
 import { isArcError } from "../utils/errors.js";
 
+/** Class-based error mapper — maps thrown error instances to HTTP responses */
+export interface ErrorMapper<T extends Error = Error> {
+  /** Error class to match (uses instanceof) */
+  type: new (
+    ...args: unknown[]
+  ) => T;
+  /** Convert the error to an HTTP response shape */
+  toResponse: (error: T) => {
+    status: number;
+    code?: string;
+    message?: string;
+    details?: Record<string, unknown>;
+  };
+}
+
 export interface ErrorHandlerOptions {
   /**
    * Include stack trace in error responses (default: false in production)
@@ -32,7 +47,7 @@ export interface ErrorHandlerOptions {
   onError?: (error: Error, request: FastifyRequest) => void | Promise<void>;
 
   /**
-   * Map specific error types to custom responses
+   * Map specific error types to custom responses (by error.name string)
    */
   errorMap?: Record<
     string,
@@ -42,6 +57,39 @@ export interface ErrorHandlerOptions {
       message?: string;
     }
   >;
+
+  /**
+   * Class-based error mappers — checked via `instanceof`, highest priority.
+   *
+   * Register your domain error classes once; Arc auto-catches and maps them
+   * in every handler. Handlers just `throw` — no try/catch needed.
+   *
+   * @example
+   * ```typescript
+   * class AccountingError extends Error {
+   *   constructor(message: string, public status: number, public code: string) {
+   *     super(message);
+   *   }
+   * }
+   *
+   * const app = await createApp({
+   *   errorHandler: {
+   *     errorMappers: [
+   *       {
+   *         type: AccountingError,
+   *         toResponse: (err) => ({ status: err.status, code: err.code, message: err.message }),
+   *       },
+   *     ],
+   *   },
+   * });
+   *
+   * // Now handlers just throw:
+   * handler: async (req) => {
+   *   await ledger.post(id); // throws AccountingError → Arc maps to proper HTTP response
+   * }
+   * ```
+   */
+  errorMappers?: ErrorMapper[];
 }
 
 interface ErrorResponse {
@@ -59,7 +107,7 @@ async function errorHandlerPluginFn(
   options: ErrorHandlerOptions = {},
 ): Promise<void> {
   const isProduction = process.env.NODE_ENV === "production";
-  const { includeStack = !isProduction, onError, errorMap = {} } = options;
+  const { includeStack = !isProduction, onError, errorMap = {}, errorMappers = [] } = options;
 
   fastify.setErrorHandler(
     async (error: FastifyError | Error, request: FastifyRequest, reply: FastifyReply) => {
@@ -74,6 +122,26 @@ async function errorHandlerPluginFn(
 
       // Get request ID if available
       const requestId = (request as { id?: string }).id;
+
+      // ── Class-based error mappers (highest priority) ──
+      // Checked first via instanceof — lets users register domain errors once
+      if (errorMappers.length > 0) {
+        for (const mapper of errorMappers) {
+          if (error instanceof mapper.type) {
+            const mapped = mapper.toResponse(error);
+            const response: ErrorResponse = {
+              success: false,
+              error: mapped.message ?? error.message,
+              code: mapped.code ?? "DOMAIN_ERROR",
+              timestamp: new Date().toISOString(),
+              ...(requestId && { requestId }),
+              ...(mapped.details && { details: mapped.details }),
+              ...(includeStack && error.stack ? { stack: error.stack } : {}),
+            };
+            return reply.code(mapped.status).send(response);
+          }
+        }
+      }
 
       // Build base response
       const response: ErrorResponse = {

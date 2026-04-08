@@ -51,7 +51,9 @@ export function buildRequestContext(
   // an authenticated Better-Auth session to a narrower service scope.
   const scope: RequestScope =
     scopeOverride && sessionScope.kind === "public" ? scopeOverride : sessionScope;
-  const user = auth ? { id: auth.userId, _id: auth.userId, ...auth } : null;
+  // Machine principals (clientId without userId) → null user.
+  // This keeps audit trails clean: ctx.user is only set for human principals.
+  const user = auth?.userId ? { id: auth.userId, _id: auth.userId, ...auth } : null;
 
   const base = {
     user: user as IRequestContext["user"],
@@ -163,14 +165,28 @@ function expandOperatorKeys(input: Record<string, unknown>): Record<string, unkn
 
 function buildScope(auth: McpAuthResult | null): RequestScope {
   if (!auth) return { kind: "public" };
+
+  // Service scope — machine-to-machine auth (clientId present, no human userId or userId is the client itself)
+  if (auth.clientId && auth.organizationId) {
+    return {
+      kind: "service",
+      clientId: auth.clientId,
+      organizationId: auth.organizationId,
+      scopes: auth.scopes,
+    };
+  }
+
+  // Member scope — human user with org context
   if (auth.organizationId) {
     return {
       kind: "member",
       userId: auth.userId,
-      userRoles: [],
+      userRoles: auth.roles ?? [],
       organizationId: auth.organizationId,
-      orgRoles: [],
+      orgRoles: auth.orgRoles ?? [],
     };
   }
-  return { kind: "authenticated", userId: auth.userId, userRoles: [] };
+
+  // Authenticated scope — human user without org context
+  return { kind: "authenticated", userId: auth.userId, userRoles: auth.roles ?? [] };
 }

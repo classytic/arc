@@ -263,12 +263,16 @@ function registerStatefulRoutes(
     opts: Record<string, unknown>,
   ) => SessionEntry["transport"] & { sessionId: string },
 ): void {
-  /** Check if the requesting user owns the session */
+  /** Check if the requesting principal owns the session */
   function isSessionOwner(entry: SessionEntry, authResult: McpAuthResult | null): boolean {
     if (!options.auth || !entry.auth || !authResult) return true;
+    const prev = entry.auth;
+    // Compare all identity fields — prevents session confusion between
+    // different service clients in the same org, and between human/machine principals.
     return (
-      entry.auth.userId === authResult.userId &&
-      entry.auth.organizationId === authResult.organizationId
+      prev.userId === authResult.userId &&
+      prev.organizationId === authResult.organizationId &&
+      prev.clientId === authResult.clientId
     );
   }
 

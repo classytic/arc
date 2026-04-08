@@ -139,7 +139,7 @@ Arc doesn't enforce an auth strategy. You choose what fits.
 await app.register(mcpPlugin, { resources, auth: false });
 ```
 
-All tools open. Every request gets `{ userId: 'anonymous' }`.
+All tools open. `ctx.user` is `null`, `scope.kind` is `"public"`. Permission guards like `!!ctx.user` correctly block — anonymous callers cannot bypass auth checks.
 
 ### 2. Better Auth OAuth 2.1 (production SaaS)
 
@@ -175,13 +175,27 @@ type McpAuthResolver = (headers: Record<string, string | undefined>) =>
   Promise<McpAuthResult | null> | McpAuthResult | null;
 ```
 
-Return `{ userId, organizationId? }` to allow. Return `null` to reject (401).
+Return `McpAuthResult` to allow. Return `null` to reject (401).
+
+**`McpAuthResult` fields:**
+- `userId?` — human user ID (optional for machine principals)
+- `organizationId?` — org scope
+- `roles?` / `orgRoles?` — user roles
+- `clientId?` — set this to produce `kind: "service"` scope (machine-to-machine)
+- `scopes?` — OAuth scopes for service accounts
 
 ```typescript
-// API key
+// Human user — API key
 auth: async (headers) => {
   if (headers['x-api-key'] !== process.env.MCP_API_KEY) return null;
-  return { userId: 'service', organizationId: 'org-123' };
+  return { userId: 'alice', organizationId: 'org-123', roles: ['admin'] };
+},
+
+// Machine principal — service account (no userId needed)
+auth: async (headers) => {
+  const key = headers['x-service-key'];
+  if (key !== process.env.SVC_KEY) return null;
+  return { clientId: 'ingestion-pipeline', organizationId: 'org-123', scopes: ['write:events'] };
 },
 
 // Gateway-validated JWT (token already verified upstream)
@@ -191,9 +205,6 @@ auth: async (headers) => {
   return userId ? { userId, organizationId: orgId } : null;
 },
 
-// Static org (trusted internal network)
-auth: async () => ({ userId: 'internal', organizationId: 'org-main' }),
-
 // Bearer token with custom validation
 auth: async (headers) => {
   const token = headers['authorization']?.replace('Bearer ', '');
@@ -202,6 +213,19 @@ auth: async (headers) => {
   return payload ? { userId: payload.sub, organizationId: payload.org } : null;
 },
 ```
+
+### Service Scope (machine-to-machine)
+
+When `clientId` is present in the auth result, Arc produces `kind: "service"` RequestScope:
+
+```
+auth resolver returns { clientId: 'pipeline-v2', organizationId: 'org-a', scopes: ['read:all'] }
+  → buildRequestContext sets _scope: { kind: 'service', clientId: 'pipeline-v2', organizationId: 'org-a', scopes: ['read:all'] }
+  → ctx.user is null (machine principals don't masquerade as users)
+  → isService(scope), getClientId(scope), getServiceScopes(scope) all work
+```
+
+When `userId` is present (without `clientId`), Arc produces `kind: "member"` or `kind: "authenticated"` as before.
 
 ### Multi-Tenancy
 

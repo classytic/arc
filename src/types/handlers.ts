@@ -237,10 +237,12 @@ export type ControllerHandler<
  * }]
  * ```
  */
-export type FastifyHandler = (
-  request: FastifyRequest,
+export type FastifyHandler<
+  RouteGeneric extends Record<string, unknown> = Record<string, unknown>,
+> = (
+  request: FastifyRequest<RouteGeneric>,
   reply: FastifyReply
-) => Promise<void> | void;
+) => Promise<unknown> | unknown;
 
 /**
  * Union type for route handlers

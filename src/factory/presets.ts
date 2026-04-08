@@ -89,11 +89,10 @@ export const productionPreset: Partial<CreateAppOptions> = {
  */
 function devLoggerConfig(): CreateAppOptions["logger"] {
   try {
-    // require.resolve throws if not installed — works in CJS and ESM
-    // biome-ignore lint: dynamic resolve check is intentional
-    const req = (eval("require") as NodeJS.Require) ?? null;
-    if (req?.resolve) {
-      req.resolve("pino-pretty");
+    // import.meta.resolve is sync in Node 20+ and doesn't load the module.
+    // This works reliably in ESM (unlike eval("require") which breaks in ESM).
+    if (typeof import.meta?.resolve === "function") {
+      import.meta.resolve("pino-pretty");
       return {
         level: "debug",
         transport: {

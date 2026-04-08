@@ -267,6 +267,75 @@ import { errorHandlerPlugin } from '@classytic/arc/plugins';
 // Auto-registered by createApp()
 ```
 
+### Error Mappers (v2.7.3)
+
+Class-based domain error → HTTP response mapping. Register once, handlers just throw:
+
+```typescript
+class AccountingError extends Error {
+  constructor(message: string, public status: number, public code: string) { super(message); }
+}
+
+const app = await createApp({
+  errorHandler: {
+    errorMappers: [{
+      type: AccountingError,
+      toResponse: (err) => ({ status: err.status, code: err.code, message: err.message }),
+    }],
+  },
+});
+// Now handlers just throw — Arc catches and maps automatically
+```
+
+Mappers are checked via `instanceof` before all other error classification. Multiple mappers supported — first match wins.
+
+## Reply Helpers (v2.7.3)
+
+Opt-in response envelope decorators: `createApp({ replyHelpers: true })`
+
+```typescript
+return reply.ok({ name: 'MacBook' });              // → 200 { success: true, data: {...} }
+return reply.ok(product, 201);                      // → 201 { success: true, data: {...} }
+return reply.fail('Not found', 404);                // → 404 { success: false, error: '...' }
+return reply.fail(['err1', 'err2'], 422);           // → 422 { success: false, errors: [...] }
+return reply.paginated({ docs, total, page, limit });
+```
+
+### Streaming Responses
+
+```typescript
+// CSV export
+return reply.stream(csvReadableStream, { contentType: 'text/csv', filename: 'export.csv' });
+// PDF download
+return reply.stream(pdfBuffer, { contentType: 'application/pdf', filename: 'report.pdf' });
+// Raw stream (Fastify native — works without reply helpers too)
+return reply.header('content-type', 'text/csv').send(readableStream);
+```
+
+### BigInt Serialization
+
+Opt-in: `createApp({ serializeBigInt: true })` — auto-converts BigInt → Number in all JSON responses.
+
+## Multipart Body Middleware (v2.7.3)
+
+Opt-in file upload support for CRUD routes — parses multipart form fields into `req.body`, attaches files to `req.body._files`:
+
+```typescript
+import { multipartBody } from '@classytic/arc/middleware';
+
+defineResource({
+  middlewares: { create: [multipartBody({ allowedMimeTypes: ['image/png'], maxFileSize: 5_000_000 })] },
+  hooks: {
+    'before:create': async (data) => {
+      if (data._files?.image) { data.imageUrl = await uploadToS3(data._files.image); delete data._files; }
+      return data;
+    },
+  },
+});
+```
+
+No-op for JSON requests — safe to always add. Options: `maxFileSize`, `maxFiles`, `allowedMimeTypes`, `filesKey`.
+
 ## Migrations
 
 ```typescript

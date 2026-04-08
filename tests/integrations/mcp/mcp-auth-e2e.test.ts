@@ -351,10 +351,10 @@ describe("Auth rejection scenarios", () => {
     expect(goodResult).toEqual({ userId: "bot", organizationId: "org-1" });
   });
 
-  it("no-auth mode always returns anonymous", async () => {
+  it("no-auth mode returns null — anonymous callers get public scope, null user", async () => {
     const { resolveMcpAuth } = await import("../../../src/integrations/mcp/authBridge.js");
     const result = await resolveMcpAuth({}, false);
-    expect(result).toEqual({ userId: "anonymous" });
+    expect(result).toBeNull();
   });
 
   it("auth resolver exception returns null (doesn't crash)", async () => {

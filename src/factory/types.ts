@@ -562,6 +562,43 @@ export interface CreateAppOptions {
     keywords?: string[];
   };
 
+  /**
+   * Enable `reply.ok()`, `reply.fail()`, `reply.paginated()` response helpers.
+   *
+   * Default: `false` (opt-in).
+   *
+   * @example
+   * ```typescript
+   * const app = await createApp({ replyHelpers: true });
+   *
+   * // Then in any handler:
+   * return reply.ok({ name: 'MacBook' });          // → 200 { success: true, data: { ... } }
+   * return reply.ok(product, 201);                  // → 201 { success: true, data: { ... } }
+   * return reply.fail('Not found', 404);            // → 404 { success: false, error: '...' }
+   * return reply.fail(['err1', 'err2'], 422);       // → 422 { success: false, errors: [...] }
+   * return reply.paginated({ docs, total, page, limit });
+   * ```
+   */
+  replyHelpers?: boolean;
+
+  /**
+   * Auto-convert BigInt values to Number in all JSON responses.
+   *
+   * When `true`, Arc adds a `preSerialization` hook that converts BigInt values
+   * to Number before JSON serialization. Without this, `JSON.stringify` throws
+   * on BigInt values (e.g., from financial libraries like fin-io).
+   *
+   * Default: `false` (opt-in — most apps don't use BigInt).
+   *
+   * @example
+   * ```typescript
+   * const app = await createApp({
+   *   serializeBigInt: true,
+   * });
+   * ```
+   */
+  serializeBigInt?: boolean;
+
   // ============================================
   // Resources & Lifecycle
   // ============================================

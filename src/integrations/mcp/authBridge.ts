@@ -38,9 +38,10 @@ export async function resolveMcpAuth(
   auth: BetterAuthHandler | McpAuthResolver | false,
   authCache?: McpAuthCache,
 ): Promise<McpAuthResult | null> {
-  // No-auth mode
+  // No-auth mode — return null so ctx.user stays null.
+  // This prevents anonymous callers from bypassing `!!ctx.user` permission guards.
   if (auth === false) {
-    return { userId: "anonymous" };
+    return null;
   }
 
   // Compute cache key once (avoids double SHA-256 hash)
@@ -72,6 +73,9 @@ export async function resolveMcpAuth(
         result = {
           userId: session.userId,
           organizationId: session.activeOrganizationId,
+          // Forward service identity fields for machine-to-machine auth
+          ...(session.clientId ? { clientId: session.clientId } : {}),
+          ...(session.scopes ? { scopes: session.scopes.split(" ") } : {}),
         };
       }
     } catch {

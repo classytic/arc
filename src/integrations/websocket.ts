@@ -44,6 +44,10 @@ export interface WebSocketClient {
   subscriptions: Set<string>;
   userId?: string;
   organizationId?: string;
+  /** OAuth client ID — present for service/machine-to-machine connections */
+  clientId?: string;
+  /** OAuth scopes — present for service/machine-to-machine connections */
+  scopes?: readonly string[];
   metadata?: Record<string, unknown>;
 }
 
@@ -64,7 +68,14 @@ export interface WebSocketPluginOptions {
   /** Heartbeat interval in ms (default: 30000). Set 0 to disable. */
   heartbeatInterval?: number;
   /** Custom authentication function for WebSocket upgrade */
-  authenticate?: (request: unknown) => Promise<{ userId?: string; organizationId?: string } | null>;
+  authenticate?: (request: unknown) => Promise<{
+    userId?: string;
+    organizationId?: string;
+    /** Set for machine-to-machine / service account auth */
+    clientId?: string;
+    /** OAuth scopes for service accounts */
+    scopes?: readonly string[];
+  } | null>;
   /** Max clients per resource subscription (default: 10000) */
   maxClientsPerRoom?: number;
   /**
@@ -415,6 +426,8 @@ const websocketPluginImpl: FastifyPluginAsync<WebSocketPluginOptions> = async (
     // Authentication
     let userId: string | undefined;
     let organizationId: string | undefined;
+    let serviceClientId: string | undefined;
+    let serviceScopes: readonly string[] | undefined;
 
     if (auth) {
       if (customAuth) {
@@ -425,6 +438,8 @@ const websocketPluginImpl: FastifyPluginAsync<WebSocketPluginOptions> = async (
         }
         userId = result.userId;
         organizationId = result.organizationId;
+        serviceClientId = result.clientId;
+        serviceScopes = result.scopes;
       } else {
         // Run fastify.authenticate to parse token and populate request.user
         // during the WebSocket handshake. Without this, request.user is never
@@ -471,6 +486,8 @@ const websocketPluginImpl: FastifyPluginAsync<WebSocketPluginOptions> = async (
       subscriptions: new Set(),
       userId,
       organizationId,
+      ...(serviceClientId ? { clientId: serviceClientId } : {}),
+      ...(serviceScopes ? { scopes: serviceScopes } : {}),
     };
 
     rooms.addClient(client);

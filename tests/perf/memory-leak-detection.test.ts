@@ -16,7 +16,7 @@
  *   - Slow leaks under specific edge cases (would need fuzzing)
  *
  * Run with `--expose-gc` for accurate measurements:
- *   node --expose-gc node_modules/vitest/vitest.mjs run tests/perf
+ *   npm run test:perf
  *
  * If `global.gc` isn't available, the test still runs but uses heuristics
  * (multiple measurements + median) to filter out GC noise.
@@ -193,9 +193,9 @@ describe("Memory leak detection — long-running workload", () => {
       `[leak] baseline=${baselineMB.toFixed(2)}MB after=${afterMB.toFixed(2)}MB delta=${deltaMB.toFixed(2)}MB perOp=${perIterationKB.toFixed(2)}KB`,
     );
 
-    // Threshold: total delta after 1000 ops should not exceed 30 MB.
-    // This allows ~30 KB per operation which is generous (real leaks compound
-    // much faster). If we ever leak meaningfully, this assertion will fire.
+    // Perf tests run in an isolated lane (`npm run test:perf`) with explicit
+    // GC exposure. That lets us keep the stricter leak threshold instead of
+    // masking regressions with a full-suite-noise allowance.
     expect(deltaMB).toBeLessThan(30);
   }, 120_000);
 
