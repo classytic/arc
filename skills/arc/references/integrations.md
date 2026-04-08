@@ -297,7 +297,7 @@ All optional, gracefully degrade:
 import { webhookPlugin } from '@classytic/arc/integrations/webhooks';
 ```
 
-Fastify plugin that auto-dispatches Arc events to customer webhook endpoints with HMAC-SHA256 signing, delivery logging, and pluggable persistence.
+Fastify plugin that auto-dispatches Arc events to customer webhook endpoints with HMAC-SHA256 signing, delivery logging, bounded concurrency, and pluggable persistence.
 
 ### Setup
 
@@ -309,6 +309,7 @@ await fastify.register(webhookPlugin, {
   store: myMongoWebhookStore,  // implements WebhookStore { getAll, save, remove }
   timeout: 5000,               // delivery timeout (default: 10000ms)
   maxLogEntries: 500,          // ring buffer cap (default: 1000)
+  concurrency: 10,             // max parallel deliveries per event (default: 5)
 });
 ```
 
@@ -338,20 +339,44 @@ await app.events.publish('order.created', { orderId: '123' });
 //   Body: { type, payload, meta }
 ```
 
-### HMAC Signing
+Deliveries run with bounded concurrency (default: 5) — one slow endpoint won't block the rest. Set `concurrency: 1` for sequential delivery.
 
-Every delivery is signed with the subscription's secret using HMAC-SHA256:
+### HMAC Signing & Verification
+
+**Outbound** — every delivery is signed with the subscription's secret:
 
 ```
 x-webhook-signature: sha256=a1b2c3...
 ```
 
-Verify on the receiving end:
+**Inbound** — verify with `verifySignature()` (timing-safe, never throws):
+
 ```typescript
-import { createHmac } from 'node:crypto';
-const expected = 'sha256=' + createHmac('sha256', secret).update(rawBody).digest('hex');
-if (expected !== req.headers['x-webhook-signature']) throw new Error('Invalid signature');
+import { verifySignature } from '@classytic/arc/integrations/webhooks';
+
+fastify.post('/webhooks/incoming', async (req, reply) => {
+  const sig = req.headers['x-webhook-signature'] as string;
+  if (!verifySignature(req.rawBody, secret, sig)) {
+    return reply.status(401).send({ error: 'Invalid signature' });
+  }
+  // handle event via req.headers['x-webhook-event']
+});
 ```
+
+Accepts `string | Buffer` body, `string | undefined` signature. Configurable for non-Arc senders:
+
+```typescript
+// GitHub (same prefix, same algorithm — works with defaults)
+verifySignature(body, secret, req.headers['x-hub-signature-256']);
+
+// Custom algorithm / bare hex
+verifySignature(body, secret, req.headers['x-custom-sig'], {
+  prefix: '',           // bare hex, no prefix
+  algorithm: 'sha512',  // non-default algorithm
+});
+```
+
+**Note:** `req.rawBody` requires `fastify-raw-body` — JSON re-serialization breaks HMAC since field ordering differs.
 
 ### Delivery Log
 

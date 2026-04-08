@@ -569,14 +569,15 @@ console.log(`Purged ${purged} old outbox events`);
 > It does **not** ship DB-specific outbox stores — that's your app's responsibility, using
 > whichever database and cleanup strategy fits your stack.
 
-## Webhooks (Outbound)
+## Webhooks (Outbound + Inbound Verification)
 
-Auto-dispatch Arc events to customer webhook endpoints with HMAC-SHA256 signing.
+Auto-dispatch Arc events to customer webhook endpoints with HMAC-SHA256 signing and bounded concurrency.
 
 ```typescript
-import { webhookPlugin } from '@classytic/arc/integrations/webhooks';
+import { webhookPlugin, verifySignature } from '@classytic/arc/integrations/webhooks';
 
-await fastify.register(webhookPlugin);
+// Outbound: auto-dispatch events to subscribers
+await fastify.register(webhookPlugin, { concurrency: 5 });
 
 await app.webhooks.register({
   id: 'wh-1',
@@ -585,9 +586,16 @@ await app.webhooks.register({
   secret: 'whsec_abc123',
 });
 
-// Events auto-dispatch — no manual wiring
 await app.events.publish('order.created', { orderId: '123' });
 // → POST https://customer.com/webhook with x-webhook-signature header
+
+// Inbound: verify signatures from other Arc services or third parties
+fastify.post('/webhooks/incoming', async (req, reply) => {
+  if (!verifySignature(req.rawBody, secret, req.headers['x-webhook-signature'])) {
+    return reply.status(401).send({ error: 'Invalid signature' });
+  }
+  // handle event
+});
 ```
 
-See [integrations reference](/docs/integrations) for WebhookStore, delivery log, and HMAC verification.
+See [integrations reference](/docs/integrations) for WebhookStore, delivery log, custom algorithms, and full verification options.

@@ -28,7 +28,7 @@
  * ```
  */
 
-import { createHmac } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
 import type { DomainEvent } from "../events/EventTransport.js";
@@ -76,6 +76,8 @@ export interface WebhookPluginOptions {
   timeout?: number;
   /** Max delivery log entries kept in memory (default: 1000) */
   maxLogEntries?: number;
+  /** Max concurrent deliveries per event (default: 5). Set to 1 for sequential. */
+  concurrency?: number;
 }
 
 export interface WebhookManager {
@@ -92,13 +94,102 @@ declare module "fastify" {
 }
 
 // ============================================================================
-// HMAC Signing
+// HMAC Signing & Verification
 // ============================================================================
 
+/**
+ * Sign a payload with HMAC-SHA256 for outbound webhook delivery.
+ *
+ * @returns `sha256=<hex>` — the format written to `x-webhook-signature`
+ */
 export function signPayload(payload: string, secret: string): string {
   const hmac = createHmac("sha256", secret);
   hmac.update(payload);
   return `sha256=${hmac.digest("hex")}`;
+}
+
+/** Options for `verifySignature` — customize for non-Arc webhook senders */
+export interface VerifySignatureOptions {
+  /**
+   * Expected prefix before the hex digest (default: `'sha256='`).
+   * Set to `''` for bare hex signatures.
+   */
+  prefix?: string;
+  /**
+   * HMAC algorithm (default: `'sha256'`).
+   * Must match what the sender uses — Arc's `signPayload` always uses sha256.
+   */
+  algorithm?: string;
+}
+
+/**
+ * Verify an inbound webhook signature using timing-safe comparison.
+ *
+ * Works with Arc's own `signPayload` format by default (`sha256=<hex>`),
+ * but configurable for any HMAC scheme via options.
+ *
+ * @param body      - Raw request body (string or Buffer — must be the exact bytes the sender signed)
+ * @param secret    - Shared secret between sender and receiver
+ * @param signature - The signature header value (e.g. `req.headers['x-webhook-signature']`)
+ * @param options   - Override prefix/algorithm for non-Arc senders
+ * @returns `true` if valid, `false` otherwise — never throws
+ *
+ * @example
+ * ```typescript
+ * import { verifySignature } from '@classytic/arc/integrations/webhooks';
+ *
+ * // Arc-to-Arc (default headers + format)
+ * fastify.post('/webhooks/incoming', async (req, reply) => {
+ *   const sig = req.headers['x-webhook-signature'] as string;
+ *   if (!verifySignature(req.rawBody, secret, sig)) {
+ *     return reply.status(401).send({ error: 'Invalid signature' });
+ *   }
+ *   // handle event via req.headers['x-webhook-event']
+ * });
+ *
+ * // Third-party sender with custom header + bare hex
+ * const valid = verifySignature(body, secret, req.headers['x-hub-signature'], {
+ *   prefix: 'sha256=',  // GitHub format
+ * });
+ *
+ * // Stripe-style (bare hex, different header)
+ * const valid = verifySignature(body, stripeSecret, req.headers['stripe-signature'], {
+ *   prefix: '',
+ * });
+ * ```
+ */
+export function verifySignature(
+  body: string | Buffer,
+  secret: string,
+  signature: string | undefined,
+  options?: VerifySignatureOptions,
+): boolean {
+  if (!signature) return false;
+
+  const prefix = options?.prefix ?? "sha256=";
+  const algorithm = options?.algorithm ?? "sha256";
+
+  // Validate prefix
+  if (prefix && !signature.startsWith(prefix)) return false;
+
+  const providedHex = signature.slice(prefix.length);
+  if (!providedHex) return false;
+
+  // Compute expected
+  const hmac = createHmac(algorithm, secret);
+  hmac.update(typeof body === "string" ? body : body);
+  const expectedHex = hmac.digest("hex");
+
+  // Length check before timing-safe compare (lengths leaking is acceptable —
+  // a wrong-length hex is already an invalid signature, not a partial match)
+  if (providedHex.length !== expectedHex.length) return false;
+
+  try {
+    return timingSafeEqual(Buffer.from(providedHex, "hex"), Buffer.from(expectedHex, "hex"));
+  } catch {
+    // Malformed hex → not a valid signature
+    return false;
+  }
 }
 
 // ============================================================================
@@ -150,6 +241,7 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
   const fetchFn = opts.fetch ?? globalThis.fetch;
   const timeout = opts.timeout ?? 10000;
   const maxLogEntries = opts.maxLogEntries ?? 1000;
+  const concurrency = opts.concurrency ?? 5;
 
   // In-memory cache of subscriptions (loaded from store on init)
   let subscriptions: WebhookSubscription[] = [];
@@ -172,7 +264,9 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
       meta: event.meta,
     });
 
-    for (const sub of matching) {
+    // Bounded concurrency — one slow endpoint doesn't block the rest.
+    // Default: 5 concurrent deliveries. Set concurrency: 1 for sequential.
+    async function deliverToSubscription(sub: WebhookSubscription): Promise<void> {
       const record: WebhookDeliveryRecord = {
         subscriptionId: sub.id,
         eventType: event.type,
@@ -183,8 +277,8 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
       try {
         const signature = signPayload(body, sub.secret);
 
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeout);
+        const ac = new AbortController();
+        const timer = setTimeout(() => ac.abort(), timeout);
 
         try {
           const response = await fetchFn(sub.url, {
@@ -196,7 +290,7 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
               "x-webhook-event": event.type,
             },
             body,
-            signal: controller.signal,
+            signal: ac.signal,
           });
 
           record.success = response.ok;
@@ -214,14 +308,24 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
         log.splice(0, log.length - maxLogEntries);
       }
     }
+
+    // Execute with bounded concurrency
+    const pending = [...matching];
+    while (pending.length > 0) {
+      const batch = pending.splice(0, concurrency);
+      await Promise.allSettled(batch.map(deliverToSubscription));
+    }
   }
 
   // -------------------------------------------------------------------
   // Auto-subscribe to Arc events (wildcard — we filter internally)
+  // Track unsubscribe handle for lifecycle cleanup (mirrors websocket.ts)
   // -------------------------------------------------------------------
 
+  let unsubscribe: (() => void) | undefined;
+
   if (fastify.events) {
-    await fastify.events.subscribe("*", dispatchEvent);
+    unsubscribe = await fastify.events.subscribe("*", dispatchEvent);
   }
 
   // -------------------------------------------------------------------
@@ -252,6 +356,15 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
   };
 
   fastify.decorate("webhooks", manager);
+
+  // Cleanup on server close — release wildcard listener to prevent leaks
+  // in hot-reload, test runners, or multi-app processes
+  fastify.addHook("onClose", async () => {
+    if (unsubscribe) {
+      unsubscribe();
+      unsubscribe = undefined;
+    }
+  });
 };
 
 export default fp(webhookPlugin, {
