@@ -1,6 +1,6 @@
 {
   "name": "@classytic/arc",
-  "version": "2.7.2",
+  "version": "2.7.3",
   "description": "Resource-oriented backend framework for Fastify — clean, minimal, powerful, tree-shakable",
   "type": "module",
   "exports": {
@@ -212,13 +212,16 @@
     "lint:fix": "biome check --fix src/",
     "lint:all": "biome check src/ tests/",
     "test": "vitest run",
+    "test:main": "vitest run",
+    "test:perf": "node --expose-gc ./node_modules/vitest/vitest.mjs run --config vitest.perf.config.ts",
+    "test:ci": "npm run test:main && npm run test:perf",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run tests/e2e",
     "test:unit": "vitest run tests/core tests/hooks tests/utils tests/plugins",
     "smoke": "node scripts/smoke-test.mjs",
-    "prepublishOnly": "npm run typecheck && npm test && npm run build && npm run smoke"
+    "prepublishOnly": "npm run typecheck && npm run test:ci && npm run build && npm run smoke"
   },
   "engines": {
     "node": ">=22"

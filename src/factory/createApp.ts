@@ -237,6 +237,30 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   // ── 7–11. Resources lifecycle (plugins → bootstrap → resources → after → hooks) ──
   await registerResources(fastify, config);
 
+  // ── Reply helpers (opt-in) ──
+  if (config.replyHelpers) {
+    const { replyHelpersPlugin } = await import("../plugins/replyHelpers.js");
+    await fastify.register(replyHelpersPlugin);
+  }
+
+  // ── BigInt serialization (opt-in) ──
+  if (config.serializeBigInt) {
+    fastify.addHook("preSerialization", async (_request, _reply, payload) => {
+      if (payload === null || payload === undefined) return payload;
+      // Fast path: only transform if the payload actually contains BigInt
+      // JSON.stringify with a replacer handles nested values efficiently
+      try {
+        return JSON.parse(
+          JSON.stringify(payload, (_key, value) =>
+            typeof value === "bigint" ? Number(value) : value,
+          ),
+        );
+      } catch {
+        return payload;
+      }
+    });
+  }
+
   // ── Log summary ──
   const authMode = config.auth === false ? "none" : config.auth ? config.auth.type : "none";
   fastify.log.info(

@@ -181,11 +181,17 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
       }
 
       try {
-        if (wal) {
+        // Skip WAL for internal lifecycle events (arc.*) — these are fire-and-forget
+        // and don't need at-least-once delivery guarantees. With a durable WAL store
+        // (e.g. MongoDB), each save() is an awaited DB write. For apps with many
+        // resources, WAL-ing every arc.resource.registered during startup can exhaust
+        // Fastify's plugin timeout window.
+        const isInternalEvent = type.startsWith("arc.");
+        if (wal && !isInternalEvent) {
           await wal.save(event);
         }
         await transport.publish(event);
-        if (wal?.acknowledge) {
+        if (wal?.acknowledge && !isInternalEvent) {
           await wal.acknowledge(event.meta.id);
         }
         onPublish?.(event);

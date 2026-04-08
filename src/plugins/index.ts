@@ -57,6 +57,8 @@ export {
   default as metricsPlugin,
   metricsPlugin as metricsPluginFn,
 } from "./metrics.js";
+// Reply helpers (response envelope decorators)
+export { replyHelpersPlugin } from "./replyHelpers.js";
 export type { RequestIdOptions } from "./requestId.js";
 // Request ID for distributed tracing
 export {

@@ -237,12 +237,28 @@ export interface McpSession {
 
 /** Resolved auth identity for a single MCP request */
 export interface McpAuthResult {
-  userId: string;
+  /**
+   * Human user ID. Optional for service/machine principals — when `clientId`
+   * is set and `userId` is omitted, the principal is purely machine-identity
+   * and `ctx.user` will be `null` (not a synthetic user object).
+   */
+  userId?: string;
   organizationId?: string;
   /** User roles (global) — used by guard helpers like requireRole() */
   roles?: string[];
   /** Org-level roles — used by guard helpers */
   orgRoles?: string[];
+  /**
+   * OAuth client ID — set this to enable `kind: "service"` scope.
+   * When present, buildRequestContext produces a service scope instead
+   * of member/authenticated, enabling `requireServiceScope()` checks.
+   */
+  clientId?: string;
+  /**
+   * OAuth scopes (e.g. `['read:products', 'write:orders']`).
+   * Carried on the `service` RequestScope for fine-grained permission checks.
+   */
+  scopes?: readonly string[];
   /** Any extra metadata from the auth resolver */
   [key: string]: unknown;
 }

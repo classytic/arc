@@ -1,8 +1,8 @@
 # @classytic/arc
 
-Database-agnostic resource framework for Fastify. Define resources, get CRUD routes, permissions, presets, caching, events, and OpenAPI — without boilerplate.
+Database-agnostic resource framework for Fastify. Define resources, get CRUD routes, permissions, presets, caching, events, OpenAPI, and MCP tools — without boilerplate.
 
-**Requires:** Fastify 5+ | Node.js 22+ | ESM only
+**v2.7.3** | Fastify 5+ | Node.js 22+ | ESM only | 260+ test files, 3523+ tests
 
 ## Install
 
@@ -690,8 +690,20 @@ npx @classytic/arc doctor                                        # Health check
 | `@classytic/arc/integrations/websocket` | WebSocket |
 | `@classytic/arc/integrations/event-gateway` | Unified SSE + WebSocket gateway |
 | `@classytic/arc/integrations/streamline` | Workflow orchestration |
+| `@classytic/arc/mcp` | MCP tools for AI agents |
 | `@classytic/arc/docs` | OpenAPI generation |
 | `@classytic/arc/cli` | CLI commands (programmatic) |
+
+## v2.7.3 Highlights
+
+- **MCP Integration** — expose resources as AI agent tools (stateless by default, service scope, multi-tenancy)
+- **Reply Helpers** — `reply.ok()`, `reply.fail()`, `reply.paginated()`, `reply.stream()` (opt-in)
+- **Error Mappers** — class-based `instanceof` domain error → HTTP response mapping
+- **Multipart Body** — `multipartBody()` middleware for file upload in CRUD routes
+- **Service Scope** — `kind: "service"` RequestScope for machine-to-machine auth (MCP + WebSocket)
+- **BigInt Serialization** — `serializeBigInt: true` auto-converts BigInt → Number
+- **Event WAL** — skips internal `arc.*` events to prevent startup timeout with durable stores
+- **Security** — `auth: false` produces null `ctx.user` (prevents anonymous bypass of `!!ctx.user` guards)
 
 ## License
 

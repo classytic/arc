@@ -8,14 +8,16 @@
 **@classytic/arc** — Resource-oriented backend framework on Fastify.
 One `defineResource()` → REST API + auth + permissions + events + caching + OpenAPI + MCP.
 
-**v2.6.2** | Node.js 22+ | TypeScript 6+ | ESM-only | Fastify 5+ | 215+ test files, 3035+ tests
+**v2.7.3** | Node.js 22+ | TypeScript 6+ | ESM-only | Fastify 5+ | 260+ test files, 3523+ tests
 
 ## Commands
 
 ```bash
 npx tsc --noEmit                                  # Typecheck
 npx biome check src/ --diagnostic-level=error      # Lint (Biome only, no ESLint)
-npx vitest run                                     # Full test suite
+npm run test:main                                  # Main test suite (excludes perf)
+npm run test:perf                                  # Isolated perf/leak suite (--expose-gc)
+npm run test:ci                                    # Main suite + perf suite
 npx vitest run tests/core/base-controller.test.ts  # Targeted test
 npx knip                                           # Dead code detection
 npm run build                                      # tsdown → dist/
@@ -68,7 +70,7 @@ npm run smoke                                      # Verify CLI + imports
 | `src/logger/*` | `npx vitest run tests/logger/` |
 | `src/rpc/*` | `npx vitest run tests/rpc/` |
 
-**Never run the full suite during dev** — use targeted tests. CI catches cross-cutting issues.
+**Never run the full suite during dev** — use targeted tests. `test:ci` is for release/CI; perf tests run separately on purpose to avoid GC-noise flakes.
 
 ## Architecture (32 modules)
 
@@ -85,7 +87,7 @@ src/
   cache/         — QueryCache, stores, SWR
   plugins/       — health, tracing, requestId, response-cache, versioning, rate-limit, metrics, SSE
   policies/      — row-level security, field masking
-  integrations/  — jobs (BullMQ), websocket, SSE, MCP, webhooks
+  integrations/  — jobs (BullMQ), websocket, SSE, MCP (stateless/stateful, service scope), webhooks
   migrations/    — MigrationRunner + MigrationStore (DB-agnostic)
   cli/           — init (3434L), generate, doctor, describe, introspect, docs
   testing/       — HttpTestHarness, mocks, auth helpers
@@ -94,7 +96,7 @@ src/
   types/         — shared types (1443L), Fastify declaration merges
   schemas/       — JSON Schema from field rules
   pipeline/      — guard, pipe, intercept, transform
-  middleware/    — request-level middleware
+  middleware/    — request-level middleware, multipartBody (file upload for CRUD)
   org/           — organization plugin, membership
   audit/         — audit trail plugin + stores
   idempotency/   — idempotency plugin + stores
@@ -114,6 +116,9 @@ src/
 3. Redis Streams are at-least-once — handlers must be idempotent
 4. `select` is never normalized to string — preserved as-is for DB agnosticism
 5. Type-only subpaths (`./org/types`) produce `export {}` at runtime — correct
+6. MCP `auth: false` → `ctx.user` is `null` (not `"anonymous"`) — permission guards work correctly
+7. Event WAL skips `arc.*` internal events — prevents startup timeout with durable WAL stores
+8. `multipartBody()` is a no-op for JSON requests — safe to always add to create/update middlewares
 6. Event publishing is fire-and-forget (`failOpen: true`) — use outbox for guaranteed delivery
 7. Presets compose but order matters — test combinations
 

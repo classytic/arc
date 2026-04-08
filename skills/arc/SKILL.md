@@ -8,7 +8,7 @@ description: |
   Triggers: arc, fastify resource, defineResource, createApp, BaseController, arc preset,
   arc auth, arc events, arc jobs, arc websocket, arc mcp, arc plugin, arc testing, arc cli,
   arc permissions, arc hooks, arc pipeline, arc factory, arc cache, arc QueryCache.
-version: 2.7.1
+version: 2.7.3
 license: MIT
 metadata:
   author: Classytic
@@ -748,13 +748,25 @@ Connect Claude CLI: `claude mcp add --transport http my-api http://localhost:300
 **Auth** — three modes, user chooses: `false` | `getAuth()` (Better Auth OAuth 2.1) | custom function:
 
 ```typescript
+// Human user auth
 auth: async (headers) => {
   if (headers['x-api-key'] !== process.env.MCP_KEY) return null;
   return { userId: 'bot', organizationId: 'org-1', roles: ['admin'] };
 },
+
+// Service account / machine-to-machine (produces kind: "service" scope)
+auth: async (headers) => ({
+  clientId: 'ingestion-pipeline',
+  organizationId: 'org-1',
+  scopes: ['read:products', 'write:events'],
+}),
 ```
 
+`auth: false` → `ctx.user` is `null`, `scope.kind` is `"public"`. Permission guards like `!!ctx.user` correctly block anonymous callers.
+
 **Guards** for custom tools: `guard(requireAuth, requireOrg, requireRole('admin'), handler)`
+
+**Service scope**: When `clientId` is set in auth result, MCP produces `kind: "service"` RequestScope — works with `requireServiceScope()`, `getClientId()`, `getServiceScopes()`. No synthetic userId needed for machine principals.
 
 **Multi-tenancy**: `organizationId` from auth flows into BaseController org-scoping automatically.
 
@@ -880,6 +892,55 @@ additionalRoutes: [{ preAuth: [(req) => { req.headers.authorization = `Bearer ${
 // SSE streaming — auto headers + bypasses response wrapper
 additionalRoutes: [{ streamResponse: true, handler: async (req, reply) => reply.send(stream) }]
 ```
+
+## DX Helpers (v2.7.3)
+
+**Reply helpers** — consistent response envelopes (opt-in via `createApp({ replyHelpers: true })`):
+
+```typescript
+return reply.ok({ name: 'MacBook' });              // → 200 { success: true, data: {...} }
+return reply.ok(product, 201);                      // → 201 { success: true, data: {...} }
+return reply.fail('Not found', 404);                // → 404 { success: false, error: '...' }
+return reply.fail(['err1', 'err2'], 422);           // → 422 { success: false, errors: [...] }
+return reply.paginated({ docs, total, page, limit });
+return reply.stream(csvReadable, { contentType: 'text/csv', filename: 'export.csv' });
+```
+
+**Error mappers** — class-based domain error → HTTP response (in `errorHandler` options):
+
+```typescript
+const app = await createApp({
+  errorHandler: {
+    errorMappers: [{
+      type: AccountingError,
+      toResponse: (err) => ({ status: err.status, code: err.code, message: err.message }),
+    }],
+  },
+});
+// Handlers just throw — Arc catches and maps automatically
+```
+
+**BigInt serialization** — opt-in via `createApp({ serializeBigInt: true })`. Converts BigInt → Number in all JSON responses.
+
+**Multipart body middleware** — opt-in file upload for CRUD routes:
+
+```typescript
+import { multipartBody } from '@classytic/arc/middleware';
+
+defineResource({
+  name: 'product',
+  adapter,
+  middlewares: { create: [multipartBody({ allowedMimeTypes: ['image/png', 'image/jpeg'], maxFileSize: 5 * 1024 * 1024 })] },
+  hooks: {
+    'before:create': async (data) => {
+      if (data._files?.image) { data.imageUrl = await uploadToS3(data._files.image); delete data._files; }
+      return data;
+    },
+  },
+});
+```
+
+`multipartBody()` is a no-op for JSON requests — safe to always add.
 
 ## Subpath Imports
 
