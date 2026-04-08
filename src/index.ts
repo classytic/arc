@@ -116,6 +116,7 @@ export type { BaseControllerOptions } from "./core/index.js";
 export {
   BaseController,
   defineResource,
+  defineResourceVariants,
   getControllerScope,
   ResourceDefinition,
 } from "./core/index.js";
@@ -187,11 +188,17 @@ export {
   publicReadAdminWrite,
   readOnly,
   requireAuth,
+  // Parent-child org hierarchy (holding → subsidiary → branch, MSP, white-label)
+  requireOrgInScope,
   // Organization permissions
   requireOrgMembership,
   requireOrgRole,
   requireOwnership,
   requireRoles,
+  // App-defined scope dimensions (branch, project, region, workspace, ...)
+  requireScopeContext,
+  // Service / API key scopes (OAuth-style)
+  requireServiceScope,
   requireTeamMembership,
   when,
 } from "./permissions/index.js";

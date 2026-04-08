@@ -1,6 +1,9 @@
 # Org Module
 
-Multi-tenant organization scoping for SaaS applications.
+Multi-tenant organization scoping for SaaS applications. Covers everything
+from single-org isolation to multi-dimension tenancy (org + branch + project),
+parent-child organization hierarchies, and mixed human + API-key authorization
+on the same routes.
 
 ## Quick Start
 
@@ -8,7 +11,13 @@ Multi-tenant organization scoping for SaaS applications.
 import { createApp } from '@classytic/arc/factory';
 import { createBetterAuthAdapter } from '@classytic/arc/auth';
 import { defineResource } from '@classytic/arc';
-import { requireOrgMembership, requireOrgRole } from '@classytic/arc/permissions';
+import {
+  allOf, anyOf,
+  requireOrgMembership, requireOrgRole,
+  requireServiceScope,    // OAuth-style scope strings for API keys
+  requireScopeContext,    // app-defined dimensions (branch, project, region)
+  requireOrgInScope,      // parent-child org hierarchies
+} from '@classytic/arc/permissions';
 
 const app = await createApp({
   preset: 'production',
@@ -25,8 +34,16 @@ const orderResource = defineResource({
   name: 'order',
   presets: ['multiTenant'],
   permissions: {
+    // Any org-bound caller — member, service (API key), or elevated admin
     list: requireOrgMembership(),
-    create: requireOrgRole('admin', 'editor'),
+
+    // Human admins OR API keys with the right OAuth scope
+    create: anyOf(
+      requireOrgRole('admin', 'editor'),
+      requireServiceScope('orders:write'),
+    ),
+
+    // Strictly humans
     delete: requireOrgRole('admin'),
   },
 });
@@ -36,45 +53,95 @@ await app.register(orderResource.toPlugin());
 
 ## Request Scope
 
-Every request has a `request.scope` field — a discriminated union that replaces scattered org context fields.
+Every request has a `request.scope` field — a discriminated union that
+replaces scattered org context fields. **Five kinds**, all opt-in:
 
 ```typescript
 import type { RequestScope } from '@classytic/arc/scope';
 
 type RequestScope =
-  | { kind: 'public' }                                          // No auth
-  | { kind: 'authenticated' }                                   // Logged in, no org
-  | { kind: 'member'; organizationId: string; orgRoles: string[]; teamId?: string }
-  | { kind: 'elevated'; organizationId?: string; elevatedBy: string }
+  | { kind: 'public' }
+  | { kind: 'authenticated'; userId?: string; userRoles?: string[] }
+  | {
+      kind: 'member';
+      userId?: string;
+      userRoles: string[];
+      organizationId: string;
+      orgRoles: string[];
+      teamId?: string;
+      /** App-defined dimensions: branch, project, region, workspace, … */
+      context?: Readonly<Record<string, string>>;
+      /** Parent orgs (closest-first) for hierarchy checks */
+      ancestorOrgIds?: readonly string[];
+    }
+  | {
+      kind: 'service';
+      clientId: string;
+      organizationId: string;
+      /** OAuth-style scope strings, e.g. ['orders:read', 'orders:write'] */
+      scopes?: readonly string[];
+      context?: Readonly<Record<string, string>>;
+      ancestorOrgIds?: readonly string[];
+    }
+  | {
+      kind: 'elevated';
+      userId?: string;
+      organizationId?: string;
+      elevatedBy: string;
+      context?: Readonly<Record<string, string>>;
+      ancestorOrgIds?: readonly string[];
+    };
 ```
 
-| Kind | Meaning | When |
-|------|---------|------|
-| `public` | No authentication | Anonymous request |
-| `authenticated` | Logged in, no org context | No active org selected |
-| `member` | Org member with roles | User has valid org membership |
-| `elevated` | Platform admin override | Explicit elevation header sent |
+| Kind | Identity | Org context | Set by |
+|------|----------|-------------|--------|
+| `public` | none | none | Default for anonymous requests |
+| `authenticated` | userId, userRoles | none | Logged in but no active org selected |
+| `member` | userId, userRoles | organizationId + orgRoles (+ teamId, context, ancestorOrgIds) | Better Auth org plugin / JWT custom auth |
+| `service` | clientId, scopes | organizationId (required) | API-key auth via `PermissionResult.scope` |
+| `elevated` | userId | organizationId optional | Platform admin via `x-arc-scope: platform` header + elevation plugin |
 
-### Type Guards
+### Type Guards & Accessors
 
 ```typescript
-import { isMember, isElevated, getOrgId, getOrgRoles, hasOrgAccess } from '@classytic/arc/scope';
+import {
+  // Type guards
+  isMember, isService, isElevated, isAuthenticated, hasOrgAccess,
+  // Identity / org accessors
+  getUserId, getUserRoles, getOrgId, getOrgRoles, getTeamId, getClientId,
+  // Service scopes
+  getServiceScopes,
+  // App-defined dimensions
+  getScopeContext, getScopeContextMap,
+  // Parent-child hierarchy
+  getAncestorOrgIds, isOrgInScope,
+} from '@classytic/arc/scope';
 
-// In a controller or permission check
 const scope = request.scope;
 
 if (isElevated(scope)) {
-  // Platform admin — full access
+  // Platform admin — typically full access
 }
 
-if (isMember(scope)) {
-  const orgId = scope.organizationId;
-  const roles = scope.orgRoles;
+if (hasOrgAccess(scope)) {
+  // member, service, or elevated — anything that carries an organizationId
+  const orgId = getOrgId(scope);
 }
 
-// Convenience: works for both member and elevated
-const orgId = getOrgId(scope);     // string | undefined
-const roles = getOrgRoles(scope);  // string[] (empty for non-member)
+if (isService(scope)) {
+  const clientId = getClientId(scope);          // string
+  const grantedScopes = getServiceScopes(scope); // readonly string[]
+}
+
+// Custom dimensions populated by your auth function
+const branchId = getScopeContext(scope, 'branchId');
+const allDimensions = getScopeContextMap(scope); // Readonly<Record<string,string>> | undefined
+
+// Parent-child checks
+const ancestors = getAncestorOrgIds(scope);     // readonly string[] (always)
+if (isOrgInScope(scope, 'acme-holding')) {
+  // current org is acme-holding OR acme-holding appears in ancestorOrgIds
+}
 ```
 
 ### Scope in Controllers
@@ -89,12 +156,13 @@ class OrderController extends BaseController {
   async getStats(req: IRequestContext): Promise<IControllerResponse> {
     const scope = getControllerScope(req);
 
-    if (scope.kind !== 'member') {
-      return { success: false, error: 'Org membership required', status: 403 };
+    // Accept member, service, or elevated — anything with org context
+    if (!hasOrgAccess(scope)) {
+      return { success: false, error: 'Org context required', status: 403 };
     }
 
     const stats = await Order.aggregate([
-      { $match: { organizationId: scope.organizationId } },
+      { $match: { organizationId: getOrgId(scope) } },
       { $group: { _id: '$status', count: { $sum: 1 } } },
     ]);
 
@@ -109,18 +177,23 @@ class OrderController extends BaseController {
 
 When `orgContext: true`, the adapter:
 1. Resolves the user's session
-2. Looks up active organization membership
+2. Looks up active organization membership (and team, if the BA `teams` plugin is enabled)
 3. Sets `request.scope` based on the result:
 
 ```
-No session                   → { kind: 'public' }
-Session, no active org       → { kind: 'authenticated' }
-Session + org membership     → { kind: 'member', organizationId, orgRoles }
+No session                       → { kind: 'public' }
+Session, no active org           → { kind: 'authenticated' }
+Session + org membership         → { kind: 'member', organizationId, orgRoles, teamId? }
 ```
+
+The Better Auth adapter does NOT populate `context` or `ancestorOrgIds` —
+those are app-defined and you set them yourself in a downstream auth hook
+(see below).
 
 ### JWT Auth
 
-For JWT apps, scope defaults to `authenticated` for logged-in users. Use the `resolveOrgFromHeader` utility for org header resolution:
+For JWT apps, scope defaults to `authenticated` for logged-in users. Use the
+`resolveOrgFromHeader` utility for org header resolution:
 
 ```typescript
 import { resolveOrgFromHeader } from '@classytic/arc/scope';
@@ -133,22 +206,129 @@ app.addHook('onRequest', resolveOrgFromHeader({
 }));
 ```
 
-## Automatic Data Filtering
+### API Key Auth (service scope)
 
-With `multiTenant` preset, queries are automatically filtered by org:
+Custom API-key authentication ships scope through the permission layer using
+`PermissionResult.scope` — no separate auth plugin required:
 
 ```typescript
-// GET /orders (user in org-123)
-// request.scope = { kind: 'member', organizationId: 'org-123', orgRoles: ['admin'] }
-// Internally: repository.findAll({ filter: { organizationId: 'org-123' } })
+import type { PermissionCheck } from '@classytic/arc/permissions';
 
-// POST /orders (user in org-123)
-// Automatically sets: data.organizationId = 'org-123'
+export function requireApiKey(): PermissionCheck {
+  return async ({ request }) => {
+    const apiKey = request.headers['x-api-key'] as string | undefined;
+    if (!apiKey) return { granted: false, reason: 'Missing API key' };
+
+    const client = await ClientModel.findOne({ apiKey });
+    if (!client) return { granted: false, reason: 'Invalid API key' };
+
+    return {
+      granted: true,
+      // Install service scope — Arc writes this onto request.scope and
+      // the multiTenantPreset filter picks it up automatically.
+      scope: {
+        kind: 'service',
+        clientId: String(client._id),
+        organizationId: String(client.companyId),
+        scopes: client.allowedScopes,  // ['orders:read', 'orders:write']
+      },
+    };
+  };
+}
+
+// Then compose with org membership and OAuth-style scope checks
+permissions: {
+  list:   allOf(requireApiKey(), requireOrgMembership(), requireServiceScope('orders:read')),
+  create: allOf(requireApiKey(), requireOrgMembership(), requireServiceScope('orders:write')),
+}
 ```
 
-For elevated scope:
-- `elevated` + `organizationId` → filter by that org (admin viewing specific org)
-- `elevated` + no `organizationId` → no filter (admin viewing all orgs)
+### Adding Custom Dimensions and Ancestors
+
+For routes that need branch/project/region scoping or parent-child
+hierarchy, populate `context` and `ancestorOrgIds` in your own auth hook
+(arc takes no position on the source — read from JWT claims, request
+headers, or your own DB):
+
+```typescript
+app.addHook('onRequest', async (request) => {
+  if (!request.scope || request.scope.kind !== 'member') return;
+
+  // Read from headers, claims, or your own data model
+  const branchId = request.headers['x-branch-id'] as string | undefined;
+  const projectId = request.headers['x-project-id'] as string | undefined;
+  const ancestors = await orgRepo.findAncestors(request.scope.organizationId);
+
+  // Replace scope with the enriched version (cast through unknown to bypass
+  // the readonly contract on context — your hook owns scope construction)
+  (request as { scope: typeof request.scope }).scope = {
+    ...request.scope,
+    context: { branchId, projectId } as Readonly<Record<string, string>>,
+    ancestorOrgIds: ancestors.map(a => a.id),
+  };
+});
+```
+
+## Automatic Data Filtering
+
+With the `multiTenant` preset, queries are automatically filtered by tenant
+fields. The preset supports two modes — single-field for the common case,
+multi-field for branch/project/region scoping in lockstep.
+
+### Single-field (default)
+
+```typescript
+import { multiTenantPreset } from '@classytic/arc/presets';
+
+multiTenantPreset({ tenantField: 'organizationId' })
+
+// GET /orders (caller in org-123)
+// → repository.findAll({ filter: { organizationId: 'org-123' } })
+
+// POST /orders (caller in org-123)
+// → request.body.organizationId = 'org-123'
+```
+
+Works identically for `member`, `service`, and `elevated` callers — all
+three carry an `organizationId` and the preset filters by it via
+`hasOrgAccess()`.
+
+### Multi-field (branch / project / region / team)
+
+```typescript
+multiTenantPreset({
+  tenantFields: [
+    { field: 'organizationId', type: 'org' },              // → getOrgId(scope)
+    { field: 'teamId',         type: 'team' },             // → getTeamId(scope)
+    { field: 'branchId',       contextKey: 'branchId' },   // → getScopeContext(scope, 'branchId')
+    { field: 'projectId',      contextKey: 'projectId' },
+  ],
+})
+```
+
+Each entry is a `TenantFieldSpec`:
+- `{ field, type: 'org' }` — reads `getOrgId(scope)`
+- `{ field, type: 'team' }` — reads `getTeamId(scope)`
+- `{ field, contextKey: '...' }` — reads `getScopeContext(scope, contextKey)`
+
+**Fail-closed semantics**: if any required dimension is missing from the
+caller's scope, list/get/update/delete return 403 with the specific missing
+field name in the error message; create is rejected. Elevated scopes apply
+whatever resolves and skip the rest (cross-context admin bypass).
+
+`tenantField` and `tenantFields` are mutually exclusive — passing both
+throws at preset construction.
+
+### Elevated and service scope behavior
+
+| Scope kind | Filter behavior |
+|---|---|
+| `member` | Filter by `scope.organizationId` (+ all configured dimensions) |
+| `service` | Same as member — API key with org context gets the same isolation |
+| `elevated` + `organizationId` | Filter by that org (admin viewing one org) |
+| `elevated` + no `organizationId` | No filter (admin viewing all orgs cross-tenant) |
+| `public` | 401 (strict) or fall-through (allowPublic mode) |
+| `authenticated` (no org) | 403 |
 
 ## Elevation Plugin (Platform Admin)
 
@@ -211,16 +391,48 @@ fastify.post('/orders', {
 
 ```typescript
 import {
+  // Org membership / roles
   requireOrgMembership,
   requireOrgRole,
+  requireTeamMembership,
+  // OAuth-style API key scopes
+  requireServiceScope,
+  // App-defined scope dimensions (branch, project, region, …)
+  requireScopeContext,
+  // Parent-child org hierarchy
+  requireOrgInScope,
+  // Static role × resource × action matrix
   createOrgPermissions,
+  // Combinators
+  allOf, anyOf, when,
 } from '@classytic/arc/permissions';
 
-// Any org member
+// Any org-bound caller — member, service, or elevated
 requireOrgMembership()
 
-// Specific org role(s) — ANY-match logic
+// Specific org role(s) — ANY-match logic. HUMAN-ONLY: services explicitly
+// fail this check with a guidance reason pointing at requireServiceScope.
+// For mixed routes that should accept both, compose with anyOf().
 requireOrgRole('admin', 'editor')
+
+// Active team membership (BA org plugin teams enabled)
+requireTeamMembership()
+
+// OAuth-style scope check on a service identity (API key). Variadic + array
+// forms. Elevated bypass. Throws at construction if no scopes provided.
+requireServiceScope('orders:write')
+requireServiceScope('orders:read', 'orders:write')
+requireServiceScope(['orders:read', 'orders:write'])
+
+// App-defined scope dimensions — three call shapes
+requireScopeContext('branchId')                                  // presence-only
+requireScopeContext('region', 'eu')                              // exact value match
+requireScopeContext({ branchId: 'eng-paris', projectId: 'p-1' }) // multi-key AND
+
+// Parent-child org hierarchy. Static or dynamic target.
+requireOrgInScope('acme-holding')                                // static
+requireOrgInScope((ctx) => ctx.request.params.orgId)             // dynamic from route param
+requireOrgInScope((ctx) => ctx.request.body?.organizationId)     // dynamic from body
 
 // Static permission matrix per role
 const perms = createOrgPermissions({
@@ -238,10 +450,48 @@ const perms = createOrgPermissions({
 perms.can({ invoice: ['approve'] })  // PermissionCheck function
 ```
 
-All org permission functions:
-- Grant access for `elevated` scope automatically
-- Read org roles from `request.scope.orgRoles`
-- Deny with clear reason for `public`/`authenticated` scope
+### Behavior summary
+
+| Helper | Member | Service (API key) | Elevated | Notes |
+|---|---|---|---|---|
+| `requireOrgMembership()` | ✅ | ✅ | ✅ | Any org-bound caller |
+| `requireOrgRole(roles)` | If role matches | ❌ deny with guidance | ✅ bypass | Human-only by design |
+| `requireServiceScope(scopes)` | ❌ | If scope matches | ✅ bypass | OAuth-style, machine-only |
+| `requireScopeContext(...)` | If keys match | If keys match | ✅ bypass | App-defined dimensions |
+| `requireTeamMembership()` | If `teamId` set | (n/a — services don't have teams) | ✅ bypass | BA org plugin teams |
+| `requireOrgInScope(target)` | If target = current or in `ancestorOrgIds` | If target = current or in `ancestorOrgIds` | ✅ bypass | Pure data check + elevated bypass |
+
+### Mixed routes (human + machine)
+
+When a route should accept both an org admin and an API key with the right
+OAuth scope, compose explicitly with `anyOf`:
+
+```typescript
+permissions: {
+  bulkImport: anyOf(
+    requireOrgRole('admin'),                    // human path
+    requireServiceScope('orders:bulk-write'),   // machine path
+  ),
+}
+```
+
+This is intentional rather than implicit. "API key bypasses role checks" is
+the kind of footgun that ships data breaches — services must opt into
+specific scope strings the same way OAuth clients do.
+
+### Real-world scenario quick reference
+
+| Scenario | Helper combination |
+|---|---|
+| Multi-tenant SaaS, single-org isolation | `multiTenantPreset({ tenantField: 'organizationId' })` + `requireOrgMembership()` |
+| Single org with multiple branches | `multiTenantPreset({ tenantFields: [{field:'organizationId',type:'org'}, {field:'branchId',contextKey:'branchId'}] })` + `requireScopeContext('branchId')` |
+| Multi-team within an org | `multiTenantPreset({ tenantFields: [..., {field:'teamId',type:'team'}] })` + `requireTeamMembership()` |
+| API key with org isolation | `allOf(requireApiKey(), requireOrgMembership())` + multi-tenant preset |
+| API key with explicit OAuth scopes | `allOf(requireApiKey(), requireServiceScope('jobs:write'))` |
+| Holding company → subsidiaries (parent admin can act on children) | `requireOrgInScope((ctx) => ctx.request.params.orgId)` + populate `scope.ancestorOrgIds` from your auth hook |
+| MSP managing many tenant orgs | Same — load all managed tenant ids into `ancestorOrgIds` |
+| Region-locked endpoint (data residency) | `requireScopeContext('region', 'eu')` |
+| Cross-tenant platform admin | Elevation plugin + `x-arc-scope: platform` header — `requireOrgRole`, `requireServiceScope`, `requireScopeContext`, `requireOrgInScope` all bypass automatically |
 
 ## Best Practices
 

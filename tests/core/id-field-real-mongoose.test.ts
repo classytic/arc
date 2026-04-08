@@ -282,3 +282,111 @@ describe("idField: 'jobId' — real Mongoose, multi-tenant", () => {
     expect(res.json().data.jobId).toBe("550e8400-e29b-41d4-a716-446655440000");
   });
 });
+
+// ============================================================================
+// Regression — repository with NATIVE idField support (MongoKit-style)
+//
+// Reproduces the bug reported against Arc 2.6.3 — 2.7.0:
+//   new Repository(Model, [], {}, { idField: 'id' })  ← repo keys on `id`
+//   defineResource({ idField: 'id' })                 ← route keys on `id`
+//
+// BaseController.update/delete/restore used to unconditionally translate the
+// route id → existing._id, which broke repos that natively look up by `id`.
+// The `resolveRepoId` helper now detects a matching `repository.idField` and
+// passes the route id through unchanged.
+// ============================================================================
+
+describe("idField: 'id' (UUID) — repository with native idField", () => {
+  let app: FastifyInstance;
+  let NativeChatModel: Model<{ id: string; title: string; organizationId?: string }>;
+
+  beforeAll(async () => {
+    const NativeChatSchema = new Schema(
+      {
+        id: { type: String, required: true, unique: true, index: true },
+        title: { type: String, required: true },
+        organizationId: { type: String },
+      },
+      { timestamps: true },
+    );
+    NativeChatModel =
+      mongoose.models.NativeIdChat || mongoose.model("NativeIdChat", NativeChatSchema);
+
+    // MongoKit Repository with native idField: 'id'
+    const repo = new Repository(
+      NativeChatModel as unknown as Model<{ id: string; title: string }>,
+      [],
+      {},
+      { idField: "id" },
+    );
+
+    const chatResource = defineResource({
+      name: "chat",
+      adapter: createMongooseAdapter({
+        model: NativeChatModel as unknown as Model<unknown>,
+        repository: repo as unknown as Repository<unknown>,
+      }),
+      queryParser: new QueryParser({ allowedFilterFields: ["id"] }),
+      idField: "id",
+      tenantField: false,
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
+      },
+    });
+
+    app = await buildApp();
+    await app.register(arcCorePlugin);
+    await app.register(chatResource.toPlugin());
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app.close();
+    await NativeChatModel.deleteMany({});
+  });
+
+  afterEach(async () => {
+    await NativeChatModel.deleteMany({});
+  });
+
+  const UUID = "550e8400-e29b-41d4-a716-446655440000";
+
+  it("PATCH /chats/:id updates by native UUID (no _id translation)", async () => {
+    await NativeChatModel.create({ id: UUID, title: "Original" });
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/chats/${UUID}`,
+      payload: { title: "Updated" },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const doc = await NativeChatModel.findOne({ id: UUID }).lean();
+    expect(doc?.title).toBe("Updated");
+  });
+
+  it("DELETE /chats/:id deletes by native UUID (regression for 2.6.3+)", async () => {
+    await NativeChatModel.create({ id: UUID, title: "Doomed" });
+
+    const res = await app.inject({
+      method: "DELETE",
+      url: `/chats/${UUID}`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const doc = await NativeChatModel.findOne({ id: UUID });
+    expect(doc).toBeNull();
+  });
+
+  it("DELETE /chats/:id returns 404 for unknown id (not 500)", async () => {
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/chats/00000000-0000-0000-0000-000000000000",
+    });
+    expect(res.statusCode).toBe(404);
+  });
+});

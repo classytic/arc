@@ -54,14 +54,51 @@ export type RequestScope =
       organizationId: string;
       orgRoles: string[];
       teamId?: string;
+      /**
+       * App-defined scope dimensions beyond org and team. Use this to carry
+       * branch / project / department / region / workspace identifiers that
+       * arc itself shouldn't take a position on.
+       *
+       * Read with `getScopeContext(scope, key)`. Filtered by
+       * `multiTenantPreset({ tenantFields: [...] })` and gated by
+       * `requireScopeContext(...)`. Populated by your auth function or
+       * adapter (e.g. from JWT claims, BA session fields, or request headers).
+       *
+       * Treat as immutable — `Readonly` enforces that at the type level.
+       */
+      context?: Readonly<Record<string, string>>;
+      /**
+       * Parent organizations the caller has access to, ordered closest-first
+       * (immediate parent → … → root). Used for explicit hierarchy checks
+       * via `isOrgInScope` and `requireOrgInScope` — there's no automatic
+       * inheritance, every check is opt-in.
+       *
+       * Arc takes no position on the source — your auth function loads the
+       * chain from your own org table during sign-in or middleware. Empty
+       * or absent = caller has no parent orgs (the common case).
+       */
+      ancestorOrgIds?: readonly string[];
     }
   | {
       kind: "service";
       clientId: string;
       organizationId: string;
       scopes?: readonly string[];
+      /** App-defined scope dimensions — see `member.context` for details. */
+      context?: Readonly<Record<string, string>>;
+      /** Parent organizations — see `member.ancestorOrgIds` for details. */
+      ancestorOrgIds?: readonly string[];
     }
-  | { kind: "elevated"; userId?: string; organizationId?: string; elevatedBy: string };
+  | {
+      kind: "elevated";
+      userId?: string;
+      organizationId?: string;
+      elevatedBy: string;
+      /** App-defined scope dimensions — see `member.context` for details. */
+      context?: Readonly<Record<string, string>>;
+      /** Parent organizations — see `member.ancestorOrgIds` for details. */
+      ancestorOrgIds?: readonly string[];
+    };
 
 // ============================================================================
 // Type Guards
@@ -150,6 +187,103 @@ export function getTeamId(scope: RequestScope): string | undefined {
 }
 
 /**
+ * Get an app-defined scope dimension by key (e.g. `branchId`, `projectId`).
+ *
+ * Returns the value when the scope is `member`/`service`/`elevated` AND has
+ * `context` set AND the key exists; `undefined` otherwise. Designed to be
+ * the single read path for any custom tenancy dimension your app cares about
+ * — branch, project, department, region, workspace, etc.
+ *
+ * Arc itself takes no position on what keys you use — that's your domain.
+ *
+ * @example
+ * ```typescript
+ * import { getScopeContext } from '@classytic/arc/scope';
+ *
+ * const branchId = getScopeContext(request.scope, 'branchId');
+ * if (!branchId) return reply.code(403).send({ error: 'Branch context required' });
+ * ```
+ */
+export function getScopeContext(scope: RequestScope, key: string): string | undefined {
+  if (scope.kind === "member" || scope.kind === "service" || scope.kind === "elevated") {
+    return scope.context?.[key];
+  }
+  return undefined;
+}
+
+/**
+ * Get the full scope context map (read-only). Returns `undefined` for scope
+ * kinds that don't carry context (`public`, `authenticated`).
+ */
+export function getScopeContextMap(
+  scope: RequestScope,
+): Readonly<Record<string, string>> | undefined {
+  if (scope.kind === "member" || scope.kind === "service" || scope.kind === "elevated") {
+    return scope.context;
+  }
+  return undefined;
+}
+
+/**
+ * Get the parent-organization chain for a scope (closest-first, root-last).
+ *
+ * Returns the `ancestorOrgIds` array when the scope is `member`/`service`/
+ * `elevated` and has it set; an empty array otherwise (including for kinds
+ * that can't carry org context).
+ *
+ * Arc takes no position on what the chain represents — your auth function
+ * loads it from your own data model. Common use cases: holding company →
+ * subsidiaries, MSP → managed tenants, white-label parent → child accounts.
+ *
+ * @example
+ * ```typescript
+ * import { getAncestorOrgIds } from '@classytic/arc/scope';
+ *
+ * const ancestors = getAncestorOrgIds(request.scope);
+ * if (ancestors.includes('acme-holding')) {
+ *   // caller has access to a path that includes Acme Holding
+ * }
+ * ```
+ */
+export function getAncestorOrgIds(scope: RequestScope): readonly string[] {
+  if (scope.kind === "member" || scope.kind === "service" || scope.kind === "elevated") {
+    return scope.ancestorOrgIds ?? [];
+  }
+  return [];
+}
+
+/**
+ * Pure predicate: does this scope grant access to `targetOrgId`?
+ *
+ * Returns `true` if `targetOrgId` equals the scope's `organizationId` OR
+ * appears in `ancestorOrgIds`. Returns `false` otherwise — including for
+ * elevated scopes (this is a pure data query, not a permission check; the
+ * elevated bypass lives in `requireOrgInScope`, not here).
+ *
+ * Designed to be the building block for any custom hierarchy logic in your
+ * own permission checks. Use `requireOrgInScope` for the route-gating
+ * version that includes the elevated bypass.
+ *
+ * @example
+ * ```typescript
+ * import { isOrgInScope } from '@classytic/arc/scope';
+ *
+ * // Inside a custom permission check
+ * if (!isOrgInScope(request.scope, request.params.orgId)) {
+ *   return { granted: false, reason: 'Not in your org hierarchy' };
+ * }
+ * ```
+ */
+export function isOrgInScope(scope: RequestScope, targetOrgId: string): boolean {
+  if (targetOrgId === undefined || targetOrgId === null) return false;
+  if (scope.kind !== "member" && scope.kind !== "service" && scope.kind !== "elevated") {
+    return false;
+  }
+  if (scope.organizationId === targetOrgId) return true;
+  return (scope.ancestorOrgIds ?? []).includes(targetOrgId);
+}
+
+/**
  * Get userId from scope (available on authenticated, member, elevated).
  *
  * @example
@@ -225,6 +359,33 @@ export function getOrgContext(request: {
   const orgRoles = getOrgRoles(scope);
 
   return { userId, organizationId, roles, orgRoles };
+}
+
+/**
+ * Read `request.scope` safely from any object that *might* have one.
+ * Falls back to `PUBLIC_SCOPE` when the field is absent or undefined.
+ *
+ * This is the canonical way for permission checks, presets, and middleware
+ * to read scope — never access `request.scope` directly because it can be
+ * `undefined` on requests that haven't been touched by an auth adapter yet.
+ *
+ * Accepts a structural shape (`{ scope?: RequestScope }`) instead of the
+ * full Fastify request type so it can be called from any layer without
+ * dragging in the Fastify type. The actual runtime is identical.
+ *
+ * @example
+ * ```typescript
+ * import { getRequestScope } from '@classytic/arc/scope';
+ *
+ * function myCheck(ctx: PermissionContext) {
+ *   const scope = getRequestScope(ctx.request);
+ *   if (isElevated(scope)) return true;
+ *   // ...
+ * }
+ * ```
+ */
+export function getRequestScope(request: { scope?: RequestScope }): RequestScope {
+  return request.scope ?? PUBLIC_SCOPE;
 }
 
 // ============================================================================

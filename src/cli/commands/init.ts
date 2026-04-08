@@ -1664,13 +1664,15 @@ export const requireSuperadmin = ()${returnType} =>
 /**
  * Organization-level guards (per-org member.role):
  *
- * - roles('admin')                     — checks BOTH user.role AND org member.role (recommended)
+ * - requireRoles('admin')              — checks BOTH user.role AND org member.role (recommended)
  * - requireOrgRole(['admin','owner'])  — checks member.role in active org ONLY
  * - requireOrgMembership()             — just checks if user is in the org (any role)
  * - requireTeamMembership()            — checks if user is in the active team
  *
- * RECOMMENDED: Use roles() for most cases — it checks platform + org roles automatically.
- * Use requireOrgRole() when you ONLY want org-level checks (exclude platform admins).
+ * RECOMMENDED: Use requireRoles() for most cases. Since Arc 2.7.1 it defaults to
+ * checking both platform AND org roles, so a single call covers BA org plugin users
+ * with platform-admin overrides. Use requireOrgRole() when you ONLY want org-level
+ * checks (and want to explicitly exclude platform admins).
  *
  * Platform superadmin automatically bypasses all org role checks.
  *

@@ -369,8 +369,16 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
         break;
       }
       case "Mixed":
-        // Schema.Types.Mixed — accept any value
-        baseType.type = ["string", "number", "boolean", "object", "array"];
+        // Schema.Types.Mixed — accept any value.
+        // We deliberately do NOT emit a JSON Schema `type` field here. A
+        // schema with no `type` matches anything, which is the right
+        // representation for Mongoose's Mixed (untyped) field.
+        //
+        // Previously this emitted `type: ["string","number","boolean","object","array"]`
+        // (a union). AJV strict mode flags union types as a `strictTypes`
+        // violation (`use allowUnionTypes`), and the union ALSO excludes
+        // `null`, breaking nullable Mixed fields. Omitting `type` is both
+        // strict-clean and semantically more accurate.
         break;
       case "Map":
         // Map<string, V> — object with string keys

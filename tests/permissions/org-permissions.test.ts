@@ -411,8 +411,11 @@ describe("denial messages do not expose held roles", () => {
 // requireRoles({ includeOrgRoles })
 // ============================================================================
 
-describe("requireRoles with includeOrgRoles option", () => {
-  it("default: does NOT check org roles", () => {
+describe("requireRoles with includeOrgRoles option (2.7.1+: defaults to true)", () => {
+  it("default: checks BOTH platform AND org roles (changed in 2.7.1)", () => {
+    // Pre-2.7.1: this test expected DENY because the default was platform-only.
+    // 2.7.1+: requireRoles defaults to includeOrgRoles: true, so an org-admin
+    // user is granted access even with `role: 'user'` at the platform level.
     const check = requireRoles(["admin"]);
     const result = check(
       makeCtx({
@@ -421,11 +424,23 @@ describe("requireRoles with includeOrgRoles option", () => {
         orgRoles: ["admin"],
       }),
     );
-    // Should DENY — org role 'admin' not checked by default
+    expect(result).toBe(true);
+  });
+
+  it("explicit includeOrgRoles: false → opts out, platform-only check", () => {
+    const check = requireRoles(["admin"], { includeOrgRoles: false });
+    const result = check(
+      makeCtx({
+        user: { id: "u1", role: "user" },
+        orgId: "org1",
+        orgRoles: ["admin"],
+      }),
+    );
+    // Org role ignored — user has no platform 'admin'
     expect(result).toEqual({ granted: false, reason: "Required roles: admin" });
   });
 
-  it("includeOrgRoles: true checks org roles too", () => {
+  it("explicit includeOrgRoles: true (now redundant but still works)", () => {
     const check = requireRoles(["admin"], { includeOrgRoles: true });
     const result = check(
       makeCtx({
@@ -437,14 +452,14 @@ describe("requireRoles with includeOrgRoles option", () => {
     expect(result).toBe(true);
   });
 
-  it("includeOrgRoles: true still checks platform roles first", () => {
-    const check = requireRoles(["admin"], { includeOrgRoles: true });
+  it("default: still checks platform roles first (before org roles)", () => {
+    const check = requireRoles(["admin"]);
     const result = check(makeCtx({ user: { id: "u1", role: "admin" } }));
     expect(result).toBe(true);
   });
 
-  it("includeOrgRoles: true denies when neither level has the role", () => {
-    const check = requireRoles(["admin"], { includeOrgRoles: true });
+  it("default: denies when neither level has the role", () => {
+    const check = requireRoles(["admin"]);
     const result = check(
       makeCtx({
         user: { id: "u1", role: "user" },
@@ -453,5 +468,37 @@ describe("requireRoles with includeOrgRoles option", () => {
       }),
     );
     expect(result).toEqual({ granted: false, reason: "Required roles: admin" });
+  });
+
+  // ── Variadic form (new in 2.7.1) ──
+
+  it("variadic: requireRoles('admin') is equivalent to requireRoles(['admin'])", () => {
+    const variadic = requireRoles("admin");
+    const arrayForm = requireRoles(["admin"]);
+    const ctx = makeCtx({ user: { id: "u1", role: "admin" } });
+    expect(variadic(ctx)).toBe(true);
+    expect(arrayForm(ctx)).toBe(true);
+  });
+
+  it("variadic: requireRoles('admin', 'editor') accepts either role", () => {
+    const check = requireRoles("admin", "editor");
+    expect(check(makeCtx({ user: { id: "u1", role: "editor" } }))).toBe(true);
+    expect(check(makeCtx({ user: { id: "u1", role: "admin" } }))).toBe(true);
+    expect(check(makeCtx({ user: { id: "u1", role: "viewer" } }))).toEqual({
+      granted: false,
+      reason: "Required roles: admin, editor",
+    });
+  });
+
+  it("variadic: also checks org roles by default (same as array form)", () => {
+    const check = requireRoles("admin");
+    const result = check(
+      makeCtx({
+        user: { id: "u1", role: "user" },
+        orgId: "org1",
+        orgRoles: ["admin"],
+      }),
+    );
+    expect(result).toBe(true);
   });
 });

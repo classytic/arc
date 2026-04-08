@@ -8,11 +8,11 @@ description: |
   Triggers: arc, fastify resource, defineResource, createApp, BaseController, arc preset,
   arc auth, arc events, arc jobs, arc websocket, arc mcp, arc plugin, arc testing, arc cli,
   arc permissions, arc hooks, arc pipeline, arc factory, arc cache, arc QueryCache.
-version: 2.7.0
+version: 2.7.1
 license: MIT
 metadata:
   author: Classytic
-  version: "2.7.0"
+  version: "2.7.1"
 tags:
   - fastify
   - rest-api
@@ -160,13 +160,23 @@ Lives at a dedicated subpath so non-Mongoose users (Prisma/Drizzle/Kysely) never
 
 ## Permissions
 
-Function-based. A `PermissionCheck` returns `boolean | { granted, reason?, filters? }`:
+Function-based. A `PermissionCheck` returns `boolean | { granted, reason?, filters?, scope? }`:
 
 ```typescript
 import {
+  // Core
   allowPublic, requireAuth, requireRoles, requireOwnership,
+  // Org-bound
   requireOrgMembership, requireOrgRole, requireTeamMembership,
+  // Service / API key (OAuth-style)
+  requireServiceScope,
+  // App-defined scope dimensions (branch, project, region, …)
+  requireScopeContext,
+  // Parent-child org hierarchy
+  requireOrgInScope,
+  // Combinators
   allOf, anyOf, when, denyAll,
+  // Dynamic ACL
   createDynamicPermissionMatrix,
 } from '@classytic/arc';
 
@@ -177,6 +187,173 @@ permissions: {
   update: anyOf(requireOwnership('userId'), requireRoles(['admin'])),
   delete: allOf(requireAuth(), requireRoles(['admin'])),
 }
+```
+
+**Mixed human + machine routes** — accept both an org admin and an API key:
+
+```typescript
+import { requireServiceScope } from '@classytic/arc';
+
+permissions: {
+  // Human admins OR API keys with the right OAuth scope
+  create: anyOf(
+    requireOrgRole('admin'),
+    requireServiceScope('jobs:write'),
+  ),
+
+  // Org-bound API key with a specific scope (no human path)
+  bulkImport: allOf(
+    requireOrgMembership(),                  // accepts member, service, elevated
+    requireServiceScope('jobs:bulk-write'),  // OAuth-style scope check
+  ),
+}
+```
+
+**Multi-level tenancy** — for app-defined scope dimensions beyond org/team
+(branch, project, region, workspace, department, …):
+
+```typescript
+import { requireScopeContext } from '@classytic/arc';
+import { multiTenantPreset } from '@classytic/arc/presets';
+
+// 1. Populate scope.context in your auth function (from headers, JWT claims,
+//    BA session fields — arc takes no position on the source).
+authFn: async (request) => {
+  const session = await myAuth.getSession(request);
+  request.scope = {
+    kind: 'member',
+    userId: session.userId,
+    userRoles: session.userRoles,
+    organizationId: session.orgId,
+    orgRoles: session.orgRoles,
+    context: {
+      branchId: request.headers['x-branch-id'],
+      projectId: request.headers['x-project-id'],
+    },
+  };
+}
+
+// 2. Gate routes by context dimensions
+permissions: {
+  branchAdmin: allOf(requireOrgRole('admin'), requireScopeContext('branchId')),
+  euOnly:      requireScopeContext('region', 'eu'),
+  projectEdit: requireScopeContext({ projectId: undefined, region: 'eu' }),
+}
+
+// 3. Auto-filter resource queries across all dimensions in lockstep
+defineResource({
+  name: 'job',
+  presets: [
+    multiTenantPreset({
+      tenantFields: [
+        { field: 'organizationId', type: 'org' },
+        { field: 'branchId',       contextKey: 'branchId' },
+        { field: 'projectId',      contextKey: 'projectId' },
+      ],
+    }),
+  ],
+});
+```
+
+Fail-closed: missing dimensions → 403 with the specific missing field name.
+Elevated scopes (platform admins) apply whatever resolves and skip the rest
+(cross-context bypass).
+
+**Parent-child org hierarchy** — for holding companies, MSPs managing
+multiple tenants, white-label parent → child accounts. Arc takes no position
+on the source: your auth function loads the chain from your own org table.
+
+```typescript
+import { requireOrgInScope } from '@classytic/arc';
+
+// 1. Auth function loads ancestorOrgIds from your org table.
+//    Order is closest-first (immediate parent → root).
+authFn: async (request) => {
+  const session = await myAuth.getSession(request);
+  const ancestors = await orgRepo.findAncestors(session.orgId);
+  request.scope = {
+    kind: 'member',
+    userId: session.userId,
+    userRoles: session.userRoles,
+    organizationId: session.orgId,
+    orgRoles: session.orgRoles,
+    ancestorOrgIds: ancestors.map(a => a.id),  // ['acme-eu', 'acme-holding']
+  };
+}
+
+// 2. Gate routes — accepts current org or any ancestor in the chain
+permissions: {
+  // GET /orgs/:orgId/jobs — caller can act on any org in their hierarchy
+  list: requireOrgInScope((ctx) => ctx.request.params.orgId),
+
+  // Static target (rare): one route, one specific org
+  holdingDashboard: requireOrgInScope('acme-holding'),
+
+  // Composed: must be admin AND target must be in hierarchy
+  childAdmin: allOf(
+    requireOrgRole('admin'),
+    requireOrgInScope((ctx) => ctx.request.params.orgId),
+  ),
+}
+```
+
+**No automatic inheritance** — every check is explicit. `multiTenantPreset`
+does NOT auto-include ancestor data (would be a footgun). Sibling
+subsidiaries naturally don't see each other's data because they aren't in
+each other's chain. Elevated bypass still applies on the permission helper.
+
+**Auth source agnostic** — `requireRoles()` checks platform roles
+(`user.role`) AND org roles (`scope.orgRoles`) by default, so it works
+identically with arc JWT, Better Auth user roles, and Better Auth org plugin.
+`requireOrgMembership()` accepts `member`, `service` (API key), and
+`elevated` scopes. `requireOrgRole()` is human-only by design — use
+`anyOf(requireOrgRole(...), requireServiceScope(...))` for mixed routes.
+`scope.context` and `scope.ancestorOrgIds` are populated by your own auth
+function or adapter — arc doesn't bake in any specific dimension or transport.
+
+### RequestScope (quick reference)
+
+Five kinds, all opt-in. Always read via accessors from `@classytic/arc/scope`,
+never via direct property access.
+
+```typescript
+type RequestScope =
+  | { kind: 'public' }
+  | { kind: 'authenticated'; userId?; userRoles? }
+  | { kind: 'member';   userId?; userRoles; organizationId; orgRoles; teamId?; context?; ancestorOrgIds? }
+  | { kind: 'service';  clientId; organizationId; scopes?; context?; ancestorOrgIds? }
+  | { kind: 'elevated'; userId?; organizationId?; elevatedBy; context?; ancestorOrgIds? };
+```
+
+| Kind | Identity | Org context | Set by |
+|---|---|---|---|
+| `public` | none | none | Default for anonymous requests |
+| `authenticated` | userId, userRoles | none | Logged in, no active org |
+| `member` | userId, userRoles | organizationId + orgRoles (+ teamId, context, ancestorOrgIds) | BA org plugin / JWT custom auth |
+| `service` | clientId, scopes | organizationId (required) | API key via `PermissionResult.scope` |
+| `elevated` | userId | organizationId optional | Elevation plugin via `x-arc-scope: platform` header |
+
+| Helper | `member` | `service` | `elevated` |
+|---|---|---|---|
+| `requireOrgMembership()` | ✅ | ✅ | ✅ |
+| `requireOrgRole(roles)` | If role matches | ❌ deny w/ guidance | ✅ bypass |
+| `requireServiceScope(scopes)` | ❌ | If scope matches | ✅ bypass |
+| `requireScopeContext(...)` | If keys match | If keys match | ✅ bypass |
+| `requireTeamMembership()` | If `teamId` set | (n/a) | ✅ bypass |
+| `requireOrgInScope(target)` | If target in chain | If target in chain | ✅ bypass |
+
+```typescript
+import {
+  isMember, isService, isElevated, hasOrgAccess,
+  getOrgId, getUserId, getOrgRoles, getServiceScopes,
+  getScopeContext, getAncestorOrgIds, isOrgInScope,
+} from '@classytic/arc/scope';
+
+if (hasOrgAccess(scope))   // member | service | elevated
+if (isService(scope))      // narrows to API key
+const orgId  = getOrgId(scope);                    // member | service | elevated
+const branch = getScopeContext(scope, 'branchId'); // custom dimension
+isOrgInScope(scope, 'acme-holding');               // pure predicate (no elevated bypass)
 ```
 
 **Custom permission:**
@@ -219,14 +396,33 @@ permissions: { list: acl.canAction('product', 'read') }
 | `slugLookup` | GET /slug/:slug | `ISlugLookupController` | `{ slugField }` |
 | `tree` | GET /tree, GET /:parent/children | `ITreeController` | `{ parentField }` |
 | `ownedByUser` | none (middleware) | — | `{ ownerField }` |
-| `multiTenant` | none (middleware) | — | `{ tenantField }` |
+| `multiTenant` | none (middleware) | — | `{ tenantField }` OR `{ tenantFields: TenantFieldSpec[] }` (2.7.1+) |
 | `audited` | none (middleware) | — | — |
 | `bulk` | POST/PATCH/DELETE /bulk | — | `{ operations?, maxCreateItems? }` |
 
 ```typescript
+// Single-field (default, backwards compatible)
 presets: ['softDelete', { name: 'multiTenant', tenantField: 'organizationId' }]
+
+// Multi-field — org + branch + project in lockstep (2.7.1+)
+presets: [
+  multiTenantPreset({
+    tenantFields: [
+      { field: 'organizationId', type: 'org' },                // → getOrgId(scope)
+      { field: 'teamId',         type: 'team' },               // → getTeamId(scope)
+      { field: 'branchId',       contextKey: 'branchId' },     // → scope.context.branchId
+      { field: 'projectId',      contextKey: 'projectId' },
+    ],
+  }),
+]
+
 // Bulk: presets: ['bulk'] or bulkPreset({ operations: ['createMany', 'updateMany'] })
 ```
+
+`multiTenant` recognizes `member`, `service` (API key), and `elevated`
+scopes uniformly via `hasOrgAccess()`. Multi-field uses fail-closed
+semantics: missing dimensions → 403 with the specific missing field name.
+Elevated scopes apply whatever resolves and skip the rest.
 
 ### tenantField — When to Use and When to Disable
 
@@ -692,6 +888,10 @@ import { defineResource, BaseController, allowPublic } from '@classytic/arc';
 import { createApp } from '@classytic/arc/factory';
 import { MemoryCacheStore, RedisCacheStore, QueryCache } from '@classytic/arc/cache';
 import { createBetterAuthAdapter, extractBetterAuthOpenApi } from '@classytic/arc/auth';
+// 2.7.1+: optional Mongoose stub-models bridge for `populate()` against
+// Better Auth collections — only loaded if you import it (subpath gate
+// keeps Mongoose out of Prisma/Drizzle/Kysely bundles).
+import { registerBetterAuthMongooseModels } from '@classytic/arc/auth/mongoose';
 import type { ExternalOpenApiPaths } from '@classytic/arc/docs';
 import { eventPlugin } from '@classytic/arc/events';
 import { RedisEventTransport } from '@classytic/arc/events/redis';
@@ -708,7 +908,21 @@ import { createTestApp } from '@classytic/arc/testing';
 import { Type, ArcListResponse } from '@classytic/arc/schemas';
 import { createStateMachine, CircuitBreaker, withCompensation, defineCompensation } from '@classytic/arc/utils';
 import { defineMigration } from '@classytic/arc/migrations';
-import { isMember, isElevated, getOrgId, getUserId, getUserRoles } from '@classytic/arc/scope';
+// Scope accessors — full surface as of 2.7.1
+import {
+  // Type guards
+  isMember, isService, isElevated, isAuthenticated, hasOrgAccess,
+  // Identity / org accessors
+  getUserId, getUserRoles, getOrgId, getOrgRoles, getTeamId, getClientId,
+  // Service scopes (OAuth-style strings on API keys)
+  getServiceScopes,
+  // App-defined scope dimensions (branch, project, region, …)
+  getScopeContext, getScopeContextMap,
+  // Parent-child org hierarchy
+  getAncestorOrgIds, isOrgInScope,
+  // Generic request-side helper
+  getRequestScope,
+} from '@classytic/arc/scope';
 import { createTenantKeyGenerator } from '@classytic/arc/scope';
 import { createRoleHierarchy } from '@classytic/arc/permissions';
 import { createServiceClient } from '@classytic/arc/rpc';
@@ -716,7 +930,7 @@ import { metricsPlugin, versioningPlugin } from '@classytic/arc/plugins';
 import { webhookPlugin } from '@classytic/arc/integrations/webhooks';
 import { mcpPlugin, createMcpServer, defineTool, definePrompt, fieldRulesToZod, resourceToTools } from '@classytic/arc/mcp';
 import { EventOutbox, MemoryOutboxStore } from '@classytic/arc/events';
-import { bulkPreset } from '@classytic/arc/presets';
+import { bulkPreset, multiTenantPreset, type TenantFieldSpec } from '@classytic/arc/presets';
 ```
 
 ## References (Progressive Disclosure)

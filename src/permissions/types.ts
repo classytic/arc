@@ -164,6 +164,12 @@ export type PermissionCheck<TDoc = Record<string, unknown>> = ((
 /**
  * Optional metadata attached to permission check functions.
  * Used for OpenAPI docs, introspection, and route-level auth decisions.
+ *
+ * Each helper from `permissions/index.ts` writes its own discriminating tag
+ * so downstream tooling (OpenAPI generator, MCP resource builder, route
+ * audit utilities) can read off the requirement without re-parsing the
+ * function body. All fields are optional — only the helpers that emit them
+ * set them.
  */
 export interface PermissionCheckMeta {
   /** Set by allowPublic() — marks the endpoint as publicly accessible */
@@ -176,4 +182,24 @@ export interface PermissionCheckMeta {
   _orgRoles?: readonly string[];
   /** Set by requireTeamMembership() — team-level permission type */
   _teamPermission?: string;
+  /**
+   * Set by requireServiceScope() — the OAuth-style scope strings the
+   * caller's `service` identity must hold (any-match logic, parallels
+   * `_orgRoles`).
+   */
+  _serviceScopes?: readonly string[];
+  /**
+   * Set by requireScopeContext() — the app-defined scope dimensions the
+   * caller must satisfy. Map keys are dimension names (`branchId`,
+   * `projectId`, etc.); values are the required string OR `undefined`
+   * for "must be present, any value".
+   */
+  _scopeContext?: Record<string, string | undefined>;
+  /**
+   * Set by requireOrgInScope() — the target organization that must appear
+   * in the caller's org chain (current org or `ancestorOrgIds`). Either
+   * a static org id or a function extracting it from the request context
+   * (e.g. from route params).
+   */
+  _orgInScopeTarget?: string | ((ctx: PermissionContext) => string | undefined);
 }
