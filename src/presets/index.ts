@@ -31,7 +31,7 @@ import type {
   RouteSchemaOptions,
 } from "../types/index.js";
 
-export type { MultiTenantOptions } from "./multiTenant.js";
+export type { MultiTenantOptions, TenantFieldSpec } from "./multiTenant.js";
 export { multiTenantPreset } from "./multiTenant.js";
 export type { OwnedByUserOptions } from "./ownedByUser.js";
 

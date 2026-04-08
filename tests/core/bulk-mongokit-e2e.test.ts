@@ -96,23 +96,111 @@ describe("Bulk Preset + MongoKit E2E", () => {
       expect(result.success).toBe(true);
       expect(result.status).toBe(201);
       expect(result.data).toHaveLength(3);
-      expect(result.meta).toEqual({ count: 3 });
+      expect(result.meta).toEqual(
+        expect.objectContaining({ count: 3, requested: 3, inserted: 3, skipped: 0 }),
+      );
 
       const dbCount = await ProductModel.countDocuments();
       expect(dbCount).toBe(3);
     });
 
-    it("fails validation for invalid documents", async () => {
+    it("all invalid → 422 with reason: all_invalid", async () => {
       const { controller, makeCtx } = await createBulkController();
 
-      // MongoKit 3.4.5+: ordered defaults to false (partial inserts).
-      // Invalid docs are skipped rather than throwing — result is success with empty data.
+      // MongoKit 3.4.5+: ordered=false, invalid docs skipped (no throw).
+      // Arc reports this as 422 partial-success with reason='all_invalid' so
+      // callers can distinguish "nothing inserted, your fault" from server errors.
       const result = await controller.bulkCreate(makeCtx({ items: [{ price: 10 }] }));
       expect(result.success).toBe(true);
+      expect(result.status).toBe(422);
       expect(result.data).toHaveLength(0);
+      expect(result.meta).toEqual(
+        expect.objectContaining({
+          requested: 1,
+          inserted: 0,
+          skipped: 1,
+          partial: true,
+          reason: "all_invalid",
+        }),
+      );
 
       const dbCount = await ProductModel.countDocuments();
       expect(dbCount).toBe(0);
+    });
+
+    it("partial valid → 207 Multi-Status with reason: some_invalid", async () => {
+      const { controller, makeCtx } = await createBulkController();
+
+      // 2 valid + 1 invalid (missing required `name`)
+      const result = await controller.bulkCreate(
+        makeCtx({
+          items: [
+            { name: "Valid1", price: 10 },
+            { price: 20 }, // missing name
+            { name: "Valid2", price: 30 },
+          ],
+        }),
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.status).toBe(207);
+      expect(result.data).toHaveLength(2);
+      expect(result.meta).toEqual(
+        expect.objectContaining({
+          requested: 3,
+          inserted: 2,
+          skipped: 1,
+          partial: true,
+          reason: "some_invalid",
+        }),
+      );
+    });
+
+    it("strips system-managed and protected fields from each item (security)", async () => {
+      const { Repository, methodRegistryPlugin, batchOperationsPlugin } = await import(
+        "@classytic/mongokit"
+      );
+      const { BaseController } = await import("../../src/core/BaseController.js");
+      const { HookSystem } = await import("../../src/hooks/HookSystem.js");
+
+      const repo = new Repository(ProductModel, [methodRegistryPlugin(), batchOperationsPlugin()]);
+      // Resource has fieldRules marking `status` as systemManaged and a custom
+      // `internalScore` field as readonly. Both must be stripped from bulk input.
+      const controller = new BaseController(repo, {
+        resourceName: "product",
+        schemaOptions: {
+          fieldRules: {
+            status: { systemManaged: true } as { systemManaged: boolean },
+            internalScore: { readonly: true } as { readonly: boolean },
+          },
+        },
+      });
+      const hooks = new HookSystem();
+      const makeCtx = (body: unknown) => ({
+        params: {},
+        query: {},
+        body,
+        headers: {},
+        metadata: { arc: { hooks } },
+      });
+
+      // Attacker tries to set a protected field via bulk create
+      const result = await controller.bulkCreate(
+        makeCtx({
+          items: [
+            // biome-ignore lint: test
+            { name: "Sneaky", price: 10, status: "vip", internalScore: 999 } as any,
+          ],
+        }),
+      );
+
+      expect(result.success).toBe(true);
+      const inserted = await ProductModel.findOne({ name: "Sneaky" }).lean();
+      expect(inserted).toBeTruthy();
+      // status should fall back to schema default (`active`), NOT `vip`
+      expect(inserted?.status).toBe("active");
+      // internalScore is not in the schema, so it shouldn't appear at all
+      expect((inserted as Record<string, unknown>).internalScore).toBeUndefined();
     });
   });
 
@@ -168,6 +256,143 @@ describe("Bulk Preset + MongoKit E2E", () => {
       expect(docs[0].price).toBe(15);
       expect(docs[1].price).toBe(25);
     });
+
+    it("strips protected fields from flat update payload (security)", async () => {
+      const { Repository, methodRegistryPlugin, batchOperationsPlugin } = await import(
+        "@classytic/mongokit"
+      );
+      const { BaseController } = await import("../../src/core/BaseController.js");
+      const { HookSystem } = await import("../../src/hooks/HookSystem.js");
+
+      await ProductModel.create({ name: "Target", price: 10, status: "draft" });
+
+      const repo = new Repository(ProductModel, [methodRegistryPlugin(), batchOperationsPlugin()]);
+      const controller = new BaseController(repo, {
+        resourceName: "product",
+        schemaOptions: {
+          fieldRules: {
+            // biome-ignore lint: test
+            status: { systemManaged: true } as any,
+          },
+        },
+      });
+      const hooks = new HookSystem();
+      const makeCtx = (body: unknown) => ({
+        params: {},
+        query: {},
+        body,
+        headers: {},
+        metadata: { arc: { hooks } },
+      });
+
+      // Attacker tries to flip status from draft → published via bulk update
+      const result = await controller.bulkUpdate(
+        makeCtx({
+          filter: { name: "Target" },
+          // biome-ignore lint: test
+          data: { price: 99, status: "published" } as any,
+        }),
+      );
+
+      expect(result.success).toBe(true);
+      // `status` should have been stripped — meta.stripped reports it
+      expect((result.meta as Record<string, unknown>)?.stripped).toEqual(["status"]);
+
+      const doc = await ProductModel.findOne({ name: "Target" }).lean();
+      expect(doc?.price).toBe(99); // legitimate field updated
+      expect(doc?.status).toBe("draft"); // protected field unchanged
+    });
+
+    it("strips protected fields from $set operator payload (security)", async () => {
+      const { Repository, methodRegistryPlugin, batchOperationsPlugin } = await import(
+        "@classytic/mongokit"
+      );
+      const { BaseController } = await import("../../src/core/BaseController.js");
+      const { HookSystem } = await import("../../src/hooks/HookSystem.js");
+
+      await ProductModel.create([
+        { name: "T1", price: 10, status: "draft" },
+        { name: "T2", price: 20, status: "draft" },
+      ]);
+
+      const repo = new Repository(ProductModel, [methodRegistryPlugin(), batchOperationsPlugin()]);
+      const controller = new BaseController(repo, {
+        resourceName: "product",
+        schemaOptions: {
+          fieldRules: {
+            // biome-ignore lint: test
+            status: { systemManaged: true } as any,
+          },
+        },
+      });
+      const hooks = new HookSystem();
+      const makeCtx = (body: unknown) => ({
+        params: {},
+        query: {},
+        body,
+        headers: {},
+        metadata: { arc: { hooks } },
+      });
+
+      // Operator-shape payload: $set should be sanitized too.
+      // ($set and $inc must target different fields per Mongo rules.)
+      const result = await controller.bulkUpdate(
+        makeCtx({
+          filter: { status: "draft" },
+          // biome-ignore lint: test
+          data: { $set: { name: "Renamed", status: "published" } } as any,
+        }),
+      );
+
+      expect(result.success).toBe(true);
+      expect((result.meta as Record<string, unknown>)?.stripped).toContain("status");
+
+      const docs = await ProductModel.find({}).sort("name").lean();
+      // $set name applied, status untouched
+      expect(docs.every((d) => d.status === "draft")).toBe(true);
+      expect(docs.every((d) => d.name === "Renamed")).toBe(true);
+    });
+
+    it("rejects bulkUpdate when ALL fields are protected (400 ALL_FIELDS_STRIPPED)", async () => {
+      const { Repository, methodRegistryPlugin, batchOperationsPlugin } = await import(
+        "@classytic/mongokit"
+      );
+      const { BaseController } = await import("../../src/core/BaseController.js");
+      const { HookSystem } = await import("../../src/hooks/HookSystem.js");
+
+      const repo = new Repository(ProductModel, [methodRegistryPlugin(), batchOperationsPlugin()]);
+      const controller = new BaseController(repo, {
+        resourceName: "product",
+        schemaOptions: {
+          fieldRules: {
+            // biome-ignore lint: test
+            status: { systemManaged: true } as any,
+          },
+        },
+      });
+      const hooks = new HookSystem();
+      const makeCtx = (body: unknown) => ({
+        params: {},
+        query: {},
+        body,
+        headers: {},
+        metadata: { arc: { hooks } },
+      });
+
+      const result = await controller.bulkUpdate(
+        makeCtx({
+          filter: { name: "anything" },
+          // biome-ignore lint: test
+          data: { status: "published" } as any,
+        }),
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.status).toBe(400);
+      expect(result.details).toEqual(
+        expect.objectContaining({ code: "ALL_FIELDS_STRIPPED", stripped: ["status"] }),
+      );
+    });
   });
 
   // ==========================================================================
@@ -192,6 +417,246 @@ describe("Bulk Preset + MongoKit E2E", () => {
       const remaining = await ProductModel.find({}).lean();
       expect(remaining).toHaveLength(1);
       expect(remaining[0].name).toBe("Keep");
+    });
+
+    // ========================================================================
+    // bulkDelete `ids[]` form — industry standard "delete by selection" pattern
+    //
+    // Real-world scenario: admin UI shows a checkbox grid, user selects 3
+    // products and clicks "Delete Selected". Frontend POSTs the selected ids.
+    // No need to construct Mongo filters client-side.
+    // ========================================================================
+
+    it("ids[] form: deletes specific documents by _id (real MongoKit deleteMany)", async () => {
+      const docs = await ProductModel.create([
+        { name: "A", price: 10, status: "active" },
+        { name: "B", price: 20, status: "active" },
+        { name: "C", price: 30, status: "active" },
+        { name: "D", price: 40, status: "active" },
+      ]);
+      // Pick 2 of 4 to delete — typical "delete selected rows" UI pattern
+      const idsToDelete = [String(docs[0]._id), String(docs[2]._id)];
+
+      const { controller, makeCtx } = await createBulkController();
+
+      const result = await controller.bulkDelete(makeCtx({ ids: idsToDelete }));
+
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual(expect.objectContaining({ deletedCount: 2 }));
+
+      const remaining = await ProductModel.find({}).sort("name").lean();
+      expect(remaining.map((d) => d.name)).toEqual(["B", "D"]);
+    });
+
+    it("ids[] form: nonexistent ids return deletedCount: 0 (no error, idempotent)", async () => {
+      await ProductModel.create({ name: "Real", price: 10, status: "active" });
+
+      const { controller, makeCtx } = await createBulkController();
+
+      // Valid ObjectId strings that don't match any doc
+      const result = await controller.bulkDelete(
+        makeCtx({
+          ids: ["507f1f77bcf86cd799439011", "507f1f77bcf86cd799439012"],
+        }),
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual(expect.objectContaining({ deletedCount: 0 }));
+      expect(await ProductModel.countDocuments()).toBe(1);
+    });
+
+    it("ids[] form: partial match — deletes only the ids that exist", async () => {
+      const docs = await ProductModel.create([
+        { name: "Real1", price: 10, status: "active" },
+        { name: "Real2", price: 20, status: "active" },
+      ]);
+
+      const { controller, makeCtx } = await createBulkController();
+
+      // Mix of real and fake ids — real-world race condition (doc deleted by
+      // another request between selection and submit). Should silently skip.
+      const result = await controller.bulkDelete(
+        makeCtx({
+          ids: [String(docs[0]._id), "507f1f77bcf86cd799439099", String(docs[1]._id)],
+        }),
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual(expect.objectContaining({ deletedCount: 2 }));
+      expect(await ProductModel.countDocuments()).toBe(0);
+    });
+
+    it("ids[] form: empty array → 400 (don't accidentally delete everything)", async () => {
+      await ProductModel.create([{ name: "Safe", price: 10, status: "active" }]);
+
+      const { controller, makeCtx } = await createBulkController();
+
+      const result = await controller.bulkDelete(makeCtx({ ids: [] }));
+
+      expect(result.success).toBe(false);
+      expect(result.status).toBe(400);
+      // Crucial: nothing deleted
+      expect(await ProductModel.countDocuments()).toBe(1);
+    });
+
+    it("ids[] form: mutually exclusive with filter → 400 (avoid ambiguity)", async () => {
+      await ProductModel.create({ name: "Safe", price: 10, status: "active" });
+
+      const { controller, makeCtx } = await createBulkController();
+
+      const result = await controller.bulkDelete(
+        makeCtx({
+          ids: ["507f1f77bcf86cd799439011"],
+          filter: { status: "active" },
+        }),
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.status).toBe(400);
+      expect(result.error).toContain("either");
+      // Crucial: nothing deleted (filter would have matched)
+      expect(await ProductModel.countDocuments()).toBe(1);
+    });
+
+    it("ids[] form: large batch (500 ids) — single deleteMany call", async () => {
+      // Industry-standard scenario: "purge old logs" — bulk delete a large set
+      const docs = await ProductModel.insertMany(
+        Array.from({ length: 500 }, (_, i) => ({
+          name: `Log${i}`,
+          price: i,
+          status: "old",
+        })),
+      );
+      // Add 10 we want to keep
+      await ProductModel.insertMany(
+        Array.from({ length: 10 }, (_, i) => ({
+          name: `Keep${i}`,
+          price: 1000 + i,
+          status: "active",
+        })),
+      );
+
+      const { controller, makeCtx } = await createBulkController();
+
+      const ids = docs.map((d) => String(d._id));
+      const result = await controller.bulkDelete(makeCtx({ ids }));
+
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual(expect.objectContaining({ deletedCount: 500 }));
+      expect(await ProductModel.countDocuments()).toBe(10);
+    });
+  });
+
+  // ==========================================================================
+  // bulkDelete `ids[]` with multi-tenancy — security-critical scenario
+  //
+  // The user supplies ids belonging to ANOTHER org. The controller MUST NOT
+  // delete them, even though the ids are valid. Tenant scope from the request
+  // is merged into the deleteMany filter, so cross-tenant ids silently no-op.
+  // ==========================================================================
+
+  describe("bulkDelete ids[] + multi-tenancy (cross-tenant isolation)", () => {
+    interface IOrgProduct {
+      _id: Types.ObjectId;
+      name: string;
+      organizationId: string;
+    }
+    let OrgProductModel: mongoose.Model<IOrgProduct>;
+
+    beforeAll(() => {
+      const schema = new Schema<IOrgProduct>({
+        name: { type: String, required: true },
+        organizationId: { type: String, required: true, index: true },
+      });
+      OrgProductModel = connection.model<IOrgProduct>("BulkOrgProduct", schema);
+    });
+
+    beforeEach(async () => {
+      await OrgProductModel.deleteMany({});
+    });
+
+    async function createTenantController() {
+      const { Repository, methodRegistryPlugin, batchOperationsPlugin } = await import(
+        "@classytic/mongokit"
+      );
+      const { BaseController } = await import("../../src/core/BaseController.js");
+      const { HookSystem } = await import("../../src/hooks/HookSystem.js");
+
+      const repo = new Repository(OrgProductModel, [
+        methodRegistryPlugin(),
+        batchOperationsPlugin(),
+      ]);
+      const controller = new BaseController(repo, { resourceName: "product" });
+      const hooks = new HookSystem();
+
+      // Simulate a request scoped to org A (multi-tenant member scope).
+      // _scope lives at metadata._scope (top-level), arc.hooks is nested.
+      const makeCtxAsOrg = (orgId: string, body: unknown) => ({
+        params: {},
+        query: {},
+        body,
+        headers: {},
+        metadata: {
+          arc: { hooks },
+          _scope: { kind: "member" as const, userId: "u1", organizationId: orgId, orgRoles: [] },
+        },
+      });
+
+      return { controller, makeCtxAsOrg };
+    }
+
+    it("rejects cross-tenant ids — org A cannot delete org B's products via ids[]", async () => {
+      const orgADocs = await OrgProductModel.create([
+        { name: "A1", organizationId: "org-a" },
+        { name: "A2", organizationId: "org-a" },
+      ]);
+      const orgBDocs = await OrgProductModel.create([
+        { name: "B1", organizationId: "org-b" },
+        { name: "B2", organizationId: "org-b" },
+      ]);
+
+      const { controller, makeCtxAsOrg } = await createTenantController();
+
+      // Caller is in org A but maliciously passes BOTH org A and org B ids
+      const allIds = [
+        String(orgADocs[0]._id),
+        String(orgADocs[1]._id),
+        String(orgBDocs[0]._id),
+        String(orgBDocs[1]._id),
+      ];
+
+      const result = await controller.bulkDelete(makeCtxAsOrg("org-a", { ids: allIds }));
+
+      expect(result.success).toBe(true);
+      // Only org A's docs deleted (2), org B's untouched
+      expect(result.data).toEqual(expect.objectContaining({ deletedCount: 2 }));
+
+      const orgARemaining = await OrgProductModel.countDocuments({ organizationId: "org-a" });
+      const orgBRemaining = await OrgProductModel.countDocuments({ organizationId: "org-b" });
+      expect(orgARemaining).toBe(0);
+      expect(orgBRemaining).toBe(2); // ← critical: cross-tenant data preserved
+    });
+
+    it("public scope on tenant-scoped resource → 403 (no anonymous bulk delete)", async () => {
+      const { controller } = await createTenantController();
+
+      const { HookSystem } = await import("../../src/hooks/HookSystem.js");
+      const ctx = {
+        params: {},
+        query: {},
+        body: { ids: ["507f1f77bcf86cd799439011"] },
+        headers: {},
+        metadata: {
+          arc: { hooks: new HookSystem() },
+          _scope: { kind: "public" as const },
+        },
+      };
+
+      const result = await controller.bulkDelete(ctx);
+
+      expect(result.success).toBe(false);
+      expect(result.status).toBe(403);
+      expect(result.details).toEqual({ code: "ORG_CONTEXT_REQUIRED" });
     });
   });
 

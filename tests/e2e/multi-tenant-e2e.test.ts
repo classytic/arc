@@ -208,10 +208,14 @@ describe("Multi-Tenant E2E (data isolation)", () => {
         payload: { title: "Orphan Invoice", amount: 50 },
       });
 
-      // multiTenant injection middleware → 403 (org required)
+      // multiTenant injection middleware → 403 (tenant context required).
+      // 2.7.1+: the multiTenant preset reports the specific missing tenant
+      // field name(s) so multi-field configs can pinpoint which dimension
+      // failed. For the default single-field case the field is `organizationId`.
       expect(res.statusCode).toBe(403);
       const body = JSON.parse(res.body);
-      expect(body.message).toContain("Organization context required");
+      expect(body.message).toContain("Tenant context incomplete");
+      expect(body.message).toContain("organizationId");
     });
   });
 

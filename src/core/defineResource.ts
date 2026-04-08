@@ -133,6 +133,21 @@ export function defineResource<TDoc = AnyRecord>(
   // Extract repository from adapter (if provided)
   const repository = config.adapter?.repository;
 
+  // Auto-derive idField from the repository when the user didn't set one
+  // explicitly. MongoKit-style repositories declare their primary key field
+  // via `repository.idField`. By picking it up here, the user only has to
+  // configure idField in ONE place (the repo) and Arc threads it through:
+  //   - BaseController.idField (lookup pass-through)
+  //   - AJV params schema strip (UUIDs/slugs not rejected by ObjectId pattern)
+  //   - ResourceDefinition.idField (introspection / OpenAPI)
+  // Set it on `config` BEFORE preset resolution so presets see the same value.
+  if (config.idField === undefined && repository) {
+    const repoIdField = (repository as { idField?: unknown }).idField;
+    if (typeof repoIdField === "string" && repoIdField !== "_id") {
+      config = { ...config, idField: repoIdField };
+    }
+  }
+
   // Check if any CRUD routes will actually be created
   const crudRoutes = CRUD_OPERATIONS;
   const disabledRoutes = new Set(config.disabledRoutes ?? []);

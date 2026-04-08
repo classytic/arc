@@ -7,9 +7,9 @@
  *     or your custom resolver, scoped to the current organization
  *
  * Three permission helpers behave differently:
- *   - `requireRoles(['admin'])` — checks platform roles only by default
- *   - `requireRoles(['admin'], { includeOrgRoles: true })` — checks both
- *   - `roles('admin', 'editor')` — always checks both, plus elevated bypass
+ *   - `requireRoles(['admin'])` — checks BOTH platform AND org roles by default (2.7.1+)
+ *   - `requireRoles(['admin'], { includeOrgRoles: false })` — explicit platform-only opt-out
+ *   - `roles('admin', 'editor')` — checks both, plus elevated bypass (alias of default)
  *
  * Real-world scenarios this guards against:
  *   - Platform admin acting in an org (no org role) — should NOT lose access
@@ -114,8 +114,11 @@ async function buildApp() {
       list: allowPublic(),
       get: allowPublic(),
       create: roles("admin", "editor"), // checks both layers
-      update: requireRoles(["admin"]), // platform only
-      delete: requireRoles(["admin"], { includeOrgRoles: true }), // both
+      // 2.7.1+: requireRoles defaults to includeOrgRoles: true.
+      // `update` keeps the platform-only behavior via explicit opt-out so we
+      // can still exercise that branch in tests.
+      update: requireRoles(["admin"], { includeOrgRoles: false }), // platform only (opt-out)
+      delete: requireRoles(["admin"]), // both layers (default)
     },
   });
 
@@ -221,7 +224,7 @@ describe("Multi-role user — platform + org role merging", () => {
     expect(res.statusCode).toBe(201);
   });
 
-  // ── update: requireRoles(['admin']) — PLATFORM ONLY ──
+  // ── update: requireRoles(['admin'], { includeOrgRoles: false }) — PLATFORM ONLY (explicit opt-out) ──
 
   it("UPDATE: platform admin → allowed", async () => {
     repo.store.set("m-x", { _id: "m-x", name: "Existing" });
@@ -235,7 +238,7 @@ describe("Multi-role user — platform + org role merging", () => {
     expect(res.statusCode).toBe(200);
   });
 
-  it("UPDATE: org admin (org role only, no platform admin) → 403 (platform-only check)", async () => {
+  it("UPDATE: org admin (org role only, no platform admin) → 403 (explicit platform-only opt-out)", async () => {
     repo.store.set("m-x", { _id: "m-x", name: "Existing" });
     const t = token({ id: "u2", role: ["user"], organizationId: ORG_A, orgRoles: ["admin"] });
     const res = await app.inject({
@@ -244,11 +247,11 @@ describe("Multi-role user — platform + org role merging", () => {
       headers: hdr(t),
       payload: { name: "Hijacked" },
     });
-    // requireRoles(['admin']) WITHOUT includeOrgRoles ignores org roles
+    // `update` is configured with `{ includeOrgRoles: false }` — org roles ignored
     expect(res.statusCode).toBe(403);
   });
 
-  // ── delete: requireRoles(['admin'], { includeOrgRoles: true }) — BOTH ──
+  // ── delete: requireRoles(['admin']) — DEFAULT (both layers in 2.7.1+) ──
 
   it("DELETE: platform admin → allowed", async () => {
     repo.store.set("m-x", { _id: "m-x", name: "Existing" });

@@ -147,13 +147,47 @@ export { presets as permissions };
 import type { FastifyRequest } from "fastify";
 import type { RequestScope } from "../scope/types.js";
 import {
+  getRequestScope as getScope,
+  getScopeContext,
+  getScopeContextMap,
   getUserId as getScopeUserId,
+  getServiceScopes,
   getTeamId,
+  hasOrgAccess,
   isElevated,
   isMember,
-  PUBLIC_SCOPE,
+  isOrgInScope,
+  isService,
 } from "../scope/types.js";
 import type { PermissionCheck, PermissionContext, PermissionResult } from "./types.js";
+
+// ============================================================================
+// Internal helpers
+// ============================================================================
+
+/**
+ * Normalize a `string | [readonly string[]]` rest-args tuple into a single
+ * `readonly string[]`. Lets a permission helper accept BOTH variadic and
+ * array call shapes from the same overload signature without each helper
+ * re-implementing the same ternary.
+ *
+ * Used by `requireOrgRole`, `requireServiceScope`, etc. **Not** used by
+ * `requireRoles` — that helper has a richer overload signature with an
+ * options object and stays on its own normalization path.
+ *
+ * @example
+ * ```typescript
+ * function requireFoo(...args: string[] | [readonly string[]]) {
+ *   const items = normalizeVariadicOrArray(args);
+ *   // items is always readonly string[]
+ * }
+ * requireFoo('a', 'b', 'c');
+ * requireFoo(['a', 'b', 'c']);
+ * ```
+ */
+function normalizeVariadicOrArray(args: string[] | [readonly string[]]): readonly string[] {
+  return Array.isArray(args[0]) ? args[0] : (args as string[]);
+}
 
 // ============================================================================
 // Permission Helpers
@@ -217,22 +251,80 @@ export function requireAuth(): PermissionCheck {
  * }
  * ```
  */
+/**
+ * Require one of the specified roles. Checks BOTH platform roles
+ * (`user.role`) AND organization roles (`scope.orgRoles`) by default —
+ * passing in either layer grants access. Elevated scope always passes.
+ *
+ * Accepts EITHER variadic strings OR a single readonly array — both forms
+ * produce identical behavior. Use whichever reads better at the call site.
+ *
+ * @example
+ * ```typescript
+ * requireRoles('admin')                       // single role, variadic
+ * requireRoles('admin', 'editor')             // multiple roles, variadic
+ * requireRoles(['admin', 'editor'])           // array form
+ * requireRoles(['admin'], { bypassRoles: ['superadmin'] })   // with options
+ * requireRoles(['admin'], { includeOrgRoles: false })        // platform-only
+ * ```
+ *
+ * **2.7.1 BREAKING CHANGE:** `includeOrgRoles` now defaults to `true`. The
+ * old default (`false`, platform-only) was a footgun for the common case of
+ * Better Auth's organization plugin where roles like 'admin' are assigned at
+ * the org level. To restore the old behavior explicitly, pass
+ * `{ includeOrgRoles: false }`.
+ *
+ * For org-only role checks, prefer `requireOrgRole('admin')`.
+ */
+export function requireRoles(role: string, ...rest: string[]): PermissionCheck;
 export function requireRoles(
   roles: readonly string[],
   options?: {
     bypassRoles?: readonly string[];
     /**
      * Also check org membership roles (`scope.orgRoles`) when in org context.
-     * Default: `false` — only checks platform roles (`user.role`).
+     * Default: `true` (changed in 2.7.1).
      *
-     * Set to `true` when using Better Auth organization plugin where roles like
-     * 'admin' are assigned at the org level, not the user level.
-     *
-     * For org-only role checks, prefer `requireOrgRole('admin')` instead.
+     * Set to `false` to restore the pre-2.7.1 behavior of checking only
+     * platform roles (`user.role`). For org-only role checks, prefer
+     * `requireOrgRole('admin')` instead.
      */
     includeOrgRoles?: boolean;
   },
+): PermissionCheck;
+export function requireRoles(
+  rolesOrFirst: string | readonly string[],
+  optionsOrSecond?:
+    | string
+    | {
+        bypassRoles?: readonly string[];
+        includeOrgRoles?: boolean;
+      },
+  ...rest: string[]
 ): PermissionCheck {
+  // Normalize the two call shapes:
+  //   requireRoles('admin', 'editor', ...)         → variadic
+  //   requireRoles(['admin', 'editor'], { ... })   → array + options
+  let roles: readonly string[];
+  let options: { bypassRoles?: readonly string[]; includeOrgRoles?: boolean } | undefined;
+
+  if (typeof rolesOrFirst === "string") {
+    // Variadic form — collect all positional string args
+    roles = [
+      rolesOrFirst,
+      ...(typeof optionsOrSecond === "string" ? [optionsOrSecond] : []),
+      ...rest,
+    ];
+    options = undefined;
+  } else {
+    roles = rolesOrFirst;
+    options = optionsOrSecond && typeof optionsOrSecond === "object" ? optionsOrSecond : undefined;
+  }
+
+  // 2.7.1: includeOrgRoles defaults to TRUE — checks both platform and org
+  // roles by default. Pass `{ includeOrgRoles: false }` to opt out.
+  const includeOrgRoles = options?.includeOrgRoles ?? true;
+
   const check: PermissionCheck = (ctx) => {
     if (!ctx.user) {
       return { granted: false, reason: "Authentication required" };
@@ -250,9 +342,10 @@ export function requireRoles(
       return true;
     }
 
-    // Optionally check org roles when in org context
-    if (options?.includeOrgRoles) {
+    // Check org roles when in org context (default behavior in 2.7.1+)
+    if (includeOrgRoles) {
       const scope = getScope(ctx.request);
+      if (isElevated(scope)) return true;
       if (isMember(scope) && roles.some((r) => scope.orgRoles.includes(r))) {
         return true;
       }
@@ -268,25 +361,30 @@ export function requireRoles(
 }
 
 /**
- * Unified role check — checks both platform roles AND org roles.
+ * **Alias of `requireRoles()`** — checks both platform roles AND org roles.
  *
- * This is the recommended helper for Better Auth organization plugin users.
- * It checks `user.role` (platform) first, then `scope.orgRoles` (org membership).
- * Elevated scope always passes.
+ * Since 2.7.1, `requireRoles()` defaults to `includeOrgRoles: true`, which
+ * means `roles('admin')` and `requireRoles('admin')` are now functionally
+ * identical. This helper is preserved for backwards compatibility and for
+ * call sites that prefer the shorter `roles()` name.
  *
- * For platform-only checks: use `requireRoles(['admin'])`
- * For org-only checks: use `requireOrgRole('admin')`
+ * **For new code, prefer `requireRoles()`** — it's the canonical name and
+ * matches the rest of the `requireXxx()` family (`requireAuth`, `requireOwnership`,
+ * `requireOrgRole`, etc.).
+ *
+ * For platform-only checks: `requireRoles(['admin'], { includeOrgRoles: false })`
+ * For org-only checks: `requireOrgRole('admin')`
  *
  * @example
  * ```typescript
- * permissions: {
- *   create: roles('admin', 'editor'),  // passes if user has role at either level
- *   delete: roles('admin'),
- * }
+ * // These are identical:
+ * roles('admin', 'editor')
+ * requireRoles('admin', 'editor')
+ * requireRoles(['admin', 'editor'])
  * ```
  */
 export function roles(...args: string[] | [readonly string[]]): PermissionCheck {
-  const roleList: readonly string[] = Array.isArray(args[0]) ? args[0] : (args as string[]);
+  const roleList = normalizeVariadicOrArray(args);
 
   const check: PermissionCheck = (ctx) => {
     if (!ctx.user) {
@@ -361,10 +459,22 @@ export function requireOwnership<TDoc = Record<string, unknown>>(
 }
 
 /**
- * Combine multiple checks - ALL must pass (AND logic)
+ * Combine multiple checks - ALL must pass (AND logic).
+ *
+ * Each child runs against the **accumulated** state of previous children:
+ *   - `filters` from earlier children are merged into the next child's
+ *     `_policyFilters` (so e.g. `requireOwnership` sees row-level scoping)
+ *   - `scope` from earlier children is installed on the request before the
+ *     next child runs (so e.g. `requireOrgMembership` after `requireApiKey`
+ *     sees the service scope from the API key check)
+ *
+ * The final returned `PermissionResult` carries both the merged `filters` AND
+ * the merged `scope`, so the outer middleware's `applyPermissionResult` call
+ * sees the same end-state.
  *
  * @example
  * ```typescript
+ * // CRUD permissions composed across roles + ownership
  * permissions: {
  *   update: allOf(
  *     requireAuth(),
@@ -372,30 +482,82 @@ export function requireOwnership<TDoc = Record<string, unknown>>(
  *     requireOwnership('createdBy')
  *   ),
  * }
+ *
+ * // Custom auth + org membership — first check installs the scope,
+ * // second check reads it.
+ * permissions: {
+ *   list: allOf(requireApiKey(), requireOrgMembership()),
+ * }
  * ```
  */
 export function allOf(...checks: PermissionCheck[]): PermissionCheck {
   return async (ctx) => {
     let mergedFilters: Record<string, unknown> = {};
+    let installedScope: RequestScope | undefined;
 
-    for (const check of checks) {
-      const result = await check(ctx);
-      const normalized: PermissionResult =
-        typeof result === "boolean" ? { granted: result } : result;
+    // Snapshot the request's pre-existing _policyFilters / scope so we can
+    // restore on failure (avoid leaking partial state into the request when
+    // a later child denies).
+    const sink = ctx.request as FastifyRequest & {
+      _policyFilters?: Record<string, unknown>;
+      scope?: RequestScope;
+    };
+    const originalFilters = sink._policyFilters;
+    const originalScope = sink.scope;
 
-      if (!normalized.granted) {
-        return normalized;
+    try {
+      for (const check of checks) {
+        const result = await check(ctx);
+        const normalized: PermissionResult =
+          typeof result === "boolean" ? { granted: result } : result;
+
+        if (!normalized.granted) {
+          // Restore request state before bailing — partial allOf() runs must
+          // not leak filters/scope from earlier children that won't be honored.
+          sink._policyFilters = originalFilters;
+          sink.scope = originalScope;
+          return normalized;
+        }
+
+        // Merge filters and apply them to the request so the NEXT child sees
+        // the accumulated row-level filter (mirrors how middleware would have
+        // applied them between two separate permission checks).
+        if (normalized.filters) {
+          mergedFilters = { ...mergedFilters, ...normalized.filters };
+          sink._policyFilters = {
+            ...(sink._policyFilters ?? {}),
+            ...normalized.filters,
+          };
+        }
+
+        // Install scope so the next child reads the augmented context.
+        // Mirrors `applyPermissionResult`'s "don't downgrade" rule: only
+        // install when the current scope is absent or `public`.
+        if (normalized.scope) {
+          const current = sink.scope;
+          if (!current || current.kind === "public") {
+            sink.scope = normalized.scope;
+            installedScope = normalized.scope;
+          } else if (!installedScope) {
+            // Even if we don't write to the request (because something more
+            // authoritative is already there), still surface the scope on the
+            // returned result so callers/audits can see what allOf produced.
+            installedScope = normalized.scope;
+          }
+        }
       }
-
-      // Merge filters
-      if (normalized.filters) {
-        mergedFilters = { ...mergedFilters, ...normalized.filters };
-      }
+    } catch (err) {
+      // Restore request state on any thrown error — same reasoning as the
+      // denial path: partial allOf() runs leave no side effects.
+      sink._policyFilters = originalFilters;
+      sink.scope = originalScope;
+      throw err;
     }
 
     return {
       granted: true,
       filters: Object.keys(mergedFilters).length > 0 ? mergedFilters : undefined,
+      scope: installedScope,
     };
   };
 }
@@ -475,38 +637,57 @@ export function when<TDoc = Record<string, unknown>>(
 }
 
 // ============================================================================
-// Organization Permission Helpers
+// Org-Bound Helpers
+// ----------------------------------------------------------------------------
+// Helpers that gate routes by an organization context. All read
+// `request.scope` set by an auth adapter (Better Auth bridge / JWT custom
+// auth / API-key check returning a `PermissionResult.scope`).
 // ============================================================================
 
-/** Read request.scope safely */
-function getScope(request: FastifyRequest): RequestScope {
-  return request.scope ?? PUBLIC_SCOPE;
-}
-
 /**
- * Require membership in the active organization.
- * User must be authenticated AND have an active org (member or elevated scope).
+ * Require an org-bound caller. Grants access for any scope kind that
+ * carries org context: `member` (human user with org membership), `service`
+ * (API key bound to an org), or `elevated` (platform admin). Denies for
+ * `public` and `authenticated` scopes (no org context).
  *
- * Reads `request.scope` set by auth adapters.
+ * This is the canonical "is the caller acting inside an org" check, and the
+ * usual partner for `multiTenantPreset` — if a route is multi-tenant
+ * filtered, you almost always want this gate too.
+ *
+ * Reads `request.scope` set by auth adapters or by upstream permission
+ * checks via `PermissionResult.scope` (e.g. a custom `requireApiKey()`).
  *
  * @example
  * ```typescript
  * permissions: {
  *   list: requireOrgMembership(),
  *   get: requireOrgMembership(),
+ *
+ *   // Composed with an OAuth-style scope check for API-key callers
+ *   create: allOf(requireOrgMembership(), requireServiceScope('jobs:write')),
  * }
  * ```
  */
 export function requireOrgMembership<TDoc = Record<string, unknown>>(): PermissionCheck<TDoc> {
   const check: PermissionCheck<TDoc> = (ctx) => {
+    const scope = getScope(ctx.request);
+
+    // 2.7.0: any scope kind with org-access semantics passes — member,
+    // service (API key bound to one org), and elevated (platform admin,
+    // org optional). Type system guarantees member/service carry an
+    // organizationId; elevated-without-org is the documented cross-org
+    // admin bypass and is intentionally allowed here.
+    //
+    // Service scopes have no `ctx.user` — that's fine, the user-presence
+    // check below only fires for non-org scopes (public/authenticated).
+    if (hasOrgAccess(scope)) return true;
+
+    // Non-org scopes: surface a message that matches the user's mental model.
+    //   - public → "Authentication required"
+    //   - authenticated without org → "Organization membership required"
     if (!ctx.user) {
       return { granted: false, reason: "Authentication required" };
     }
-
-    const scope = getScope(ctx.request);
-    if (isElevated(scope)) return true;
-    if (isMember(scope)) return true;
-
     return { granted: false, reason: "Organization membership required" };
   };
   check._orgPermission = "membership";
@@ -517,6 +698,23 @@ export function requireOrgMembership<TDoc = Record<string, unknown>>(): Permissi
  * Require specific org-level roles.
  * Reads `request.scope.orgRoles` (set by auth adapters).
  * Elevated scope always passes (platform admin bypass).
+ *
+ * **Service scopes (API keys) always fail this check** — services don't
+ * carry user-style org roles, only OAuth-style `scopes` strings. For routes
+ * that should accept BOTH human admins AND API keys, compose explicitly:
+ *
+ * ```typescript
+ * permissions: {
+ *   create: anyOf(
+ *     requireOrgRole('admin'),                       // human path
+ *     requireServiceScope('jobs:write'),             // machine path
+ *   ),
+ * }
+ * ```
+ *
+ * This separation is intentional — implicit "API key bypasses role checks"
+ * is the kind of footgun that ships data breaches. Services must opt into
+ * specific scopes the same way OAuth clients do.
  *
  * @param roles - Required org roles (user needs at least one)
  *
@@ -531,16 +729,32 @@ export function requireOrgMembership<TDoc = Record<string, unknown>>(): Permissi
 export function requireOrgRole<TDoc = Record<string, unknown>>(
   ...args: string[] | [readonly string[]]
 ): PermissionCheck<TDoc> {
-  // Support both: requireOrgRole('admin', 'owner') and requireOrgRole(['admin', 'owner'])
-  const roles: readonly string[] = Array.isArray(args[0]) ? args[0] : (args as string[]);
+  // Accepts both `requireOrgRole('admin', 'owner')` and `requireOrgRole(['admin', 'owner'])`
+  const roles = normalizeVariadicOrArray(args);
 
   const check: PermissionCheck<TDoc> = (ctx) => {
+    const scope = getScope(ctx.request);
+
+    // Elevated bypass — platform admin can act regardless of org role
+    if (isElevated(scope)) return true;
+
+    // Service scope (API key) — explicitly deny with a guidance reason.
+    // Services have OAuth-style `scopes`, not user-style `orgRoles`.
+    // Compose with `requireServiceScope(...)` via `anyOf()` for mixed routes.
+    if (isService(scope)) {
+      return {
+        granted: false,
+        reason:
+          "Service scopes (API keys) cannot satisfy requireOrgRole. " +
+          "Use requireServiceScope(...) for machine identities, or compose " +
+          "with anyOf(requireOrgRole(...), requireServiceScope(...)) to accept both.",
+      };
+    }
+
+    // Human path — require user + member scope
     if (!ctx.user) {
       return { granted: false, reason: "Authentication required" };
     }
-
-    const scope = getScope(ctx.request);
-    if (isElevated(scope)) return true;
 
     if (!isMember(scope)) {
       return { granted: false, reason: "Organization membership required" };
@@ -558,6 +772,316 @@ export function requireOrgRole<TDoc = Record<string, unknown>>(
   check._orgRoles = roles;
   return check;
 }
+
+// ============================================================================
+// Service / API Key Scopes
+// ----------------------------------------------------------------------------
+// OAuth-style scope strings for machine identities (API keys, service
+// accounts). Companion to `requireOrgRole` for the human path — see the
+// "mixed routes" pattern in each helper's JSDoc.
+// ============================================================================
+
+/**
+ * Require specific OAuth-style scope strings on a service (API key) identity.
+ *
+ * Reads `request.scope.scopes` — only populated when the scope kind is
+ * `service`. Mirrors how OAuth 2.0 / Better Auth's apiKey plugin / API
+ * gateways express machine permissions: a comma- or array-encoded list of
+ * scope strings like `'jobs:read'`, `'jobs:write'`, `'memories:*'`.
+ *
+ * **Pass behavior:**
+ * - `service` scope where `scopes` contains ANY of the required strings → grant
+ * - `elevated` scope (platform admin) → grant
+ * - Anything else → deny with a clear reason
+ *
+ * Notably this does **not** grant for `member` scopes — humans go through
+ * `requireOrgRole`. For routes that should accept both, compose with `anyOf`:
+ *
+ * ```typescript
+ * permissions: {
+ *   create: anyOf(
+ *     requireOrgRole('admin'),
+ *     requireServiceScope('jobs:write'),
+ *   ),
+ * }
+ * ```
+ *
+ * @param scopes - Required scope strings (caller needs at least one)
+ *
+ * @example
+ * ```typescript
+ * // Variadic
+ * requireServiceScope('jobs:write')
+ * requireServiceScope('jobs:read', 'jobs:write')
+ *
+ * // Array
+ * requireServiceScope(['jobs:read', 'jobs:write'])
+ *
+ * // Composed with org membership for org-scoped API keys
+ * permissions: {
+ *   list: allOf(requireOrgMembership(), requireServiceScope('jobs:read')),
+ *   create: allOf(requireOrgMembership(), requireServiceScope('jobs:write')),
+ * }
+ * ```
+ */
+export function requireServiceScope<TDoc = Record<string, unknown>>(
+  ...args: string[] | [readonly string[]]
+): PermissionCheck<TDoc> {
+  // Accepts both `requireServiceScope('jobs:write')` and `requireServiceScope(['jobs:write'])`
+  const required = normalizeVariadicOrArray(args);
+
+  if (required.length === 0) {
+    throw new Error(
+      "requireServiceScope() requires at least one scope string (e.g. requireServiceScope('jobs:write'))",
+    );
+  }
+
+  const check: PermissionCheck<TDoc> = (ctx) => {
+    const scope = getScope(ctx.request);
+
+    // Elevated bypass — platform admin can act regardless of service scopes
+    if (isElevated(scope)) return true;
+
+    if (!isService(scope)) {
+      return {
+        granted: false,
+        reason:
+          "Service identity required (API key). " +
+          "For human users, use requireOrgRole(...) or compose with " +
+          "anyOf(requireOrgRole(...), requireServiceScope(...)).",
+      };
+    }
+
+    const granted = getServiceScopes(scope);
+    if (required.some((r) => granted.includes(r))) {
+      return true;
+    }
+
+    return {
+      granted: false,
+      reason: `Required service scopes: ${required.join(", ")} (granted: ${granted.length > 0 ? granted.join(", ") : "none"})`,
+    };
+  };
+  // Tag for introspection / OpenAPI docs (parallels _orgRoles on requireOrgRole)
+  check._serviceScopes = required;
+  return check;
+}
+
+// ============================================================================
+// Scope Context (custom tenancy dimensions)
+// ----------------------------------------------------------------------------
+// Helpers for app-defined scope dimensions (branch, project, department,
+// region, workspace, …) that arc itself doesn't model. Auth function
+// populates `scope.context`; routes gate via `requireScopeContext`;
+// `multiTenantPreset({ tenantFields })` filters by them.
+// ============================================================================
+
+/**
+ * Require app-defined scope context dimensions (branch, project, department,
+ * region, workspace, etc.) on the current request.
+ *
+ * Reads `request.scope.context` (a `Readonly<Record<string, string>>` slot
+ * available on `member`, `service`, and `elevated` scope kinds). Arc takes
+ * no position on what dimensions you use — you set them, you check them.
+ *
+ * **Three call shapes:**
+ *
+ * ```typescript
+ * // 1. Presence check — key must exist on scope.context
+ * requireScopeContext('branchId')
+ *
+ * // 2. Value match — key must equal a specific string
+ * requireScopeContext('branchId', 'eng-paris')
+ *
+ * // 3. Multi-key (object form, AND semantics) — every key must match
+ * requireScopeContext({ branchId: 'eng-paris', projectId: 'p-123' })
+ * requireScopeContext({ region: 'eu', branchId: undefined })  // 'undefined' = presence-only for that key
+ * ```
+ *
+ * **Pass behavior:**
+ * - All required keys present (and matching values when specified) → grant
+ * - `elevated` scope (platform admin) → grant unconditionally (cross-context bypass)
+ * - Any required key missing or mismatched → deny with a clear reason
+ * - Scope kind without context support (`public`, `authenticated`) → deny
+ *
+ * Pairs with `multiTenantPreset({ tenantFields: [...] })` for row-level
+ * filtering on the same dimensions.
+ *
+ * @example
+ * ```typescript
+ * permissions: {
+ *   // Branch-scoped CRUD — caller must have branchId in their scope context
+ *   list: allOf(requireOrgMembership(), requireScopeContext('branchId')),
+ *
+ *   // Project admin — caller must have BOTH project context AND admin role
+ *   delete: allOf(requireOrgRole('admin'), requireScopeContext('projectId')),
+ *
+ *   // Region-locked endpoint
+ *   euOnly: requireScopeContext('region', 'eu'),
+ * }
+ * ```
+ */
+export function requireScopeContext<TDoc = Record<string, unknown>>(
+  keyOrMap: string | Record<string, string | undefined>,
+  value?: string,
+): PermissionCheck<TDoc> {
+  // Normalize the three call shapes into a single { key: expectedValue|undefined } map.
+  // `undefined` means "presence-only" for that key.
+  let required: Record<string, string | undefined>;
+
+  if (typeof keyOrMap === "string") {
+    required = { [keyOrMap]: value };
+  } else if (keyOrMap && typeof keyOrMap === "object") {
+    required = keyOrMap;
+  } else {
+    throw new Error(
+      "requireScopeContext() requires a key (string), key+value, or { key: value } map",
+    );
+  }
+
+  const requiredKeys = Object.keys(required);
+  if (requiredKeys.length === 0) {
+    throw new Error(
+      "requireScopeContext() requires at least one key (e.g. requireScopeContext('branchId'))",
+    );
+  }
+
+  const check: PermissionCheck<TDoc> = (ctx) => {
+    const scope = getScope(ctx.request);
+
+    // Elevated bypass — platform admin can act regardless of context dimensions
+    if (isElevated(scope)) return true;
+
+    const ctxMap = getScopeContextMap(scope);
+    if (!ctxMap) {
+      return {
+        granted: false,
+        reason:
+          "Scope context required (member, service, or elevated scope). " +
+          "Populate request.scope.context in your auth function.",
+      };
+    }
+
+    // Walk every required key — fail closed on the first mismatch
+    for (const key of requiredKeys) {
+      const expected = required[key];
+      const actual = getScopeContext(scope, key);
+      if (actual === undefined) {
+        return {
+          granted: false,
+          reason: `Required scope context key "${key}" is missing`,
+        };
+      }
+      if (expected !== undefined && actual !== expected) {
+        return {
+          granted: false,
+          reason: `Required scope context "${key}" must equal "${expected}" (got "${actual}")`,
+        };
+      }
+    }
+
+    return true;
+  };
+
+  // Tag for introspection / OpenAPI docs (parallels _orgRoles, _serviceScopes)
+  check._scopeContext = required;
+  return check;
+}
+
+// ============================================================================
+// Org Hierarchy
+// ----------------------------------------------------------------------------
+// Parent-child organization checks. Auth function pre-loads
+// `scope.ancestorOrgIds`; routes opt in via `requireOrgInScope`. No
+// automatic permission inheritance — every check is explicit.
+// ============================================================================
+
+/**
+ * Require that the caller's scope grants access to a target organization
+ * — either the current org or one of its ancestors (`scope.ancestorOrgIds`).
+ *
+ * Designed for parent-child organization hierarchies (holding company →
+ * subsidiary → branch, MSP → managed tenants, white-label parent → child
+ * accounts) where some routes need to accept "this org OR any org I have
+ * access to via the chain". Arc takes no position on the source of the
+ * chain — your auth function loads `ancestorOrgIds` from your own data
+ * model. There's no automatic inheritance: every route opts in explicitly.
+ *
+ * **Two call shapes:**
+ *
+ * ```typescript
+ * // Static target — rare, used when one route only ever acts on one org
+ * requireOrgInScope('acme-holding')
+ *
+ * // Dynamic target — extracted from request params/body/headers per call
+ * requireOrgInScope((ctx) => ctx.request.params.orgId)
+ * requireOrgInScope((ctx) => ctx.request.body?.organizationId)
+ * ```
+ *
+ * **Pass behavior:**
+ * - Target equals `scope.organizationId` → grant
+ * - Target appears in `scope.ancestorOrgIds` → grant
+ * - `elevated` scope → grant unconditionally (cross-org admin bypass)
+ * - Target is undefined (extractor returned nothing) → deny with reason
+ * - Anything else → deny with target name in reason
+ *
+ * @example
+ * ```typescript
+ * // /orgs/:orgId/jobs — caller can act on any org in their hierarchy chain
+ * permissions: {
+ *   list: requireOrgInScope((ctx) => ctx.request.params.orgId),
+ *   create: allOf(
+ *     requireOrgInScope((ctx) => ctx.request.body?.organizationId),
+ *     requireOrgRole('admin'),
+ *   ),
+ * }
+ * ```
+ */
+export function requireOrgInScope<TDoc = Record<string, unknown>>(
+  target: string | ((ctx: PermissionContext<TDoc>) => string | undefined),
+): PermissionCheck<TDoc> {
+  if (target === undefined || target === null) {
+    throw new Error(
+      "requireOrgInScope() requires a target org id (string) or an extractor function",
+    );
+  }
+
+  const check: PermissionCheck<TDoc> = (ctx) => {
+    const scope = getScope(ctx.request);
+
+    // Elevated bypass — platform admin acts cross-org regardless of chain
+    if (isElevated(scope)) return true;
+
+    // Resolve the target org id (static or dynamic)
+    const targetOrgId = typeof target === "function" ? target(ctx) : target;
+    if (!targetOrgId) {
+      return {
+        granted: false,
+        reason: "requireOrgInScope: target org id could not be resolved from the request",
+      };
+    }
+
+    if (isOrgInScope(scope, targetOrgId)) return true;
+
+    return {
+      granted: false,
+      reason: `Target organization "${targetOrgId}" is not in the caller's org hierarchy`,
+    };
+  };
+
+  // Tag for introspection (parallels _orgRoles, _serviceScopes, _scopeContext)
+  check._orgInScopeTarget = target;
+  return check;
+}
+
+// ============================================================================
+// Permission Matrices
+// ----------------------------------------------------------------------------
+// Higher-level role × resource × action mapping. Static
+// (`createOrgPermissions`) for compile-time-known matrices, dynamic
+// (`createDynamicPermissionMatrix`) for runtime-resolved ones with
+// optional caching and event-based invalidation.
+// ============================================================================
 
 /**
  * Create a scoped permission system for resource-action patterns.

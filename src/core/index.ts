@@ -25,6 +25,7 @@ export {
   createPermissionMiddleware,
 } from "./createCrudRouter.js";
 export { defineResource, ResourceDefinition } from "./defineResource.js";
+export { defineResourceVariants } from "./defineResourceVariants.js";
 // Fastify adapter for framework-agnostic controllers
 export {
   createCrudHandlers,

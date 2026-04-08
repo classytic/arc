@@ -95,13 +95,18 @@ describe("Security: Release Blockers", () => {
 
       await createMiddleware?.(request, reply);
 
-      // ✅ FIXED: Returns 403 instead of creating orphaned data
+      // ✅ FIXED: Returns 403 instead of creating orphaned data.
+      // 2.7.1+: the multi-tenant preset reports the specific missing tenant
+      // field name(s) so multi-field configs can pinpoint which dimension
+      // failed. For the default single-field case it's `organizationId`.
       expect(statusCode).toBe(403);
-      expect(responseBody).toEqual({
+      expect(responseBody).toMatchObject({
         success: false,
         error: "Forbidden",
-        message: "Organization context required to create resources",
       });
+      const message = (responseBody as { message: string }).message;
+      expect(message).toContain("Tenant context incomplete");
+      expect(message).toContain("organizationId");
     });
 
     it("correctly filters when orgId exists", async () => {

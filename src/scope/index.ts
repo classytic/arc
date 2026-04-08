@@ -29,10 +29,14 @@ export { resolveOrgFromHeader } from "./resolveOrgFromHeader.js";
 export type { RequestScope } from "./types.js";
 export {
   AUTHENTICATED_SCOPE,
+  getAncestorOrgIds,
   getClientId,
   getOrgContext,
   getOrgId,
   getOrgRoles,
+  getRequestScope,
+  getScopeContext,
+  getScopeContextMap,
   getServiceScopes,
   getTeamId,
   getUserId,
@@ -41,6 +45,7 @@ export {
   isAuthenticated,
   isElevated,
   isMember,
+  isOrgInScope,
   isService,
   PUBLIC_SCOPE,
 } from "./types.js";

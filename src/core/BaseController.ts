@@ -94,6 +94,14 @@ export interface BaseControllerOptions {
   tenantField?: string | false;
   /**
    * Primary key field name (default: '_id').
+   *
+   * If not set, the controller auto-derives it from the repository's own
+   * `idField` property (e.g. MongoKit's `Repository({ idField: 'id' })`),
+   * so you only need to configure it in one place.
+   *
+   * Set explicitly to override the repo's setting (e.g. `'_id'` to opt out
+   * of native pass-through and force the slug-translation path).
+   *
    * Override for non-MongoDB adapters (e.g., 'id' for SQL databases).
    */
   idField?: string;
@@ -157,7 +165,12 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     this.resourceName = options.resourceName;
     this.tenantField =
       options.tenantField !== undefined ? options.tenantField : DEFAULT_TENANT_FIELD;
-    this.idField = options.idField ?? DEFAULT_ID_FIELD;
+    // Auto-derive from repo when not explicitly set — saves users from
+    // configuring idField in two places (repo and controller).
+    this.idField =
+      options.idField ??
+      ((repository as { idField?: unknown })?.idField as string | undefined) ??
+      DEFAULT_ID_FIELD;
     this._matchesFilter = options.matchesFilter;
     if (options.cache) this._cacheConfig = options.cache;
     if (options.presetFields) this._presetFields = options.presetFields;
@@ -211,6 +224,33 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
   /** Get hook system from request context (instance-scoped) */
   private getHooks(req: IRequestContext): HookSystem | null {
     return this.meta(req)?.arc?.hooks ?? null;
+  }
+
+  /**
+   * Resolve the repository primary key for mutation calls (update/delete/restore).
+   *
+   * When the resource declares a custom `idField` (e.g. `slug`, `jobId`, UUID),
+   * the default behavior is to translate the route id → the fetched doc's `_id`
+   * because most Mongo repositories key their mutation methods off `_id`.
+   *
+   * Exception: if the repository itself exposes a matching `idField` property
+   * (e.g. MongoKit's `new Repository(Model, [], {}, { idField: 'id' })`), the
+   * repository already knows how to look up by that field — so we pass the
+   * route id through unchanged and skip the translation.
+   *
+   * This makes `defineResource({ idField: 'id' })` work end-to-end with repos
+   * that natively support custom primary keys, without breaking the slug-style
+   * aliasing that Arc 2.6.3 introduced for repos keyed on `_id`.
+   */
+  private resolveRepoId(id: string, existing: AnyRecord | null): string {
+    if (this.idField === DEFAULT_ID_FIELD) return id;
+    if (!existing) return id;
+    // RepositoryLike.idField (when present) declares the repo's native PK field.
+    // If it matches the resource's idField, the repo handles lookup itself —
+    // pass the route id through unchanged.
+    const repoIdField = (this.repository as RepositoryLike).idField;
+    if (repoIdField && repoIdField === this.idField) return id;
+    return String(existing[DEFAULT_ID_FIELD] ?? id);
   }
 
   // ============================================================================
@@ -567,12 +607,11 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
 
     // Resolve the real repository primary key for the update call.
     // When idField is a custom field (slug, jobId, etc.), `id` is a slug but
-    // the repository's update() expects the native PK (_id for Mongo). Pull
-    // the native PK off the already-fetched document.
-    const repoId =
-      this.idField !== DEFAULT_ID_FIELD && existing
-        ? String((existing as AnyRecord)[DEFAULT_ID_FIELD] ?? id)
-        : id;
+    // the repository's update() typically expects the native PK (_id for Mongo).
+    // EXCEPTION: If the repository natively supports the same idField (e.g.
+    // MongoKit's `new Repository(Model, [], {}, { idField: 'id' })`), pass the
+    // route id through unchanged — the repo handles lookup itself.
+    const repoId = this.resolveRepoId(id, existing as AnyRecord | null);
 
     const hooks = this.getHooks(req);
     let processedData = data;
@@ -662,12 +701,9 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       };
     }
 
-    // Resolve the real repository primary key for the delete call (same
-    // reason as update: custom idField → native PK mismatch).
-    const repoId =
-      this.idField !== DEFAULT_ID_FIELD && existing
-        ? String((existing as AnyRecord)[DEFAULT_ID_FIELD] ?? id)
-        : id;
+    // Resolve the real repository primary key for the delete call (see
+    // resolveRepoId for native-idField fast-path).
+    const repoId = this.resolveRepoId(id, existing as AnyRecord | null);
 
     const hooks = this.getHooks(req);
     if (hooks && this.resourceName) {
@@ -841,12 +877,9 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       };
     }
 
-    // Custom idField: derive the native PK from the fetched doc, since
-    // repo.restore() expects the repository's native primary key.
-    const repoId =
-      this.idField !== DEFAULT_ID_FIELD && existing
-        ? String((existing as AnyRecord)[DEFAULT_ID_FIELD] ?? id)
-        : id;
+    // Custom idField: derive the native PK from the fetched doc, unless the
+    // repo natively supports the same idField (see resolveRepoId).
+    const repoId = this.resolveRepoId(id, existing as AnyRecord | null);
     const item = await repo.restore(repoId);
     if (!item) {
       return { success: false, error: "Resource not found", status: 404 };
@@ -915,6 +948,16 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       return { success: false, error: "Bulk create requires a non-empty items array", status: 400 };
     }
 
+    // SECURITY: Sanitize EACH item the same way single-doc create does — strip
+    // system fields, systemManaged/readonly/immutable fields, and apply
+    // field-level write permissions. Without this, a tenant-scoped user can
+    // overwrite createdBy, organizationId, or any other protected field via
+    // the bulk endpoint.
+    const arcContext = this.meta(req);
+    const sanitizedItems = items.map((item) =>
+      this.bodySanitizer.sanitize((item ?? {}) as AnyRecord, "create", req, arcContext),
+    );
+
     // SECURITY: Inject tenant field into each item when an org scope is
     // present. Mirrors AccessControl.buildIdFilter semantics:
     //   - No scope at all (unit tests, internal calls) → no injection
@@ -925,9 +968,8 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     // The fail-close decision for HTTP-facing routes belongs to the middleware
     // layer (multi-tenant preset on bulk routes). The controller stays
     // lenient when there's no scope so it can be unit-tested directly.
-    let scopedItems = items;
+    let scopedItems: AnyRecord[] = sanitizedItems;
     if (this.tenantField) {
-      const arcContext = this.meta(req);
       const scope = arcContext?._scope;
       if (scope) {
         if (scope.kind === "public") {
@@ -949,8 +991,8 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
             };
           }
           const tenantField = this.tenantField;
-          scopedItems = items.map((item) => ({
-            ...(item as AnyRecord),
+          scopedItems = sanitizedItems.map((item) => ({
+            ...item,
             [tenantField]: orgId,
           }));
         }
@@ -958,11 +1000,28 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     }
 
     const created = await repo.createMany(scopedItems);
+    const requested = items.length;
+    const inserted = created.length;
+    const skipped = requested - inserted;
+
     return {
       success: true,
       data: created,
-      status: 201,
-      meta: { count: created.length },
+      // Partial-success reporting:
+      //   - all inserted   → 201
+      //   - some inserted  → 207 Multi-Status
+      //   - none inserted  → 422 Unprocessable Entity (caller sent garbage)
+      status: skipped === 0 ? 201 : inserted === 0 ? 422 : 207,
+      meta: {
+        count: inserted,
+        requested,
+        inserted,
+        skipped,
+        ...(skipped > 0 && {
+          partial: true,
+          reason: inserted === 0 ? "all_invalid" : "some_invalid",
+        }),
+      },
     };
   }
 
@@ -1009,6 +1068,64 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     return filter;
   }
 
+  /**
+   * Sanitize a bulk update data payload through the same write-permission
+   * pipeline as single-doc update(). Handles both shapes:
+   *
+   *   - Flat:           `{ name: 'x', status: 'y' }`
+   *   - Mongo operator: `{ $set: { name: 'x' }, $inc: { views: 1 }, $unset: { tag: '' } }`
+   *
+   * For each operand, runs `bodySanitizer.sanitize('update', ...)` so that
+   * system fields, systemManaged/readonly/immutable rules, AND field-level
+   * write permissions are enforced. Without this, a tenant-scoped user could
+   * pass `{ $set: { organizationId: 'org-b' } }` to move records across orgs.
+   *
+   * Returns the sanitized payload along with the list of stripped fields for
+   * audit/error reporting.
+   */
+  private sanitizeBulkUpdateData(
+    data: AnyRecord,
+    req: IRequestContext,
+    arcContext: ArcInternalMetadata | undefined,
+  ): { sanitized: AnyRecord; stripped: string[] } {
+    const stripped = new Set<string>();
+    // Mongo update operators always start with $. If ANY top-level key starts
+    // with $, treat the payload as operator-style; otherwise treat it as flat.
+    const isOperatorShape = Object.keys(data).some((k) => k.startsWith("$"));
+
+    if (!isOperatorShape) {
+      const before = new Set(Object.keys(data));
+      const sanitized = this.bodySanitizer.sanitize(data, "update", req, arcContext);
+      for (const key of before) {
+        if (!(key in sanitized)) stripped.add(key);
+      }
+      return { sanitized, stripped: [...stripped] };
+    }
+
+    // Operator shape: sanitize each operator's operand independently.
+    // Non-mutating operators ($push, $pull, $addToSet, etc.) are still subject
+    // to write-permission checks because they modify the doc.
+    const sanitized: AnyRecord = {};
+    for (const [op, operand] of Object.entries(data)) {
+      if (!op.startsWith("$") || operand === null || typeof operand !== "object") {
+        // Pass-through for non-object values (defensive — shouldn't happen).
+        sanitized[op] = operand;
+        continue;
+      }
+      const operandObj = operand as AnyRecord;
+      const before = new Set(Object.keys(operandObj));
+      const sanitizedOperand = this.bodySanitizer.sanitize(operandObj, "update", req, arcContext);
+      for (const key of before) {
+        if (!(key in sanitizedOperand)) stripped.add(key);
+      }
+      // Drop empty operators (e.g. { $set: {} } after stripping protected fields).
+      if (Object.keys(sanitizedOperand).length > 0) {
+        sanitized[op] = sanitizedOperand;
+      }
+    }
+    return { sanitized, stripped: [...stripped] };
+  }
+
   async bulkUpdate(
     req: IRequestContext,
   ): Promise<IControllerResponse<{ matchedCount: number; modifiedCount: number }>> {
@@ -1030,7 +1147,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       return { success: false, error: "Bulk update requires non-empty data", status: 400 };
     }
 
-    // SECURITY: Merge tenant scope + policy filters into the user-supplied filter
+    // SECURITY: Merge tenant scope + policy filters into the user-supplied filter.
     const scopedFilter = this.buildBulkFilter(body.filter, req);
     if (scopedFilter === null) {
       return {
@@ -1041,10 +1158,48 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       };
     }
 
-    const result = await repo.updateMany(scopedFilter, body.data);
-    return { success: true, data: result, status: 200 };
+    // SECURITY: Run the data payload through the same write-permission
+    // pipeline as single-doc update. Strips system fields, systemManaged /
+    // readonly / immutable fields, and applies field-level write permissions.
+    // Handles both flat (`{ name: 'x' }`) and operator (`{ $set: ..., $inc: ... }`) shapes.
+    const arcContext = this.meta(req);
+    const { sanitized, stripped } = this.sanitizeBulkUpdateData(body.data, req, arcContext);
+
+    if (Object.keys(sanitized).length === 0) {
+      return {
+        success: false,
+        error: "Bulk update payload contained only protected fields",
+        details: { code: "ALL_FIELDS_STRIPPED", stripped },
+        status: 400,
+      };
+    }
+
+    const result = await repo.updateMany(scopedFilter, sanitized);
+    return {
+      success: true,
+      data: result,
+      status: 200,
+      ...(stripped.length > 0 && { meta: { stripped } }),
+    };
   }
 
+  /**
+   * Bulk delete by `filter` or `ids`.
+   *
+   * Body shape (one of):
+   *   - `{ filter: { status: 'archived' } }`     — delete by query filter
+   *   - `{ ids: ['id1', 'id2', 'id3'] }`         — delete specific docs by id
+   *
+   * The `ids` form translates to `{ [idField]: { $in: ids } }` using the
+   * resource's `idField` (so it works with custom PKs like `slug`, `jobId`,
+   * UUID, etc.). Tenant scope and policy filters are merged in either way,
+   * so cross-tenant deletes are blocked at the controller layer.
+   *
+   * Both forms perform a single `repo.deleteMany()` DB call — no per-doc
+   * fetch loop. Per-doc lifecycle hooks (`before:delete`/`after:delete`) do
+   * NOT fire for bulk operations; use the single-doc `delete()` if you need
+   * them, or subscribe to the bulk lifecycle event from the events plugin.
+   */
   async bulkDelete(req: IRequestContext): Promise<IControllerResponse<{ deletedCount: number }>> {
     const repo = this.repository as unknown as {
       deleteMany?: (filter: Record<string, unknown>) => Promise<{ deletedCount: number }>;
@@ -1053,13 +1208,36 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       return { success: false, error: "Repository does not support deleteMany", status: 501 };
     }
 
-    const body = req.body as { filter?: Record<string, unknown> };
-    if (!body.filter || Object.keys(body.filter).length === 0) {
-      return { success: false, error: "Bulk delete requires a non-empty filter", status: 400 };
+    const body = req.body as {
+      filter?: Record<string, unknown>;
+      ids?: ReadonlyArray<string>;
+    };
+
+    // Build the user filter — accept either `ids` (preferred for known docs)
+    // or `filter` (for query-based bulk deletes).
+    let userFilter: Record<string, unknown>;
+    if (body.ids && body.ids.length > 0) {
+      if (body.filter && Object.keys(body.filter).length > 0) {
+        return {
+          success: false,
+          error: "Bulk delete accepts either `ids` or `filter`, not both",
+          status: 400,
+        };
+      }
+      // Use the resource's idField — works for `_id`, `slug`, `jobId`, UUID, etc.
+      userFilter = { [this.idField]: { $in: body.ids } };
+    } else if (body.filter && Object.keys(body.filter).length > 0) {
+      userFilter = body.filter;
+    } else {
+      return {
+        success: false,
+        error: "Bulk delete requires a non-empty `filter` or `ids` array",
+        status: 400,
+      };
     }
 
-    // SECURITY: Merge tenant scope + policy filters into the user-supplied filter
-    const scopedFilter = this.buildBulkFilter(body.filter, req);
+    // SECURITY: Merge tenant scope + policy filters into the user-supplied filter.
+    const scopedFilter = this.buildBulkFilter(userFilter, req);
     if (scopedFilter === null) {
       return {
         success: false,

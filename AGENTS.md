@@ -43,7 +43,7 @@ src/                          181 files across 32 modules
   adapters/                   RepositoryLike interface + mongoose/prisma adapters
   auth/                       authPlugin (JWT), betterAuth adapter, sessionManager, redis-session
   permissions/                RBAC (989L), role hierarchy, field-level permissions, presets
-  scope/                      RequestScope discriminated union (public|authenticated|member|elevated)
+  scope/                      RequestScope discriminated union (public|authenticated|member|service|elevated)
   events/                     EventPlugin, transports (memory, redis pub/sub, redis streams), defineEvent
   hooks/                      HookSystem (724L) — before/after lifecycle on resources
   cache/                      QueryCache, query-cache plugin, scope-aware cache keys
@@ -125,14 +125,34 @@ user?: Record<string, unknown>;
 
 ### RequestScope
 
-Discriminated union on `kind`: `public | authenticated | member | elevated`.
+Discriminated union on `kind`: `public | authenticated | member | service | elevated`.
+The `service` kind covers API-key / machine-to-machine auth (custom auth
+checks install it via `PermissionResult.scope`). All org-bound kinds
+(member, service, elevated) optionally carry `context?: Readonly<Record<string, string>>`
+for app-defined dimensions and `ancestorOrgIds?: readonly string[]` for
+parent-child org chains.
 
 ```typescript
 // Always use accessors, not direct property access
-import { getUserId, getUserRoles } from '@classytic/arc/scope';
-const id = getUserId(scope);     // works for all scope kinds
-const roles = getUserRoles(scope); // returns string[]
+import {
+  getUserId, getUserRoles, getOrgId, getServiceScopes,
+  getScopeContext, getAncestorOrgIds, hasOrgAccess,
+} from '@classytic/arc/scope';
+
+const id      = getUserId(scope);                       // works for all scope kinds
+const roles   = getUserRoles(scope);                    // string[]
+const orgId   = getOrgId(scope);                        // member | service | elevated
+const scopes  = getServiceScopes(scope);                // service kind only
+const branch  = getScopeContext(scope, 'branchId');     // custom dimensions
+const parents = getAncestorOrgIds(scope);               // parent orgs (always returns array)
+hasOrgAccess(scope);                                    // member | service | elevated
 ```
+
+Permission helpers that read scope: `requireOrgMembership`, `requireOrgRole`
+(humans-only), `requireServiceScope` (machines-only, OAuth-style),
+`requireScopeContext` (custom dimensions), `requireOrgInScope` (hierarchy),
+`requireTeamMembership`. See `docs/getting-started/permissions.mdx` for the
+full helper × scope-kind behavior table.
 
 ### Generics
 

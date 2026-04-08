@@ -166,7 +166,9 @@ describe("Bulk Preset", () => {
       expect(result.success).toBe(true);
       expect(result.status).toBe(201);
       expect(result.data).toHaveLength(2);
-      expect(result.meta).toEqual({ count: 2 });
+      expect(result.meta).toEqual(
+        expect.objectContaining({ count: 2, requested: 2, inserted: 2, skipped: 0 }),
+      );
       expect(repo.createMany).toHaveBeenCalledWith([
         { name: "A", price: 10 },
         { name: "B", price: 20 },
@@ -333,6 +335,65 @@ describe("Bulk Preset", () => {
 
       expect(result.success).toBe(false);
       expect(result.status).toBe(501);
+    });
+
+    it("supports `ids` form — translates to { _id: { $in } }", async () => {
+      const { BaseController } = await import("../../src/core/BaseController.js");
+
+      const deleteMany = vi.fn().mockResolvedValue({ deletedCount: 3 });
+      const controller = new BaseController(createMockRepo({ deleteMany }), {
+        resourceName: "product",
+      });
+
+      const result = await controller.bulkDelete(await createReqCtx({ ids: ["a", "b", "c"] }));
+
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual({ deletedCount: 3 });
+      expect(deleteMany).toHaveBeenCalledWith({ _id: { $in: ["a", "b", "c"] } });
+    });
+
+    it("supports `ids` form with custom idField", async () => {
+      const { BaseController } = await import("../../src/core/BaseController.js");
+
+      const deleteMany = vi.fn().mockResolvedValue({ deletedCount: 2 });
+      const controller = new BaseController(createMockRepo({ deleteMany }), {
+        resourceName: "chat",
+        idField: "id",
+      });
+
+      const result = await controller.bulkDelete(await createReqCtx({ ids: ["uuid-1", "uuid-2"] }));
+
+      expect(result.success).toBe(true);
+      expect(deleteMany).toHaveBeenCalledWith({ id: { $in: ["uuid-1", "uuid-2"] } });
+    });
+
+    it("returns 400 when both `ids` and `filter` are provided", async () => {
+      const { BaseController } = await import("../../src/core/BaseController.js");
+      const deleteMany = vi.fn();
+      const controller = new BaseController(createMockRepo({ deleteMany }), {
+        resourceName: "product",
+      });
+
+      const result = await controller.bulkDelete(
+        await createReqCtx({ ids: ["a"], filter: { archived: true } }),
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.status).toBe(400);
+      expect(result.error).toContain("either");
+      expect(deleteMany).not.toHaveBeenCalled();
+    });
+
+    it("returns 400 when `ids` is empty array (falls through to missing filter)", async () => {
+      const { BaseController } = await import("../../src/core/BaseController.js");
+      const controller = new BaseController(createMockRepo({ deleteMany: vi.fn() }), {
+        resourceName: "product",
+      });
+
+      const result = await controller.bulkDelete(await createReqCtx({ ids: [] }));
+
+      expect(result.success).toBe(false);
+      expect(result.status).toBe(400);
     });
   });
 

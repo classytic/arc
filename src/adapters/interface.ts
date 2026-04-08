@@ -42,6 +42,21 @@ export interface RepositoryLike {
   delete(id: string, options?: unknown): Promise<unknown>;
 
   // ── Recommended ──
+  /**
+   * The repository's native primary key field. When set, Arc's BaseController
+   * will pass route params through to `update()`/`delete()`/`restore()` calls
+   * unchanged instead of translating them to `_id`.
+   *
+   * Set this to match your `defineResource({ idField })` for repositories that
+   * natively look up by a custom field (e.g. MongoKit's
+   * `new Repository(Model, [], {}, { idField: 'id' })`). Without it, Arc will
+   * try to translate route ids → fetched doc's `_id` which 404s on repos that
+   * don't key on `_id`.
+   *
+   * Defaults to `'_id'` (Mongo). Repositories that always use `_id` may omit it.
+   */
+  readonly idField?: string;
+
   /** Find single doc by compound filter — used by AccessControl for idField + org/policy scoping.
    * Without this, Arc falls back to getById + post-fetch security checks. */
   getOne?(filter: Record<string, unknown>, options?: unknown): Promise<unknown>;

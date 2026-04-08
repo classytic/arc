@@ -194,7 +194,9 @@ Function-based, composable:
 ```typescript
 import {
   allowPublic, requireAuth, requireRoles, requireOwnership,
-  requireOrgMembership, requireOrgRole, allOf, anyOf, denyAll,
+  requireOrgMembership, requireOrgRole, requireServiceScope,
+  requireScopeContext,
+  allOf, anyOf, denyAll,
   createDynamicPermissionMatrix,
 } from '@classytic/arc';
 
@@ -204,8 +206,62 @@ permissions: {
   create: requireRoles(['admin', 'editor']),
   update: anyOf(requireOwnership('userId'), requireRoles(['admin'])),
   delete: allOf(requireAuth(), requireRoles(['admin'])),
+
+  // Mixed human + machine routes — accept org admins OR API keys
+  bulkImport: anyOf(
+    requireOrgRole('admin'),                    // human path
+    requireServiceScope('jobs:bulk-write'),     // machine path (OAuth-style)
+  ),
+
+  // Multi-level tenancy — branch/project/region scoped routes
+  branchAdmin: allOf(requireOrgRole('admin'), requireScopeContext('branchId')),
+  euOnly:      requireScopeContext('region', 'eu'),
+  projectEdit: requireScopeContext({ projectId: 'p-1', region: 'eu' }),
+
+  // Parent-child org hierarchy (holding → subsidiary → branch, MSP, white-label)
+  // Reads scope.ancestorOrgIds (loaded by your auth function from your own org table)
+  childOrgAccess: requireOrgInScope((ctx) => ctx.request.params.orgId),
 }
 ```
+
+`requireRoles()` checks platform roles (`user.role`) AND org roles
+(`scope.orgRoles`) by default — same call works for arc JWT, Better Auth user
+roles, and Better Auth org plugin. `requireOrgMembership()` accepts `member`,
+`service` (API key), and `elevated` scopes; `multiTenantPreset` filters by
+org for all three. For machine identities, `requireServiceScope('jobs:write')`
+mirrors OAuth 2.0 scope strings. For app-defined dimensions beyond org/team
+(branch, project, region, workspace), `requireScopeContext('branchId')`
+reads from `scope.context` populated by your auth function. For parent-child
+org hierarchies (holding → subsidiary, MSP → tenants, white-label),
+`requireOrgInScope((ctx) => ctx.request.params.orgId)` accepts the current
+org or any ancestor in `scope.ancestorOrgIds`.
+
+**Multi-level tenant filtering** — the `multiTenantPreset` scales from
+single-org isolation to lockstep filtering across any number of dimensions:
+
+```typescript
+import { multiTenantPreset } from '@classytic/arc/presets';
+
+// Single-field (default, backwards compatible)
+multiTenantPreset({ tenantField: 'organizationId' })
+
+// Multi-field — org + branch + project, all enforced in lockstep
+multiTenantPreset({
+  tenantFields: [
+    { field: 'organizationId', type: 'org' },                // → getOrgId(scope)
+    { field: 'teamId',         type: 'team' },               // → getTeamId(scope)
+    { field: 'branchId',       contextKey: 'branchId' },     // → scope.context.branchId
+    { field: 'projectId',      contextKey: 'projectId' },
+  ],
+})
+```
+
+Fail-closed semantics: if any required dimension is missing from the caller's
+scope, list/get/update/delete return 403 with the specific missing field name,
+and create is rejected. Elevated scopes apply whatever resolves and skip the
+rest (cross-context admin bypass). Your auth function populates
+`scope.context` from JWT claims, BA session fields, or request headers — arc
+takes no position on which dimension names you use.
 
 **Field-level permissions:**
 
