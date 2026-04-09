@@ -278,9 +278,7 @@ describe("loadResources — Node.js #subpath imports", () => {
       resource("settings", "import { PORT } from '#config/env.ts';"),
     );
 
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const loaded = await loadResources(join(dir, "src", "resources"));
-    warnSpy.mockRestore();
 
     expect(loaded).toHaveLength(2);
     const names = loaded.map((r) => (r as { name: string }).name).sort();
@@ -340,17 +338,15 @@ describe("loadResources — tsconfig path aliases (expected failures)", () => {
       resource("broken", "import { something } from '@/utils/helper';"),
     );
 
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warnSpy = vi.fn();
 
-    const loaded = await loadResources(dir);
+    const loaded = await loadResources(dir, { logger: { warn: warnSpy } });
     // Should return empty — the import fails, but loadResources doesn't crash
     expect(loaded).toHaveLength(0);
 
     // Should log a warning about the failed import
-    const failMsg = warnSpy.mock.calls.find((c) => String(c[0]).includes("failed to import"));
+    const failMsg = warnSpy.mock.calls.find((c: unknown[]) => String(c[0]).includes("failed to import"));
     expect(failMsg).toBeDefined();
-
-    warnSpy.mockRestore();
   });
 
   it("resource using ~/ alias fails gracefully", async () => {
@@ -361,15 +357,13 @@ describe("loadResources — tsconfig path aliases (expected failures)", () => {
       resource("tilde", "import { config } from '~/config';"),
     );
 
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warnSpy = vi.fn();
 
-    const loaded = await loadResources(dir);
+    const loaded = await loadResources(dir, { logger: { warn: warnSpy } });
     expect(loaded).toHaveLength(0);
 
-    const failMsg = warnSpy.mock.calls.find((c) => String(c[0]).includes("failed to import"));
+    const failMsg = warnSpy.mock.calls.find((c: unknown[]) => String(c[0]).includes("failed to import"));
     expect(failMsg).toBeDefined();
-
-    warnSpy.mockRestore();
   });
 
   it("mix of valid relative + invalid alias: valid resources still load", async () => {
@@ -388,19 +382,17 @@ describe("loadResources — tsconfig path aliases (expected failures)", () => {
       resource("bad", "import { nope } from '@lib/nope';"),
     );
 
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warnSpy = vi.fn();
 
-    const loaded = await loadResources(dir);
+    const loaded = await loadResources(dir, { logger: { warn: warnSpy } });
 
     // Only the valid resource loads — bad one fails gracefully
     expect(loaded).toHaveLength(1);
     expect((loaded[0] as { name: string }).name).toBe("good");
 
     // Warning logged for the failed one
-    const failMsg = warnSpy.mock.calls.find((c) => String(c[0]).includes("failed to import"));
+    const failMsg = warnSpy.mock.calls.find((c: unknown[]) => String(c[0]).includes("failed to import"));
     expect(failMsg).toBeDefined();
-
-    warnSpy.mockRestore();
   });
 });
 

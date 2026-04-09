@@ -105,9 +105,7 @@ export function toJsonSchema(input: unknown): Record<string, unknown> | undefine
   if (isZodSchema(input)) {
     if (!_toJSONSchema) {
       // Zod not installed but a Zod schema was passed — can't convert
-      console.warn(
-        "[Arc] Zod schema detected but zod is not installed. " + "Install zod v4: npm install zod",
-      );
+      // Zod not installed — return input as-is (best effort)
       return input as Record<string, unknown>;
     }
     try {

@@ -1,0 +1,164 @@
+# Streamline — Durable Workflows
+
+`@classytic/streamline` is a MongoDB-native workflow engine that integrates with Arc as an optional plugin. It adds durable workflow orchestration (retries, sleep, human-in-the-loop, concurrency control) to your Arc application without additional infrastructure.
+
+## Installation
+
+```bash
+npm install @classytic/streamline @classytic/mongokit
+```
+
+## Setup
+
+```typescript
+import Fastify from 'fastify';
+import { arcCorePlugin } from '@classytic/arc';
+import { streamlinePlugin } from '@classytic/arc/integrations/streamline';
+import { createWorkflow } from '@classytic/streamline';
+import mongoose from 'mongoose';
+
+await mongoose.connect('mongodb://localhost/myapp');
+
+// Define workflows
+const orderWorkflow = createWorkflow('process-order', {
+  steps: {
+    validate: async (ctx) => { /* ... */ },
+    charge: {
+      handler: async (ctx) => { /* ... */ },
+      retries: 3,
+      retryDelay: 1000,
+    },
+    ship: async (ctx) => { /* ... */ },
+  },
+  context: (input) => ({ orderId: input.orderId }),
+  cancelOn: [{ event: 'order.cancelled' }],
+  concurrency: { limit: 10, key: (input) => input.userId },
+});
+
+const app = Fastify();
+await app.register(arcCorePlugin, { /* ... */ });
+await app.register(streamlinePlugin, {
+  workflows: [orderWorkflow],
+  prefix: '/api/workflows',
+});
+```
+
+## REST Endpoints
+
+For each registered workflow, these endpoints are created:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/:workflowId/start` | Start a new run |
+| `GET` | `/:workflowId/runs/:runId` | Get run status |
+| `POST` | `/:workflowId/runs/:runId/resume` | Resume a waiting run |
+| `POST` | `/:workflowId/runs/:runId/cancel` | Cancel a run |
+| `POST` | `/:workflowId/runs/:runId/pause` | Pause a run |
+| `POST` | `/:workflowId/runs/:runId/rewind` | Rewind to a step |
+| `GET` | `/` | List all workflows |
+
+### Start with Distributed Primitives
+
+The start endpoint accepts `idempotencyKey` and `priority`:
+
+```bash
+curl -X POST /api/workflows/process-order/start \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "input": { "orderId": "123", "userId": "u1" },
+    "idempotencyKey": "order:123",
+    "priority": 10
+  }'
+```
+
+Duplicate starts with the same `idempotencyKey` return the existing active run instead of creating a new one. The key is reusable after the run completes, fails, or is cancelled.
+
+## Event Bridging
+
+By default (`bridgeEvents: true`), workflow operations are published to Arc's event bus:
+
+| Arc Event | When |
+|-----------|------|
+| `workflow.{id}.started` | Run created |
+| `workflow.{id}.resumed` | Run resumed |
+| `workflow.{id}.cancelled` | Run cancelled |
+
+These events follow Arc's `DomainEvent` pattern and work with any configured event transport (in-memory, Redis, etc.).
+
+### Bridging Arc Events to Streamline Triggers
+
+Streamline's `trigger` config auto-starts workflows from its internal event bus. To connect Arc's event system to streamline triggers, bridge them explicitly:
+
+```typescript
+// Bridge: Arc event → streamline trigger
+fastify.events.subscribe('user.created', (event) => {
+  onboardingWorkflow.container.eventBus.emit('user.created', event);
+});
+```
+
+This is intentionally manual. Arc's events have transport-level guarantees (WAL, DLQ, retry). Streamline's event bus is in-memory. Auto-bridging would silently mix these guarantees, leading to confusing behavior. The explicit bridge makes the boundary visible.
+
+## Authentication and Permissions
+
+```typescript
+await app.register(streamlinePlugin, {
+  workflows: [orderWorkflow],
+  auth: true, // Requires fastify.authenticate (from Arc's auth plugin)
+  permissions: {
+    start: async (request) => request.user.role === 'admin',
+    cancel: async (request) => request.user.role === 'admin',
+    resume: async (request) => true,
+    get: async (request) => true,
+  },
+});
+```
+
+## Plugin Options
+
+```typescript
+interface StreamlinePluginOptions {
+  workflows: WorkflowLike[];
+  prefix?: string;            // Default: '/workflows'
+  auth?: boolean;             // Default: true
+  bridgeEvents?: boolean;     // Default: true
+  permissions?: {
+    start?: (request) => boolean | Promise<boolean>;
+    resume?: (request) => boolean | Promise<boolean>;
+    cancel?: (request) => boolean | Promise<boolean>;
+    list?: (request) => boolean | Promise<boolean>;
+    get?: (request) => boolean | Promise<boolean>;
+  };
+}
+```
+
+## Accessing Workflows in Handlers
+
+```typescript
+// From any route handler
+const wf = fastify.getWorkflow('process-order');
+const run = await wf?.get(runId);
+
+// Iterate all registered workflows
+for (const [id, workflow] of fastify.workflows) {
+  console.log(id, workflow.definition.name);
+}
+```
+
+## Streamline Features Available via Arc
+
+| Feature | How it works |
+|---------|-------------|
+| **Idempotency** | Pass `idempotencyKey` in start body |
+| **Priority** | Pass `priority` in start body |
+| **Concurrency** | Configured per-workflow, enforced by engine |
+| **cancelOn** | Configured per-workflow, triggers on event |
+| **Event trigger** | Configured per-workflow, bridge Arc events manually |
+| **Human-in-the-loop** | Use resume endpoint to continue waiting workflows |
+| **Step logs** | Persisted via `ctx.log()`, visible in run response |
+| **Step metrics** | `completedAt`, `durationMs` per step in run response |
+
+## Related
+
+- [@classytic/streamline docs](https://github.com/classytic/streamline)
+- [Arc Events](../production-ops/events) — Arc's event system
+- [Building Plugins](./building-plugins) — How to build Arc plugins

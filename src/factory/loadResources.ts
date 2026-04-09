@@ -101,6 +101,8 @@ export interface LoadResourcesOptions {
    * @default false
    */
   silent?: boolean;
+  /** Optional logger for diagnostics. No output when omitted (silent by default). */
+  logger?: { warn: (msg: string) => void };
 }
 
 /**
@@ -245,17 +247,18 @@ export async function loadResources(
     resources.push(resource);
   }
 
-  // Log diagnostics to stderr (available before Fastify logger exists)
-  if (!silent) {
+  // Log diagnostics via injected logger (no output when omitted)
+  const log = silent ? undefined : options?.logger;
+  if (log) {
     if (failed.length) {
-      console.warn(`[arc] loadResources: ${failed.length} file(s) failed to import:`);
-      for (const f of failed) console.warn(`  - ${f}`);
+      log.warn(`[arc] loadResources: ${failed.length} file(s) failed to import:`);
+      for (const f of failed) log.warn(`  - ${f}`);
     }
     if (skipped.length) {
-      console.warn(
+      log.warn(
         `[arc] loadResources: ${skipped.length} file(s) skipped (no default export with toPlugin):`,
       );
-      for (const f of skipped) console.warn(`  - ${f}`);
+      for (const f of skipped) log.warn(`  - ${f}`);
     }
   }
 

@@ -211,14 +211,13 @@ describe("loadResources()", () => {
       `import { something } from './nonexistent.js';\nexport default { toPlugin: () => {} };`,
     );
 
-    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const resources = await loadResources(tmpDir);
+    const warnSpy = vi.fn();
+    const resources = await loadResources(tmpDir, { logger: { warn: warnSpy } });
     expect(resources.length).toBe(0);
 
     // Should warn with .js hint
-    const warnings = consoleSpy.mock.calls.flat().join("\n");
+    const warnings = warnSpy.mock.calls.flat().join("\n");
     expect(warnings).toContain("failed to import");
-    consoleSpy.mockRestore();
     rm(tmpDir, { recursive: true, force: true });
   });
 

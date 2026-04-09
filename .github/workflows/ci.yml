@@ -38,18 +38,26 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Lint
-        run: npx biome check src/
+        run: npx biome check src/ --diagnostic-level=error
+
+      - name: Dead code
+        run: npx knip
+
+      - name: Build
+        run: npm run build
 
       - name: Test
         run: npx vitest run
         env:
           MONGO_URI: mongodb://localhost:27017/test
 
-      - name: Build
-        run: npm run build
-
       - name: Smoke test
         run: npm run smoke
+
+      - name: MCP E2E
+        run: node scripts/mcp-e2e.mjs
+        env:
+          MONGODB_URI: mongodb://localhost:27017/arc_mcp_e2e
 
   # ─────────────────────────────────────────────
   # Bun — secondary runtime

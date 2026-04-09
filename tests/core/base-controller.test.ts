@@ -328,13 +328,14 @@ describe("BaseController", () => {
     });
 
     it("should log but not fail on afterCreate hook errors", async () => {
-      const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const errorSpy = vi.fn();
+      const loggedHooks = new HookSystem({ logger: { error: errorSpy } });
 
-      hooks.after("product", "create", async () => {
+      loggedHooks.after("product", "create", async () => {
         throw new Error("After hook failed");
       });
 
-      const req = createReq(hooks, {
+      const req = createReq(loggedHooks, {
         body: { name: "Test", price: 100 },
       });
 
@@ -343,9 +344,7 @@ describe("BaseController", () => {
 
       expect(response.success).toBe(true);
       expect(response.status).toBe(201);
-      expect(consoleErrorSpy).toHaveBeenCalled();
-
-      consoleErrorSpy.mockRestore();
+      expect(errorSpy).toHaveBeenCalled();
     });
   });
 

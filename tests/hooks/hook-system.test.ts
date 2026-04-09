@@ -214,42 +214,40 @@ describe("HookSystem", () => {
     });
 
     it("should catch and log errors without failing", async () => {
-      const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const errorSpy = vi.fn();
+      const loggedHookSystem = new HookSystem({ logger: { error: errorSpy } });
 
-      hookSystem.after("product", "create", async () => {
+      loggedHookSystem.after("product", "create", async () => {
         throw new Error("After hook error");
       });
 
       // Should not throw
       await expect(
-        hookSystem.executeAfter("product", "create", { _id: "123" }),
+        loggedHookSystem.executeAfter("product", "create", { _id: "123" }),
       ).resolves.toBeUndefined();
 
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining("[HookSystem] Error in after hook"),
         expect.any(Error),
       );
-
-      consoleErrorSpy.mockRestore();
     });
 
     it("should execute all after hooks even if one fails", async () => {
-      const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const errorSpy = vi.fn();
+      const loggedHookSystem = new HookSystem({ logger: { error: errorSpy } });
       const handler1 = vi.fn(async () => {
         throw new Error("Hook 1 failed");
       });
       const handler2 = vi.fn();
 
-      hookSystem.after("product", "create", handler1, 1);
-      hookSystem.after("product", "create", handler2, 2);
+      loggedHookSystem.after("product", "create", handler1, 1);
+      loggedHookSystem.after("product", "create", handler2, 2);
 
-      await hookSystem.executeAfter("product", "create", { _id: "123" });
+      await loggedHookSystem.executeAfter("product", "create", { _id: "123" });
 
       expect(handler1).toHaveBeenCalled();
       // handler2 might not be called if the error happens before it
       // This depends on implementation - for now, after hooks stop on first error
-
-      consoleErrorSpy.mockRestore();
     });
   });
 
