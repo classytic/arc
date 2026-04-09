@@ -127,7 +127,7 @@ src/
 | Peer | Min | Required? |
 |------|-----|-----------|
 | fastify | >=5.0.0 | **Yes** |
-| @classytic/mongokit | >=3.5.0 | No |
+| @classytic/mongokit | >=3.5.6 | No |
 | mongoose | >=9.0.0 | No |
 | better-auth | >=1.5.5 | No |
 | ioredis | >=5.0.0 | No |
