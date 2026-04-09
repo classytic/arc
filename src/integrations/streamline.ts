@@ -76,7 +76,7 @@ export interface WorkflowRunLike {
   status: string;
   context?: unknown;
   input?: unknown;
-  steps?: Record<string, unknown>;
+  steps?: unknown[];
   error?: unknown;
   idempotencyKey?: string;
   priority?: number;
@@ -84,7 +84,6 @@ export interface WorkflowRunLike {
   stepLogs?: unknown[];
   createdAt?: Date;
   updatedAt?: Date;
-  [key: string]: unknown;
 }
 
 export interface StreamlinePluginOptions {
