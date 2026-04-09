@@ -73,11 +73,11 @@ export class HookSystem {
 
   constructor(options?: HookSystemOptions) {
     this.hooks = new Map();
-    // Default to console.error/warn so developers see hook issues during development
-    // Pass custom logger to redirect to fastify.log or silence in tests
-    // Use arrow function wrapper to allow spying in tests
-    this.logger = options?.logger ?? { error: (...args: unknown[]) => console.error(...args) };
-    this.warn = options?.logger?.warn ?? ((...args: unknown[]) => console.warn(...args));
+    // No-op by default — the caller (arcCorePlugin) injects fastify.log.
+    // Silent default prevents unstructured stderr in consumer apps.
+    const noop = () => {};
+    this.logger = options?.logger ?? { error: noop };
+    this.warn = options?.logger?.warn ?? noop;
   }
 
   /**

@@ -35,24 +35,39 @@ import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 // Types (defined here so we don't import streamline at module level)
 // ============================================================================
 
+/** Start options — matches @classytic/streamline v2.1 StartOptions */
+export interface WorkflowStartOptions {
+  meta?: Record<string, unknown>;
+  idempotencyKey?: string;
+  priority?: number;
+}
+
 /** Minimal workflow interface — matches @classytic/streamline's createWorkflow() return */
 export interface WorkflowLike {
-  definition: { id: string; name?: string; steps: Record<string, unknown> };
+  definition: { id: string; name?: string; steps: Record<string, unknown> | unknown[] };
   engine: {
-    start(input: unknown, meta?: unknown): Promise<WorkflowRunLike>;
+    start(input: unknown, options?: WorkflowStartOptions): Promise<WorkflowRunLike>;
     execute(runId: string): Promise<WorkflowRunLike>;
     resume(runId: string, payload?: unknown): Promise<WorkflowRunLike>;
     cancel(runId: string): Promise<WorkflowRunLike>;
     pause?(runId: string): Promise<WorkflowRunLike>;
     rewindTo?(runId: string, stepId: string): Promise<WorkflowRunLike>;
     get(runId: string): Promise<WorkflowRunLike | null>;
+    waitFor?(runId: string, options?: { timeout?: number }): Promise<WorkflowRunLike>;
     shutdown?(): void;
   };
-  start(input: unknown, meta?: unknown): Promise<WorkflowRunLike>;
+  start(input: unknown, options?: WorkflowStartOptions): Promise<WorkflowRunLike>;
   resume(runId: string, payload?: unknown): Promise<WorkflowRunLike>;
   cancel(runId: string): Promise<WorkflowRunLike>;
   get(runId: string): Promise<WorkflowRunLike | null>;
   shutdown?(): void;
+  /** Streamline container for event bridging (streamline >=2.1) */
+  container?: {
+    eventBus: {
+      on(event: string, listener: (...args: unknown[]) => void): void;
+      off(event: string, listener: (...args: unknown[]) => void): void;
+    };
+  };
 }
 
 export interface WorkflowRunLike {
@@ -63,6 +78,10 @@ export interface WorkflowRunLike {
   input?: unknown;
   steps?: Record<string, unknown>;
   error?: unknown;
+  idempotencyKey?: string;
+  priority?: number;
+  concurrencyKey?: string;
+  stepLogs?: unknown[];
   createdAt?: Date;
   updatedAt?: Date;
   [key: string]: unknown;
@@ -75,8 +94,21 @@ export interface StreamlinePluginOptions {
   prefix?: string;
   /** Require authentication for all workflow endpoints (default: true) */
   auth?: boolean;
-  /** Connect workflow events to Arc's event bus (default: true) */
+  /** Connect workflow lifecycle events to Arc's event bus (default: true) */
   bridgeEvents?: boolean;
+  /**
+   * Bridge step-level events (step:started, step:completed, step:failed) to Arc's event bus.
+   * Disabled by default — enable for dashboards or monitoring.
+   * Requires the workflow to expose `container.eventBus` (streamline >=2.1).
+   * @default false
+   */
+  bridgeStepEvents?: boolean;
+  /**
+   * Enable SSE streaming endpoint: GET /:workflowId/runs/:runId/stream
+   * Streams step-level events as Server-Sent Events for live UI updates.
+   * @default false
+   */
+  enableStreaming?: boolean;
   /** Custom permission check for workflow operations */
   permissions?: {
     start?: (request: unknown) => boolean | Promise<boolean>;
@@ -100,6 +132,8 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
     prefix = "/workflows",
     auth = true,
     bridgeEvents = true,
+    bridgeStepEvents = false,
+    enableStreaming = false,
     permissions: perms,
   } = options;
 
@@ -150,8 +184,13 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
         if (!(await checkPerm("start", request))) {
           return reply.status(403).send({ success: false, error: "Forbidden" });
         }
-        const { input, meta } = (request.body ?? {}) as { input?: unknown; meta?: unknown };
-        const run = await wf.start(input, meta);
+        const { input, meta, idempotencyKey, priority } = (request.body ?? {}) as {
+          input?: unknown;
+          meta?: Record<string, unknown>;
+          idempotencyKey?: string;
+          priority?: number;
+        };
+        const run = await wf.start(input, { meta, idempotencyKey, priority });
 
         // Bridge event to Arc's event bus (fire-and-forget — never fail the HTTP response)
         if (bridgeEvents && fastify.events?.publish) {
@@ -247,6 +286,41 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
       },
     );
 
+    // POST /:workflowId/runs/:runId/execute — Execute (resume from start) a workflow run
+    fastify.post(
+      `${routePrefix}/runs/:runId/execute`,
+      {
+        preHandler: authPreHandler,
+      },
+      async (request, _reply) => {
+        const { runId } = request.params as { runId: string };
+        const run = await wf.engine.execute(runId);
+        return { success: true, data: run };
+      },
+    );
+
+    // GET /:workflowId/runs/:runId/wait — Poll until workflow reaches terminal state (if supported)
+    if (wf.engine.waitFor) {
+      fastify.get(
+        `${routePrefix}/runs/:runId/wait`,
+        {
+          preHandler: authPreHandler,
+        },
+        async (request, reply) => {
+          if (!(await checkPerm("get", request))) {
+            return reply.status(403).send({ success: false, error: "Forbidden" });
+          }
+          const { runId } = request.params as { runId: string };
+          const { timeout } = (request.query ?? {}) as { timeout?: string };
+          const timeoutMs = timeout ? Number.parseInt(timeout, 10) : 30000;
+          const run = await wf.engine.waitFor!(runId, {
+            timeout: Math.min(timeoutMs, 120000),
+          });
+          return { success: true, data: run };
+        },
+      );
+    }
+
     // POST /:workflowId/runs/:runId/pause — Pause a running workflow (if supported)
     if (wf.engine.pause) {
       fastify.post(
@@ -280,6 +354,116 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
         },
       );
     }
+
+    // ============ Opt-in: Step-level event bridging ============
+    if (bridgeStepEvents && wf.container?.eventBus && fastify.events?.publish) {
+      const stepEvents = [
+        "step:started",
+        "step:completed",
+        "step:failed",
+        "step:skipped",
+        "step:retry-scheduled",
+      ];
+      for (const eventName of stepEvents) {
+        wf.container.eventBus.on(eventName, (payload: unknown) => {
+          const p = payload as { runId?: string; stepId?: string; [k: string]: unknown };
+          fastify.events
+            .publish(`workflow.${id}.${eventName}`, {
+              runId: p?.runId,
+              stepId: p?.stepId,
+              workflowId: id,
+              ...p,
+            })
+            .catch((err: unknown) => {
+              fastify.log.warn({ err, workflowId: id }, `Failed to bridge ${eventName}`);
+            });
+        });
+      }
+    }
+
+    // ============ Opt-in: SSE streaming endpoint ============
+    if (enableStreaming && wf.container?.eventBus) {
+      fastify.get(
+        `${routePrefix}/runs/:runId/stream`,
+        { preHandler: authPreHandler },
+        async (request, reply) => {
+          if (!(await checkPerm("get", request))) {
+            return reply.status(403).send({ success: false, error: "Forbidden" });
+          }
+
+          const { runId } = request.params as { runId: string };
+          const run = await wf.get(runId);
+          if (!run) {
+            return reply.status(404).send({ success: false, error: "Workflow run not found" });
+          }
+
+          reply.raw.writeHead(200, {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            Connection: "keep-alive",
+          });
+
+          const events = [
+            "step:started",
+            "step:completed",
+            "step:failed",
+            "step:skipped",
+            "workflow:completed",
+            "workflow:failed",
+            "workflow:cancelled",
+          ];
+
+          const listeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
+          let closed = false;
+
+          const send = (event: string, data: unknown) => {
+            if (closed) return;
+            try {
+              reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+            } catch {
+              // Client disconnected
+              cleanup();
+            }
+          };
+
+          const cleanup = () => {
+            if (closed) return;
+            closed = true;
+            for (const { event, fn } of listeners) {
+              wf.container?.eventBus.off(event, fn);
+            }
+            listeners.length = 0;
+            try {
+              reply.raw.end();
+            } catch {
+              // Already ended
+            }
+          };
+
+          for (const eventName of events) {
+            const fn = (payload: unknown) => {
+              const p = payload as { runId?: string; [k: string]: unknown };
+              if (p?.runId !== runId) return;
+              send(eventName, p);
+
+              // Auto-close on terminal workflow events
+              if (
+                eventName === "workflow:completed" ||
+                eventName === "workflow:failed" ||
+                eventName === "workflow:cancelled"
+              ) {
+                cleanup();
+              }
+            };
+            wf.container!.eventBus.on(eventName, fn);
+            listeners.push({ event: eventName, fn });
+          }
+
+          // Clean up on client disconnect
+          request.raw.on("close", cleanup);
+        },
+      );
+    }
   }
 
   // List all registered workflows
@@ -292,7 +476,9 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
       const list = Array.from(registry.entries()).map(([id, wf]) => ({
         id,
         name: wf.definition.name ?? id,
-        steps: Object.keys(wf.definition.steps),
+        steps: Array.isArray(wf.definition.steps)
+          ? wf.definition.steps.map((s: unknown) => (s as { id?: string }).id ?? String(s))
+          : Object.keys(wf.definition.steps),
       }));
       return { success: true, data: list };
     },

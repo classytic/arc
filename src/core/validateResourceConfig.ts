@@ -412,14 +412,6 @@ export function assertValidConfig(config: ResourceConfig, options?: ValidateOpti
     throw new Error(errorMsg);
   }
 
-  // Log warnings in development
-  if (result.warnings.length > 0 && process.env.NODE_ENV !== "production") {
-    console.warn(
-      formatValidationErrors(config.name ?? "unknown", {
-        valid: true,
-        errors: [],
-        warnings: result.warnings,
-      }),
-    );
-  }
+  // Warnings are available via validateResourceConfig() return value.
+  // Callers with access to a logger can surface them; no console output from library code.
 }

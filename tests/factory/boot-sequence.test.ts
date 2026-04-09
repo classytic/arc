@@ -381,20 +381,17 @@ describe("loadResources — silent option", () => {
     warnSpy.mockRestore();
   });
 
-  it("silent: false (default) still logs warnings", async () => {
+  it("silent: false (default) still logs warnings when logger provided", async () => {
     const dir = join(TMP, "noisy");
     mkdirSync(dir, { recursive: true });
 
     writeFileSync(join(dir, "bad.resource.ts"), "export default { notAResource: true };\n");
 
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warnSpy = vi.fn();
+    await loadResources(dir, { logger: { warn: warnSpy } });
 
-    await loadResources(dir);
-
-    const skipMsg = warnSpy.mock.calls.find((c) => String(c[0]).includes("skipped"));
+    const skipMsg = warnSpy.mock.calls.find((c: unknown[]) => String(c[0]).includes("skipped"));
     expect(skipMsg).toBeDefined();
-
-    warnSpy.mockRestore();
   });
 
   it("silent: true also suppresses import failure warnings", async () => {

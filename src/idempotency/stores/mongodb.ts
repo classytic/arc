@@ -76,9 +76,8 @@ export class MongoIdempotencyStore implements IdempotencyStore {
     this.ttlMs = options.ttlMs ?? 86400000;
 
     if (options.createIndex !== false) {
-      this.ensureIndex().catch((err) => {
-        console.warn("[MongoIdempotencyStore] Failed to create index:", err);
-      });
+      // Fire-and-forget — index creation failure is non-fatal
+      this.ensureIndex().catch(() => {});
     }
   }
 
