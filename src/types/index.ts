@@ -570,7 +570,48 @@ export interface ResourceConfig<TDoc = AnyRecord> {
    */
   fields?: import('../permissions/fields.js').FieldPermissionMap;
   middlewares?: MiddlewareConfig;
+  /** @deprecated Use `routes` instead. Will error in v3. */
   additionalRoutes?: AdditionalRoute[];
+
+  /**
+   * Custom routes — the v2.8 way to add endpoints beyond CRUD.
+   * Replaces `additionalRoutes` with cleaner naming and no `wrapHandler` boolean.
+   *
+   * @example
+   * ```typescript
+   * routes: [
+   *   { method: 'GET', path: '/stats', handler: 'getStats', permissions: auth() },
+   *   { method: 'POST', path: '/webhook', handler: webhookFn, raw: true, permissions: auth() },
+   * ]
+   * ```
+   */
+  routes?: RouteDefinition[];
+
+  /**
+   * State-transition actions → unified POST /:id/action endpoint.
+   * Each action can be a bare handler or full config with permissions + schema.
+   *
+   * @example
+   * ```typescript
+   * actions: {
+   *   approve: async (id, data, req) => service.approve(id, req.user._id),
+   *   cancel: {
+   *     handler: async (id, data, req) => service.cancel(id, data.reason, req.user._id),
+   *     permissions: roles('admin'),
+   *     schema: { reason: { type: 'string' } },
+   *   },
+   * },
+   * actionPermissions: auth(),
+   * ```
+   */
+  actions?: ActionsMap;
+
+  /**
+   * Fallback permission for actions without per-action permissions.
+   * Only applies when `actions` is defined.
+   */
+  actionPermissions?: PermissionCheck;
+
   disableCrud?: boolean;
   disableDefaultRoutes?: boolean;
   disabledRoutes?: CrudRouteKey[]; // Specific routes to disable
@@ -846,6 +887,116 @@ export interface AdditionalRoute {
     isError?: boolean;
   }>;
 }
+
+// ============================================================================
+// Route Definition (v2.8 — replaces additionalRoutes for users)
+// ============================================================================
+
+/** HTTP methods for custom routes */
+type RouteMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
+/** MCP tool configuration for a route or action */
+interface RouteMcpConfig {
+  /** Override auto-generated tool description */
+  readonly description?: string;
+  /** MCP tool annotations */
+  readonly annotations?: { readonly readOnlyHint?: boolean; readonly destructiveHint?: boolean; readonly idempotentHint?: boolean; readonly openWorldHint?: boolean };
+}
+
+/**
+ * Route definition — replaces additionalRoutes.
+ *
+ * - `handler: 'string'` → controller method → full Arc pipeline + MCP tool
+ * - `handler: function` → inline handler → full Arc pipeline + MCP tool
+ * - `raw: true` → raw Fastify handler → no pipeline, no MCP by default
+ */
+interface RouteDefinition {
+  readonly method: RouteMethod;
+  /** Path relative to resource prefix */
+  readonly path: string;
+  /**
+   * Route handler.
+   * - String: controller method name (goes through Arc pipeline)
+   * - Function without `raw: true`: receives IRequestContext, returns IControllerResponse (goes through Arc pipeline)
+   * - Function with `raw: true`: raw Fastify handler (request, reply)
+   */
+  readonly handler: string | import('./handlers.js').ControllerHandler | RouteHandlerMethod | ((request: FastifyRequest<Record<string, unknown>>, reply: FastifyReply) => unknown);
+  /** Permission check — REQUIRED */
+  readonly permissions: PermissionCheck;
+  /**
+   * Raw mode — bypasses Arc pipeline. Handler receives raw Fastify request/reply.
+   * Default: false (handler goes through Arc pipeline).
+   */
+  readonly raw?: boolean;
+  /** Logical operation name (for pipeline keys, MCP tool naming). Defaults to handler name or method+path slug. */
+  readonly operation?: string;
+  /** OpenAPI summary */
+  readonly summary?: string;
+  /** OpenAPI description */
+  readonly description?: string;
+  /** OpenAPI tags */
+  readonly tags?: string[];
+  /** Route-level middleware */
+  readonly preHandler?: RouteHandlerMethod[] | ((fastify: FastifyInstance) => RouteHandlerMethod[]);
+  /** Pre-auth handlers (run before authentication) */
+  readonly preAuth?: RouteHandlerMethod[];
+  /** SSE streaming mode */
+  readonly streamResponse?: boolean;
+  /** Fastify route schema */
+  readonly schema?: Record<string, unknown>;
+  /**
+   * MCP tool generation:
+   * - omitted/true: auto-generate (non-raw routes only)
+   * - false: skip MCP
+   * - object: explicit config
+   */
+  readonly mcp?: boolean | RouteMcpConfig;
+  /**
+   * MCP handler for raw routes — parallel entry point for MCP without changing HTTP handler.
+   */
+  readonly mcpHandler?: (input: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }>;
+}
+
+// ============================================================================
+// Action Definition (v2.8 — replaces onRegister + createActionRouter)
+// ============================================================================
+
+/**
+ * Action handler function for state transitions.
+ * Receives the resource ID, action-specific data, and the request context.
+ */
+type ActionHandlerFn = (
+  id: string,
+  data: Record<string, unknown>,
+  req: RequestWithExtras,
+) => Promise<unknown>;
+
+/**
+ * Full action configuration with handler, permissions, and schema.
+ */
+interface ActionDefinition {
+  /** Action handler */
+  readonly handler: ActionHandlerFn;
+  /** Per-action permission check (overrides resource-level actionPermissions) */
+  readonly permissions?: PermissionCheck;
+  /** JSON Schema for action-specific body fields */
+  readonly schema?: Record<string, Record<string, unknown>>;
+  /** Description for OpenAPI docs and MCP tool */
+  readonly description?: string;
+  /**
+   * MCP tool generation:
+   * - omitted/true: auto-generate
+   * - false: skip
+   * - object: explicit config
+   */
+  readonly mcp?: boolean | RouteMcpConfig;
+}
+
+/** Action config: bare handler function OR full ActionDefinition */
+type ActionEntry = ActionHandlerFn | ActionDefinition;
+
+/** Actions configuration map */
+type ActionsMap = Record<string, ActionEntry>;
 
 export interface RouteSchemaOptions {
   hiddenFields?: string[];
@@ -1494,3 +1645,6 @@ export type TypedRepository<TDoc> = CrudRepository<TDoc>;
 // ============================================================================
 
 export type { BaseControllerOptions } from '../core/BaseController.js';
+
+// v2.8 route + action types
+export type { RouteDefinition, RouteMcpConfig, ActionHandlerFn, ActionDefinition, ActionEntry, ActionsMap };

@@ -44,6 +44,8 @@ import { CRUD_OPERATIONS } from "../constants.js";
 import { applyPresets } from "../presets/index.js";
 import type { RegisterOptions } from "../registry/ResourceRegistry.js";
 import type {
+  ActionDefinition,
+  ActionsMap,
   AdditionalRoute,
   AnyRecord,
   CrudController,
@@ -54,12 +56,15 @@ import type {
   IController,
   MiddlewareConfig,
   OpenApiSchemas,
+  PermissionCheck,
   QueryParserInterface,
   RateLimitConfig,
+  RequestWithExtras,
   ResourceCacheConfig,
   ResourceConfig,
   ResourceMetadata,
   ResourcePermissions,
+  RouteDefinition,
   RouteSchemaOptions,
 } from "../types/index.js";
 import { convertOpenApiSchemas, convertRouteSchema } from "../utils/schemaConverter.js";
@@ -111,7 +116,7 @@ export function defineResource<TDoc = AnyRecord>(
       }
     }
 
-    // Validate additionalRoutes
+    // Validate additionalRoutes (v2 legacy)
     for (const route of config.additionalRoutes ?? []) {
       if (typeof route.permissions !== "function") {
         throw new Error(
@@ -126,6 +131,48 @@ export function defineResource<TDoc = AnyRecord>(
             `wrapHandler is required.\n` +
             `Set true for ControllerHandler (context object) or false for FastifyHandler (req, reply).`,
         );
+      }
+    }
+
+    // Validate routes (v2.8)
+    if (config.routes && config.additionalRoutes) {
+      throw new Error(
+        `[Arc] Resource '${config.name}': Cannot use both 'routes' and 'additionalRoutes'.\n` +
+          `Use 'routes' (v2.8) — it replaces 'additionalRoutes'.`,
+      );
+    }
+    for (const route of config.routes ?? []) {
+      if (typeof route.permissions !== "function") {
+        throw new Error(
+          `[Arc] Resource '${config.name}' route ${route.method} ${route.path}: ` +
+            `permissions is required and must be a PermissionCheck function.`,
+        );
+      }
+    }
+
+    // Validate actions (v2.8)
+    if (config.actions) {
+      const CRUD_OPS = new Set(["create", "update", "delete", "list", "get"]);
+      for (const [name, entry] of Object.entries(config.actions)) {
+        if (CRUD_OPS.has(name)) {
+          throw new Error(
+            `[Arc] Resource '${config.name}': action '${name}' conflicts with CRUD operation.\n` +
+              `Use a different name (e.g., '${name}_item', 'do_${name}').`,
+          );
+        }
+        if (typeof entry !== "function") {
+          const def = entry as ActionDefinition;
+          if (typeof def.handler !== "function") {
+            throw new Error(
+              `[Arc] Resource '${config.name}': actions.${name}.handler must be a function.`,
+            );
+          }
+          if (def.permissions !== undefined && typeof def.permissions !== "function") {
+            throw new Error(
+              `[Arc] Resource '${config.name}': actions.${name}.permissions must be a PermissionCheck function.`,
+            );
+          }
+        }
       }
     }
   }
@@ -453,6 +500,10 @@ export class ResourceDefinition<TDoc = AnyRecord> {
   readonly disableDefaultRoutes: boolean;
   readonly disabledRoutes: CrudRouteKey[];
 
+  // Actions (v2.8)
+  readonly actions?: ActionsMap;
+  readonly actionPermissions?: PermissionCheck;
+
   // Events
   readonly events: Record<string, EventDefinition>;
 
@@ -519,11 +570,17 @@ export class ResourceDefinition<TDoc = AnyRecord> {
     // Security
     this.permissions = (config.permissions ?? {}) as ResourcePermissions;
 
-    // Customization
-    this.additionalRoutes = config.additionalRoutes ?? [];
+    // Customization — convert v2.8 `routes` to internal `AdditionalRoute` format
+    this.additionalRoutes = config.routes
+      ? convertRoutesToAdditionalRoutes(config.routes)
+      : (config.additionalRoutes ?? []);
     this.middlewares = config.middlewares ?? {};
     this.disableDefaultRoutes = config.disableDefaultRoutes ?? false;
     this.disabledRoutes = config.disabledRoutes ?? [];
+
+    // Actions (v2.8)
+    this.actions = config.actions;
+    this.actionPermissions = config.actionPermissions;
 
     // Events
     this.events = config.events ?? {};
@@ -674,17 +731,18 @@ export class ResourceDefinition<TDoc = AnyRecord> {
         }
       }
 
-      // onRegister lifecycle hook — called with the scoped Fastify instance
-      const onRegister = (
-        self as unknown as { _onRegister?: (f: FastifyInstance) => void | Promise<void> }
-      )._onRegister;
-      if (onRegister) {
-        await onRegister(fastify);
-      }
-
       await fastify.register(
         async (instance) => {
           const typedInstance = instance as FastifyWithDecorators;
+
+          // onRegister lifecycle hook — called INSIDE the prefixed scope
+          // so createActionRouter / custom sub-plugins get the resource prefix automatically.
+          const onRegister = (
+            self as unknown as { _onRegister?: (f: FastifyInstance) => void | Promise<void> }
+          )._onRegister;
+          if (onRegister) {
+            await onRegister(instance);
+          }
 
           // Schema generation is handled at define-time (see defineResource, lines ~222-230).
           // No competing runtime generation here.
@@ -850,6 +908,17 @@ export class ResourceDefinition<TDoc = AnyRecord> {
             fields: self.fields,
           });
 
+          // Register first-class actions (v2.8) — after CRUD routes, inside prefix scope
+          if (self.actions && Object.keys(self.actions).length > 0) {
+            const { createActionRouter } = await import("./createActionRouter.js");
+            const actionConfig = normalizeActionsToRouterConfig(
+              self.actions,
+              self.actionPermissions,
+              self.tag,
+            );
+            createActionRouter(instance as unknown as FastifyInstance, actionConfig);
+          }
+
           if (self.events && Object.keys(self.events).length > 0) {
             typedInstance.log?.debug?.(
               `Resource '${self.name}' defined ${Object.keys(self.events).length} events`,
@@ -931,4 +1000,84 @@ function deepMergeSchemas(base: AnyRecord, override: AnyRecord): AnyRecord {
 function capitalize(str: string): string {
   if (!str) return "";
   return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+// ============================================================================
+// v2.8 — model auto-detection
+// ============================================================================
+
+// ============================================================================
+// v2.8 — routes → AdditionalRoute conversion
+// ============================================================================
+
+/**
+ * Convert v2.8 RouteDefinition[] to internal AdditionalRoute[] format.
+ * The internal format is what createCrudRouter understands.
+ */
+function convertRoutesToAdditionalRoutes(routes: RouteDefinition[]): AdditionalRoute[] {
+  return routes.map((route) => ({
+    method: route.method,
+    path: route.path,
+    handler: route.handler as AdditionalRoute["handler"],
+    permissions: route.permissions,
+    // raw: true → wrapHandler: false, otherwise wrapHandler: true for pipeline routes
+    wrapHandler: !route.raw,
+    operation: route.operation,
+    summary: route.summary,
+    description: route.description,
+    tags: route.tags,
+    preHandler: route.preHandler,
+    preAuth: route.preAuth,
+    streamResponse: route.streamResponse,
+    schema: route.schema,
+    mcpHandler: route.mcpHandler as AdditionalRoute["mcpHandler"],
+  }));
+}
+
+// ============================================================================
+// v2.8 — actions → ActionRouterConfig conversion
+// ============================================================================
+
+/**
+ * Normalize ActionsMap into the ActionRouterConfig shape that createActionRouter expects.
+ */
+function normalizeActionsToRouterConfig(
+  actions: ActionsMap,
+  globalAuth: PermissionCheck | undefined,
+  tag: string,
+): {
+  tag: string;
+  actions: Record<
+    string,
+    (id: string, data: Record<string, unknown>, req: RequestWithExtras) => Promise<unknown>
+  >;
+  actionPermissions: Record<string, PermissionCheck>;
+  actionSchemas: Record<string, Record<string, Record<string, unknown>>>;
+  globalAuth?: PermissionCheck;
+} {
+  const handlers: Record<
+    string,
+    (id: string, data: Record<string, unknown>, req: RequestWithExtras) => Promise<unknown>
+  > = {};
+  const permissions: Record<string, PermissionCheck> = {};
+  const schemas: Record<string, Record<string, Record<string, unknown>>> = {};
+
+  for (const [name, entry] of Object.entries(actions)) {
+    if (typeof entry === "function") {
+      handlers[name] = entry;
+    } else {
+      const def = entry as ActionDefinition;
+      handlers[name] = def.handler;
+      if (def.permissions) permissions[name] = def.permissions;
+      if (def.schema) schemas[name] = def.schema;
+    }
+  }
+
+  return {
+    tag,
+    actions: handlers,
+    actionPermissions: permissions,
+    actionSchemas: schemas,
+    globalAuth,
+  };
 }

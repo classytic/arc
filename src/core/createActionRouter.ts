@@ -61,7 +61,7 @@ import type {
  * @param req - Full Fastify request object
  * @returns Action result (will be wrapped in success response)
  */
-export type ActionHandler<TData = any, TResult = any> = (
+export type ActionHandler<TData = Record<string, unknown>, TResult = unknown> = (
   id: string,
   data: TData,
   req: RequestWithExtras,
@@ -74,36 +74,36 @@ export interface ActionRouterConfig {
   /**
    * OpenAPI tag for grouping routes
    */
-  tag?: string;
+  readonly tag?: string;
 
   /**
    * Action handlers map
    * @example { approve: (id, data, req) => service.approve(id), ... }
    */
-  actions: Record<string, ActionHandler>;
+  readonly actions: Record<string, ActionHandler>;
 
   /**
    * Per-action permission checks (PermissionCheck functions)
    * @example { approve: requireRoles(['admin', 'manager']), cancel: requireRoles(['admin']) }
    */
-  actionPermissions?: Record<string, PermissionCheck>;
+  readonly actionPermissions?: Record<string, PermissionCheck>;
 
   /**
    * Per-action JSON schema for body validation
    * @example { dispatch: { transport: { type: 'object' } } }
    */
-  actionSchemas?: Record<string, Record<string, any>>;
+  readonly actionSchemas?: Record<string, Record<string, unknown>>;
 
   /**
    * Global permission check applied to all actions (if action-specific not defined)
    */
-  globalAuth?: PermissionCheck;
+  readonly globalAuth?: PermissionCheck;
 
   /**
    * Optional idempotency service
    * If provided, will handle idempotency-key header
    */
-  idempotencyService?: IdempotencyService;
+  readonly idempotencyService?: IdempotencyService;
 
   /**
    * Custom error handler for action execution failures
@@ -112,7 +112,7 @@ export interface ActionRouterConfig {
    * @param id - The resource ID
    * @returns Status code and error response
    */
-  onError?: (
+  readonly onError?: (
     error: Error,
     action: string,
     id: string,
@@ -124,8 +124,8 @@ export interface ActionRouterConfig {
  * Apps can provide their own implementation
  */
 export interface IdempotencyService {
-  check(key: string, payload: any): Promise<{ isNew: boolean; existingResult?: any }>;
-  complete(key: string | undefined, result: any): Promise<void>;
+  check(key: string, payload: unknown): Promise<{ isNew: boolean; existingResult?: unknown }>;
+  complete(key: string | undefined, result: unknown): Promise<void>;
   fail(key: string | undefined, error: Error): Promise<void>;
 }
 
@@ -157,7 +157,7 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
   }
 
   // Build unified body schema with action-specific properties
-  const bodyProperties: Record<string, any> = {
+  const bodyProperties: Record<string, unknown> = {
     action: {
       type: "string",
       enum: actionEnum,
@@ -169,9 +169,11 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
   Object.entries(actionSchemas).forEach(([actionName, schema]) => {
     if (schema && typeof schema === "object") {
       Object.entries(schema).forEach(([propName, propSchema]) => {
+        const schemaObj = propSchema as Record<string, unknown>;
         bodyProperties[propName] = {
-          ...propSchema,
-          description: `${propSchema.description || ""} (for ${actionName} action)`.trim(),
+          ...schemaObj,
+          description:
+            `${(schemaObj.description as string) || ""} (for ${actionName} action)`.trim(),
         };
       });
     }
@@ -225,7 +227,7 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
       preHandler: preHandler.length ? preHandler : undefined,
     },
     async (req: FastifyRequest, reply: FastifyReply) => {
-      const { action, ...data } = req.body as { action: string; [key: string]: any };
+      const { action, ...data } = req.body as { action: string; [key: string]: unknown };
       const { id } = req.params as { id: string };
       const rawIdempotencyKey = req.headers["idempotency-key"];
       const idempotencyKey = Array.isArray(rawIdempotencyKey)

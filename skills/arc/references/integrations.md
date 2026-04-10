@@ -3,7 +3,7 @@
 Pluggable adapters for BullMQ jobs, WebSocket real-time, Streamline workflows, and MCP tools.
 All are separate subpath imports — only loaded when explicitly used.
 
-> **MCP** has its own dedicated reference: [mcp.md](mcp.md) — auto-generate tools from resources, custom tools, Better Auth OAuth 2.1.
+> **MCP** has its own dedicated reference: [mcp.md](mcp.md) — auto-generate tools from resources (including actions, v2.8), custom tools, Better Auth OAuth 2.1.
 
 ## Job Queue (BullMQ)
 

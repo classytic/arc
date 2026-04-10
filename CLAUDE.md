@@ -8,7 +8,7 @@
 **@classytic/arc** — Resource-oriented backend framework on Fastify.
 One `defineResource()` → REST API + auth + permissions + events + caching + OpenAPI + MCP.
 
-**v2.7.5** | Node.js 22+ | TypeScript 6+ | ESM-only | Fastify 5+ | 260+ test files, 3535+ tests
+**v2.8.0** | Node.js 22+ | TypeScript 6+ | ESM-only | Fastify 5+ | 260+ test files, 3535+ tests
 
 ## Commands
 
@@ -76,7 +76,7 @@ npm run smoke                                      # Verify CLI + imports
 
 ```
 src/
-  core/          — defineResource, BaseController (939L), QueryResolver, createCrudRouter
+  core/          — defineResource, BaseController (939L), QueryResolver, createCrudRouter, routes + actions on defineResource (v2.8)
   factory/       — createApp (main entry point)
   adapters/      — RepositoryLike interface + mongoose/prisma adapters
   auth/          — JWT, Better Auth, sessions
@@ -121,6 +121,7 @@ src/
 8. `multipartBody()` is a no-op for JSON requests — safe to always add to create/update middlewares
 6. Event publishing is fire-and-forget (`failOpen: true`) — use outbox for guaranteed delivery
 7. Presets compose but order matters — test combinations
+9. `additionalRoutes` is deprecated — use `routes` (no `wrapHandler`). `actions` replaces `onRegister` + `createActionRouter`.
 
 ## Peer Deps (never bundle)
 
@@ -129,7 +130,7 @@ src/
 | fastify | >=5.0.0 | **Yes** |
 | @classytic/mongokit | >=3.5.6 | No |
 | mongoose | >=9.0.0 | No |
-| better-auth | >=1.5.5 | No |
+| better-auth | >=1.6.2 | No |
 | ioredis | >=5.0.0 | No |
 | bullmq | >=5.0.0 | No |
 | @prisma/client | >=5.0.0 | No |

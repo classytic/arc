@@ -2,7 +2,7 @@
 
 Database-agnostic resource framework for Fastify. Define resources, get CRUD routes, permissions, presets, caching, events, OpenAPI, and MCP tools — without boilerplate.
 
-**v2.7.3** | Fastify 5+ | Node.js 22+ | ESM only | 260+ test files, 3523+ tests
+**v2.8.0** | Fastify 5+ | Node.js 22+ | ESM only | 260+ test files, 3523+ tests
 
 ## Install
 
@@ -694,7 +694,7 @@ npx @classytic/arc doctor                                        # Health check
 | `@classytic/arc/docs` | OpenAPI generation |
 | `@classytic/arc/cli` | CLI commands (programmatic) |
 
-## v2.7.3 Highlights
+## v2.8.0 Highlights
 
 - **MCP Integration** — expose resources as AI agent tools (stateless by default, service scope, multi-tenancy)
 - **Reply Helpers** — `reply.ok()`, `reply.fail()`, `reply.paginated()`, `reply.stream()` (opt-in)
