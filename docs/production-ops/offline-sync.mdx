@@ -1,0 +1,380 @@
+# Offline Sync — Recipe
+
+Build offline-first, multi-user sync using Arc's existing primitives. **Arc does not ship a sync engine** — sync is deeply domain-specific. Instead, Arc provides the building blocks; you compose them into a sync protocol that fits your app.
+
+## Why Not a Plugin?
+
+Sync touches conflict resolution, data priority, client storage, and domain-specific merge logic — all things only you understand. A framework-level abstraction would either be too simple (you outgrow it immediately) or too complex (competing with Replicache/PowerSync). Arc gives you primitives; you wire them.
+
+## Building Blocks
+
+| Arc Primitive | Sync Role | Import |
+|---|---|---|
+| `auditPlugin` | Change log — captures `before`, `after`, `changes`, `timestamp`, `userId` per mutation | `@classytic/arc/audit` |
+| `eventPlugin` + outbox | Reliable change propagation — at-least-once delivery to sync subscribers | `@classytic/arc/events` |
+| `idempotencyPlugin` | Dedup offline replays — prevents double-apply when client retries | `@classytic/arc/idempotency` |
+| `softDelete` preset | Tombstones — deleted records remain queryable until all clients have synced past them | `@classytic/arc/presets` |
+| Hook system | Inject `_rev` version fields, populate sync metadata on every write | `@classytic/arc/hooks` |
+| Redis Streams transport | Durable, ordered event log with cursor-based consumption | `@classytic/arc/events/redis-stream` |
+| SSE / WebSocket | Push changes to online clients in real-time | `@classytic/arc/plugins` |
+
+## Architecture
+
+```
+Client (offline)                     Server (Arc)
+─────────────────                    ────────────────────
+IndexedDB / SQLite                   Your Database
+  ↕                                    ↕
+Mutation Queue           ── POST /sync/push ──→  Your Push Handler
+  (pending changes)                               ├─ Idempotency check
+                                                  ├─ Conflict detection
+                                                  ├─ Your resolution logic
+                                                  ├─ Write + bump _rev
+                                                  └─ Audit log entry
+                         ←── 200 OK ────────
+                           { resolved, conflicts, cursor }
+
+                         ── GET /sync/pull ───→  Your Pull Handler
+                           ?since=cursor           ├─ Query audit log
+                                                   ├─ Filter by permissions
+                                                   └─ Include tombstones
+                         ←── 200 OK ────────
+                           { changes[], cursor, hasMore }
+```
+
+## Step 1 — Resource with Version Tracking
+
+Use hooks to auto-increment a `_rev` field on every write. This is how the server and client detect conflicts.
+
+```typescript
+import { defineResource } from '@classytic/arc';
+
+const documentResource = defineResource({
+  name: 'document',
+  adapter: yourAdapter,
+  presets: ['softDelete', 'audited'],
+  hooks: {
+    beforeCreate: async ({ data }) => ({
+      ...data,
+      _rev: 1,
+      _seq: await getNextSeq('document'),  // global monotonic counter
+    }),
+    beforeUpdate: async ({ data, existing }) => ({
+      ...data,
+      _rev: existing._rev + 1,
+      _seq: await getNextSeq('document'),
+    }),
+  },
+});
+```
+
+`_rev` is per-document (detects conflicts). `_seq` is global (provides a cursor for pull).
+
+> **Tip:** `getNextSeq()` is your implementation — a simple MongoDB `findOneAndUpdate` with `$inc`, a Redis `INCR`, or a Postgres sequence. Arc doesn't prescribe how you generate monotonic counters.
+
+## Step 2 — Pull Endpoint
+
+Clients call this on reconnect to get all changes since their last sync. The audit log already tracks every mutation.
+
+```typescript
+fastify.get('/sync/pull', async (request, reply) => {
+  const since = Number(request.query.since) || 0;
+  const limit = Math.min(Number(request.query.limit) || 100, 500);
+
+  // Query audit log for changes since cursor
+  const entries = await fastify.audit.query({
+    resource: 'document',
+    from: undefined,  // use _seq instead of timestamp
+    limit,
+  });
+
+  // Filter to entries after the client's cursor
+  // and by the user's permissions (row-level security)
+  const changes = entries
+    .filter(e => (e.after?._seq ?? 0) > since)
+    .map(entry => ({
+      id: entry.documentId,
+      action: entry.action,              // 'create' | 'update' | 'delete' | 'restore'
+      data: entry.after,
+      _rev: entry.after?._rev,
+      _seq: entry.after?._seq,
+      timestamp: entry.timestamp,
+    }));
+
+  const newCursor = changes.at(-1)?._seq ?? since;
+
+  return reply.send({
+    changes,
+    cursor: newCursor,
+    hasMore: changes.length === limit,
+  });
+});
+```
+
+> **Production note:** For large datasets, query your database directly by `_seq > since` instead of filtering audit logs in memory. The audit log approach works well for moderate scale and gives you the full before/after diff for free.
+
+## Step 3 — Push Endpoint
+
+Clients send their queued offline mutations. You detect conflicts and apply your resolution strategy.
+
+```typescript
+fastify.post('/sync/push', async (request, reply) => {
+  const { mutations } = request.body;
+  const results = [];
+
+  for (const mutation of mutations) {
+    // Idempotency: skip if already applied
+    const existing = await fastify.idempotency?.get(mutation.clientId);
+    if (existing) {
+      results.push({ id: mutation.id, status: 'already-applied' });
+      continue;
+    }
+
+    const current = await documentRepo.findById(mutation.id);
+
+    // No conflict — base version matches server
+    if (!current || current._rev === mutation.baseRev) {
+      const saved = await documentRepo.update(mutation.id, mutation.data);
+      results.push({ id: mutation.id, status: 'applied', data: saved });
+      continue;
+    }
+
+    // Conflict — base version doesn't match
+    const resolved = resolveConflict(mutation, current);
+    results.push(resolved);
+  }
+
+  return reply.send({ results, cursor: await getCurrentSeq('document') });
+});
+```
+
+## Step 4 — Conflict Resolution (Your Logic)
+
+This is the part only you can write. Here are common strategies:
+
+### Server-Wins
+
+Simplest. Discard the client change. Good for admin-controlled data.
+
+```typescript
+function resolveConflict(mutation, serverDoc) {
+  // Server state is truth — client change is discarded
+  return {
+    id: mutation.id,
+    status: 'conflict-server-wins',
+    data: serverDoc,
+    serverRev: serverDoc._rev,
+  };
+}
+```
+
+### Client-Wins
+
+The offline user's version always takes precedence. Good for single-owner data like personal notes.
+
+```typescript
+function resolveConflict(mutation, serverDoc) {
+  // Client overrides — apply their data with bumped rev
+  const merged = { ...mutation.data, _rev: serverDoc._rev + 1 };
+  return { id: mutation.id, status: 'conflict-client-wins', data: merged };
+}
+```
+
+### Field-Level Merge
+
+The sweet spot for most collaborative apps. Non-conflicting field changes merge automatically; conflicting fields use last-write-wins.
+
+```typescript
+function resolveConflict(mutation, serverDoc) {
+  const clientChanges = mutation.data;
+  const merged = { ...serverDoc };
+  const conflicts = [];
+
+  for (const [field, clientValue] of Object.entries(clientChanges)) {
+    const serverValue = serverDoc[field];
+    const baseValue = mutation.base?.[field];  // client sends their base snapshot
+
+    if (serverValue === baseValue) {
+      // Server didn't change this field — accept client's value
+      merged[field] = clientValue;
+    } else if (clientValue === baseValue) {
+      // Client didn't change this field — keep server's value
+      // (already in merged)
+    } else {
+      // Both changed the same field — LWW or flag for manual resolution
+      conflicts.push({ field, client: clientValue, server: serverValue });
+      merged[field] = serverValue;  // default: server-wins per field
+    }
+  }
+
+  merged._rev = serverDoc._rev + 1;
+
+  return {
+    id: mutation.id,
+    status: conflicts.length ? 'conflict-partial-merge' : 'merged',
+    data: merged,
+    conflicts,
+  };
+}
+```
+
+### Manual Resolution
+
+Store both versions, let the user decide in the UI. Good for critical data.
+
+```typescript
+function resolveConflict(mutation, serverDoc) {
+  // Don't resolve — return both versions for the user to pick
+  return {
+    id: mutation.id,
+    status: 'conflict-manual',
+    serverVersion: serverDoc,
+    clientVersion: mutation.data,
+    conflictId: crypto.randomUUID(),
+  };
+}
+```
+
+Add a resolution endpoint:
+
+```typescript
+fastify.post('/sync/conflicts/:conflictId/resolve', async (request, reply) => {
+  const { winner } = request.body;  // 'server' | 'client' | merged data
+  // Apply the chosen version
+});
+```
+
+## Step 5 — Real-Time Push (Online Clients)
+
+When a client is online, push changes immediately via SSE instead of waiting for pull.
+
+```typescript
+import { ssePlugin } from '@classytic/arc/plugins';
+
+await fastify.register(ssePlugin, {
+  path: '/sync/stream',
+  patterns: ['document.*'],
+});
+
+// Auto-emitted by BaseController on CRUD operations:
+// → document.created, document.updated, document.deleted
+// → SSE streams to all connected clients automatically
+```
+
+Clients subscribe to `EventSource('/sync/stream')` while online. When they go offline, they accumulate missed changes and catch up via the pull endpoint on reconnect.
+
+## Step 6 — Tombstone Cleanup
+
+The `softDelete` preset marks records as deleted but keeps them queryable. Sync clients need to see deletions. Purge tombstones after a retention window.
+
+```typescript
+// Periodic cleanup — run via cron or Arc's job system
+import { defineJob } from '@classytic/arc/integrations/jobs';
+
+const purgeTombstones = defineJob({
+  name: 'purge-tombstones',
+  handler: async () => {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    await documentRepo.deleteMany({
+      deletedAt: { $lt: thirtyDaysAgo },
+    });
+  },
+});
+```
+
+> **Warning:** Any client that hasn't synced in 30+ days will miss tombstones. Handle this on the client side — if the gap is too large, do a full resync instead of incremental pull.
+
+## Choosing a Strategy
+
+| Strategy | Best For | Tradeoff |
+|---|---|---|
+| **Server-wins** | Settings, admin data, config | Simple but lossy — offline edits are discarded |
+| **Client-wins** | Personal notes, drafts, single-owner | Simple but can lose concurrent edits from others |
+| **Field-level merge** | Collaborative documents, shared records | Best UX — most changes merge cleanly, only true conflicts need resolution |
+| **Manual resolution** | Financial data, legal documents | Safest but requires UI work for conflict resolution |
+
+You can mix strategies per resource:
+
+```typescript
+const strategies = {
+  'setting': resolveServerWins,
+  'document': resolveFieldMerge,
+  'invoice': resolveManual,
+};
+```
+
+## Client-Side (Not Arc's Concern)
+
+Arc provides the server endpoints. The client handles:
+
+- **Local storage:** IndexedDB, SQLite (via WatermelonDB, RxDB, or raw)
+- **Mutation queue:** Track offline changes with their `baseRev`
+- **Service worker:** Background sync API for reconnection
+- **Rebase:** Pull server changes first, replay local mutations on top
+
+Pair Arc's server with any client-side sync library. The pull/push endpoints are plain REST — no proprietary protocol.
+
+## Full Example
+
+Putting it all together:
+
+```typescript
+import { createApp } from '@classytic/arc/factory';
+import { defineResource } from '@classytic/arc';
+import { auditPlugin } from '@classytic/arc/audit';
+import { idempotencyPlugin } from '@classytic/arc/idempotency';
+import { RedisIdempotencyStore } from '@classytic/arc/idempotency/redis';
+import { ssePlugin } from '@classytic/arc/plugins';
+
+const app = await createApp({
+  preset: 'production',
+  arcPlugins: {
+    audit: {
+      enabled: true,
+      stores: ['mongodb'],
+      mongoConnection: mongoose.connection,
+    },
+    idempotency: {
+      enabled: true,
+      store: new RedisIdempotencyStore({ client: redis }),
+    },
+  },
+});
+
+// Resource with sync support
+const document = defineResource({
+  name: 'document',
+  adapter: createMongooseAdapter({ model: DocumentModel }),
+  presets: ['softDelete', 'audited'],
+  hooks: {
+    beforeCreate: async ({ data }) => ({
+      ...data,
+      _rev: 1,
+      _seq: await getNextSeq('document'),
+    }),
+    beforeUpdate: async ({ data, existing }) => ({
+      ...data,
+      _rev: existing._rev + 1,
+      _seq: await getNextSeq('document'),
+    }),
+  },
+});
+
+// SSE for online clients
+await app.register(ssePlugin, {
+  path: '/sync/stream',
+  patterns: ['document.*'],
+});
+
+// Sync endpoints (your routes, your logic)
+app.get('/sync/pull', pullHandler);
+app.post('/sync/push', pushHandler);
+app.post('/sync/conflicts/:id/resolve', resolveHandler);
+```
+
+## See Also
+
+- [Audit Module](./audit) — Change tracking that powers sync pull
+- [Events Module](./events) — Real-time propagation and outbox pattern
+- [Idempotency Module](./idempotency) — Dedup offline replays
+- [Presets](../getting-started/presets) — `softDelete` for tombstones

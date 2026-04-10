@@ -8,11 +8,11 @@ description: |
   Triggers: arc, fastify resource, defineResource, createApp, BaseController, arc preset,
   arc auth, arc events, arc jobs, arc websocket, arc mcp, arc plugin, arc testing, arc cli,
   arc permissions, arc hooks, arc pipeline, arc factory, arc cache, arc QueryCache.
-version: 2.7.3
+version: 2.8.0
 license: MIT
 metadata:
   author: Classytic
-  version: "2.7.1"
+  version: "2.8.0"
 tags:
   - fastify
   - rest-api
@@ -91,6 +91,23 @@ const productResource = defineResource({
   additionalRoutes: [
     { method: 'GET', path: '/featured', handler: 'getFeatured', permissions: allowPublic(), wrapHandler: true },
   ],
+
+  // v2.8: routes (replaces additionalRoutes — additionalRoutes still works but is deprecated)
+  routes: [
+    { method: 'GET', path: '/stats', handler: 'getStats', permissions: auth() },
+    { method: 'POST', path: '/webhook', handler: webhookFn, raw: true, permissions: auth() },
+  ],
+
+  // v2.8: actions (replaces onRegister + createActionRouter)
+  actions: {
+    approve: async (id, data, req) => service.approve(id, req.user._id),
+    cancel: {
+      handler: async (id, data, req) => service.cancel(id, data.reason, req.user._id),
+      permissions: roles('admin'),
+      schema: { reason: { type: 'string' } },
+    },
+  },
+  actionPermissions: auth(),
 });
 
 await fastify.register(productResource.toPlugin());
@@ -867,7 +884,8 @@ permissions: {
 **DX helpers:**
 
 ```typescript
-// Typed request for wrapHandler: false routes — no more (req as any).user
+// Typed request for raw routes — no more (req as any).user
+// v2.8: `raw: true` replaces `wrapHandler: false` (wrapHandler still works but is deprecated)
 import type { ArcRequest } from '@classytic/arc';
 handler: async (req: ArcRequest, reply) => { req.user?.id; req.scope; req.signal; }
 
@@ -884,6 +902,7 @@ import { createDomainError } from '@classytic/arc';
 throw createDomainError('SELF_REFERRAL', 'Cannot refer yourself', 422);
 
 // Resource lifecycle hook — wire singletons during registration
+// v2.8: for action routes, use `actions` config instead of onRegister + createActionRouter
 defineResource({ name: 'notification', onRegister: (f) => setSseManager(f.sseManager) });
 
 // SSE auth — preAuth runs BEFORE auth middleware (EventSource can't set headers)
@@ -893,7 +912,7 @@ additionalRoutes: [{ preAuth: [(req) => { req.headers.authorization = `Bearer ${
 additionalRoutes: [{ streamResponse: true, handler: async (req, reply) => reply.send(stream) }]
 ```
 
-## DX Helpers (v2.7.3)
+## DX Helpers (v2.7.3+)
 
 **Reply helpers** — consistent response envelopes (opt-in via `createApp({ replyHelpers: true })`):
 

@@ -46,6 +46,8 @@ await app.register(mcpPlugin, {
 
 Per resource, generates up to 5 tools: `list_{plural}`, `get_{name}`, `create_{name}`, `update_{name}`, `delete_{name}`.
 
+Resource `actions` (v2.8) also auto-generate MCP tools — each action becomes a tool named `{action}_{name}` with the action's input schema.
+
 Tool handlers call `BaseController` — same pipeline as REST (auth, org-scoping, hooks, field permissions, cache).
 
 ### McpPluginOptions
