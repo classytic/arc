@@ -36,6 +36,7 @@ export {
   type EventTransport,
   MemoryEventTransport,
   type MemoryEventTransportOptions,
+  type PublishManyResult,
 } from "./EventTransport.js";
 export { type EventPluginOptions, eventPlugin } from "./eventPlugin.js";
 // Event type constants and helpers
@@ -48,9 +49,27 @@ export {
   type CrudEventSuffix,
   crudEventType,
 } from "./eventTypes.js";
-export type { EventOutboxOptions, OutboxStore } from "./outbox.js";
+export type {
+  EventOutboxOptions,
+  ExponentialBackoffOptions,
+  OutboxAcknowledgeOptions,
+  OutboxClaimOptions,
+  OutboxErrorInfo,
+  OutboxFailOptions,
+  OutboxRelayErrorHandler,
+  OutboxRelayErrorKind,
+  OutboxStore,
+  OutboxWriteOptions,
+  RelayResult,
+} from "./outbox.js";
 // Transactional Outbox pattern
-export { EventOutbox, MemoryOutboxStore } from "./outbox.js";
+export {
+  EventOutbox,
+  exponentialBackoff,
+  InvalidOutboxEventError,
+  MemoryOutboxStore,
+  OutboxOwnershipError,
+} from "./outbox.js";
 export type { RetryOptions } from "./retry.js";
 // Retry & Dead Letter Queue (transport-agnostic)
 export { createDeadLetterPublisher, withRetry } from "./retry.js";

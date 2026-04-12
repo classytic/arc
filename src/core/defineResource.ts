@@ -496,6 +496,16 @@ export class ResourceDefinition<TDoc = AnyRecord> {
 
   // Customization
   readonly additionalRoutes: AdditionalRoute[];
+  /**
+   * Original v2.8 `routes` declaration — retained for downstream consumers
+   * (OpenAPI, MCP, registry, CLI introspect). Preserves fields dropped during
+   * normalization to `additionalRoutes` (notably `mcp`, `description`,
+   * `annotations`). Undefined when the resource was defined with the legacy
+   * `additionalRoutes` shape.
+   *
+   * Added in 2.8.1 — the source-of-truth fix for "canonical resource manifest".
+   */
+  readonly routes?: readonly RouteDefinition[];
   readonly middlewares: MiddlewareConfig;
   readonly disableDefaultRoutes: boolean;
   readonly disabledRoutes: CrudRouteKey[];
@@ -570,7 +580,11 @@ export class ResourceDefinition<TDoc = AnyRecord> {
     // Security
     this.permissions = (config.permissions ?? {}) as ResourcePermissions;
 
-    // Customization — convert v2.8 `routes` to internal `AdditionalRoute` format
+    // Customization — convert v2.8 `routes` to internal `AdditionalRoute` format,
+    // but also RETAIN the original `routes` shape so OpenAPI/MCP/registry/CLI can
+    // read metadata (mcp, description, annotations) that gets dropped during
+    // normalization to AdditionalRoute.
+    this.routes = config.routes;
     this.additionalRoutes = config.routes
       ? convertRoutesToAdditionalRoutes(config.routes)
       : (config.additionalRoutes ?? []);
@@ -1031,6 +1045,8 @@ function convertRoutesToAdditionalRoutes(routes: RouteDefinition[]): AdditionalR
     streamResponse: route.streamResponse,
     schema: route.schema,
     mcpHandler: route.mcpHandler as AdditionalRoute["mcpHandler"],
+    // Preserve MCP opt-out / annotations (v2.8.1 fix — previously dropped)
+    mcp: route.mcp as AdditionalRoute["mcp"],
   }));
 }
 
@@ -1052,7 +1068,7 @@ function normalizeActionsToRouterConfig(
     (id: string, data: Record<string, unknown>, req: RequestWithExtras) => Promise<unknown>
   >;
   actionPermissions: Record<string, PermissionCheck>;
-  actionSchemas: Record<string, Record<string, Record<string, unknown>>>;
+  actionSchemas: Record<string, Record<string, unknown>>;
   globalAuth?: PermissionCheck;
 } {
   const handlers: Record<
@@ -1060,7 +1076,7 @@ function normalizeActionsToRouterConfig(
     (id: string, data: Record<string, unknown>, req: RequestWithExtras) => Promise<unknown>
   > = {};
   const permissions: Record<string, PermissionCheck> = {};
-  const schemas: Record<string, Record<string, Record<string, unknown>>> = {};
+  const schemas: Record<string, Record<string, unknown>> = {};
 
   for (const [name, entry] of Object.entries(actions)) {
     if (typeof entry === "function") {
@@ -1069,7 +1085,11 @@ function normalizeActionsToRouterConfig(
       const def = entry as ActionDefinition;
       handlers[name] = def.handler;
       if (def.permissions) permissions[name] = def.permissions;
-      if (def.schema) schemas[name] = def.schema;
+      // Pass the schema through as-is — createActionRouter's normalizeActionSchema
+      // handles all three shapes (full JSON Schema, Zod v4, legacy field map).
+      // description/mcp are intentionally NOT passed to the router — they're
+      // metadata for OpenAPI/MCP generators which read from ResourceDefinition.actions.
+      if (def.schema) schemas[name] = def.schema as Record<string, unknown>;
     }
   }
 

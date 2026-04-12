@@ -2,7 +2,7 @@
 
 Database-agnostic resource framework for Fastify. Define resources, get CRUD routes, permissions, presets, caching, events, OpenAPI, and MCP tools — without boilerplate.
 
-**v2.8.0** | Fastify 5+ | Node.js 22+ | ESM only | 260+ test files, 3523+ tests
+**v2.8.1** | Fastify 5+ | Node.js 22+ | ESM only | 260+ test files, 3600+ tests
 
 ## Install
 
@@ -693,6 +693,15 @@ npx @classytic/arc doctor                                        # Health check
 | `@classytic/arc/mcp` | MCP tools for AI agents |
 | `@classytic/arc/docs` | OpenAPI generation |
 | `@classytic/arc/cli` | CLI commands (programmatic) |
+
+## v2.8.1 Highlights
+
+- **Per-action discriminated validation** — `actions` schemas now enforce required fields via a `oneOf` body schema; missing inputs are rejected at the HTTP layer by AJV (no more silent bypass)
+- **Actions in OpenAPI** — `POST /:id/action` endpoint auto-generated from `ResourceDefinition.actions`, with per-action descriptions and the same discriminated body schema as the runtime router
+- **Route/action metadata preserved** — `mcp: false`, `description`, `annotations` no longer dropped during `routes → additionalRoutes` normalization
+- **Canonical source retained** — `ResourceDefinition.routes` and `ResourceDefinition.actions` now kept as declared, so OpenAPI/MCP/registry can read the original shape
+- **Outbox hardening** — expanded `OutboxStore` contract (`claimPending`, `fail`, write options, dedupe, visibleAt), ownership-mismatch throws, onError reporting, safe multi-worker relay
+- **`slugLookup` fallback** — works with MongoKit's default Repository (no custom `getBySlug` needed)
 
 ## v2.8.0 Highlights
 

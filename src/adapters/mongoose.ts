@@ -212,6 +212,24 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
         const typeInfo = schemaType as MongooseSchemaType;
         properties[fieldName] = this.mongooseTypeToOpenApi(typeInfo);
 
+        // Merge fieldRules constraints into OpenAPI property — parity with
+        // MCP's fieldRulesToZod path. Mongoose model-level constraints
+        // (minlength, maxlength, min, max, enum) are already picked up by
+        // mongooseTypeToOpenApi; fieldRules act as an override/supplement
+        // layer for constraints that only exist in arc config.
+        const rule = fieldRules[fieldName];
+        if (rule) {
+          const prop = properties[fieldName] as AnyRecord;
+          if (rule.minLength != null && prop.minLength == null) prop.minLength = rule.minLength;
+          if (rule.maxLength != null && prop.maxLength == null) prop.maxLength = rule.maxLength;
+          if (rule.min != null && prop.minimum == null) prop.minimum = rule.min;
+          if (rule.max != null && prop.maximum == null) prop.maximum = rule.max;
+          if (rule.pattern != null && prop.pattern == null) prop.pattern = rule.pattern;
+          if (rule.enum != null && prop.enum == null) prop.enum = rule.enum;
+          if (rule.description != null && prop.description == null)
+            prop.description = rule.description as string;
+        }
+
         // Mark as required unless overridden
         if (
           typeInfo.isRequired &&

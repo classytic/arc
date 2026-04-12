@@ -529,31 +529,162 @@ await outbox.store({
 const relayed = await outbox.relay();  // publishes pending → transport
 ```
 
-**OutboxStore interface** — Arc is DB-agnostic; you implement this for your database:
+**OutboxStore interface** — Arc is DB-agnostic; you implement this for your database.
+The contract has three required methods and several optional capabilities that stores
+can opt into for richer semantics:
 
 ```typescript
 interface OutboxStore {
-  save(event: DomainEvent): Promise<void>;
+  // ── Required ──────────────────────────────────────────────────────────
+  save(event: DomainEvent, options?: OutboxWriteOptions): Promise<void>;
   getPending(limit: number): Promise<DomainEvent[]>;
-  acknowledge(eventId: string): Promise<void>;
-  /** Optional — purge old acknowledged events. DB-specific cleanup. */
+  acknowledge(eventId: string, options?: OutboxAcknowledgeOptions): Promise<void>;
+
+  // ── Optional capabilities ─────────────────────────────────────────────
+  /** Lease-based atomic claim — required for safe multi-worker relay */
+  claimPending?(options?: OutboxClaimOptions): Promise<DomainEvent[]>;
+  /** Failure tracking — enables retries, backoff, dead-letter */
+  fail?(eventId: string, error: OutboxErrorInfo, options?: OutboxFailOptions): Promise<void>;
+  /** Purge old acknowledged events — DB-specific cleanup */
   purge?(olderThanMs: number): Promise<number>;
 }
 ```
 
-Arc ships only `MemoryOutboxStore` (for dev/testing). Production stores are implemented
-by you — this keeps the framework DB-agnostic and avoids coupling to any ORM or driver.
+Arc ships only `MemoryOutboxStore` (for dev/testing) — it's a reference implementation
+of the **full** capability set. Production stores are implemented by you — this keeps
+the framework DB-agnostic and avoids coupling to any ORM or driver.
+
+### Transactional writes
+
+Pass your DB session through `OutboxWriteOptions.session` to persist the event in
+the same transaction as your business write. Stores that support it will honor it;
+others ignore the field (best-effort contract).
+
+```typescript
+await db.withTransaction(async (session) => {
+  await orders.insertOne(order, { session });
+  await outbox.store(
+    { type: 'order.created', payload: order, meta: { id, timestamp: new Date() } },
+    { session },
+  );
+  // DB commit and event commit are atomic
+});
+```
+
+Additional write options — all optional, all backward-compatible:
+
+| Option | Purpose |
+|--------|---------|
+| `session` | DB transaction handle for atomic store-and-write |
+| `visibleAt` | Earliest time the event should be visible to relay (delayed publishing) |
+| `dedupeKey` | Idempotency key — stores that support it skip duplicates |
+| `partitionKey` | Routing key for sharded transports (Kafka, Redis Streams) |
+| `headers` | Propagated to the transport layer |
+
+### Multi-worker relay (claim + lease)
+
+If you run multiple relay workers, implement `claimPending` on your store. Each
+worker atomically claims a batch with a lease TTL — stale leases are reclaimed
+automatically, and no two workers publish the same event.
+
+```typescript
+const outbox = new EventOutbox({
+  store,
+  transport,
+  consumerId: `relay-${process.pid}`,
+  leaseMs: 30_000, // 30s lease
+});
+
+// On every tick, relay() claims its own batch — safe to run on N workers
+setInterval(() => outbox.relay(), 1_000);
+```
+
+`EventOutbox` automatically detects `claimPending` and uses it over `getPending`.
+Stores without it stay single-worker safe.
+
+### Retry and dead-letter (fail hook)
+
+If your store implements `fail`, relay calls it on publish failure instead of
+stopping the batch. This unlocks retry scheduling (via `retryAt`) and dead-letter
+handling (via `deadLetter: true`):
+
+```typescript
+// Inside your store.fail implementation
+async fail(eventId, error, options) {
+  const entry = await this.findById(eventId);
+  entry.attempts++;
+  entry.lastError = error;
+
+  if (entry.attempts >= MAX_ATTEMPTS) {
+    entry.status = 'dead_letter'; // won't be retried
+    return;
+  }
+
+  // Exponential backoff
+  const backoffMs = Math.min(60_000, 1_000 * 2 ** entry.attempts);
+  entry.visibleAt = new Date(Date.now() + backoffMs);
+  await this.update(entry);
+}
+```
+
+Without `fail`, relay keeps its legacy behavior: stop on first failure, leave
+the event pending, retry on the next `relay()` call.
+
+### Recommended Mongo store schema
+
+For apps building a Mongo-backed store, this shape captures the full contract:
+
+```typescript
+{
+  eventId: string,        // unique — from event.meta.id
+  type: string,
+  payload: unknown,
+  meta: unknown,
+  status: 'pending' | 'delivered' | 'dead_letter',
+  attempts: number,
+  leaseOwner: string | null,
+  leaseExpiresAt: Date | null,
+  visibleAt: Date,        // default: now
+  dedupeKey?: string,     // unique sparse index for idempotency
+  lastError?: { message: string, code?: string },
+  createdAt: Date,
+  deliveredAt: Date | null,
+}
+```
+
+Recommended indexes:
+- `{ status: 1, visibleAt: 1 }` — claim scan
+- `{ eventId: 1 }` unique — ack/fail lookup
+- `{ dedupeKey: 1 }` unique sparse — idempotency
+- `{ deliveredAt: 1 }` with `expireAfterSeconds` — automatic purge
+
+### Terminology — `delivered` is canonical
+
+Arc's outbox uses **`delivered`** as the canonical term for the terminal
+successful state:
+
+| Term | Meaning |
+|------|---------|
+| `acknowledge()` | The store operation that transitions an event to delivered |
+| `delivered` | The resulting state |
+| `deliveredAt` | The timestamp field / column store authors should use |
+
+Older drafts of this doc used `acknowledgedAt` — that is deprecated. Use
+**`deliveredAt`** in all new store implementations.
 
 ### Outbox Cleanup
 
-Acknowledged events accumulate over time. Arc provides `purge()` as an **optional contract**
+Delivered events accumulate over time. Arc provides `purge()` as an **optional contract**
 on `OutboxStore` — implement it using your DB's native cleanup mechanism:
 
 | Database | Recommended Cleanup | Notes |
 |----------|-------------------|-------|
-| MongoDB | TTL index on `acknowledgedAt` | Automatic, zero-code once index is created |
-| PostgreSQL/MySQL | Scheduled `DELETE FROM outbox WHERE acknowledged_at < NOW() - INTERVAL '7 days'` | Use pg_cron or app-level scheduler |
-| Redis | Key expiry (`EXPIRE`) on acknowledged entries | Built-in, no scheduler needed |
+| MongoDB | TTL index on `deliveredAt` | Automatic, zero-code once index is created |
+| PostgreSQL/MySQL | Scheduled `DELETE FROM outbox WHERE status = 'delivered' AND delivered_at < NOW() - INTERVAL '7 days'` | Use pg_cron or app-level scheduler |
+| Redis | Key expiry (`EXPIRE`) on delivered entries | Built-in, no scheduler needed |
+
+Only events in the `delivered` state are eligible for purge — `pending`,
+`failed`, and `dead_letter` rows must never be removed by cleanup.
 
 ```typescript
 // Option A: Use Arc's purge() contract (if your store implements it)
@@ -561,13 +692,119 @@ const purged = await outbox.purge(7 * 24 * 60 * 60 * 1000); // 7 days
 console.log(`Purged ${purged} old outbox events`);
 
 // Option B: Use your DB's native cleanup (no Arc involvement)
-// MongoDB: db.outbox.createIndex({ acknowledgedAt: 1 }, { expireAfterSeconds: 604800 })
-// PostgreSQL: CREATE EXTENSION pg_cron; SELECT cron.schedule('0 3 * * *', $$DELETE FROM ...$$);
+// MongoDB: db.outbox.createIndex({ deliveredAt: 1 }, { expireAfterSeconds: 604800 })
+// PostgreSQL: CREATE EXTENSION pg_cron; SELECT cron.schedule('0 3 * * *', $$DELETE FROM outbox WHERE status='delivered' AND delivered_at < NOW() - INTERVAL '7 days'$$);
 ```
 
 > **Arc's boundary:** Arc defines the interface and calls `store.purge()` if implemented.
 > It does **not** ship DB-specific outbox stores — that's your app's responsibility, using
 > whichever database and cleanup strategy fits your stack.
+
+### Backend guarantees — what you get from different stores
+
+Arc's outbox is intentionally backend-neutral: it specifies a contract, not a
+storage technology. The guarantees you actually get depend on the store you
+plug in, so choose deliberately:
+
+| Store backend | Transactional with business DB write | Durable across restarts | Atomic multi-worker claim | Notes |
+|---|---|---|---|---|
+| **Mongo / SQL in same DB as business** | ✅ (when store.save accepts `{ session }` and the host passes the transaction handle) | ✅ | ✅ (via `FOR UPDATE SKIP LOCKED` or `findOneAndUpdate`) | Classic transactional outbox — strongest guarantees |
+| **Separate Mongo / SQL database** | ❌ (two-phase commit needed — don't) | ✅ | ✅ | Use only if you accept eventual consistency between business and events |
+| **Redis Streams / Redis hash** | ❌ | ✅ (with AOF/RDB) | ✅ (via consumer groups) | Durable but NOT atomic with your business DB — handle the race |
+| **Kafka / RabbitMQ direct producer** | ❌ | ✅ | ✅ | Treat as transport, not store — skip the outbox layer if you're OK with fire-and-forget |
+| **SQS / SNS** | ❌ | ✅ | ✅ (SQS visibility timeout) | Handle the host-coordinates case: buffer in DB, then forward to SQS |
+
+**Key rule**: the only way to get true transactional outbox semantics is for
+the store to share the same DB transaction as your business write. Pass the
+transaction handle through `OutboxWriteOptions.session` and verify the store
+honors it. Any other topology gives you durability without atomicity — and
+that's a conscious trade-off, not a bug.
+
+### Retry helper — `exponentialBackoff()`
+
+Store authors implementing `fail()` can use Arc's `exponentialBackoff()` to
+compute consistent `retryAt` timestamps with jitter:
+
+```typescript
+import { exponentialBackoff } from '@classytic/arc/events';
+
+async fail(eventId, error, options) {
+  const entry = await this.findById(eventId);
+  entry.attempts++;
+
+  if (entry.attempts >= MAX_ATTEMPTS) {
+    entry.status = 'dead_letter';
+    await this.update(entry);
+    return;
+  }
+
+  // 1s, 2s, 4s, 8s, 16s, 32s, 60s (capped), with ±20% jitter
+  entry.visibleAt = exponentialBackoff({ attempt: entry.attempts });
+  entry.status = 'pending';
+  await this.update(entry);
+}
+```
+
+Options: `baseMs` (first delay, default 1000), `maxMs` (cap, default 60000),
+`jitter` (0–1, default 0.2). Jitter is always additive — never schedules
+earlier than the computed delay — so it safely spreads retry bursts across
+multiple workers without risking earlier-than-intended publishes.
+
+### Batched publish — `publishMany`
+
+Transports that can efficiently batch (Kafka producer, Redis pipeline,
+RabbitMQ publisher confirms, SQS `SendMessageBatch`) should implement the
+optional `publishMany(events)` method. When present, `EventOutbox.relay`
+auto-detects it and sends the entire batch in one network call instead of
+N per-event calls. Disable per-instance via `usePublishMany: false`.
+
+```typescript
+class KafkaEventTransport implements EventTransport {
+  async publishMany(events) {
+    const results = new Map<string, Error | null>();
+    const kafkaBatch = events.map((e) => ({
+      topic: e.type,
+      messages: [{ key: e.meta.id, value: JSON.stringify(e) }],
+    }));
+    const outcomes = await producer.sendBatch({ topicMessages: kafkaBatch });
+    // Map per-message outcomes back to event IDs
+    for (const ev of events) {
+      results.set(ev.meta.id, null); // or Error if that message failed
+    }
+    return results;
+  }
+}
+```
+
+### Rich relay results — `relayBatch()`
+
+For operational dashboards and alerting, `relayBatch()` returns a
+`RelayResult` with per-kind counts instead of just the success total:
+
+```typescript
+const result = await outbox.relayBatch();
+//   {
+//     relayed: 87,
+//     attempted: 100,
+//     publishFailed: 10,
+//     ackFailed: 1,
+//     ownershipMismatches: 2,
+//     malformed: 0,
+//     failHookErrors: 0,
+//     usedPublishMany: true,
+//   }
+
+metrics.increment('outbox.relayed', result.relayed);
+metrics.increment('outbox.publish_failed', result.publishFailed);
+metrics.increment('outbox.ownership_mismatch', result.ownershipMismatches);
+
+if (result.malformed > 0) {
+  logger.error('Store returned malformed event — investigate corrupted rows');
+}
+```
+
+`relay()` (returning just the count) remains the simple shortcut for workers
+that don't need the breakdown.
 
 ## Webhooks (Outbound + Inbound Verification)
 

@@ -52,8 +52,10 @@ import type {
   IController,
   IControllerResponse,
   IRequestContext,
+  OffsetPaginatedResult,
   PaginatedResult,
   PaginationParams,
+  PaginationResult,
   ParsedQuery,
   QueryParserInterface,
   ResourceCacheConfig,
@@ -726,10 +728,23 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       }
     }
 
+    // Hard-delete opt-in: `?hard=true` query or `{ mode: 'hard' }` body.
+    // This is a HINT to the adapter — repos without soft-delete plugins
+    // ignore it. SECURITY: the `delete` permission check has already run,
+    // so any caller able to delete can also hard-delete. Consumers who
+    // want to gate hard-delete separately should read `req.query.hard`
+    // inside their PermissionCheck and reject unauthorized promotions.
+    const hardHint =
+      req.query?.hard === "true" ||
+      req.query?.hard === true ||
+      (req.body as { mode?: string } | undefined)?.mode === "hard";
+    const deleteMode: "hard" | undefined = hardHint ? "hard" : undefined;
+
     const repoDelete = async () =>
       this.repository.delete(repoId, {
         user,
         context: arcContext,
+        ...(deleteMode ? { mode: deleteMode } : {}),
       });
 
     let result: unknown;
@@ -743,10 +758,16 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       result = await repoDelete();
     }
 
-    const deleteSuccess =
-      typeof result === "object" && result !== null
-        ? (result as { success?: boolean }).success
-        : result;
+    // Accept both the mongokit shape (`{ success, message }`) and raw driver
+    // shapes (`{ acknowledged, deletedCount }`) so SQL / prisma adapters can
+    // return what their driver produces without a translation layer.
+    const deleteSuccess = (() => {
+      if (typeof result !== "object" || result === null) return !!result;
+      const r = result as { success?: boolean; deletedCount?: number };
+      if (typeof r.success === "boolean") return r.success;
+      if (typeof r.deletedCount === "number") return r.deletedCount > 0;
+      return true;
+    })();
     if (!deleteSuccess) {
       return { success: false, error: "Resource not found", status: 404 };
     }
@@ -777,21 +798,32 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
   // ============================================================================
 
   async getBySlug(req: IRequestContext): Promise<IControllerResponse<TDoc>> {
-    const repo = this.repository as TRepository & {
-      getBySlug?: (slug: string, options?: unknown) => Promise<TDoc | null>;
-    };
-    if (!repo.getBySlug) {
-      return {
-        success: false,
-        error: "Slug lookup not implemented",
-        status: 501,
-      };
-    }
-
     const slugField = this._presetFields.slugField ?? "slug";
     const slug = (req.params[slugField] ?? req.params.slug) as string;
     const options = this.queryResolver.resolve(req, this.meta(req));
-    const item = await repo.getBySlug(slug, options);
+
+    const repo = this.repository as TRepository & {
+      getBySlug?: (slug: string, options?: unknown) => Promise<TDoc | null>;
+      getOne?: (filter: Record<string, unknown>, options?: unknown) => Promise<TDoc | null>;
+    };
+
+    // Prefer explicit getBySlug, fallback to getOne with slug filter
+    let item: TDoc | null = null;
+    if (repo.getBySlug) {
+      item = (await repo.getBySlug(slug, options)) as TDoc | null;
+    } else if (repo.getOne) {
+      const filter = {
+        [slugField]: slug,
+        ...((options as Record<string, unknown>)?.filter ?? {}),
+      } as Record<string, unknown>;
+      item = (await repo.getOne(filter, options)) as TDoc | null;
+    } else {
+      return {
+        success: false,
+        error: "Slug lookup not implemented — repository needs getBySlug() or getOne()",
+        status: 501,
+      };
+    }
 
     // Full access control: org scope + policy filters (same as GET /:id)
     if (!this.accessControl.validateItemAccess(item as AnyRecord, req)) {
@@ -801,9 +833,12 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     return { success: true, data: item as TDoc, status: 200 };
   }
 
-  async getDeleted(req: IRequestContext): Promise<IControllerResponse<PaginatedResult<TDoc>>> {
+  async getDeleted(req: IRequestContext): Promise<IControllerResponse<PaginationResult<TDoc>>> {
     const repo = this.repository as TRepository & {
-      getDeleted?: (options?: unknown) => Promise<TDoc[] | PaginatedResult<TDoc>>;
+      getDeleted?: (
+        params?: unknown,
+        options?: unknown,
+      ) => Promise<TDoc[] | PaginationResult<TDoc>>;
     };
     if (!repo.getDeleted) {
       return {
@@ -813,25 +848,35 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       };
     }
 
-    const options = this.queryResolver.resolve(req, this.meta(req));
-    const result = await repo.getDeleted(options);
+    // Pass parsed query as the first arg (params) and scope meta as the
+    // second (options), matching the canonical `getDeleted(params, options)`
+    // signature. mongokit's softDeletePlugin honors both shapes.
+    const parsed = this.queryResolver.resolve(req, this.meta(req));
+    const result = await repo.getDeleted(parsed, parsed);
 
+    // Bare-array shape — legacy adapters that return `TDoc[]` get wrapped
+    // in a synthetic offset envelope so downstream consumers always see a
+    // PaginationResult.
     if (Array.isArray(result)) {
+      const docs = result as TDoc[];
       return {
         success: true,
         data: {
-          docs: result as TDoc[],
+          method: "offset",
+          docs,
           page: 1,
-          limit: result.length,
-          total: result.length,
+          limit: docs.length,
+          total: docs.length,
           pages: 1,
           hasNext: false,
           hasPrev: false,
-        },
+        } satisfies OffsetPaginatedResult<TDoc>,
         status: 200,
       };
     }
 
+    // Pagination result — either offset or keyset. Pass through unchanged;
+    // `method` discriminator lets clients narrow.
     return {
       success: true,
       data: result as PaginatedResult<TDoc>,
@@ -877,12 +922,57 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       };
     }
 
+    const arcContext = this.meta(req);
+    const user = req.user as UserLike | undefined;
+
     // Custom idField: derive the native PK from the fetched doc, unless the
     // repo natively supports the same idField (see resolveRepoId).
     const repoId = this.resolveRepoId(id, existing as AnyRecord | null);
-    const item = await repo.restore(repoId);
+
+    const hooks = this.getHooks(req);
+    if (hooks && this.resourceName) {
+      try {
+        await hooks.executeBefore(this.resourceName, "restore", existing as AnyRecord, {
+          user,
+          context: arcContext,
+          meta: { id },
+        });
+      } catch (err) {
+        return {
+          success: false,
+          error: "Hook execution failed",
+          details: {
+            code: "BEFORE_RESTORE_HOOK_ERROR",
+            message: (err as Error).message,
+          },
+          status: 400,
+        };
+      }
+    }
+
+    const repoRestore = (): Promise<TDoc | null> => repo.restore!(repoId) as Promise<TDoc | null>;
+
+    let item: TDoc | null;
+    if (hooks && this.resourceName) {
+      item = (await hooks.executeAround(this.resourceName, "restore", existing, repoRestore, {
+        user,
+        context: arcContext,
+        meta: { id },
+      })) as TDoc | null;
+    } else {
+      item = await repoRestore();
+    }
+
     if (!item) {
       return { success: false, error: "Resource not found", status: 404 };
+    }
+
+    if (hooks && this.resourceName) {
+      await hooks.executeAfter(this.resourceName, "restore", item as AnyRecord, {
+        user,
+        context: arcContext,
+        meta: { id },
+      });
     }
 
     return {
@@ -1133,7 +1223,13 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       updateMany?: (
         filter: Record<string, unknown>,
         data: Record<string, unknown>,
-      ) => Promise<{ matchedCount: number; modifiedCount: number }>;
+        options?: Record<string, unknown>,
+      ) => Promise<{
+        matchedCount: number;
+        modifiedCount: number;
+        acknowledged?: boolean;
+        upsertedCount?: number;
+      }>;
     };
     if (!repo.updateMany) {
       return { success: false, error: "Repository does not support updateMany", status: 501 };
@@ -1202,7 +1298,10 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
    */
   async bulkDelete(req: IRequestContext): Promise<IControllerResponse<{ deletedCount: number }>> {
     const repo = this.repository as unknown as {
-      deleteMany?: (filter: Record<string, unknown>) => Promise<{ deletedCount: number }>;
+      deleteMany?: (
+        filter: Record<string, unknown>,
+        options?: { mode?: "hard" | "soft"; [key: string]: unknown },
+      ) => Promise<{ deletedCount: number; acknowledged?: boolean; soft?: boolean }>;
     };
     if (!repo.deleteMany) {
       return { success: false, error: "Repository does not support deleteMany", status: 501 };
@@ -1211,6 +1310,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     const body = req.body as {
       filter?: Record<string, unknown>;
       ids?: ReadonlyArray<string>;
+      mode?: "hard" | "soft";
     };
 
     // Build the user filter — accept either `ids` (preferred for known docs)
@@ -1247,7 +1347,17 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       };
     }
 
-    const result = await repo.deleteMany(scopedFilter);
+    // Hard-delete opt-in: `?hard=true` query or `{ mode: 'hard' }` body.
+    // Same security note as single-doc delete — the `delete` permission has
+    // already authorized the caller; gate separately in your PermissionCheck
+    // if you want stricter rules for hard deletes.
+    const hardHint = req.query?.hard === "true" || req.query?.hard === true || body.mode === "hard";
+    // Only pass the options arg when something's actually set — keeps the
+    // call site indistinguishable from pre-hard-delete arc for test mocks
+    // that assert on exact call arguments.
+    const result = hardHint
+      ? await repo.deleteMany(scopedFilter, { mode: "hard" })
+      : await repo.deleteMany(scopedFilter);
     return { success: true, data: result, status: 200 };
   }
 }

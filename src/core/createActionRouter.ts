@@ -53,6 +53,7 @@ import type {
   RequestWithExtras,
   UserBase,
 } from "../types/index.js";
+import { toJsonSchema } from "../utils/schemaConverter.js";
 
 /**
  * Action handler function
@@ -89,8 +90,40 @@ export interface ActionRouterConfig {
   readonly actionPermissions?: Record<string, PermissionCheck>;
 
   /**
-   * Per-action JSON schema for body validation
-   * @example { dispatch: { transport: { type: 'object' } } }
+   * Per-action schema for body validation.
+   *
+   * Accepted shapes per action:
+   *
+   * 1. **Full JSON Schema object** with `type: 'object'`, `properties`, `required` —
+   *    used verbatim. Required fields ARE enforced by Fastify's AJV.
+   *
+   * 2. **Zod v4 schema** — auto-converted via `z.toJSONSchema()`. Required fields
+   *    ARE enforced.
+   *
+   * 3. **Legacy field map** `{ fieldName: { type: 'string' } }` — each key becomes
+   *    a property and is treated as REQUIRED unless the property schema has
+   *    `nullable: true` or Arc's sentinel `required: false`. Kept for back-compat.
+   *
+   * All shapes are compiled into a single `oneOf` discriminator body schema
+   * so AJV can validate action-specific required fields at the HTTP layer.
+   *
+   * @example JSON Schema
+   * ```ts
+   * actionSchemas: {
+   *   dispatch: {
+   *     type: 'object',
+   *     properties: { carrier: { type: 'string' } },
+   *     required: ['carrier'],
+   *   },
+   * }
+   * ```
+   *
+   * @example Zod v4
+   * ```ts
+   * actionSchemas: {
+   *   dispatch: z.object({ carrier: z.string() }),
+   * }
+   * ```
    */
   readonly actionSchemas?: Record<string, Record<string, unknown>>;
 
@@ -156,28 +189,9 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
     return;
   }
 
-  // Build unified body schema with action-specific properties
-  const bodyProperties: Record<string, unknown> = {
-    action: {
-      type: "string",
-      enum: actionEnum,
-      description: `Action to perform: ${actionEnum.join(" | ")}`,
-    },
-  };
-
-  // Add action-specific schema properties
-  Object.entries(actionSchemas).forEach(([actionName, schema]) => {
-    if (schema && typeof schema === "object") {
-      Object.entries(schema).forEach(([propName, propSchema]) => {
-        const schemaObj = propSchema as Record<string, unknown>;
-        bodyProperties[propName] = {
-          ...schemaObj,
-          description:
-            `${(schemaObj.description as string) || ""} (for ${actionName} action)`.trim(),
-        };
-      });
-    }
-  });
+  // Build discriminated body schema — AJV enforces required fields per action.
+  // Each action gets its own branch in a `oneOf` array with `action: { const: <name> }`.
+  const bodySchema = buildActionBodySchema(actionEnum, actionSchemas);
 
   const routeSchema = {
     tags: tag ? [tag] : undefined,
@@ -190,11 +204,7 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
       },
       required: ["id"],
     },
-    body: {
-      type: "object",
-      properties: bodyProperties,
-      required: ["action"],
-    },
+    body: bodySchema,
     // No response schema — action handlers return dynamic shapes
     // (Mongoose documents, composite objects, etc.) that cannot be
     // described with a static JSON Schema.  Fastify will serialize
@@ -382,6 +392,109 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
     { actions: actionEnum, tag },
     "[createActionRouter] Registered action endpoint: POST /:id/action",
   );
+}
+
+/**
+ * Build a discriminated body schema for the unified action endpoint.
+ *
+ * Produces a schema of the form:
+ * ```json
+ * {
+ *   "type": "object",
+ *   "required": ["action"],
+ *   "oneOf": [
+ *     { "properties": { "action": { "const": "dispatch" }, "carrier": {...} }, "required": ["action", "carrier"] },
+ *     { "properties": { "action": { "const": "approve" } }, "required": ["action"] }
+ *   ]
+ * }
+ * ```
+ *
+ * AJV validates this natively, so an action call missing required fields is
+ * rejected with HTTP 400 before the handler ever runs.
+ *
+ * Exported so OpenAPI generation and MCP tool generation can reuse the same
+ * schema shape (single source of truth).
+ */
+export function buildActionBodySchema(
+  actionEnum: readonly string[],
+  actionSchemas: Record<string, Record<string, unknown>> = {},
+): Record<string, unknown> {
+  const branches: Array<Record<string, unknown>> = [];
+
+  for (const actionName of actionEnum) {
+    const raw = actionSchemas[actionName];
+    const { properties, required } = normalizeActionSchema(raw);
+
+    // Always pin the action field to its const name in this branch
+    const branchProperties: Record<string, unknown> = {
+      action: { type: "string", const: actionName },
+      ...properties,
+    };
+    const branchRequired = ["action", ...required.filter((r) => r !== "action")];
+
+    // Deliberately NOT setting `additionalProperties: false` — Arc actions are
+    // permissive by default, allowing extra fields to pass through to handlers.
+    // Users who want strict validation can supply a full JSON Schema with
+    // `additionalProperties: false` in their action's `schema`.
+    branches.push({
+      type: "object",
+      properties: branchProperties,
+      required: branchRequired,
+    });
+  }
+
+  return {
+    type: "object",
+    required: ["action"],
+    oneOf: branches,
+  };
+}
+
+/**
+ * Normalize the accepted schema shapes into `{ properties, required }`.
+ *
+ * Handles:
+ * 1. Full JSON Schema object (has `type: 'object'` + `properties`)
+ * 2. Zod v4 schema (has `_zod` marker) — converted via `toJsonSchema`
+ * 3. Legacy field map (`{ fieldName: { type: 'string' } }`) — every field required
+ *    unless its schema has `nullable: true` or sentinel `required: false`
+ */
+function normalizeActionSchema(raw: Record<string, unknown> | undefined): {
+  properties: Record<string, unknown>;
+  required: string[];
+} {
+  if (!raw || typeof raw !== "object") return { properties: {}, required: [] };
+
+  // Zod / JSON Schema detection: toJsonSchema returns a full object schema
+  const converted = toJsonSchema(raw);
+  if (
+    converted &&
+    typeof converted === "object" &&
+    (converted.type === "object" || "properties" in converted)
+  ) {
+    const props = (converted.properties as Record<string, unknown> | undefined) ?? {};
+    const req = Array.isArray(converted.required) ? (converted.required as string[]) : [];
+    return { properties: props, required: req };
+  }
+
+  // Legacy field map: each top-level key is a property. All required by default.
+  const properties: Record<string, unknown> = {};
+  const required: string[] = [];
+  for (const [fieldName, fieldSchema] of Object.entries(raw)) {
+    if (fieldName === "type" || fieldName === "properties" || fieldName === "required") {
+      // Skip meta keys that can't be legacy field names
+      continue;
+    }
+    if (!fieldSchema || typeof fieldSchema !== "object") continue;
+    const fs = fieldSchema as Record<string, unknown>;
+    properties[fieldName] = fs;
+    // Sentinel `required: false` on a field marks it optional in the legacy map.
+    // Everything else is required.
+    if (fs.required !== false) {
+      required.push(fieldName);
+    }
+  }
+  return { properties, required };
 }
 
 /**

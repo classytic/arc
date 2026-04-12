@@ -15,7 +15,7 @@
  * ```
  */
 
-import type { IControllerResponse, IRequestContext, PaginatedResult } from "../types/index.js";
+import type { IControllerResponse, IRequestContext, PaginationResult } from "../types/index.js";
 
 /**
  * Soft Delete Preset Interface
@@ -29,7 +29,7 @@ import type { IControllerResponse, IRequestContext, PaginatedResult } from "../t
  *
  * **Repository Requirements:**
  * Your repository must implement:
- * - `getDeleted(options): Promise<PaginatedResult<T> | T[]>`
+ * - `getDeleted(params?, options?): Promise<PaginationResult<T> | T[]>`
  * - `restore(id): Promise<T | null>`
  *
  * @example
@@ -49,7 +49,7 @@ export interface ISoftDeleteController<TDoc = unknown> {
    * Get all soft-deleted items
    * Called by: GET /deleted
    */
-  getDeleted(req: IRequestContext): Promise<IControllerResponse<PaginatedResult<TDoc>>>;
+  getDeleted(req: IRequestContext): Promise<IControllerResponse<PaginationResult<TDoc>>>;
 
   /**
    * Restore a soft-deleted item by ID

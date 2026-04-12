@@ -8,11 +8,7 @@ import { describe, expect, it } from "vitest";
 import { sendControllerResponse } from "../../src/core/fastifyAdapter.js";
 import {
   itemResponse,
-  // Aliases for backwards compatibility
-  itemWrapper,
   listResponse,
-  messageWrapper,
-  paginateWrapper,
   paginationSchema,
 } from "../../src/utils/responseSchemas.js";
 
@@ -122,34 +118,6 @@ describe("Response Format Consistency", () => {
       // itemResponse uses 'data' which is CORRECT for single items
       expect(schema.properties).toHaveProperty("data");
       expect(schema.properties).toHaveProperty("success");
-    });
-  });
-
-  describe("Backwards Compatibility Aliases", () => {
-    it("itemWrapper should be an alias for itemResponse", () => {
-      const schema = { type: "object" as const, properties: { name: { type: "string" } } };
-      const itemResult = itemResponse(schema);
-      const wrapperResult = itemWrapper(schema);
-
-      expect(itemResult).toEqual(wrapperResult);
-    });
-
-    it("paginateWrapper should be an alias for listResponse", () => {
-      const schema = { type: "object" as const, properties: { name: { type: "string" } } };
-      const listResult = listResponse(schema);
-      const wrapperResult = paginateWrapper(schema);
-
-      expect(listResult).toEqual(wrapperResult);
-    });
-
-    it("messageWrapper should return same schema as deleteResponse", () => {
-      const messageResult = messageWrapper();
-
-      expect(messageResult.properties).toHaveProperty("success");
-      expect(messageResult.properties).toHaveProperty("data");
-      expect((messageResult.properties as Record<string, any>).data.properties).toHaveProperty(
-        "message",
-      );
     });
   });
 });

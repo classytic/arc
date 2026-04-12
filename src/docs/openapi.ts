@@ -16,6 +16,7 @@
 
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
+import { buildActionBodySchema } from "../core/createActionRouter.js";
 import type { PermissionCheck } from "../permissions/types.js";
 import { getUserRoles } from "../permissions/types.js";
 import type { FastifyWithDecorators, RegistryEntry } from "../types/index.js";
@@ -358,10 +359,11 @@ function generateResourcePaths(
   const paths: Record<string, PathItem> = {};
   const basePath = `${apiPrefix}${resource.prefix}`;
 
-  // Skip if default routes are disabled and no additional routes
+  // Skip if default routes are disabled and no additional routes / no actions
   if (
     resource.disableDefaultRoutes &&
-    (!resource.additionalRoutes || resource.additionalRoutes.length === 0)
+    (!resource.additionalRoutes || resource.additionalRoutes.length === 0) &&
+    (!resource.actions || resource.actions.length === 0)
   ) {
     return paths;
   }
@@ -639,6 +641,82 @@ function generateResourcePaths(
       route.summary ?? handlerName,
       extras,
       requiresAuthForRoute,
+      additionalSecurity,
+    );
+  }
+
+  // v2.8.1 — Generate `POST /:id/action` from declarative `actions`.
+  // Uses the SAME buildActionBodySchema as the runtime router so docs and
+  // validation stay in sync (single source of truth).
+  if (resource.actions && resource.actions.length > 0) {
+    const actionPath = toOpenApiPath(`${basePath}/:id/action`);
+    const actionEnum = resource.actions.map((a) => a.name);
+    const actionSchemas: Record<string, Record<string, unknown>> = {};
+    for (const a of resource.actions) {
+      if (a.schema) actionSchemas[a.name] = a.schema;
+    }
+    const bodySchema = buildActionBodySchema(actionEnum, actionSchemas);
+
+    // Build a human-friendly description listing each action + its permission/description
+    const descLines: string[] = [
+      "Unified action endpoint for state transitions.",
+      "",
+      "**Available actions:**",
+    ];
+    for (const a of resource.actions) {
+      const perm = a.permissions as PermissionCheck | undefined;
+      const roles = perm?._roles;
+      const roleStr = roles?.length ? ` — requires: ${roles.join(" or ")}` : "";
+      const descStr = a.description ? ` — ${a.description}` : "";
+      descLines.push(`- \`${a.name}\`${roleStr}${descStr}`);
+    }
+
+    // Determine whether the action endpoint requires auth.
+    // Runtime fallback chain: per-action permissions → resource.actionPermissions.
+    // If the fallback requires auth and an action has no per-action permissions,
+    // that action requires auth at runtime — so OpenAPI must reflect that.
+    const fallbackPerm = resource.actionPermissions as PermissionCheck | undefined;
+    const fallbackRequiresAuth = typeof fallbackPerm === "function" && !fallbackPerm._isPublic;
+
+    const anyAuthRequired = resource.actions.some((a) => {
+      const p = a.permissions as PermissionCheck | undefined;
+      if (typeof p === "function") return !p._isPublic;
+      // No per-action permission → falls back to actionPermissions
+      return fallbackRequiresAuth;
+    });
+
+    if (!paths[actionPath]) paths[actionPath] = {};
+    paths[actionPath].post = createOperation(
+      resource,
+      "action",
+      `Perform action (${actionEnum.join(" / ")})`,
+      {
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Resource ID",
+          },
+        ],
+        description: descLines.join("\n"),
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: bodySchema as SchemaObject,
+            },
+          },
+        },
+        responses: {
+          "200": { description: "Action executed successfully" },
+          "400": { description: "Invalid action or missing required fields" },
+          "401": { description: "Authentication required" },
+          "403": { description: "Permission denied" },
+        },
+      },
+      anyAuthRequired,
       additionalSecurity,
     );
   }

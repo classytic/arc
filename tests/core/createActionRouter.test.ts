@@ -1062,7 +1062,7 @@ describe("createActionRouter: OpenAPI Schema", () => {
     await app.close();
   });
 
-  it("should generate action enum in body schema", async () => {
+  it("should generate discriminated body schema with one branch per action (v2.8.1)", async () => {
     const app = Fastify({ logger: false });
 
     let capturedSchema: any;
@@ -1083,7 +1083,16 @@ describe("createActionRouter: OpenAPI Schema", () => {
     await app.ready();
 
     expect(capturedSchema).toBeDefined();
-    expect(capturedSchema.body.properties.action.enum).toEqual(["approve", "reject", "cancel"]);
+    // v2.8.1: discriminated schema — oneOf with const on each branch's action field
+    expect(capturedSchema.body.type).toBe("object");
+    expect(capturedSchema.body.required).toEqual(["action"]);
+    expect(Array.isArray(capturedSchema.body.oneOf)).toBe(true);
+    expect(capturedSchema.body.oneOf).toHaveLength(3);
+
+    const consts = capturedSchema.body.oneOf.map(
+      (branch: any) => branch.properties.action.const,
+    );
+    expect(consts).toEqual(["approve", "reject", "cancel"]);
 
     await app.close();
   });

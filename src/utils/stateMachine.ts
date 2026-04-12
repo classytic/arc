@@ -98,11 +98,6 @@ export type TransitionGuard = (context: TransitionContext) => boolean | Promise<
 
 export type TransitionAction = (context: TransitionContext) => void | Promise<void>;
 
-export interface TransitionHook {
-  before?: TransitionAction;
-  after?: TransitionAction;
-}
-
 export type TransitionConfig = Record<
   string,
   | string[]
@@ -276,53 +271,4 @@ export function createStateMachine(
     clearHistory,
     getAvailableActions,
   };
-}
-
-/**
- * Execute a state transition with guards and actions
- *
- * @example
- * const result = await executeTransition(
- *   orderState,
- *   'approve',
- *   'pending',
- *   'approved',
- *   { paymentConfirmed: true }
- * );
- *
- * if (result.success) {
- *   console.log('Transition successful');
- * } else {
- *   console.error(result.error);
- * }
- */
-export async function executeTransition(
-  stateMachine: StateMachine,
-  action: string,
-  from: string,
-  to: string,
-  context?: Record<string, unknown>,
-): Promise<{ success: boolean; error?: string }> {
-  try {
-    // Check if transition is allowed (use canAsync for guard evaluation)
-    const canTransition = await stateMachine.canAsync(action, from, context);
-    if (!canTransition) {
-      return {
-        success: false,
-        error: `Cannot transition from ${from} to ${to} via ${action}`,
-      };
-    }
-
-    // Record the transition if history is enabled
-    if (stateMachine.recordTransition) {
-      stateMachine.recordTransition(from, to, action, context);
-    }
-
-    return { success: true };
-  } catch (err) {
-    return {
-      success: false,
-      error: err instanceof Error ? err.message : "Transition failed",
-    };
-  }
 }

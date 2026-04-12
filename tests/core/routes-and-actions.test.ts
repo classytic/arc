@@ -532,19 +532,52 @@ describe("v2.8: actions — extended", () => {
     expect(JSON.parse(dispatchRes.body).data.status).toBe("dispatched");
   });
 
-  // 8. Action with missing required schema field is still accepted
-  it("action with missing schema field is still accepted (Fastify validates body, not action schemas)", async () => {
-    // dispatch expects carrier, but we omit it — action should still execute
+  // 8. Per-action discriminated body schema enforcement (v2.8.1)
+  // Previously: all action fields flattened into one body schema with only `action` required,
+  //             so { action: 'dispatch' } without carrier passed validation.
+  // Now: each action gets its own branch in a `oneOf` discriminator; AJV enforces per-action
+  //      required fields at the HTTP layer. Missing required fields → 400.
+  it("action with missing required schema field is rejected with 400 (discriminated body schema)", async () => {
+    // dispatch expects carrier — omit it, should be rejected
     const res = await app.inject({
       method: "POST",
       url: `/orders/${itemId}/action`,
       payload: { action: "dispatch" },
     });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("action with correct required field passes validation", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/orders/${itemId}/action`,
+      payload: { action: "dispatch", carrier: "FedEx" },
+    });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.success).toBe(true);
-    // carrier is undefined since we didn't send it
-    expect(body.data.carrier).toBeUndefined();
+    expect(body.data.carrier).toBe("FedEx");
+  });
+
+  it("action with no schema (bare handler) accepts empty body", async () => {
+    // 'approve' is a bare function — no schema means no required fields beyond 'action'
+    const res = await app.inject({
+      method: "POST",
+      url: `/orders/${itemId}/action`,
+      payload: { action: "approve" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.success).toBe(true);
+  });
+
+  it("wrong action name is rejected by discriminator (not just by enum)", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/orders/${itemId}/action`,
+      payload: { action: "nonexistent" },
+    });
+    expect(res.statusCode).toBe(400);
   });
 
   // 9. actionPermissions fallback
