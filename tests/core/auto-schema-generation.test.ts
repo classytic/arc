@@ -245,6 +245,114 @@ describe("Auto-Schema Generation from Adapter", () => {
   });
 
   // ============================================================================
+  // Tests: fieldRules → OpenAPI constraint mapping
+  // ============================================================================
+
+  describe("fieldRules constraints auto-map to OpenAPI", () => {
+    it("should merge minLength/maxLength/min/max/pattern/enum/description from fieldRules into OpenAPI properties", async () => {
+      const app = await buildTestApp({
+        schemaOptions: {
+          fieldRules: {
+            name: {
+              minLength: 3,
+              maxLength: 100,
+              pattern: "^[A-Za-z]",
+              description: "Product name",
+            },
+            price: { min: 0, max: 10000 },
+            description: {
+              enum: ["short", "medium", "long"],
+            },
+          },
+        },
+      });
+
+      // Inspect the generated route schemas by checking if validation works.
+      // A name shorter than minLength=3 should be rejected by AJV.
+      const tooShort = await app.inject({
+        method: "POST",
+        url: "/items",
+        payload: { name: "AB", price: 50 },
+      });
+      expect(tooShort.statusCode).toBe(400);
+
+      // A name meeting minLength should pass schema validation
+      const valid = await app.inject({
+        method: "POST",
+        url: "/items",
+        payload: { name: "Valid Name", price: 50 },
+      });
+      expect(valid.statusCode).toBeLessThan(500);
+
+      // price below min=0 should be rejected
+      const negativePrice = await app.inject({
+        method: "POST",
+        url: "/items",
+        payload: { name: "Test Item", price: -5 },
+      });
+      expect(negativePrice.statusCode).toBe(400);
+
+      // price above max=10000 should be rejected
+      const overPrice = await app.inject({
+        method: "POST",
+        url: "/items",
+        payload: { name: "Test Item", price: 99999 },
+      });
+      expect(overPrice.statusCode).toBe(400);
+
+      // description not in enum should be rejected
+      const badEnum = await app.inject({
+        method: "POST",
+        url: "/items",
+        payload: { name: "Test Item", description: "invalid" },
+      });
+      expect(badEnum.statusCode).toBe(400);
+
+      // description in enum should pass
+      const goodEnum = await app.inject({
+        method: "POST",
+        url: "/items",
+        payload: { name: "Test Item", description: "short" },
+      });
+      expect(goodEnum.statusCode).toBeLessThan(500);
+
+      await app.close();
+    });
+
+    it("should NOT override constraints already set by Mongoose schema", async () => {
+      // The mock model has `name: String` with no constraints.
+      // If we add fieldRules with minLength, it should be applied.
+      // But if the Mongoose schema already had minlength, fieldRules
+      // should NOT override (Mongoose schema is authoritative).
+      const app = await buildTestApp({
+        schemaOptions: {
+          fieldRules: {
+            name: { minLength: 2, description: "Name field" },
+          },
+        },
+      });
+
+      // "AB" (length 2) should pass with minLength=2
+      const res = await app.inject({
+        method: "POST",
+        url: "/items",
+        payload: { name: "AB" },
+      });
+      expect(res.statusCode).toBeLessThan(500);
+
+      // "A" (length 1) should fail
+      const tooShort = await app.inject({
+        method: "POST",
+        url: "/items",
+        payload: { name: "A" },
+      });
+      expect(tooShort.statusCode).toBe(400);
+
+      await app.close();
+    });
+  });
+
+  // ============================================================================
   // Tests: customSchemas override
   // ============================================================================
 

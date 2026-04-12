@@ -107,10 +107,21 @@ export function envelope<T>(data: T, meta?: Record<string, unknown>): {
 // Re-export from dedicated type modules
 export type {
   CrudRepository,
-  PaginatedResult,
-  QueryOptions,
-  PaginationParams,
+  BulkWriteOperation,
+  BulkWriteResult,
+  DeleteManyResult,
+  DeleteOptions,
+  DeleteResult,
   InferDoc,
+  KeysetPaginatedResult,
+  OffsetPaginatedResult,
+  PaginatedResult,
+  PaginationParams,
+  PaginationResult,
+  QueryOptions,
+  RepositorySession,
+  UpdateManyResult,
+  WriteOptions,
 } from './repository.js';
 
 export type {
@@ -886,6 +897,25 @@ export interface AdditionalRoute {
     content: Array<{ type: string; text: string }>;
     isError?: boolean;
   }>;
+
+  /**
+   * MCP tool generation config preserved from v2.8 `routes`.
+   * - `false`: skip MCP tool generation for this route
+   * - `true` / omitted: auto-generate when the route goes through Arc's pipeline
+   * - object: explicit description/annotations overrides
+   *
+   * Added in 2.8.1 — previously dropped during `routes → additionalRoutes`
+   * normalization, breaking MCP opt-out and per-route annotations.
+   */
+  mcp?: boolean | {
+    readonly description?: string;
+    readonly annotations?: {
+      readonly readOnlyHint?: boolean;
+      readonly destructiveHint?: boolean;
+      readonly idempotentHint?: boolean;
+      readonly openWorldHint?: boolean;
+    };
+  };
 }
 
 // ============================================================================
@@ -1012,9 +1042,24 @@ export interface RouteSchemaOptions {
   filterableFields?: string[];
   fieldRules?: Record<string, {
     systemManaged?: boolean;
+    hidden?: boolean;
     immutable?: boolean;
     immutableAfterCreate?: boolean;
     optional?: boolean;
+    /** String minimum length — auto-maps to OpenAPI `minLength` and MCP tool schema */
+    minLength?: number;
+    /** String maximum length — auto-maps to OpenAPI `maxLength` and MCP tool schema */
+    maxLength?: number;
+    /** Number minimum — auto-maps to OpenAPI `minimum` and MCP tool schema */
+    min?: number;
+    /** Number maximum — auto-maps to OpenAPI `maximum` and MCP tool schema */
+    max?: number;
+    /** Regex pattern — auto-maps to OpenAPI `pattern` and MCP tool schema */
+    pattern?: string;
+    /** Allowed values — auto-maps to OpenAPI `enum` and MCP tool schema */
+    enum?: ReadonlyArray<string | number>;
+    /** Human-readable description — auto-maps to OpenAPI `description` */
+    description?: string;
     [key: string]: unknown;
   }>;
   query?: Record<string, unknown>; // Query parameter schema for OpenAPI
@@ -1550,6 +1595,36 @@ export interface RegistryEntry extends ResourceMetadata {
   rateLimit?: RateLimitConfig | false;
   /** Per-resource audit opt-in flag (read by auditPlugin perResource mode) */
   audit?: boolean | { operations?: ("create" | "update" | "delete")[] };
+  /**
+   * v2.8 declarative actions metadata — populated from `ResourceConfig.actions`.
+   *
+   * Consumed by OpenAPI generation (renders `POST /:id/action` with a
+   * discriminated body schema) and MCP tool generation.
+   *
+   * Added in 2.8.1.
+   */
+  actions?: Array<{
+    readonly name: string;
+    readonly description?: string;
+    /** Raw per-action schema (JSON Schema, Zod v4, or legacy field map) */
+    readonly schema?: Record<string, unknown>;
+    /** Per-action permission check (if different from resource-level `actionPermissions`) */
+    readonly permissions?: PermissionCheck;
+    /** MCP tool generation flag — `false` to skip, object for overrides */
+    readonly mcp?: boolean | {
+      readonly description?: string;
+      readonly annotations?: Record<string, unknown>;
+    };
+  }>;
+  /**
+   * Resource-level fallback permission for actions without per-action
+   * permissions. Used by OpenAPI to determine auth requirements and by MCP
+   * as the fallback in `createActionToolHandler`.
+   *
+   * Added in 2.8.1 — previously not surfaced to downstream consumers,
+   * causing OpenAPI to mark action endpoints as public when runtime required auth.
+   */
+  actionPermissions?: PermissionCheck;
 }
 
 export interface RegistryStats {

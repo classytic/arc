@@ -14,7 +14,7 @@ import type { McpAuthResult } from "./types.js";
 // Types
 // ============================================================================
 
-export type McpOperation = "list" | "get" | "create" | "update" | "delete";
+export type McpOperation = "list" | "get" | "create" | "update" | "delete" | "action";
 
 // ============================================================================
 // Main
@@ -80,6 +80,18 @@ export function buildRequestContext(
 
     case "delete":
       return { ...base, params: { id: String(input.id ?? "") }, query: {}, body: undefined };
+
+    case "action": {
+      // Action: id in params, everything else (minus id) in body.
+      // The `action` field should already be in input if the caller added it.
+      const { id: _actionId, ...actionBody } = input;
+      return {
+        ...base,
+        params: { id: String(_actionId ?? "") },
+        query: {},
+        body: actionBody,
+      };
+    }
   }
 }
 

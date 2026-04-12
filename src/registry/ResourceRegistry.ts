@@ -80,6 +80,22 @@ export class ResourceRegistry {
       pipelineSteps: extractPipelineSteps(resource.pipe),
       rateLimit: resource.rateLimit,
       audit: resource.audit,
+      // v2.8.1 — expose actions metadata + fallback permission for OpenAPI/MCP/introspection
+      actionPermissions: resource.actionPermissions,
+      actions: resource.actions
+        ? Object.entries(resource.actions).map(([name, entry]) => {
+            if (typeof entry === "function") {
+              return { name };
+            }
+            return {
+              name,
+              description: entry.description,
+              schema: entry.schema as Record<string, unknown> | undefined,
+              permissions: entry.permissions,
+              mcp: entry.mcp,
+            };
+          })
+        : undefined,
       plugin: resource.toPlugin(), // Store plugin factory
     };
 
@@ -140,8 +156,10 @@ export class ResourceRegistry {
       byModule: this._groupBy(resources, "module"),
       presetUsage: presetCounts,
       totalRoutes: resources.reduce((sum, r) => {
+        // Each resource with actions contributes 1 route: POST /:id/action
+        const actionsCount = (r.actions?.length ?? 0) > 0 ? 1 : 0;
         if (r.disableDefaultRoutes) {
-          return sum + (r.additionalRoutes?.length ?? 0);
+          return sum + (r.additionalRoutes?.length ?? 0) + actionsCount;
         }
         const disabledSet = new Set(r.disabledRoutes ?? []);
         let defaultCount = CRUD_OPERATIONS.filter((route) => !disabledSet.has(route)).length;
@@ -149,7 +167,7 @@ export class ResourceRegistry {
         if (!disabledSet.has("update") && r.updateMethod === "both") {
           defaultCount += 1;
         }
-        return sum + defaultCount + (r.additionalRoutes?.length ?? 0);
+        return sum + defaultCount + (r.additionalRoutes?.length ?? 0) + actionsCount;
       }, 0),
       totalEvents: resources.reduce((sum, r) => sum + (r.events?.length ?? 0), 0),
     };

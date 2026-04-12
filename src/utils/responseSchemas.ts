@@ -121,11 +121,6 @@ export function listResponse(itemSchema: JsonSchema): JsonSchema {
 }
 
 /**
- * Alias for listResponse - matches local responseSchemas.js naming
- */
-export const paginateWrapper = listResponse;
-
-/**
  * Create a single item response schema
  *
  * Runtime format: { success, data: {...} }
@@ -133,11 +128,6 @@ export const paginateWrapper = listResponse;
 export function itemResponse(itemSchema: JsonSchema): JsonSchema {
   return wrapResponse(itemSchema);
 }
-
-/**
- * Alias for itemResponse - matches local responseSchemas.js naming
- */
-export const itemWrapper = itemResponse;
 
 /**
  * Create a create/update response schema
@@ -181,11 +171,6 @@ export function deleteResponse(): JsonSchema {
     additionalProperties: true,
   };
 }
-
-/**
- * Alias for deleteResponse - matches local responseSchemas.js naming
- */
-export const messageWrapper = deleteResponse;
 
 // ============================================================================
 // HTTP Status Response Schemas

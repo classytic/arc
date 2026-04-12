@@ -12,7 +12,7 @@ import type { AnyRecord, RequestContext, UserBase } from "../types/index.js";
 // ============================================================================
 
 export type HookPhase = "before" | "around" | "after";
-export type HookOperation = "create" | "update" | "delete" | "read" | "list";
+export type HookOperation = "create" | "update" | "delete" | "restore" | "read" | "list";
 
 export interface HookContext<T = AnyRecord> {
   resource: string;

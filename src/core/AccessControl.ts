@@ -13,6 +13,7 @@ import type {
   AnyRecord,
   ArcInternalMetadata,
   IRequestContext,
+  QueryOptions,
   RequestContext,
 } from "../types/index.js";
 
@@ -35,8 +36,8 @@ export interface AccessControlConfig {
 
 /** Minimal repository interface for access-controlled fetch operations */
 export interface AccessControlRepository {
-  getById(id: string, options?: unknown): Promise<unknown>;
-  getOne?: (filter: AnyRecord, options?: unknown) => Promise<unknown>;
+  getById(id: string, options?: QueryOptions): Promise<unknown>;
+  getOne?: (filter: AnyRecord, options?: QueryOptions) => Promise<unknown>;
 }
 
 // ============================================================================
@@ -165,7 +166,7 @@ export class AccessControl {
     id: string,
     req: IRequestContext,
     repository: AccessControlRepository,
-    queryOptions?: unknown,
+    queryOptions?: QueryOptions,
   ): Promise<TDoc | null> {
     const compoundFilter = this.buildIdFilter(id, req);
     const hasCompoundFilters = Object.keys(compoundFilter).length > 1;

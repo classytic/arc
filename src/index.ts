@@ -228,6 +228,8 @@ export type {
   ArcRequest,
   // Plugin options
   AuthPluginOptions,
+  BulkWriteOperation,
+  BulkWriteResult,
   ConfigError,
   ControllerLike,
   CrudController,
@@ -235,6 +237,9 @@ export type {
   CrudRouteKey,
   CrudRouterOptions,
   CrudSchemas,
+  DeleteManyResult,
+  DeleteOptions,
+  DeleteResult,
   EventDefinition,
   FastifyRequestExtras,
   FastifyWithAuth,
@@ -254,9 +259,13 @@ export type {
   // Framework-agnostic controller types (MongoKit-compatible)
   IRequestContext,
   JWTPayload,
+  KeysetPaginatedResult,
   MiddlewareConfig,
+  OffsetPaginatedResult,
   OwnershipCheck,
   PaginatedResult,
+  PaginationParams,
+  PaginationResult,
   PresetFunction,
   // Presets
   PresetResult,
@@ -265,6 +274,7 @@ export type {
   // Registry
   RegistryEntry,
   RegistryStats,
+  RepositorySession,
   // Request context
   RequestContext,
   RequestIdOptions,
@@ -282,10 +292,12 @@ export type {
   TypedController,
   TypedRepository,
   TypedResourceConfig,
+  UpdateManyResult,
   UserBase,
   UserOrganization,
   ValidateOptions,
   ValidationResult,
+  WriteOptions,
 } from "./types/index.js";
 // DX helpers (value exports from types)
 export { envelope } from "./types/index.js";

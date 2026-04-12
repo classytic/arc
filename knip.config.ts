@@ -3,7 +3,6 @@ import type { KnipConfig } from "knip";
 const config: KnipConfig = {
   project: ["src/**/*.ts"],
 
-  // tsdown auto-detects entries from tsdown.config.ts
   tsdown: {
     config: ["tsdown.config.ts"],
   },
@@ -15,12 +14,9 @@ const config: KnipConfig = {
 
   // Optional peer deps — conditionally required at runtime, not statically imported
   ignoreDependencies: [
-    "mongoose",
     "bullmq",
-    "@fastify/cors",
-    "@fastify/helmet",
-    "@fastify/rate-limit",
-    "@fastify/under-pressure",
+    "pino-pretty",
+    "@classytic/streamline",
     "@opentelemetry/api",
     "@opentelemetry/sdk-node",
     "@opentelemetry/sdk-trace-base",
@@ -29,10 +25,13 @@ const config: KnipConfig = {
     "@opentelemetry/instrumentation-http",
     "@opentelemetry/instrumentation-mongodb",
     "@opentelemetry/auto-instrumentations-node",
-    "tsx",
-    "mongodb-memory-server",
   ],
 
+  // Files whose exports are consumed by downstream apps / kit authors
+  ignore: ["src/adapters/types.ts"],
+
+  // Public API exports for downstream consumers, not used in src/ itself
+  ignoreExportsUsedInFile: true,
 };
 
 export default config;

@@ -1,35 +1,73 @@
 # Changelog
 
+## 2.8.1
+
+### Repository Contract
+
+- `CrudRepository<TDoc>` — canonical contract tiered into Required / Recommended / Optional
+- Hard delete forwarding — `DELETE /:id?hard=true` flows to `repo.delete({ mode: 'hard' })`
+- `BaseController.delete` — accepts both mongokit and raw driver result shapes
+- `BaseController.getDeleted` — handles keyset pagination, passes parsed query to repo
+- `RepositoryLike` expanded with optional capabilities (count, exists, distinct, bulkWrite, aggregate, withTransaction)
+- New typed option/result types (DeleteOptions, DeleteResult, PaginationResult, etc.)
+- `@classytic/mongokit` peer dep bumped to `>=3.6.0`
+- Repository contract conformance test (31 tests) — kit authors: copy and swap in your adapter
+
+### Actions + Routes
+
+- Per-action discriminated validation — `oneOf` body schema, AJV enforces required fields at HTTP layer
+- Zod v4 action schemas — accepts Zod, full JSON Schema, or legacy field map
+- `buildActionBodySchema()` — single source of truth for runtime router + OpenAPI
+- Actions in OpenAPI — `POST /:id/action` auto-generated with discriminated body schema
+- Actions in registry — `RegistryEntry.actions` for introspection, `totalRoutes` includes action endpoint
+- **Actions in MCP** — `resourceToTools()` generates one tool per action (`{action}_{resource}`), with input schema from action schema, per-action permission checks, `mcp: false` opt-out
+- **Route-level MCP config honored** — `mcp: false` skips route from tool generation, `mcp: { description, annotations }` overrides defaults
+- Route metadata preserved — `mcp`, `description`, `annotations` survive normalization
+- `ResourceDefinition.routes/actions` retained — original config available to downstream consumers
+- `additionalProperties` open by default in action schemas — documented: extra fields pass through to handlers unless the app author supplies a full schema with `additionalProperties: false`
+
+### Outbox
+
+- Expanded `OutboxStore` contract — `claimPending`, `fail`, write options (`session`, `visibleAt`, `dedupeKey`), all optional + backward-compatible
+- `relayBatch()` — returns `RelayResult` with per-kind counts (relayed, publishFailed, ackFailed, ownershipMismatches, malformed)
+- `publishMany` support — optional batched publish on `EventTransport`, auto-detected by relay
+- `exponentialBackoff()` — retry helper for store authors implementing `fail()` with backoff
+- `OutboxOwnershipError` — stores must throw on mismatch; relay handles it correctly
+- `InvalidOutboxEventError` — `EventOutbox.store()` validates before persistence
+- `onError` callback — non-fatal error reporting for logging/metrics
+- Terminology aligned — `delivered` / `deliveredAt` is canonical; `acknowledgedAt` deprecated
+- Backend guarantees documented — Mongo/SQL vs Redis/Kafka atomicity + durability table
+
+### Fixes
+
+- `slugLookup` fallback — `getOne({ [slugField]: slug })` when `getBySlug` missing
+- Restore lifecycle hooks — `before:restore` / `around:restore` / `after:restore` now fire from `BaseController.restore()`, symmetric with delete hooks
+- **fieldRules → OpenAPI parity** — `minLength`, `maxLength`, `min`, `max`, `pattern`, `enum`, `description` from `fieldRules` now auto-map to OpenAPI schema properties (was already working for MCP tools, now consistent). Mongoose model-level constraints still take precedence.
+- `RouteSchemaOptions.fieldRules` type now declares constraint fields explicitly (`minLength`, `maxLength`, `min`, `max`, `pattern`, `enum`, `description`) for IDE autocomplete
+- README version sync
+
+### Tests
+
+- 130+ new tests across repository contract, actions, routes, outbox
+
 ## 2.8.0
 
-- **`routes`** replaces `additionalRoutes` — no more `wrapHandler` boolean, use `raw: true` for raw Fastify handlers
-- **`actions`** on `defineResource()` — declarative state transitions, replaces `onRegister` + `createActionRouter` pattern
-- **`actionPermissions`** fallback for actions without per-action permissions
-- **`onRegister` scope fix** — now runs inside the resource prefix scope, no manual prefix needed
-- **Code quality** — removed 6 `any` types from `createActionRouter.ts`, `readonly` on all new interfaces
-- **40 new tests** — routes, actions, validation, edge cases, type safety
-
-### Migration
+- **`routes`** replaces `additionalRoutes` — `raw: true` instead of `wrapHandler: false`
+- **`actions`** on `defineResource()` — declarative state transitions (Stripe pattern)
+- **`actionPermissions`** fallback, **`onRegister` scope fix**
+- 40 new tests
 
 ```typescript
 // Before (v2.7)
 additionalRoutes: [
   { method: 'GET', path: '/stats', handler: fn, wrapHandler: false, permissions: auth() },
 ],
-onRegister: (fastify) => {
-  fastify.register((instance, _opts, done) => {
-    createActionRouter(instance, { actions: { approve: handler } });
-    done();
-  }, { prefix: '/transfers' });
-},
 
 // After (v2.8)
 routes: [
   { method: 'GET', path: '/stats', handler: fn, raw: true, permissions: auth() },
 ],
-actions: {
-  approve: handler,
-},
+actions: { approve: handler },
 ```
 
 ---

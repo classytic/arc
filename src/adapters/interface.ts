@@ -1,83 +1,161 @@
 /**
- * Data Adapter Interface - Database Abstraction Layer
+ * Data Adapter Interface — Database Abstraction Layer
  *
- * Core abstraction that allows Arc to work with any database.
- * This is the ONLY contract between Arc and data persistence.
+ * The contract that binds arc to persistence. Any database can back arc by
+ * providing a `DataAdapter` with a repository implementing `RepositoryLike`
+ * (or the typed `CrudRepository<TDoc>`).
  */
 
-import type { CrudRepository, OpenApiSchemas, RouteSchemaOptions } from "../types/index.js";
+import type {
+  CrudRepository,
+  DeleteManyResult,
+  DeleteOptions,
+  OpenApiSchemas,
+  PaginationParams,
+  PaginationResult,
+  QueryOptions,
+  RepositorySession,
+  RouteSchemaOptions,
+  UpdateManyResult,
+  WriteOptions,
+} from "../types/index.js";
 
 /**
- * Minimal repository interface for flexible adapter compatibility.
- * Any repository with these method signatures is accepted — no `as any` needed.
+ * Minimal structural repository shape for flexible adapter compatibility.
  *
- * CrudRepository<TDoc> and MongoKit Repository both satisfy this interface.
- */
-/**
- * Minimal repository interface for flexible adapter compatibility.
- * Any repository with these method signatures is accepted.
+ * `RepositoryLike` is the **loose** variant of `CrudRepository<TDoc>` — it
+ * uses `unknown` for document payloads so any object with the right method
+ * names satisfies it without type assertions. Prefer `CrudRepository<TDoc>`
+ * for kits you own; use `RepositoryLike` when wrapping third-party repos.
  *
- * **Required** — core CRUD (every resource needs these):
- *   getAll, getById, create, update, delete
+ * Both interfaces declare the same tiered capabilities:
  *
- * **Recommended** — used by AccessControl for compound queries:
- *   getOne
+ * - **Required** — `getAll`, `getById`, `create`, `update`, `delete`
+ * - **Recommended** — `getOne` / `getByQuery` (used by AccessControl for
+ *   compound filters like `idField + orgId + policy`)
+ * - **Optional** — feature-detected at runtime by presets and the
+ *   BaseController. Declare only what your DB supports.
  *
- * **Optional** — enabled by presets, checked at runtime:
- *   getBySlug     — slugLookup preset
- *   getDeleted    — softDelete preset (list soft-deleted)
- *   restore       — softDelete preset (restore soft-deleted)
- *   getTree       — tree preset (hierarchical queries)
- *   getChildren   — tree preset (child nodes)
- *   createMany    — bulk preset (batch create)
- *   updateMany    — bulk preset (batch update by filter)
- *   deleteMany    — bulk preset (batch delete by filter)
+ * See [CrudRepository](../types/repository.ts) for full prose-level docs
+ * on each method and the design rationale behind the tiering.
  */
 export interface RepositoryLike {
-  // ── Required ──
-  getAll(params?: unknown): Promise<unknown>;
-  getById(id: string, options?: unknown): Promise<unknown>;
-  create(data: unknown, options?: unknown): Promise<unknown>;
-  update(id: string, data: unknown, options?: unknown): Promise<unknown>;
-  delete(id: string, options?: unknown): Promise<unknown>;
+  // ── Identity ─────────────────────────────────────────────────────────
 
-  // ── Recommended ──
   /**
-   * The repository's native primary key field. When set, Arc's BaseController
-   * will pass route params through to `update()`/`delete()`/`restore()` calls
+   * The repository's native primary key field. When set, arc's BaseController
+   * passes route params through to `update()`/`delete()`/`restore()` calls
    * unchanged instead of translating them to `_id`.
    *
-   * Set this to match your `defineResource({ idField })` for repositories that
-   * natively look up by a custom field (e.g. MongoKit's
-   * `new Repository(Model, [], {}, { idField: 'id' })`). Without it, Arc will
-   * try to translate route ids → fetched doc's `_id` which 404s on repos that
-   * don't key on `_id`.
+   * Match this to your `defineResource({ idField })` for repositories that
+   * natively look up by a custom field (e.g. mongokit's
+   * `new Repository(Model, [], {}, { idField: 'id' })`). Without it, arc
+   * will try to translate route ids → fetched doc's `_id`, which 404s on
+   * repos that don't key on `_id`.
    *
-   * Defaults to `'_id'` (Mongo). Repositories that always use `_id` may omit it.
+   * Defaults to `'_id'` (Mongo). Kits that always use `_id` may omit it.
    */
   readonly idField?: string;
 
-  /** Find single doc by compound filter — used by AccessControl for idField + org/policy scoping.
-   * Without this, Arc falls back to getById + post-fetch security checks. */
-  getOne?(filter: Record<string, unknown>, options?: unknown): Promise<unknown>;
+  // ── Required: Core Read ──────────────────────────────────────────────
 
-  // ── Optional (preset-dependent, checked at runtime) ──
-  getBySlug?(slug: string, options?: unknown): Promise<unknown>;
-  getDeleted?(options?: unknown): Promise<unknown>;
-  restore?(id: string): Promise<unknown>;
-  getTree?(options?: unknown): Promise<unknown>;
-  getChildren?(parentId: string, options?: unknown): Promise<unknown>;
-  createMany?(items: unknown[], options?: unknown): Promise<unknown>;
-  updateMany?(filter: Record<string, unknown>, data: unknown): Promise<unknown>;
-  deleteMany?(filter: Record<string, unknown>): Promise<unknown>;
+  getAll(params?: PaginationParams, options?: QueryOptions): Promise<unknown>;
+  getById(id: string, options?: QueryOptions): Promise<unknown>;
 
+  // ── Required: Core Write ─────────────────────────────────────────────
+
+  create(data: unknown, options?: WriteOptions): Promise<unknown>;
+  update(id: string, data: unknown, options?: WriteOptions): Promise<unknown>;
+
+  /**
+   * Delete by primary key. Pass `{ mode: 'hard' }` to bypass soft-delete
+   * interception (required by arc's hard-delete flow — `?hard=true` on
+   * the DELETE route forwards this option).
+   */
+  delete(id: string, options?: DeleteOptions): Promise<unknown>;
+
+  // ── Recommended: Compound read ───────────────────────────────────────
+
+  /**
+   * Find a single doc by compound filter. Used by AccessControl for
+   * `idField + org + policy` scoping. Without this, arc falls back to
+   * `getById` + post-fetch security checks (slower, and 404s on custom
+   * idFields that live outside the user's scope).
+   */
+  getOne?(filter: Record<string, unknown>, options?: QueryOptions): Promise<unknown>;
+
+  /** Alias many kits expose alongside `getOne`. Arc checks both. */
+  getByQuery?(filter: Record<string, unknown>, options?: QueryOptions): Promise<unknown>;
+
+  // ── Optional: Projections & existence ────────────────────────────────
+
+  count?(filter?: Record<string, unknown>, options?: QueryOptions): Promise<number>;
+  exists?(
+    filter: Record<string, unknown>,
+    options?: QueryOptions,
+  ): Promise<boolean | { _id: unknown } | null>;
+  distinct?<T = unknown>(
+    field: string,
+    filter?: Record<string, unknown>,
+    options?: QueryOptions,
+  ): Promise<T[]>;
+  findAll?(filter?: Record<string, unknown>, options?: QueryOptions): Promise<unknown[]>;
+  getOrCreate?(
+    filter: Record<string, unknown>,
+    data: unknown,
+    options?: WriteOptions,
+  ): Promise<unknown>;
+
+  // ── Optional: Batch operations (bulk preset) ─────────────────────────
+
+  createMany?(items: unknown[], options?: WriteOptions): Promise<unknown[]>;
+  updateMany?(
+    filter: Record<string, unknown>,
+    data: Record<string, unknown>,
+    options?: WriteOptions,
+  ): Promise<UpdateManyResult>;
+  deleteMany?(filter: Record<string, unknown>, options?: DeleteOptions): Promise<DeleteManyResult>;
+  // `bulkWrite`, `aggregate`, `aggregatePaginate` — kit-specific shapes.
+  // See [CrudRepository](../types/repository.ts) for why these are
+  // intentionally not typed structurally: each DB uses its own pipeline
+  // and operation types, so arc leaves them as opaque capabilities.
+  bulkWrite?: unknown;
+
+  // ── Optional: Soft delete (softDelete preset) ────────────────────────
+
+  restore?(id: string, options?: QueryOptions): Promise<unknown>;
+  getDeleted?(
+    params?: PaginationParams,
+    options?: QueryOptions,
+  ): Promise<PaginationResult<unknown> | unknown[]>;
+
+  // ── Optional: Aggregation (kit-specific shapes — see CrudRepository) ──
+
+  aggregate?: unknown;
+  aggregatePaginate?: unknown;
+
+  // ── Optional: Transactions ───────────────────────────────────────────
+
+  withTransaction?<T>(
+    callback: (session: RepositorySession) => Promise<T>,
+    options?: Record<string, unknown>,
+  ): Promise<T>;
+
+  // ── Optional: Preset-specific conveniences ───────────────────────────
+
+  getBySlug?(slug: string, options?: QueryOptions): Promise<unknown>;
+  getTree?(options?: QueryOptions): Promise<unknown>;
+  getChildren?(parentId: string, options?: QueryOptions): Promise<unknown>;
+
+  // ── Escape hatch ─────────────────────────────────────────────────────
   [key: string]: unknown;
 }
 
 export interface DataAdapter<TDoc = unknown> {
   /**
-   * Repository implementing CRUD operations
-   * Accepts CrudRepository, MongoKit Repository, or any compatible object
+   * Repository implementing CRUD operations. Accepts the typed
+   * `CrudRepository<TDoc>` or the loose `RepositoryLike` — arc checks
+   * capabilities at runtime via feature detection.
    */
   repository: CrudRepository<TDoc> | RepositoryLike;
 

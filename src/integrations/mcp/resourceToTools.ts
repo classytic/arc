@@ -75,10 +75,12 @@ export function resourceToTools(
   resource: ResourceDefinition,
   config: ResourceToToolsConfig = {},
 ): ToolDefinition[] {
-  // Use existing controller, or auto-create one from adapter for MCP
+  // Use existing controller, or auto-create one from adapter for MCP.
+  // Controller is required for CRUD and additionalRoute tools, but NOT for
+  // actions (which carry their own handler). So we don't early-return here
+  // — resources with only `actions` (no adapter/controller) still produce tools.
   const controller =
     resource.controller ?? (resource.adapter ? createMcpController(resource) : undefined);
-  if (!controller) return [];
 
   const explicitFieldRules = resource.schemaOptions?.fieldRules as
     | Record<string, FieldRuleEntry>
@@ -107,83 +109,163 @@ export function resourceToTools(
 
   const hasSoftDelete = resource._appliedPresets?.includes("softDelete") ?? false;
 
-  // Determine enabled operations — only disabledRoutes matters, NOT disableDefaultRoutes
-  let ops = ALL_CRUD_OPS.filter((op) => {
-    if (resource.disabledRoutes?.includes(op)) return false;
-    return true;
-  });
-  if (config.operations) ops = ops.filter((op) => config.operations?.includes(op));
-
   const tools: ToolDefinition[] = [];
   const prefix = config.toolNamePrefix;
 
-  for (const op of ops) {
-    // Support per-operation name overrides: names: { get: 'get_job_by_id' }
-    const name =
-      config.names?.[op] ??
-      (op === "list"
-        ? `${prefix ? `${prefix}_` : ""}list_${pluralize(resource.name)}`
-        : `${prefix ? `${prefix}_` : ""}${op}_${resource.name}`);
+  // CRUD tools require a controller — skip if unavailable (actions-only resource)
+  if (!controller) {
+    // Jump straight to additionalRoutes + actions (below)
+  } else {
+    // Determine enabled operations — only disabledRoutes matters, NOT disableDefaultRoutes
+    let ops = ALL_CRUD_OPS.filter((op) => {
+      if (resource.disabledRoutes?.includes(op)) return false;
+      return true;
+    });
+    if (config.operations) ops = ops.filter((op) => config.operations?.includes(op));
 
-    tools.push({
-      name,
-      description:
-        config.descriptions?.[op] ??
-        defaultDescription(op, resource.displayName, hasSoftDelete, {
+    for (const op of ops) {
+      // Support per-operation name overrides: names: { get: 'get_job_by_id' }
+      const name =
+        config.names?.[op] ??
+        (op === "list"
+          ? `${prefix ? `${prefix}_` : ""}list_${pluralize(resource.name)}`
+          : `${prefix ? `${prefix}_` : ""}${op}_${resource.name}`);
+
+      tools.push({
+        name,
+        description:
+          config.descriptions?.[op] ??
+          defaultDescription(op, resource.displayName, hasSoftDelete, {
+            filterableFields,
+            allowedOperators,
+            sortableFields,
+          }),
+        annotations: ANNOTATIONS[op],
+        inputSchema: buildInputSchema(op, fieldRules, {
+          hiddenFields,
+          readonlyFields,
+          extraHideFields: config.hideFields,
           filterableFields,
           allowedOperators,
-          sortableFields,
+          adapterBodies,
         }),
-      annotations: ANNOTATIONS[op],
-      inputSchema: buildInputSchema(op, fieldRules, {
-        hiddenFields,
-        readonlyFields,
-        extraHideFields: config.hideFields,
-        filterableFields,
-        allowedOperators,
-        adapterBodies,
-      }),
-      handler: createHandler(op, controller, resource.name, resource.permissions),
-    });
-  }
-
-  // Additional routes with wrapHandler: true OR mcpHandler become extra tools
-  for (const route of resource.additionalRoutes ?? []) {
-    const mcpHandler = route.mcpHandler as
-      | ((input: Record<string, unknown>) => Promise<CallToolResult>)
-      | undefined;
-    if (!route.wrapHandler && !mcpHandler) continue;
-    if (!mcpHandler && !["POST", "PUT", "PATCH", "DELETE"].includes(route.method)) continue;
-
-    const opName = route.operation ?? slugifyRoute(route.method, route.path);
-    const hasId = route.path.includes(":id");
-
-    const inputShape: Record<string, z.ZodTypeAny> = {};
-    if (hasId) inputShape.id = z.string().describe("Resource ID");
-
-    if (mcpHandler) {
-      // Direct MCP handler — no controller wrapping needed
-      tools.push({
-        name: prefix ? `${prefix}_${opName}_${resource.name}` : `${opName}_${resource.name}`,
-        description: route.summary ?? route.description ?? `${opName} on ${resource.displayName}`,
-        annotations: { openWorldHint: true },
-        inputSchema: inputShape,
-        handler: async (input, _ctx) => {
-          try {
-            return await mcpHandler(input);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-          }
-        },
+        handler: createHandler(op, controller, resource.name, resource.permissions),
       });
-    } else {
+    }
+
+    // Additional routes with wrapHandler: true OR mcpHandler become extra tools.
+    // v2.8.1: honor route-level `mcp` metadata — skip routes with `mcp: false`,
+    // and use `mcp.description` / `mcp.annotations` when provided.
+    for (const route of resource.additionalRoutes ?? []) {
+      // mcp: false → skip MCP tool generation for this route
+      if (route.mcp === false) continue;
+
+      const mcpHandler = route.mcpHandler as
+        | ((input: Record<string, unknown>) => Promise<CallToolResult>)
+        | undefined;
+      if (!route.wrapHandler && !mcpHandler) continue;
+      if (!mcpHandler && !["POST", "PUT", "PATCH", "DELETE"].includes(route.method)) continue;
+
+      const opName = route.operation ?? slugifyRoute(route.method, route.path);
+      const hasId = route.path.includes(":id");
+
+      // Resolve description and annotations from route-level mcp config
+      const mcpConfig = typeof route.mcp === "object" && route.mcp !== null ? route.mcp : undefined;
+      const toolDescription =
+        mcpConfig?.description ??
+        route.summary ??
+        route.description ??
+        `${opName} on ${resource.displayName}`;
+      const toolAnnotations: ToolAnnotations = mcpConfig?.annotations
+        ? { ...mcpConfig.annotations }
+        : { openWorldHint: true };
+
+      const inputShape: Record<string, z.ZodTypeAny> = {};
+      if (hasId) inputShape.id = z.string().describe("Resource ID");
+
+      if (mcpHandler) {
+        tools.push({
+          name: prefix ? `${prefix}_${opName}_${resource.name}` : `${opName}_${resource.name}`,
+          description: toolDescription,
+          annotations: toolAnnotations,
+          inputSchema: inputShape,
+          handler: async (input, _ctx) => {
+            try {
+              return await mcpHandler(input);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
+            }
+          },
+        });
+      } else {
+        tools.push({
+          name: prefix ? `${prefix}_${opName}_${resource.name}` : `${opName}_${resource.name}`,
+          description: toolDescription,
+          annotations: toolAnnotations,
+          inputSchema: inputShape,
+          handler: createAdditionalRouteHandler(route, controller, hasId),
+        });
+      }
+    }
+  } // end: controller-gated CRUD + additionalRoutes block
+
+  // v2.8.1 — Generate MCP tools from declarative `actions`.
+  // Naming convention: `{action}_{resource}` (e.g., `approve_order`)
+  // Each action becomes a tool with `id` (resource ID) + action-specific input fields.
+  // Handler calls `controller.executeAction(id, actionName, data)` or falls
+  // back to a direct controller method call.
+  if (resource.actions) {
+    for (const [actionName, entry] of Object.entries(resource.actions)) {
+      const def = typeof entry === "function" ? { handler: entry } : entry;
+
+      // Respect mcp: false on per-action definitions
+      if (typeof def !== "function" && "mcp" in def && def.mcp === false) continue;
+
+      const mcpCfg = typeof def !== "function" && typeof def.mcp === "object" ? def.mcp : undefined;
+      const description =
+        (mcpCfg as Record<string, unknown> | undefined)?.description ??
+        (typeof def !== "function" ? def.description : undefined) ??
+        `${actionName} action on ${resource.displayName}`;
+      const annotations: ToolAnnotations = (mcpCfg as Record<string, unknown> | undefined)
+        ?.annotations
+        ? { ...((mcpCfg as Record<string, unknown>).annotations as ToolAnnotations) }
+        : { destructiveHint: true };
+
+      // Build input schema: always requires `id`, plus action-specific fields from schema
+      const inputShape: Record<string, z.ZodTypeAny> = {
+        id: z.string().describe("Resource ID"),
+      };
+
+      // Extract action-specific fields from the schema (if provided)
+      const rawSchema = typeof def !== "function" ? def.schema : undefined;
+      if (rawSchema && typeof rawSchema === "object") {
+        const converted = convertActionSchemaToZod(rawSchema as Record<string, unknown>);
+        for (const [key, val] of Object.entries(converted)) {
+          inputShape[key] = val;
+        }
+      }
+
+      const toolName = prefix
+        ? `${prefix}_${actionName}_${resource.name}`
+        : `${actionName}_${resource.name}`;
+
+      const handler = typeof entry === "function" ? entry : def.handler;
+      const actionPerms =
+        (typeof def !== "function" ? def.permissions : undefined) ?? resource.actionPermissions;
+
       tools.push({
-        name: prefix ? `${prefix}_${opName}_${resource.name}` : `${opName}_${resource.name}`,
-        description: route.summary ?? route.description ?? `${opName} on ${resource.displayName}`,
-        annotations: { openWorldHint: true },
+        name: toolName,
+        description: String(description),
+        annotations,
         inputSchema: inputShape,
-        handler: createAdditionalRouteHandler(route, controller, hasId),
+        handler: createActionToolHandler(
+          actionName,
+          handler as (id: string, data: Record<string, unknown>, req: unknown) => Promise<unknown>,
+          actionPerms as PermissionCheck | undefined,
+          resource.name,
+          resource.permissions,
+        ),
       });
     }
   }
@@ -576,4 +658,154 @@ function createMcpController(resource: ResourceDefinition): unknown {
     idField: resource.idField,
     matchesFilter: resource.adapter?.matchesFilter,
   });
+}
+
+// ============================================================================
+// Action → MCP Tool helpers (v2.8.1)
+// ============================================================================
+
+/**
+ * Convert an action schema (JSON Schema, Zod, or legacy field map) to a Zod
+ * shape for MCP tool input. This mirrors `normalizeActionSchema` in
+ * `createActionRouter.ts` but produces Zod types for the MCP SDK.
+ */
+function convertActionSchemaToZod(raw: Record<string, unknown>): Record<string, z.ZodTypeAny> {
+  // Check if it's a Zod schema directly (has `_zod` marker)
+  if ("_zod" in raw && typeof (raw as Record<string, unknown>).shape === "object") {
+    const shape = (raw as Record<string, unknown>).shape as Record<string, z.ZodTypeAny>;
+    return { ...shape };
+  }
+
+  // Full JSON Schema with `type: 'object'` + `properties`
+  if (
+    (raw.type === "object" || "properties" in raw) &&
+    typeof raw.properties === "object" &&
+    raw.properties !== null
+  ) {
+    const props = raw.properties as Record<string, Record<string, unknown>>;
+    const requiredSet = new Set<string>(
+      Array.isArray(raw.required) ? (raw.required as string[]) : [],
+    );
+    return jsonSchemaPropsToZod(props, requiredSet);
+  }
+
+  // Legacy field map: each top-level key is a property
+  const result: Record<string, z.ZodTypeAny> = {};
+  for (const [fieldName, fieldSchema] of Object.entries(raw)) {
+    if (fieldName === "type" || fieldName === "properties" || fieldName === "required") continue;
+    if (!fieldSchema || typeof fieldSchema !== "object") continue;
+    const fs = fieldSchema as Record<string, unknown>;
+    const desc = typeof fs.description === "string" ? fs.description : `${fieldName} field`;
+    const isOptional = fs.required === false;
+    const base = jsonSchemaTypeToZod(fs);
+    result[fieldName] = isOptional ? base.optional().describe(desc) : base.describe(desc);
+  }
+  return result;
+}
+
+function jsonSchemaPropsToZod(
+  props: Record<string, Record<string, unknown>>,
+  requiredSet: Set<string>,
+): Record<string, z.ZodTypeAny> {
+  const result: Record<string, z.ZodTypeAny> = {};
+  for (const [name, schema] of Object.entries(props)) {
+    const desc = typeof schema.description === "string" ? schema.description : name;
+    const base = jsonSchemaTypeToZod(schema);
+    result[name] = requiredSet.has(name) ? base.describe(desc) : base.optional().describe(desc);
+  }
+  return result;
+}
+
+function jsonSchemaTypeToZod(schema: Record<string, unknown>): z.ZodTypeAny {
+  const type = typeof schema.type === "string" ? schema.type : "string";
+  // Handle enum before type switch — enum is a constraint, not a type
+  if (Array.isArray(schema.enum) && schema.enum.length > 0) {
+    return z.enum(schema.enum as [string, ...string[]]);
+  }
+  switch (type) {
+    case "number":
+    case "integer":
+      return z.number();
+    case "boolean":
+      return z.boolean();
+    case "array":
+      return z.array(z.unknown());
+    case "object":
+      return z.record(z.string(), z.unknown());
+    default:
+      return z.string();
+  }
+}
+
+/**
+ * Create an MCP tool handler for a declarative action.
+ *
+ * Uses the SAME `evaluatePermission()` and `buildRequestContext()` as
+ * CRUD tools — single code path for permission side effects, scope
+ * construction, and request context assembly. This eliminates the
+ * DRY/drift risk flagged in the review: REST and MCP action tools now
+ * share identical context-building machinery.
+ */
+function createActionToolHandler(
+  actionName: string,
+  handler: (id: string, data: Record<string, unknown>, req: unknown) => Promise<unknown>,
+  permissions: PermissionCheck | undefined,
+  resourceName: string,
+  _resourcePermissions: ResourcePermissions | undefined,
+): ToolDefinition["handler"] {
+  return async (input, ctx) => {
+    const session = ctx.session;
+
+    // Same evaluatePermission() as CRUD tools — honors scope, filters,
+    // all PermissionResult side effects identically in MCP and REST.
+    const permResult = await evaluatePermission(
+      permissions,
+      session,
+      resourceName,
+      actionName,
+      input,
+    );
+    if (permResult && !permResult.granted) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: permResult.reason ?? `Permission denied for action '${actionName}'`,
+            }),
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    // Use the shared context builder — same factory as CRUD tools.
+    // The `action` operation type puts id in params, everything else in body,
+    // with correct `kind`-discriminated scope from session + permission override.
+    const inputWithAction = { ...input, action: actionName };
+    const reqCtx = buildRequestContext(
+      inputWithAction,
+      session,
+      "action",
+      permResult?.filters,
+      permResult?.scope,
+    );
+
+    const id = typeof input.id === "string" ? input.id : "";
+    const { id: _discardId, ...data } = input;
+
+    try {
+      // Pass the full IRequestContext as the `req` argument so action
+      // handlers see user, scope, metadata, and filters in the same
+      // shape as when called from the HTTP router.
+      const result = await handler(id, data, reqCtx);
+      return {
+        content: [{ type: "text", text: JSON.stringify({ success: true, data: result }) }],
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
+    }
+  };
 }

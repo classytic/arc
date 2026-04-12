@@ -31,7 +31,7 @@ interface MongoCollection {
     filter: object,
     update: object,
     options?: object,
-  ): Promise<{ acknowledged: boolean; matchedCount: number; modifiedCount: number }>;
+  ): Promise<{ acknowledged: boolean; matchedCount: number; modifiedCount: number; upsertedCount?: number }>;
   deleteOne(filter: object): Promise<{ deletedCount: number }>;
   deleteMany(filter: object): Promise<{ deletedCount: number }>;
   createIndex(spec: object, options?: object): Promise<string>;
@@ -161,11 +161,12 @@ export class MongoIdempotencyStore implements IdempotencyStore {
         { upsert: true },
       );
 
-      // matchedCount === 1: existing doc matched (lock was free/expired)
-      // modifiedCount can be 0 if the $set value is identical — use matchedCount
-      // upsertedCount === 1 (implied by acknowledged + matchedCount === 0):
-      //   new doc created with our lock
-      return result.matchedCount === 1 || result.modifiedCount === 1;
+      // Two success cases:
+      // 1. matchedCount === 1: existing doc matched our filter (lock free/expired), updated in place
+      // 2. upsertedCount === 1: no doc matched, upsert INSERTED a new doc with our lock
+      // The old code only checked matchedCount/modifiedCount — both are 0 on insert,
+      // so fresh keys returned false even though the insert succeeded.
+      return result.matchedCount === 1 || (result.upsertedCount ?? 0) === 1;
     } catch {
       // Duplicate key on upsert race or other error → someone else got the lock
       return false;

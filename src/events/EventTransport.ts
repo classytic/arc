@@ -74,6 +74,26 @@ export interface EventTransport {
   publish(event: DomainEvent): Promise<void>;
 
   /**
+   * Publish a batch of events to the transport (optional, v2.8.1+).
+   *
+   * Transports that can efficiently batch (Kafka producer, Redis pipeline,
+   * RabbitMQ publisher confirms, SQS send-message-batch) should implement
+   * this. {@link import('./outbox.js').EventOutbox.relay} auto-detects and
+   * uses it for much higher throughput than per-event publishing.
+   *
+   * **Contract**: the returned `PublishManyResult` must describe the
+   * per-event outcome so the caller can acknowledge successes and fail the
+   * rest. Partial success is allowed — the transport reports it per event.
+   *
+   * If not implemented, `EventOutbox.relay` falls back to calling
+   * {@link publish} once per event.
+   *
+   * @param events - Events to publish (in order)
+   * @returns Per-event outcome map keyed by `event.meta.id`
+   */
+  publishMany?(events: readonly DomainEvent[]): Promise<PublishManyResult>;
+
+  /**
    * Subscribe to events matching a pattern
    * @param pattern - Event type pattern (e.g., 'product.*', '*')
    * @param handler - Handler function
@@ -86,6 +106,15 @@ export interface EventTransport {
    */
   close?(): Promise<void>;
 }
+
+/**
+ * Per-event outcome returned by {@link EventTransport.publishMany}.
+ *
+ * The key is `event.meta.id`; the value is `null` for success or an `Error`
+ * for per-event failure. Transports MUST include an entry for every event
+ * in the input batch.
+ */
+export type PublishManyResult = ReadonlyMap<string, Error | null>;
 
 export interface MemoryEventTransportOptions {
   /** Logger for error/warning messages (default: console) */
@@ -134,6 +163,27 @@ export class MemoryEventTransport implements EventTransport {
         this.logger.error(`[EventTransport] Handler error for ${event.type}:`, err);
       }
     }
+  }
+
+  /**
+   * Reference `publishMany` implementation — delegates to `publish()` in order.
+   *
+   * Production transports (Kafka, Redis pipeline, SQS batch) should override
+   * this with a single batched network call. Memory transport has nothing to
+   * batch, so we just loop — the loop still returns a proper result map so
+   * `EventOutbox.relay` can exercise the batched code path in tests.
+   */
+  async publishMany(events: readonly DomainEvent[]): Promise<PublishManyResult> {
+    const results = new Map<string, Error | null>();
+    for (const event of events) {
+      try {
+        await this.publish(event);
+        results.set(event.meta.id, null);
+      } catch (err) {
+        results.set(event.meta.id, err instanceof Error ? err : new Error(String(err)));
+      }
+    }
+    return results;
   }
 
   async subscribe(pattern: string, handler: EventHandler): Promise<() => void> {
