@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.8.3
+
+- **Export `Guard<T>` and `GuardConfig<T>` types** from `@classytic/arc/utils` — fixes TS4023 when consumers re-export `defineGuard()` results in their own declaration files
+
 ## 2.8.2
 
 ### Repository Contract

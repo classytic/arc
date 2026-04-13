@@ -83,14 +83,28 @@ describe("Key symbols from root (@classytic/arc)", () => {
 });
 
 describe("Key symbols from @classytic/arc/utils", () => {
-  it("exports handleRaw, createDomainError, error classes", async () => {
+  it("exports handleRaw, defineGuard, createDomainError, error classes", async () => {
     const mod = await import("@classytic/arc/utils");
     expect(typeof mod.handleRaw).toBe("function");
+    expect(typeof mod.defineGuard).toBe("function");
     expect(typeof mod.createDomainError).toBe("function");
     expect(typeof mod.ArcError).toBe("function");
     expect(typeof mod.ForbiddenError).toBe("function");
     expect(typeof mod.createStateMachine).toBe("function");
     expect(typeof mod.CircuitBreaker).toBe("function");
+  });
+
+  it("exports Guard and GuardConfig types (TS4023 fix)", async () => {
+    // This is a compile-time check — if Guard/GuardConfig aren't exported,
+    // consumers get TS4023 when re-exporting defineGuard() results.
+    // The runtime test just verifies the module loads; the real check is
+    // that this file compiles with the type import below.
+    const mod = await import("@classytic/arc/utils");
+    const guard = mod.defineGuard({ name: "test", resolve: () => ({ ok: true }) });
+    // guard should be typed as Guard<{ ok: boolean }> — if not exported, TS breaks
+    expect(guard.name).toBe("test");
+    expect(typeof guard.preHandler).toBe("function");
+    expect(typeof guard.from).toBe("function");
   });
 });
 
