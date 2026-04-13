@@ -37,7 +37,7 @@ import type { FastifyReply, FastifyRequest, RouteHandlerMethod } from "fastify";
 /** Hidden property key for guard context storage on the request object. */
 const GUARD_STORE_KEY = "__arcGuardContext";
 
-interface GuardConfig<T> {
+export interface GuardConfig<T> {
   /** Unique name — used as the storage key on the request. */
   readonly name: string;
   /**
@@ -48,7 +48,7 @@ interface GuardConfig<T> {
   readonly resolve: (req: FastifyRequest, reply: FastifyReply) => T | Promise<T>;
 }
 
-interface Guard<T> {
+export interface Guard<T> {
   /** Use in `routeGuards` or per-route `preHandler` arrays. */
   readonly preHandler: RouteHandlerMethod;
   /**

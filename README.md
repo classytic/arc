@@ -2,7 +2,7 @@
 
 Database-agnostic resource framework for Fastify. Define resources, get CRUD routes, permissions, presets, caching, events, OpenAPI, and MCP tools — without boilerplate.
 
-**v2.8.2** | Fastify 5+ | Node.js 22+ | ESM only | 278+ test files, 3844+ tests
+**v2.8.3** | Fastify 5+ | Node.js 22+ | ESM only | 278+ test files, 3844+ tests
 
 ## Install
 

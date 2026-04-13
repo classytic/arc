@@ -24,6 +24,7 @@ export type {
 } from "./compensation.js";
 export { defineCompensation, withCompensation } from "./compensation.js";
 // Typed route guard helper
+export type { Guard, GuardConfig } from "./defineGuard.js";
 export { defineGuard } from "./defineGuard.js";
 export type { ErrorDetails } from "./errors.js";
 // Errors
