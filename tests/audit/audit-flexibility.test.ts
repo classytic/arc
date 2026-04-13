@@ -3,7 +3,7 @@
  *
  * Verifies the audit surface is rich enough for enterprise/distributed apps:
  *
- *   1. additionalRoutes can call fastify.audit.custom() (e.g., custom action logging)
+ *   1. routes can call fastify.audit.custom() (e.g., custom action logging)
  *   2. MCP-style action handlers can audit through the same API
  *   3. Distributed event log: hook subscribers can persist audit entries to multiple stores
  *   4. Read auditing: not auto-fired, but reachable via manual custom() calls
@@ -44,7 +44,7 @@ describe("audit plugin — flexibility surface", () => {
     return { store, hookSystem };
   }
 
-  // ── 1. additionalRoutes / custom handlers ──
+  // ── 1. routes / custom handlers ──
 
   it("additionalRoute handler can call fastify.audit.custom()", async () => {
     const { store } = await setup({

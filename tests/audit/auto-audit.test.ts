@@ -237,7 +237,7 @@ describe("Auto-Audit via Hook System", () => {
 
     await app.ready();
 
-    // Simulate manual audit from an additionalRoute with wrapHandler: false
+    // Simulate manual audit from an additionalRoute with raw: true
     await (
       app as unknown as { audit: { custom: (...args: unknown[]) => Promise<void> } }
     ).audit.custom(
@@ -257,7 +257,7 @@ describe("Auto-Audit via Hook System", () => {
     expect(entries[0].organizationId).toBe("org-1");
   });
 
-  it("auto-audits wrapHandler: true routes that call controller methods (via hooks)", async () => {
+  it("auto-audits raw: false routes that call controller methods (via hooks)", async () => {
     const store = new MemoryAuditStore();
     const hookSystem = new HookSystem({ logger: { error: () => {} } });
 
@@ -272,7 +272,7 @@ describe("Auto-Audit via Hook System", () => {
 
     await app.ready();
 
-    // When a wrapHandler: true additional route calls controller.update(),
+    // When a raw: false additional route calls controller.update(),
     // the BaseController triggers hooks.executeAfter('resource', 'update', result, { meta: { existing } })
     // This simulates that call path:
     await hookSystem.executeAfter(

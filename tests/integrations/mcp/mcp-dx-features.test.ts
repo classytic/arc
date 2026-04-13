@@ -6,7 +6,7 @@
  *   2. Per-resource names + toolNamePrefix
  *   3. /mcp/health endpoint
  *   4. disableDefaultRoutes does NOT block MCP tools
- *   5. mcpHandler on additionalRoutes (wrapHandler: false)
+ *   5. mcpHandler on routes (wrapHandler: false)
  *   6. Auth cache for stateless mode
  *   7. Mixed auto-gen + custom tools with guards
  */
@@ -71,7 +71,7 @@ function makeResource(
   opts: {
     tenantField?: string | false;
     disableDefaultRoutes?: boolean;
-    additionalRoutes?: any[];
+    routes?: any[];
   } = {},
 ) {
   const repo = new Repository(model);
@@ -104,7 +104,7 @@ function makeResource(
       },
     },
     disableDefaultRoutes: opts.disableDefaultRoutes,
-    additionalRoutes: opts.additionalRoutes,
+    routes: opts.routes,
   });
 }
 
@@ -235,13 +235,13 @@ describe("disableDefaultRoutes + MCP", () => {
 });
 
 // ============================================================================
-// 4. mcpHandler on additionalRoutes
+// 4. mcpHandler on routes
 // ============================================================================
 
-describe("mcpHandler on additionalRoutes", () => {
+describe("mcpHandler on routes", () => {
   it("wrapHandler: false routes with mcpHandler become MCP tools", () => {
     const resource = makeResource("product", ProductModel, {
-      additionalRoutes: [
+      routes: [
         {
           method: "GET" as const,
           path: "/stats",
@@ -263,7 +263,7 @@ describe("mcpHandler on additionalRoutes", () => {
 
   it("mcpHandler receives input and returns result", async () => {
     const resource = makeResource("product", ProductModel, {
-      additionalRoutes: [
+      routes: [
         {
           method: "POST" as const,
           path: "/analyze",

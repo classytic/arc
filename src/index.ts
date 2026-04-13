@@ -312,6 +312,7 @@ export {
   UnauthorizedError,
   ValidationError,
 } from "./utils/errors.js";
+// handleRaw lives on @classytic/arc/utils only — not re-exported from root to preserve tree-shaking
 
 // ============================================================================
 // MOVED TO DEDICATED SUBPATHS (no longer re-exported from main barrel)

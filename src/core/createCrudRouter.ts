@@ -216,10 +216,19 @@ function createAdditionalRoutes<TDoc = unknown>(
     cacheMw: RouteHandlerMethod | null;
     idempotencyMw: RouteHandlerMethod | null;
     pipeline?: PipelineConfig;
+    routeGuards: RouteHandlerMethod[];
   },
 ): void {
-  const { tag, resourceName, arcDecorator, rateLimitConfig, cacheMw, idempotencyMw, pipeline } =
-    options;
+  const {
+    tag,
+    resourceName,
+    arcDecorator,
+    rateLimitConfig,
+    cacheMw,
+    idempotencyMw,
+    pipeline,
+    routeGuards,
+  } = options;
 
   for (const route of routes) {
     // Derive logical operation name for pipeline keys and permission actions.
@@ -321,6 +330,7 @@ function createAdditionalRoutes<TDoc = unknown>(
       authMw, // Authenticate first (populates request.user)
       permissionMw, // Then check permissions
       pluginMw, // Cache (GET) or idempotency (mutations) — after auth
+      ...routeGuards, // Resource-level guards — after auth, before per-route
       ...customPreHandlers,
     ].filter(Boolean) as PreHandlerHook[];
 
@@ -407,6 +417,7 @@ export function createCrudRouter<TDoc = unknown>(
     schemas = {},
     permissions = {},
     middlewares = {},
+    routeGuards = [],
     additionalRoutes = [],
     disableDefaultRoutes = false,
     disabledRoutes = [],
@@ -542,9 +553,14 @@ export function createCrudRouter<TDoc = unknown>(
     if (!disabledRoutes.includes("list")) {
       const authMw = buildAuthMiddleware(fastify, permissions.list);
       const permMw = buildPermissionMiddleware(permissions.list, resourceName, "list");
-      const listPreHandler = [arcDecorator, authMw, permMw, cacheMw, ...mw.list].filter(
-        Boolean,
-      ) as PreHandlerHook[];
+      const listPreHandler = [
+        arcDecorator,
+        authMw,
+        permMw,
+        cacheMw,
+        ...routeGuards,
+        ...mw.list,
+      ].filter(Boolean) as PreHandlerHook[];
       fastify.route({
         method: "GET",
         url: "/",
@@ -563,9 +579,14 @@ export function createCrudRouter<TDoc = unknown>(
     if (!disabledRoutes.includes("get")) {
       const authMw = buildAuthMiddleware(fastify, permissions.get);
       const permMw = buildPermissionMiddleware(permissions.get, resourceName, "get");
-      const getPreHandler = [arcDecorator, authMw, permMw, cacheMw, ...mw.get].filter(
-        Boolean,
-      ) as PreHandlerHook[];
+      const getPreHandler = [
+        arcDecorator,
+        authMw,
+        permMw,
+        cacheMw,
+        ...routeGuards,
+        ...mw.get,
+      ].filter(Boolean) as PreHandlerHook[];
       fastify.route({
         method: "GET",
         url: "/:id",
@@ -584,9 +605,14 @@ export function createCrudRouter<TDoc = unknown>(
     if (!disabledRoutes.includes("create")) {
       const authMw = buildAuthMiddleware(fastify, permissions.create);
       const permMw = buildPermissionMiddleware(permissions.create, resourceName, "create");
-      const createPreHandler = [arcDecorator, authMw, permMw, idempotencyMw, ...mw.create].filter(
-        Boolean,
-      ) as PreHandlerHook[];
+      const createPreHandler = [
+        arcDecorator,
+        authMw,
+        permMw,
+        idempotencyMw,
+        ...routeGuards,
+        ...mw.create,
+      ].filter(Boolean) as PreHandlerHook[];
       fastify.route({
         method: "POST",
         url: "/",
@@ -607,9 +633,14 @@ export function createCrudRouter<TDoc = unknown>(
         updateMethod === "both" ? (["PUT", "PATCH"] as const) : ([updateMethod] as const);
       const authMw = buildAuthMiddleware(fastify, permissions.update);
       const permMw = buildPermissionMiddleware(permissions.update, resourceName, "update");
-      const updatePreHandler = [arcDecorator, authMw, permMw, idempotencyMw, ...mw.update].filter(
-        Boolean,
-      ) as PreHandlerHook[];
+      const updatePreHandler = [
+        arcDecorator,
+        authMw,
+        permMw,
+        idempotencyMw,
+        ...routeGuards,
+        ...mw.update,
+      ].filter(Boolean) as PreHandlerHook[];
       for (const method of updateMethods) {
         fastify.route({
           method,
@@ -634,7 +665,7 @@ export function createCrudRouter<TDoc = unknown>(
     if (!disabledRoutes.includes("delete")) {
       const authMw = buildAuthMiddleware(fastify, permissions.delete);
       const permMw = buildPermissionMiddleware(permissions.delete, resourceName, "delete");
-      const deletePreHandler = [arcDecorator, authMw, permMw, ...mw.delete].filter(
+      const deletePreHandler = [arcDecorator, authMw, permMw, ...routeGuards, ...mw.delete].filter(
         Boolean,
       ) as PreHandlerHook[];
       fastify.route({
@@ -662,6 +693,7 @@ export function createCrudRouter<TDoc = unknown>(
       cacheMw,
       idempotencyMw,
       pipeline,
+      routeGuards,
     });
   }
 }

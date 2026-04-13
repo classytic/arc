@@ -52,7 +52,7 @@ describe("MongoKit 3.5.5 features — built dist smoke test", () => {
         readonlyFields: [],
       },
       permissions: {},
-      additionalRoutes: [],
+      routes: [],
       middlewares: {},
       disableDefaultRoutes: false,
       disabledRoutes: [],

@@ -5,7 +5,7 @@
  * 1. ControllerHandler - Arc's standard pattern (receives context object)
  * 2. FastifyHandler - Fastify native pattern (receives request, reply)
  *
- * Use `wrapHandler: true` for ControllerHandler, `wrapHandler: false` for FastifyHandler.
+ * Use `raw: false` for ControllerHandler, `raw: true` for FastifyHandler.
  */
 
 import type { FastifyRequest, FastifyReply } from 'fastify';
@@ -15,7 +15,7 @@ import type { RequestContext } from './index.js';
 /**
  * Minimal server accessor — exposes safe, read-only server decorators.
  * Allows controller handlers to publish events, log, and audit
- * without switching to `wrapHandler: false`.
+ * without switching to `raw: true`.
  */
 export interface ServerAccessor {
   /** Event bus — publish domain events from any handler */
@@ -128,7 +128,7 @@ export interface IRequestContext<
   metadata?: TMetadata;
   /**
    * Fastify server accessor — publish events, log, and audit
-   * from any handler without switching to `wrapHandler: false`.
+   * from any handler without switching to `raw: true`.
    *
    * @example
    * ```typescript
@@ -166,7 +166,7 @@ export interface IControllerResponse<T = unknown> {
  * Controller handler — Arc's standard pattern.
  *
  * Receives a request context object, returns IControllerResponse.
- * Use with `wrapHandler: true` in additionalRoutes.
+ * Use with `raw: false` in routes.
  *
  * **Generic parameters:**
  * - `TResponse` — shape of `IControllerResponse.data` (default: `unknown`)
@@ -198,12 +198,12 @@ export interface IControllerResponse<T = unknown> {
  *   return { success: true, data: product };
  * };
  *
- * additionalRoutes: [{
+ * routes: [{
  *   method: 'POST',
  *   path: '/products',
  *   handler: createProduct,
  *   permissions: requireAuth(),
- *   wrapHandler: true,  // Arc wraps this into Fastify handler
+ *   raw: false,  // Arc wraps this into Fastify handler
  * }]
  * ```
  */
@@ -218,7 +218,7 @@ export type ControllerHandler<
  * Fastify native handler
  *
  * Standard Fastify request/reply pattern.
- * Use with `wrapHandler: false` in additionalRoutes.
+ * Use with `raw: true` in routes.
  *
  * @example
  * ```typescript
@@ -228,12 +228,12 @@ export type ControllerHandler<
  *   return reply.send(file.buffer);
  * };
  *
- * additionalRoutes: [{
+ * routes: [{
  *   method: 'GET',
  *   path: '/files/:id/download',
  *   handler: downloadFile,
  *   permissions: requireAuth(),
- *   wrapHandler: false,  // Use as-is, no wrapping
+ *   raw: true,  // Use as-is, no wrapping
  * }]
  * ```
  */

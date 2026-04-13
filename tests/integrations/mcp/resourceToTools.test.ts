@@ -26,6 +26,7 @@ function mockResource(overrides?: Partial<ResourceDefinition>): ResourceDefiniti
       readonlyFields: [],
     },
     permissions: {},
+    routes: [],
     additionalRoutes: [],
     middlewares: {},
     disableDefaultRoutes: false,
@@ -250,7 +251,7 @@ describe("resourceToTools", () => {
   // ============================================================================
 
   describe("mcpHandler on additional routes", () => {
-    it("picks up mcpHandler from wrapHandler:false routes", async () => {
+    it("picks up mcpHandler from raw:false routes", async () => {
       const mcpHandler = vi.fn().mockResolvedValue({
         content: [{ type: "text", text: '{"count": 42}' }],
       });
@@ -284,7 +285,7 @@ describe("resourceToTools", () => {
       expect(mcpHandler).toHaveBeenCalledWith({ filter: "active" });
     });
 
-    it("ignores wrapHandler:false routes without mcpHandler", () => {
+    it("ignores raw:false routes without mcpHandler", () => {
       const tools = resourceToTools(
         mockResource({
           additionalRoutes: [

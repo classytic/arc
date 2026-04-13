@@ -7,7 +7,7 @@
  * 2. Zod v4 schemas accepted as action schemas (auto-converted to JSON Schema)
  * 3. Full JSON Schema body shape accepted (with explicit `required` array)
  * 4. Legacy field-map shape still works (every field required by default)
- * 5. `mcp: false` / `description` / `annotations` preserved from `routes` through to additionalRoutes
+ * 5. `mcp: false` / `description` / `annotations` preserved from `routes` through to routes
  * 6. Original `config.routes` retained on ResourceDefinition
  * 7. `config.actions` retained on ResourceDefinition with full metadata
  * 8. OpenAPI generator emits `POST /:id/action` with discriminated body schema
@@ -288,7 +288,7 @@ describe("v2.8.1: metadata preservation", () => {
   const Model = createMockModel("MetaPreserve");
   const repo = createMockRepository(Model);
 
-  it("routes: mcp: false is preserved on additionalRoutes after normalization", () => {
+  it("routes: mcp: false is preserved on routes after normalization", () => {
     const resource = defineResource({
       name: "widget",
       prefix: "/widgets",
@@ -324,9 +324,9 @@ describe("v2.8.1: metadata preservation", () => {
       ],
     });
 
-    expect(resource.additionalRoutes).toHaveLength(2);
-    expect(resource.additionalRoutes[0].mcp).toBe(false);
-    expect(resource.additionalRoutes[1].mcp).toMatchObject({
+    expect(resource.routes).toHaveLength(2);
+    expect(resource.routes[0].mcp).toBe(false);
+    expect(resource.routes[1].mcp).toMatchObject({
       description: "Custom MCP description",
       annotations: { readOnlyHint: true, idempotentHint: true },
     });
@@ -418,7 +418,7 @@ describe("v2.8.1: OpenAPI action path generation", () => {
       presets: [],
       permissions: {},
       routes: [],
-      additionalRoutes: [],
+      routes: [],
       actions: [
         {
           name: "approve",
@@ -474,7 +474,7 @@ describe("v2.8.1: OpenAPI action path generation", () => {
       presets: [],
       permissions: {},
       routes: [],
-      additionalRoutes: [],
+      routes: [],
       plugin: () => {},
       disableDefaultRoutes: true,
       disabledRoutes: [],

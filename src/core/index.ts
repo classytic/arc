@@ -19,7 +19,7 @@ export type {
   ActionRouterConfig,
   IdempotencyService,
 } from "./createActionRouter.js";
-export { createActionRouter } from "./createActionRouter.js";
+export { buildActionBodySchema, createActionRouter } from "./createActionRouter.js";
 export {
   createCrudRouter,
   createPermissionMiddleware,

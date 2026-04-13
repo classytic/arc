@@ -53,6 +53,16 @@ export async function registerResources(
   }
 
   // ── 3. Resources (split by prefix) ──
+  // resourceDir → auto-discover when no explicit resources array provided
+  if (!config.resources?.length && config.resourceDir) {
+    const { loadResources } = await import("./loadResources.js");
+    const { resolve } = await import("node:path");
+    const dir = resolve(config.resourceDir);
+    config = {
+      ...config,
+      resources: await loadResources(dir, { logger: fastify.log }),
+    };
+  }
   if (config.resources?.length) {
     // Detect duplicate resource names early — a common mistake with loadResources + manual array
     const seen = new Set<string>();
