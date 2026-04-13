@@ -32,7 +32,7 @@ export {
 export type { ArcPlugin, CreatePluginDefinition, PluginResourceResult } from "./createPlugin.js";
 // Plugin factory (forRoot/forFeature pattern)
 export { createPlugin } from "./createPlugin.js";
-export type { ErrorHandlerOptions } from "./errorHandler.js";
+export type { ErrorHandlerOptions, ErrorMapper } from "./errorHandler.js";
 
 // Global error handling
 export {

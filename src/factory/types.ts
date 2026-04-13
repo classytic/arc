@@ -633,6 +633,28 @@ export interface CreateAppOptions {
   resourcePrefix?: string;
 
   /**
+   * Auto-discover resources from a directory instead of passing an explicit
+   * `resources` array. Resolves relative to `process.cwd()`.
+   *
+   * This replaces the common pattern:
+   * ```ts
+   * resources: await loadResources(import.meta.url)
+   * ```
+   *
+   * When both `resourceDir` and `resources` are provided, `resources` wins
+   * (explicit always beats convention).
+   *
+   * @example
+   * ```ts
+   * const app = await createApp({
+   *   resourceDir: 'src/resources',
+   *   resourcePrefix: '/api/v1',
+   * });
+   * ```
+   */
+  resourceDir?: string;
+
+  /**
    * Custom plugin registration — runs after Arc core (security, auth, events)
    * but before `bootstrap` and `resources`.
    *

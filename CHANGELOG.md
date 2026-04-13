@@ -44,11 +44,18 @@
 - Restore lifecycle hooks — `before:restore` / `around:restore` / `after:restore` now fire from `BaseController.restore()`, symmetric with delete hooks
 - **fieldRules → OpenAPI parity** — `minLength`, `maxLength`, `min`, `max`, `pattern`, `enum`, `description` from `fieldRules` now auto-map to OpenAPI schema properties (was already working for MCP tools, now consistent). Mongoose model-level constraints still take precedence.
 - `RouteSchemaOptions.fieldRules` type now declares constraint fields explicitly (`minLength`, `maxLength`, `min`, `max`, `pattern`, `enum`, `description`) for IDE autocomplete
+- `ErrorMapper` type now exported from `@classytic/arc/plugins` — consumers can type custom error mappers
+- **Preset routes lost when `routes` also defined** — `presets: ['softDelete']` + `routes: [...]` silently dropped preset routes (`/deleted`, `/:id/restore`). Now both are merged correctly.
 - README version sync
+
+### DX
+
+- **`routeGuards`** on `defineResource()` — resource-level preHandlers that auto-apply to every route (CRUD + custom `routes` + preset routes). Runs after auth/permissions, before per-route `preHandler`. Eliminates per-handler guard boilerplate.
+- **`defineGuard()`** helper (`@classytic/arc/utils`) — typed preHandler + context extraction pair. Guard runs once, result accessible via `guard.from(req)` with full type inference. Composes with `routeGuards`.
 
 ### Tests
 
-- 130+ new tests across repository contract, actions, routes, outbox
+- 150+ new tests across repository contract, actions, routes, outbox, route guards, defineGuard
 
 ## 2.8.0
 

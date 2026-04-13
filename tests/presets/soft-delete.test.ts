@@ -13,6 +13,22 @@ import { applyPresets } from "../../src/presets/index.js";
 import { softDeletePreset } from "../../src/presets/softDelete.js";
 import type { ResourceConfig, ResourcePermissions } from "../../src/types/index.js";
 
+/** Extract routes from preset result (supports both `routes` and legacy `routes`). */
+function getPresetRoutes(
+  result: ReturnType<typeof softDeletePreset>,
+  permissions: ResourcePermissions = {},
+) {
+  if (result.routes) {
+    return typeof result.routes === "function" ? result.routes(permissions) : result.routes;
+  }
+  if (result.routes) {
+    return typeof result.routes === "function"
+      ? result.routes(permissions)
+      : result.routes;
+  }
+  return [];
+}
+
 describe("softDelete preset", () => {
   describe("Preset configuration", () => {
     it("should return correct preset name", () => {
@@ -21,15 +37,7 @@ describe("softDelete preset", () => {
     });
 
     it("should add GET /deleted route", () => {
-      const result = softDeletePreset();
-      const permissions: ResourcePermissions = { list: allowPublic() };
-
-      // additionalRoutes is a function that takes permissions
-      const routes =
-        typeof result.additionalRoutes === "function"
-          ? result.additionalRoutes(permissions)
-          : result.additionalRoutes || [];
-
+      const routes = getPresetRoutes(softDeletePreset(), { list: allowPublic() });
       const deletedRoute = routes.find((r) => r.path === "/deleted");
       expect(deletedRoute).toBeDefined();
       expect(deletedRoute?.method).toBe("GET");
@@ -37,14 +45,9 @@ describe("softDelete preset", () => {
     });
 
     it("should add POST /:id/restore route", () => {
-      const result = softDeletePreset();
-      const permissions: ResourcePermissions = { update: requireRoles(["admin"]) };
-
-      const routes =
-        typeof result.additionalRoutes === "function"
-          ? result.additionalRoutes(permissions)
-          : result.additionalRoutes || [];
-
+      const routes = getPresetRoutes(softDeletePreset(), {
+        update: requireRoles(["admin"]),
+      });
       const restoreRoute = routes.find((r) => r.path === "/:id/restore");
       expect(restoreRoute).toBeDefined();
       expect(restoreRoute?.method).toBe("POST");
@@ -52,56 +55,28 @@ describe("softDelete preset", () => {
     });
 
     it("should use list permission for /deleted route", () => {
-      const result = softDeletePreset();
       const listPermission = requireRoles(["admin"]);
-      const permissions: ResourcePermissions = { list: listPermission };
-
-      const routes =
-        typeof result.additionalRoutes === "function"
-          ? result.additionalRoutes(permissions)
-          : result.additionalRoutes || [];
-
+      const routes = getPresetRoutes(softDeletePreset(), { list: listPermission });
       const deletedRoute = routes.find((r) => r.path === "/deleted");
       expect(deletedRoute?.permissions).toBe(listPermission);
     });
 
     it("should fallback to requireRoles admin if list permission not defined", () => {
-      const result = softDeletePreset();
-      const permissions: ResourcePermissions = {};
-
-      const routes =
-        typeof result.additionalRoutes === "function"
-          ? result.additionalRoutes(permissions)
-          : result.additionalRoutes || [];
-
+      const routes = getPresetRoutes(softDeletePreset(), {});
       const deletedRoute = routes.find((r) => r.path === "/deleted");
       expect(deletedRoute?.permissions).toBeDefined();
       expect(typeof deletedRoute?.permissions).toBe("function");
     });
 
     it("should use update permission for restore route", () => {
-      const result = softDeletePreset();
       const updatePermission = requireRoles(["superadmin"]);
-      const permissions: ResourcePermissions = { update: updatePermission };
-
-      const routes =
-        typeof result.additionalRoutes === "function"
-          ? result.additionalRoutes(permissions)
-          : result.additionalRoutes || [];
-
+      const routes = getPresetRoutes(softDeletePreset(), { update: updatePermission });
       const restoreRoute = routes.find((r) => r.path === "/:id/restore");
       expect(restoreRoute?.permissions).toBe(updatePermission);
     });
 
     it("should fallback to requireRoles admin if update permission not defined", () => {
-      const result = softDeletePreset();
-      const permissions: ResourcePermissions = {};
-
-      const routes =
-        typeof result.additionalRoutes === "function"
-          ? result.additionalRoutes(permissions)
-          : result.additionalRoutes || [];
-
+      const routes = getPresetRoutes(softDeletePreset(), {});
       const restoreRoute = routes.find((r) => r.path === "/:id/restore");
       expect(restoreRoute?.permissions).toBeDefined();
       expect(typeof restoreRoute?.permissions).toBe("function");
@@ -118,27 +93,25 @@ describe("softDelete preset", () => {
 
       const result = applyPresets(baseConfig, ["softDelete"]);
 
-      // Should have additional routes added
-      expect(result.additionalRoutes).toBeDefined();
-      expect(result.additionalRoutes?.length).toBeGreaterThanOrEqual(2);
+      // Preset routes merged into config.routes
+      expect(result.routes).toBeDefined();
+      expect(result.routes!.length).toBeGreaterThanOrEqual(2);
 
-      // Find the preset routes
-      const routePaths = result.additionalRoutes?.map((r) => r.path) || [];
+      const routePaths = result.routes!.map((r) => r.path);
       expect(routePaths).toContain("/deleted");
       expect(routePaths).toContain("/:id/restore");
     });
 
-    it("should preserve existing additional routes", () => {
+    it("should preserve existing routes", () => {
       const baseConfig: ResourceConfig = {
         name: "product",
         permissions: {},
-        additionalRoutes: [
+        routes: [
           {
             method: "GET",
             path: "/custom",
             handler: "custom",
             permissions: allowPublic(),
-            wrapHandler: true,
           },
         ],
         presets: ["softDelete"],
@@ -146,8 +119,7 @@ describe("softDelete preset", () => {
 
       const result = applyPresets(baseConfig, ["softDelete"]);
 
-      // Should have both existing and preset routes
-      const routePaths = result.additionalRoutes?.map((r) => r.path) || [];
+      const routePaths = result.routes!.map((r) => r.path);
       expect(routePaths).toContain("/custom");
       expect(routePaths).toContain("/deleted");
     });

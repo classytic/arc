@@ -25,7 +25,7 @@
  */
 
 import { requireAuth } from "../permissions/index.js";
-import type { AdditionalRoute, PresetResult, ResourcePermissions } from "../types/index.js";
+import type { PresetResult, ResourcePermissions, RouteDefinition } from "../types/index.js";
 
 // ============================================================================
 // Types
@@ -50,15 +50,14 @@ export function bulkPreset(opts?: BulkPresetOptions): PresetResult {
 
   return {
     name: "bulk",
-    additionalRoutes: (permissions: ResourcePermissions): AdditionalRoute[] => {
-      const routes: AdditionalRoute[] = [];
+    routes: (permissions: ResourcePermissions): RouteDefinition[] => {
+      const routes: RouteDefinition[] = [];
 
       if (operations.includes("createMany")) {
         routes.push({
           method: "POST",
           path: "/bulk",
           handler: "bulkCreate",
-          wrapHandler: true,
           operation: "bulkCreate",
           summary: "Create multiple items",
           permissions: permissions.create ?? requireAuth(),
@@ -89,7 +88,6 @@ export function bulkPreset(opts?: BulkPresetOptions): PresetResult {
           method: "PATCH",
           path: "/bulk",
           handler: "bulkUpdate",
-          wrapHandler: true,
           operation: "bulkUpdate",
           summary: "Update multiple items matching filter",
           permissions: permissions.update ?? requireAuth(),
@@ -126,7 +124,6 @@ export function bulkPreset(opts?: BulkPresetOptions): PresetResult {
           method: "DELETE",
           path: "/bulk",
           handler: "bulkDelete",
-          wrapHandler: true,
           operation: "bulkDelete",
           summary: "Delete multiple items matching filter",
           permissions: permissions.delete ?? requireAuth(),

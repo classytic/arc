@@ -206,3 +206,312 @@ describe("MongoIdempotencyStore — delete operations", () => {
     expect(result).toBeUndefined();
   });
 });
+
+// ============================================================================
+// Error handling — infrastructure errors must NOT collapse into 409
+// ============================================================================
+
+describe("MongoIdempotencyStore — error handling", () => {
+  it("tryLock returns false for E11000 duplicate key (genuine contention)", async () => {
+    // First lock succeeds
+    const first = await store.tryLock("race-1", "req-A", 10_000);
+    expect(first).toBe(true);
+
+    // Concurrent lock attempt on same key — returns false (not throw)
+    const second = await store.tryLock("race-1", "req-B", 10_000);
+    expect(second).toBe(false);
+  });
+
+  it("tryLock THROWS for non-contention errors (not false)", async () => {
+    // Create a store with a broken collection that throws a non-E11000 error
+    const brokenDb = {
+      collection: () => ({
+        findOne: async () => null,
+        insertOne: async () => ({ acknowledged: true }),
+        updateOne: async () => {
+          const err = new Error("Authentication failed") as Error & { code: number };
+          err.code = 18; // Mongo auth error
+          throw err;
+        },
+        deleteOne: async () => ({ deletedCount: 0 }),
+        deleteMany: async () => ({ deletedCount: 0 }),
+        createIndex: async () => "ok",
+      }),
+    };
+
+    const brokenStore = new MongoIdempotencyStore({
+      connection: { db: brokenDb } as unknown as { db: { collection(name: string): unknown } },
+      createIndex: false,
+    });
+
+    // Should throw the auth error, NOT return false
+    await expect(brokenStore.tryLock("key", "req", 10_000)).rejects.toThrow("Authentication failed");
+  });
+
+  it("tryLock THROWS for write concern errors", async () => {
+    const wcErrorDb = {
+      collection: () => ({
+        findOne: async () => null,
+        insertOne: async () => ({ acknowledged: true }),
+        updateOne: async () => {
+          const err = new Error("Write concern timeout") as Error & { code: number };
+          err.code = 64; // WriteConcernFailed
+          throw err;
+        },
+        deleteOne: async () => ({ deletedCount: 0 }),
+        deleteMany: async () => ({ deletedCount: 0 }),
+        createIndex: async () => "ok",
+      }),
+    };
+
+    const wcStore = new MongoIdempotencyStore({
+      connection: { db: wcErrorDb } as unknown as { db: { collection(name: string): unknown } },
+      createIndex: false,
+    });
+
+    await expect(wcStore.tryLock("key", "req", 10_000)).rejects.toThrow("Write concern");
+  });
+});
+
+// ============================================================================
+// ensureIndex — transient failures must be retried
+// ============================================================================
+
+describe("MongoIdempotencyStore — index creation", () => {
+  it("same instance retries index creation on next write after transient startup failure", async () => {
+    let createIndexCalls = 0;
+    const flakyDb = {
+      collection: () => ({
+        findOne: async () => null,
+        insertOne: async () => ({ acknowledged: true }),
+        updateOne: async () => ({
+          acknowledged: true,
+          matchedCount: 0,
+          modifiedCount: 0,
+          upsertedCount: 1,
+        }),
+        deleteOne: async () => ({ deletedCount: 0 }),
+        deleteMany: async () => ({ deletedCount: 0 }),
+        createIndex: async () => {
+          createIndexCalls++;
+          if (createIndexCalls === 1) throw new Error("ECONNREFUSED");
+          return "ok";
+        },
+      }),
+    };
+
+    const singleStore = new MongoIdempotencyStore({
+      connection: { db: flakyDb } as unknown as {
+        db: { collection(name: string): unknown };
+      },
+      createIndex: true,
+    });
+    // Constructor fire-and-forget fails
+    await new Promise((r) => setTimeout(r, 20));
+    expect(createIndexCalls).toBe(1);
+
+    // Same instance — tryLock triggers lazy retry of ensureIndex
+    await singleStore.tryLock("key-1", "req-1", 10_000);
+    expect(createIndexCalls).toBe(2); // Retried and succeeded
+
+    // Third call should NOT retry (indexCreated is now true)
+    await singleStore.tryLock("key-2", "req-2", 10_000);
+    expect(createIndexCalls).toBe(2); // No retry
+  });
+
+  it("same instance retries from set() path too", async () => {
+    let createIndexCalls = 0;
+    const flakyDb = {
+      collection: () => ({
+        findOne: async () => null,
+        insertOne: async () => ({ acknowledged: true }),
+        updateOne: async () => ({
+          acknowledged: true,
+          matchedCount: 1,
+          modifiedCount: 1,
+        }),
+        deleteOne: async () => ({ deletedCount: 0 }),
+        deleteMany: async () => ({ deletedCount: 0 }),
+        createIndex: async () => {
+          createIndexCalls++;
+          if (createIndexCalls === 1) throw new Error("ECONNREFUSED");
+          return "ok";
+        },
+      }),
+    };
+
+    const s = new MongoIdempotencyStore({
+      connection: { db: flakyDb } as unknown as {
+        db: { collection(name: string): unknown };
+      },
+      createIndex: true,
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(createIndexCalls).toBe(1); // Failed
+
+    await s.set("k", {
+      statusCode: 200,
+      headers: {},
+      body: {},
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    expect(createIndexCalls).toBe(2); // Retried from set()
+  });
+
+  it("marks index as created on code 85 (IndexOptionsConflict = already exists)", async () => {
+    let createIndexCalls = 0;
+    const conflictDb = {
+      collection: () => ({
+        findOne: async () => null,
+        insertOne: async () => ({ acknowledged: true }),
+        updateOne: async () => ({
+          acknowledged: true,
+          matchedCount: 0,
+          modifiedCount: 0,
+          upsertedCount: 1,
+        }),
+        deleteOne: async () => ({ deletedCount: 0 }),
+        deleteMany: async () => ({ deletedCount: 0 }),
+        createIndex: async () => {
+          createIndexCalls++;
+          const err = new Error("Index already exists") as Error & { code: number };
+          err.code = 85;
+          throw err;
+        },
+      }),
+    };
+
+    const s = new MongoIdempotencyStore({
+      connection: { db: conflictDb } as unknown as {
+        db: { collection(name: string): unknown };
+      },
+      createIndex: true,
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(createIndexCalls).toBe(1);
+
+    // Should NOT retry — code 85 is treated as success
+    await s.tryLock("k", "r", 10_000);
+    expect(createIndexCalls).toBe(1);
+  });
+});
+
+// ============================================================================
+// Real TTL cleanup — proves Mongo actually deletes expired docs
+// ============================================================================
+
+describe("MongoIdempotencyStore — TTL expiry (real Mongo)", () => {
+  let ttlMongod: MongoMemoryServer;
+  let ttlClient: MongoClient;
+
+  beforeAll(async () => {
+    // Start mongod with aggressive TTL monitor (1s instead of default 60s)
+    ttlMongod = await MongoMemoryServer.create({
+      instance: { args: ["--setParameter", "ttlMonitorSleepSecs=1"] },
+    });
+    ttlClient = await MongoClient.connect(ttlMongod.getUri());
+  });
+
+  afterAll(async () => {
+    await ttlClient?.close();
+    await ttlMongod?.stop();
+  });
+
+  it("expired doc is removed by Mongo TTL monitor", async () => {
+    const db = ttlClient.db("ttl-test");
+    const col = db.collection("idemp_ttl");
+
+    const ttlStore = new MongoIdempotencyStore({
+      connection: { db },
+      collection: "idemp_ttl",
+      createIndex: true,
+      ttlMs: 1_000, // 1 second
+      logger: { warn: () => {} },
+    });
+
+    // Wait for index creation
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Lock + store a result with 1s TTL
+    await ttlStore.tryLock("ttl-key-1", "req-1", 10_000);
+    await ttlStore.set("ttl-key-1", {
+      statusCode: 200,
+      headers: {},
+      body: { cached: true },
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 1_000), // expires in 1s
+    });
+
+    // Verify doc exists
+    const before = await col.findOne({ _id: "ttl-key-1" });
+    expect(before).not.toBeNull();
+
+    // Wait for TTL monitor to run (sleepSecs=1, so 3s is safe)
+    await new Promise((r) => setTimeout(r, 3_000));
+
+    // Doc should be gone — removed by Mongo's TTL monitor
+    const after = await col.findOne({ _id: "ttl-key-1" });
+    expect(after).toBeNull();
+  }, 10_000); // 10s timeout for this test
+});
+
+// ============================================================================
+// Plugin + Mongo regression — non-E11000 must NOT become 409
+// ============================================================================
+
+describe("idempotencyPlugin + MongoIdempotencyStore — error propagation", () => {
+  it("Mongo auth error surfaces as 500, not 409", async () => {
+    const Fastify = (await import("fastify")).default;
+    const { idempotencyPlugin } = await import("../../src/idempotency/idempotencyPlugin.js");
+
+    // Real MongoIdempotencyStore with a collection that throws auth error on updateOne
+    let firstCall = true;
+    const brokenDb = {
+      collection: () => ({
+        findOne: async () => null,
+        insertOne: async () => ({ acknowledged: true }),
+        updateOne: async () => {
+          if (firstCall) {
+            firstCall = false;
+            const err = new Error("not authorized on db") as Error & { code: number };
+            err.code = 13; // Mongo Unauthorized
+            throw err;
+          }
+          return { acknowledged: true, matchedCount: 0, modifiedCount: 0, upsertedCount: 1 };
+        },
+        deleteOne: async () => ({ deletedCount: 0 }),
+        deleteMany: async () => ({ deletedCount: 0 }),
+        createIndex: async () => "ok",
+      }),
+    };
+
+    const mongoStore = new MongoIdempotencyStore({
+      connection: { db: brokenDb } as unknown as { db: { collection(name: string): unknown } },
+      createIndex: false,
+      logger: { warn: () => {} },
+    });
+
+    const app = Fastify({ logger: false });
+    await app.register(idempotencyPlugin, {
+      enabled: true,
+      store: mongoStore,
+    });
+
+    app.post("/test", {
+      preHandler: [app.idempotency.middleware],
+    }, async () => ({ ok: true }));
+
+    await app.ready();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/test",
+      headers: { "idempotency-key": "mongo-auth-err" },
+    });
+
+    // Must be 500 (auth error), NOT 409 (conflict)
+    expect(res.statusCode).toBe(500);
+    await app.close();
+  });
+});

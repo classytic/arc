@@ -6,7 +6,7 @@
  * action route registration.
  *
  * Bug report: team used disableDefaultRoutes + onRegister with double prefix,
- * reimplemented CRUD as additionalRoutes, bypassed BaseController pipeline.
+ * reimplemented CRUD as routes, bypassed BaseController pipeline.
  */
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -51,13 +51,13 @@ describe("createActionRouter + defineResource integration", () => {
         delete: allowPublic(),
       },
       // Only custom routes that Arc doesn't provide
-      additionalRoutes: [
+      routes: [
         {
           method: "GET",
           path: "/stats",
           summary: "Transfer statistics",
           permissions: allowPublic(),
-          wrapHandler: false,
+          raw: true,
           handler: async (_req, reply) => reply.send({ success: true, data: { total: 42 } }),
         },
       ],
@@ -97,13 +97,13 @@ describe("createActionRouter + defineResource integration", () => {
         update: allowPublic(),
         delete: allowPublic(),
       },
-      additionalRoutes: [
+      routes: [
         {
           method: "GET",
           path: "/",
           summary: "List (reimplemented)",
           permissions: allowPublic(),
-          wrapHandler: false,
+          raw: true,
           handler: async (_req, reply) => reply.send({ success: true, docs: [] }),
         },
         {
@@ -111,7 +111,7 @@ describe("createActionRouter + defineResource integration", () => {
           path: "/",
           summary: "Create (reimplemented)",
           permissions: allowPublic(),
-          wrapHandler: false,
+          raw: true,
           handler: async (req, reply) => reply.code(201).send({ success: true, data: req.body }),
         },
       ],

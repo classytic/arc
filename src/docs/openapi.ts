@@ -362,7 +362,7 @@ function generateResourcePaths(
   // Skip if default routes are disabled and no additional routes / no actions
   if (
     resource.disableDefaultRoutes &&
-    (!resource.additionalRoutes || resource.additionalRoutes.length === 0) &&
+    (!resource.customRoutes || resource.customRoutes.length === 0) &&
     (!resource.actions || resource.actions.length === 0)
   ) {
     return paths;
@@ -574,7 +574,7 @@ function generateResourcePaths(
   }
 
   // Additional routes from presets
-  for (const route of resource.additionalRoutes || []) {
+  for (const route of resource.customRoutes || []) {
     const fullPath = toOpenApiPath(`${basePath}${route.path}`);
     const method = route.method.toLowerCase() as keyof PathItem;
 

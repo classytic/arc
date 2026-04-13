@@ -61,13 +61,13 @@ describe("Compensation in Arc additionalRoute", () => {
         update: requireAuth(),
         delete: requireAuth(),
       },
-      additionalRoutes: [
+      routes: [
         {
           method: "POST",
           path: "/:id/checkout",
           summary: "Process order checkout with compensation",
           permissions: requireAuth(),
-          wrapHandler: false,
+          raw: true,
           handler: async (request, reply) => {
             const { id } = request.params as { id: string };
             const order = await OrderModel.findById(id).lean();
@@ -127,7 +127,7 @@ describe("Compensation in Arc additionalRoute", () => {
           path: "/:id/checkout-fail",
           summary: "Checkout that always fails at payment step",
           permissions: requireAuth(),
-          wrapHandler: false,
+          raw: true,
           handler: async (request, reply) => {
             const { id } = request.params as { id: string };
 

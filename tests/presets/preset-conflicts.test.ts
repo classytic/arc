@@ -20,12 +20,12 @@ function minimalConfig(name = "test") {
 function presetWithRoutes(name: string, routes: Array<{ method: string; path: string }>) {
   return {
     name,
-    additionalRoutes: routes.map((r) => ({
+    routes: routes.map((r) => ({
       method: r.method,
       path: r.path,
       handler: async () => ({ success: true }),
       permissions: (() => true) as any,
-      wrapHandler: true as const,
+      raw: false as const,
     })),
   };
 }
@@ -91,7 +91,7 @@ describe("applyPresets conflict detection", () => {
     const result = applyPresets(minimalConfig("order"), [preset]);
 
     expect(result.name).toBe("order");
-    expect((result as any).additionalRoutes).toHaveLength(2);
+    expect((result as any).routes).toHaveLength(2);
   });
 
   it("should work fine with an empty presets array", () => {
