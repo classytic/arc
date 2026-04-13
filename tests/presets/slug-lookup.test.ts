@@ -11,7 +11,14 @@ import { describe, expect, it } from "vitest";
 import { allowPublic, requireRoles } from "../../src/permissions/index.js";
 import { applyPresets } from "../../src/presets/index.js";
 import { slugLookupPreset } from "../../src/presets/slugLookup.js";
-import type { ResourceConfig, ResourcePermissions } from "../../src/types/index.js";
+import type { PresetResult, ResourceConfig, ResourcePermissions } from "../../src/types/index.js";
+
+function getPresetRoutes(result: PresetResult, permissions: ResourcePermissions = {}) {
+  if (result.routes) {
+    return typeof result.routes === "function" ? result.routes(permissions) : result.routes;
+  }
+  return [];
+}
 
 describe("slugLookup preset", () => {
   describe("Preset configuration", () => {
@@ -21,14 +28,7 @@ describe("slugLookup preset", () => {
     });
 
     it("should add GET /slug/:slug route with default slug field", () => {
-      const result = slugLookupPreset();
-      const permissions: ResourcePermissions = { get: allowPublic() };
-
-      const routes =
-        typeof result.additionalRoutes === "function"
-          ? result.additionalRoutes(permissions)
-          : result.additionalRoutes || [];
-
+      const routes = getPresetRoutes(slugLookupPreset(), { get: allowPublic() });
       const slugRoute = routes.find((r) => r.path.includes("/slug/"));
       expect(slugRoute).toBeDefined();
       expect(slugRoute?.method).toBe("GET");
@@ -37,28 +37,14 @@ describe("slugLookup preset", () => {
     });
 
     it("should use get permission for slug route", () => {
-      const result = slugLookupPreset();
       const getPermission = requireRoles(["user", "admin"]);
-      const permissions: ResourcePermissions = { get: getPermission };
-
-      const routes =
-        typeof result.additionalRoutes === "function"
-          ? result.additionalRoutes(permissions)
-          : result.additionalRoutes || [];
-
+      const routes = getPresetRoutes(slugLookupPreset(), { get: getPermission });
       const slugRoute = routes.find((r) => r.path.includes("/slug/"));
       expect(slugRoute?.permissions).toBe(getPermission);
     });
 
     it("should default to allowPublic if get permission not defined", () => {
-      const result = slugLookupPreset();
-      const permissions: ResourcePermissions = {};
-
-      const routes =
-        typeof result.additionalRoutes === "function"
-          ? result.additionalRoutes(permissions)
-          : result.additionalRoutes || [];
-
+      const routes = getPresetRoutes(slugLookupPreset(), {});
       const slugRoute = routes.find((r) => r.path.includes("/slug/"));
       expect(slugRoute?.permissions).toBeDefined();
       expect(typeof slugRoute?.permissions).toBe("function");
@@ -73,14 +59,9 @@ describe("slugLookup preset", () => {
 
   describe("Custom slug field", () => {
     it("should support custom slug field name", () => {
-      const result = slugLookupPreset({ slugField: "permalink" });
-      const permissions: ResourcePermissions = { get: allowPublic() };
-
-      const routes =
-        typeof result.additionalRoutes === "function"
-          ? result.additionalRoutes(permissions)
-          : result.additionalRoutes || [];
-
+      const routes = getPresetRoutes(slugLookupPreset({ slugField: "permalink" }), {
+        get: allowPublic(),
+      });
       const slugRoute = routes.find((r) => r.path.includes("/slug/"));
       expect(slugRoute?.path).toBe("/slug/:permalink");
     });
@@ -101,9 +82,8 @@ describe("slugLookup preset", () => {
 
       const result = applyPresets(baseConfig, ["slugLookup"]);
 
-      // Should have additional routes added
-      expect(result.additionalRoutes).toBeDefined();
-      const routePaths = result.additionalRoutes?.map((r) => r.path) || [];
+      expect(result.routes).toBeDefined();
+      const routePaths = result.routes!.map((r) => r.path);
       expect(routePaths.some((p) => p.includes("/slug/"))).toBe(true);
     });
 
@@ -116,7 +96,6 @@ describe("slugLookup preset", () => {
 
       const result = applyPresets(baseConfig, [{ name: "slugLookup", slugField: "handle" }]);
 
-      // Check if controller options were passed
       expect(result._controllerOptions?.slugField).toBe("handle");
     });
   });

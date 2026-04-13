@@ -372,8 +372,11 @@ export class RedisStreamTransport implements EventTransport {
           await this.processEntry(messageId, fields);
         }
       }
-    } catch {
-      // Pending check failures are non-fatal — will retry next iteration
+    } catch (err) {
+      // Pending check failures are non-fatal — will retry next poll iteration.
+      // But we MUST log so operators know about Redis connectivity issues,
+      // permission errors, or processEntry failures that could cause message loss.
+      this.logger.error("[RedisStreamTransport] claimPending error:", err);
     }
   }
 

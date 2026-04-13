@@ -269,8 +269,8 @@ function describeRoutes(resource: ResourceDefinition<unknown>): RouteDescription
     }
   }
 
-  // Additional routes
-  for (const ar of resource.additionalRoutes) {
+  // Custom routes
+  for (const ar of resource.routes ?? []) {
     routes.push({
       method: ar.method,
       path: `${resource.prefix}${ar.path}`,

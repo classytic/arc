@@ -1,19 +1,59 @@
 /**
  * MongoDB Idempotency Store
  *
- * Durable idempotency store using MongoDB.
- * Suitable for multi-instance deployments.
+ * Durable idempotency store using MongoDB. Suitable for multi-instance
+ * deployments where in-memory stores won't work.
  *
- * @example
- * import mongoose from 'mongoose';
- * import { MongoIdempotencyStore } from '@classytic/arc/idempotency';
+ * ## Setup
+ *
+ * ```typescript
+ * import { idempotencyPlugin } from '@classytic/arc/idempotency';
+ * import { MongoIdempotencyStore } from '@classytic/arc/idempotency/mongodb';
  *
  * await fastify.register(idempotencyPlugin, {
+ *   enabled: true,
  *   store: new MongoIdempotencyStore({
- *     connection: mongoose.connection,
- *     collection: 'idempotency_keys',
+ *     connection: mongoose.connection, // or MongoClient.db()
+ *     collection: 'idempotency_keys',  // default: 'arc_idempotency'
+ *     ttlMs: 24 * 60 * 60 * 1000,     // default: 24 hours
+ *     logger: fastify.log,             // operational warnings (default: console)
  *   }),
  * });
+ * ```
+ *
+ * ## TTL Cleanup
+ *
+ * The store auto-creates a TTL index on `expiresAt` at startup (retried
+ * lazily on write paths if the initial attempt fails). MongoDB's TTL monitor
+ * runs as a background thread that deletes expired documents automatically.
+ *
+ * **Important timing note:** MongoDB's TTL monitor runs every
+ * `ttlMonitorSleepSecs` (default: **60 seconds**). This means:
+ *
+ * - Documents are NOT deleted exactly at `expiresAt` — there is up to a
+ *   60-second window where an expired doc still exists on disk.
+ * - The store's `get()` method checks expiry at read time, so expired docs
+ *   are never returned to callers even if Mongo hasn't cleaned them yet.
+ * - For testing with fast expiry, start mongod with
+ *   `--setParameter ttlMonitorSleepSecs=1`.
+ * - In Atlas / managed MongoDB, `ttlMonitorSleepSecs` is not configurable
+ *   but the default 60s is fine for production — idempotency keys typically
+ *   have 24h TTLs.
+ *
+ * **Recommended TTL windows:**
+ *
+ * | Use case | TTL | Why |
+ * |----------|-----|-----|
+ * | Payment mutations | 24–48 hours | Covers retry storms + manual resubmission |
+ * | Form submissions | 1–4 hours | Short enough to not accumulate, long enough for retries |
+ * | Batch imports | 15–30 minutes | High volume, quick turnover |
+ *
+ * ## Error Handling
+ *
+ * - `tryLock()` throws on non-contention errors (auth, write concern,
+ *   network). Only `E11000` duplicate-key race returns `false`.
+ * - `ensureIndex()` retries on transient failures and logs a warning via
+ *   the configured logger. Code 85/86 (index already exists) is benign.
  */
 
 import type { IdempotencyResult, IdempotencyStore } from "./interface.js";
@@ -31,7 +71,12 @@ interface MongoCollection {
     filter: object,
     update: object,
     options?: object,
-  ): Promise<{ acknowledged: boolean; matchedCount: number; modifiedCount: number; upsertedCount?: number }>;
+  ): Promise<{
+    acknowledged: boolean;
+    matchedCount: number;
+    modifiedCount: number;
+    upsertedCount?: number;
+  }>;
   deleteOne(filter: object): Promise<{ deletedCount: number }>;
   deleteMany(filter: object): Promise<{ deletedCount: number }>;
   createIndex(spec: object, options?: object): Promise<string>;
@@ -52,6 +97,11 @@ interface IdempotencyDocument {
   expiresAt: Date;
 }
 
+/** Minimal logger interface — compatible with console, pino, fastify.log */
+interface IdempotencyLogger {
+  warn(message: string, ...args: unknown[]): void;
+}
+
 export interface MongoIdempotencyStoreOptions {
   /** Mongoose connection or MongoDB connection object */
   connection: MongoConnection;
@@ -61,6 +111,8 @@ export interface MongoIdempotencyStoreOptions {
   createIndex?: boolean;
   /** Default TTL in ms (default: 86400000 = 24 hours) */
   ttlMs?: number;
+  /** Logger for operational warnings (default: console) */
+  logger?: IdempotencyLogger;
 }
 
 export class MongoIdempotencyStore implements IdempotencyStore {
@@ -69,14 +121,18 @@ export class MongoIdempotencyStore implements IdempotencyStore {
   private collectionName: string;
   private ttlMs: number;
   private indexCreated = false;
+  private shouldEnsureIndex: boolean;
+  private logger: IdempotencyLogger;
 
   constructor(options: MongoIdempotencyStoreOptions) {
     this.connection = options.connection;
     this.collectionName = options.collection ?? "arc_idempotency";
     this.ttlMs = options.ttlMs ?? 86400000;
+    this.shouldEnsureIndex = options.createIndex !== false;
+    this.logger = options.logger ?? console;
 
-    if (options.createIndex !== false) {
-      // Fire-and-forget — index creation failure is non-fatal
+    if (this.shouldEnsureIndex) {
+      // Eager attempt — best-effort on startup, retried lazily on write paths
       this.ensureIndex().catch(() => {});
     }
   }
@@ -88,12 +144,21 @@ export class MongoIdempotencyStore implements IdempotencyStore {
   private async ensureIndex(): Promise<void> {
     if (this.indexCreated) return;
     try {
-      // TTL index for automatic cleanup
       await this.collection.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
       this.indexCreated = true;
-    } catch {
-      // Index might already exist
-      this.indexCreated = true;
+    } catch (err) {
+      // MongoDB error code 85 = IndexOptionsConflict (index already exists with same shape).
+      // That's benign — mark as created. Any other error is a real problem (auth, connection,
+      // invalid collection) so we leave indexCreated = false and retry on next call.
+      const code = (err as { code?: number })?.code;
+      if (code === 85 || code === 86) {
+        this.indexCreated = true;
+        return;
+      }
+      // Transient failure — log so operators know TTL cleanup won't work until retry succeeds
+      this.logger.warn(
+        `[MongoIdempotencyStore] TTL index creation failed (will retry on next write): ${(err as Error).message ?? err}`,
+      );
     }
   }
 
@@ -117,6 +182,12 @@ export class MongoIdempotencyStore implements IdempotencyStore {
   }
 
   async set(key: string, result: Omit<IdempotencyResult, "key">): Promise<void> {
+    // Lazy retry: if startup index creation failed, try again before writing.
+    // Non-blocking — failure here is non-fatal (TTL cleanup just won't work
+    // until the index is eventually created).
+    if (this.shouldEnsureIndex && !this.indexCreated) {
+      await this.ensureIndex().catch(() => {});
+    }
     await this.collection.updateOne(
       { _id: key },
       {
@@ -136,6 +207,9 @@ export class MongoIdempotencyStore implements IdempotencyStore {
   }
 
   async tryLock(key: string, requestId: string, ttlMs: number): Promise<boolean> {
+    if (this.shouldEnsureIndex && !this.indexCreated) {
+      await this.ensureIndex().catch(() => {});
+    }
     const now = new Date();
     const expiresAt = new Date(now.getTime() + ttlMs);
 
@@ -167,9 +241,13 @@ export class MongoIdempotencyStore implements IdempotencyStore {
       // The old code only checked matchedCount/modifiedCount — both are 0 on insert,
       // so fresh keys returned false even though the insert succeeded.
       return result.matchedCount === 1 || (result.upsertedCount ?? 0) === 1;
-    } catch {
-      // Duplicate key on upsert race or other error → someone else got the lock
-      return false;
+    } catch (err) {
+      // E11000 duplicate key on upsert race = genuine lock contention → return false.
+      // Any other error (auth failure, write concern, connection lost) is a real
+      // infrastructure problem that must NOT be masked as a 409 conflict.
+      const code = (err as { code?: number })?.code;
+      if (code === 11000) return false;
+      throw err;
     }
   }
 

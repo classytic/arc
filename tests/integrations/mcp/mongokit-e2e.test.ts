@@ -53,7 +53,7 @@ function mockResourceWithMongoKit(
     },
     queryParser,
     permissions: {},
-    additionalRoutes: [],
+    routes: [],
     middlewares: {},
     disableDefaultRoutes: false,
     disabledRoutes: [],

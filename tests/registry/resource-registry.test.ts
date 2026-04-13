@@ -11,7 +11,7 @@ function mockResource(name: string, overrides: Record<string, unknown> = {}) {
     adapter: { type: "memory", name: "mock" },
     permissions: {},
     _appliedPresets: [],
-    additionalRoutes: [],
+    routes: [],
     events: {},
     disableDefaultRoutes: false,
     updateMethod: "PATCH",
@@ -87,14 +87,14 @@ describe("ResourceRegistry", () => {
     const registry = new ResourceRegistry();
     registry.register(
       mockResource("users", {
-        additionalRoutes: [
-          { method: "POST", path: "/approve", handler: "approve", wrapHandler: true },
+        routes: [
+          { method: "POST", path: "/approve", handler: "approve", raw: false },
         ],
       }),
     );
     const entry = registry.get("users")!;
-    expect(entry.additionalRoutes).toHaveLength(1);
-    expect(entry.additionalRoutes[0].method).toBe("POST");
+    expect(entry.customRoutes).toHaveLength(1);
+    expect(entry.customRoutes![0].method).toBe("POST");
   });
 
   it("records events from resource definition", () => {

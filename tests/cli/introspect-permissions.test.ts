@@ -21,7 +21,7 @@ describe("CLI introspect permission rendering", () => {
         "  prefix: '/products',",
         "  permissions: { list: allowList, create: requireAdmin },",
         "  _appliedPresets: [],",
-        "  additionalRoutes: [],",
+        "  routes: [],",
         "  events: {},",
         "  disableDefaultRoutes: false,",
         "  _registryMeta: {},",

@@ -63,7 +63,7 @@ declare module 'fastify' {
 /**
  * Typed Fastify request with Arc decorations.
  *
- * Use this in `wrapHandler: false` handlers instead of `(req as any).user`.
+ * Use this in `raw: true` handlers instead of `(req as any).user`.
  *
  * @example
  * ```typescript
@@ -581,12 +581,27 @@ export interface ResourceConfig<TDoc = AnyRecord> {
    */
   fields?: import('../permissions/fields.js').FieldPermissionMap;
   middlewares?: MiddlewareConfig;
-  /** @deprecated Use `routes` instead. Will error in v3. */
-  additionalRoutes?: AdditionalRoute[];
+  /**
+   * PreHandler guards auto-applied to **every** route on this resource
+   * (CRUD + custom `routes` + preset routes). Runs after auth/permissions,
+   * before per-route `preHandler`. Use for mode gates, tenant checks,
+   * feature flags — anything that applies to every endpoint.
+   *
+   * @example
+   * ```typescript
+   * defineResource({
+   *   routeGuards: [requireFlowMode('standard')],
+   *   routes: [
+   *     { method: 'GET', path: '/', raw: true, handler: listHandler },
+   *     // guard runs automatically — no per-route boilerplate
+   *   ],
+   * });
+   * ```
+   */
+  routeGuards?: RouteHandlerMethod[];
 
   /**
-   * Custom routes — the v2.8 way to add endpoints beyond CRUD.
-   * Replaces `additionalRoutes` with cleaner naming and no `wrapHandler` boolean.
+   * Custom routes beyond CRUD. Presets also merge their routes here.
    *
    * @example
    * ```typescript
@@ -1314,7 +1329,8 @@ export interface PresetHook {
 
 export interface PresetResult {
   name: string;
-  additionalRoutes?: AdditionalRoute[] | ((permissions: ResourcePermissions) => AdditionalRoute[]);
+  /** Preset routes — merged into the resource's `routes` array. */
+  routes?: RouteDefinition[] | ((permissions: ResourcePermissions) => RouteDefinition[]);
   middlewares?: MiddlewareConfig;
   schemaOptions?: RouteSchemaOptions;
   controllerOptions?: Record<string, unknown>;
@@ -1551,6 +1567,9 @@ export interface CrudRouterOptions {
    * Set to `false` to disable rate limiting for this resource.
    */
   rateLimit?: RateLimitConfig | false;
+
+  /** PreHandler guards applied to every route (CRUD + custom + preset). */
+  routeGuards?: RouteHandlerMethod[];
 }
 
 // ============================================================================
@@ -1565,7 +1584,17 @@ export interface ResourceMetadata {
   module?: string;
   permissions?: ResourcePermissions;
   presets: string[];
-  additionalRoutes?: AdditionalRoute[];
+  customRoutes?: Array<{
+    method: string;
+    path: string;
+    handler: string;
+    operation?: string;
+    summary?: string;
+    description?: string;
+    permissions?: PermissionCheck;
+    raw?: boolean;
+    schema?: Record<string, unknown>;
+  }>;
   routes: Array<{
     method: string;
     path: string;
