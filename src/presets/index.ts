@@ -23,7 +23,6 @@
  */
 
 import type {
-  AdditionalRoute,
   AnyRecord,
   MiddlewareConfig,
   PresetResult,
@@ -171,12 +170,13 @@ function validatePresetCombination(presets: PresetResult[]): PresetConflict[] {
 
   for (const preset of presets) {
     const name = preset.name ?? "unknown";
-    const routes: AdditionalRoute[] =
-      typeof preset.additionalRoutes === "function"
-        ? preset.additionalRoutes({})
-        : (preset.additionalRoutes ?? []);
+    const presetRoutes = preset.routes
+      ? typeof preset.routes === "function"
+        ? preset.routes({})
+        : preset.routes
+      : [];
 
-    for (const route of routes) {
+    for (const route of presetRoutes) {
       const key = `${route.method} ${route.path}`;
       const existing = routeMap.get(key);
       if (existing) {
@@ -227,9 +227,8 @@ export function applyPresets<TDoc = AnyRecord>(
  * Resolve preset input to PresetResult
  */
 function resolvePresetInput(preset: PresetInput): PresetResult {
-  // Check if already a fully-resolved PresetResult (has middlewares or additionalRoutes)
-  // This allows custom presets to be passed directly without registry lookup
-  if (typeof preset === "object" && ("middlewares" in preset || "additionalRoutes" in preset)) {
+  // Check if already a fully-resolved PresetResult (has routes or middlewares)
+  if (typeof preset === "object" && ("middlewares" in preset || "routes" in preset)) {
     return preset as PresetResult;
   }
 
@@ -277,14 +276,11 @@ function mergePreset<TDoc = AnyRecord>(
 ): ResourceConfig<TDoc> {
   const result = { ...config } as ExtendedResourceConfig<TDoc>;
 
-  // Merge additional routes
-  if (preset.additionalRoutes) {
-    const routes: AdditionalRoute[] =
-      typeof preset.additionalRoutes === "function"
-        ? preset.additionalRoutes(config.permissions ?? {})
-        : preset.additionalRoutes;
-
-    result.additionalRoutes = [...(result.additionalRoutes ?? []), ...routes];
+  // Merge preset routes into config.routes (v2.8.1+)
+  if (preset.routes) {
+    const resolved =
+      typeof preset.routes === "function" ? preset.routes(config.permissions ?? {}) : preset.routes;
+    result.routes = [...(result.routes ?? []), ...resolved];
   }
 
   // Merge middlewares

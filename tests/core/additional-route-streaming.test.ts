@@ -1,7 +1,7 @@
 /**
  * Additional Route — Streaming & Flexibility Tests
  *
- * Verifies that additionalRoutes support:
+ * Verifies that routes support:
  * - Raw Fastify handlers (streaming, NDJSON, SSE)
  * - Zod v4 schemas auto-converted to OpenAPI
  * - Mixed handler types on the same resource
@@ -23,7 +23,7 @@ describe("Additional Route — Streaming & Flexibility", () => {
   // Raw Fastify handler (streaming)
   // ==========================================================================
 
-  describe("raw Fastify handler (wrapHandler: false)", () => {
+  describe("raw Fastify handler (raw: true)", () => {
     it("supports NDJSON streaming via reply.raw", async () => {
       app = Fastify({ logger: false });
 
@@ -122,7 +122,7 @@ describe("Additional Route — Streaming & Flexibility", () => {
   // Zod v4 schema auto-conversion
   // ==========================================================================
 
-  describe("Zod v4 schema conversion for additionalRoutes", () => {
+  describe("Zod v4 schema conversion for routes", () => {
     it("converts Zod body schema to JSON Schema for route registration", async () => {
       // Test the converter directly since Zod is a peer dep
       const { convertRouteSchema, isZodSchema } = await import(

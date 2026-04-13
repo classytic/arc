@@ -22,7 +22,7 @@ describe("CLI docs command", () => {
         "  prefix: '/products',",
         "  permissions: { list: allowPublic, get: allowPublic, create: allowPublic, update: allowPublic, delete: allowPublic },",
         "  _appliedPresets: [],",
-        "  additionalRoutes: [],",
+        "  routes: [],",
         "  events: {},",
         "  disableDefaultRoutes: false,",
         "  _registryMeta: {",

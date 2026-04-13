@@ -58,7 +58,7 @@ export class ResourceRegistry {
       permissions: resource.permissions as ResourcePermissions | undefined,
       presets: resource._appliedPresets ?? [],
       routes: [], // Populated later by getIntrospection()
-      additionalRoutes: resource.additionalRoutes.map((r) => ({
+      customRoutes: (resource.routes ?? []).map((r) => ({
         method: r.method,
         path: r.path,
         handler:
@@ -67,8 +67,8 @@ export class ResourceRegistry {
         summary: r.summary,
         description: r.description,
         permissions: r.permissions,
-        wrapHandler: r.wrapHandler,
-        schema: r.schema, // Include schema for OpenAPI docs
+        raw: r.raw,
+        schema: r.schema,
       })),
       events: Object.keys(resource.events ?? {}),
       registeredAt: new Date().toISOString(),
@@ -159,7 +159,7 @@ export class ResourceRegistry {
         // Each resource with actions contributes 1 route: POST /:id/action
         const actionsCount = (r.actions?.length ?? 0) > 0 ? 1 : 0;
         if (r.disableDefaultRoutes) {
-          return sum + (r.additionalRoutes?.length ?? 0) + actionsCount;
+          return sum + (r.customRoutes?.length ?? 0) + actionsCount;
         }
         const disabledSet = new Set(r.disabledRoutes ?? []);
         let defaultCount = CRUD_OPERATIONS.filter((route) => !disabledSet.has(route)).length;
@@ -167,7 +167,7 @@ export class ResourceRegistry {
         if (!disabledSet.has("update") && r.updateMethod === "both") {
           defaultCount += 1;
         }
-        return sum + defaultCount + (r.additionalRoutes?.length ?? 0) + actionsCount;
+        return sum + defaultCount + (r.customRoutes?.length ?? 0) + actionsCount;
       }, 0),
       totalEvents: resources.reduce((sum, r) => sum + (r.events?.length ?? 0), 0),
     };
@@ -216,7 +216,7 @@ export class ResourceRegistry {
           permissions: r.permissions,
           routes: [
             ...defaultRoutes,
-            ...(r.additionalRoutes?.map((ar) => ({
+            ...(r.customRoutes?.map((ar) => ({
               method: ar.method,
               path: `${r.prefix}${ar.path}`,
               operation: ar.operation ?? (typeof ar.handler === "string" ? ar.handler : "custom"),

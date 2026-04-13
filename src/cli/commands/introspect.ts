@@ -90,8 +90,8 @@ export async function introspect(args: string[]): Promise<void> {
         console.log(`   Presets: ${resource.presets.join(", ")}`);
       }
 
-      if (resource.additionalRoutes && resource.additionalRoutes.length > 0) {
-        console.log(`   Additional Routes: ${resource.additionalRoutes.length}`);
+      if (resource.customRoutes && resource.customRoutes.length > 0) {
+        console.log(`   Additional Routes: ${resource.customRoutes.length}`);
       }
 
       console.log("");
@@ -103,7 +103,7 @@ export async function introspect(args: string[]): Promise<void> {
     console.log(`  Total Resources: ${stats.totalResources}`);
     console.log(`  With Presets: ${resources.filter((r) => r.presets?.length > 0).length}`);
     console.log(
-      `  With Custom Routes: ${resources.filter((r) => r.additionalRoutes && r.additionalRoutes.length > 0).length}`,
+      `  With Custom Routes: ${resources.filter((r) => r.customRoutes && r.customRoutes.length > 0).length}`,
     );
   } catch (error: unknown) {
     if (error instanceof Error) throw error;

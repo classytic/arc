@@ -65,6 +65,7 @@ import type {
   ResourceMetadata,
   ResourcePermissions,
   RouteDefinition,
+  RouteHandlerMethod,
   RouteSchemaOptions,
 } from "../types/index.js";
 import { convertOpenApiSchemas, convertRouteSchema } from "../utils/schemaConverter.js";
@@ -116,31 +117,7 @@ export function defineResource<TDoc = AnyRecord>(
       }
     }
 
-    // Validate additionalRoutes (v2 legacy)
-    for (const route of config.additionalRoutes ?? []) {
-      if (typeof route.permissions !== "function") {
-        throw new Error(
-          `[Arc] Resource '${config.name}' route ${route.method} ${route.path}: ` +
-            `permissions is required and must be a PermissionCheck function.\n` +
-            `Use allowPublic() or requireAuth() from @classytic/arc/permissions.`,
-        );
-      }
-      if (typeof route.wrapHandler !== "boolean") {
-        throw new Error(
-          `[Arc] Resource '${config.name}' route ${route.method} ${route.path}: ` +
-            `wrapHandler is required.\n` +
-            `Set true for ControllerHandler (context object) or false for FastifyHandler (req, reply).`,
-        );
-      }
-    }
-
-    // Validate routes (v2.8)
-    if (config.routes && config.additionalRoutes) {
-      throw new Error(
-        `[Arc] Resource '${config.name}': Cannot use both 'routes' and 'additionalRoutes'.\n` +
-          `Use 'routes' (v2.8) — it replaces 'additionalRoutes'.`,
-      );
-    }
+    // Validate routes
     for (const route of config.routes ?? []) {
       if (typeof route.permissions !== "function") {
         throw new Error(
@@ -507,6 +484,7 @@ export class ResourceDefinition<TDoc = AnyRecord> {
    */
   readonly routes?: readonly RouteDefinition[];
   readonly middlewares: MiddlewareConfig;
+  readonly routeGuards?: RouteHandlerMethod[];
   readonly disableDefaultRoutes: boolean;
   readonly disabledRoutes: CrudRouteKey[];
 
@@ -580,15 +558,14 @@ export class ResourceDefinition<TDoc = AnyRecord> {
     // Security
     this.permissions = (config.permissions ?? {}) as ResourcePermissions;
 
-    // Customization — convert v2.8 `routes` to internal `AdditionalRoute` format,
-    // but also RETAIN the original `routes` shape so OpenAPI/MCP/registry/CLI can
-    // read metadata (mcp, description, annotations) that gets dropped during
-    // normalization to AdditionalRoute.
+    // `config.routes` is the single source — user routes + preset routes
+    // are merged here by `applyPresets → mergePreset`.
     this.routes = config.routes;
     this.additionalRoutes = config.routes
-      ? convertRoutesToAdditionalRoutes(config.routes)
-      : (config.additionalRoutes ?? []);
+      ? convertRoutesToAdditionalRoutes(config.routes as RouteDefinition[])
+      : [];
     this.middlewares = config.middlewares ?? {};
+    this.routeGuards = config.routeGuards;
     this.disableDefaultRoutes = config.disableDefaultRoutes ?? false;
     this.disabledRoutes = config.disabledRoutes ?? [];
 
@@ -911,6 +888,7 @@ export class ResourceDefinition<TDoc = AnyRecord> {
             schemas: schemas ?? undefined,
             permissions: self.permissions,
             middlewares: self.middlewares,
+            routeGuards: self.routeGuards,
             additionalRoutes: resolvedRoutes,
             disableDefaultRoutes: self.disableDefaultRoutes,
             disabledRoutes: self.disabledRoutes,
@@ -986,7 +964,18 @@ export class ResourceDefinition<TDoc = AnyRecord> {
       prefix: this.prefix,
       presets: this._appliedPresets,
       permissions: this.permissions,
-      additionalRoutes: this.additionalRoutes,
+      customRoutes: (this.routes ?? []).map((r) => ({
+        method: r.method,
+        path: r.path,
+        handler:
+          typeof r.handler === "string" ? r.handler : (r.handler as Function).name || "anonymous",
+        operation: r.operation,
+        summary: r.summary,
+        description: r.description,
+        permissions: r.permissions,
+        raw: r.raw,
+        schema: r.schema as Record<string, unknown>,
+      })),
       routes: [], // Populated at runtime during registration
       events: Object.keys(this.events),
     };

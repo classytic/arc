@@ -2076,7 +2076,7 @@ const exampleResource = defineResource${ts ? "<ExampleDocument>" : ""}({
   permissions: ${config.tenant === "multi" ? "orgStaffPermissions" : "publicReadPermissions"},
 
   // Add custom routes here:
-  // additionalRoutes: [
+  // routes: [
   //   {
   //     method: 'GET',
   //     path: '/custom',
@@ -2605,14 +2605,14 @@ export const authResource = defineResource({
   adapter: createAdapter(User${ts ? " as any" : ""}, userRepository${ts ? " as any" : ""}),
   disableDefaultRoutes: true,
 
-  additionalRoutes: [
+  routes: [
     {
       method: 'POST',
       path: '/register',
       summary: 'Register new user',
       permissions: allowPublic(),
       handler: handlers.register,
-      wrapHandler: false,
+      raw: true,
       schema: { body: schemas.registerBody, response: { 201: schemas.successResponse } },
     },
     {
@@ -2621,7 +2621,7 @@ export const authResource = defineResource({
       summary: 'User login',
       permissions: allowPublic(),
       handler: handlers.login,
-      wrapHandler: false,
+      raw: true,
       schema: { body: schemas.loginBody, response: { 200: schemas.loginResponse } },
     },
     {
@@ -2630,7 +2630,7 @@ export const authResource = defineResource({
       summary: 'Refresh access token',
       permissions: allowPublic(),
       handler: handlers.refreshToken,
-      wrapHandler: false,
+      raw: true,
       schema: { body: schemas.refreshBody, response: { 200: schemas.tokenResponse } },
     },
     {
@@ -2639,7 +2639,7 @@ export const authResource = defineResource({
       summary: 'Request password reset',
       permissions: allowPublic(),
       handler: handlers.forgotPassword,
-      wrapHandler: false,
+      raw: true,
       schema: { body: schemas.forgotBody, response: { 200: schemas.successResponse } },
     },
     {
@@ -2648,7 +2648,7 @@ export const authResource = defineResource({
       summary: 'Reset password with token',
       permissions: allowPublic(),
       handler: handlers.resetPassword,
-      wrapHandler: false,
+      raw: true,
       schema: { body: schemas.resetBody, response: { 200: schemas.successResponse } },
     },
   ],
@@ -2666,14 +2666,14 @@ export const userProfileResource = defineResource({
   adapter: createAdapter(User${ts ? " as any" : ""}, userRepository${ts ? " as any" : ""}),
   disableDefaultRoutes: true,
 
-  additionalRoutes: [
+  routes: [
     {
       method: 'GET',
       path: '/me',
       summary: 'Get current user profile',
       permissions: requireAuth(),
       handler: handlers.getUserProfile,
-      wrapHandler: false,
+      raw: true,
       schema: { response: { 200: schemas.userProfileResponse } },
     },
     {
@@ -2682,7 +2682,7 @@ export const userProfileResource = defineResource({
       summary: 'Update current user profile',
       permissions: requireAuth(),
       handler: handlers.updateUserProfile,
-      wrapHandler: false,
+      raw: true,
       schema: { body: schemas.updateUserBody, response: { 200: schemas.userProfileResponse } },
     },
   ],

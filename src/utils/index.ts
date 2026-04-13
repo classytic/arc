@@ -23,11 +23,14 @@ export type {
   CompensationStep,
 } from "./compensation.js";
 export { defineCompensation, withCompensation } from "./compensation.js";
+// Typed route guard helper
+export { defineGuard } from "./defineGuard.js";
 export type { ErrorDetails } from "./errors.js";
 // Errors
 export {
   ArcError,
   ConflictError,
+  createDomainError,
   createError,
   ForbiddenError,
   isArcError,
@@ -39,6 +42,8 @@ export {
   UnauthorizedError,
   ValidationError,
 } from "./errors.js";
+// Raw handler wrapper
+export { handleRaw } from "./handleRaw.js";
 export type { ArcQueryParserOptions } from "./queryParser.js";
 // Query Parser
 export {

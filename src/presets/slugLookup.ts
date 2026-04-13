@@ -5,7 +5,7 @@
  */
 
 import { allowPublic } from "../permissions/index.js";
-import type { AdditionalRoute, PresetResult, ResourcePermissions } from "../types/index.js";
+import type { PresetResult, ResourcePermissions, RouteDefinition } from "../types/index.js";
 
 export interface SlugLookupOptions {
   slugField?: string;
@@ -16,18 +16,16 @@ export function slugLookupPreset(options: SlugLookupOptions = {}): PresetResult 
 
   return {
     name: "slugLookup",
-    additionalRoutes: (permissions: ResourcePermissions): AdditionalRoute[] => [
+    routes: (permissions: ResourcePermissions): RouteDefinition[] => [
       {
         method: "GET",
         path: `/slug/:${slugField}`,
         handler: "getBySlug",
         summary: "Get by slug",
         permissions: permissions.get ?? allowPublic(),
-        wrapHandler: true,
         operation: "getBySlug",
       },
     ],
-    // Pass to controller so it knows which param to read
     controllerOptions: {
       slugField,
     },

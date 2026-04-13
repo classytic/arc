@@ -233,7 +233,7 @@ describe("resourceToTools → createMcpServer integration", () => {
       readonlyFields: [],
     },
     permissions: {},
-    additionalRoutes: [],
+    routes: [],
     disabledRoutes: [],
     disableDefaultRoutes: false,
     _appliedPresets: [],

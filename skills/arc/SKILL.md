@@ -8,7 +8,7 @@ description: |
   Triggers: arc, fastify resource, defineResource, createApp, BaseController, arc preset,
   arc auth, arc events, arc jobs, arc websocket, arc mcp, arc plugin, arc testing, arc cli,
   arc permissions, arc hooks, arc pipeline, arc factory, arc cache, arc QueryCache.
-version: 2.8.0
+version: 2.8.1
 license: MIT
 metadata:
   author: Classytic
@@ -88,17 +88,28 @@ const productResource = defineResource({
     delete: requireRoles(['admin']),
   },
   cache: { staleTime: 30, gcTime: 300, tags: ['catalog'] },
-  additionalRoutes: [
-    { method: 'GET', path: '/featured', handler: 'getFeatured', permissions: allowPublic(), wrapHandler: true },
-  ],
 
-  // v2.8: routes (replaces additionalRoutes — additionalRoutes still works but is deprecated)
+  // v2.8.1: routeGuards — auto-apply to ALL routes (CRUD + custom + preset)
+  routeGuards: [modeGuard, orgGuard.preHandler],
+
+  // v2.8.1: fieldRules constraints → auto-map to OpenAPI + AJV validation
+  schemaOptions: {
+    fieldRules: {
+      name: { minLength: 2, maxLength: 200, description: 'Product name' },
+      price: { min: 0, max: 100000 },
+      sku: { pattern: '^[A-Z]{3}-\\d{3}$' },
+      status: { enum: ['draft', 'active', 'archived'] },
+      deletedAt: { systemManaged: true },
+    },
+  },
+
+  // Custom routes (compose with presets — softDelete adds /deleted, /:id/restore)
   routes: [
     { method: 'GET', path: '/stats', handler: 'getStats', permissions: auth() },
     { method: 'POST', path: '/webhook', handler: webhookFn, raw: true, permissions: auth() },
   ],
 
-  // v2.8: actions (replaces onRegister + createActionRouter)
+  // Actions (replaces onRegister + createActionRouter)
   actions: {
     approve: async (id, data, req) => service.approve(id, req.user._id),
     cancel: {
@@ -112,7 +123,69 @@ const productResource = defineResource({
 
 await fastify.register(productResource.toPlugin());
 // Auto-generates: GET /, GET /:id, POST /, PATCH /:id, DELETE /:id
+// + softDelete preset adds: GET /deleted, POST /:id/restore
 ```
+
+## routeGuards + defineGuard (v2.8.1)
+
+Resource-level guards that apply to **every** route (CRUD + custom + preset):
+
+```typescript
+import { defineGuard } from '@classytic/arc/utils';
+import type { RouteHandlerMethod } from '@classytic/arc';
+
+// Simple guard — reject if condition fails
+const modeGuard: RouteHandlerMethod = async (req, reply) => {
+  if (!req.headers['x-mode']) {
+    reply.code(403).send({ error: 'Mode header required' });
+  }
+};
+
+// Typed guard — resolve context once, extract anywhere
+const orgGuard = defineGuard({
+  name: 'org',
+  resolve: (req) => {
+    const orgId = req.headers['x-org-id'] as string;
+    if (!orgId) throw new Error('Missing x-org-id');
+    return { orgId, actorId: req.user?.id ?? 'system' };
+  },
+});
+
+defineResource({
+  name: 'procurement',
+  routeGuards: [modeGuard, orgGuard.preHandler],  // all routes protected
+  routes: [{
+    method: 'GET', path: '/summary', raw: true, permissions: auth(),
+    handler: async (req, reply) => {
+      const { orgId } = orgGuard.from(req);  // typed, no re-computation
+      reply.send({ orgId, count: await Model.countDocuments() });
+    },
+  }],
+  // ...
+});
+```
+
+**Execution order:** auth → permissions → cache/idempotency → `routeGuards` → per-route `preHandler`
+
+## fieldRules → OpenAPI + AJV (v2.8.1)
+
+One definition, two outputs — constraints auto-map to OpenAPI schema + Fastify AJV validation:
+
+```typescript
+schemaOptions: {
+  fieldRules: {
+    name: { minLength: 2, maxLength: 200, description: 'Product name' },
+    price: { min: 0, max: 100000 },
+    sku: { pattern: '^[A-Z]{3}-\\d{3}$' },
+    status: { enum: ['draft', 'active', 'archived'] },
+    password: { hidden: true },           // blocked from select + OpenAPI
+    deletedAt: { systemManaged: true },   // blocked from input schemas
+    slug: { immutable: true },            // excluded from update body
+  },
+},
+```
+
+Mongoose model-level constraints (`minlength`, `maxlength`, `min`, `max`, `enum`) take precedence. `fieldRules` supplements what the model doesn't declare.
 
 ## Authentication
 

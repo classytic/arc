@@ -7,19 +7,18 @@
  */
 
 import { requireRoles } from "../permissions/index.js";
-import type { AdditionalRoute, PresetResult, ResourcePermissions } from "../types/index.js";
+import type { PresetResult, ResourcePermissions, RouteDefinition } from "../types/index.js";
 
 export function softDeletePreset(): PresetResult {
   return {
     name: "softDelete",
-    additionalRoutes: (permissions: ResourcePermissions): AdditionalRoute[] => [
+    routes: (permissions: ResourcePermissions): RouteDefinition[] => [
       {
         method: "GET",
         path: "/deleted",
         handler: "getDeleted",
         summary: "Get soft-deleted items",
         permissions: permissions.list ?? requireRoles(["admin"]),
-        wrapHandler: true,
         operation: "listDeleted",
       },
       {
@@ -28,7 +27,6 @@ export function softDeletePreset(): PresetResult {
         handler: "restore",
         summary: "Restore soft-deleted item",
         permissions: permissions.update ?? requireRoles(["admin"]),
-        wrapHandler: true,
         operation: "restore",
       },
     ],

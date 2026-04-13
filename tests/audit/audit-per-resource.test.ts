@@ -25,7 +25,7 @@ function stubResource(arc: { registry: { register?: unknown } }, name: string, a
     prefix: `/${name}s`,
     presets: [],
     routes: [],
-    additionalRoutes: [],
+    routes: [],
     events: [],
     audit,
   });

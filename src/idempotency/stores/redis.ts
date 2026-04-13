@@ -32,6 +32,11 @@ export interface RedisClient {
   disconnect?(): Promise<void>;
 }
 
+/** Extended Redis client that supports eval — ioredis always has this. */
+interface RedisWithEval extends RedisClient {
+  eval(script: string, numkeys: number, ...args: (string | number)[]): Promise<unknown>;
+}
+
 export interface RedisIdempotencyStoreOptions {
   /** Redis client instance */
   client: RedisClient;
@@ -107,10 +112,25 @@ export class RedisIdempotencyStore implements IdempotencyStore {
   }
 
   async unlock(key: string, requestId: string): Promise<void> {
-    // Only unlock if we hold the lock (check requestId)
-    const currentHolder = await this.client.get(this.lockKey(key));
-    if (currentHolder === requestId) {
-      await this.client.del(this.lockKey(key));
+    // Atomic check-and-delete via Lua script — avoids the TOCTOU race
+    // where another worker acquires the lock between our GET and DEL.
+    // The script only deletes if the current value matches our requestId.
+    const luaScript = `
+      if redis.call("get", KEYS[1]) == ARGV[1] then
+        return redis.call("del", KEYS[1])
+      else
+        return 0
+      end
+    `;
+    const lockKey = this.lockKey(key);
+    if (typeof (this.client as RedisWithEval).eval === "function") {
+      await (this.client as RedisWithEval).eval(luaScript, 1, lockKey, requestId);
+    } else {
+      // Fallback for clients without eval — best-effort (TOCTOU possible)
+      const currentHolder = await this.client.get(lockKey);
+      if (currentHolder === requestId) {
+        await this.client.del(lockKey);
+      }
     }
   }
 

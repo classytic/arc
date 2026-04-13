@@ -5,7 +5,7 @@
  */
 
 import { allowPublic } from "../permissions/index.js";
-import type { AdditionalRoute, PresetResult, ResourcePermissions } from "../types/index.js";
+import type { PresetResult, ResourcePermissions, RouteDefinition } from "../types/index.js";
 
 export interface TreeOptions {
   parentField?: string;
@@ -16,14 +16,13 @@ export function treePreset(options: TreeOptions = {}): PresetResult {
 
   return {
     name: "tree",
-    additionalRoutes: (permissions: ResourcePermissions): AdditionalRoute[] => [
+    routes: (permissions: ResourcePermissions): RouteDefinition[] => [
       {
         method: "GET",
         path: "/tree",
         handler: "getTree",
         summary: "Get hierarchical tree",
         permissions: permissions.list ?? allowPublic(),
-        wrapHandler: true,
         operation: "getTree",
       },
       {
@@ -32,11 +31,9 @@ export function treePreset(options: TreeOptions = {}): PresetResult {
         handler: "getChildren",
         summary: "Get children of parent",
         permissions: permissions.list ?? allowPublic(),
-        wrapHandler: true,
         operation: "getChildren",
       },
     ],
-    // Pass to controller so it knows which param to read
     controllerOptions: {
       parentField,
     },

@@ -63,7 +63,7 @@ function makeResource(
       readonlyFields: [],
     },
     permissions,
-    additionalRoutes: [],
+    routes: [],
     middlewares: {},
     disableDefaultRoutes: false,
     disabledRoutes: [],

@@ -7,7 +7,7 @@
  *   3. getOrgContext() canonical org extraction
  *   4. createDomainError() factory
  *   5. onRegister lifecycle hook
- *   6. preAuth on additionalRoutes
+ *   6. preAuth on routes
  *   7. streamResponse flag
  */
 
@@ -247,10 +247,10 @@ describe("onRegister lifecycle hook", () => {
 });
 
 // ============================================================================
-// 5. preAuth on additionalRoutes
+// 5. preAuth on routes
 // ============================================================================
 
-describe("preAuth on additionalRoutes", () => {
+describe("preAuth on routes", () => {
   it("preAuth array is accepted in route type without error", () => {
     const repo = new Repository(ItemModel);
 
@@ -260,11 +260,11 @@ describe("preAuth on additionalRoutes", () => {
       adapter: createMongooseAdapter({ model: ItemModel, repository: repo }),
       controller: new BaseController(repo, { resourceName: "item" }),
       permissions: { list: allowPublic() },
-      additionalRoutes: [
+      routes: [
         {
           method: "GET" as const,
           path: "/stream",
-          wrapHandler: false,
+          raw: true,
           permissions: allowPublic(),
           preAuth: [
             (req: FastifyRequest) => {
@@ -281,8 +281,8 @@ describe("preAuth on additionalRoutes", () => {
 
     // Resource created without errors
     expect(resource.name).toBe("item");
-    expect(resource.additionalRoutes.length).toBe(1);
-    expect((resource.additionalRoutes[0] as any).preAuth).toHaveLength(1);
+    expect(resource.routes.length).toBe(1);
+    expect((resource.routes[0] as any).preAuth).toHaveLength(1);
   });
 });
 
@@ -290,7 +290,7 @@ describe("preAuth on additionalRoutes", () => {
 // 6. streamResponse flag
 // ============================================================================
 
-describe("streamResponse flag on additionalRoutes", () => {
+describe("streamResponse flag on routes", () => {
   it("streamResponse is accepted in route type", () => {
     const repo = new Repository(ItemModel);
 
@@ -299,11 +299,11 @@ describe("streamResponse flag on additionalRoutes", () => {
       adapter: createMongooseAdapter({ model: ItemModel, repository: repo }),
       controller: new BaseController(repo, { resourceName: "item" }),
       permissions: { list: allowPublic() },
-      additionalRoutes: [
+      routes: [
         {
           method: "GET" as const,
           path: "/events",
-          wrapHandler: false,
+          raw: true,
           streamResponse: true,
           permissions: allowPublic(),
           handler: async (_req: FastifyRequest, reply: FastifyReply) => {
@@ -314,8 +314,8 @@ describe("streamResponse flag on additionalRoutes", () => {
       ],
     });
 
-    expect(resource.additionalRoutes.length).toBe(1);
-    expect((resource.additionalRoutes[0] as any).streamResponse).toBe(true);
+    expect(resource.routes.length).toBe(1);
+    expect((resource.routes[0] as any).streamResponse).toBe(true);
   });
 });
 

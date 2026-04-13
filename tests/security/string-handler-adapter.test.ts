@@ -100,20 +100,20 @@ describe("Security: String Handler Response Adapter", () => {
       adapter: createTestAdapter(repo),
       controller,
       disableDefaultRoutes: false, // Keep CRUD routes for testing
-      additionalRoutes: [
+      routes: [
         {
           method: "GET",
           path: "/custom/:id",
           handler: "customAction", // STRING handler
           permissions: allowPublic(),
-          wrapHandler: true,
+          raw: false,
         },
         {
           method: "POST",
           path: "/error",
           handler: "errorAction", // STRING handler
           permissions: allowPublic(),
-          wrapHandler: true,
+          raw: false,
         },
       ],
     });
@@ -198,7 +198,7 @@ describe("Security: String Handler Response Adapter", () => {
     const funcResource = defineResource({
       name: "func",
       adapter: createTestAdapter(repo),
-      additionalRoutes: [
+      routes: [
         {
           method: "GET",
           path: "/direct",
@@ -206,7 +206,7 @@ describe("Security: String Handler Response Adapter", () => {
             return reply.send({ direct: true, method: "function" });
           },
           permissions: allowPublic(),
-          wrapHandler: false,
+          raw: true,
         },
       ],
     });
@@ -234,13 +234,13 @@ describe("Security: String Handler Response Adapter", () => {
         name: "invalid",
         adapter: createTestAdapter(repo),
         controller,
-        additionalRoutes: [
+        routes: [
           {
             method: "GET",
             path: "/missing",
             handler: "nonExistentMethod", // Does not exist
             permissions: allowPublic(),
-            wrapHandler: true,
+            raw: false,
           },
         ],
       });
@@ -270,13 +270,13 @@ describe("Security: String Handler Response Adapter", () => {
       name: "async",
       adapter: createTestAdapter(repo),
       controller: asyncController,
-      additionalRoutes: [
+      routes: [
         {
           method: "GET",
           path: "/async/:id",
           handler: "asyncMethod",
           permissions: allowPublic(),
-          wrapHandler: true,
+          raw: false,
         },
       ],
     });
@@ -299,7 +299,7 @@ describe("Security: String Handler Response Adapter", () => {
     await app3.close();
   });
 
-  it("should handle Fastify-native pattern with wrapHandler: false", async () => {
+  it("should handle Fastify-native pattern with raw: true", async () => {
     // Controller using Fastify-native (req, reply) pattern - 2 parameters
     const fastifyNativeController = {
       getBySlug: async (req: any, reply: any) => {
@@ -316,13 +316,13 @@ describe("Security: String Handler Response Adapter", () => {
       adapter: createTestAdapter(repo),
       controller: fastifyNativeController as any,
       disableDefaultRoutes: true,
-      additionalRoutes: [
+      routes: [
         {
           method: "GET",
           path: "/:slug",
           handler: "getBySlug",
           permissions: allowPublic(),
-          wrapHandler: false, // Explicit: Fastify-native handler
+          raw: true, // Explicit: Fastify-native handler
         },
       ],
     });
@@ -345,7 +345,7 @@ describe("Security: String Handler Response Adapter", () => {
     await app4.close();
   });
 
-  it("should handle IController pattern with wrapHandler: true", async () => {
+  it("should handle IController pattern with raw: false", async () => {
     // Controller using IController (context) pattern - 1 parameter
     const iControllerStyleController = {
       getBySlug: async (context: any) => {
@@ -363,13 +363,13 @@ describe("Security: String Handler Response Adapter", () => {
       adapter: createTestAdapter(repo),
       controller: iControllerStyleController as any,
       disableDefaultRoutes: true,
-      additionalRoutes: [
+      routes: [
         {
           method: "GET",
           path: "/:slug",
           handler: "getBySlug",
           permissions: allowPublic(),
-          wrapHandler: true, // Explicit: IController handler
+          raw: false, // Explicit: IController handler
         },
       ],
     });
@@ -392,7 +392,7 @@ describe("Security: String Handler Response Adapter", () => {
     await app5.close();
   });
 
-  it("should break when wrapHandler mismatches handler type (true for Fastify-native)", async () => {
+  it("should break when raw mismatches handler type (true for Fastify-native)", async () => {
     // Fastify-native controller but force wrapping (will break)
     const fastifyNativeController = {
       getBySlug: async (req: any, reply: any) => {
@@ -406,13 +406,13 @@ describe("Security: String Handler Response Adapter", () => {
       adapter: createTestAdapter(repo),
       controller: fastifyNativeController as any,
       disableDefaultRoutes: true,
-      additionalRoutes: [
+      routes: [
         {
           method: "GET",
           path: "/:slug",
           handler: "getBySlug",
           permissions: allowPublic(),
-          wrapHandler: true, // Force wrap despite Fastify-native - will break
+          raw: false, // Force wrap despite Fastify-native - will break
         },
       ],
     });
@@ -432,7 +432,7 @@ describe("Security: String Handler Response Adapter", () => {
     await app6.close();
   });
 
-  it("should work when wrapHandler: false used for IController-style (handler receives req)", async () => {
+  it("should work when raw: true used for IController-style (handler receives req)", async () => {
     // IController-style but force no wrapping
     const iControllerStyleController = {
       getBySlug: async (context: any) => {
@@ -447,13 +447,13 @@ describe("Security: String Handler Response Adapter", () => {
       adapter: createTestAdapter(repo),
       controller: iControllerStyleController as any,
       disableDefaultRoutes: true,
-      additionalRoutes: [
+      routes: [
         {
           method: "GET",
           path: "/:slug",
           handler: "getBySlug",
           permissions: allowPublic(),
-          wrapHandler: false, // Force no wrap despite IController-style
+          raw: true, // Force no wrap despite IController-style
         },
       ],
     });

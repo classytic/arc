@@ -13,7 +13,7 @@
 
 import { CRUD_OPERATIONS } from "../constants.js";
 import { getAvailablePresets } from "../presets/index.js";
-import type { AdditionalRoute, PresetResult, ResourceConfig } from "../types/index.js";
+import type { PresetResult, ResourceConfig, RouteDefinition } from "../types/index.js";
 
 // ============================================================================
 // Types
@@ -98,11 +98,11 @@ export function validateResourceConfig(
     // the intended default. No warning needed; it's not a misconfiguration.
   } else {
     // Service resources (no CRUD routes) don't need adapter or controller
-    if (!config.adapter && !config.additionalRoutes?.length) {
+    if (!config.adapter && !config.routes?.length) {
       warnings.push({
         field: "config",
-        message: "Resource has no adapter and no additionalRoutes",
-        suggestion: "Provide either adapter for CRUD or additionalRoutes for custom logic",
+        message: "Resource has no adapter and no routes",
+        suggestion: "Provide either adapter for CRUD or routes for custom logic",
       });
     }
   }
@@ -129,9 +129,9 @@ export function validateResourceConfig(
     }
   }
 
-  // Validate additional route handlers exist
-  if (config.controller && config.additionalRoutes) {
-    validateAdditionalRouteHandlers(config.controller, config.additionalRoutes, errors);
+  // Validate route handlers exist on controller
+  if (config.controller && config.routes) {
+    validateRouteHandlers(config.controller, config.routes, errors);
   }
 
   // ========================================
@@ -175,8 +175,8 @@ export function validateResourceConfig(
   // Additional Route Validation
   // ========================================
 
-  if (config.additionalRoutes) {
-    validateAdditionalRoutes(config.additionalRoutes, errors);
+  if (config.routes) {
+    validateRoutes(config.routes, errors);
   }
 
   return {
@@ -190,9 +190,9 @@ export function validateResourceConfig(
 // Helper Functions
 // ============================================================================
 
-function validateAdditionalRouteHandlers(
+function validateRouteHandlers(
   controller: unknown,
-  routes: AdditionalRoute[],
+  routes: RouteDefinition[],
   errors: ConfigError[],
 ): void {
   const ctrl = controller as Record<string, unknown>;
@@ -201,7 +201,7 @@ function validateAdditionalRouteHandlers(
     if (typeof route.handler === "string") {
       if (typeof ctrl[route.handler] !== "function") {
         errors.push({
-          field: `additionalRoutes[${route.method} ${route.path}]`,
+          field: `routes[${route.method} ${route.path}]`,
           message: `Handler "${route.handler}" not found on controller`,
           suggestion: `Add method "${route.handler}" to controller or use a function handler`,
         });
@@ -218,8 +218,8 @@ function validatePermissionKeys(
 ): void {
   const validKeys = new Set([...CRUD_OPERATIONS, ...(options.additionalPermissionKeys ?? [])]);
 
-  // Add keys from additional routes
-  for (const route of config.additionalRoutes ?? []) {
+  // Add keys from custom routes
+  for (const route of config.routes ?? []) {
     if (typeof route.handler === "string") {
       validKeys.add(route.handler);
     }
@@ -265,8 +265,8 @@ function validatePresets(
 
   for (const preset of presets) {
     // Skip validation for fully-resolved PresetResult objects (custom presets)
-    // These have middlewares/additionalRoutes and are ready to use
-    if (typeof preset === "object" && ("middlewares" in preset || "additionalRoutes" in preset)) {
+    // These have middlewares/routes and are ready to use
+    if (typeof preset === "object" && ("middlewares" in preset || "routes" in preset)) {
       // This is a custom preset passed as PresetResult - skip registry validation
       continue;
     }
@@ -317,47 +317,43 @@ function validatePresetOptions(
   }
 }
 
-function validateAdditionalRoutes(routes: AdditionalRoute[], errors: ConfigError[]): void {
+function validateRoutes(routes: RouteDefinition[], errors: ConfigError[]): void {
   const validMethods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"];
   const seenRoutes = new Set<string>();
 
   for (const [i, route] of routes.entries()) {
-    // Method validation
     if (!validMethods.includes(route.method)) {
       errors.push({
-        field: `additionalRoutes[${i}].method`,
+        field: `routes[${i}].method`,
         message: `Invalid HTTP method "${route.method}"`,
         suggestion: `Valid methods: ${validMethods.join(", ")}`,
       });
     }
 
-    // Path validation
     if (!route.path) {
       errors.push({
-        field: `additionalRoutes[${i}].path`,
+        field: `routes[${i}].path`,
         message: "Route path is required",
       });
     } else if (!route.path.startsWith("/")) {
       errors.push({
-        field: `additionalRoutes[${i}].path`,
+        field: `routes[${i}].path`,
         message: `Route path must start with "/" (got "${route.path}")`,
         suggestion: `Change to "/${route.path}"`,
       });
     }
 
-    // Handler validation
     if (!route.handler) {
       errors.push({
-        field: `additionalRoutes[${i}].handler`,
+        field: `routes[${i}].handler`,
         message: "Route handler is required",
       });
     }
 
-    // Duplicate detection
     const routeKey = `${route.method} ${route.path}`;
     if (seenRoutes.has(routeKey)) {
       errors.push({
-        field: `additionalRoutes[${i}]`,
+        field: `routes[${i}]`,
         message: `Duplicate route "${routeKey}"`,
       });
     }

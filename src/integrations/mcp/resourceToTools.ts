@@ -153,7 +153,7 @@ export function resourceToTools(
       });
     }
 
-    // Additional routes with wrapHandler: true OR mcpHandler become extra tools.
+    // Custom routes with pipeline handlers (raw: false) OR mcpHandler become tools.
     // v2.8.1: honor route-level `mcp` metadata — skip routes with `mcp: false`,
     // and use `mcp.description` / `mcp.annotations` when provided.
     for (const route of resource.additionalRoutes ?? []) {

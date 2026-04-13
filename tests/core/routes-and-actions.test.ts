@@ -2,11 +2,11 @@
  * Tests: v2.8 `routes` + `actions` on defineResource
  *
  * Validates:
- * - `routes` replaces `additionalRoutes` with cleaner API
+ * - `routes` replaces `routes` with cleaner API
  * - `actions` creates POST /:id/action endpoint declaratively
  * - Per-action permissions and schemas
  * - MCP tool generation from actions
- * - Cannot mix `routes` + `additionalRoutes`
+ * - Cannot mix `routes` + `routes`
  * - Action name cannot collide with CRUD operations
  */
 
@@ -49,7 +49,7 @@ describe("v2.8: routes + actions", () => {
         delete: allowPublic(),
       },
 
-      // v2.8 routes (replaces additionalRoutes)
+      // v2.8 routes (replaces routes)
       routes: [
         {
           method: "GET",
@@ -200,17 +200,6 @@ describe("v2.8: routes + actions", () => {
   });
 
   // ── Validation ──
-
-  it("cannot mix routes and additionalRoutes", () => {
-    expect(() =>
-      defineResource({
-        name: "bad",
-        disableDefaultRoutes: true,
-        routes: [{ method: "GET", path: "/x", handler: async () => ({}), permissions: allowPublic() }],
-        additionalRoutes: [{ method: "GET", path: "/y", handler: async () => ({}), permissions: allowPublic(), wrapHandler: false }],
-      }),
-    ).toThrow("Cannot use both");
-  });
 
   it("action name cannot collide with CRUD operation", () => {
     expect(() =>
@@ -427,10 +416,10 @@ describe("v2.8: routes — extended", () => {
         },
       ],
     });
-    // The resource stores converted additionalRoutes — verify the conversion preserved raw → wrapHandler=false
-    expect(resource.additionalRoutes).toBeDefined();
-    expect(resource.additionalRoutes.length).toBe(1);
-    expect(resource.additionalRoutes[0].wrapHandler).toBe(false);
+    // Verify the resource retained routes with mcp: false preserved
+    expect(resource.routes).toBeDefined();
+    expect(resource.routes!.length).toBe(1);
+    expect(resource.routes![0].mcp).toBe(false);
   });
 });
 
