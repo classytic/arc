@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.8.4
+
+### Added
+
+- **MCP ↔ AI SDK bridge** — new helpers in `@classytic/arc/mcp`:
+  - `bridgeToMcp(bridge)` exposes any AI SDK tool builder as an MCP tool with automatic auth, envelope translation, and error mapping.
+  - `buildMcpToolsFromBridges(bridges, options)` takes a list of bridges and returns the registered MCP tool array, with optional `include`/`exclude` filtering for per-environment configuration (read-only deployments, strict allowlists).
+  - `McpBridge.annotations` reuses the public `ToolAnnotations` type for consistency with `defineTool`.
+  - Use case: apps that already define AI SDK tools for in-process agents no longer need to hand-roll an MCP wrapper. Same tool definition, both transports.
+
 ## 2.8.3
 
 - **Export `Guard<T>` and `GuardConfig<T>` types** from `@classytic/arc/utils` — fixes TS4023 when consumers re-export `defineGuard()` results in their own declaration files

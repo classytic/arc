@@ -2,7 +2,7 @@
 
 Database-agnostic resource framework for Fastify. Define resources, get CRUD routes, permissions, presets, caching, events, OpenAPI, and MCP tools — without boilerplate.
 
-**v2.8.3** | Fastify 5+ | Node.js 22+ | ESM only | 278+ test files, 3844+ tests
+**v2.8.4** | Fastify 5+ | Node.js 22+ | ESM only | 279+ test files, 3867+ tests
 
 ## Install
 
@@ -693,6 +693,27 @@ npx @classytic/arc doctor                                        # Health check
 | `@classytic/arc/mcp` | MCP tools for AI agents |
 | `@classytic/arc/docs` | OpenAPI generation |
 | `@classytic/arc/cli` | CLI commands (programmatic) |
+
+## v2.8.4 Highlights
+
+- **MCP ↔ AI SDK bridge** — expose AI SDK `tool()` definitions over MCP without duplicating code. `bridgeToMcp(bridge)` adapts any AI SDK tool into an MCP tool with automatic auth, guard delegation, and `{ error } → isError` envelope translation. `buildMcpToolsFromBridges(bridges, { include, exclude })` registers a whole catalog at once with per-environment filtering.
+
+```typescript
+import { bridgeToMcp, buildMcpToolsFromBridges, type McpBridge } from '@classytic/arc/mcp';
+
+export const triggerJobBridge: McpBridge = {
+  name: 'trigger_job',
+  description: 'Start a job.',
+  inputSchema: { phase: z.enum(['investigate', 'fix']) },
+  annotations: { destructiveHint: true },
+  buildTool: (ctx) => buildTriggerJobTool(getUserId(ctx) ?? ''),
+};
+
+await app.register(mcpPlugin, {
+  resources,
+  extraTools: buildMcpToolsFromBridges([triggerJobBridge]),
+});
+```
 
 ## v2.8.1 Highlights
 
