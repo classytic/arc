@@ -34,10 +34,16 @@
  * ```
  */
 
+// AI SDK bridge — expose AI SDK tool builders as MCP tools
+export {
+  type BuildMcpToolsFromBridgesOptions,
+  bridgeToMcp,
+  buildMcpToolsFromBridges,
+  type McpBridge,
+} from "./aiSdkBridge.js";
 // Factory (Level 2)
 export { type AuthRef, createMcpServer, type McpServerInstance } from "./createMcpServer.js";
 export { type DefinePromptConfig, definePrompt } from "./definePrompt.js";
-
 // Builders — user-facing API for custom tools/prompts
 export { type DefineToolConfig, defineTool } from "./defineTool.js";
 // Utilities

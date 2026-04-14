@@ -175,6 +175,49 @@ defineTool('delete_all', {
 });
 ```
 
+## AI SDK Bridge
+
+If you already define tools with the Vercel AI SDK's `tool()` for in-process agents, expose them over MCP without duplicating the definition. The bridge handles `isAuthenticated` rejection, optional guards, `{ error }` → `isError: true` envelope translation, and thrown-error mapping.
+
+```typescript
+import { bridgeToMcp, getUserId, hasOrg, type McpBridge } from '@classytic/arc/mcp';
+import { tool } from 'ai';
+import { z } from 'zod';
+
+function buildTriggerJobTool(companyId: string) {
+  return tool({
+    description: 'Start an investigation/fix/review job.',
+    inputSchema: z.object({ phase: z.enum(['investigate', 'fix', 'review']) }),
+    execute: async ({ phase }) => ({ jobId: `${companyId}-${phase}-${Date.now()}` }),
+  });
+}
+
+export const triggerJobBridge: McpBridge = {
+  name: 'trigger_job',
+  description: 'Start an investigation/fix/review job.',
+  inputSchema: { phase: z.enum(['investigate', 'fix', 'review']) },
+  annotations: { destructiveHint: true },
+  buildTool: (ctx) => buildTriggerJobTool(getUserId(ctx) ?? ''),
+  guard: (ctx) => (hasOrg(ctx) ? null : 'Organization scope required'),
+};
+```
+
+Register bridges at the plugin level, with optional per-environment filtering:
+
+```typescript
+import { buildMcpToolsFromBridges } from '@classytic/arc/mcp';
+
+await app.register(mcpPlugin, {
+  resources,
+  extraTools: buildMcpToolsFromBridges(allBridges, {
+    // Read-only deployment — hide destructive tools
+    exclude: process.env.DEPLOYMENT === 'readonly' ? ['trigger_job'] : [],
+  }),
+});
+```
+
+`buildMcpToolsFromBridges` also accepts `{ include: [...] }` for strict allowlists. Bridges can be tested end-to-end with [`createTestMcpClient`](#testing).
+
 ## Custom Prompts
 
 ```typescript
@@ -321,4 +364,5 @@ import { mcpPlugin, defineTool, definePrompt, resourceToTools, fieldRulesToZod, 
 import { createTestMcpClient } from '@classytic/arc/mcp/testing';
 import { guard, requireAuth, requireOrg, requireRole, customGuard } from '@classytic/arc/mcp';
 import { isAuthenticated, hasOrg, getUserId, getOrgId, denied } from '@classytic/arc/mcp';
+import { bridgeToMcp, buildMcpToolsFromBridges, type McpBridge } from '@classytic/arc/mcp';
 ```

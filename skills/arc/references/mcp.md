@@ -430,6 +430,43 @@ const createShape = fieldRulesToZod(resource.schemaOptions.fieldRules, {
 // → { name: z.string(), price: z.number(), category: z.enum([...]) }
 ```
 
+## AI SDK Bridge (v2.8.4+)
+
+Expose AI SDK `tool()` definitions over MCP without duplicating glue. The bridge handles `isAuthenticated` rejection, optional custom guards, `{ error }` → `isError: true` envelope translation, and thrown-error mapping.
+
+```typescript
+import { bridgeToMcp, buildMcpToolsFromBridges, getUserId, hasOrg, type McpBridge } from '@classytic/arc/mcp';
+import { tool } from 'ai';
+import { z } from 'zod';
+
+function buildTriggerJobTool(companyId: string) {
+  return tool({
+    description: 'Start a job.',
+    inputSchema: z.object({ phase: z.enum(['investigate', 'fix']) }),
+    execute: async ({ phase }) => ({ jobId: `${companyId}-${phase}-${Date.now()}` }),
+  });
+}
+
+export const triggerJobBridge: McpBridge = {
+  name: 'trigger_job',
+  description: 'Start a job.',
+  inputSchema: { phase: z.enum(['investigate', 'fix']) },
+  annotations: { destructiveHint: true },
+  buildTool: (ctx) => buildTriggerJobTool(getUserId(ctx) ?? ''),
+  guard: (ctx) => (hasOrg(ctx) ? null : 'Organization scope required'),
+};
+
+await app.register(mcpPlugin, {
+  resources,
+  extraTools: buildMcpToolsFromBridges([triggerJobBridge], {
+    // Per-environment filtering — read-only deployments hide destructive tools
+    exclude: process.env.DEPLOYMENT === 'readonly' ? ['trigger_job'] : [],
+  }),
+});
+```
+
+`buildMcpToolsFromBridges` also accepts `{ include: [...] }` for strict allowlists. `buildTool` is called fresh per request — safe for per-tenant dep resolution. `McpBridge.annotations` is the same `ToolAnnotations` shape as `defineTool`.
+
 ## Schema Discovery — MCP Resources
 
 Auto-registered for agent discovery:

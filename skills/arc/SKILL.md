@@ -856,6 +856,28 @@ auth: async (headers) => ({
 
 **Guards** for custom tools: `guard(requireAuth, requireOrg, requireRole('admin'), handler)`
 
+**AI SDK bridge** (v2.8.4+) — expose AI SDK `tool()` definitions over MCP without duplicating glue. Handles auth, guards, `{ error } → isError` translation, and thrown-error mapping:
+
+```typescript
+import { bridgeToMcp, buildMcpToolsFromBridges, getUserId, hasOrg, type McpBridge } from '@classytic/arc/mcp';
+
+export const triggerJobBridge: McpBridge = {
+  name: 'trigger_job',
+  description: 'Start a job.',
+  inputSchema: { phase: z.enum(['investigate', 'fix']) },
+  annotations: { destructiveHint: true },
+  buildTool: (ctx) => buildTriggerJobTool(getUserId(ctx) ?? ''),
+  guard: (ctx) => (hasOrg(ctx) ? null : 'Organization scope required'),
+};
+
+await app.register(mcpPlugin, {
+  resources,
+  extraTools: buildMcpToolsFromBridges([triggerJobBridge], {
+    exclude: process.env.DEPLOYMENT === 'readonly' ? ['trigger_job'] : [],
+  }),
+});
+```
+
 **Service scope**: When `clientId` is set in auth result, MCP produces `kind: "service"` RequestScope — works with `requireServiceScope()`, `getClientId()`, `getServiceScopes()`. No synthetic userId needed for machine principals.
 
 **Multi-tenancy**: `organizationId` from auth flows into BaseController org-scoping automatically.
