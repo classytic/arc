@@ -153,3 +153,142 @@ export class RedisCacheStore<TValue = unknown> implements CacheStore<TValue> {
     return `${this.prefix}${key}`;
   }
 }
+
+// ============================================================================
+// Adapters — bridge common clients to the RedisCacheClient interface
+// ============================================================================
+
+/**
+ * Minimal ioredis shape we depend on. We don't import ioredis itself so the
+ * cache subpath stays peer-dep-free.
+ */
+export interface IoredisLike {
+  get(key: string): Promise<string | null>;
+  set(...args: unknown[]): Promise<string | null>;
+  del(...keys: string[]): Promise<number>;
+  scan(cursor: string | number, ...args: (string | number)[]): Promise<[string, string[]]>;
+  pipeline?(): { del(key: string): unknown; exec(): Promise<unknown> };
+}
+
+/**
+ * Wrap an ioredis instance as a `RedisCacheClient`.
+ *
+ * Why: arc's `RedisCacheClient` uses node-redis-v4 object-options style
+ * (`set(key, val, { PX })`), but ioredis expects positional flags
+ * (`set(key, val, 'PX', ms)`). Without this adapter every ioredis user
+ * reinvents the bridge.
+ *
+ * @example
+ * ```typescript
+ * import Redis from 'ioredis';
+ * import { RedisCacheStore, ioredisAsCacheClient } from '@classytic/arc/cache';
+ *
+ * const redis = new Redis(process.env.REDIS_URL);
+ * const store = new RedisCacheStore({
+ *   client: ioredisAsCacheClient(redis),
+ *   prefix: 'arc:cache:',
+ * });
+ * ```
+ */
+export function ioredisAsCacheClient(client: IoredisLike): RedisCacheClient {
+  return {
+    async get(key) {
+      return client.get(key);
+    },
+    async set(key, value, options) {
+      if (options?.PX) {
+        return client.set(key, value, "PX", options.PX, ...(options.NX ? ["NX"] : []));
+      }
+      if (options?.EX) {
+        return client.set(key, value, "EX", options.EX, ...(options.NX ? ["NX"] : []));
+      }
+      if (options?.NX) return client.set(key, value, "NX");
+      return client.set(key, value);
+    },
+    async del(key) {
+      if (Array.isArray(key)) return client.del(...key);
+      return client.del(key);
+    },
+    async scan(cursor, ...args) {
+      const [next, keys] = await client.scan(cursor, ...args);
+      return [next, keys];
+    },
+    pipeline: client.pipeline ? () => client.pipeline!() : undefined,
+  };
+}
+
+/**
+ * Minimal `@upstash/redis` REST SDK shape we depend on.
+ *
+ * `@upstash/redis` is HTTP-based and works on edge runtimes (Cloudflare
+ * Workers, Vercel Edge, Deno Deploy) where TCP connections — and thus
+ * ioredis — are unavailable.
+ */
+export interface UpstashRedisLike {
+  get(key: string): Promise<string | null | unknown>;
+  set(key: string, value: unknown, opts?: Record<string, unknown>): Promise<unknown>;
+  del(...keys: string[]): Promise<number>;
+  scan(
+    cursor: number | string,
+    opts?: { match?: string; count?: number },
+  ): Promise<[number, string[]] | [string, string[]]>;
+}
+
+/**
+ * Wrap an `@upstash/redis` REST client as a `RedisCacheClient`.
+ *
+ * Enables running arc's cache layer on edge runtimes without ioredis.
+ * Requires `@upstash/redis` as an optional peer dependency.
+ *
+ * @example
+ * ```typescript
+ * import { Redis } from '@upstash/redis';
+ * import { RedisCacheStore, upstashAsCacheClient } from '@classytic/arc/cache';
+ *
+ * const redis = Redis.fromEnv();
+ * const store = new RedisCacheStore({
+ *   client: upstashAsCacheClient(redis),
+ *   prefix: 'arc:cache:',
+ * });
+ * ```
+ */
+export function upstashAsCacheClient(client: UpstashRedisLike): RedisCacheClient {
+  return {
+    async get(key) {
+      const raw = await client.get(key);
+      // Upstash auto-deserializes strings — arc stores JSON strings and
+      // parses them itself, so we need to re-serialize here to preserve
+      // the contract. Null passes through.
+      if (raw == null) return null;
+      return typeof raw === "string" ? raw : JSON.stringify(raw);
+    },
+    async set(key, value, options) {
+      // Map arc's uppercase option keys to upstash's lowercase.
+      const opts: Record<string, unknown> = {};
+      if (options?.PX) opts.px = options.PX;
+      if (options?.EX) opts.ex = options.EX;
+      if (options?.NX) opts.nx = true;
+      if (options?.XX) opts.xx = true;
+      const res = await client.set(key, value, opts);
+      return res == null ? null : String(res);
+    },
+    async del(key) {
+      if (Array.isArray(key)) return client.del(...key);
+      return client.del(key);
+    },
+    async scan(cursor, ...args) {
+      // arc passes variadic strings in the node-redis v3 shape:
+      // `scan(cursor, 'MATCH', pattern, 'COUNT', count)`
+      // upstash takes an options object. Translate.
+      const opts: { match?: string; count?: number } = {};
+      for (let i = 0; i < args.length; i += 2) {
+        const flag = String(args[i]).toLowerCase();
+        const val = args[i + 1];
+        if (flag === "match" && typeof val === "string") opts.match = val;
+        if (flag === "count") opts.count = Number(val);
+      }
+      const [next, keys] = await client.scan(cursor, opts);
+      return [next, keys];
+    },
+  };
+}

@@ -168,6 +168,35 @@ class KafkaTransport implements EventTransport {
 | Redis Pub/Sub | `@classytic/arc/events/redis` | Multi-instance, real-time |
 | Redis Streams | `@classytic/arc/events/redis-stream` | Ordered, persistent, consumer groups |
 
+### Streams vs Pub/Sub — pick the right one
+
+Choosing wrong loses messages silently. Default to **Streams** for anything business-critical.
+
+| Requirement | Use |
+|---|---|
+| Message MUST NOT be lost (billing, payments, audit) | **Streams** |
+| Real-time notifications, OK to miss when no subscriber is up | Pub/Sub |
+| Need to replay/reprocess past events | **Streams** |
+| Multiple workers processing the same queue | **Streams** (consumer groups) |
+| Simple broadcast to live WebSocket clients | Pub/Sub |
+| Event sourcing or audit trail | **Streams** |
+| Single-instance dev | Memory |
+| At-least-once delivery with durable WAL | **Streams** + outbox pattern |
+
+**Why it matters:** Pub/Sub is fire-and-forget. If no subscriber is connected when you publish, the message is gone. Streams persist until every consumer group acknowledges them — crashes, restarts, and network blips are survivable.
+
+**Defense-in-depth:** pair `eventPlugin` with the transactional outbox (`EventOutbox` + `MemoryOutboxStore` or your own persistent store) for guaranteed delivery even if Redis is unreachable at publish time.
+
+### Redis eviction policy — required for queues and idempotency
+
+When you back events (Streams), jobs (BullMQ), idempotency, or cache with Redis, your Redis instance **must** be configured with `maxmemory-policy: noeviction`. Any other policy can silently evict in-flight stream entries or pending jobs.
+
+- **Self-hosted Redis:** `redis-cli CONFIG SET maxmemory-policy noeviction` (or set in `redis.conf`).
+- **Upstash:** free/paid DBs default to `optimistic-volatile`. You'll see `IMPORTANT! Eviction policy is optimistic-volatile. It should be "noeviction"` in BullMQ logs. **Do one of:** open a support ticket to request `noeviction`, use a dedicated DB for queues, or accept that long-idle jobs may be evicted.
+- **ElastiCache / Redis Cloud:** set the parameter group's `maxmemory-policy` to `noeviction` before pointing arc at it.
+
+For a pure cache DB (no queues, no idempotency), `allkeys-lru` is correct and what you want.
+
 ## Injectable Logger
 
 All transports and retry accept a `logger` option — defaults to `console`, compatible with pino/fastify.log:

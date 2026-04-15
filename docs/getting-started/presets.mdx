@@ -408,6 +408,45 @@ presets: [
 ]
 ```
 
+## Files Upload
+
+Backend-agnostic file uploads. Takes any implementation of arc's `Storage` interface and registers three raw routes on the owning resource. Arc ships zero reference `Storage` adapters on purpose — the 50-line adapter belongs in your app source, next to the decisions that inform it (dedup strategy, multi-tenancy policy, CDN integration).
+
+```typescript
+import { defineResource } from '@classytic/arc';
+import { filesUploadPreset } from '@classytic/arc/presets/files-upload';
+import { s3Storage } from './storage/s3-storage.js'; // your ~50-line adapter
+
+defineResource({
+  name: 'file',
+  prefix: '/files',
+  disableDefaultRoutes: true, // preset owns every route
+  presets: [
+    filesUploadPreset({
+      storage: s3Storage({ bucket: 'my-app' }),
+      allowedMimeTypes: ['image/png', 'image/jpeg', 'application/pdf'],
+      maxFileSize: 5 * 1024 * 1024,
+    }),
+  ],
+});
+```
+
+**Routes:**
+
+| Route | Behavior |
+|-------|----------|
+| `POST /upload` | Multipart → `storage.upload()` → `{ success: true, data: { id, url, pathname, contentType, bytes, metadata? } }` |
+| `GET /:id` | Streams bytes back. Full HTTP Range support (`bytes=start-end`, suffix `bytes=-N`, open-ended `bytes=N-`) with `206 Partial Content` + `Content-Range` |
+| `DELETE /:id` | 204 on success, 404 on already-absent |
+
+**When to use:** persistent CRUD-over-bytes patterns — media libraries, avatars, attachments, document vaults.
+
+**When NOT to use:** process-and-return flows like OCR, speech-to-text, image classification, content moderation, LLM analysis. These don't want an `id` or a `url` — they want the buffer in-memory for one-shot processing. Use arc's `multipartBody()` middleware + a raw route directly; it's about 10 lines and avoids forcing you to write a no-op storage adapter.
+
+See the [Files Upload guide](./files-upload) for the full preset API, the `Storage` contract, four worked adapter examples (media-kit, raw S3, local FS, in-memory), and the `runStorageContract()` test suite adapter authors use to verify compatibility.
+
+---
+
 ## Best Practices
 
 1. **Use presets for common patterns** - Don't reinvent softDelete, multiTenant
@@ -421,3 +460,4 @@ presets: [
 - [Core Module](./core) - Resource definition
 - [Auth Module](./auth) - Permissions and authorization
 - [Org Module](./org) - Multi-tenant setup
+- [Files Upload](./files-upload) - `filesUploadPreset` + `Storage` contract

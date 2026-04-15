@@ -9,11 +9,13 @@ export default defineConfig({
     "src/index.ts",
     "src/core/index.ts",
     "src/types/index.ts",
+    "src/types/storage.ts",
     "src/adapters/index.ts",
     "src/permissions/index.ts",
     "src/cache/index.ts",
     "src/presets/index.ts",
     "src/presets/multiTenant.ts",
+    "src/presets/filesUpload.ts",
 
     // Scope
     "src/scope/index.ts",
@@ -67,6 +69,7 @@ export default defineConfig({
 
     // Testing
     "src/testing/index.ts",
+    "src/testing/storageContract.ts",
 
     // Policies
     "src/policies/index.ts",

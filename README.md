@@ -661,6 +661,34 @@ npx @classytic/arc doctor                                        # Health check
 }
 ```
 
+## Bundle Size
+
+Arc is tree-shakable and split into 47 subpath exports. You pay only for what you import.
+
+| What you import | JS shipped to your bundle |
+|---|---|
+| `createApp` + `defineResource` + `BaseController` (minimal CRUD API) | **~130 KB** |
+| `+ @classytic/arc/events/redis` (distributed pub/sub) | +24 KB |
+| `+ @classytic/arc/integrations/jobs` (BullMQ) | +8 KB |
+| `+ @classytic/arc/mcp` (AI agent tools) | +24 KB |
+
+For reference — Fastify core alone is ~300 KB, NestJS core + reflect-metadata is 400+ KB. Arc's minimal footprint is smaller than either, with more features included. `dist/` on disk is 1.7 MB but most of it is `.d.mts` type declarations (free at runtime), the CLI (88 KB, only loaded when running `npx @classytic/arc init`), and the testing helpers (52 KB, never shipped to production).
+
+**Use subpath imports** — they're the whole reason arc stays lean:
+
+```typescript
+// Good — each import resolves to exactly one subpath chunk
+import { createApp } from '@classytic/arc/factory';
+import { defineResource } from '@classytic/arc/core';
+import { jobsPlugin } from '@classytic/arc/integrations/jobs';   // only if you use queues
+import { mcpPlugin } from '@classytic/arc/mcp';                    // only if you expose MCP
+
+// Bad — pulls the whole barrel; tree-shaking helps but subpath is better
+import { createApp, defineResource, jobsPlugin, mcpPlugin } from '@classytic/arc';
+```
+
+Arc sets `"sideEffects": false` in [package.json](package.json), so modern bundlers (esbuild, Rollup, Webpack 5+, tsdown) correctly eliminate unused exports even from the barrel.
+
 ## Subpath Imports
 
 | Import | Purpose |

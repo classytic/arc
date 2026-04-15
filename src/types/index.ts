@@ -987,8 +987,20 @@ interface RouteDefinition {
   readonly preAuth?: RouteHandlerMethod[];
   /** SSE streaming mode */
   readonly streamResponse?: boolean;
-  /** Fastify route schema */
-  readonly schema?: Record<string, unknown>;
+  /**
+   * Fastify route schema. Each slot (`body`, `querystring`, `params`, `headers`,
+   * `response[status]`) accepts a plain JSON Schema object **or** a Zod v4 schema —
+   * arc auto-converts via `convertRouteSchema` at registration time. Slot values
+   * are typed `unknown` so class-based Zod schemas assign without casts.
+   */
+  readonly schema?: {
+    body?: unknown;
+    querystring?: unknown;
+    params?: unknown;
+    headers?: unknown;
+    response?: Record<number | string, unknown>;
+    [key: string]: unknown;
+  };
   /**
    * MCP tool generation:
    * - omitted/true: auto-generate (non-raw routes only)
@@ -1024,8 +1036,11 @@ interface ActionDefinition {
   readonly handler: ActionHandlerFn;
   /** Per-action permission check (overrides resource-level actionPermissions) */
   readonly permissions?: PermissionCheck;
-  /** JSON Schema for action-specific body fields */
-  readonly schema?: Record<string, Record<string, unknown>>;
+  /**
+   * JSON Schema or Zod v4 schema for action-specific body fields.
+   * Per-field values are typed `unknown` so Zod class instances assign without casts.
+   */
+  readonly schema?: Record<string, unknown>;
   /** Description for OpenAPI docs and MCP tool */
   readonly description?: string;
   /**
@@ -1090,51 +1105,60 @@ export interface FieldRule {
 /**
  * CRUD Route Schemas (Fastify Native Format)
  *
+ * Each slot accepts either a plain JSON Schema object **or** a Zod v4 schema —
+ * arc's `convertRouteSchema` feature-detects at runtime. The slot values are
+ * typed `unknown` (not `Record<string, unknown>`) so class-based Zod schemas
+ * assign cleanly without `as unknown as Record<string, unknown>` casts.
+ *
  * @example
+ * ```ts
  * {
  *   list: {
  *     querystring: { type: 'object', properties: { page: { type: 'number' } } },
- *     response: { 200: { type: 'object', properties: { docs: { type: 'array' } } } }
+ *     response: { 200: z.object({ docs: z.array(EntitySchema) }) }
  *   },
  *   create: {
- *     body: { type: 'object', properties: { name: { type: 'string' } } },
- *     response: { 201: { type: 'object' } }
+ *     body: z.object({ name: z.string(), size: z.number().int().positive() }),
+ *     response: { 201: EntitySchema }
  *   }
  * }
+ * ```
  */
 export interface CrudSchemas {
   /** GET / - List all resources */
   list?: {
-    querystring?: Record<string, unknown>;
+    /** Plain JSON Schema or Zod schema (auto-converted). */
+    querystring?: unknown;
+    /** Map of HTTP status code → JSON Schema or Zod schema. */
     response?: Record<number, unknown>;
     [key: string]: unknown;
   };
 
   /** GET /:id - Get single resource */
   get?: {
-    params?: Record<string, unknown>;
+    params?: unknown;
     response?: Record<number, unknown>;
     [key: string]: unknown;
   };
 
   /** POST / - Create resource */
   create?: {
-    body?: Record<string, unknown>;
+    body?: unknown;
     response?: Record<number, unknown>;
     [key: string]: unknown;
   };
 
   /** PATCH /:id - Update resource */
   update?: {
-    params?: Record<string, unknown>;
-    body?: Record<string, unknown>;
+    params?: unknown;
+    body?: unknown;
     response?: Record<number, unknown>;
     [key: string]: unknown;
   };
 
   /** DELETE /:id - Delete resource */
   delete?: {
-    params?: Record<string, unknown>;
+    params?: unknown;
     response?: Record<number, unknown>;
     [key: string]: unknown;
   };

@@ -11,5 +11,14 @@
  * const store = new RedisIdempotencyStore({ client: new Redis() });
  */
 
-export type { RedisClient, RedisIdempotencyStoreOptions } from "./stores/redis.js";
-export { RedisIdempotencyStore } from "./stores/redis.js";
+export type {
+  IoredisLike,
+  RedisClient,
+  RedisIdempotencyStoreOptions,
+  UpstashRedisLike,
+} from "./stores/redis.js";
+export {
+  ioredisAsIdempotencyClient,
+  RedisIdempotencyStore,
+  upstashAsIdempotencyClient,
+} from "./stores/redis.js";

@@ -1,14 +1,71 @@
 # Changelog
 
+## 2.8.5
+
+### Fixed — Zod → Fastify schema regression
+
+- **`z.number().positive() / .negative() / .gt() / .lt()` no longer break route registration.** The converter in `src/utils/schemaConverter.ts` used to hardcode `target: "openapi-3.0"`, which emits the draft-04 boolean form `exclusiveMinimum: true`. Fastify v5's AJV 8 is configured for draft-07 and rejects that at route registration with `schema is invalid: data/properties/X/exclusiveMinimum must be number`. The default target is now `"draft-7"` (matches Fastify's bundled AJV) and emits the numeric form AJV expects. OpenAPI doc generation still uses `"openapi-3.0"` so 3.0 consumers see the boolean form they expect.
+- **`toJsonSchema()`, `convertRouteSchema()`, `convertOpenApiSchemas()`** now accept a `target: JsonSchemaTarget` argument (`"draft-7" | "draft-2020-12" | "openapi-3.0" | "openapi-3.1"`). Defaults are Fastify-first for validators and OpenAPI-first for doc generation.
+- **`$schema` meta stripped** from converted Zod output so AJV strict mode stays quiet when the bundled draft and Zod's emitted `$schema` URI don't match.
+- **`CrudSchemas` and `RouteDefinition.schema` slot types widened** from `Record<string, unknown>` to `unknown` so Zod class instances assign without `as unknown as Record<string, unknown>` casts at the wiring point.
+
+### Added — `filesUploadPreset` + `Storage` contract
+
+- **New preset** `filesUploadPreset({ storage, … })` from `@classytic/arc/presets/files-upload`. Registers three raw routes on the owning resource:
+  - `POST /upload` — multipart parsed, file persisted via `storage.upload()`, returns `{ success: true, data: { id, url, pathname, contentType, bytes, metadata? } }`.
+  - `GET /:id` — streams bytes back. Full HTTP Range support: single range (`bytes=start-end`), suffix (`bytes=-N`), open-ended (`bytes=N-`). Sends `Accept-Ranges: bytes` + `Content-Range` + 206 on partial reads. Falls back to server-side slicing when the adapter returns a full buffer.
+  - `DELETE /:id` — 204 on success, 404 on already-absent.
+- **New `Storage` interface** at `@classytic/arc/types/storage`. Deliberately minimal (5 methods, 3 optional). Adapters live in app source — arc ships zero reference adapters on purpose. `read(id, ctx, range?)` takes an optional `{ start, end }` range, end-inclusive, matching media-kit's `StorageDriver.read()` shape.
+- **New contract suite** `runStorageContract(name, setup)` from `@classytic/arc/testing/storage`. Verifies any `Storage` adapter against 9 behavioral assertions (upload/read round-trip, delete idempotency, scope threading, lifecycle, stream+buffer kinds, ranged reads). Passing the contract guarantees preset compatibility.
+- **Scope threading by default.** `contextFrom(scope)` defaults to `{ userId, organizationId }` extracted via `getUserId` / `getOrgId`. Override to project `projectId`, `workspaceId`, etc.
+- **Per-route opt-outs** via `includeRoutes: { upload?, read?, delete? }` and per-route permissions via `permissions: { upload?, read?, delete? }`.
+- **New subpath exports**: `./types/storage`, `./presets/files-upload`, `./testing/storage`. All tree-shakeable — pulling the preset does not drag in mongoose, S3 SDKs, or any storage-specific code.
+
+### Added — `multipartBody({ requiredFields })`
+
+- **New option** on the existing `multipartBody()` middleware: `requiredFields?: string[]`. When set, returns `400 { code: "MISSING_FILE_FIELDS", details: { missing } }` if any listed field is absent from the uploaded files. Singular vs plural wording handled automatically.
+- **Stays no-op for JSON requests** — the middleware still short-circuits on non-multipart content types, so the same middleware remains safe to add to shared create/update routes that accept both JSON and multipart.
+- **Discoverable from the options object** users already use (`maxFileSize`, `allowedMimeTypes`, `filesKey`). `filesKey` JSDoc now explicitly distinguishes "destination key on `req.body`" from "required source fields" to prevent confusion.
+
+### Documentation
+
+- New `docs/getting-started/files-upload.mdx` — full preset guide with four worked adapter samples (media-kit, raw S3, local FS, in-memory), `runStorageContract()` usage, when-not-to-use callout (OCR, ASR, classification flows belong in `multipartBody()` + raw route, not this preset).
+- `docs/getting-started/presets.mdx` updated with a `filesUpload` entry.
+
 ## 2.8.4
 
-### Added
+### Added — MCP ↔ AI SDK bridge
 
 - **MCP ↔ AI SDK bridge** — new helpers in `@classytic/arc/mcp`:
   - `bridgeToMcp(bridge)` exposes any AI SDK tool builder as an MCP tool with automatic auth, envelope translation, and error mapping.
   - `buildMcpToolsFromBridges(bridges, options)` takes a list of bridges and returns the registered MCP tool array, with optional `include`/`exclude` filtering for per-environment configuration (read-only deployments, strict allowlists).
   - `McpBridge.annotations` reuses the public `ToolAnnotations` type for consistency with `defineTool`.
-  - Use case: apps that already define AI SDK tools for in-process agents no longer need to hand-roll an MCP wrapper. Same tool definition, both transports.
+
+### Added — distributed-system hardening (audit against Redis Inc + BullMQ specialist skills)
+
+- **`jobsPlugin` wrapped with `fastify-plugin`** — `fastify.jobs.dispatch(...)` now works from the outer scope as documented (was previously encapsulated).
+- **Stalled-job event bridge** — `worker.on('stalled', ...)` publishes `job.*.stalled` through the arc event bus so silent worker crashes can be alerted on.
+- **Graceful shutdown pauses before closing** — `dispatcher.close()` now calls `worker.pause()` first so in-flight jobs drain on SIGTERM instead of being interrupted.
+- **Repeatable / cron jobs** — `defineJob({ repeat: { pattern, tz } | { every } })`. Cron patterns require an explicit `tz` (enforced at register time) to prevent DST drift. Schedules are upserted on plugin register.
+- **Large payload warning** — `dispatch()` logs a warning when serialized job data exceeds 100 KB ("pass IDs, not objects").
+- **Naive ioredis detection** — `jobsPlugin` warns at register time when the Redis connection lacks `maxRetriesPerRequest: null` (the setting BullMQ requires to survive connection blips).
+- **DLQ default name** uses `-dead` suffix instead of `:dead` (BullMQ rejects `:` in queue names).
+
+### Added — Redis client adapters (DX wins)
+
+- **`ioredisAsCacheClient(redis)`** and **`upstashAsCacheClient(redis)`** in `@classytic/arc/cache` — bridge either client to arc's `RedisCacheClient` contract without hand-rolled adapters.
+- **`ioredisAsIdempotencyClient(redis)`** and **`upstashAsIdempotencyClient(redis)`** in `@classytic/arc/idempotency/redis` — same for the idempotency store.
+- **Edge runtime support** — the `upstash*` adapters let arc's cache and idempotency layers run on Cloudflare Workers, Vercel Edge, and Deno Deploy via `@upstash/redis` (REST, no TCP).
+
+### Added — performance
+
+- **`RedisIdempotencyStore.findByPrefix()`** now fetches keys in concurrent batches of 10 with early termination on first unexpired match. On high-latency Redis (Upstash / ElastiCache across regions), this is roughly 10× faster than the previous sequential loop.
+
+### Documentation
+
+- **Bundle size section** in README with real numbers (~130 KB minimal), subpath-import pattern, and comparison vs Fastify/NestJS.
+- **"Streams vs Pub/Sub" decision table** in `skills/arc/references/events.md` — prevents users from picking pub/sub for business-critical events.
+- **Redis eviction policy guidance** — requires `noeviction` for any Redis backing queues/streams/idempotency, with per-provider notes (Upstash, self-hosted, ElastiCache).
 
 ## 2.8.3
 

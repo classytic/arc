@@ -597,9 +597,11 @@ function generateResourcePaths(
     };
 
     // Add request body from route.schema.body (for POST, PUT, PATCH)
-    // Auto-convert Zod schemas to JSON Schema (no-op for plain JSON Schema)
+    // Auto-convert Zod schemas to JSON Schema with the OpenAPI 3.0 target
+    // (arc emits OpenAPI 3.0.3 — using the Fastify default here would leak
+    // numeric `exclusiveMinimum` into 3.0 docs that expect the boolean form).
     const rawSchema = route.schema as Record<string, unknown> | undefined;
-    const routeSchema = rawSchema ? convertRouteSchema(rawSchema) : undefined;
+    const routeSchema = rawSchema ? convertRouteSchema(rawSchema, "openapi-3.0") : undefined;
     if (routeSchema?.body && ["post", "put", "patch"].includes(method)) {
       extras.requestBody = {
         required: true,

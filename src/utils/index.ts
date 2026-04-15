@@ -67,6 +67,7 @@ export {
   successResponseSchema,
   wrapResponse,
 } from "./responseSchemas.js";
+export type { JsonSchemaTarget } from "./schemaConverter.js";
 // Schema Converter
 export {
   convertOpenApiSchemas,

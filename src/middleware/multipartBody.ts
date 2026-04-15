@@ -70,8 +70,25 @@ export interface MultipartBodyOptions {
   /**
    * Key on `req.body` where parsed files are attached (default: '_files').
    * Set to a custom key if '_files' conflicts with your schema.
+   *
+   * Note: this is the **destination** key — it controls where parsed files
+   * land on `req.body`, not which form fields are required. To enforce that
+   * a specific file field must be present in the request, use `requiredFields`.
    */
   filesKey?: string;
+  /**
+   * Multipart form field names that MUST be present in the request.
+   * Returns 400 with `{ success: false, error, code: 'MISSING_FILE_FIELDS' }`
+   * when any listed field is absent from the uploaded files.
+   *
+   * Only enforced when the request IS multipart — JSON requests still pass
+   * through as no-ops so the same middleware stays safe to add to shared
+   * create/update routes that accept both content types.
+   *
+   * @example ['file']                  // single-field upload (OCR, classify)
+   * @example ['avatar', 'cover']       // multi-field upload (profile editor)
+   */
+  requiredFields?: string[];
 }
 
 const DEFAULT_MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
@@ -95,6 +112,10 @@ export function multipartBody(options: MultipartBodyOptions = {}): RouteHandlerM
   const maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
   const allowedMimeTypes = options.allowedMimeTypes ? new Set(options.allowedMimeTypes) : undefined;
   const filesKey = options.filesKey ?? DEFAULT_FILES_KEY;
+  const requiredFields =
+    options.requiredFields && options.requiredFields.length > 0
+      ? options.requiredFields
+      : undefined;
 
   return async function parseMultipartBody(request, reply) {
     // Skip non-multipart requests (JSON, urlencoded, etc.) — no-op
@@ -158,6 +179,21 @@ export function multipartBody(options: MultipartBodyOptions = {}): RouteHandlerM
         success: false,
         error: "Failed to parse multipart form data",
       });
+    }
+
+    // Enforce required file fields — only when multipart parsing actually ran.
+    // JSON requests short-circuited at the top and never reach here, preserving
+    // the "safe to add to shared create/update routes" property.
+    if (requiredFields) {
+      const missing = requiredFields.filter((name) => !(name in files));
+      if (missing.length > 0) {
+        return reply.code(400).send({
+          success: false,
+          error: `Missing required file field${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}`,
+          code: "MISSING_FILE_FIELDS",
+          details: { missing },
+        });
+      }
     }
 
     // Attach files if any were uploaded
