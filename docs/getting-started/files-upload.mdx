@@ -1,0 +1,618 @@
+# Files Upload
+
+Backend-agnostic file uploads for arc resources. One preset, one `Storage` interface, four adapter examples. **Arc ships zero reference adapters on purpose** — the 50-line adapter belongs in your app source, next to the decisions that inform it (dedup strategy, multi-tenancy policy, CDN integration, soft-delete TTL).
+
+## 30-second setup
+
+```typescript
+import { defineResource } from '@classytic/arc';
+import { filesUploadPreset } from '@classytic/arc/presets/files-upload';
+import { s3Storage } from './storage/s3-storage.js';
+
+export const fileResource = defineResource({
+  name: 'file',
+  prefix: '/files',
+  disableDefaultRoutes: true, // preset owns every route
+  permissions: {
+    list: allowPublic(),
+    get: allowPublic(),
+    create: allowPublic(),
+    update: allowPublic(),
+    delete: allowPublic(),
+  },
+  presets: [
+    filesUploadPreset({
+      storage: s3Storage({ bucket: 'my-app-uploads' }),
+      allowedMimeTypes: ['image/png', 'image/jpeg', 'application/pdf'],
+      maxFileSize: 5 * 1024 * 1024, // 5 MB
+    }),
+  ],
+});
+```
+
+That's it. Three routes register on the resource:
+
+| Method | Path | Behavior |
+|--------|------|----------|
+| `POST` | `/files/upload` | Multipart → `storage.upload()` → `{ success: true, data: { id, url, pathname, contentType, bytes, metadata? } }` |
+| `GET` | `/files/:id` | Streams bytes back with full HTTP Range support |
+| `DELETE` | `/files/:id` | 204 on success, 404 on already-absent |
+
+Auth, logging, metrics, events all go through arc's existing middleware chain. The preset does not invent its own auth model and does not persist metadata — that's the adapter's job.
+
+## The `Storage` interface
+
+```typescript
+import type { Storage } from '@classytic/arc/types/storage';
+
+export interface Storage {
+  upload(input: StorageUploadInput, ctx: StorageContext): Promise<StorageFile>;
+  read(id: string, ctx: StorageContext, range?: StorageReadRange): Promise<StorageReadResult>;
+  delete(id: string, ctx: StorageContext): Promise<boolean>;
+  exists?(id: string, ctx: StorageContext): Promise<boolean>;
+  resolveUrl?(id: string, ctx: StorageContext): Promise<string>;
+}
+```
+
+Five methods, three of them optional. Any decent storage wrapper is 50–100 LOC.
+
+**Types:**
+
+```typescript
+interface StorageUploadInput {
+  buffer: Buffer;
+  filename: string;
+  mimeType: string; // IANA media type
+  size: number;
+}
+
+interface StorageContext {
+  scope?: Record<string, unknown>; // threaded from RequestScope via contextFrom
+  requestId?: string;
+}
+
+interface StorageFile {
+  id: string;         // adapter owns the namespace — used as the route param
+  url: string;        // public or signed URL
+  pathname: string;   // storage-side key (opaque to arc)
+  contentType: string;
+  bytes: number;
+  metadata?: Record<string, unknown>; // adapter-defined passthrough
+}
+
+interface StorageReadRange {
+  start: number; // inclusive
+  end: number;   // inclusive, matches HTTP Range semantics
+}
+
+type StorageReadResult =
+  | { kind: 'stream'; stream: NodeJS.ReadableStream; contentType: string; bytes?: number; range?: StorageReadRange }
+  | { kind: 'buffer'; buffer: Buffer; contentType: string; totalBytes?: number; range?: StorageReadRange };
+```
+
+**On `read()` and ranges:** if `range` is provided, implementations SHOULD return only the requested slice and echo `range` on the result. Implementations that cannot range (trivial in-memory adapters, legacy backends) MAY return the full object — the preset slices it server-side. Both paths are contract-compliant.
+
+**On `delete()`:** MAY be a soft delete. The interface doesn't dictate lifecycle. Return `false` when the id was already absent.
+
+## Preset options
+
+```typescript
+filesUploadPreset({
+  // Required
+  storage: Storage,
+
+  // Multipart tuning (forwarded to the middleware)
+  fieldName?: string,                       // default: 'file'
+  maxFileSize?: number,                     // default: 10 MB
+  allowedMimeTypes?: string[],              // default: no filter
+
+  // Per-route permissions (defaults: upload → requireAuth, read → allowPublic, delete → requireAuth)
+  permissions?: {
+    upload?: PermissionCheck;
+    read?: PermissionCheck;
+    delete?: PermissionCheck;
+  },
+
+  // Opt-outs (default: all three routes enabled)
+  includeRoutes?: {
+    upload?: boolean;
+    read?: boolean;
+    delete?: boolean;
+  },
+
+  // Map RequestScope → StorageContext.scope
+  // Default: { userId, organizationId } via getUserId / getOrgId
+  contextFrom?: (scope: RequestScope | undefined) => Record<string, unknown>,
+});
+```
+
+## Scope threading
+
+The preset projects `RequestScope` into `StorageContext.scope` by default, so adapters can isolate per-tenant / per-user / per-project without arc knowing anything about your isolation model:
+
+```typescript
+// Default contextFrom — works out of the box for most apps
+function defaultContextFrom(scope) {
+  return {
+    userId: getUserId(scope),
+    organizationId: getOrgId(scope),
+  };
+}
+
+// Customize — add projectId, workspaceId, any app-specific key
+filesUploadPreset({
+  storage,
+  contextFrom: (scope) => ({
+    userId: getUserId(scope),
+    organizationId: getOrgId(scope),
+    projectId: scope?.kind === 'member' ? scope.orgContext?.projectId : undefined,
+  }),
+});
+```
+
+Adapters ignore keys they don't care about — it's a passthrough bag, not a typed contract. Complete scope threading is always safer than missing keys.
+
+## HTTP Range support
+
+`GET /:id` automatically sends `Accept-Ranges: bytes` and handles three range forms:
+
+| Header | Returns | Example |
+|--------|---------|---------|
+| `Range: bytes=100-199` | Bytes 100–199 inclusive, 206 + `Content-Range` | Mid-object slice |
+| `Range: bytes=-500` | Last 500 bytes, 206 + `Content-Range` | Suffix range (needs `totalBytes` from adapter) |
+| `Range: bytes=1024-` | From byte 1024 to end, 206 + `Content-Range` | Open-ended (needs `totalBytes`) |
+
+If the adapter honors the range (sets `range` on the result), the preset echoes it. If the adapter returns a full buffer unsliced, the preset slices server-side. If the adapter returns a full **stream** unsliced, the preset falls through to a 200 response (RFC 7233 §4.1 allows this — we can't safely slice an arbitrary stream without buffering it).
+
+---
+
+## Four worked adapter examples
+
+Copy-paste the one that matches your stack. None of these ship in arc.
+
+### 1. Media-kit adapter (~80 LOC)
+
+For MongoDB users who want variants, transforms, dedup, and a metadata collection. Delegates to `@classytic/media-kit`'s engine.
+
+```typescript
+// app/src/storage/media-kit-storage.ts
+import type { Storage } from '@classytic/arc/types/storage';
+import type { MediaEngine } from '@classytic/media-kit';
+
+export function mediaKitStorage(engine: MediaEngine): Storage {
+  const media = engine.repositories.media;
+
+  return {
+    async upload(input, ctx) {
+      const doc = await media.upload(
+        { buffer: input.buffer, filename: input.filename, mimeType: input.mimeType },
+        {
+          organizationId: ctx.scope?.organizationId as string | undefined,
+          userId: ctx.scope?.userId as string | undefined,
+        },
+      );
+      return {
+        id: String(doc._id),
+        url: await media.getAssetUrl(doc),
+        pathname: doc.key,
+        contentType: doc.mimeType,
+        bytes: doc.size,
+        metadata: { hash: doc.hash, variants: doc.variants },
+      };
+    },
+
+    async read(id, _ctx, range) {
+      const doc = await media.getById(id);
+      if (!doc) throw new Error('Not found');
+      const stream = await engine.driver.read(doc.key, range);
+      return {
+        kind: 'stream',
+        stream,
+        contentType: doc.mimeType,
+        bytes: doc.size,
+        range,
+      };
+    },
+
+    async delete(id, ctx) {
+      return media.softDelete(id, {
+        organizationId: ctx.scope?.organizationId as string | undefined,
+      });
+    },
+
+    async resolveUrl(id) {
+      const doc = await media.getById(id);
+      return doc ? media.getAssetUrl(doc) : '';
+    },
+  };
+}
+```
+
+### 2. Raw S3 adapter (~80 LOC)
+
+Bring your own `@aws-sdk/client-s3`. No dedup, no metadata — for apps that just need bytes in S3.
+
+```typescript
+// app/src/storage/s3-storage.ts
+import type { Storage } from '@classytic/arc/types/storage';
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+} from '@aws-sdk/client-s3';
+import { randomUUID } from 'node:crypto';
+
+export interface S3StorageOptions {
+  client: S3Client;
+  bucket: string;
+  baseUrl: string;
+  /** Map id → S3 key. For trivial setups, in-memory Map is fine; for prod, persist to your own DB. */
+  resolveKey: (id: string) => Promise<string | undefined>;
+  persistKey: (id: string, key: string) => Promise<void>;
+}
+
+export function s3Storage(opts: S3StorageOptions): Storage {
+  const { client, bucket, baseUrl, resolveKey, persistKey } = opts;
+
+  return {
+    async upload(input, ctx) {
+      const id = randomUUID();
+      const ext = input.filename.split('.').pop() ?? 'bin';
+      const scopeKey = String(ctx.scope?.organizationId ?? 'global');
+      const key = `${scopeKey}/${id}.${ext}`;
+
+      await client.send(
+        new PutObjectCommand({
+          Bucket: bucket,
+          Key: key,
+          Body: input.buffer,
+          ContentType: input.mimeType,
+        }),
+      );
+      await persistKey(id, key);
+
+      return {
+        id,
+        url: `${baseUrl}/${key}`,
+        pathname: key,
+        contentType: input.mimeType,
+        bytes: input.size,
+      };
+    },
+
+    async read(id, _ctx, range) {
+      const key = await resolveKey(id);
+      if (!key) throw new Error('Not found');
+
+      const rangeHeader = range ? `bytes=${range.start}-${range.end}` : undefined;
+      const out = await client.send(
+        new GetObjectCommand({ Bucket: bucket, Key: key, Range: rangeHeader }),
+      );
+      const total = Number(out.ContentLength ?? 0);
+
+      return {
+        kind: 'stream',
+        stream: out.Body as NodeJS.ReadableStream,
+        contentType: out.ContentType ?? 'application/octet-stream',
+        bytes: total,
+        range,
+      };
+    },
+
+    async delete(id) {
+      const key = await resolveKey(id);
+      if (!key) return false;
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+      return true;
+    },
+  };
+}
+```
+
+### 3. Local filesystem adapter (~70 LOC)
+
+For `npm run dev`. Scopes by organizationId, guards against path traversal.
+
+```typescript
+// app/src/storage/local-storage.ts
+import type { Storage } from '@classytic/arc/types/storage';
+import { createReadStream, promises as fs } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+
+export interface LocalStorageOptions {
+  basePath: string;
+  baseUrl?: string; // default: '/api/files'
+}
+
+export function localStorage(opts: LocalStorageOptions): Storage {
+  const baseUrl = opts.baseUrl ?? '/api/files';
+  const base = resolve(opts.basePath);
+
+  function scopedPath(ctx: { scope?: Record<string, unknown> }, id: string): string {
+    const scopeKey = String(ctx.scope?.organizationId ?? 'default');
+    const filepath = resolve(base, scopeKey, id);
+    // Path-traversal guard — never let `id` escape the base directory.
+    if (!filepath.startsWith(base)) throw new Error('Path traversal');
+    return filepath;
+  }
+
+  return {
+    async upload(input, ctx) {
+      const id = randomUUID();
+      const scopeKey = String(ctx.scope?.organizationId ?? 'default');
+      const dir = resolve(base, scopeKey);
+      await fs.mkdir(dir, { recursive: true });
+
+      const filepath = join(dir, id);
+      await fs.writeFile(filepath, input.buffer);
+
+      return {
+        id,
+        url: `${baseUrl}/${id}`,
+        pathname: `${scopeKey}/${id}`,
+        contentType: input.mimeType,
+        bytes: input.size,
+      };
+    },
+
+    async read(id, ctx, range) {
+      const filepath = scopedPath(ctx, id);
+      const stat = await fs.stat(filepath).catch(() => null);
+      if (!stat) throw new Error('Not found');
+
+      const stream = range
+        ? createReadStream(filepath, { start: range.start, end: range.end })
+        : createReadStream(filepath);
+
+      return {
+        kind: 'stream',
+        stream,
+        contentType: 'application/octet-stream',
+        bytes: stat.size,
+        range,
+      };
+    },
+
+    async delete(id, ctx) {
+      const filepath = scopedPath(ctx, id);
+      try {
+        await fs.unlink(filepath);
+        return true;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+        throw err;
+      }
+    },
+  };
+}
+```
+
+### 4. In-memory adapter (~30 LOC)
+
+For unit tests. Scope-keyed so multi-tenant tests see isolation.
+
+```typescript
+// app/src/storage/memory-storage.ts
+import type { Storage } from '@classytic/arc/types/storage';
+import { randomUUID } from 'node:crypto';
+
+export function memoryStorage(): Storage {
+  const rows = new Map<
+    string,
+    { buffer: Buffer; contentType: string; scope: Record<string, unknown> | undefined }
+  >();
+
+  return {
+    async upload(input, ctx) {
+      const id = randomUUID();
+      rows.set(id, {
+        buffer: Buffer.from(input.buffer),
+        contentType: input.mimeType,
+        scope: ctx.scope,
+      });
+      return {
+        id,
+        url: `memory://${id}`,
+        pathname: id,
+        contentType: input.mimeType,
+        bytes: input.size,
+      };
+    },
+
+    async read(id, _ctx, range) {
+      const row = rows.get(id);
+      if (!row) throw new Error('Not found');
+      if (range) {
+        return {
+          kind: 'buffer',
+          buffer: row.buffer.subarray(range.start, range.end + 1),
+          contentType: row.contentType,
+          totalBytes: row.buffer.length,
+          range,
+        };
+      }
+      return { kind: 'buffer', buffer: row.buffer, contentType: row.contentType };
+    },
+
+    async delete(id) {
+      return rows.delete(id);
+    },
+  };
+}
+```
+
+---
+
+## Verifying your adapter
+
+Arc ships a contract test suite at `@classytic/arc/testing/storage`. Any adapter that passes it is guaranteed to work with `filesUploadPreset`.
+
+```typescript
+// app/tests/storage.contract.test.ts
+import { runStorageContract } from '@classytic/arc/testing/storage';
+import { s3Storage } from '../src/storage/s3-storage.js';
+
+runStorageContract('s3Storage', async () => {
+  const storage = s3Storage({ /* test config */ });
+  return { storage, teardown: async () => { /* cleanup */ } };
+});
+```
+
+The suite covers ~9 behaviors:
+
+1. `upload()` returns a populated `StorageFile`
+2. `read(upload.id)` round-trips the exact bytes
+3. `delete()` returns `true` first time, `false` (or throws) after
+4. `exists()` (if implemented) agrees with upload/delete state
+5. `resolveUrl()` (if implemented) returns a non-empty URL
+6. Two isolated scopes get distinct ids (scope threading)
+7. Full lifecycle: upload → read → delete → read rejects
+8. Both `kind: 'stream'` and `kind: 'buffer'` results deliver correct bytes
+9. Ranged reads slice correctly (when adapter supports them)
+
+---
+
+## When NOT to use this preset
+
+The preset is built around **persistent CRUD-over-bytes** — upload → get an id → later GET by id → eventually DELETE. It is the wrong tool for **process-and-return** flows:
+
+- OCR (`POST /ocr/extract` → `{ text, confidence, blocks }`)
+- Speech-to-text / ASR
+- Image classification or tagging
+- PDF → text extraction
+- Content moderation scans
+- LLM analysis (vision, embeddings-on-upload)
+- Thumbnail-and-reply (no persistence needed)
+
+These flows don't want an `id`, don't want a `url`, don't want `GET /:id`, and don't want `DELETE /:id`. The preset's other two routes become dead weight and forcing you to write a no-op `Storage` adapter just to use the preset is strictly worse than not using it.
+
+**The right tool** for process-and-return is arc's `multipartBody()` middleware with a raw route. About 10 lines, no adapter:
+
+```typescript
+import { multipartBody } from '@classytic/arc/middleware';
+
+defineResource({
+  name: 'ocr',
+  prefix: '/ocr',
+  disableDefaultRoutes: true,
+  permissions: { /* ... */ },
+  routes: [
+    {
+      method: 'POST',
+      path: '/extract',
+      raw: true,
+      permissions: requireAuth(),
+      preHandler: [
+        multipartBody({
+          maxFileSize: 10 * 1024 * 1024,
+          allowedMimeTypes: ['application/pdf', 'image/png', 'image/jpeg'],
+          requiredFields: ['file'], // 400 if missing — no handler guard needed
+        }),
+      ],
+      handler: async (req, reply) => {
+        const file = (req.body as any)._files.file; // guaranteed by middleware
+        const result = await ocr.extract(file.buffer, file.mimetype);
+        return reply.send({ success: true, data: result });
+      },
+    },
+  ],
+});
+```
+
+---
+
+## Composing adapters
+
+The `Storage` interface is small on purpose — wrap it to add cross-cutting concerns without touching the base adapter.
+
+**Caching wrapper:**
+
+```typescript
+export function withCache(inner: Storage, cache: Cache): Storage {
+  return {
+    ...inner,
+    async read(id, ctx, range) {
+      const key = `file:${id}:${range ? `${range.start}-${range.end}` : 'full'}`;
+      const cached = await cache.get(key);
+      if (cached) return { kind: 'buffer', buffer: cached, contentType: 'application/octet-stream' };
+      const result = await inner.read(id, ctx, range);
+      // cache only small buffers
+      if (result.kind === 'buffer' && result.buffer.length < 1024 * 1024) {
+        await cache.set(key, result.buffer);
+      }
+      return result;
+    },
+  };
+}
+```
+
+**Encryption wrapper:**
+
+```typescript
+export function withEncryption(inner: Storage, key: Buffer): Storage {
+  return {
+    ...inner,
+    async upload(input, ctx) {
+      return inner.upload({ ...input, buffer: encrypt(input.buffer, key) }, ctx);
+    },
+    async read(id, ctx, range) {
+      // NOTE: encrypt-then-range is a lie — you can't slice ciphertext safely.
+      // Only range AFTER decrypting by buffering the full object.
+      const result = await inner.read(id, ctx); // ignore range
+      if (result.kind !== 'buffer') throw new Error('encrypted adapters must return buffer');
+      const plain = decrypt(result.buffer, key);
+      if (range) {
+        return {
+          kind: 'buffer',
+          buffer: plain.subarray(range.start, range.end + 1),
+          contentType: result.contentType,
+          totalBytes: plain.length,
+          range,
+        };
+      }
+      return { kind: 'buffer', buffer: plain, contentType: result.contentType };
+    },
+  };
+}
+```
+
+**Multi-backend routing** (hot files on SSD, cold on S3):
+
+```typescript
+export function routeByAge(hot: Storage, cold: Storage, hotDays: number): Storage {
+  return {
+    upload: hot.upload, // new uploads always go to hot
+    async read(id, ctx, range) {
+      try {
+        return await hot.read(id, ctx, range);
+      } catch {
+        return cold.read(id, ctx, range);
+      }
+    },
+    async delete(id, ctx) {
+      const a = await hot.delete(id, ctx).catch(() => false);
+      const b = await cold.delete(id, ctx).catch(() => false);
+      return a || b;
+    },
+  };
+}
+```
+
+## What this preset does NOT cover
+
+By design. These either belong in your adapter, in a richer package like `@classytic/media-kit`, or in a custom route:
+
+- **Image variants / transforms** (thumbnails, webp conversion) — media-kit territory
+- **Batch or resumable uploads** — write your own route
+- **Signed upload URLs (presigned PUT)** — add a custom route on the resource that calls your adapter's presign method
+- **Virus scanning, hashing, dedup** — wrap the adapter
+- **Custom response shapes** (legacy endpoints) — use `multipartBody()` directly, skip the preset
+
+## See Also
+
+- [Presets](./presets) — the full preset catalog
+- [Core Module](./core) — resource definition
+- [Tree-Shaking](./tree-shaking) — how `./presets/files-upload` and `./types/storage` stay out of bundles that don't use them
+- [@classytic/media-kit](https://npmjs.com/@classytic/media-kit) — richer storage with variants, transforms, and a metadata collection if you're on MongoDB

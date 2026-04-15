@@ -242,6 +242,60 @@ describe("toJsonSchema", () => {
     const result = toJsonSchema(fakeZod);
     expect(result).toEqual({ type: "object" });
   });
+
+  // ---------------------------------------------------------------------------
+  // Regression: Zod .positive() / .negative() / .gt() / .lt() with Fastify AJV
+  // ---------------------------------------------------------------------------
+  // The `openapi-3.0` target emits boolean `exclusiveMinimum: true` (draft-04
+  // legacy form), which Fastify v5's AJV 8 rejects at route registration with
+  // `schema is invalid: data/properties/X/exclusiveMinimum must be number`.
+  // Default target is `draft-7` which emits the numeric form AJV expects.
+
+  it("defaults to numeric exclusiveMinimum for z.number().positive() (Fastify AJV compatible)", () => {
+    const result = toJsonSchema(z.object({ size: z.number().int().positive() }));
+    expect(result).toMatchObject({
+      properties: { size: { exclusiveMinimum: 0 } },
+    });
+    // Must NOT emit the draft-04 boolean form
+    expect(result).not.toMatchObject({
+      properties: { size: { exclusiveMinimum: true } },
+    });
+  });
+
+  it("defaults to numeric exclusiveMaximum for z.number().negative()", () => {
+    const result = toJsonSchema(z.object({ delta: z.number().negative() }));
+    expect(result).toMatchObject({
+      properties: { delta: { exclusiveMaximum: 0 } },
+    });
+  });
+
+  it("defaults to numeric exclusiveMinimum for z.number().gt(n)", () => {
+    const result = toJsonSchema(z.object({ n: z.number().gt(5) }));
+    expect(result).toMatchObject({
+      properties: { n: { exclusiveMinimum: 5 } },
+    });
+  });
+
+  it("defaults to numeric exclusiveMaximum for z.number().lt(n)", () => {
+    const result = toJsonSchema(z.object({ n: z.number().lt(10) }));
+    expect(result).toMatchObject({
+      properties: { n: { exclusiveMaximum: 10 } },
+    });
+  });
+
+  it("strips $schema meta so Fastify AJV strict mode stays quiet", () => {
+    const result = toJsonSchema(z.object({ a: z.string() }));
+    expect(result).toBeDefined();
+    expect(Object.hasOwn(result as object, "$schema")).toBe(false);
+  });
+
+  it("openapi-3.0 target still emits boolean exclusive form for doc generation", () => {
+    const result = toJsonSchema(z.object({ size: z.number().positive() }), "openapi-3.0");
+    // OpenAPI 3.0 schemas keep the legacy boolean + minimum pair
+    expect(result).toMatchObject({
+      properties: { size: { exclusiveMinimum: true, minimum: 0 } },
+    });
+  });
 });
 
 // ============================================================================

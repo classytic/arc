@@ -6,6 +6,7 @@ export default {
   auth: 'Authentication',
   permissions: 'Permissions',
   presets: 'Presets',
+  'files-upload': 'Files Upload',
   org: 'Organization / Multi-tenant',
   'tree-shaking': 'Tree-Shaking',
   examples: 'Examples',

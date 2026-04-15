@@ -30,8 +30,12 @@ export {
   queryCachePlugin,
 } from "./queryCachePlugin.js";
 export {
+  type IoredisLike,
+  ioredisAsCacheClient,
   type RedisCacheClient,
   RedisCacheStore,
   type RedisCacheStoreOptions,
   type RedisPipeline,
+  type UpstashRedisLike,
+  upstashAsCacheClient,
 } from "./redis.js";

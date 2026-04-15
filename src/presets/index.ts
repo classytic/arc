@@ -52,6 +52,12 @@ export type { AuditedPresetOptions } from "./audited.js";
 export { auditedPreset } from "./audited.js";
 export type { BulkOperation, BulkPresetOptions } from "./bulk.js";
 export { bulkPreset } from "./bulk.js";
+export type {
+  FilesUploadPresetOptions,
+  FilesUploadPresetPermissions,
+  FilesUploadPresetRoutes,
+} from "./filesUpload.js";
+export { filesUploadPreset } from "./filesUpload.js";
 export type { TreeOptions } from "./tree.js";
 export { treePreset } from "./tree.js";
 

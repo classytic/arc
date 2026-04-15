@@ -153,18 +153,32 @@ export class RedisIdempotencyStore implements IdempotencyStore {
 
   async findByPrefix(prefix: string): Promise<IdempotencyResult | undefined> {
     const keys = await this.scanByPrefix(this.resultKey(prefix));
-    for (const key of keys) {
-      const data = await this.client.get(key);
-      if (!data) continue;
-      try {
-        const result = JSON.parse(data) as IdempotencyResult;
-        if (new Date(result.expiresAt) < new Date()) continue;
-        return {
-          ...result,
-          createdAt: new Date(result.createdAt),
-          expiresAt: new Date(result.expiresAt),
-        };
-      } catch {}
+    if (keys.length === 0) return undefined;
+
+    // Fetch in concurrent batches with early termination. Sequential GETs
+    // would block on N round-trips of Redis RTT — over TLS on a managed
+    // provider like Upstash that's easily 10ms+ per call. We fetch 10 at a
+    // time, scan the batch for an unexpired match, and return as soon as
+    // we find one without loading the rest.
+    const BATCH_SIZE = 10;
+    const now = new Date();
+
+    for (let i = 0; i < keys.length; i += BATCH_SIZE) {
+      const batch = keys.slice(i, i + BATCH_SIZE);
+      const values = await Promise.all(batch.map((k) => this.client.get(k)));
+
+      for (const data of values) {
+        if (!data) continue;
+        try {
+          const result = JSON.parse(data) as IdempotencyResult;
+          if (new Date(result.expiresAt) < now) continue;
+          return {
+            ...result,
+            createdAt: new Date(result.createdAt),
+            expiresAt: new Date(result.expiresAt),
+          };
+        } catch {}
+      }
     }
     return undefined;
   }
@@ -192,4 +206,164 @@ export class RedisIdempotencyStore implements IdempotencyStore {
     // Don't close the client - it's passed in and may be shared
     // The caller is responsible for closing it
   }
+}
+
+// ============================================================================
+// Adapters — bridge common Redis clients to the idempotency RedisClient shape
+// ============================================================================
+
+/** Minimal ioredis shape we depend on — keeps this file peer-dep-free. */
+export interface IoredisLike {
+  get(key: string): Promise<string | null>;
+  set(...args: unknown[]): Promise<string | null>;
+  del(...keys: string[]): Promise<number>;
+  exists(...keys: string[]): Promise<number>;
+  scan(cursor: string | number, ...args: (string | number)[]): Promise<[string, string[]]>;
+  eval?(script: string, numKeys: number, ...args: (string | number)[]): Promise<unknown>;
+  quit?(): Promise<string>;
+  disconnect?(): void;
+}
+
+/**
+ * Wrap an ioredis instance as the arc idempotency `RedisClient`.
+ *
+ * Arc's idempotency store expects node-redis-v4 style option objects
+ * (`{ EX, NX }`). ioredis uses positional flags. This adapter lets users
+ * plug an ioredis instance in without writing the bridge themselves.
+ *
+ * @example
+ * ```typescript
+ * import Redis from 'ioredis';
+ * import { RedisIdempotencyStore, ioredisAsIdempotencyClient }
+ *   from '@classytic/arc/idempotency/redis';
+ *
+ * const redis = new Redis(process.env.REDIS_URL);
+ * const store = new RedisIdempotencyStore({
+ *   client: ioredisAsIdempotencyClient(redis),
+ * });
+ * ```
+ */
+export function ioredisAsIdempotencyClient(client: IoredisLike): RedisClient & {
+  eval?: (script: string, numkeys: number, ...args: (string | number)[]) => Promise<unknown>;
+} {
+  return {
+    async get(key) {
+      return client.get(key);
+    },
+    async set(key, value, options) {
+      const args: unknown[] = [key, value];
+      if (options?.EX != null) args.push("EX", options.EX);
+      if (options?.NX) args.push("NX");
+      return (client.set as (...a: unknown[]) => Promise<string | null>)(...args);
+    },
+    async del(key) {
+      if (Array.isArray(key)) return client.del(...key);
+      return client.del(key);
+    },
+    async exists(key) {
+      if (Array.isArray(key)) return client.exists(...key);
+      return client.exists(key);
+    },
+    async scan(cursor, ...args) {
+      const [next, keys] = await client.scan(cursor, ...args);
+      return [next, keys];
+    },
+    eval: client.eval
+      ? (script, numKeys, ...args) => client.eval!(script, numKeys, ...args)
+      : undefined,
+    async quit() {
+      if (client.quit) return client.quit();
+      return "OK";
+    },
+    async disconnect() {
+      if (client.disconnect) client.disconnect();
+    },
+  };
+}
+
+/** Minimal `@upstash/redis` shape we depend on (REST client, edge-safe). */
+export interface UpstashRedisLike {
+  get(key: string): Promise<string | null | unknown>;
+  set(key: string, value: unknown, opts?: Record<string, unknown>): Promise<unknown>;
+  del(...keys: string[]): Promise<number>;
+  exists(...keys: string[]): Promise<number>;
+  scan(
+    cursor: number | string,
+    opts?: { match?: string; count?: number },
+  ): Promise<[number, string[]] | [string, string[]]>;
+  eval?(script: string, keys: string[], args: (string | number)[]): Promise<unknown>;
+}
+
+/**
+ * Wrap an `@upstash/redis` REST client as an idempotency `RedisClient`.
+ *
+ * Enables running arc's idempotency store on Cloudflare Workers, Vercel Edge
+ * and Deno Deploy — runtimes that don't support raw TCP (ioredis).
+ *
+ * @example
+ * ```typescript
+ * import { Redis } from '@upstash/redis';
+ * import { RedisIdempotencyStore, upstashAsIdempotencyClient }
+ *   from '@classytic/arc/idempotency/redis';
+ *
+ * const redis = Redis.fromEnv();
+ * const store = new RedisIdempotencyStore({
+ *   client: upstashAsIdempotencyClient(redis),
+ * });
+ * ```
+ */
+export function upstashAsIdempotencyClient(client: UpstashRedisLike): RedisClient & {
+  eval?: (script: string, numkeys: number, ...args: (string | number)[]) => Promise<unknown>;
+} {
+  return {
+    async get(key) {
+      const raw = await client.get(key);
+      if (raw == null) return null;
+      // Arc stores JSON strings; upstash auto-deserializes. Re-serialize to
+      // preserve the contract so RedisIdempotencyStore can JSON.parse it.
+      return typeof raw === "string" ? raw : JSON.stringify(raw);
+    },
+    async set(key, value, options) {
+      const opts: Record<string, unknown> = {};
+      if (options?.EX != null) opts.ex = options.EX;
+      if (options?.NX) opts.nx = true;
+      const res = await client.set(key, value, opts);
+      return res == null ? null : String(res);
+    },
+    async del(key) {
+      if (Array.isArray(key)) return client.del(...key);
+      return client.del(key);
+    },
+    async exists(key) {
+      if (Array.isArray(key)) return client.exists(...key);
+      return client.exists(key);
+    },
+    async scan(cursor, ...args) {
+      const opts: { match?: string; count?: number } = {};
+      for (let i = 0; i < args.length; i += 2) {
+        const flag = String(args[i]).toLowerCase();
+        const val = args[i + 1];
+        if (flag === "match" && typeof val === "string") opts.match = val;
+        if (flag === "count") opts.count = Number(val);
+      }
+      const [next, keys] = await client.scan(cursor, opts);
+      return [next, keys];
+    },
+    eval: client.eval
+      ? async (script, _numKeys, ...args) => {
+          // Upstash eval takes (script, keys[], args[]) — arc's contract passes
+          // numkeys + flat args. Splitting here preserves the arc shape.
+          const keyCount = _numKeys;
+          const keys = args.slice(0, keyCount).map(String);
+          const rest = args.slice(keyCount);
+          return client.eval!(script, keys, rest);
+        }
+      : undefined,
+    async quit() {
+      return "OK";
+    },
+    async disconnect() {
+      /* no-op — HTTP client has no persistent connection */
+    },
+  };
 }

@@ -64,13 +64,16 @@ describe("Public API Contract", () => {
       "./plugins/tracing",
       "./policies",
       "./presets",
+      "./presets/files-upload",
       "./presets/tenant",
       "./registry",
       "./rpc",
       "./schemas",
       "./scope",
       "./testing",
+      "./testing/storage",
       "./types",
+      "./types/storage",
       "./utils",
     ].sort();
 

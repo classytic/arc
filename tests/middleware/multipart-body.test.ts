@@ -19,13 +19,9 @@ describe("multipartBody middleware", () => {
     await app.register(multipartPlugin, { limits: { fileSize: 10 * 1024 * 1024 } });
 
     // Route with multipartBody middleware
-    app.post(
-      "/products",
-      { preHandler: [multipartBody()] },
-      async (request) => {
-        return { body: request.body };
-      },
-    );
+    app.post("/products", { preHandler: [multipartBody()] }, async (request) => {
+      return { body: request.body };
+    });
 
     // Route with MIME type restriction
     app.post(
@@ -43,14 +39,32 @@ describe("multipartBody middleware", () => {
       },
     );
 
-    // Route with custom files key
+    // Route that requires a single file field (OCR-style endpoint)
     app.post(
-      "/docs",
-      { preHandler: [multipartBody({ filesKey: "uploads" })] },
+      "/ocr",
+      {
+        preHandler: [multipartBody({ requiredFields: ["file"] })],
+      },
       async (request) => {
         return { body: request.body };
       },
     );
+
+    // Route that requires multiple file fields (multi-upload editor)
+    app.post(
+      "/profile",
+      {
+        preHandler: [multipartBody({ requiredFields: ["avatar", "cover"] })],
+      },
+      async (request) => {
+        return { body: request.body };
+      },
+    );
+
+    // Route with custom files key
+    app.post("/docs", { preHandler: [multipartBody({ filesKey: "uploads" })] }, async (request) => {
+      return { body: request.body };
+    });
 
     await app.ready();
   });
@@ -103,7 +117,13 @@ describe("multipartBody middleware", () => {
     const fileContent = Buffer.from("fake image data");
     const form = buildMultipart([
       { type: "field", name: "name", value: "Product Photo" },
-      { type: "file", name: "image", filename: "photo.png", mimetype: "image/png", content: fileContent },
+      {
+        type: "file",
+        name: "image",
+        filename: "photo.png",
+        mimetype: "image/png",
+        content: fileContent,
+      },
     ]);
 
     const response = await app.inject({
@@ -128,8 +148,20 @@ describe("multipartBody middleware", () => {
   it("should handle multiple files", async () => {
     const form = buildMultipart([
       { type: "field", name: "title", value: "Gallery" },
-      { type: "file", name: "cover", filename: "cover.jpg", mimetype: "image/jpeg", content: Buffer.from("cover") },
-      { type: "file", name: "thumb", filename: "thumb.png", mimetype: "image/png", content: Buffer.from("thumb") },
+      {
+        type: "file",
+        name: "cover",
+        filename: "cover.jpg",
+        mimetype: "image/jpeg",
+        content: Buffer.from("cover"),
+      },
+      {
+        type: "file",
+        name: "thumb",
+        filename: "thumb.png",
+        mimetype: "image/png",
+        content: Buffer.from("thumb"),
+      },
     ]);
 
     const response = await app.inject({
@@ -149,9 +181,7 @@ describe("multipartBody middleware", () => {
   // ── No files = no _files key ──
 
   it("should not add _files key when no files uploaded", async () => {
-    const form = buildMultipart([
-      { type: "field", name: "name", value: "NoFile" },
-    ]);
+    const form = buildMultipart([{ type: "field", name: "name", value: "NoFile" }]);
 
     const response = await app.inject({
       method: "POST",
@@ -170,7 +200,13 @@ describe("multipartBody middleware", () => {
 
   it("should reject disallowed MIME types with 415", async () => {
     const form = buildMultipart([
-      { type: "file", name: "doc", filename: "test.pdf", mimetype: "application/pdf", content: Buffer.from("pdf") },
+      {
+        type: "file",
+        name: "doc",
+        filename: "test.pdf",
+        mimetype: "application/pdf",
+        content: Buffer.from("pdf"),
+      },
     ]);
 
     const response = await app.inject({
@@ -187,7 +223,13 @@ describe("multipartBody middleware", () => {
 
   it("should accept allowed MIME types", async () => {
     const form = buildMultipart([
-      { type: "file", name: "photo", filename: "pic.png", mimetype: "image/png", content: Buffer.from("img") },
+      {
+        type: "file",
+        name: "photo",
+        filename: "pic.png",
+        mimetype: "image/png",
+        content: Buffer.from("img"),
+      },
     ]);
 
     const response = await app.inject({
@@ -225,7 +267,13 @@ describe("multipartBody middleware", () => {
   it("should use custom filesKey", async () => {
     const form = buildMultipart([
       { type: "field", name: "title", value: "Doc" },
-      { type: "file", name: "file", filename: "test.pdf", mimetype: "application/pdf", content: Buffer.from("pdf") },
+      {
+        type: "file",
+        name: "file",
+        filename: "test.pdf",
+        mimetype: "application/pdf",
+        content: Buffer.from("pdf"),
+      },
     ]);
 
     const response = await app.inject({
@@ -240,6 +288,108 @@ describe("multipartBody middleware", () => {
     expect(result.body.uploads).toBeDefined();
     expect(result.body.uploads.file.filename).toBe("test.pdf");
     expect(result.body._files).toBeUndefined();
+  });
+
+  // ── requiredFields enforcement ──
+
+  it("requiredFields: accepts a request when every listed field is present", async () => {
+    const form = buildMultipart([
+      {
+        type: "file",
+        name: "file",
+        filename: "scan.pdf",
+        mimetype: "application/pdf",
+        content: Buffer.from("%PDF-1.4 fake"),
+      },
+    ]);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/ocr",
+      headers: form.headers,
+      payload: form.payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const result = response.json();
+    expect(result.body._files.file.filename).toBe("scan.pdf");
+  });
+
+  it("requiredFields: returns 400 with MISSING_FILE_FIELDS when the field is absent", async () => {
+    // Multipart request with NO files — just a text field.
+    const form = buildMultipart([{ type: "field", name: "note", value: "oops" }]);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/ocr",
+      headers: form.headers,
+      payload: form.payload,
+    });
+
+    expect(response.statusCode).toBe(400);
+    const body = response.json();
+    expect(body.success).toBe(false);
+    expect(body.code).toBe("MISSING_FILE_FIELDS");
+    expect(body.error).toMatch(/Missing required file field/);
+    expect(body.details.missing).toEqual(["file"]);
+  });
+
+  it("requiredFields: lists every missing field and uses plural wording", async () => {
+    // Only `avatar` uploaded — `cover` is missing.
+    const form = buildMultipart([
+      {
+        type: "file",
+        name: "avatar",
+        filename: "me.png",
+        mimetype: "image/png",
+        content: Buffer.from("a"),
+      },
+    ]);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/profile",
+      headers: form.headers,
+      payload: form.payload,
+    });
+
+    expect(response.statusCode).toBe(400);
+    const body = response.json();
+    expect(body.code).toBe("MISSING_FILE_FIELDS");
+    expect(body.details.missing).toEqual(["cover"]);
+    // Single missing field → singular wording.
+    expect(body.error).toBe("Missing required file field: cover");
+  });
+
+  it("requiredFields: lists multiple missing fields with plural wording", async () => {
+    // Send zero files — both avatar AND cover are missing.
+    const form = buildMultipart([{ type: "field", name: "bio", value: "hi" }]);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/profile",
+      headers: form.headers,
+      payload: form.payload,
+    });
+
+    expect(response.statusCode).toBe(400);
+    const body = response.json();
+    expect(body.details.missing).toEqual(["avatar", "cover"]);
+    expect(body.error).toBe("Missing required file fields: avatar, cover");
+  });
+
+  it("requiredFields: stays a no-op for JSON requests (safe on shared routes)", async () => {
+    // Non-multipart content-type → middleware short-circuits and the JSON body
+    // passes through unchanged, even though `requiredFields: ['file']` is set.
+    const response = await app.inject({
+      method: "POST",
+      url: "/ocr",
+      headers: { "content-type": "application/json" },
+      payload: { plain: "json" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().body).toEqual({ plain: "json" });
   });
 
   // ── JSON field parsing ──
