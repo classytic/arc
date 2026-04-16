@@ -541,6 +541,39 @@ export interface CrudRepository<TDoc> {
    */
   aggregatePaginate?: unknown;
 
+  /**
+   * Fluent aggregation pipeline builder.
+   *
+   * Same `unknown` reasoning as `aggregate` — each kit returns its own
+   * builder class (mongokit returns `AggregationBuilder`, others may
+   * return SQL builders, Prisma chains, etc.). Cast at the call site:
+   *
+   * ```ts
+   * import type { AggregationBuilder } from '@classytic/mongokit';
+   * const pipeline = (repo.buildAggregation?.() as AggregationBuilder)
+   *   .match({ status: 'active' })
+   *   .group({ _id: '$category', count: { $sum: 1 } })
+   *   .build();
+   * ```
+   */
+  buildAggregation?(): unknown;
+
+  /**
+   * Fluent `$lookup` stage builder. Same kit-specific reasoning as
+   * `buildAggregation` — cast at the call site.
+   *
+   * ```ts
+   * import type { LookupBuilder } from '@classytic/mongokit';
+   * const stages = (repo.buildLookup?.('departments') as LookupBuilder)
+   *   .localField('deptSlug')
+   *   .foreignField('slug')
+   *   .as('department')
+   *   .single()
+   *   .build();
+   * ```
+   */
+  buildLookup?(from?: string): unknown;
+
   // ── Optional: Transactions ───────────────────────────────────────────
 
   /**

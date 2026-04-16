@@ -27,7 +27,6 @@ function mockResource(overrides?: Partial<ResourceDefinition>): ResourceDefiniti
     },
     permissions: {},
     routes: [],
-    additionalRoutes: [],
     middlewares: {},
     disableDefaultRoutes: false,
     disabledRoutes: [],
@@ -258,12 +257,12 @@ describe("resourceToTools", () => {
 
       const tools = resourceToTools(
         mockResource({
-          additionalRoutes: [
+          routes: [
             {
               method: "GET",
               path: "/stats",
               handler: () => {},
-              wrapHandler: false,
+              raw: true,
               permissions: () => ({ allowed: true }),
               operation: "stats",
               summary: "Get product stats",
@@ -288,12 +287,12 @@ describe("resourceToTools", () => {
     it("ignores raw:false routes without mcpHandler", () => {
       const tools = resourceToTools(
         mockResource({
-          additionalRoutes: [
+          routes: [
             {
               method: "GET",
               path: "/stats",
               handler: () => {},
-              wrapHandler: false,
+              raw: true,
               permissions: () => ({ allowed: true }),
             } as any,
           ],

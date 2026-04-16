@@ -183,7 +183,7 @@ describe("preAuth on routes", () => {
   it("preAuth array is accepted in route type without error", () => {
     const repo = new Repository(ItemModel);
 
-    // Type-level test: preAuth is a valid property on AdditionalRoute
+    // Type-level test: preAuth is a valid property on RouteDefinition
     const resource = defineResource({
       name: "item",
       adapter: createMongooseAdapter({ model: ItemModel, repository: repo }),
