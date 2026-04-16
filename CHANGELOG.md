@@ -1,5 +1,68 @@
 # Changelog
 
+## 2.9.0
+
+### Breaking — no compat shims (pre-1.0 clean-up)
+
+- **`AdditionalRoute` type removed.** Use `RouteDefinition` — the single public shape for user + preset routes. Zero functional change for consumers writing `routes: [...]` on `defineResource`.
+- **`resource.additionalRoutes` runtime field removed.** `resource.routes: readonly RouteDefinition[]` is the only source of truth now; `wrapHandler` is derived inline from `!route.raw` at each use-site (createCrudRouter, resourceToTools, openapi). Fewer allocations, no normalised mirror.
+- **`wrapHandler: boolean` on route entries removed.** Use `raw: true` to opt out of arc's pipeline (raw Fastify handler); omit or `raw: false` to keep the pipeline wrap (default). String handlers automatically route through the controller.
+- **`CrudRouterOptions.additionalRoutes` → `routes`** (the low-level API used by advanced wiring; most users don't touch it).
+- **`TestHarness.runCrud()` removed** (was `@deprecated` — called through the deprecated model-level path). Use `HttpTestHarness.runCrud()` for HTTP-level CRUD tests (auth + permissions + pipeline).
+
+### Added — `searchPreset` (backend-agnostic search / vector / embed)
+
+- **New preset** `searchPreset({ repository?, search?, similar?, embed?, routes? })` from `@classytic/arc/presets/search`. Mounts up to three standard routes (`POST /search`, `POST /search-similar`, `POST /embed`) without assuming any specific search engine — you bring the backend, arc brings the HTTP + permissions + OpenAPI + MCP wiring. Opt-in per section; `mcp: false` skips per path; `routes` array adds bespoke endpoints (`/autocomplete`, `/reindex`, `/facets`).
+- **Auto-wire from repository** — pass `repository: productRepo` + `search: true` and the preset synthesises the handler from `repo.search` / `repo.searchSimilar` / `repo.embed` using each kit plugin's **native** calling convention (verified against mongokit 3.6):
+  - `search(query, options)` — positional (elasticSearchPlugin)
+  - `searchSimilar(VectorSearchParams)` — single object (vectorPlugin)
+  - `embed(input)` — single arg (vectorPlugin)
+- **Explicit handlers always win** — set `search: { handler: (req) => pinecone.query(...) }` for Pinecone / Algolia / Typesense / custom backends.
+- **Zod v4 schemas** pass through to both Fastify (draft-7 for AJV) and OpenAPI (openapi-3.0) with no manual `z.toJSONSchema()` calls.
+- **New subpath export**: `@classytic/arc/presets/search`. Tree-shakeable.
+
+### Added — `RepositoryLike` search / vector type hints (opt-in)
+
+- Optional `search?`, `searchSimilar?`, `embed?`, `buildAggregation?`, `buildLookup?` declared on `RepositoryLike`. Type-level only — any repo that registers matching methods (mongokit's plugin system, your own adapter) gets autocomplete. Repos without them compile cleanly (the methods are optional).
+
+### Added — pagination types carry kit-specific extras via `TExtra` generic
+
+- **`OffsetPaginatedResult<TDoc, TExtra = {}>`**, **`KeysetPaginatedResult<TDoc, TExtra = {}>`**, **`PaginationResult<TDoc, TExtra = {}>`**, **`PaginatedResult<TDoc, TExtra = {}>`** — each type now threads an optional `TExtra` slot so kits can surface their own metadata (query timing, region, cursor version, index hit-rate) at the top level without a wrapper object. Default `TExtra = {}` keeps all existing code unchanged; opt in explicitly where you need typed extras:
+  ```ts
+  type ProductPage = OffsetPaginatedResult<Product, { tookMs: number; region: string }>;
+  ```
+- **`warning?: string`** added to `OffsetPaginatedResult` — surfaces mongokit's deep-pagination hint when `page * limit` exceeds the kit's threshold.
+- Converted `interface` to type-alias intersection to support the generic; no implementors exist in-tree, zero behaviour change for the 30 existing consumers.
+
+### Added — MCP tools emit for all custom routes
+
+- `resourceToTools` no longer gates the custom-routes loop on `resource.adapter` / controller presence. Preset routes and adapter-less service resources emit MCP tools automatically. String handlers still require a controller; function handlers and `mcpHandler` don't. Respects per-route `mcp: false`.
+
+### Added — security + DX flexibility
+
+- **`filesUploadPreset.sanitizeFilename`** — `boolean | '*' | (filename) => string | boolean`. Defaults to strict (rejects path separators / NULs / `.` / `..` / >255 chars). Set `false` or `'*'` to accept any filename (microservice / API-server contexts where filename is a label, not a path). Function form can transform, reject (return `false`), or accept.
+- **`multipartBody.allowedMimeTypes`** — now accepts `'*'`, `'*/*'`, and `type/*` patterns alongside exact MIME types.
+- **`idempotencyPlugin.namespace`** — optional string folded into the fingerprint, so multiple deployments can safely share one store (e.g. prod + canary on the same Redis).
+- **`webhooks.verifySignature`** — throws `TypeError` loudly when `body` is a parsed object instead of a string / Buffer (the most common footgun — Fastify re-serialises JSON and HMAC silently fails to match).
+- **Elevation plugin** — publishes `arc.scope.elevated` event on every successful elevation with `{ userId, organizationId?, route?, method?, requestId?, timestamp }`. Always emitted, independent of the optional `onElevation` callback.
+
+### Fixed — `searchSimilar` calling convention aligned with mongokit
+
+- `searchPreset` auto-wire previously called `repo.searchSimilar(body.query, body)` positionally. Mongokit's `vectorPlugin` expects a single `VectorSearchParams` object, so options (`limit`, `filter`, `numCandidates`, `field`, `minScore`, …) were being silently dropped. Now passes `body` as one object; verified against mongokit 3.6.
+
+### Fixed
+
+- MCP custom-route handler now supports inline function handlers (not only string controller-method names). Preset routes with function handlers emit working MCP tools.
+
+### Documentation
+
+- Updated `additionalRoutes` / `AdditionalRoute` / `wrapHandler` → `routes` / `RouteDefinition` / `raw` across 8 `.mdx` guides and the `SKILL.md` bundled skill.
+- New `searchPreset` sections in `docs/getting-started/presets.mdx` and `skills/arc/SKILL.md` covering auto-wire, external backends, custom paths, Zod schemas, per-path MCP opt-out, and multi-resource namespacing.
+
+### Tests
+
+- 4216 main tests / 321 files pass (4 skipped, 4 todo). Added suites for: migrations crash/recovery, AsyncLocalStorage propagation through Fastify, rate-limit burst + refill, graceful-shutdown in-flight handling, registry edge cases, schema helpers Fastify integration, idempotency concurrency, outbox crash/retry, webhook signature edge cases, elevation audit payload shape, Better Auth API-key via `x-organization-id`, mongokit `buildCrudSchemasFromModel` e2e, searchPreset (21 tests), `TExtra` generic.
+
 ## 2.8.5
 
 ### Fixed — Zod → Fastify schema regression
