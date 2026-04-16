@@ -209,59 +209,55 @@ export class AccessControl {
     const hasCompoundFilters = Object.keys(compoundFilter).length > 1;
     const needsCompoundLookup = hasCompoundFilters || this.idField !== DEFAULT_ID_FIELD;
 
-    try {
-      if (needsCompoundLookup && typeof repository.getOne === "function") {
-        const doc = (await repository.getOne(compoundFilter, queryOptions)) as TDoc | null;
-        if (doc) return { doc, reason: null };
+    // Adapters signal "not found" by returning null (RepositoryLike contract).
+    // Any thrown error is a REAL error (connection loss, driver error, etc.)
+    // and should propagate so the framework maps it to 500, not silently 404.
+    if (needsCompoundLookup && typeof repository.getOne === "function") {
+      const doc = (await repository.getOne(compoundFilter, queryOptions)) as TDoc | null;
+      if (doc) return { doc, reason: null };
 
-        // The compound filter didn't match — the doc may still exist without
-        // the policy/tenant fields. Attempt a raw ID-only lookup to
-        // distinguish "missing" from "filtered". This is a DIAGNOSTIC query
-        // so we DON'T apply it for writes — security is already enforced by
-        // the compound filter returning null.
-        if (hasCompoundFilters) {
-          const idOnly: AnyRecord = { [this.idField]: id };
-          const rawDoc = await (repository.getOne as (f: AnyRecord) => Promise<unknown>)(idOnly);
-          if (rawDoc) {
-            // Doc exists but didn't match the compound filter. Determine why.
-            const arcContext = this._meta(req);
-            if (!this.checkOrgScope(rawDoc as AnyRecord, arcContext)) {
-              return { doc: null, reason: "ORG_SCOPE_DENIED" };
-            }
-            return { doc: null, reason: "POLICY_FILTERED" };
+      // The compound filter didn't match — the doc may still exist without
+      // the policy/tenant fields. Attempt a raw ID-only lookup to
+      // distinguish "missing" from "filtered". This is a DIAGNOSTIC query
+      // so we DON'T apply it for writes — security is already enforced by
+      // the compound filter returning null.
+      if (hasCompoundFilters) {
+        const idOnly: AnyRecord = { [this.idField]: id };
+        const rawDoc = await (repository.getOne as (f: AnyRecord) => Promise<unknown>)(idOnly);
+        if (rawDoc) {
+          // Doc exists but didn't match the compound filter. Determine why.
+          const arcContext = this._meta(req);
+          if (!this.checkOrgScope(rawDoc as AnyRecord, arcContext)) {
+            return { doc: null, reason: "ORG_SCOPE_DENIED" };
           }
-        }
-        return { doc: null, reason: "NOT_FOUND" };
-      }
-
-      // Fallback: default _id lookups
-      if (this.idField !== DEFAULT_ID_FIELD) {
-        if (typeof repository.getOne !== "function") {
-          throw new Error(
-            `Resource with idField="${this.idField}" requires repository.getOne() to look up by custom field. ` +
-              `Arc's BaseController cannot fall back to getById() because it would query by _id.`,
-          );
+          return { doc: null, reason: "POLICY_FILTERED" };
         }
       }
-
-      const item = (await repository.getById(id, queryOptions)) as TDoc | null;
-      if (!item) return { doc: null, reason: "NOT_FOUND" };
-
-      const arcContext = this._meta(req);
-      if (!this.checkOrgScope(item as AnyRecord, arcContext)) {
-        return { doc: null, reason: "ORG_SCOPE_DENIED" };
-      }
-      if (!this.checkPolicyFilters(item as AnyRecord, req)) {
-        return { doc: null, reason: "POLICY_FILTERED" };
-      }
-
-      return { doc: item, reason: null };
-    } catch (error: unknown) {
-      if (error instanceof Error && error.message?.includes("not found")) {
-        return { doc: null, reason: "NOT_FOUND" };
-      }
-      throw error;
+      return { doc: null, reason: "NOT_FOUND" };
     }
+
+    // Fallback: default _id lookups
+    if (this.idField !== DEFAULT_ID_FIELD) {
+      if (typeof repository.getOne !== "function") {
+        throw new Error(
+          `Resource with idField="${this.idField}" requires repository.getOne() to look up by custom field. ` +
+            `Arc's BaseController cannot fall back to getById() because it would query by _id.`,
+        );
+      }
+    }
+
+    const item = (await repository.getById(id, queryOptions)) as TDoc | null;
+    if (!item) return { doc: null, reason: "NOT_FOUND" };
+
+    const arcContext = this._meta(req);
+    if (!this.checkOrgScope(item as AnyRecord, arcContext)) {
+      return { doc: null, reason: "ORG_SCOPE_DENIED" };
+    }
+    if (!this.checkPolicyFilters(item as AnyRecord, req)) {
+      return { doc: null, reason: "POLICY_FILTERED" };
+    }
+
+    return { doc: item, reason: null };
   }
 
   /**

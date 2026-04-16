@@ -67,6 +67,14 @@ import { AccessControl, type FetchDenialReason } from "./AccessControl.js";
 import { BodySanitizer, type FieldWriteDenialPolicy } from "./BodySanitizer.js";
 import { getDefaultQueryParser, QueryResolver } from "./QueryResolver.js";
 
+/**
+ * Portable "run on next tick" scheduler. `setImmediate` is Node-only — not
+ * available in Bun workers, Deno, Cloudflare Workers, or edge runtimes. Fall
+ * back to queueMicrotask (universal) when setImmediate is absent.
+ */
+const scheduleBackground: (cb: () => void) => void =
+  typeof setImmediate === "function" ? (cb) => void setImmediate(cb) : (cb) => queueMicrotask(cb);
+
 // ============================================================================
 // Controller Options
 // ============================================================================
@@ -369,7 +377,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
 
       if (status === "stale") {
         // SWR: return stale data immediately, revalidate in background
-        setImmediate(() => {
+        scheduleBackground(() => {
           this.executeListQuery(options, req)
             .then((fresh) => qc.set(key, fresh, cacheConfig))
             .catch(() => {});
@@ -468,7 +476,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       }
 
       if (status === "stale") {
-        setImmediate(() => {
+        scheduleBackground(() => {
           this.executeGetQuery(id, options, req)
             .then(({ doc: fresh }) => {
               if (fresh) qc.set(key, fresh, cacheConfig);
@@ -495,17 +503,12 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       };
     }
 
-    // No cache
-    try {
-      const { doc, reason } = await this.executeGetQuery(id, options, req);
-      if (!doc) return this.notFoundResponse(reason);
-      return { success: true, data: doc, status: 200 };
-    } catch (error: unknown) {
-      if (error instanceof Error && error.message?.includes("not found")) {
-        return this.notFoundResponse("NOT_FOUND");
-      }
-      throw error;
-    }
+    // No cache — adapters signal "not found" by returning null (not by throwing).
+    // Genuine errors (connection loss, permission on DB, etc.) bubble up and
+    // get mapped to 500 by the framework, which is correct.
+    const { doc, reason } = await this.executeGetQuery(id, options, req);
+    if (!doc) return this.notFoundResponse(reason);
+    return { success: true, data: doc, status: 200 };
   }
 
   /** Execute get query through hooks (extracted for cache revalidation) */
@@ -711,7 +714,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     }
 
     if (!item) {
-      return { success: false, error: "Resource not found", status: 404 };
+      return this.notFoundResponse("NOT_FOUND");
     }
 
     return {
@@ -818,7 +821,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       return true;
     })();
     if (!deleteSuccess) {
-      return { success: false, error: "Resource not found", status: 404 };
+      return this.notFoundResponse("NOT_FOUND");
     }
 
     if (hooks && this.resourceName) {
@@ -876,7 +879,9 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
 
     // Full access control: org scope + policy filters (same as GET /:id)
     if (!this.accessControl.validateItemAccess(item as AnyRecord, req)) {
-      return { success: false, error: "Resource not found", status: 404 };
+      // Use POLICY_FILTERED when the item exists but was filtered out — keeps
+      // the details.code signal consistent with the GET /:id path.
+      return this.notFoundResponse(item ? "POLICY_FILTERED" : "NOT_FOUND");
     }
 
     return { success: true, data: item as TDoc, status: 200 };
@@ -959,7 +964,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     });
 
     if (!existing) {
-      return { success: false, error: "Resource not found", status: 404 };
+      return this.notFoundResponse("NOT_FOUND");
     }
 
     if (!this.accessControl.checkOwnership(existing as AnyRecord, req)) {
@@ -1013,7 +1018,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     }
 
     if (!item) {
-      return { success: false, error: "Resource not found", status: 404 };
+      return this.notFoundResponse("NOT_FOUND");
     }
 
     if (hooks && this.resourceName) {
@@ -1076,16 +1081,17 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
 
   async bulkCreate(req: IRequestContext): Promise<IControllerResponse<TDoc[]>> {
     const repo = this.repository as unknown as {
-      createMany?: (items: unknown[]) => Promise<TDoc[]>;
+      createMany?: (items: unknown[], options?: unknown) => Promise<TDoc[]>;
     };
     if (!repo.createMany) {
       return { success: false, error: "Repository does not support createMany", status: 501 };
     }
 
-    const items = (req.body as { items?: unknown[] })?.items;
-    if (!items || items.length === 0) {
+    const rawItems = (req.body as { items?: unknown[] })?.items;
+    if (!Array.isArray(rawItems) || rawItems.length === 0) {
       return { success: false, error: "Bulk create requires a non-empty items array", status: 400 };
     }
+    const items = rawItems;
 
     // SECURITY: Sanitize EACH item the same way single-doc create does — strip
     // system fields, systemManaged/readonly/immutable fields, and apply
@@ -1093,6 +1099,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     // overwrite createdBy, organizationId, or any other protected field via
     // the bulk endpoint.
     const arcContext = this.meta(req);
+    const user = req.user as UserLike | undefined;
     const sanitizedItems = items.map((item) =>
       this.bodySanitizer.sanitize((item ?? {}) as AnyRecord, "create", req, arcContext),
     );
@@ -1138,7 +1145,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       }
     }
 
-    const created = await repo.createMany(scopedItems);
+    const created = await repo.createMany(scopedItems, { user, context: arcContext });
     const requested = items.length;
     const inserted = created.length;
     const skipped = requested - inserted;
@@ -1226,11 +1233,18 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     data: AnyRecord,
     req: IRequestContext,
     arcContext: ArcInternalMetadata | undefined,
-  ): { sanitized: AnyRecord; stripped: string[] } {
+  ): { sanitized: AnyRecord; stripped: string[]; mixedShape: boolean } {
     const stripped = new Set<string>();
-    // Mongo update operators always start with $. If ANY top-level key starts
-    // with $, treat the payload as operator-style; otherwise treat it as flat.
-    const isOperatorShape = Object.keys(data).some((k) => k.startsWith("$"));
+    // Mongo update operators always start with $. Reject mixed shapes —
+    // `{ $set: {...}, name: 'x' }` is ambiguous: mongo ignores non-operator
+    // top-level keys in operator mode, silently dropping the flat field.
+    const keys = Object.keys(data);
+    const operatorKeys = keys.filter((k) => k.startsWith("$"));
+    const flatKeys = keys.filter((k) => !k.startsWith("$"));
+    const isOperatorShape = operatorKeys.length > 0;
+    if (isOperatorShape && flatKeys.length > 0) {
+      return { sanitized: {}, stripped: [], mixedShape: true };
+    }
 
     if (!isOperatorShape) {
       const before = new Set(Object.keys(data));
@@ -1238,7 +1252,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       for (const key of before) {
         if (!(key in sanitized)) stripped.add(key);
       }
-      return { sanitized, stripped: [...stripped] };
+      return { sanitized, stripped: [...stripped], mixedShape: false };
     }
 
     // Operator shape: sanitize each operator's operand independently.
@@ -1262,7 +1276,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
         sanitized[op] = sanitizedOperand;
       }
     }
-    return { sanitized, stripped: [...stripped] };
+    return { sanitized, stripped: [...stripped], mixedShape: false };
   }
 
   async bulkUpdate(
@@ -1308,7 +1322,22 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     // readonly / immutable fields, and applies field-level write permissions.
     // Handles both flat (`{ name: 'x' }`) and operator (`{ $set: ..., $inc: ... }`) shapes.
     const arcContext = this.meta(req);
-    const { sanitized, stripped } = this.sanitizeBulkUpdateData(body.data, req, arcContext);
+    const user = req.user as UserLike | undefined;
+    const { sanitized, stripped, mixedShape } = this.sanitizeBulkUpdateData(
+      body.data,
+      req,
+      arcContext,
+    );
+
+    if (mixedShape) {
+      return {
+        success: false,
+        error:
+          "Bulk update payload cannot mix operator keys ($set, $inc, ...) with flat fields. Pick one shape.",
+        details: { code: "MIXED_UPDATE_SHAPE" },
+        status: 400,
+      };
+    }
 
     if (Object.keys(sanitized).length === 0) {
       return {
@@ -1319,7 +1348,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       };
     }
 
-    const result = await repo.updateMany(scopedFilter, sanitized);
+    const result = await repo.updateMany(scopedFilter, sanitized, { user, context: arcContext });
     return {
       success: true,
       data: result,
@@ -1401,12 +1430,14 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     // already authorized the caller; gate separately in your PermissionCheck
     // if you want stricter rules for hard deletes.
     const hardHint = req.query?.hard === "true" || req.query?.hard === true || body.mode === "hard";
-    // Only pass the options arg when something's actually set — keeps the
-    // call site indistinguishable from pre-hard-delete arc for test mocks
-    // that assert on exact call arguments.
-    const result = hardHint
-      ? await repo.deleteMany(scopedFilter, { mode: "hard" })
-      : await repo.deleteMany(scopedFilter);
+    const arcContext = this.meta(req);
+    const user = req.user as UserLike | undefined;
+    const options: { mode?: "hard"; user?: UserLike; context?: ArcInternalMetadata } = {
+      user,
+      context: arcContext,
+    };
+    if (hardHint) options.mode = "hard";
+    const result = await repo.deleteMany(scopedFilter, options);
     return { success: true, data: result, status: 200 };
   }
 }

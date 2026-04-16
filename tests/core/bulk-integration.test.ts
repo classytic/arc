@@ -168,10 +168,13 @@ describe("Bulk Preset", () => {
       expect(result.meta).toEqual(
         expect.objectContaining({ count: 2, requested: 2, inserted: 2, skipped: 0 }),
       );
-      expect(repo.createMany).toHaveBeenCalledWith([
-        { name: "A", price: 10 },
-        { name: "B", price: 20 },
-      ]);
+      expect(repo.createMany).toHaveBeenCalledWith(
+        [
+          { name: "A", price: 10 },
+          { name: "B", price: 20 },
+        ],
+        expect.objectContaining({ context: expect.anything() }),
+      );
     });
 
     it("returns 400 when items is empty", async () => {
@@ -235,6 +238,7 @@ describe("Bulk Preset", () => {
       expect(repo.updateMany).toHaveBeenCalledWith(
         { status: "draft" },
         { $set: { status: "published" } },
+        expect.objectContaining({ context: expect.anything() }),
       );
     });
 
@@ -299,7 +303,10 @@ describe("Bulk Preset", () => {
       expect(result.success).toBe(true);
       expect(result.status).toBe(200);
       expect(result.data).toEqual({ deletedCount: 3 });
-      expect(repo.deleteMany).toHaveBeenCalledWith({ archived: true });
+      expect(repo.deleteMany).toHaveBeenCalledWith(
+        { archived: true },
+        expect.objectContaining({ context: expect.anything() }),
+      );
     });
 
     it("returns 400 when filter is empty", async () => {
@@ -348,7 +355,10 @@ describe("Bulk Preset", () => {
 
       expect(result.success).toBe(true);
       expect(result.data).toEqual({ deletedCount: 3 });
-      expect(deleteMany).toHaveBeenCalledWith({ _id: { $in: ["a", "b", "c"] } });
+      expect(deleteMany).toHaveBeenCalledWith(
+        { _id: { $in: ["a", "b", "c"] } },
+        expect.objectContaining({ context: expect.anything() }),
+      );
     });
 
     it("supports `ids` form with custom idField", async () => {
@@ -363,7 +373,10 @@ describe("Bulk Preset", () => {
       const result = await controller.bulkDelete(await createReqCtx({ ids: ["uuid-1", "uuid-2"] }));
 
       expect(result.success).toBe(true);
-      expect(deleteMany).toHaveBeenCalledWith({ id: { $in: ["uuid-1", "uuid-2"] } });
+      expect(deleteMany).toHaveBeenCalledWith(
+        { id: { $in: ["uuid-1", "uuid-2"] } },
+        expect.objectContaining({ context: expect.anything() }),
+      );
     });
 
     it("returns 400 when both `ids` and `filter` are provided", async () => {
