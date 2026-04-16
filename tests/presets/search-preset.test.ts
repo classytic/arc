@@ -14,6 +14,7 @@
 
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
 import { allowPublic, requireAuth } from "../../src/permissions/index.js";
@@ -230,6 +231,92 @@ describe("searchPreset — end-to-end via createApp", () => {
     });
     expect(bad.statusCode).toBe(400);
     expect(backend).not.toHaveBeenCalled();
+  });
+
+  it("accepts a Zod v4 schema and converts it for Fastify validation + OpenAPI", async () => {
+    // Arc's convertRouteSchema auto-converts Zod → JSON Schema (draft-7 for
+    // Fastify AJV validation, openapi-3.0 for docs). Users can pass
+    // `z.object(...)` directly to searchPreset and get both HTTP validation
+    // and OpenAPI path entries without calling zod.toJSONSchema() themselves.
+    const Fastify = (await import("fastify")).default;
+    const { arcCorePlugin } = await import("../../src/core/arcCorePlugin.js");
+    const { openApiPlugin } = await import("../../src/docs/openapi.js");
+
+    const backend = vi.fn(async () => [{ id: "z1" }]);
+
+    const searchBody = z.object({
+      query: z.string().min(1),
+      limit: z.number().int().positive().max(100).optional(),
+      filters: z
+        .object({
+          category: z.string().optional(),
+          inStock: z.boolean().optional(),
+        })
+        .optional(),
+    });
+
+    const resource = defineResource({
+      name: "product",
+      prefix: "/products",
+      disableDefaultRoutes: true,
+      permissions: { list: allowPublic() },
+      presets: [
+        searchPreset({
+          search: {
+            schema: { body: searchBody },
+            handler: async () => backend(),
+          },
+        }),
+      ],
+    });
+
+    app = Fastify({ logger: false });
+    await app.register(arcCorePlugin);
+    await app.register(resource.toPlugin());
+    await app.register(openApiPlugin, { title: "Test API", version: "1.0.0" });
+    await app.ready();
+
+    // 1) Valid body → 200
+    const good = await app.inject({
+      method: "POST",
+      url: "/products/search",
+      headers: { "content-type": "application/json" },
+      payload: { query: "widget", limit: 10 },
+    });
+    expect(good.statusCode).toBe(200);
+    expect(backend).toHaveBeenCalledTimes(1);
+
+    // 2) Invalid body (empty query) → 400 from Fastify/AJV, handler NOT called
+    backend.mockClear();
+    const bad = await app.inject({
+      method: "POST",
+      url: "/products/search",
+      headers: { "content-type": "application/json" },
+      payload: { query: "" },
+    });
+    expect(bad.statusCode).toBe(400);
+    expect(backend).not.toHaveBeenCalled();
+
+    // 3) OpenAPI document includes the converted schema at the preset path
+    const docs = await app.inject({ method: "GET", url: "/_docs/openapi.json" });
+    expect(docs.statusCode).toBe(200);
+    const spec = docs.json() as {
+      paths: Record<
+        string,
+        Record<string, { requestBody?: { content: Record<string, { schema: unknown }> } }>
+      >;
+    };
+    const postOp = spec.paths["/products/search"]?.post;
+    expect(postOp).toBeDefined();
+    const bodySchema = postOp?.requestBody?.content?.["application/json"]?.schema as {
+      type?: string;
+      required?: string[];
+      properties?: Record<string, unknown>;
+    };
+    expect(bodySchema?.type).toBe("object");
+    expect(bodySchema?.required).toContain("query");
+    expect(bodySchema?.properties).toHaveProperty("query");
+    expect(bodySchema?.properties).toHaveProperty("limit");
   });
 
   it("mounts multiple sections and a bespoke route in one preset", async () => {
