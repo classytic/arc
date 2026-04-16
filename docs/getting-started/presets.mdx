@@ -333,7 +333,7 @@ registerPreset('softDelete', myCustomSoftDelete, { override: true });
 ```typescript
 interface PresetResult {
   name: string;
-  additionalRoutes?: AdditionalRoute[] | ((permissions) => AdditionalRoute[]);
+  routes?: RouteDefinition[] | ((permissions) => RouteDefinition[]);
   middlewares?: {
     list?: RouteHandler[];
     get?: RouteHandler[];
@@ -444,6 +444,62 @@ defineResource({
 **When NOT to use:** process-and-return flows like OCR, speech-to-text, image classification, content moderation, LLM analysis. These don't want an `id` or a `url` — they want the buffer in-memory for one-shot processing. Use arc's `multipartBody()` middleware + a raw route directly; it's about 10 lines and avoids forcing you to write a no-op storage adapter.
 
 See the [Files Upload guide](./files-upload) for the full preset API, the `Storage` contract, four worked adapter examples (media-kit, raw S3, local FS, in-memory), and the `runStorageContract()` test suite adapter authors use to verify compatibility.
+
+---
+
+## Search (text + vector + embed)
+
+Backend-agnostic routes for search engines: Elasticsearch, OpenSearch, Algolia, Typesense, Atlas $vectorSearch, Pinecone, Qdrant, Milvus, etc. Arc ships the routes + permissions + OpenAPI + MCP wiring; you bring the backend.
+
+```typescript
+import { searchPreset } from '@classytic/arc/presets/search';
+
+// A — auto-wire from a repo that exposes search/searchSimilar/embed methods
+// (e.g. mongokit repos with elasticSearchPlugin + vectorPlugin registered)
+defineResource({
+  name: 'product',
+  adapter: createMongooseAdapter({ model: Product, repository: productRepo }),
+  presets: [
+    searchPreset({
+      repository: productRepo,   // shorthand: methods auto-discovered
+      search: true,              // POST /search  → productRepo.search(body.query, body)
+      similar: true,             // POST /search-similar → productRepo.searchSimilar(body.query, body)
+    }),
+  ],
+});
+
+// B — external backend (no repo coupling)
+searchPreset({
+  search: {
+    path: '/full-text',
+    schema: { body: z.object({ q: z.string().min(1), limit: z.number().int().optional() }) },
+    handler: (req) => elastic.search({ index: 'products', q: req.body.q }),
+  },
+  similar: {
+    handler: (req) => pinecone.query({ vector: req.body.vector, topK: req.body.topK ?? 10 }),
+    mcp: false, // skip MCP for this one
+  },
+  // Bespoke paths — anything that doesn't fit /search, /search-similar, /embed
+  routes: [
+    { method: 'GET', path: '/autocomplete', permissions: allowPublic(),
+      handler: (req) => algolia.suggest((req.query as { q: string }).q) },
+  ],
+});
+```
+
+**Defaults per section:**
+
+| Section | Path | Method | Permission fallback |
+|---------|------|--------|---------------------|
+| `search` | `/search` | POST | resource `list` → `allowPublic()` |
+| `similar` | `/search-similar` | POST | resource `list` → `allowPublic()` |
+| `embed` | `/embed` | POST | `requireAuth()` |
+
+Every field (`path`, `method`, `permissions`, `schema` — JSON Schema or Zod v4 — `mcp`, `summary`, `tags`, `operation`) is overridable per section. Zod schemas are auto-converted to JSON Schema (draft-7 for Fastify / AJV, openapi-3.0 for docs) with no `.toJSONSchema()` call required.
+
+**MCP:** each section and each entry in `routes` accepts the same `mcp` field as regular route definitions (`false` to skip, `RouteMcpConfig` object for description/annotations). One resource's tools are namespaced as `{op}_{resource}` so many resources can share the same paths without collision.
+
+**When to skip the preset:** one-off search endpoints — just use `routes: [{ ... }]` on `defineResource` directly.
 
 ---
 

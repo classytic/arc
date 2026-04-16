@@ -38,7 +38,7 @@ describe("tokenExtractor option", () => {
     });
     await app.ready();
 
-    const token = jwt.sign({ id: "user-1", role: "admin" }, JWT_SECRET);
+    const token = jwt.sign({ id: "user-1", role: "admin", type: "access" }, JWT_SECRET);
 
     // Bearer header works
     const res = await app.inject({
@@ -63,7 +63,7 @@ describe("tokenExtractor option", () => {
     });
     await app.ready();
 
-    const token = jwt.sign({ id: "user-2", role: "editor" }, JWT_SECRET);
+    const token = jwt.sign({ id: "user-2", role: "editor", type: "access" }, JWT_SECRET);
 
     // Custom header works
     const res = await app.inject({
@@ -105,7 +105,7 @@ describe("tokenExtractor option", () => {
     });
     await app.ready();
 
-    const token = jwt.sign({ id: "user-3" }, JWT_SECRET);
+    const token = jwt.sign({ id: "user-3", type: "access" }, JWT_SECRET);
 
     // Even with a valid Bearer token, custom extractor returning null = 401
     const res = await app.inject({
@@ -134,7 +134,7 @@ describe("tokenExtractor option", () => {
     expect(noTokenRes.statusCode).toBe(200);
 
     // With token in custom header
-    const token = jwt.sign({ id: "user-4", role: "viewer" }, JWT_SECRET);
+    const token = jwt.sign({ id: "user-4", role: "viewer", type: "access" }, JWT_SECRET);
     capturedUser = null;
     const withTokenRes = await app.inject({
       method: "GET",

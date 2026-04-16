@@ -241,10 +241,30 @@ function normaliseSection(value: SearchSection | undefined): SearchRouteConfig |
 type RawSearchHandler = (req: IRequestContext) => Promise<unknown>;
 
 /**
- * Build an auto-synthesised handler that calls `repo[method]` with
- * `(body.query, body)` — the convention used by mongokit's elasticSearch /
- * vector plugins. Returns `undefined` when the method isn't present so the
- * caller can fall back to an explicit `cfg.handler` or skip the route.
+ * Build an auto-synthesised handler that proxies the request body to
+ * `repo[method]` using each kit's native calling convention. Returns
+ * `undefined` when the method isn't present so the caller can fall back to
+ * an explicit `cfg.handler` or skip the route.
+ *
+ * Conventions (verified against mongokit 3.6):
+ *
+ * - **`search`** (mongokit `elasticSearchPlugin`):
+ *   `search(query, { limit?, from?, mongoOptions? })` — positional. `query`
+ *   is the engine-native DSL (e.g. ES `match` clause). Arc passes
+ *   `(body.query, body)` so the rest of the body flows into options.
+ *
+ * - **`searchSimilar`** (mongokit `vectorPlugin`):
+ *   `searchSimilar(params: VectorSearchParams)` — **single object**. `params`
+ *   carries `query` (vector, text, or multimodal), `limit`, `filter`,
+ *   `numCandidates`, `exact`, `field`, `minScore`, etc. Arc passes `body`
+ *   directly so the shapes align. Passing positional args here would
+ *   silently break (first arg becomes the whole `params`, second arg
+ *   is ignored).
+ *
+ * - **`embed`** (mongokit `vectorPlugin`):
+ *   `embed(input: string | EmbeddingInput)` — single arg. Arc passes
+ *   `body.input ?? body`, so callers may wrap as `{ input: "…" }` or send
+ *   the `EmbeddingInput` shape directly.
  */
 function autoHandlerFor(
   repo: SearchPresetOptions["repository"] | undefined,
@@ -260,6 +280,16 @@ function autoHandlerFor(
       return (fn as (input: unknown) => Promise<unknown>)(body.input ?? body);
     };
   }
+
+  if (method === "searchSimilar") {
+    // Single-object call — matches mongokit's VectorSearchParams contract.
+    return async (req) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      return (fn as (params: unknown) => Promise<unknown>)(body);
+    };
+  }
+
+  // Full-text search — positional `(query, options)` per elasticSearchPlugin.
   return async (req) => {
     const body = (req.body ?? {}) as { query?: unknown; [k: string]: unknown };
     return (fn as (q: unknown, o?: unknown) => Promise<unknown>)(body.query, body);

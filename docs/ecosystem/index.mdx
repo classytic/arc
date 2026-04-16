@@ -29,13 +29,13 @@ export default fp(async (fastify, opts) => {
 // 2. Arc Plugin — global + per-resource
 export const myPlugin = createPlugin('mine', {
   forRoot: async (fastify, opts) => { /* global setup */ },
-  forResource: (config, opts) => ({ hooks: [...], additionalRoutes: [...] }),
+  forResource: (config, opts) => ({ hooks: [...], routes: [...] }),
 });
 
 // 3. Preset — composable behavior
 registerPreset('mine', (opts) => ({
   name: 'mine',
-  additionalRoutes: [...],
+  routes: [...],
   middlewares: { create: [...] },
 }));
 

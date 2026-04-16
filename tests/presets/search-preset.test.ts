@@ -120,9 +120,15 @@ describe("searchPreset — route definitions", () => {
 });
 
 describe("searchPreset — auto-wire from `repository`", () => {
-  it("synthesises handlers from repo.search / searchSimilar / embed when section is `true`", async () => {
-    const search = vi.fn(async (query: unknown) => [{ id: "s", q: query }]);
-    const searchSimilar = vi.fn(async (query: unknown) => [{ id: "v", q: query }]);
+  it("synthesises handlers using each method's native calling convention", async () => {
+    // Contract (verified against mongokit 3.6):
+    //   - search(query, options)              — elasticSearchPlugin, positional
+    //   - searchSimilar(params)                — vectorPlugin, single object
+    //   - embed(input)                         — vectorPlugin, single arg
+    const search = vi.fn(async (query: unknown, _opts?: unknown) => [{ id: "s", q: query }]);
+    const searchSimilar = vi.fn(async (params: { query: unknown }) => [
+      { id: "v", q: params.query },
+    ]);
     const embed = vi.fn(async (input: unknown) => [0.1, 0.2, Number(`${input}`.length) || 0]);
 
     const preset = searchPreset({
@@ -141,19 +147,28 @@ describe("searchPreset — auto-wire from `repository`", () => {
       return fn({ body, params: {}, query: {} });
     };
 
+    // search: (query, options) — positional, whole body is the options object
     const sOut = (await callRoute("/search", { query: "widget", limit: 5 })) as {
       success: boolean;
-      data: unknown;
     };
     expect(sOut.success).toBe(true);
     expect(search).toHaveBeenCalledWith("widget", { query: "widget", limit: 5 });
 
-    const simOut = (await callRoute("/search-similar", { query: [0.1, 0.2] })) as {
-      success: boolean;
-    };
+    // searchSimilar(params) — single VectorSearchParams-compatible object
+    const simOut = (await callRoute("/search-similar", {
+      query: [0.1, 0.2],
+      limit: 10,
+      filter: { category: "widget" },
+    })) as { success: boolean };
     expect(simOut.success).toBe(true);
-    expect(searchSimilar).toHaveBeenCalledWith([0.1, 0.2], { query: [0.1, 0.2] });
+    expect(searchSimilar).toHaveBeenCalledTimes(1);
+    expect(searchSimilar).toHaveBeenCalledWith({
+      query: [0.1, 0.2],
+      limit: 10,
+      filter: { category: "widget" },
+    });
 
+    // embed(input) — single arg, body.input preferred, falls back to whole body
     const eOut = (await callRoute("/embed", { input: "hello" })) as {
       success: boolean;
       data: number[];

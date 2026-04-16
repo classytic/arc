@@ -42,13 +42,13 @@ class ProductController extends BaseController {
 defineResource({
   name: 'product',
   controller: new ProductController(productRepository),
-  additionalRoutes: [
+  routes: [
     {
       method: 'GET',
       path: '/category/:category',
       handler: 'getByCategory',
-      wrapHandler: true,  // ✅ Arc wraps this
       permissions: allowPublic(),
+      // (no `raw` flag → arc wraps the handler in its pipeline — the default)
     },
   ],
 });
@@ -130,12 +130,12 @@ class ReportController {
 defineResource({
   name: 'report',
   controller: new ReportController(),
-  additionalRoutes: [
+  routes: [
     {
       method: 'GET',
       path: '/:id/download',
       handler: 'downloadPDF',
-      wrapHandler: false,  // ✅ Native Fastify handler
+      raw: true,  // ✅ Native Fastify handler, no arc pipeline
       permissions: requireAuthenticated(),
     },
   ],
@@ -161,7 +161,7 @@ class VideoController {
   }
 }
 
-// wrapHandler: false for streaming
+// Register as `raw: true` on the route — no arc pipeline wrap for streaming
 ```
 
 ### Example 3: Custom Content-Type (CSV Export)
@@ -185,7 +185,7 @@ class ExportController {
   }
 }
 
-// wrapHandler: false for custom content type
+// Register as `raw: true` on the route — raw Fastify handler for custom content-type
 ```
 
 ### Example 4: Redirect
@@ -203,7 +203,7 @@ class AuthController {
   }
 }
 
-// wrapHandler: false for redirects
+// Register as `raw: true` on the route — raw Fastify handler for redirects
 ```
 
 ### Example 5: Server-Sent Events (SSE)
@@ -228,31 +228,31 @@ class NotificationController {
   }
 }
 
-// wrapHandler: false for SSE
+// Register as `raw: true` on the route — raw Fastify handler for SSE
 ```
 
 ---
 
 ## Quick Decision Guide
 
-| Use Case | Pattern | wrapHandler |
-|----------|---------|-------------|
-| Standard GET/POST/PATCH/DELETE | Arc Context | `true` |
-| Business logic | Arc Context | `true` |
-| JSON responses | Arc Context | `true` |
-| File download | Native Fastify | `false` |
-| File upload | Native Fastify | `false` |
-| Streaming | Native Fastify | `false` |
-| Custom headers | Native Fastify | `false` |
-| Redirect | Native Fastify | `false` |
-| SSE/WebSocket | Native Fastify | `false` |
-| Custom content-type (CSV, XML, etc.) | Native Fastify | `false` |
+| Use Case | Pattern | `raw` flag |
+|----------|---------|-----------|
+| Standard GET/POST/PATCH/DELETE | Arc Context | omit (default) |
+| Business logic | Arc Context | omit |
+| JSON responses | Arc Context | omit |
+| File download | Native Fastify | `true` |
+| File upload | Native Fastify | `true` |
+| Streaming | Native Fastify | `true` |
+| Custom headers | Native Fastify | `true` |
+| Redirect | Native Fastify | `true` |
+| SSE/WebSocket | Native Fastify | `true` |
+| Custom content-type (CSV, XML, etc.) | Native Fastify | `true` |
 
 ---
 
 ## Common Mistakes
 
-### ❌ Mistake 1: Wrong wrapHandler value
+### ❌ Mistake 1: Wrong `raw` value for the handler signature
 
 ```typescript
 // Controller method returns IControllerResponse
@@ -260,23 +260,23 @@ async getConfig(req: IRequestContext): Promise<IControllerResponse> {
   return { success: true, data: config };
 }
 
-// But resource says wrapHandler: false
-additionalRoutes: [{
+// But the route was marked `raw: true`
+routes: [{
   handler: 'getConfig',
-  wrapHandler: false,  // ❌ WRONG! Should be true
+  raw: true,  // ❌ WRONG! IRequestContext handlers need the arc pipeline
 }]
 ```
 
-### ✅ Fix: Match wrapHandler to method signature
+### ✅ Fix: Match `raw` to the method signature
 
 ```typescript
-// IRequestContext → wrapHandler: true
+// IRequestContext handler → default (no `raw`) so arc wraps it
 async getConfig(req: IRequestContext): Promise<IControllerResponse> { ... }
-additionalRoutes: [{ handler: 'getConfig', wrapHandler: true }]
+routes: [{ handler: 'getConfig' /* raw omitted */ }]
 
-// Fastify native → wrapHandler: false
+// Fastify native handler → `raw: true` to bypass the pipeline
 async downloadFile(req: FastifyRequest, reply: FastifyReply): Promise<void> { ... }
-additionalRoutes: [{ handler: 'downloadFile', wrapHandler: false }]
+routes: [{ handler: 'downloadFile', raw: true }]
 ```
 
 ---
@@ -318,7 +318,7 @@ async getConfig(request: FastifyRequest, reply: FastifyReply): Promise<void> {
   });
 }
 
-// wrapHandler: false
+// Route declared as `raw: true`
 ```
 
 ---
@@ -379,8 +379,8 @@ describe('ReportController', () => {
 
 ## Summary
 
-- **Default to Arc Context Pattern** (`wrapHandler: true`) for 90% of your routes
-- **Use Native Fastify Pattern** (`wrapHandler: false`) only when you need:
+- **Default to Arc Context Pattern** (omit `raw`, i.e. the default) for 90% of your routes
+- **Use Native Fastify Pattern** (set `raw: true`) only when you need:
   - File downloads/uploads
   - Streaming
   - Custom headers

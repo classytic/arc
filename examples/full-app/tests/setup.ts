@@ -41,9 +41,9 @@ export async function teardownApp(): Promise<void> {
   await mongo?.stop();
 }
 
-/** Create a JWT token for testing */
+/** Create a JWT token for testing — stamps `type: "access"` to satisfy arc's strictTokenType default. */
 export function createToken(payload: Record<string, unknown>): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: "1h" });
+  return jwt.sign({ ...payload, type: "access" }, JWT_SECRET, { expiresIn: "1h" });
 }
 
 /** Seed a test user in the database and return a token */
