@@ -64,7 +64,14 @@ export interface MultipartBodyOptions {
    * Allowed MIME types (default: all).
    * Files with disallowed types are rejected with 415.
    *
+   * Supports three forms in a single list:
+   *   - Exact: `image/png`
+   *   - Subtype wildcard: `image/\*` — any `image/…`
+   *   - Any:   `\*` or `\*\/\*` — equivalent to omitting the option
+   *
    * @example ['image/jpeg', 'image/png', 'application/pdf']
+   * @example ['image/*', 'application/pdf']
+   * @example ['*']   // accept any type explicitly
    */
   allowedMimeTypes?: string[];
   /**
@@ -95,6 +102,50 @@ const DEFAULT_MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const DEFAULT_MAX_FILES = 5;
 const DEFAULT_FILES_KEY = "_files";
 
+interface MimeMatcher {
+  matches(mime: string): boolean;
+  describe(): string;
+}
+
+/**
+ * Build a matcher for MIME allow-lists that supports exact (e.g. `image/png`),
+ * subtype wildcards (e.g. `image/\*`), and total wildcards (`\*` or `\*\/\*`).
+ *
+ * Returns `undefined` when no filter is needed — either because the option
+ * was omitted or because a total wildcard was present.
+ */
+function buildMimeMatcher(allowed: string[] | undefined): MimeMatcher | undefined {
+  if (!allowed || allowed.length === 0) return undefined;
+
+  const exact = new Set<string>();
+  const prefixes: string[] = []; // stored without trailing `*` (e.g. `image/`)
+
+  for (const entry of allowed) {
+    const value = entry.trim().toLowerCase();
+    if (!value) continue;
+    if (value === "*" || value === "*/*") return undefined; // any — no filter
+    if (value.endsWith("/*")) {
+      prefixes.push(value.slice(0, -1)); // `image/*` → `image/`
+    } else {
+      exact.add(value);
+    }
+  }
+
+  if (exact.size === 0 && prefixes.length === 0) return undefined;
+
+  return {
+    matches(mime: string): boolean {
+      const m = mime.toLowerCase();
+      if (exact.has(m)) return true;
+      for (const p of prefixes) if (m.startsWith(p)) return true;
+      return false;
+    },
+    describe(): string {
+      return [...exact, ...prefixes.map((p) => `${p}*`)].join(", ");
+    },
+  };
+}
+
 /**
  * Create a multipart body parsing middleware.
  *
@@ -110,7 +161,7 @@ const DEFAULT_FILES_KEY = "_files";
 export function multipartBody(options: MultipartBodyOptions = {}): RouteHandlerMethod {
   const maxFileSize = options.maxFileSize ?? DEFAULT_MAX_FILE_SIZE;
   const maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
-  const allowedMimeTypes = options.allowedMimeTypes ? new Set(options.allowedMimeTypes) : undefined;
+  const mimeMatcher = buildMimeMatcher(options.allowedMimeTypes);
   const filesKey = options.filesKey ?? DEFAULT_FILES_KEY;
   const requiredFields =
     options.requiredFields && options.requiredFields.length > 0
@@ -142,11 +193,11 @@ export function multipartBody(options: MultipartBodyOptions = {}): RouteHandlerM
         if (part.type === "file") {
           if (fileCount >= maxFiles) continue;
 
-          // MIME type check
-          if (allowedMimeTypes && !allowedMimeTypes.has(part.mimetype)) {
+          // MIME type check — supports exact, `type/*`, and `*` patterns.
+          if (mimeMatcher && !mimeMatcher.matches(part.mimetype)) {
             return reply.code(415).send({
               success: false,
-              error: `File type '${part.mimetype}' not allowed. Accepted: ${[...allowedMimeTypes].join(", ")}`,
+              error: `File type '${part.mimetype}' not allowed. Accepted: ${mimeMatcher.describe()}`,
             });
           }
 

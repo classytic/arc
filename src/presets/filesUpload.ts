@@ -70,6 +70,21 @@ export interface FilesUploadPresetPermissions {
   delete?: PermissionCheck;
 }
 
+/**
+ * Filename policy — controls how user-supplied filenames are validated before
+ * reaching the `Storage.upload()` adapter.
+ *
+ * - `true` (default): strict — rejects path separators, NULs, `.`/`..`, empty,
+ *   and names >255 chars. Safe default for disk/S3/prefix-joining adapters.
+ * - `false` | `'*'`: accept any filename verbatim. Use when the filename is a
+ *   user-supplied *label* and the adapter generates the storage key itself —
+ *   typical for microservice ingress, API-server proxies, or content stores
+ *   that use `id` for the path and treat `filename` as metadata.
+ * - function: custom policy. Return a string to *transform* the filename,
+ *   `false` to reject (triggers `ValidationError`), or `true`/`void` to accept.
+ */
+export type FilenamePolicy = boolean | "*" | ((filename: string) => string | boolean | void);
+
 export interface FilesUploadPresetOptions {
   /** Any implementation of the `Storage` interface. App owns it. */
   storage: Storage;
@@ -80,8 +95,17 @@ export interface FilesUploadPresetOptions {
   /** Max bytes per file. Forwarded to `multipartBody`. Default: 10 MB. */
   maxFileSize?: number;
 
-  /** IANA MIME allow-list. Forwarded to `multipartBody`. Default: no filter. */
+  /**
+   * IANA MIME allow-list. Forwarded to `multipartBody`. Default: no filter.
+   * Pass `['*']` to explicitly allow any type (equivalent to omitting).
+   */
   allowedMimeTypes?: string[];
+
+  /**
+   * Filename validation policy. Default: `true` (strict).
+   * See {@link FilenamePolicy}.
+   */
+  sanitizeFilename?: FilenamePolicy;
 
   /**
    * Per-route permissions.
@@ -187,18 +211,15 @@ interface HandlerDeps {
   readonly storage: Storage;
   readonly fieldName: string;
   readonly contextFrom: (scope: RequestScope | undefined) => Record<string, unknown>;
+  readonly applyFilenamePolicy: (filename: string) => string;
 }
 
 /**
- * Reject filenames that could escape a storage root or confuse a filesystem.
- *
- * Storage adapters that compose user-supplied names into paths are the target —
- * an S3 adapter might use `${prefix}/${filename}`, a disk adapter `path.join(root, filename)`.
- * Both are corruptible by `../`, path separators, or NULs. Sanitisation belongs
- * in the adapter, but the preset ships the strict default so the common case
- * is safe out of the box.
+ * Strict policy — rejects filenames that could escape a storage root or
+ * confuse a filesystem. Safe default for disk/S3 adapters that compose
+ * `${prefix}/${filename}` or `path.join(root, filename)`.
  */
-function assertSafeFilename(filename: string): void {
+function strictFilenamePolicy(filename: string): string {
   if (filename.length === 0) {
     throw new ValidationError("Upload filename is empty");
   }
@@ -214,6 +235,24 @@ function assertSafeFilename(filename: string): void {
   if (filename === "." || filename === "..") {
     throw new ValidationError("Upload filename is a path traversal component");
   }
+  return filename;
+}
+
+/** Resolve the user-supplied policy option into a concrete validator. */
+function resolveFilenamePolicy(policy: FilenamePolicy | undefined): (filename: string) => string {
+  if (policy === undefined || policy === true) return strictFilenamePolicy;
+  if (policy === false || policy === "*") return (f) => f;
+  if (typeof policy === "function") {
+    return (filename: string): string => {
+      const result = policy(filename);
+      if (result === false) {
+        throw new ValidationError(`Upload filename rejected: ${filename}`);
+      }
+      if (typeof result === "string") return result;
+      return filename;
+    };
+  }
+  return strictFilenamePolicy;
 }
 
 function makeUploadHandler(deps: HandlerDeps): RouteHandlerMethod {
@@ -228,13 +267,13 @@ function makeUploadHandler(deps: HandlerDeps): RouteHandlerMethod {
       throw new ValidationError(`Missing file field '${deps.fieldName}' in multipart body`);
     }
 
-    assertSafeFilename(file.filename);
+    const filename = deps.applyFilenamePolicy(file.filename);
 
     const ctx = buildStorageContext(request, deps.contextFrom);
     const result = await deps.storage.upload(
       {
         buffer: file.buffer,
-        filename: file.filename,
+        filename,
         mimeType: file.mimetype,
         size: file.size,
       },
@@ -391,6 +430,7 @@ export function filesUploadPreset(options: FilesUploadPresetOptions): PresetResu
     storage: options.storage,
     fieldName: options.fieldName ?? DEFAULT_FIELD_NAME,
     contextFrom: options.contextFrom ?? defaultContextFrom,
+    applyFilenamePolicy: resolveFilenamePolicy(options.sanitizeFilename),
   };
 
   const maxFileSize = options.maxFileSize ?? DEFAULT_MAX_FILE_SIZE;

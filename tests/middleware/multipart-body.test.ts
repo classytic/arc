@@ -66,6 +66,20 @@ describe("multipartBody middleware", () => {
       return { body: request.body };
     });
 
+    // Subtype wildcard: accept any image/*
+    app.post(
+      "/images-any",
+      { preHandler: [multipartBody({ allowedMimeTypes: ["image/*"] })] },
+      async (request) => ({ body: request.body }),
+    );
+
+    // Total wildcard: accept any type (equivalent to omitting)
+    app.post(
+      "/any",
+      { preHandler: [multipartBody({ allowedMimeTypes: ["*"] })] },
+      async (request) => ({ body: request.body }),
+    );
+
     await app.ready();
   });
 
@@ -414,6 +428,71 @@ describe("multipartBody middleware", () => {
     expect(result.body.tags).toEqual(["electronics", "sale"]);
     expect(result.body.meta).toEqual({ color: "red" });
     expect(result.body.isNull).toBeNull();
+  });
+
+  // ── MIME wildcards ──
+
+  it("accepts any subtype with `image/*`", async () => {
+    const form = buildMultipart([
+      {
+        type: "file",
+        name: "photo",
+        filename: "pic.webp",
+        mimetype: "image/webp",
+        content: Buffer.from("img"),
+      },
+    ]);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/images-any",
+      headers: form.headers,
+      payload: form.payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+  });
+
+  it("rejects other families when `image/*` is set", async () => {
+    const form = buildMultipart([
+      {
+        type: "file",
+        name: "doc",
+        filename: "test.pdf",
+        mimetype: "application/pdf",
+        content: Buffer.from("pdf"),
+      },
+    ]);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/images-any",
+      headers: form.headers,
+      payload: form.payload,
+    });
+
+    expect(response.statusCode).toBe(415);
+  });
+
+  it("accepts any type when `*` is set", async () => {
+    const form = buildMultipart([
+      {
+        type: "file",
+        name: "anything",
+        filename: "data.bin",
+        mimetype: "application/octet-stream",
+        content: Buffer.from("x"),
+      },
+    ]);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/any",
+      headers: form.headers,
+      payload: form.payload,
+    });
+
+    expect(response.statusCode).toBe(200);
   });
 });
 

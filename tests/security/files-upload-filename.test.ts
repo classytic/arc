@@ -10,12 +10,16 @@
 
 import type { FastifyReply, FastifyRequest, RouteHandlerMethod } from "fastify";
 import { describe, expect, it, vi } from "vitest";
+import type { FilenamePolicy } from "../../src/presets/filesUpload.js";
 import { filesUploadPreset } from "../../src/presets/filesUpload.js";
 import type { ResourcePermissions, RouteDefinition } from "../../src/types/index.js";
 import type { Storage } from "../../src/types/storage.js";
 import { ValidationError } from "../../src/utils/errors.js";
 
-function getUploadHandler(): { handler: RouteHandlerMethod; upload: ReturnType<typeof vi.fn> } {
+function getUploadHandler(sanitizeFilename?: FilenamePolicy): {
+  handler: RouteHandlerMethod;
+  upload: ReturnType<typeof vi.fn>;
+} {
   const upload = vi.fn(async (input: { size: number; mimeType: string }) => ({
     id: "id-1",
     url: "memory://id-1",
@@ -29,7 +33,7 @@ function getUploadHandler(): { handler: RouteHandlerMethod; upload: ReturnType<t
     delete: vi.fn(),
   } as unknown as Storage;
 
-  const preset = filesUploadPreset({ storage });
+  const preset = filesUploadPreset({ storage, sanitizeFilename });
   const permissions: ResourcePermissions = {};
   const routes =
     typeof preset.routes === "function" ? preset.routes(permissions) : (preset.routes ?? []);
@@ -96,5 +100,68 @@ describe("Security: Files Upload filename sanitisation", () => {
     await (handler as (req: FastifyRequest, reply: FastifyReply) => Promise<unknown>)(req, reply);
     expect(upload).toHaveBeenCalledTimes(1);
     expect((upload.mock.calls[0] as unknown[])[0]).toMatchObject({ filename: "photo.jpg" });
+  });
+});
+
+describe("filesUploadPreset: sanitizeFilename flexibility", () => {
+  it.each<[FilenamePolicy, string]>([
+    [false, "foo/bar.txt"],
+    ["*", "foo/bar.txt"],
+    [false, "../etc/passwd"],
+    [false, ".."],
+    [false, ""],
+  ])("policy %s accepts previously-rejected name %s", async (policy, filename) => {
+    const { handler, upload } = getUploadHandler(policy);
+    const req = makeRequest(filename);
+    const reply = makeReply();
+
+    await (handler as (req: FastifyRequest, reply: FastifyReply) => Promise<unknown>)(req, reply);
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect((upload.mock.calls[0] as unknown[])[0]).toMatchObject({ filename });
+  });
+
+  it("custom policy function can transform the filename", async () => {
+    const policy: FilenamePolicy = (name) => name.toLowerCase().replace(/\s+/g, "-");
+    const { handler, upload } = getUploadHandler(policy);
+    const req = makeRequest("Vacation Photo.JPG");
+    const reply = makeReply();
+
+    await (handler as (req: FastifyRequest, reply: FastifyReply) => Promise<unknown>)(req, reply);
+    expect((upload.mock.calls[0] as unknown[])[0]).toMatchObject({
+      filename: "vacation-photo.jpg",
+    });
+  });
+
+  it("custom policy function can reject via `false`", async () => {
+    const policy: FilenamePolicy = (name) => (name.endsWith(".exe") ? false : true);
+    const { handler, upload } = getUploadHandler(policy);
+    const req = makeRequest("malware.exe");
+    const reply = makeReply();
+
+    await expect(
+      (handler as (req: FastifyRequest, reply: FastifyReply) => Promise<unknown>)(req, reply),
+    ).rejects.toThrow(ValidationError);
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  it("custom policy can accept via `true`/void", async () => {
+    const policy: FilenamePolicy = () => undefined;
+    const { handler, upload } = getUploadHandler(policy);
+    const req = makeRequest("foo/bar.txt");
+    const reply = makeReply();
+
+    await (handler as (req: FastifyRequest, reply: FastifyReply) => Promise<unknown>)(req, reply);
+    expect((upload.mock.calls[0] as unknown[])[0]).toMatchObject({ filename: "foo/bar.txt" });
+  });
+
+  it("explicit policy `true` keeps strict default behavior", async () => {
+    const { handler, upload } = getUploadHandler(true);
+    const req = makeRequest("../etc/passwd");
+    const reply = makeReply();
+
+    await expect(
+      (handler as (req: FastifyRequest, reply: FastifyReply) => Promise<unknown>)(req, reply),
+    ).rejects.toThrow(ValidationError);
+    expect(upload).not.toHaveBeenCalled();
   });
 });
