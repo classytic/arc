@@ -193,8 +193,15 @@ describe("AccessControl error DX — distinct failure codes", () => {
     });
   });
 
-  describe("repository throws 404 — clean arc-level translation", () => {
-    it("catches mongokit's throw and returns NOT_FOUND without leaking the stack", async () => {
+  describe("repository error translation — structural status:404 only", () => {
+    // Adapter contract (post-v2.9):
+    //   - "not found" is primarily signalled by returning `null`.
+    //   - Adapters that throw (mongokit etc.) MUST attach a structural
+    //     `status: 404` on the Error. Arc translates only those to 404/NOT_FOUND.
+    //   - Plain Errors — even with "not found" in the message — always
+    //     propagate so real DB errors ("index 'x' not found") are not
+    //     misclassified as missing documents.
+    it("translates mongokit-style errors (status:404) to clean NOT_FOUND", async () => {
       const error = new Error("Document not found") as Error & { status: number };
       error.status = 404;
       const repo = makeRepo({
@@ -209,8 +216,22 @@ describe("AccessControl error DX — distinct failure codes", () => {
       expect(result.success).toBe(false);
       expect(result.status).toBe(404);
       expect((result.details as Record<string, unknown>)?.code).toBe("NOT_FOUND");
-      // Must NOT leak internal error details
       expect(result.error).not.toContain("stack");
+    });
+
+    it("real errors propagate instead of being silently 404'd by string match", async () => {
+      // Pre-v2.9 this would match "not found" and get swallowed into a 404.
+      // Post-v2.9: no string sniffing → error bubbles up (→ 500 at the edge).
+      const repo = makeRepo({
+        getById: vi.fn(async () => {
+          throw new Error("index 'projectId_1' not found on collection agents");
+        }),
+      });
+      const ctrl = new BaseController(repo, { resourceName: "agent" });
+
+      await expect(ctrl.get(makeRequest({ params: { id: "x" } }))).rejects.toThrow(
+        /index.*not found/,
+      );
     });
   });
 });

@@ -39,6 +39,7 @@ describe("Public API Contract", () => {
       "./docs",
       "./dynamic",
       "./events",
+      "./events/mongo",
       "./events/redis",
       "./events/redis-stream",
       "./factory",

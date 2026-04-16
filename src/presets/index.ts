@@ -58,6 +58,12 @@ export type {
   FilesUploadPresetRoutes,
 } from "./filesUpload.js";
 export { filesUploadPreset } from "./filesUpload.js";
+export type {
+  SearchHandler,
+  SearchPresetOptions,
+  SearchRouteConfig,
+} from "./search.js";
+export { searchPreset } from "./search.js";
 export type { TreeOptions } from "./tree.js";
 export { treePreset } from "./tree.js";
 

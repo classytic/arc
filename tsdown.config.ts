@@ -16,6 +16,7 @@ export default defineConfig({
     "src/presets/index.ts",
     "src/presets/multiTenant.ts",
     "src/presets/filesUpload.ts",
+    "src/presets/search.ts",
 
     // Scope
     "src/scope/index.ts",
