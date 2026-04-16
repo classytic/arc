@@ -29,10 +29,13 @@ export type {
 // Typed event definitions & registry
 export { createEventRegistry, defineEvent } from "./defineEvent.js";
 export {
+  createChildEvent,
   createEvent,
+  type DeadLetteredEvent,
   type DomainEvent,
   type EventHandler,
   type EventLogger,
+  type EventMeta,
   type EventTransport,
   MemoryEventTransport,
   type MemoryEventTransportOptions,

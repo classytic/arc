@@ -17,31 +17,103 @@
  * }
  */
 
+/**
+ * Event metadata.
+ *
+ * Split out as a standalone interface so primitives / downstream packages can
+ * mirror it without re-declaring the DomainEvent wrapper. See events.ts in
+ * @classytic/primitives for the sibling shape.
+ */
+export interface EventMeta {
+  /** Unique event ID (UUID v4 recommended) */
+  id: string;
+
+  /** Event timestamp */
+  timestamp: Date;
+
+  /**
+   * Schema version for this event type. Default: `1`.
+   *
+   * Use when the payload shape evolves so handlers can branch on version
+   * during migration windows (`if (event.meta.schemaVersion === 2) ...`).
+   * Bump ONLY when the payload contract changes in a breaking way.
+   */
+  schemaVersion?: number;
+
+  /**
+   * Correlation ID — stays stable across an entire causal chain so a single
+   * user action can be traced through every downstream event. Spans service
+   * boundaries. Generated at the edge (HTTP request, CLI invocation) and
+   * inherited by every child event.
+   */
+  correlationId?: string;
+
+  /**
+   * Causation ID — the `meta.id` of the direct parent event that caused
+   * this one. Forms a linked-list of cause-and-effect within a correlation.
+   *
+   * Distinct from correlationId: correlation groups, causation chains.
+   * Use {@link createChildEvent} to populate this automatically.
+   */
+  causationId?: string;
+
+  /**
+   * Partition key hint for ordered transports (Kafka, Kinesis, Redis Streams
+   * consumer groups). Events with the same partitionKey are guaranteed to be
+   * delivered in publish order by transports that honour it.
+   *
+   * Defaults to `resourceId` if unset. Transports that don't support ordering
+   * (in-memory, simple pub/sub) ignore this field.
+   */
+  partitionKey?: string;
+
+  /** Source resource (e.g. 'order', 'transaction') */
+  resource?: string;
+
+  /** Resource identifier */
+  resourceId?: string;
+
+  /** User who triggered the event */
+  userId?: string;
+
+  /** Organization context */
+  organizationId?: string;
+}
+
 export interface DomainEvent<T = unknown> {
   /** Event type (e.g., 'product.created', 'order.shipped') */
   type: string;
   /** Event payload */
   payload: T;
   /** Event metadata */
-  meta: {
-    /** Unique event ID */
-    id: string;
-    /** Event timestamp */
-    timestamp: Date;
-    /** Source resource */
-    resource?: string;
-    /** Resource ID */
-    resourceId?: string;
-    /** User who triggered the event */
-    userId?: string;
-    /** Organization context */
-    organizationId?: string;
-    /** Correlation ID for tracing */
-    correlationId?: string;
-  };
+  meta: EventMeta;
 }
 
 export type EventHandler<T = unknown> = (event: DomainEvent<T>) => void | Promise<void>;
+
+/**
+ * A permanently-failed event routed to a dead-letter sink after retries
+ * have been exhausted. Mirrors the shape a caller would log, alert on, or
+ * replay from once the upstream issue is fixed.
+ */
+export interface DeadLetteredEvent<T = unknown> {
+  /** The original event */
+  event: DomainEvent<T>;
+  /** Serialised failure reason (message + optional machine code + stack) */
+  error: {
+    message: string;
+    code?: string;
+    stack?: string;
+  };
+  /** How many delivery attempts were made before giving up */
+  attempts: number;
+  /** First failure timestamp */
+  firstFailedAt: Date;
+  /** Last failure timestamp (immediately before dead-lettering) */
+  lastFailedAt: Date;
+  /** Optional handler / subscriber name that last failed (for debug) */
+  handlerName?: string;
+}
 
 /**
  * Minimal logger interface for event transports.
@@ -100,6 +172,16 @@ export interface EventTransport {
    * @returns Unsubscribe function
    */
   subscribe(pattern: string, handler: EventHandler): Promise<() => void>;
+
+  /**
+   * Route a permanently-failed event to the transport's dead-letter sink
+   * (Kafka DLQ topic, SQS DLQ, Redis Stream `PEL` timeout handler, etc.).
+   *
+   * Called by {@link import('./outbox.js').EventOutbox} after exhausting
+   * retries. Transports that don't have a native DLQ can omit this —
+   * callers treat an absent `deadLetter` as "log and drop".
+   */
+  deadLetter?(dlq: DeadLetteredEvent): Promise<void>;
 
   /**
    * Close transport connections
@@ -210,12 +292,15 @@ export class MemoryEventTransport implements EventTransport {
 }
 
 /**
- * Create a domain event with auto-generated metadata
+ * Create a domain event with auto-generated metadata.
+ *
+ * `id` and `timestamp` are filled in; everything else is caller-controlled.
+ * Set `schemaVersion` explicitly for any event type you plan to evolve.
  */
 export function createEvent<T>(
   type: string,
   payload: T,
-  meta?: Partial<DomainEvent["meta"]>,
+  meta?: Partial<EventMeta>,
 ): DomainEvent<T> {
   return {
     type,
@@ -223,6 +308,62 @@ export function createEvent<T>(
     meta: {
       id: crypto.randomUUID(),
       timestamp: new Date(),
+      ...meta,
+    },
+  };
+}
+
+/**
+ * Create a child event that chains causation from a parent event.
+ *
+ * Rules:
+ *  - `causationId` is set to the parent's `id` (direct cause)
+ *  - `correlationId` is inherited from the parent if set, else falls back
+ *    to the parent's `id` (root correlation)
+ *  - `userId` / `organizationId` are inherited when not overridden so the
+ *    whole chain stays scoped to the originating principal/tenant
+ *
+ * Caller-supplied `meta` wins over inherited fields — pass `{ userId: newActor }`
+ * to override when a subsystem acts on behalf of a different principal.
+ *
+ * @example
+ * ```typescript
+ * const orderPlaced = createEvent('order.placed', { orderId: 'o1' }, {
+ *   correlationId: req.id, userId: user.id,
+ * });
+ * await events.publish(orderPlaced);
+ *
+ * // Downstream handler emits a child event:
+ * const reserved = createChildEvent(orderPlaced, 'inventory.reserved', {
+ *   orderId: 'o1', skus: ['sku-1', 'sku-2'],
+ * });
+ * // reserved.meta.causationId   === orderPlaced.meta.id
+ * // reserved.meta.correlationId === orderPlaced.meta.correlationId
+ * // reserved.meta.userId        === user.id   (inherited)
+ * ```
+ */
+export function createChildEvent<T>(
+  parent: DomainEvent,
+  type: string,
+  payload: T,
+  meta?: Partial<EventMeta>,
+): DomainEvent<T> {
+  const inherited: Partial<EventMeta> = {
+    correlationId: parent.meta.correlationId ?? parent.meta.id,
+    causationId: parent.meta.id,
+  };
+  if (parent.meta.userId !== undefined) inherited.userId = parent.meta.userId;
+  if (parent.meta.organizationId !== undefined) {
+    inherited.organizationId = parent.meta.organizationId;
+  }
+
+  return {
+    type,
+    payload,
+    meta: {
+      id: crypto.randomUUID(),
+      timestamp: new Date(),
+      ...inherited,
       ...meta,
     },
   };

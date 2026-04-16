@@ -123,7 +123,7 @@ const ssePlugin: FastifyPluginAsync<SSEOptions> = async (
           async (event: DomainEvent<unknown>) => {
             // Org-scoped filtering: only forward events for the user's org
             if (orgScoped) {
-              const eventOrgId = (event.meta as Record<string, unknown>)?.organizationId;
+              const eventOrgId = event.meta?.organizationId;
               // If caller has no org, drop any event that carries an orgId
               if (dropOrgEvents && eventOrgId) return;
               // If caller has an org, only forward events matching their org
