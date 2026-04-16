@@ -34,7 +34,6 @@ import { executePipeline } from "../pipeline/pipe.js";
 import type { PipelineConfig, PipelineContext, PipelineStep } from "../pipeline/types.js";
 import type { ControllerHandler } from "../types/handlers.js";
 import type {
-  AdditionalRoute,
   CrudController,
   CrudRouterOptions,
   FastifyWithDecorators,
@@ -43,6 +42,7 @@ import type {
   IRequestContext,
   RateLimitConfig,
   RequestWithExtras,
+  RouteDefinition,
   UserLike,
 } from "../types/index.js";
 import { getDefaultCrudSchemas } from "../utils/responseSchemas.js";
@@ -202,11 +202,12 @@ function buildPermissionMiddleware(
 }
 
 /**
- * Create additional routes from preset/custom definitions
+ * Mount custom routes (from presets or user-defined `routes`) on Fastify.
+ * `wrapHandler` is derived inline from `!route.raw`.
  */
-function createAdditionalRoutes<TDoc = unknown>(
+function createCustomRoutes<TDoc = unknown>(
   fastify: FastifyWithDecorators,
-  routes: AdditionalRoute[],
+  routes: readonly RouteDefinition[],
   controller: CrudController<TDoc> | undefined,
   options: {
     tag: string;
@@ -239,7 +240,10 @@ function createAdditionalRoutes<TDoc = unknown>(
         ? route.handler
         : `${route.method.toLowerCase()}${route.path.replace(/[/:]/g, "_")}`);
 
-    // Resolve handler - wrapHandler is REQUIRED (no auto-detection)
+    // Derive pipeline wrapping from `raw`: `raw: true` → no wrap;
+    // anything else (default) → arc pipeline wraps the handler.
+    const wrapHandler = !route.raw;
+
     let handler: RouteHandlerMethod;
 
     if (typeof route.handler === "string") {
@@ -258,8 +262,7 @@ function createAdditionalRoutes<TDoc = unknown>(
       // Bind method to controller
       const boundMethod = (method as Function).bind(controller);
 
-      // Explicit wrapHandler - no auto-detection
-      if (route.wrapHandler) {
+      if (wrapHandler) {
         const steps = pipeline ? resolvePipelineSteps(pipeline, opName) : [];
         if (steps.length > 0) {
           handler = createPipelineHandler(
@@ -275,8 +278,8 @@ function createAdditionalRoutes<TDoc = unknown>(
         handler = boundMethod as RouteHandlerMethod;
       }
     } else {
-      // Function handler - use explicit wrapHandler
-      if (route.wrapHandler) {
+      // Function handler
+      if (wrapHandler) {
         const steps = pipeline ? resolvePipelineSteps(pipeline, opName) : [];
         if (steps.length > 0) {
           handler = createPipelineHandler(
@@ -418,7 +421,7 @@ export function createCrudRouter<TDoc = unknown>(
     permissions = {},
     middlewares = {},
     routeGuards = [],
-    additionalRoutes = [],
+    routes: customRoutes = [],
     disableDefaultRoutes = false,
     disabledRoutes = [],
     resourceName = "unknown",
@@ -684,8 +687,8 @@ export function createCrudRouter<TDoc = unknown>(
   }
 
   // Additional routes from presets and custom
-  if (additionalRoutes.length > 0) {
-    createAdditionalRoutes(fastify, additionalRoutes, controller, {
+  if (customRoutes.length > 0) {
+    createCustomRoutes(fastify, customRoutes, controller, {
       tag,
       resourceName,
       arcDecorator,

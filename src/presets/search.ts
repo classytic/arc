@@ -71,8 +71,9 @@
  * ```
  */
 
+import type { RepositoryLike } from "../adapters/interface.js";
 import { allowPublic, requireAuth } from "../permissions/index.js";
-import type { ControllerHandler, IControllerResponse } from "../types/handlers.js";
+import type { ControllerHandler, IControllerResponse, IRequestContext } from "../types/handlers.js";
 import type {
   PermissionCheck,
   PresetResult,
@@ -93,7 +94,12 @@ import type {
 export type SearchHandler = ControllerHandler;
 
 export interface SearchRouteConfig {
-  /** User-supplied handler. Required — if omitted, the route is NOT mounted. */
+  /**
+   * User-supplied handler. When omitted, the preset auto-synthesises a handler
+   * from `options.repository` (calling `repo.search` / `repo.searchSimilar` /
+   * `repo.embed` respectively). If `repository` is also absent — or the repo
+   * doesn't expose the matching method — the route is NOT mounted.
+   */
   handler?: SearchHandler;
   /** HTTP path relative to the resource prefix. Defaults per-kind: `/search`, `/search-similar`, `/embed`. */
   path?: string;
@@ -120,13 +126,32 @@ export interface SearchRouteConfig {
   tags?: string[];
 }
 
+/**
+ * Shorthand shape for `search` / `similar` / `embed` sections:
+ *   - `undefined`           → route not mounted
+ *   - `true`                → mount with defaults, auto-wire from `repository`
+ *   - `SearchRouteConfig`   → explicit config (and optional handler override)
+ */
+export type SearchSection = true | SearchRouteConfig;
+
 export interface SearchPresetOptions {
-  /** Full-text / engine-backed search route. Opt-in — provide `handler` to mount. */
-  search?: SearchRouteConfig;
+  /**
+   * Repository exposing `search`/`searchSimilar`/`embed`. When provided,
+   * any section without an explicit `handler` is auto-wired to the matching
+   * repo method. Mongokit's `elasticSearchPlugin` + `vectorPlugin` register
+   * exactly these methods — pass the repo once and the handlers are synthesised.
+   *
+   * Sections set to `true` REQUIRE `repository` (otherwise the route is
+   * skipped silently). Sections with an explicit `handler` ignore this field.
+   */
+  repository?: Pick<RepositoryLike, "search" | "searchSimilar" | "embed">;
+
+  /** Full-text / engine-backed search route. Opt-in. */
+  search?: SearchSection;
   /** Vector / semantic similarity route. Opt-in. */
-  similar?: SearchRouteConfig;
+  similar?: SearchSection;
   /** Embedding route (text/media → vector). Opt-in. */
-  embed?: SearchRouteConfig;
+  embed?: SearchSection;
   /**
    * Fully custom routes — merged as-is into the resource's route table.
    * Use this for endpoints that don't fit search/similar/embed naming,
@@ -183,7 +208,9 @@ const BUILTINS: readonly BuiltinSpec[] = [
  * If the handler already returns `{ success, data }`, arc passes it through;
  * otherwise we wrap the raw return value so callers don't have to.
  */
-function wrapEnvelope(handler: SearchHandler): ControllerHandler {
+function wrapEnvelope(
+  handler: SearchHandler | ((req: IRequestContext) => Promise<unknown>),
+): ControllerHandler {
   return async (req) => {
     const out = (await handler(req)) as unknown;
     if (out !== null && typeof out === "object" && "success" in out) {
@@ -194,20 +221,81 @@ function wrapEnvelope(handler: SearchHandler): ControllerHandler {
 }
 
 /**
+ * Normalise a section value — `true` → empty config, `undefined` → undefined,
+ * object → passthrough. Lets callers write `search: true` to mount with
+ * defaults + auto-wire.
+ */
+function normaliseSection(value: SearchSection | undefined): SearchRouteConfig | undefined {
+  if (value === undefined) return undefined;
+  if (value === true) return {};
+  return value;
+}
+
+/**
+ * Internal handler shape returned by the auto-wire synthesiser. Returns raw
+ * data which `wrapEnvelope` later coerces into `IControllerResponse`. The
+ * looser return type is deliberate — `SearchHandler` requires `IControllerResponse`,
+ * but auto-wired handlers proxy directly to repo methods that return arbitrary
+ * shapes (arrays of docs, scored hits, vectors, …).
+ */
+type RawSearchHandler = (req: IRequestContext) => Promise<unknown>;
+
+/**
+ * Build an auto-synthesised handler that calls `repo[method]` with
+ * `(body.query, body)` — the convention used by mongokit's elasticSearch /
+ * vector plugins. Returns `undefined` when the method isn't present so the
+ * caller can fall back to an explicit `cfg.handler` or skip the route.
+ */
+function autoHandlerFor(
+  repo: SearchPresetOptions["repository"] | undefined,
+  method: "search" | "searchSimilar" | "embed",
+): RawSearchHandler | undefined {
+  if (!repo) return undefined;
+  const fn = repo[method];
+  if (typeof fn !== "function") return undefined;
+
+  if (method === "embed") {
+    return async (req) => {
+      const body = (req.body ?? {}) as { input?: unknown };
+      return (fn as (input: unknown) => Promise<unknown>)(body.input ?? body);
+    };
+  }
+  return async (req) => {
+    const body = (req.body ?? {}) as { query?: unknown; [k: string]: unknown };
+    return (fn as (q: unknown, o?: unknown) => Promise<unknown>)(body.query, body);
+  };
+}
+
+/**
  * Create a search preset bound to a resource.
  *
- * The preset mounts routes lazily — ONLY the sections with a `handler` produce
- * routes. This keeps the surface minimal and makes DB-agnosticism explicit:
- * you bring the backend, arc brings the HTTP + permissions + docs.
+ * Mounts routes only for sections the caller opts into. A section's handler
+ * is either:
+ *   1. explicit `cfg.handler` — always wins,
+ *   2. `options.repository` auto-wire — if the repo exposes the matching
+ *      method (`search` / `searchSimilar` / `embed`),
+ *   3. otherwise the route is silently skipped.
+ *
+ * The preset itself stays DB-agnostic: nothing is imported from mongokit —
+ * it only feature-detects the optional methods on whatever repo you pass.
  */
 export function searchPreset(options: SearchPresetOptions = {}): PresetResult {
   const sections: Record<"search" | "similar" | "embed", SearchRouteConfig | undefined> = {
-    search: options.search,
-    similar: options.similar,
-    embed: options.embed,
+    search: normaliseSection(options.search),
+    similar: normaliseSection(options.similar),
+    embed: normaliseSection(options.embed),
   };
 
   const extraRoutes: readonly RouteDefinition[] = options.routes ?? [];
+
+  const repoMethodFor: Record<
+    "search" | "similar" | "embed",
+    "search" | "searchSimilar" | "embed"
+  > = {
+    search: "search",
+    similar: "searchSimilar",
+    embed: "embed",
+  };
 
   return {
     name: "search",
@@ -216,7 +304,10 @@ export function searchPreset(options: SearchPresetOptions = {}): PresetResult {
 
       for (const spec of BUILTINS) {
         const cfg = sections[spec.key];
-        if (!cfg?.handler) continue; // opt-in only
+        if (!cfg) continue;
+
+        const handler = cfg.handler ?? autoHandlerFor(options.repository, repoMethodFor[spec.key]);
+        if (!handler) continue; // no explicit handler AND no matching repo method
 
         const route: RouteDefinition = {
           method: cfg.method ?? "POST",
@@ -228,7 +319,7 @@ export function searchPreset(options: SearchPresetOptions = {}): PresetResult {
           permissions: cfg.permissions ?? spec.permissionFallback(permissions),
           schema: cfg.schema,
           mcp: cfg.mcp,
-          handler: wrapEnvelope(cfg.handler),
+          handler: wrapEnvelope(handler),
         };
         mounted.push(route);
       }

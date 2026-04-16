@@ -32,7 +32,6 @@ function makeResourceWithActions(overrides: Partial<ResourceDefinition> = {}): R
     schemaOptions: {},
     permissions: {},
     routes: [],
-    additionalRoutes: [],
     _appliedPresets: [],
     actions: {
       approve: async (id: string) => ({ id, status: "approved" }),
@@ -217,13 +216,12 @@ describe("MCP: route-level mcp metadata", () => {
     const resource = makeResourceWithActions({
       actions: undefined,
       controller: mockController,
-      additionalRoutes: [
+      routes: [
         {
           method: "GET",
           path: "/stats",
           handler: async () => ({ stats: true }),
           permissions: allowPublic(),
-          wrapHandler: true,
           mcp: false,
         },
         {
@@ -231,7 +229,6 @@ describe("MCP: route-level mcp metadata", () => {
           path: "/export",
           handler: async () => ({ exported: true }),
           permissions: allowPublic(),
-          wrapHandler: true,
         },
       ],
     });
@@ -247,13 +244,12 @@ describe("MCP: route-level mcp metadata", () => {
     const resource = makeResourceWithActions({
       actions: undefined,
       controller: mockController,
-      additionalRoutes: [
+      routes: [
         {
           method: "POST",
           path: "/trigger",
           handler: async () => ({ ok: true }),
           permissions: allowPublic(),
-          wrapHandler: true,
           mcp: {
             description: "Trigger the pipeline",
             annotations: { readOnlyHint: false, destructiveHint: true },

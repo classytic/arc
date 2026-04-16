@@ -46,7 +46,6 @@ import type { RegisterOptions } from "../registry/ResourceRegistry.js";
 import type {
   ActionDefinition,
   ActionsMap,
-  AdditionalRoute,
   AnyRecord,
   CrudController,
   CrudRouteKey,
@@ -472,18 +471,11 @@ export class ResourceDefinition<TDoc = AnyRecord> {
   // Security
   readonly permissions: ResourcePermissions;
 
-  // Customization
-  readonly additionalRoutes: AdditionalRoute[];
-  /**
-   * Original v2.8 `routes` declaration — retained for downstream consumers
-   * (OpenAPI, MCP, registry, CLI introspect). Preserves fields dropped during
-   * normalization to `additionalRoutes` (notably `mcp`, `description`,
-   * `annotations`). Undefined when the resource was defined with the legacy
-   * `additionalRoutes` shape.
-   *
-   * Added in 2.8.1 — the source-of-truth fix for "canonical resource manifest".
-   */
-  readonly routes?: readonly RouteDefinition[];
+  // Customization — user-declared custom routes (single source of truth).
+  // Always an array; empty when the user didn't declare any. Consumers
+  // (createCrudRouter, resourceToTools, OpenAPI, registry, CLI introspect)
+  // read this directly. `wrapHandler` is derived from `!route.raw` at use-site.
+  readonly routes: readonly RouteDefinition[];
   readonly middlewares: MiddlewareConfig;
   readonly routeGuards?: RouteHandlerMethod[];
   readonly disableDefaultRoutes: boolean;
@@ -560,11 +552,9 @@ export class ResourceDefinition<TDoc = AnyRecord> {
     this.permissions = (config.permissions ?? {}) as ResourcePermissions;
 
     // `config.routes` is the single source — user routes + preset routes
-    // are merged here by `applyPresets → mergePreset`.
-    this.routes = config.routes;
-    this.additionalRoutes = config.routes
-      ? convertRoutesToAdditionalRoutes(config.routes as RouteDefinition[])
-      : [];
+    // are merged here by `applyPresets → mergePreset`. Always stored as an
+    // array (possibly empty); no separate normalised copy.
+    this.routes = (config.routes ?? []) as readonly RouteDefinition[];
     this.middlewares = config.middlewares ?? {};
     this.routeGuards = config.routeGuards;
     this.disableDefaultRoutes = config.disableDefaultRoutes ?? false;
@@ -637,7 +627,7 @@ export class ResourceDefinition<TDoc = AnyRecord> {
       }
     }
 
-    for (const route of this.additionalRoutes) {
+    for (const route of this.routes) {
       if (typeof route.handler === "string") {
         if (!this.controller) {
           errors.push(
@@ -863,18 +853,16 @@ export class ResourceDefinition<TDoc = AnyRecord> {
               : ({ querystring: normalizedSchema } as AnyRecord);
           }
 
-          // Pass routes as-is to createCrudRouter
-          // String handler resolution and wrapping is handled in createCrudRouter
-          const resolvedRoutes = self.additionalRoutes;
-
-          // Create CRUD routes
+          // Pass routes as-is to createCrudRouter.
+          // String handler resolution + `wrapHandler` derivation (from `!route.raw`)
+          // happen inside createCrudRouter.
           createCrudRouter(typedInstance, self.controller as unknown as CrudController<TDoc>, {
             tag: self.tag,
             schemas: schemas ?? undefined,
             permissions: self.permissions,
             middlewares: self.middlewares,
             routeGuards: self.routeGuards,
-            additionalRoutes: resolvedRoutes,
+            routes: self.routes,
             disableDefaultRoutes: self.disableDefaultRoutes,
             disabledRoutes: self.disabledRoutes,
             resourceName: self.name,
@@ -993,36 +981,6 @@ function capitalize(str: string): string {
 // ============================================================================
 // v2.8 — model auto-detection
 // ============================================================================
-
-// ============================================================================
-// v2.8 — routes → AdditionalRoute conversion
-// ============================================================================
-
-/**
- * Convert v2.8 RouteDefinition[] to internal AdditionalRoute[] format.
- * The internal format is what createCrudRouter understands.
- */
-function convertRoutesToAdditionalRoutes(routes: RouteDefinition[]): AdditionalRoute[] {
-  return routes.map((route) => ({
-    method: route.method,
-    path: route.path,
-    handler: route.handler as AdditionalRoute["handler"],
-    permissions: route.permissions,
-    // raw: true → wrapHandler: false, otherwise wrapHandler: true for pipeline routes
-    wrapHandler: !route.raw,
-    operation: route.operation,
-    summary: route.summary,
-    description: route.description,
-    tags: route.tags,
-    preHandler: route.preHandler,
-    preAuth: route.preAuth,
-    streamResponse: route.streamResponse,
-    schema: route.schema,
-    mcpHandler: route.mcpHandler as AdditionalRoute["mcpHandler"],
-    // Preserve MCP opt-out / annotations (v2.8.1 fix — previously dropped)
-    mcp: route.mcp as AdditionalRoute["mcp"],
-  }));
-}
 
 // ============================================================================
 // v2.8 — actions → ActionRouterConfig conversion

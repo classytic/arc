@@ -66,6 +66,7 @@ describe("Public API Contract", () => {
       "./policies",
       "./presets",
       "./presets/files-upload",
+      "./presets/search",
       "./presets/tenant",
       "./registry",
       "./rpc",

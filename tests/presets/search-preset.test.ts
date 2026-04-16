@@ -119,6 +119,149 @@ describe("searchPreset — route definitions", () => {
   });
 });
 
+describe("searchPreset — auto-wire from `repository`", () => {
+  it("synthesises handlers from repo.search / searchSimilar / embed when section is `true`", async () => {
+    const search = vi.fn(async (query: unknown) => [{ id: "s", q: query }]);
+    const searchSimilar = vi.fn(async (query: unknown) => [{ id: "v", q: query }]);
+    const embed = vi.fn(async (input: unknown) => [0.1, 0.2, Number(`${input}`.length) || 0]);
+
+    const preset = searchPreset({
+      repository: { search, searchSimilar, embed },
+      search: true,
+      similar: true,
+      embed: true,
+    });
+    const routes = extractRoutes(preset);
+    expect(routes.map((r) => r.path).sort()).toEqual(["/embed", "/search", "/search-similar"]);
+
+    const callRoute = async (path: string, body: unknown) => {
+      const route = routes.find((r) => r.path === path);
+      if (!route) throw new Error(`route ${path} not found`);
+      const fn = route.handler as (r: unknown) => Promise<unknown>;
+      return fn({ body, params: {}, query: {} });
+    };
+
+    const sOut = (await callRoute("/search", { query: "widget", limit: 5 })) as {
+      success: boolean;
+      data: unknown;
+    };
+    expect(sOut.success).toBe(true);
+    expect(search).toHaveBeenCalledWith("widget", { query: "widget", limit: 5 });
+
+    const simOut = (await callRoute("/search-similar", { query: [0.1, 0.2] })) as {
+      success: boolean;
+    };
+    expect(simOut.success).toBe(true);
+    expect(searchSimilar).toHaveBeenCalledWith([0.1, 0.2], { query: [0.1, 0.2] });
+
+    const eOut = (await callRoute("/embed", { input: "hello" })) as {
+      success: boolean;
+      data: number[];
+    };
+    expect(eOut.success).toBe(true);
+    expect(embed).toHaveBeenCalledWith("hello");
+    expect(eOut.data[2]).toBe(5);
+  });
+
+  it("explicit `handler` on a section wins over the repository method", async () => {
+    const repoSearch = vi.fn(async () => "repo-result");
+    const override = vi.fn(async () => "override-result");
+
+    const preset = searchPreset({
+      repository: { search: repoSearch },
+      search: { handler: override },
+    });
+    const routes = extractRoutes(preset);
+    const fn = routes[0]?.handler as (r: unknown) => Promise<unknown>;
+    const out = (await fn({ body: {}, params: {}, query: {} })) as {
+      success: boolean;
+      data: string;
+    };
+    expect(out.data).toBe("override-result");
+    expect(override).toHaveBeenCalledTimes(1);
+    expect(repoSearch).not.toHaveBeenCalled();
+  });
+
+  it("section `true` without a matching repo method skips the route silently", () => {
+    const preset = searchPreset({
+      repository: { search: async () => [] }, // no searchSimilar, no embed
+      search: true,
+      similar: true,
+      embed: true,
+    });
+    const routes = extractRoutes(preset);
+    expect(routes).toHaveLength(1);
+    expect(routes[0]?.path).toBe("/search");
+  });
+
+  it("custom path + schema still apply when handler is auto-wired", () => {
+    const preset = searchPreset({
+      repository: { search: async () => [] },
+      search: {
+        path: "/full-text",
+        schema: { body: { type: "object", required: ["query"] } },
+      },
+    });
+    const routes = extractRoutes(preset);
+    expect(routes[0]?.path).toBe("/full-text");
+    expect(routes[0]?.schema).toBeDefined();
+  });
+});
+
+describe("searchPreset — per-path MCP opt-out", () => {
+  it("mcp: false on a section excludes only that path from MCP tool generation", () => {
+    const preset = searchPreset({
+      search: { handler: async () => [] /* mcp omitted → default (auto) */ },
+      similar: { handler: async () => [], mcp: false },
+      embed: { handler: async () => [0] },
+    });
+    const routes = extractRoutes(preset);
+    const byPath = Object.fromEntries(routes.map((r) => [r.path, r]));
+
+    // The preset passes the flag through unchanged so resourceToTools /
+    // openapi / mcpPlugin can honour it downstream.
+    expect(byPath["/search"]?.mcp).toBeUndefined(); // default → auto
+    expect(byPath["/search-similar"]?.mcp).toBe(false); // explicit opt-out
+    expect(byPath["/embed"]?.mcp).toBeUndefined();
+  });
+
+  it("mcp: false on a route inside `routes` excludes it too", () => {
+    const preset = searchPreset({
+      routes: [
+        {
+          method: "POST",
+          path: "/reindex",
+          handler: async () => ({ success: true, data: null }),
+          permissions: allowPublic(),
+          mcp: false, // admin route — don't expose to MCP
+        },
+        {
+          method: "POST",
+          path: "/facets",
+          handler: async () => ({ success: true, data: [] }),
+          permissions: allowPublic(),
+          // mcp omitted → stays in MCP surface
+        },
+      ],
+    });
+    const routes = extractRoutes(preset);
+    expect(routes.find((r) => r.path === "/reindex")?.mcp).toBe(false);
+    expect(routes.find((r) => r.path === "/facets")?.mcp).toBeUndefined();
+  });
+
+  it("mcp accepts a RouteMcpConfig object for per-path description + annotations", () => {
+    const mcpConfig = {
+      description: "Catalog full-text search",
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    };
+    const preset = searchPreset({
+      search: { handler: async () => [], mcp: mcpConfig },
+    });
+    const routes = extractRoutes(preset);
+    expect(routes[0]?.mcp).toBe(mcpConfig);
+  });
+});
+
 describe("searchPreset — envelope wrapping", () => {
   it("wraps a raw return value into { success, data }", async () => {
     const hit = [{ id: "a" }];
@@ -317,6 +460,86 @@ describe("searchPreset — end-to-end via createApp", () => {
     expect(bodySchema?.required).toContain("query");
     expect(bodySchema?.properties).toHaveProperty("query");
     expect(bodySchema?.properties).toHaveProperty("limit");
+  });
+
+  it("multiple resources with searchPreset register cleanly on one mcpPlugin endpoint", async () => {
+    // Proves the common multi-resource pattern: product + order + ticket
+    // each get their own searchPreset, one mcpPlugin exposes them all,
+    // tool names are automatically per-resource-namespaced via resourceName
+    // so there's no collision.
+    const { mcpPlugin } = await import("../../src/integrations/mcp/index.js");
+
+    const makeResource = (name: string, prefix: string) =>
+      defineResource({
+        name,
+        prefix,
+        disableDefaultRoutes: true,
+        permissions: { list: allowPublic() },
+        presets: [
+          searchPreset({
+            search: { handler: async () => [] },
+            similar: { handler: async () => [] },
+          }),
+        ],
+      });
+
+    const product = makeResource("product", "/products");
+    const order = makeResource("order", "/orders");
+    const ticket = makeResource("ticket", "/tickets");
+
+    const Fastify = (await import("fastify")).default;
+    app = Fastify({ logger: false });
+    await app.register(product.toPlugin());
+    await app.register(order.toPlugin());
+    await app.register(ticket.toPlugin());
+
+    // Single MCP endpoint hosting all three resources
+    await app.register(mcpPlugin, {
+      resources: [product, order, ticket],
+      prefix: "/mcp",
+    });
+    await app.ready();
+
+    // Each resource registers under its own name — `mcpPlugin` namespaces
+    // tools as `{operation}_{resource}` so multiple resources can share the
+    // same search/similar routes without colliding.
+    expect(app.mcp?.resourceNames.sort()).toEqual(["order", "product", "ticket"]);
+    // NOTE: resourceToTools requires a resource.adapter (for its CRUD
+    // controller path) before it emits tools from preset routes. Resources
+    // in this test are adapter-less — `resourceNames` is enough to prove
+    // multi-resource registration works; real apps bring an adapter and
+    // get `{operation}_{resource}` tools automatically.
+  });
+
+  it("mcpPlugin `exclude` filters out resources even when they have search routes", async () => {
+    const { mcpPlugin } = await import("../../src/integrations/mcp/index.js");
+
+    const makeResource = (name: string, prefix: string) =>
+      defineResource({
+        name,
+        prefix,
+        disableDefaultRoutes: true,
+        permissions: { list: allowPublic() },
+        presets: [searchPreset({ search: { handler: async () => [] } })],
+      });
+
+    const pub = makeResource("product", "/products");
+    const admin = makeResource("admin", "/admin-items");
+
+    const Fastify = (await import("fastify")).default;
+    app = Fastify({ logger: false });
+    await app.register(pub.toPlugin());
+    await app.register(admin.toPlugin());
+    await app.register(mcpPlugin, {
+      resources: [pub, admin],
+      prefix: "/mcp",
+      exclude: ["admin"], // admin resource gets zero MCP tools
+    });
+    await app.ready();
+
+    expect(app.mcp?.resourceNames).toEqual(["product"]);
+    const toolNames = app.mcp?.toolNames ?? [];
+    expect(toolNames.every((t) => !t.includes("admin"))).toBe(true);
   });
 
   it("mounts multiple sections and a bespoke route in one preset", async () => {

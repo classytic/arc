@@ -112,10 +112,10 @@ export function resourceToTools(
   const tools: ToolDefinition[] = [];
   const prefix = config.toolNamePrefix;
 
-  // CRUD tools require a controller — skip if unavailable (actions-only resource)
-  if (!controller) {
-    // Jump straight to additionalRoutes + actions (below)
-  } else {
+  // CRUD tools require a controller — skip entirely for actions-only /
+  // pure-custom-route resources (those still emit tools from `routes` + `actions`
+  // below).
+  if (controller) {
     // Determine enabled operations — only disabledRoutes matters, NOT disableDefaultRoutes
     let ops = ALL_CRUD_OPS.filter((op) => {
       if (resource.disabledRoutes?.includes(op)) return false;
@@ -152,63 +152,71 @@ export function resourceToTools(
         handler: createHandler(op, controller, resource.name, resource.permissions),
       });
     }
+  }
 
-    // Custom routes with pipeline handlers (raw: false) OR mcpHandler become tools.
-    // v2.8.1: honor route-level `mcp` metadata — skip routes with `mcp: false`,
-    // and use `mcp.description` / `mcp.annotations` when provided.
-    for (const route of resource.additionalRoutes ?? []) {
-      // mcp: false → skip MCP tool generation for this route
-      if (route.mcp === false) continue;
+  // Custom `routes` (v2.8 single source) → MCP tools. Runs REGARDLESS of
+  // controller presence — a route with `mcpHandler` needs no controller, and
+  // a pipeline-wrapped route with a function handler doesn't either. Only the
+  // controller-bound string-handler path below requires a controller.
+  //   - `mcp: false`     → skip this route
+  //   - `raw: true`      → tool only if `mcpHandler` is provided
+  //   - function handler + `raw: false/undefined` → wrapped tool via createCustomRouteHandler
+  //   - string handler   → needs a controller; skipped silently when absent
+  for (const route of resource.routes ?? []) {
+    if (route.mcp === false) continue;
 
-      const mcpHandler = route.mcpHandler as
-        | ((input: Record<string, unknown>) => Promise<CallToolResult>)
-        | undefined;
-      if (!route.wrapHandler && !mcpHandler) continue;
-      if (!mcpHandler && !["POST", "PUT", "PATCH", "DELETE"].includes(route.method)) continue;
+    const mcpHandler = route.mcpHandler as
+      | ((input: Record<string, unknown>) => Promise<CallToolResult>)
+      | undefined;
 
-      const opName = route.operation ?? slugifyRoute(route.method, route.path);
-      const hasId = route.path.includes(":id");
+    const wrapHandler = !route.raw;
+    if (!wrapHandler && !mcpHandler) continue;
+    if (!mcpHandler && !["POST", "PUT", "PATCH", "DELETE"].includes(route.method)) continue;
 
-      // Resolve description and annotations from route-level mcp config
-      const mcpConfig = typeof route.mcp === "object" && route.mcp !== null ? route.mcp : undefined;
-      const toolDescription =
-        mcpConfig?.description ??
-        route.summary ??
-        route.description ??
-        `${opName} on ${resource.displayName}`;
-      const toolAnnotations: ToolAnnotations = mcpConfig?.annotations
-        ? { ...mcpConfig.annotations }
-        : { openWorldHint: true };
+    // String handlers reach the controller by name — skip when there's no controller.
+    if (!mcpHandler && typeof route.handler === "string" && !controller) continue;
 
-      const inputShape: Record<string, z.ZodTypeAny> = {};
-      if (hasId) inputShape.id = z.string().describe("Resource ID");
+    const opName = route.operation ?? slugifyRoute(route.method, route.path);
+    const hasId = route.path.includes(":id");
 
-      if (mcpHandler) {
-        tools.push({
-          name: prefix ? `${prefix}_${opName}_${resource.name}` : `${opName}_${resource.name}`,
-          description: toolDescription,
-          annotations: toolAnnotations,
-          inputSchema: inputShape,
-          handler: async (input, _ctx) => {
-            try {
-              return await mcpHandler(input);
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-            }
-          },
-        });
-      } else {
-        tools.push({
-          name: prefix ? `${prefix}_${opName}_${resource.name}` : `${opName}_${resource.name}`,
-          description: toolDescription,
-          annotations: toolAnnotations,
-          inputSchema: inputShape,
-          handler: createAdditionalRouteHandler(route, controller, hasId),
-        });
-      }
+    const mcpConfig = typeof route.mcp === "object" && route.mcp !== null ? route.mcp : undefined;
+    const toolDescription =
+      mcpConfig?.description ??
+      route.summary ??
+      route.description ??
+      `${opName} on ${resource.displayName}`;
+    const toolAnnotations: ToolAnnotations = mcpConfig?.annotations
+      ? { ...mcpConfig.annotations }
+      : { openWorldHint: true };
+
+    const inputShape: Record<string, z.ZodTypeAny> = {};
+    if (hasId) inputShape.id = z.string().describe("Resource ID");
+
+    if (mcpHandler) {
+      tools.push({
+        name: prefix ? `${prefix}_${opName}_${resource.name}` : `${opName}_${resource.name}`,
+        description: toolDescription,
+        annotations: toolAnnotations,
+        inputSchema: inputShape,
+        handler: async (input, _ctx) => {
+          try {
+            return await mcpHandler(input);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
+          }
+        },
+      });
+    } else {
+      tools.push({
+        name: prefix ? `${prefix}_${opName}_${resource.name}` : `${opName}_${resource.name}`,
+        description: toolDescription,
+        annotations: toolAnnotations,
+        inputSchema: inputShape,
+        handler: createCustomRouteHandler(route, controller, hasId),
+      });
     }
-  } // end: controller-gated CRUD + additionalRoutes block
+  } // end: custom routes → MCP tools
 
   // v2.8.1 — Generate MCP tools from declarative `actions`.
   // Naming convention: `{action}_{resource}` (e.g., `approve_order`)
@@ -421,12 +429,12 @@ function createHandler(
   };
 }
 
-function createAdditionalRouteHandler(
+function createCustomRouteHandler(
   route: { handler: unknown; operation?: string; method: string; path: string },
   controller: unknown,
   hasId: boolean,
 ): ToolDefinition["handler"] {
-  const ctrl = controller as unknown as Record<string, ControllerMethod>;
+  const ctrl = controller as unknown as Record<string, ControllerMethod> | undefined;
   const handlerName =
     typeof route.handler === "string"
       ? route.handler
@@ -434,6 +442,28 @@ function createAdditionalRouteHandler(
 
   return async (input, ctx) => {
     try {
+      // Function-handler case — arc's pipeline-wrapped handler is the route's
+      // own `handler`. No controller lookup needed.
+      if (typeof route.handler === "function") {
+        const reqCtx = buildRequestContext(input, ctx.session, hasId ? "update" : "create");
+        const fn = route.handler as (
+          req: ReturnType<typeof buildRequestContext>,
+        ) => Promise<unknown>;
+        const out = (await fn(reqCtx)) as unknown;
+        const envelope =
+          out !== null && typeof out === "object" && "success" in out
+            ? (out as { success: boolean; data?: unknown })
+            : { success: true, data: out };
+        return toCallToolResult(envelope);
+      }
+
+      // String-handler case — look up on the controller.
+      if (!ctrl) {
+        return {
+          content: [{ type: "text", text: `Handler "${handlerName}" has no controller available` }],
+          isError: true,
+        };
+      }
       const method = ctrl[handlerName];
       if (typeof method !== "function") {
         return {

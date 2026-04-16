@@ -180,6 +180,48 @@ Arc does NOT auto-derive scope from `request.user.organizationId` — that's a f
 4. **Rate-limit keys respect all 5 scope kinds.** The built-in `createTenantKeyGenerator` uses `organizationId` for member/service/elevated and falls back to `userId`/IP for authenticated/public.
 5. **multiTenant preset injects org on UPDATE (v2.9).** Body-supplied `organizationId` is overwritten with the caller's scope — closes the tenant-hop vector where a member could PATCH their own doc into another tenant. Elevated scope with no org still bypasses (admin cross-tenant).
 
+## Mongokit tenant-context helper (optional)
+
+If your adapter is mongokit ≥3.7, you can wire mongokit's `createTenantContext()` to propagate the org id through `AsyncLocalStorage` — useful when domain code outside arc routes needs the current tenant without threading `req` everywhere:
+
+```ts
+import { createTenantContext, multiTenantPlugin, Repository } from '@classytic/mongokit';
+import { getOrgId } from '@classytic/arc/scope';
+
+const tenantContext = createTenantContext();
+const repo = new Repository(Model, [
+  multiTenantPlugin({ tenantField: 'organizationId', context: tenantContext }),
+]);
+
+// Install scope → ALS bridge once in your app:
+fastify.addHook('preHandler', (req, _reply, done) => {
+  const scope = (req.metadata as { _scope?: unknown } | undefined)?._scope;
+  const orgId = scope ? getOrgId(scope as never) : undefined;
+  if (orgId) tenantContext.run(orgId, done);
+  else done();
+});
+
+// Now any domain code can read it:
+import { getTenantId } from './tenantContext.js';
+await someService.doThing({ orgId: getTenantId() });
+```
+
+Arc doesn't bundle this — it's mongokit-specific. Arc's scope helpers (`getOrgId`, `getOrgContext`) remain the source of truth inside the request cycle; `createTenantContext()` is a complement for code that lives outside it.
+
+## Plugin-order safety (mongokit ≥3.7)
+
+Mongokit's `Repository` constructor accepts `pluginOrderChecks: 'warn' | 'throw' | 'off'` (default `'warn'`). Pass `'throw'` in production to catch foot-guns — e.g. installing `softDeletePlugin` AFTER `batchOperationsPlugin` silently bypasses soft-delete on `deleteMany`:
+
+```ts
+new Repository(Model, [
+  multiTenantPlugin({...}),       // must precede cache + batch-ops
+  softDeletePlugin(),             // must precede batch-ops
+  batchOperationsPlugin(),
+], {}, { pluginOrderChecks: 'throw' });
+```
+
+Arc doesn't surface this option — configure it directly on the mongokit `Repository` you hand to `defineResource({ adapter: createMongooseAdapter({ repository }) })`.
+
 ## Helpers reference
 
 All exported from `@classytic/arc/scope`:

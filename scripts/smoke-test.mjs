@@ -31,6 +31,11 @@ const criticalFiles = [
   "dist/scope/index.mjs",
   "dist/permissions/index.mjs",
   "dist/cli/commands/doctor.mjs",
+  "dist/presets/index.mjs",
+  "dist/presets/search.mjs",
+  "dist/presets/search.d.mts",
+  "dist/presets/filesUpload.mjs",
+  "dist/presets/multiTenant.mjs",
 ];
 for (const f of criticalFiles) {
   check(f, () => {
@@ -51,6 +56,8 @@ const imports = [
   ["dist/factory/index.mjs", "./dist/factory/index.mjs"],
   ["dist/scope/index.mjs", "./dist/scope/index.mjs"],
   ["dist/permissions/index.mjs", "./dist/permissions/index.mjs"],
+  ["dist/presets/index.mjs", "./dist/presets/index.mjs"],
+  ["dist/presets/search.mjs", "./dist/presets/search.mjs"],
 ];
 for (const [label, path] of imports) {
   check(label, () => {

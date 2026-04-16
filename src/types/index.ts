@@ -784,151 +784,8 @@ export interface ResourceHooks {
   afterDelete?: (ctx: ResourceHookContext) => Promise<void> | void;
 }
 
-/**
- * Additional route definition for custom endpoints
- */
-export interface AdditionalRoute {
-  /** HTTP method */
-  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
-  /** Route path (relative to resource prefix) */
-  path: string;
-  /**
-   * Handler - string (controller method name) or function.
-   *
-   * When `wrapHandler: true`:
-   * - `string` — calls controller method by name (e.g., `'approve'`)
-   * - `ControllerHandler` — receives `IRequestContext`, returns `IControllerResponse`
-   *
-   * When `wrapHandler: false`:
-   * - Fastify handler `(request, reply) => unknown`
-   */
-  handler: string | import('./handlers.js').ControllerHandler | RouteHandlerMethod | ((request: FastifyRequest<any>, reply: FastifyReply) => unknown);
-
-  /** Permission check - REQUIRED */
-  permissions: PermissionCheck;
-
-  /**
-   * Handler type - REQUIRED, no auto-detection
-   * true = ControllerHandler (receives context object)
-   * false = FastifyHandler (receives request, reply)
-   */
-  wrapHandler: boolean;
-
-  /**
-   * Logical operation name for pipeline keys and permission actions.
-   * Defaults to handler name (string handlers) or method+path slug.
-   * Prevents collisions when multiple routes share the same HTTP method.
-   *
-   * @example
-   * operation: 'listDeleted'  // Used as pipeline key and permission action
-   * operation: 'restore'
-   */
-  operation?: string;
-
-  /** OpenAPI summary */
-  summary?: string;
-  /** OpenAPI description */
-  description?: string;
-  /** OpenAPI tags */
-  tags?: string[];
-
-  /**
-   * Custom route-level middleware
-   * Can be an array of handlers or a function that receives fastify and returns handlers
-   * @example
-   * // Direct array
-   * preHandler: [myMiddleware]
-   * // Function that receives fastify (for accessing decorators)
-   * preHandler: (fastify) => [fastify.customerContext({ required: true })]
-   */
-  preHandler?: RouteHandlerMethod[] | ((fastify: FastifyInstance) => RouteHandlerMethod[]);
-
-  /**
-   * Pre-auth handlers — run BEFORE authentication middleware.
-   * Use for promoting query params to headers (e.g., EventSource ?token= → Authorization).
-   *
-   * @example
-   * ```typescript
-   * preAuth: [(req) => {
-   *   const token = (req.query as Record<string, string>)?.token;
-   *   if (token) req.headers.authorization = `Bearer ${token}`;
-   * }]
-   * ```
-   */
-  preAuth?: RouteHandlerMethod[];
-
-  /**
-   * Streaming response mode — designed for SSE and AI streaming routes.
-   * When `true`:
-   * - Forces `wrapHandler: false` (no `{ success, data }` wrapper)
-   * - Sets SSE headers: `Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`
-   * - `request.signal` (Fastify 5 built-in) is available for abort-on-disconnect
-   *
-   * @example
-   * ```typescript
-   * {
-   *   method: 'POST',
-   *   path: '/stream',
-   *   streamResponse: true,
-   *   permissions: requireAuth(),
-   *   handler: async (request, reply) => {
-   *     const { stream } = await generateStream({ abortSignal: request.signal });
-   *     return reply.send(stream);
-   *   },
-   * }
-   * ```
-   */
-  streamResponse?: boolean;
-
-  /** Fastify route schema */
-  schema?: Record<string, unknown>;
-
-  /**
-   * MCP handler for routes with `wrapHandler: false`.
-   * When set, this route becomes an MCP tool without needing `wrapHandler: true`.
-   * The HTTP handler stays a plain Fastify handler; MCP gets a parallel entry point.
-   *
-   * @example
-   * ```typescript
-   * additionalRoutes: [{
-   *   method: 'GET',
-   *   path: '/stats',
-   *   handler: (req, reply) => reply.send(getStats()),
-   *   wrapHandler: false,
-   *   permissions: isAuthenticated,
-   *   mcpHandler: async (input) => ({
-   *     content: [{ type: 'text', text: JSON.stringify(await getStats()) }],
-   *   }),
-   * }]
-   * ```
-   */
-  mcpHandler?: (input: Record<string, unknown>) => Promise<{
-    content: Array<{ type: string; text: string }>;
-    isError?: boolean;
-  }>;
-
-  /**
-   * MCP tool generation config preserved from v2.8 `routes`.
-   * - `false`: skip MCP tool generation for this route
-   * - `true` / omitted: auto-generate when the route goes through Arc's pipeline
-   * - object: explicit description/annotations overrides
-   *
-   * Added in 2.8.1 — previously dropped during `routes → additionalRoutes`
-   * normalization, breaking MCP opt-out and per-route annotations.
-   */
-  mcp?: boolean | {
-    readonly description?: string;
-    readonly annotations?: {
-      readonly readOnlyHint?: boolean;
-      readonly destructiveHint?: boolean;
-      readonly idempotentHint?: boolean;
-      readonly openWorldHint?: boolean;
-    };
-  };
-}
-
 // ============================================================================
-// Route Definition (v2.8 — replaces additionalRoutes for users)
+// Route Definition (the single custom-route shape — user-facing and internal)
 // ============================================================================
 
 /** HTTP methods for custom routes */
@@ -943,7 +800,7 @@ interface RouteMcpConfig {
 }
 
 /**
- * Route definition — replaces additionalRoutes.
+ * Route definition — the single custom-route shape (user-facing + internal).
  *
  * - `handler: 'string'` → controller method → full Arc pipeline + MCP tool
  * - `handler: function` → inline handler → full Arc pipeline + MCP tool
@@ -1555,8 +1412,8 @@ export interface CrudRouterOptions {
   /** Middlewares for each CRUD operation */
   middlewares?: MiddlewareConfig;
 
-  /** Additional custom routes (from presets or user-defined) */
-  additionalRoutes?: AdditionalRoute[];
+  /** Custom routes (from presets or user-defined) */
+  routes?: readonly RouteDefinition[];
 
   /** Disable all default CRUD routes */
   disableDefaultRoutes?: boolean;

@@ -218,8 +218,6 @@ export { guard, intercept, pipe, transform } from "./pipeline/index.js";
 // Types — re-export all types (zero runtime cost, eliminated at compile time)
 // ============================================================================
 export type {
-  // Routes
-  AdditionalRoute,
   // Base types
   AnyRecord,
   ApiResponse,

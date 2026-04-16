@@ -199,7 +199,7 @@ export function convertOpenApiSchemas(
  *
  * JSON Schema values pass through unchanged. Only Zod schemas are converted.
  *
- * Used for both additionalRoutes and customSchemas (CRUD overrides).
+ * Used for both custom routes and customSchemas (CRUD overrides).
  *
  * Defaults to `draft-7` so Fastify v5's bundled AJV 8 accepts the output.
  * Pass `openapi-3.0` (or `openapi-3.1`) when generating OpenAPI documents.

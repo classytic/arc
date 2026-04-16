@@ -134,6 +134,19 @@ export interface RepositoryLike {
   aggregate?: unknown;
   aggregatePaginate?: unknown;
 
+  /**
+   * Fluent aggregation builder. Mongokit returns `AggregationBuilder`;
+   * other kits may return their own builder class. Cast at the call site
+   * — arc never calls this internally. See [CrudRepository.buildAggregation](../types/repository.ts).
+   */
+  buildAggregation?(): unknown;
+
+  /**
+   * Fluent `$lookup` stage builder. Mongokit returns `LookupBuilder`;
+   * other kits may return nothing. Cast at the call site.
+   */
+  buildLookup?(from?: string): unknown;
+
   // ── Optional: Transactions ───────────────────────────────────────────
 
   withTransaction?<T>(

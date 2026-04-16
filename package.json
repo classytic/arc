@@ -247,7 +247,7 @@
     "node": ">=22"
   },
   "peerDependencies": {
-    "@classytic/mongokit": ">=3.6.4",
+    "@classytic/mongokit": ">=3.7.0",
     "@classytic/streamline": ">=2.1.0",
     "@fastify/cors": ">=11.0.0",
     "@fastify/helmet": ">=13.0.0",
@@ -366,7 +366,7 @@
   "devDependencies": {
     "@better-auth/mongo-adapter": "^1.6.2",
     "@biomejs/biome": "^2.4.11",
-    "@classytic/mongokit": "^3.6.4",
+    "@classytic/mongokit": "^3.7.0",
     "@classytic/streamline": "^2.1.0",
     "@fastify/cors": "^11.2.0",
     "@fastify/helmet": "^13.0.2",
