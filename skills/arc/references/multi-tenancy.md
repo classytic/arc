@@ -178,6 +178,7 @@ Arc does NOT auto-derive scope from `request.user.organizationId` — that's a f
 2. **`elevated` with no `organizationId` bypasses tenant filtering.** This is intentional (admin sees everything), but it means you can't use `kind: 'elevated'` for normal per-org access.
 3. **`systemManaged` is your seatbelt for create/update.** Mark tenant fields (`companyId`, `organizationId`) as `systemManaged` in `fieldRules` so `BodySanitizer` strips any client-supplied value. The tenant field is then injected from the scope at write time — not from the request body.
 4. **Rate-limit keys respect all 5 scope kinds.** The built-in `createTenantKeyGenerator` uses `organizationId` for member/service/elevated and falls back to `userId`/IP for authenticated/public.
+5. **multiTenant preset injects org on UPDATE (v2.9).** Body-supplied `organizationId` is overwritten with the caller's scope — closes the tenant-hop vector where a member could PATCH their own doc into another tenant. Elevated scope with no org still bypasses (admin cross-tenant).
 
 ## Helpers reference
 

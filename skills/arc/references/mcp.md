@@ -537,7 +537,7 @@ Use to verify the MCP server is alive before configuring Claude CLI.
 
 ### ArcRequest — Typed Fastify Request
 
-For `wrapHandler: false` routes, use `ArcRequest` instead of `(req as any).user`:
+For `raw: true` routes, use `ArcRequest` instead of `(req as any).user`:
 
 ```typescript
 import type { ArcRequest } from '@classytic/arc';
@@ -589,28 +589,15 @@ throw createDomainError('INSUFFICIENT_BALANCE', 'Not enough credits', 402, { bal
 // Arc's error handler auto-maps statusCode to HTTP response
 ```
 
-### onRegister — Resource Lifecycle Hook
-
-Called during plugin registration with the scoped Fastify instance:
-
-```typescript
-defineResource({
-  name: 'notification',
-  onRegister: (fastify) => {
-    setSseManager(fastify.sseManager);
-  },
-})
-```
-
 ### preAuth — Pre-Auth Handlers for SSE/WebSocket
 
 Run before auth middleware. Use for promoting `?token=` to `Authorization` header (EventSource can't set headers):
 
 ```typescript
-additionalRoutes: [{
+routes: [{
   method: 'GET',
   path: '/stream',
-  wrapHandler: false,
+  raw: true,
   permissions: requireAuth(),
   preAuth: [(req) => {
     const token = req.query?.token;
@@ -625,7 +612,7 @@ additionalRoutes: [{
 Auto-sets SSE headers and bypasses Arc's response wrapper:
 
 ```typescript
-additionalRoutes: [{
+routes: [{
   method: 'POST',
   path: '/stream',
   streamResponse: true,        // SSE headers + no { success, data } wrapper

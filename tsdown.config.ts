@@ -51,6 +51,7 @@ export default defineConfig({
     "src/events/index.ts",
     "src/events/transports/redis.ts",
     "src/events/transports/redis-stream-entry.ts",
+    "src/events/transports/mongo-outbox.ts",
 
     // Audit — barrel (memory-only) + dedicated MongoDB subpath
     "src/audit/index.ts",

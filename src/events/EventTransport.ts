@@ -78,6 +78,54 @@ export interface EventMeta {
 
   /** Organization context */
   organizationId?: string;
+
+  /**
+   * Originating service or package (e.g. `'commerce'`, `'billing'`, `'arc-core'`).
+   *
+   * In a multi-service deployment, consumers route / log / alert by `source`
+   * without parsing `type` prefixes. Arc itself never populates this — hosts
+   * set it once per emitter (`app.events.publish('order.placed', p, { source: 'commerce' })`).
+   * Inherited by {@link createChildEvent} so downstream events carry the same
+   * source unless overridden.
+   */
+  source?: string;
+
+  /**
+   * Idempotency key — stable hint that this event represents a specific
+   * operation exactly once. Consumers dedupe with `if (processed.has(meta.idempotencyKey)) return`.
+   *
+   * Survives every transport (Memory / Pub-Sub / Streams / Kafka) because it's
+   * part of the event, not a transport-side option. Distinct from `meta.id`
+   * (which is fresh per emit — a retry would produce a new id).
+   *
+   * Typical sources: HTTP `Idempotency-Key` header, outbox `dedupeKey`, or
+   * `{aggregate.type}:{aggregate.id}:{action}`. Inherited by child events.
+   */
+  idempotencyKey?: string;
+
+  /**
+   * DDD aggregate marker — the aggregate that owns this event's invariant.
+   *
+   * Use when routing events by aggregate, doing event-sourcing replay, or
+   * enforcing consistency boundaries. Distinct from `resource` / `resourceId`
+   * (HTTP-origin entity) because an event emitted *by* one REST resource can
+   * *belong to* a different aggregate (e.g. `POST /orders/:id/ship` emits
+   * `shipment.dispatched` owned by a shipment aggregate).
+   *
+   * Downstream packages narrow `aggregate.type` to their own string union via
+   * interface extension:
+   *
+   * ```ts
+   * type CartAggregateType = 'cart' | 'cart-item';
+   * interface CartEventMeta extends EventMeta {
+   *   aggregate?: { type: CartAggregateType; id: string };
+   * }
+   * ```
+   *
+   * Not inherited by {@link createChildEvent} — child events typically belong
+   * to a different aggregate than their parent.
+   */
+  aggregate?: { type: string; id: string };
 }
 
 export interface DomainEvent<T = unknown> {
@@ -356,6 +404,12 @@ export function createChildEvent<T>(
   if (parent.meta.organizationId !== undefined) {
     inherited.organizationId = parent.meta.organizationId;
   }
+  if (parent.meta.source !== undefined) inherited.source = parent.meta.source;
+  if (parent.meta.idempotencyKey !== undefined) {
+    inherited.idempotencyKey = parent.meta.idempotencyKey;
+  }
+  // `aggregate` is NOT inherited — child events usually belong to a different
+  // aggregate than their parent (see the DDD semantics in EventMeta docs).
 
   return {
     type,

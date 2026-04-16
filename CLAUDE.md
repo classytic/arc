@@ -8,7 +8,7 @@
 **@classytic/arc** — Resource-oriented backend framework on Fastify.
 One `defineResource()` → REST API + auth + permissions + events + caching + OpenAPI + MCP.
 
-**v2.8.4** | Node.js 22+ | TypeScript 6+ | ESM-only | Fastify 5+ | 279+ test files, 3867+ tests
+**v2.9** | Node.js 22+ | TypeScript 6+ | ESM-only | Fastify 5+ | ~300 test files
 
 ## Commands
 
@@ -42,6 +42,9 @@ npm run smoke                                      # Verify CLI + imports
 - `RequestScope`: discriminated union on `kind` — use `getUserId(scope)` / `getUserRoles(scope)`
 - `RepositoryLike` returns `Promise<unknown>` — intentional minimum contract
 - `BaseController<TDoc = AnyRecord>` — `TDoc` inferred from Model, `unknown` default forces narrowing
+- `EventMeta` (v2.9): `id`, `timestamp`, `schemaVersion?`, `correlationId?`, `causationId?`, `partitionKey?`, `source?`, `idempotencyKey?`, `resource?`, `resourceId?`, `userId?`, `organizationId?`, `aggregate?: { type: string; id: string }` — arc is source of truth; `@classytic/primitives` mirrors it. Domain packages narrow `aggregate.type` to a closed union via interface extension. `aggregate` is NOT inherited by `createChildEvent`; `source` + `idempotencyKey` ARE.
+- Outbox (v2.9): `EventOutbox.store()` auto-maps `meta.idempotencyKey` → `OutboxWriteOptions.dedupeKey`. `failurePolicy({ event, error, attempts }) => { retryAt?, deadLetter? }` centralises retry/DLQ. `store.getDeadLettered?(limit)` returns `DeadLetteredEvent[]`. `RelayResult.deadLettered` counts per batch. Durable `MongoOutboxStore` ships at `@classytic/arc/events/mongo` (mongoose is opt-in peer).
+- `PolicyContext` / `PolicyResult`: `unknown` (not `any`) — adapters narrow at the edge
 
 ## Test Mapping (run the right tests)
 
@@ -69,6 +72,9 @@ npm run smoke                                      # Verify CLI + imports
 | `src/schemas/*` | `npx vitest run tests/schemas/` |
 | `src/logger/*` | `npx vitest run tests/logger/` |
 | `src/rpc/*` | `npx vitest run tests/rpc/` |
+| `src/discovery/*` | `npx vitest run tests/discovery/` |
+| `src/utils/queryParser*` | `npx vitest run tests/utils/ tests/property/` |
+| `src/auth/authPlugin*` | `npx vitest run tests/auth/ tests/property/jwt-bearer*` |
 
 **Never run the full suite during dev** — use targeted tests. `test:ci` is for release/CI; perf tests run separately on purpose to avoid GC-noise flakes.
 
@@ -116,12 +122,21 @@ src/
 3. Redis Streams are at-least-once — handlers must be idempotent
 4. `select` is never normalized to string — preserved as-is for DB agnosticism
 5. Type-only subpaths (`./org/types`) produce `export {}` at runtime — correct
-6. MCP `auth: false` → `ctx.user` is `null` (not `"anonymous"`) — permission guards work correctly
-7. Event WAL skips `arc.*` internal events — prevents startup timeout with durable WAL stores
+6. MCP `auth: false` → `ctx.user` is `null` (not `"anonymous"`) — guards work correctly
+7. Event WAL skips `arc.*` internal events — prevents startup timeout with durable stores
 8. `multipartBody()` is a no-op for JSON requests — safe to always add to create/update middlewares
-6. Event publishing is fire-and-forget (`failOpen: true`) — use outbox for guaranteed delivery
-7. Presets compose but order matters — test combinations
-9. `additionalRoutes` is deprecated — use `routes` (no `wrapHandler`). `actions` replaces `onRegister` + `createActionRouter`.
+9. Event publishing is fire-and-forget (`failOpen: true`) — use outbox for guaranteed delivery
+10. Presets compose but order matters — test combinations
+11. **Field-write perms default to `reject` (403)** — opt into silent `strip` via `onFieldWriteDenied: 'strip'`
+12. **Elevation always emits `arc.scope.elevated`** — apps that want audit can subscribe; `onElevation` callback still works
+13. **multiTenant injects org on UPDATE too** (v2.9) — body-supplied `organizationId` is overwritten with caller's scope
+14. `verifySignature(body, ...)` throws `TypeError` if body isn't string/Buffer — pass `req.rawBody`, not parsed body
+
+## Removed in v2.9 (no longer exported)
+
+- `createActionRouter` / `buildActionBodySchema` — use `defineResource({ actions: { ... } })`
+- `ResourceConfig.onRegister` — use `actions` or resource `hooks`
+- `PluginResourceResult.additionalRoutes` — plugins return `routes: RouteDefinition[]` instead
 
 ## Peer Deps (never bundle)
 

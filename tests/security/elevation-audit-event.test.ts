@@ -142,4 +142,90 @@ describe("Security: Elevation audit event", () => {
     await new Promise((r) => setImmediate(r));
     expect(events).toHaveLength(1);
   });
+
+  it("payload shape is stable — every documented field is present with correct type", async () => {
+    // Schema-drift gate: downstream SIEM / audit consumers rely on every
+    // documented field. A silent rename (e.g. `requestId` → `reqId`) would
+    // only surface in production — this assertion pins the contract.
+    const events: Array<Record<string, unknown>> = [];
+
+    app = await createApp({
+      preset: "development",
+      auth: { type: "jwt", jwt: { secret: JWT_SECRET } },
+      elevation: { platformRoles: ["superadmin"] },
+      logger: false,
+      helmet: false,
+      rateLimit: false,
+      plugins: async (fastify) => {
+        await fastify.events.subscribe("arc.scope.elevated", async (evt) => {
+          events.push(evt.payload as Record<string, unknown>);
+        });
+        fastify.post("/items", { preHandler: [fastify.authenticate] }, async () => ({ ok: true }));
+      },
+    });
+    await app.ready();
+
+    const token = app.auth.issueTokens({ id: "admin-42", role: ["superadmin"] }).accessToken;
+
+    await app.inject({
+      method: "POST",
+      url: "/items",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "x-arc-scope": "platform",
+        "x-organization-id": "org-abc",
+      },
+      payload: {},
+    });
+
+    await new Promise((r) => setImmediate(r));
+    expect(events).toHaveLength(1);
+
+    const evt = events[0] as Record<string, unknown>;
+    expect(typeof evt.userId).toBe("string");
+    expect(evt.userId).toBe("admin-42");
+    expect(typeof evt.organizationId).toBe("string");
+    expect(evt.organizationId).toBe("org-abc");
+    expect(typeof evt.method).toBe("string");
+    expect(evt.method).toBe("POST");
+    expect(typeof evt.requestId).toBe("string");
+    expect((evt.requestId as string).length).toBeGreaterThan(0);
+    expect(typeof evt.timestamp).toBe("string");
+    // Timestamp must be a parseable ISO date string.
+    expect(Number.isNaN(Date.parse(evt.timestamp as string))).toBe(false);
+  });
+
+  it("emits one event per elevation — sequential requests produce two distinct entries", async () => {
+    const events: Array<Record<string, unknown>> = [];
+
+    app = await createApp({
+      preset: "development",
+      auth: { type: "jwt", jwt: { secret: JWT_SECRET } },
+      elevation: { platformRoles: ["superadmin"] },
+      logger: false,
+      helmet: false,
+      rateLimit: false,
+      plugins: async (fastify) => {
+        await fastify.events.subscribe("arc.scope.elevated", async (evt) => {
+          events.push(evt.payload as Record<string, unknown>);
+        });
+        fastify.get("/items", { preHandler: [fastify.authenticate] }, async () => ({ ok: true }));
+      },
+    });
+    await app.ready();
+
+    const token = app.auth.issueTokens({ id: "admin-1", role: ["superadmin"] }).accessToken;
+    const headers = {
+      authorization: `Bearer ${token}`,
+      "x-arc-scope": "platform",
+      "x-organization-id": "org-xyz",
+    };
+
+    await app.inject({ method: "GET", url: "/items", headers });
+    await app.inject({ method: "GET", url: "/items", headers });
+
+    await new Promise((r) => setImmediate(r));
+    expect(events).toHaveLength(2);
+    expect(events[0]?.requestId).not.toBe(events[1]?.requestId);
+  });
 });
