@@ -225,6 +225,100 @@ auth: {
 }
 ```
 
+## Service Identity (Machine Principals)
+
+Arc distinguishes **machine callers** (API clients, spawned agents, cron workers) from **human users** via `RequestScope.service` — a first-class scope kind with `clientId` + OAuth-style `scopes`. Any auth mechanism (arc JWT, API keys, Better Auth client credentials, mTLS, gateway headers) can install it; arc does not ship a "service token" issuer — the app picks its credential flow and maps the result to scope.
+
+Install service scope from your `authenticate` callback — arc's default JWT verify installs `member` scope by design, so custom authenticators are the extension point:
+
+```typescript
+await createApp({
+  auth: {
+    type: 'jwt',
+    jwt: { secret: process.env.JWT_SECRET! },
+    authenticate: async (request, { jwt }) => {
+      const token = request.headers.authorization?.slice(7);
+      if (!token) return null;
+      const decoded = jwt.verify(token) as {
+        clientId?: string; userId?: string;
+        organizationId?: string; scopes?: string[];
+      };
+      // Machine principal — clientId present, no human user record.
+      if (decoded.clientId) {
+        request.scope = {
+          kind: 'service',
+          clientId: decoded.clientId,
+          organizationId: decoded.organizationId ?? '',
+          scopes: decoded.scopes ?? [],
+        };
+        return { clientId: decoded.clientId };   // returned value → request.user
+      }
+      // Human principal — fall through to user lookup.
+      return await User.findById(decoded.userId);
+    },
+  },
+});
+```
+
+Gate routes on service identity using the scope helpers + a permission builder:
+
+```typescript
+import { isService, getClientId, getServiceScopes } from '@classytic/arc/scope';
+import type { PermissionCheck } from '@classytic/arc/permissions';
+
+const requireScope = (scope: string): PermissionCheck => (ctx) => {
+  if (!isService(ctx.request.scope)) return { granted: false, reason: 'service only' };
+  const has = getServiceScopes(ctx.request.scope).includes(scope);
+  return has ? { granted: true } : { granted: false, reason: `missing scope: ${scope}` };
+};
+
+defineResource({
+  name: 'order',
+  permissions: { create: requireScope('orders:write') },
+});
+```
+
+**Mixing humans and services on the same route** — compose arc's builders:
+
+```typescript
+// Humans with 'editor' role OR services with 'orders:write' scope
+permissions: {
+  create: anyOf(requireOrgRole('editor'), requireScope('orders:write')),
+}
+```
+
+**Audit differentiation** — because `scope.kind === 'service'` carries `clientId` instead of `userId`, your audit plugin's `actor` resolver can tag machine actions distinctly:
+
+```typescript
+auditPlugin({
+  actor: (request) =>
+    isService(request.scope)
+      ? { kind: 'service', clientId: getClientId(request.scope) }
+      : { kind: 'user', userId: getUserId(request.scope) },
+});
+```
+
+**Rate-limit separation** — gate a separate bucket per `clientId` so one noisy agent can't starve humans in the same org:
+
+```typescript
+rateLimit: {
+  keyGenerator: (req) =>
+    isService(req.scope) ? `svc:${getClientId(req.scope)}` : `org:${getOrgId(req.scope)}`,
+}
+```
+
+**Credential-flow choice is the app's** — arc does not pick for you:
+
+| Flow | Wire via `authenticate` callback |
+|---|---|
+| Arc JWT with `clientId` claim | example above |
+| API key in header (DB lookup) | read `x-api-key`, look up client, set `scope` to service |
+| Better Auth client credentials | `auth.api.getSession({ headers })`, detect client-credential grant |
+| mTLS cert DN → client | read cert from terminator header, map DN → `clientId` |
+| OAuth2 client-credentials | verify token via introspection endpoint |
+
+All five produce the same downstream primitive: `RequestScope.service`. Permission builders, audit hooks, and rate-limit keys compose the same way regardless.
+
 ## Microservice Gateway Pattern
 
 ```

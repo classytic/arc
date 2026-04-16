@@ -203,7 +203,7 @@ describe("Compensation in Arc additionalRoute", () => {
       const order = await OrderModel.create({ items: ["widget", "gadget"], total: 50 });
 
       // Generate a JWT token
-      const token = app.jwt.sign({ sub: "user-1", role: ["admin"] });
+      const token = app.jwt.sign({ sub: "user-1", role: ["admin"], type: "access" });
 
       const res = await app.inject({
         method: "POST",
@@ -233,7 +233,7 @@ describe("Compensation in Arc additionalRoute", () => {
   describe("failed checkout with rollback", () => {
     it("compensates completed steps when payment fails", async () => {
       const order = await OrderModel.create({ items: ["thing"], total: 99, status: "pending" });
-      const token = app.jwt.sign({ sub: "user-1", role: ["admin"] });
+      const token = app.jwt.sign({ sub: "user-1", role: ["admin"], type: "access" });
 
       const res = await app.inject({
         method: "POST",
@@ -260,7 +260,7 @@ describe("Compensation in Arc additionalRoute", () => {
 
   describe("edge cases", () => {
     it("returns 404 for non-existent order", async () => {
-      const token = app.jwt.sign({ sub: "user-1" });
+      const token = app.jwt.sign({ sub: "user-1", type: "access" });
       const fakeId = new mongoose.Types.ObjectId();
 
       const res = await app.inject({

@@ -167,8 +167,8 @@ export const analytics = createPlugin<AnalyticsRootOptions, AnalyticsResourceOpt
           },
         ],
 
-        // Additional routes
-        additionalRoutes: [
+        // Custom routes
+        routes: [
           {
             method: 'GET',
             path: '/analytics',
@@ -240,21 +240,19 @@ function versioningPreset(options: VersioningOptions = {}): PresetResult {
   return {
     name: 'versioning',
 
-    // Additional routes
-    additionalRoutes: (permissions) => [
+    // Custom routes — function form receives the resource's permission table
+    routes: (permissions) => [
       {
         method: 'GET',
         path: '/:id/versions',
         handler: 'getVersions',
         permissions: permissions.get,
-        wrapHandler: true,
       },
       {
         method: 'POST',
         path: '/:id/revert/:versionId',
         handler: 'revertToVersion',
         permissions: permissions.update,
-        wrapHandler: true,
       },
     ],
 

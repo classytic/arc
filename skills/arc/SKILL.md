@@ -81,7 +81,8 @@ await app.listen({ port: 8040, host: '0.0.0.0' });
 
 - `createActionRouter`, `buildActionBodySchema` — use `actions` on `defineResource`
 - `ResourceConfig.onRegister` — use `actions` or resource `hooks`
-- `PluginResourceResult.additionalRoutes` → `routes: RouteDefinition[]`
+- `AdditionalRoute` type + `resource.additionalRoutes` field — use `RouteDefinition` and `resource.routes` (single source of truth; no normalised mirror)
+- `wrapHandler` on route defs — derived from `!route.raw` at use-site (set `raw: true` to opt out of the arc pipeline)
 
 ## defineResource()
 
@@ -504,6 +505,8 @@ permissions: { list: acl.canAction('product', 'read') }
 | `multiTenant` | none (middleware) | — | `{ tenantField }` OR `{ tenantFields: TenantFieldSpec[] }` (2.7.1+) |
 | `audited` | none (middleware) | — | — |
 | `bulk` | POST/PATCH/DELETE /bulk | — | `{ operations?, maxCreateItems? }` |
+| `filesUpload` | POST /upload, GET /:id, DELETE /:id | — (uses `Storage` adapter) | `{ storage, sanitizeFilename?, allowedMimeTypes?, maxFileSize? }` |
+| `search` | POST /search, /search-similar, /embed (opt-in) | — | `{ repository?, search?, similar?, embed?, routes? }` |
 
 ```typescript
 // Single-field (default, backwards compatible)
@@ -592,6 +595,47 @@ This applies to CRUD routes (`GET/PATCH/DELETE /:id`), action routes (`POST /:id
 User-provided `openApiSchemas.params` still overrides everything.
 
 For custom adapters, honor the new `AdapterSchemaContext` passed to `generateSchemas(options, context?)` to emit the right `params.id` pattern from the start. Legacy adapters still work — Arc's safety net strips mismatched ObjectId patterns automatically.
+
+## searchPreset (text + vector + embed)
+
+Backend-agnostic routes for Elasticsearch / OpenSearch / Algolia / Typesense / Atlas `$vectorSearch` / Pinecone / Qdrant / Milvus. Opt-in per section; `mcp: false` skips per path.
+
+```typescript
+import { searchPreset } from '@classytic/arc/presets/search';
+
+// A — auto-wire from a repo with search/searchSimilar/embed methods
+// (mongokit's elasticSearchPlugin + vectorPlugin register exactly these).
+// Each method's native calling convention is honoured:
+//   search(query, options)          — positional (elasticSearchPlugin)
+//   searchSimilar(VectorSearchParams) — single object (vectorPlugin)
+//   embed(input)                    — single arg (vectorPlugin)
+searchPreset({
+  repository: productRepo,
+  search: true,    // POST /search         → repo.search(body.query, body)
+  similar: true,   // POST /search-similar → repo.searchSimilar(body)
+  // embed omitted → /embed not mounted
+})
+
+// B — external backends + custom path + Zod schema
+searchPreset({
+  search: {
+    path: '/full-text',
+    schema: { body: z.object({ q: z.string().min(1) }) },
+    handler: (req) => elastic.search({ index: 'products', q: req.body.q }),
+  },
+  similar: { handler: (req) => pinecone.query({ vector: req.body.vector, topK: 10 }), mcp: false },
+  routes: [  // bespoke paths
+    { method: 'GET', path: '/autocomplete', permissions: allowPublic(),
+      handler: (req) => algolia.suggest((req.query as { q: string }).q) },
+  ],
+})
+```
+
+**Defaults:** search/similar → POST, permissions fall back to resource `list` → `allowPublic()`. Embed → POST + `requireAuth()`. Every field (`path`, `method`, `schema`, `permissions`, `mcp`, `summary`, `tags`, `operation`) is overridable per section. Zod v4 schemas auto-convert to JSON Schema for both Fastify validation and OpenAPI.
+
+**MCP namespacing:** tool names are `{op}_{resource}` — many resources can register their own searchPreset under one `mcpPlugin` endpoint without colliding (`product_search`, `order_search`, …).
+
+**When to use `routes` directly instead:** one-off search endpoints, or when you want full control without the preset's defaults.
 
 ## QueryCache
 

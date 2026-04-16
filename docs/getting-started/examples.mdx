@@ -71,11 +71,11 @@ export const postResource = defineResource({
     update: requireAuth(),    // ownedByUser enforces ownership
     delete: requireRoles(['admin']),
   },
-  additionalRoutes: [
+  routes: [
     {
       method: 'POST',
       path: '/:id/publish',
-      wrapHandler: false,
+      raw: true,
       permissions: requireAuth(),
       handler: async (req, reply) => {
         const post = await PostModel.findByIdAndUpdate(

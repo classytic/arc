@@ -488,14 +488,13 @@ export const productResource = defineResource({
   name: 'product',
   // ... adapter, permissions
 
-  additionalRoutes: [
+  routes: [
     {
       method: 'GET',
       path: '/featured',
       handler: 'getFeatured',
       summary: 'Get featured products',
       permissions: allowPublic(),
-      wrapHandler: true,  // Arc context pattern
     },
     {
       method: 'POST',
@@ -503,7 +502,6 @@ export const productResource = defineResource({
       handler: 'publish',
       summary: 'Publish a product',
       permissions: requireRoles(['admin']),
-      wrapHandler: true,  // Arc context pattern
     },
   ],
 });

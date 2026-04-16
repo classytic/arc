@@ -60,7 +60,7 @@ const productResource = defineResource({
 
   // Advanced
   skipValidation: false,       // Bypass config validation
-  disableDefaultRoutes: false, // Only use additionalRoutes
+  disableDefaultRoutes: false, // When true, only custom `routes` are mounted
 });
 
 // Register with Fastify
@@ -396,21 +396,20 @@ import type { FastifyRequest, FastifyReply } from 'fastify';
 defineResource({
   name: 'product',
   controller: productController,
-  additionalRoutes: [
+  routes: [
     {
       method: 'GET',
       path: '/featured',
-      handler: 'getFeatured',       // Controller method (Arc context)
+      handler: 'getFeatured',       // Controller method (arc pipeline)
       permissions: allowPublic(),
-      wrapHandler: true,             // IRequestContext pattern
       summary: 'Get featured products',
     },
     {
       method: 'GET',
       path: '/:id/download',
-      handler: 'downloadFile',       // Fastify native handler
+      handler: 'downloadFile',       // Fastify request/reply
       permissions: requireAuth(),
-      wrapHandler: false,            // Fastify request/reply
+      raw: true,                     // skip arc pipeline
       summary: 'Download product file',
     },
     {
@@ -422,7 +421,6 @@ defineResource({
         return { success: true, data: result };
       },
       permissions: requireRoles(['admin']),
-      wrapHandler: true,
     },
   ],
 });
@@ -430,7 +428,7 @@ defineResource({
 
 ### Handler Patterns
 
-**Arc Context Pattern** (`wrapHandler: true`):
+**Arc Context Pattern** (default — `raw` omitted):
 
 ```typescript
 class ProductController extends BaseController {
@@ -446,7 +444,7 @@ class ProductController extends BaseController {
 }
 ```
 
-**Fastify Native Pattern** (`wrapHandler: false`):
+**Fastify Native Pattern** (`raw: true`):
 
 ```typescript
 class ProductController extends BaseController {
@@ -572,7 +570,7 @@ defineResource({
 - Controller methods exist
 - Preset names are valid
 - Permission keys match routes
-- wrapHandler matches handler signature
+- `raw` matches the handler signature (omit for arc-pipeline handlers, set `true` for raw Fastify handlers)
 
 ## createCrudRouter (Advanced)
 
@@ -589,7 +587,7 @@ createCrudRouter(fastify, controller, {
     list: allowPublic(),
     create: requireRoles(['admin']),
   },
-  additionalRoutes: [...],
+  routes: [...],
 });
 ```
 

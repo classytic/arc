@@ -279,8 +279,23 @@ export interface PaginationParams<TDoc = unknown> {
  *
  * `method` is optional so legacy adapters returning the bare `{ docs, page,
  * limit, total, pages, hasNext, hasPrev }` shape still satisfy the type.
+ *
+ * ## Extending with kit-specific fields
+ *
+ * Kits are free to return extra metadata (query timing, region, index hit-rate,
+ * cursor version, …). Supply them via the `TExtra` generic and they appear
+ * at the top level alongside the standard fields — no wrapper object, no
+ * narrowing gymnastics:
+ *
+ * ```ts
+ * type ProductPage = OffsetPaginatedResult<Product, { tookMs: number; region: string }>;
+ * //   ^? { method?: "offset"; docs: Product[]; page: number; ...; tookMs: number; region: string }
+ * ```
+ *
+ * Default `TExtra = {}` preserves the standard shape for every caller that
+ * doesn't care about extras.
  */
-export interface OffsetPaginatedResult<TDoc> {
+export type OffsetPaginatedResult<TDoc, TExtra = {}> = {
   /** Discriminator — omitted or `"offset"` */
   method?: "offset";
   docs: TDoc[];
@@ -290,13 +305,24 @@ export interface OffsetPaginatedResult<TDoc> {
   pages: number;
   hasNext: boolean;
   hasPrev: boolean;
-}
+  /**
+   * Optional performance warning surfaced by the underlying kit for deep
+   * offset pagination (e.g. mongokit emits one when `page * limit` exceeds
+   * its `deepPageThreshold`). Kits that don't produce warnings leave it
+   * absent.
+   */
+  warning?: string;
+} & TExtra;
 
 /**
  * Keyset-based paginated result (returned when `sort` is provided without
  * `page`). Ideal for infinite scroll — no `count()` query, O(1) per page.
+ *
+ * Cursor tokens are opaque by design; kits encode their own versioning
+ * (mongokit carries a `ver` field inside the token). Surface kit-specific
+ * extras (e.g. `cursor.version`, `queryPlan`) via the `TExtra` generic.
  */
-export interface KeysetPaginatedResult<TDoc> {
+export type KeysetPaginatedResult<TDoc, TExtra = {}> = {
   /** Discriminator — always `"keyset"` */
   method: "keyset";
   docs: TDoc[];
@@ -304,7 +330,7 @@ export interface KeysetPaginatedResult<TDoc> {
   hasMore: boolean;
   /** Opaque cursor token for the next page, or `null` at the end */
   next: string | null;
-}
+} & TExtra;
 
 /**
  * Discriminated union of all pagination result shapes.
@@ -320,9 +346,9 @@ export interface KeysetPaginatedResult<TDoc> {
  * }
  * ```
  */
-export type PaginationResult<TDoc> =
-  | OffsetPaginatedResult<TDoc>
-  | KeysetPaginatedResult<TDoc>;
+export type PaginationResult<TDoc, TExtra = {}> =
+  | OffsetPaginatedResult<TDoc, TExtra>
+  | KeysetPaginatedResult<TDoc, TExtra>;
 
 /**
  * Legacy alias. Existing code typed as `PaginatedResult<TDoc>` continues
@@ -330,7 +356,7 @@ export type PaginationResult<TDoc> =
  * common. New code should prefer `PaginationResult<TDoc>` for the full
  * discriminated union.
  */
-export type PaginatedResult<TDoc> = OffsetPaginatedResult<TDoc>;
+export type PaginatedResult<TDoc, TExtra = {}> = OffsetPaginatedResult<TDoc, TExtra>;
 
 /**
  * Standard CRUD Repository Interface

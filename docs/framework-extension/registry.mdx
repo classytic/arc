@@ -96,7 +96,7 @@ interface RegistryEntry {
   controller: CrudController;
   permissions: AuthConfig;
   presets: string[];
-  additionalRoutes: Array<{
+  routes: Array<{
     method: string;
     path: string;
     handler: string;
@@ -144,7 +144,7 @@ const testResource = defineResource({
 const nav = resourceRegistry.getAll().map(r => ({
   label: r.displayName,
   path: r.prefix,
-  operations: r.additionalRoutes.length + 5, // CRUD + additional
+  operations: r.routes.length + 5, // CRUD + custom routes
 }));
 ```
 

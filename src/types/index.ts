@@ -1386,6 +1386,24 @@ export interface AuthPluginOptions {
    * ```
    */
   isRevoked?: (decoded: Record<string, unknown>) => boolean | Promise<boolean>;
+
+  /**
+   * Enforce strict JWT `type` claim validation (default: `true`).
+   *
+   * When enabled, `authenticate` requires `decoded.type === "access"`.
+   * Tokens with a missing or unexpected `type` claim are rejected — defence in
+   * depth for apps that reuse the JWT secret to sign other token kinds (invite
+   * links, one-time verification codes, legacy tokens from a third-party
+   * issuer).
+   *
+   * Arc's own token issuance (`issueTokens`) always sets `type: "access"` or
+   * `type: "refresh"`, so this default is safe for arc-generated tokens.
+   *
+   * Set to `false` ONLY when you must accept tokens signed without a `type`
+   * claim (e.g. a legacy issuer you don't control). In that mode arc still
+   * rejects tokens explicitly marked `type: "refresh"`.
+   */
+  strictTokenType?: boolean;
 }
 
 

@@ -108,6 +108,13 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
     exposeAuthErrors = false,
     tokenExtractor,
     isRevoked,
+    // Default true: reject tokens whose `type` claim is missing or unexpected.
+    // This is defence-in-depth for apps that reuse the JWT secret to sign
+    // non-access tokens (invite links, password-reset codes, etc). Arc's own
+    // issueTokens always sets type: "access", so this is safe for arc-issued
+    // tokens. Set to false to re-enable the pre-2.9 lenient behavior for
+    // legacy third-party issuers.
+    strictTokenType = true,
   } = opts;
 
   /** Extract token from request — uses custom extractor if provided, else Bearer header */
@@ -205,9 +212,15 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
         const token = resolveToken(request);
         if (token) {
           const decoded = jwtContext.verify(token) as Record<string, unknown>;
-          // Reject refresh tokens — they must only be used at the refresh endpoint
+          // Always reject refresh tokens at the access endpoint.
           if (decoded.type === "refresh") {
             throw new Error("Refresh tokens cannot be used for authentication");
+          }
+          // Strict mode (default): reject tokens whose type is missing or not
+          // "access". Lenient mode accepts any non-refresh token for
+          // back-compat with legacy issuers that don't stamp a type claim.
+          if (strictTokenType && decoded.type !== "access") {
+            throw new Error("Invalid token type: expected access token");
           }
           user = decoded;
         }
@@ -309,8 +322,13 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
         const token = resolveToken(request);
         if (token) {
           const decoded = jwtContext.verify(token) as Record<string, unknown>;
-          // Silently ignore refresh tokens
+          // Silently ignore refresh tokens at access endpoints.
           if (decoded.type === "refresh") return;
+          // Strict mode (default): silently ignore tokens whose type is
+          // missing or not "access" — matches the mandatory-auth path's
+          // default-deny, but stays non-throwing to preserve the "optional"
+          // contract for unauthenticated requests.
+          if (strictTokenType && decoded.type !== "access") return;
           user = decoded;
         }
       }
