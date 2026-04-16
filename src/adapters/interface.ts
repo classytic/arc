@@ -147,6 +147,22 @@ export interface RepositoryLike {
   getTree?(options?: QueryOptions): Promise<unknown>;
   getChildren?(parentId: string, options?: QueryOptions): Promise<unknown>;
 
+  // ── Optional: Search / AI (registered by kit plugins) ────────────────
+  // These are intentionally opaque (`unknown` args/returns) because each
+  // backend uses different query shapes — ES `query_string`, Atlas `$search`,
+  // Pinecone `topK`, Algolia filters, Typesense `query_by`, etc. Arc never
+  // calls these directly from BaseController; they're exposed through
+  // `searchPreset()` or custom `actions` on `defineResource`.
+
+  /** Full-text / engine-backed search. Present when e.g. mongokit's `elasticSearchPlugin` is registered. */
+  search?(query: unknown, options?: unknown): Promise<unknown>;
+
+  /** Semantic / vector similarity search. Present when e.g. mongokit's `vectorPlugin` is registered. */
+  searchSimilar?(query: unknown, options?: unknown): Promise<unknown>;
+
+  /** Embed a text/media input into its vector representation. */
+  embed?(input: unknown): Promise<number[]>;
+
   // ── Escape hatch ─────────────────────────────────────────────────────
   [key: string]: unknown;
 }

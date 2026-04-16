@@ -113,15 +113,11 @@ describe("Bulk Preset", () => {
     it("allows selecting specific operations only", async () => {
       const { bulkPreset } = await import("../../src/presets/bulk.js");
 
-      const onlyCreate = (bulkPreset({ operations: ["createMany"] }).routes as Function)(
-        {},
-      );
+      const onlyCreate = (bulkPreset({ operations: ["createMany"] }).routes as Function)({});
       expect(onlyCreate).toHaveLength(1);
       expect(onlyCreate[0].method).toBe("POST");
 
-      const onlyDelete = (bulkPreset({ operations: ["deleteMany"] }).routes as Function)(
-        {},
-      );
+      const onlyDelete = (bulkPreset({ operations: ["deleteMany"] }).routes as Function)({});
       expect(onlyDelete).toHaveLength(1);
       expect(onlyDelete[0].method).toBe("DELETE");
     });

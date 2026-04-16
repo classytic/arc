@@ -44,6 +44,10 @@
       "types": "./dist/presets/filesUpload.d.mts",
       "default": "./dist/presets/filesUpload.mjs"
     },
+    "./presets/search": {
+      "types": "./dist/presets/search.d.mts",
+      "default": "./dist/presets/search.mjs"
+    },
     "./auth": {
       "types": "./dist/auth/index.d.mts",
       "default": "./dist/auth/index.mjs"

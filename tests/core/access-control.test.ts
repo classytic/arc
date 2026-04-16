@@ -709,19 +709,23 @@ describe("AccessControl", () => {
       expect(result).toBeNull();
     });
 
-    it('returns null when repository throws "not found" error', async () => {
+    it('rethrows "not found"-named errors (post-v2.9: adapters must return null, not throw)', async () => {
+      // Pre-v2.9: AccessControl string-matched "not found" and swallowed it
+      // into null. That was fragile — "index 'x' not found" would also get
+      // mapped to null/404. New contract: adapters return null for missing;
+      // throws always propagate.
       const ac = createAccessControl();
       const repo = {
         getById: vi.fn().mockRejectedValue(new Error("Document not found")),
       };
       const req = createReq();
 
-      const result = await ac.fetchWithAccessControl("abc", req, repo);
-
-      expect(result).toBeNull();
+      await expect(ac.fetchWithAccessControl("abc", req, repo)).rejects.toThrow(
+        "Document not found",
+      );
     });
 
-    it('rethrows non-"not found" errors', async () => {
+    it("rethrows driver/connection errors", async () => {
       const ac = createAccessControl();
       const repo = {
         getById: vi.fn().mockRejectedValue(new Error("Database connection failed")),

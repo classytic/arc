@@ -374,32 +374,27 @@ function registerStatefulRoutes(
     // New session — stateful mode NEEDS a sessionIdGenerator. Passing
     // `undefined` (as stateless mode does) disables the SDK's session
     // management entirely, leaving `transport.sessionId` undefined and
-    // breaking cache.set() / session reuse. Use randomUUID from node:crypto —
-    // the SDK docs pattern.
+    // breaking cache.set() / session reuse.
+    //
+    // The `onsessioninitialized` callback fires when the SDK assigns the
+    // session id during the initialize handshake — this is the only
+    // reliable moment to wire the entry into the cache, since
+    // `transport.sessionId` is undefined until then.
     const authRef: AuthRef = { current: authResult };
-    const transport = new Transport({ sessionIdGenerator: () => randomUUID() });
+    const transport: SessionEntry["transport"] & { sessionId: string | undefined } = new Transport({
+      sessionIdGenerator: () => randomUUID(),
+      onsessioninitialized: (newSessionId: string) => {
+        cache.set(newSessionId, {
+          transport,
+          lastAccessed: Date.now(),
+          organizationId: authResult?.organizationId ?? "",
+          auth: authResult,
+          authRef,
+        });
+      },
+    });
     const server = await createServer(authRef);
     await server.connect(transport);
-
-    // Read the sessionId AFTER connect() — the SDK assigns it during the
-    // initialize handshake. Guard against undefined just in case the SDK
-    // version in use doesn't set it synchronously.
-    const newSessionId = transport.sessionId;
-    if (!newSessionId) {
-      fastify.log.error("mcpPlugin: stateful transport did not produce a sessionId — check SDK version");
-      return reply.code(500).send({
-        jsonrpc: "2.0",
-        error: { code: -32000, message: "Failed to establish session" },
-      });
-    }
-
-    cache.set(newSessionId, {
-      transport,
-      lastAccessed: Date.now(),
-      organizationId: authResult?.organizationId ?? "",
-      auth: authResult,
-      authRef,
-    });
 
     await transport.handleRequest(request.raw, reply.raw, request.body);
   });
