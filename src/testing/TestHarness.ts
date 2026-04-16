@@ -19,8 +19,11 @@
  * harness.runAll();
  *
  * // Or run specific test suites
- * harness.runCrud();
  * harness.runPresets();
+ * harness.runValidation();
+ *
+ * // For HTTP-level CRUD coverage (auth, permissions, routes), use
+ * // `HttpTestHarness` from `@classytic/arc/testing`.
  */
 
 import mongoose, { type Model } from "mongoose";
@@ -102,103 +105,17 @@ export class TestHarness<T = unknown> {
   }
 
   /**
-   * Run all baseline tests
+   * Run all baseline tests (schema, presets, field permissions, pipeline, events).
    *
-   * Executes CRUD, validation, and preset tests
+   * For HTTP-level CRUD coverage (routes, auth, permissions), use
+   * {@link HttpTestHarness} instead.
    */
   runAll(): void {
-    this.runCrud();
     this.runValidation();
     this.runPresets();
     this.runFieldPermissions();
     this.runPipeline();
     this.runEvents();
-  }
-
-  /**
-   * Run CRUD operation tests (model-level)
-   *
-   * Tests: create, read (list + getById), update, delete
-   *
-   * @deprecated Use `HttpTestHarness.runCrud()` for HTTP-level CRUD tests.
-   * This method tests Mongoose models directly and does not exercise
-   * HTTP routes, authentication, permissions, or the Arc pipeline.
-   */
-  runCrud(): void {
-    const { resource, fixtures, Model } = this;
-
-    describe(`${resource.displayName} CRUD Operations`, () => {
-      beforeAll(async () => {
-        await mongoose.connect(this.mongoUri);
-        if (this.setupFn) await this.setupFn();
-      });
-
-      afterAll(async () => {
-        // Cleanup created documents
-        if (this._createdIds.length > 0) {
-          await Model.deleteMany({ _id: { $in: this._createdIds } });
-        }
-        if (this.teardownFn) await this.teardownFn();
-        await mongoose.disconnect();
-      });
-
-      describe("Create", () => {
-        it("should create a new document with valid data", async () => {
-          const doc = await Model.create(fixtures.valid);
-          this._createdIds.push(doc._id);
-
-          expect(doc).toBeDefined();
-          expect(doc._id).toBeDefined();
-
-          // Verify all provided fields
-          for (const [key, value] of Object.entries(fixtures.valid)) {
-            if (typeof value !== "object") {
-              expect(doc[key]).toEqual(value);
-            }
-          }
-        });
-
-        it("should have timestamps", async () => {
-          const doc = await Model.findById(this._createdIds[0]);
-          expect(doc).toBeDefined();
-          expect(doc?.createdAt).toBeDefined();
-          expect(doc?.updatedAt).toBeDefined();
-        });
-      });
-
-      describe("Read", () => {
-        it("should find document by ID", async () => {
-          const doc = await Model.findById(this._createdIds[0]);
-          expect(doc).toBeDefined();
-        });
-
-        it("should list documents", async () => {
-          const docs = await Model.find({});
-          expect(Array.isArray(docs)).toBe(true);
-          expect(docs.length).toBeGreaterThan(0);
-        });
-      });
-
-      describe("Update", () => {
-        it("should update document", async () => {
-          const updateData = fixtures.update || { updatedAt: new Date() };
-          const doc = await Model.findByIdAndUpdate(this._createdIds[0], updateData, {
-            new: true,
-          });
-          expect(doc).toBeDefined();
-        });
-      });
-
-      describe("Delete", () => {
-        it("should delete document", async () => {
-          // Create a doc specifically for deletion
-          const toDelete = await Model.create(fixtures.valid);
-          await Model.findByIdAndDelete(toDelete._id);
-          const deleted = await Model.findById(toDelete._id);
-          expect(deleted).toBeNull();
-        });
-      });
-    });
   }
 
   /**
