@@ -79,9 +79,14 @@ function parseExpiresIn(input: string | undefined, defaultValue: number): number
 }
 
 /**
- * Extract Bearer token from Authorization header
+ * Extract Bearer token from Authorization header.
+ *
+ * Exported for property-based test coverage — the contract is:
+ *  - header must start with exactly `"Bearer "` (case-sensitive, one space)
+ *  - everything after that prefix is returned verbatim (no trim, no parse)
+ *  - missing header → `null`; any other shape → `null`
  */
-function extractBearerToken(request: FastifyRequest): string | null {
+export function extractBearerToken(request: FastifyRequest): string | null {
   const auth = request.headers.authorization;
   if (!auth?.startsWith("Bearer ")) return null;
   return auth.slice(7);

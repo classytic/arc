@@ -382,7 +382,7 @@ export class TestHarness<T = unknown> {
 
             it(`should strip hidden field '${field}' from writes`, () => {
               const body = { [field]: "attempt", name: "test" } as Record<string, unknown>;
-              const result = applyFieldWritePermissions(body, fieldPerms, []);
+              const { body: result } = applyFieldWritePermissions(body, fieldPerms, []);
               expect(result[field]).toBeUndefined();
               expect(result.name).toBe("test");
             });
@@ -408,7 +408,7 @@ export class TestHarness<T = unknown> {
           case "writableBy":
             it(`should strip field '${field}' from writes by non-privileged users`, () => {
               const body = { [field]: "new-value", name: "test" } as Record<string, unknown>;
-              const result = applyFieldWritePermissions(body, fieldPerms, ["viewer"]);
+              const { body: result } = applyFieldWritePermissions(body, fieldPerms, ["viewer"]);
               expect(result[field]).toBeUndefined();
               expect(result.name).toBe("test");
             });
@@ -417,7 +417,7 @@ export class TestHarness<T = unknown> {
               const writeRole = perm.roles[0]!;
               it(`should allow writing field '${field}' by roles: ${[...perm.roles].join(", ")}`, () => {
                 const body = { [field]: "new-value" } as Record<string, unknown>;
-                const result = applyFieldWritePermissions(body, fieldPerms, [writeRole]);
+                const { body: result } = applyFieldWritePermissions(body, fieldPerms, [writeRole]);
                 expect(result[field]).toBe("new-value");
               });
             }
@@ -744,7 +744,7 @@ function runFieldPermissionTests(displayName: string, fieldPerms: FieldPermissio
 
           it(`should strip hidden field '${field}' from writes`, () => {
             const body = { [field]: "attempt", name: "test" } as Record<string, unknown>;
-            const result = applyFieldWritePermissions(body, fieldPerms, []);
+            const { body: result } = applyFieldWritePermissions(body, fieldPerms, []);
             expect(result[field]).toBeUndefined();
           });
           break;
@@ -769,7 +769,7 @@ function runFieldPermissionTests(displayName: string, fieldPerms: FieldPermissio
         case "writableBy":
           it(`should strip field '${field}' from writes by non-privileged users`, () => {
             const body = { [field]: "v", name: "test" } as Record<string, unknown>;
-            const result = applyFieldWritePermissions(body, fieldPerms, ["_no_role_"]);
+            const { body: result } = applyFieldWritePermissions(body, fieldPerms, ["_no_role_"]);
             expect(result[field]).toBeUndefined();
           });
 
@@ -777,7 +777,7 @@ function runFieldPermissionTests(displayName: string, fieldPerms: FieldPermissio
             const writeRole = perm.roles[0]!;
             it(`should allow writing field '${field}' by roles: ${[...perm.roles].join(", ")}`, () => {
               const body = { [field]: "v" } as Record<string, unknown>;
-              const result = applyFieldWritePermissions(body, fieldPerms, [writeRole]);
+              const { body: result } = applyFieldWritePermissions(body, fieldPerms, [writeRole]);
               expect(result[field]).toBe("v");
             });
           }

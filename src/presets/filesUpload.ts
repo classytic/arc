@@ -189,6 +189,33 @@ interface HandlerDeps {
   readonly contextFrom: (scope: RequestScope | undefined) => Record<string, unknown>;
 }
 
+/**
+ * Reject filenames that could escape a storage root or confuse a filesystem.
+ *
+ * Storage adapters that compose user-supplied names into paths are the target —
+ * an S3 adapter might use `${prefix}/${filename}`, a disk adapter `path.join(root, filename)`.
+ * Both are corruptible by `../`, path separators, or NULs. Sanitisation belongs
+ * in the adapter, but the preset ships the strict default so the common case
+ * is safe out of the box.
+ */
+function assertSafeFilename(filename: string): void {
+  if (filename.length === 0) {
+    throw new ValidationError("Upload filename is empty");
+  }
+  if (filename.length > 255) {
+    throw new ValidationError("Upload filename exceeds 255 characters");
+  }
+  if (filename.includes("\0")) {
+    throw new ValidationError("Upload filename contains a NUL byte");
+  }
+  if (filename.includes("/") || filename.includes("\\")) {
+    throw new ValidationError("Upload filename contains a path separator");
+  }
+  if (filename === "." || filename === "..") {
+    throw new ValidationError("Upload filename is a path traversal component");
+  }
+}
+
 function makeUploadHandler(deps: HandlerDeps): RouteHandlerMethod {
   return async function uploadHandler(request: FastifyRequest, reply: FastifyReply) {
     const body = request.body as Record<string, unknown> | null | undefined;
@@ -200,6 +227,8 @@ function makeUploadHandler(deps: HandlerDeps): RouteHandlerMethod {
     if (!file) {
       throw new ValidationError(`Missing file field '${deps.fieldName}' in multipart body`);
     }
+
+    assertSafeFilename(file.filename);
 
     const ctx = buildStorageContext(request, deps.contextFrom);
     const result = await deps.storage.upload(

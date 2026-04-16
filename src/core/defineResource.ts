@@ -215,6 +215,7 @@ export function defineResource<TDoc = AnyRecord>(
       idField: resolvedConfig.idField,
       matchesFilter: config.adapter?.matchesFilter,
       cache: resolvedConfig.cache,
+      onFieldWriteDenied: resolvedConfig.onFieldWriteDenied,
       presetFields: resolvedConfig._controllerOptions
         ? {
             slugField: resolvedConfig._controllerOptions.slugField,
@@ -606,13 +607,6 @@ export class ResourceDefinition<TDoc = AnyRecord> {
 
     // Pending hooks from presets
     this._pendingHooks = config._pendingHooks ?? [];
-
-    // onRegister lifecycle hook (internal — called by toPlugin)
-    if ((config as ResourceConfig<TDoc>).onRegister) {
-      (
-        this as unknown as { _onRegister?: (f: FastifyInstance) => void | Promise<void> }
-      )._onRegister = (config as ResourceConfig<TDoc>).onRegister;
-    }
   }
 
   /** Get repository from adapter (if available) */
@@ -725,15 +719,6 @@ export class ResourceDefinition<TDoc = AnyRecord> {
       await fastify.register(
         async (instance) => {
           const typedInstance = instance as FastifyWithDecorators;
-
-          // onRegister lifecycle hook — called INSIDE the prefixed scope
-          // so createActionRouter / custom sub-plugins get the resource prefix automatically.
-          const onRegister = (
-            self as unknown as { _onRegister?: (f: FastifyInstance) => void | Promise<void> }
-          )._onRegister;
-          if (onRegister) {
-            await onRegister(instance);
-          }
 
           // Schema generation is handled at define-time (see defineResource, lines ~222-230).
           // No competing runtime generation here.

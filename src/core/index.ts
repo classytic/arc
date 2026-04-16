@@ -14,12 +14,9 @@ export type { BaseControllerOptions } from "./BaseController.js";
 export { BaseController } from "./BaseController.js";
 export type { BodySanitizerConfig } from "./BodySanitizer.js";
 export { BodySanitizer } from "./BodySanitizer.js";
-export type {
-  ActionHandler,
-  ActionRouterConfig,
-  IdempotencyService,
-} from "./createActionRouter.js";
-export { buildActionBodySchema, createActionRouter } from "./createActionRouter.js";
+// createActionRouter is the internal engine for the public `actions` API on
+// defineResource. It is no longer exported — apps should declare actions via
+// `defineResource({ actions: { ... } })`.
 export {
   createCrudRouter,
   createPermissionMiddleware,

@@ -143,17 +143,41 @@ const elevationPlugin: FastifyPluginAsync<ElevationOptions> = async (
     request.scope = scope;
     log.debug("Scope elevated", { userId, organizationId: orgId });
 
-    // Step 5: Fire audit callback
+    // Step 5: Emit audit event — always. Apps that register onElevation get
+    // a direct callback; apps that don't still see the event via `arc.events`
+    // so privilege elevation is never silently lost. The WAL skips arc.*
+    // events so this does not impact startup for durable stores.
+    const event = {
+      userId,
+      organizationId: orgId || undefined,
+      request,
+      timestamp: new Date(),
+    };
+
+    const publish = (
+      fastify as unknown as { events?: { publish?: (t: string, p: unknown) => Promise<void> } }
+    ).events?.publish;
+    if (publish) {
+      try {
+        await publish("arc.scope.elevated", {
+          userId: event.userId,
+          organizationId: event.organizationId,
+          route: request.routeOptions?.url ?? request.url,
+          method: request.method,
+          requestId: request.id,
+          timestamp: event.timestamp.toISOString(),
+        });
+      } catch (err) {
+        log.warn("Failed to publish arc.scope.elevated event", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     if (onElevation) {
       try {
-        await onElevation({
-          userId,
-          organizationId: orgId || undefined,
-          request,
-          timestamp: new Date(),
-        });
+        await onElevation(event);
       } catch {
-        // Don't fail the request if audit logging fails
         log.warn("onElevation callback threw — continuing request");
       }
     }

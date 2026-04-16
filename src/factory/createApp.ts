@@ -159,6 +159,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   const fastify: FastifyInstance = Fastify({
     logger: config.logger ?? true,
     trustProxy: config.trustProxy ?? false,
+    pluginTimeout: config.pluginTimeout ?? 10_000,
     routerOptions: {
       querystringParser: (str: string) => qs.parse(str),
     },

@@ -190,12 +190,11 @@ export const invoiceResource = defineResource({
   },
 
   // Custom routes for business logic
-  additionalRoutes: [
+  routes: [
     {
       method: 'GET',
       path: '/overdue',
       handler: 'getOverdue',
-      wrapHandler: true,
       permissions: requireRoles(['admin', 'finance']),
       summary: 'Get overdue invoices',
     },
@@ -203,7 +202,6 @@ export const invoiceResource = defineResource({
       method: 'GET',
       path: '/stats',
       handler: 'getStats',
-      wrapHandler: true,
       permissions: requireRoles(['admin', 'finance']),
       summary: 'Get invoice statistics',
     },
@@ -211,7 +209,6 @@ export const invoiceResource = defineResource({
       method: 'POST',
       path: '/:id/send',
       handler: 'sendInvoice',
-      wrapHandler: true,
       permissions: requireRoles(['admin', 'finance']),
       summary: 'Send invoice to customer',
     },
@@ -219,7 +216,6 @@ export const invoiceResource = defineResource({
       method: 'POST',
       path: '/:id/mark-paid',
       handler: 'markPaid',
-      wrapHandler: true,
       permissions: requireRoles(['admin', 'finance']),
       summary: 'Mark invoice as paid',
     },

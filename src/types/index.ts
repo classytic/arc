@@ -580,6 +580,16 @@ export interface ResourceConfig<TDoc = AnyRecord> {
    * ```
    */
   fields?: import('../permissions/fields.js').FieldPermissionMap;
+  /**
+   * Policy for requests that include fields the caller can't write.
+   *
+   * - `'reject'` (default, secure): 403 with the denied field names. Surfaces
+   *   misconfigurations and write-side permission violations instead of
+   *   silently dropping them.
+   * - `'strip'`: legacy silent-drop behaviour — only opt in when migrating
+   *   code that relied on the pre-2.9 permissive default.
+   */
+  onFieldWriteDenied?: 'reject' | 'strip';
   middlewares?: MiddlewareConfig;
   /**
    * PreHandler guards auto-applied to **every** route on this resource
@@ -670,22 +680,6 @@ export interface ResourceConfig<TDoc = AnyRecord> {
   skipValidation?: boolean; // Skip schema validation
   skipRegistry?: boolean; // Don't register in introspection
   _appliedPresets?: string[]; // Internal: track applied presets
-  /**
-   * Called during plugin registration with the scoped Fastify instance.
-   * Use for wiring singletons, reading decorators, or setting up resource-specific
-   * services that need access to the Fastify instance.
-   *
-   * @example
-   * ```typescript
-   * defineResource({
-   *   name: 'notification',
-   *   onRegister: (fastify) => {
-   *     setSseManager(fastify.sseManager);
-   *   },
-   * })
-   * ```
-   */
-  onRegister?: (fastify: FastifyInstance) => void | Promise<void>;
   /** HTTP method for update routes. Default: 'PATCH' */
   updateMethod?: 'PUT' | 'PATCH' | 'both';
   /**

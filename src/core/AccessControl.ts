@@ -18,6 +18,21 @@ import type {
 } from "../types/index.js";
 
 // ============================================================================
+// Fetch Result — detailed denial reason for DX-friendly 404 responses
+// ============================================================================
+
+/** Denial reason codes returned by `fetchDetailed()`. */
+export type FetchDenialReason = "NOT_FOUND" | "POLICY_FILTERED" | "ORG_SCOPE_DENIED";
+
+/** Result of a detailed fetch with access control. */
+export interface FetchResult<TDoc> {
+  /** The document, or null if denied. */
+  doc: TDoc | null;
+  /** Null when the doc was found. A string code when denied. */
+  reason: FetchDenialReason | null;
+}
+
+// ============================================================================
 // Configuration
 // ============================================================================
 
@@ -168,34 +183,59 @@ export class AccessControl {
     repository: AccessControlRepository,
     queryOptions?: QueryOptions,
   ): Promise<TDoc | null> {
+    const result = await this.fetchDetailed<TDoc>(id, req, repository, queryOptions);
+    return result.doc;
+  }
+
+  /**
+   * Same as `fetchWithAccessControl` but returns a structured result with
+   * a denial reason so callers can distinguish "doc doesn't exist" from
+   * "doc exists but was filtered by policy/org scope" from "repo threw".
+   *
+   * Codes:
+   * - `null`               — doc was found, no denial
+   * - `'NOT_FOUND'`        — doc genuinely doesn't exist in the DB
+   * - `'POLICY_FILTERED'`  — doc exists but the request's policy filters exclude it
+   * - `'ORG_SCOPE_DENIED'` — doc exists but the caller's org context doesn't match
+   * - `'REPO_ERROR'`       — the repository threw a "not found" error (mongokit style)
+   */
+  async fetchDetailed<TDoc>(
+    id: string,
+    req: IRequestContext,
+    repository: AccessControlRepository,
+    queryOptions?: QueryOptions,
+  ): Promise<FetchResult<TDoc>> {
     const compoundFilter = this.buildIdFilter(id, req);
     const hasCompoundFilters = Object.keys(compoundFilter).length > 1;
-
-    // Prefer `getOne({ ...filter })` via compound filter whenever either:
-    //   1. The idField is NOT the repository's native primary key (`_id`),
-    //      in which case `getById(id)` would run `_id === id` and miss the
-    //      document entirely; OR
-    //   2. There are additional filters (tenant/policy) that must be merged
-    //      into the DB query for a secure single-round-trip lookup.
-    //
-    // Falls back to `getById` + post-hoc security checks when the adapter
-    // doesn't expose `getOne` and the resource uses the default idField.
     const needsCompoundLookup = hasCompoundFilters || this.idField !== DEFAULT_ID_FIELD;
 
     try {
       if (needsCompoundLookup && typeof repository.getOne === "function") {
-        return (await repository.getOne(compoundFilter, queryOptions)) as TDoc | null;
+        const doc = (await repository.getOne(compoundFilter, queryOptions)) as TDoc | null;
+        if (doc) return { doc, reason: null };
+
+        // The compound filter didn't match — the doc may still exist without
+        // the policy/tenant fields. Attempt a raw ID-only lookup to
+        // distinguish "missing" from "filtered". This is a DIAGNOSTIC query
+        // so we DON'T apply it for writes — security is already enforced by
+        // the compound filter returning null.
+        if (hasCompoundFilters) {
+          const idOnly: AnyRecord = { [this.idField]: id };
+          const rawDoc = await (repository.getOne as (f: AnyRecord) => Promise<unknown>)(idOnly);
+          if (rawDoc) {
+            // Doc exists but didn't match the compound filter. Determine why.
+            const arcContext = this._meta(req);
+            if (!this.checkOrgScope(rawDoc as AnyRecord, arcContext)) {
+              return { doc: null, reason: "ORG_SCOPE_DENIED" };
+            }
+            return { doc: null, reason: "POLICY_FILTERED" };
+          }
+        }
+        return { doc: null, reason: "NOT_FOUND" };
       }
 
-      // Fallback path — only safe for default _id lookups.
-      // If idField is non-default AND the repo doesn't implement getOne, we
-      // still try getById but the caller should configure a repository with
-      // getOne support (MongoKit's Repository has it out of the box).
+      // Fallback: default _id lookups
       if (this.idField !== DEFAULT_ID_FIELD) {
-        // Last-resort fallback: scan via any method the repo exposes.
-        // If there's truly no way to query by a custom field, the caller
-        // must provide `getOne`. Throwing a helpful error beats silently
-        // returning null.
         if (typeof repository.getOne !== "function") {
           throw new Error(
             `Resource with idField="${this.idField}" requires repository.getOne() to look up by custom field. ` +
@@ -205,21 +245,20 @@ export class AccessControl {
       }
 
       const item = (await repository.getById(id, queryOptions)) as TDoc | null;
-      if (!item) return null;
+      if (!item) return { doc: null, reason: "NOT_FOUND" };
 
       const arcContext = this._meta(req);
-      if (
-        !this.checkOrgScope(item as AnyRecord, arcContext) ||
-        !this.checkPolicyFilters(item as AnyRecord, req)
-      ) {
-        return null;
+      if (!this.checkOrgScope(item as AnyRecord, arcContext)) {
+        return { doc: null, reason: "ORG_SCOPE_DENIED" };
+      }
+      if (!this.checkPolicyFilters(item as AnyRecord, req)) {
+        return { doc: null, reason: "POLICY_FILTERED" };
       }
 
-      return item;
+      return { doc: item, reason: null };
     } catch (error: unknown) {
-      // Repositories (MongoKit, etc.) may throw "not found" errors instead of returning null
       if (error instanceof Error && error.message?.includes("not found")) {
-        return null;
+        return { doc: null, reason: "NOT_FOUND" };
       }
       throw error;
     }

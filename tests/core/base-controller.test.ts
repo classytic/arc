@@ -395,7 +395,12 @@ describe("BaseController", () => {
       }
       const { Repository } = require("@classytic/mongokit");
       jobRepository = new Repository(JobModel);
-      jobController = new BaseController(jobRepository, { resourceName: "job" });
+      // These tests cover the stripping mechanics for the legacy policy.
+      // Default 'reject' coverage lives in tests/security/field-write-denied.test.ts.
+      jobController = new BaseController(jobRepository, {
+        resourceName: "job",
+        onFieldWriteDenied: "strip",
+      });
     });
 
     it("should preserve writableBy fields for bypass-scoped users (superadmin)", async () => {

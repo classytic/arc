@@ -325,6 +325,9 @@ export interface CreateAppOptions {
   /** Trust proxy headers (X-Forwarded-For, etc.) */
   trustProxy?: boolean;
 
+  /** Fastify plugin/onReady timeout in ms (default: 10_000). Raise for slow boot work (index materialisation, WAL replay, external warm-up). */
+  pluginTimeout?: number;
+
   // ============================================
   // Authentication (New Clean API)
   // ============================================

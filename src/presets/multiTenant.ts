@@ -311,7 +311,11 @@ export function multiTenantPreset(options: MultiTenantOptions = {}): PresetResul
       list: [getFilter("list")],
       get: [getFilter("get")],
       create: [tenantInjection],
-      update: [getFilter("update")],
+      // UPDATE runs BOTH: filter pins the lookup to the caller's tenant,
+      // and injection overwrites any attacker-supplied `organizationId` in
+      // the body. Without injection on update a member can hop their own
+      // document to another tenant by sending `{ organizationId: <other> }`.
+      update: [getFilter("update"), tenantInjection],
       delete: [getFilter("delete")],
     } as MiddlewareConfig,
   };

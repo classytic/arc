@@ -60,11 +60,11 @@ export default defineResource({
     sortableFields: ["createdAt", "title"],
   },
 
-  additionalRoutes: [
+  routes: [
     {
       method: "POST",
       path: "/:id/publish",
-      wrapHandler: false,
+      raw: true,
       permissions: requireAuth(),
       summary: "Publish a draft post",
       handler: async (req, reply) => {

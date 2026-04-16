@@ -62,6 +62,14 @@ export interface IdempotencyPluginOptions {
   store?: IdempotencyStore;
   /** Retry-After header value in seconds when request is in-flight (default: 1) */
   retryAfterSeconds?: number;
+  /**
+   * Namespace key folded into the fingerprint — use when two deployments share
+   * a single store but should not replay each other's responses (e.g. `api`
+   * vs `jobs` with the same Redis, or prod vs canary sharing one cluster).
+   *
+   * Omit for the common case where the store is per-deployment.
+   */
+  namespace?: string;
 }
 
 declare module "fastify" {
@@ -116,6 +124,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     exclude,
     store = new MemoryIdempotencyStore({ ttlMs }),
     retryAfterSeconds = 1,
+    namespace,
   } = opts;
 
   // Skip if not enabled
@@ -209,7 +218,10 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     const user = request.user as { id?: string; _id?: string } | undefined;
     const userId = user?.id ?? user?._id ?? "anon";
 
-    const fingerprint = `${request.method}:${request.url}:${bodyHash}:u=${userId}`;
+    // Namespace prefix prevents cross-deployment collisions on a shared store
+    // (prod vs canary, api vs jobs, etc.) without adding a second store layer.
+    const namespacePart = namespace ? `n=${namespace}:` : "";
+    const fingerprint = `${namespacePart}${request.method}:${request.url}:${bodyHash}:u=${userId}`;
     return fingerprint;
   }
 

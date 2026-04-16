@@ -109,12 +109,14 @@ describe("Key symbols from @classytic/arc/utils", () => {
 });
 
 describe("Key symbols from @classytic/arc/core", () => {
-  it("exports defineResource, BaseController, buildActionBodySchema", async () => {
+  it("exports defineResource, BaseController", async () => {
     const mod = await import("@classytic/arc/core");
     expect(typeof mod.defineResource).toBe("function");
     expect(typeof mod.BaseController).toBe("function");
-    expect(typeof mod.buildActionBodySchema).toBe("function");
-    expect(typeof mod.createActionRouter).toBe("function");
+    // createActionRouter is the internal engine for the public `actions` API;
+    // it is intentionally NOT exported.
+    expect((mod as Record<string, unknown>).createActionRouter).toBeUndefined();
+    expect((mod as Record<string, unknown>).buildActionBodySchema).toBeUndefined();
   });
 });
 
@@ -190,9 +192,9 @@ describe("Publish-path sanity (dist/ artifacts)", () => {
     expect(typeof mod.exponentialBackoff).toBe("function");
   });
 
-  it("dist/core/index.mjs exports buildActionBodySchema", async () => {
+  it("dist/core/index.mjs exports defineResource", async () => {
     const mod = await import("../../dist/core/index.mjs");
-    expect(typeof mod.buildActionBodySchema).toBe("function");
+    expect(typeof mod.defineResource).toBe("function");
   });
 
   it("dist/ .d.mts files exist for type checking", async () => {
