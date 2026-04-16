@@ -8,11 +8,11 @@ description: |
   Triggers: arc, fastify resource, defineResource, createApp, BaseController, arc preset,
   arc auth, arc events, arc jobs, arc websocket, arc mcp, arc plugin, arc testing, arc cli,
   arc permissions, arc hooks, arc pipeline, arc factory, arc cache, arc QueryCache.
-version: 2.8.1
+version: 2.9.0
 license: MIT
 metadata:
   author: Classytic
-  version: "2.8.0"
+  version: "2.9.0"
 tags:
   - fastify
   - rest-api
@@ -68,6 +68,21 @@ await app.register(productResource.toPlugin());
 await app.listen({ port: 8040, host: '0.0.0.0' });
 ```
 
+## v2.9 Security Defaults (breaking)
+
+- **Field-write perms: `reject` (default)** — requests carrying non-writable fields get 403 with denied-field list. Opt into silent strip: `defineResource({ onFieldWriteDenied: 'strip' })`.
+- **multiTenant injects org on UPDATE** — body-supplied `organizationId` overwritten with caller's scope. Closes tenant-hop vector.
+- **Elevation always emits `arc.scope.elevated` event** — audit via `fastify.events.subscribe(...)`.
+- **`verifySignature(body, ...)` throws on parsed body** — pass `req.rawBody`, not `req.body`.
+- **Upload `sanitizeFilename`** — strict by default (no `/ \ .. \0 >255ch`). Pass `false` / `'*'` / custom fn to relax.
+- **Idempotency `namespace`** option for shared-store prod+canary deployments.
+
+## Removed in v2.9
+
+- `createActionRouter`, `buildActionBodySchema` — use `actions` on `defineResource`
+- `ResourceConfig.onRegister` — use `actions` or resource `hooks`
+- `PluginResourceResult.additionalRoutes` → `routes: RouteDefinition[]`
+
 ## defineResource()
 
 Single API to define a full REST resource:
@@ -109,7 +124,7 @@ const productResource = defineResource({
     { method: 'POST', path: '/webhook', handler: webhookFn, raw: true, permissions: auth() },
   ],
 
-  // Actions (replaces onRegister + createActionRouter)
+  // Actions — single POST /:id/action endpoint, discriminated on `action` body field
   actions: {
     approve: async (id, data, req) => service.approve(id, req.user._id),
     cancel: {
@@ -667,7 +682,11 @@ CRUD events auto-emit: `{resource}.created`, `{resource}.updated`, `{resource}.d
 
 **Transports:** Memory (default) | Redis Pub/Sub (fire-and-forget) | Redis Streams (durable, at-least-once, consumer groups, DLQ)
 
-**Event Outbox** — at-least-once delivery via transactional outbox pattern. Arc ships `OutboxStore` interface + `MemoryOutboxStore` (dev). You implement the store for your DB (Mongoose, Drizzle, Knex, etc.). Cleanup via optional `purge()` contract or native DB tools (TTL index, pg_cron, key expiry).
+**Event Outbox** — at-least-once delivery via transactional outbox pattern. Arc ships `OutboxStore` interface + `MemoryOutboxStore` (dev). You implement the store for your DB (Mongoose, Drizzle, Knex, etc.).
+
+**Event contract (v2.9):** `EventMeta` = `id`, `timestamp`, optional `schemaVersion`, `correlationId`, `causationId`, `partitionKey`, `source`, `idempotencyKey`, `resource`, `resourceId`, `userId`, `organizationId`, `aggregate: { type, id }`. `createChildEvent(parent, ...)` inherits correlation/causation/source/idempotencyKey; aggregate stays explicit. `DeadLetteredEvent<T>` + optional `transport.deadLetter()` for typed DLQ. `withRetry({ transport })` auto-routes exhausted events — no custom plumbing for Kafka/SQS. `@classytic/primitives` mirrors these shapes — arc is source of truth.
+
+**Outbox (v2.9):** `EventOutbox.store()` auto-maps `meta.idempotencyKey` → `dedupeKey`. `new EventOutbox({ failurePolicy: ({ attempts }) => ({ retryAt, deadLetter }) })` centralises retry/DLQ. `outbox.getDeadLettered(limit)` returns typed `DeadLetteredEvent[]` from stores that implement `store.getDeadLettered`. `RelayResult.deadLettered` for per-batch DLQ count. Durable `MongoOutboxStore` at `@classytic/arc/events/mongo` — multi-worker claim, TTL purge, unique dedupe index, `onDisconnect: 'throw'` default, session-threaded writes.
 
 ## Factory — createApp()
 
@@ -963,7 +982,7 @@ defineResource({ name: 'order', audit: true });
 defineResource({ name: 'payment', audit: { operations: ['delete'] } });
 defineResource({ name: 'product' }); // not audited
 
-// Manual custom() for MCP/additionalRoutes/read auditing
+// Manual custom() for MCP tools / custom routes / read auditing
 app.post('/orders/:id/refund', async (req) => {
   await app.audit.custom('order', req.params.id, 'refund', { reason }, { user });
 });
@@ -995,7 +1014,6 @@ permissions: {
 
 ```typescript
 // Typed request for raw routes — no more (req as any).user
-// v2.8: `raw: true` replaces `wrapHandler: false` (wrapHandler still works but is deprecated)
 import type { ArcRequest } from '@classytic/arc';
 handler: async (req: ArcRequest, reply) => { req.user?.id; req.scope; req.signal; }
 
@@ -1011,15 +1029,16 @@ const { userId, organizationId, roles, orgRoles } = getOrgContext(request);
 import { createDomainError } from '@classytic/arc';
 throw createDomainError('SELF_REFERRAL', 'Cannot refer yourself', 422);
 
-// Resource lifecycle hook — wire singletons during registration
-// v2.8: for action routes, use `actions` config instead of onRegister + createActionRouter
-defineResource({ name: 'notification', onRegister: (f) => setSseManager(f.sseManager) });
+// Custom routes — always `routes: [...]` with optional `raw: true` for non-JSON
+defineResource({
+  routes: [{ method: 'GET', path: '/stats', handler: 'getStats', permissions: allowPublic() }],
+});
 
 // SSE auth — preAuth runs BEFORE auth middleware (EventSource can't set headers)
-additionalRoutes: [{ preAuth: [(req) => { req.headers.authorization = `Bearer ${req.query.token}`; }] }]
+routes: [{ preAuth: [(req) => { req.headers.authorization = `Bearer ${req.query.token}`; }] }]
 
-// SSE streaming — auto headers + bypasses response wrapper
-additionalRoutes: [{ streamResponse: true, handler: async (req, reply) => reply.send(stream) }]
+// SSE streaming — raw: true + stream the response
+routes: [{ method: 'GET', path: '/stream', raw: true, handler: async (req, reply) => reply.send(stream) }]
 ```
 
 ## DX Helpers (v2.7.3+)

@@ -116,6 +116,10 @@
       "types": "./dist/events/transports/redis-stream-entry.d.mts",
       "default": "./dist/events/transports/redis-stream-entry.mjs"
     },
+    "./events/mongo": {
+      "types": "./dist/events/transports/mongo-outbox.d.mts",
+      "default": "./dist/events/transports/mongo-outbox.mjs"
+    },
     "./dynamic": {
       "types": "./dist/dynamic/index.d.mts",
       "default": "./dist/dynamic/index.mjs"

@@ -2,6 +2,15 @@
 
 Health checks, audit trail, idempotency, tracing, SSE, caching, graceful shutdown.
 
+## v2.9 Security Defaults
+
+- **Field-write perms reject by default** — `defineResource({ fields, onFieldWriteDenied })`. Default `'reject'` → 403 with denied field list. Legacy silent-strip: `onFieldWriteDenied: 'strip'`.
+- **Elevation always emits `arc.scope.elevated`** — subscribe via `fastify.events.subscribe('arc.scope.elevated', handler)` for audit. `onElevation` callback still supported.
+- **multiTenant injects org on UPDATE** — closes cross-tenant hop vector. Body-supplied `organizationId` overwritten with caller's scope.
+- **`verifySignature(body, secret, sig)` throws TypeError** if body isn't string/Buffer — register `@fastify/raw-body` before webhook routes; pass `req.rawBody`.
+- **Upload `sanitizeFilename` (preset)** — strict by default; `false` / `'*'` / custom fn to relax per adapter needs.
+- **Idempotency `namespace`** — fold an env key into the fingerprint when multiple deployments share a Redis (prod + canary, api + jobs).
+
 ## Health Plugin
 
 Kubernetes-ready liveness/readiness probes:
@@ -655,16 +664,16 @@ await withCompensation('checkout', steps, { orderId }, {
 });
 ```
 
-**In an additionalRoute with Arc auth:**
+**In a custom route with Arc auth:**
 
 ```typescript
 defineResource({
   name: 'order',
-  additionalRoutes: [{
+  routes: [{
     method: 'POST',
     path: '/:id/checkout',
     permissions: requireAuth(),
-    wrapHandler: false,
+    raw: true,
     handler: async (request, reply) => {
       const result = await withCompensation('checkout', steps, { orderId: request.params.id });
       if (!result.success) return reply.code(422).send({ error: result.error });

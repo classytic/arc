@@ -16,7 +16,7 @@ import {
 } from "../../src/events/EventTransport.js";
 
 describe("EventMeta v2 fields", () => {
-  it("createEvent accepts schemaVersion, causationId, partitionKey", () => {
+  it("createEvent accepts every v2 optional field", () => {
     const evt = createEvent(
       "order.placed",
       { orderId: "o1" },
@@ -25,6 +25,9 @@ describe("EventMeta v2 fields", () => {
         causationId: "parent-id",
         partitionKey: "o1",
         correlationId: "trace-1",
+        aggregate: { type: "order", id: "o1" },
+        source: "commerce",
+        idempotencyKey: "order:o1:placed",
       },
     );
 
@@ -32,6 +35,9 @@ describe("EventMeta v2 fields", () => {
     expect(evt.meta.causationId).toBe("parent-id");
     expect(evt.meta.partitionKey).toBe("o1");
     expect(evt.meta.correlationId).toBe("trace-1");
+    expect(evt.meta.aggregate).toEqual({ type: "order", id: "o1" });
+    expect(evt.meta.source).toBe("commerce");
+    expect(evt.meta.idempotencyKey).toBe("order:o1:placed");
   });
 
   it("createEvent leaves new fields undefined when not supplied (back-compat)", () => {
@@ -39,6 +45,27 @@ describe("EventMeta v2 fields", () => {
     expect(evt.meta.schemaVersion).toBeUndefined();
     expect(evt.meta.causationId).toBeUndefined();
     expect(evt.meta.partitionKey).toBeUndefined();
+    expect(evt.meta.aggregate).toBeUndefined();
+    expect(evt.meta.source).toBeUndefined();
+    expect(evt.meta.idempotencyKey).toBeUndefined();
+  });
+
+  it("EventMeta can be narrowed via interface extension (downstream pattern)", () => {
+    // Simulates what `@classytic/cart` does: narrow aggregate.type to a
+    // closed union without duplicating the whole meta shape.
+    type CartAggregateType = "cart" | "cart-item";
+    interface CartEventMeta {
+      aggregate?: { type: CartAggregateType; id: string };
+    }
+
+    const evt = createEvent(
+      "cart.line_added",
+      { lineId: "l1" },
+      { aggregate: { type: "cart", id: "c1" } },
+    );
+    // Narrow the meta in a consumer:
+    const narrowed = evt.meta as typeof evt.meta & CartEventMeta;
+    expect(narrowed.aggregate?.type).toBe("cart");
   });
 });
 
@@ -101,6 +128,67 @@ describe("createChildEvent — causation chain", () => {
 
     expect(child.meta.id).not.toBe(parent.meta.id);
     expect(child.meta.timestamp).toBeInstanceOf(Date);
+  });
+
+  it("aggregate is NOT inherited from parent — each event names its own aggregate", () => {
+    // An order-aggregate event emits an inventory-aggregate event. The child
+    // belongs to a different aggregate; silently inheriting would be wrong.
+    const parent = createEvent(
+      "order.placed",
+      { orderId: "o1" },
+      { aggregate: { type: "order", id: "o1" } },
+    );
+    const child = createChildEvent(parent, "inventory.reserved", { sku: "a" });
+
+    expect(child.meta.aggregate).toBeUndefined();
+  });
+
+  it("child can declare its own aggregate explicitly", () => {
+    const parent = createEvent(
+      "order.placed",
+      { orderId: "o1" },
+      { aggregate: { type: "order", id: "o1" } },
+    );
+    const child = createChildEvent(
+      parent,
+      "inventory.reserved",
+      { sku: "a" },
+      { aggregate: { type: "inventory", id: "inv-1" } },
+    );
+
+    expect(child.meta.aggregate).toEqual({ type: "inventory", id: "inv-1" });
+    // Causation + correlation still threaded through
+    expect(child.meta.causationId).toBe(parent.meta.id);
+    expect(child.meta.correlationId).toBe(parent.meta.id);
+  });
+
+  it("child inherits source + idempotencyKey from parent", () => {
+    const parent = createEvent(
+      "order.placed",
+      { orderId: "o1" },
+      { source: "commerce", idempotencyKey: "order:o1:placed" },
+    );
+    const child = createChildEvent(parent, "inventory.reserved", { sku: "a" });
+
+    expect(child.meta.source).toBe("commerce");
+    expect(child.meta.idempotencyKey).toBe("order:o1:placed");
+  });
+
+  it("child can override inherited source + idempotencyKey", () => {
+    const parent = createEvent(
+      "order.placed",
+      { orderId: "o1" },
+      { source: "commerce", idempotencyKey: "k1" },
+    );
+    const child = createChildEvent(
+      parent,
+      "inventory.reserved",
+      { sku: "a" },
+      { source: "inventory-svc", idempotencyKey: "k2" },
+    );
+
+    expect(child.meta.source).toBe("inventory-svc");
+    expect(child.meta.idempotencyKey).toBe("k2");
   });
 
   it("three-level chain preserves correlation across all hops", () => {

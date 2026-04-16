@@ -41,7 +41,7 @@
  * ```
  */
 
-import type { DomainEvent, EventTransport } from "./EventTransport.js";
+import type { DeadLetteredEvent, DomainEvent, EventTransport } from "./EventTransport.js";
 
 /** Default outbox retention — delivered events older than this are eligible for purge */
 const DEFAULT_OUTBOX_RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -124,6 +124,57 @@ export interface OutboxErrorInfo {
   readonly message: string;
   readonly code?: string;
 }
+
+/**
+ * Context passed to {@link OutboxFailurePolicy}.
+ */
+export interface OutboxFailureContext {
+  /** The event whose delivery just failed */
+  readonly event: DomainEvent;
+  /** The error returned by the transport / handler */
+  readonly error: Error;
+  /**
+   * Attempt count including this failure (1 on the first fail).
+   *
+   * Tracked by {@link EventOutbox} in-process — accurate within a single
+   * relay process, resets on restart. For durable attempt counts, query
+   * your store directly inside the policy.
+   */
+  readonly attempts: number;
+}
+
+/**
+ * Decision returned by {@link OutboxFailurePolicy} — controls how the
+ * relay calls `store.fail()` for a failed event.
+ */
+export interface OutboxFailureDecision {
+  /** Schedule retry for this time. Omit for immediate (next-poll) retry. */
+  readonly retryAt?: Date;
+  /**
+   * Move the event to dead-letter state (no further retries). When `true`,
+   * {@link RelayResult.deadLettered} is incremented.
+   */
+  readonly deadLetter?: boolean;
+}
+
+/**
+ * Centralised retry/DLQ policy evaluated by {@link EventOutbox.relayBatch}
+ * on every failure. Returns the options passed to `store.fail()`.
+ *
+ * Typical shape:
+ * ```typescript
+ * failurePolicy: ({ attempts, error }) => {
+ *   if (attempts >= 5) return { deadLetter: true };
+ *   return { retryAt: exponentialBackoff({ attempt: attempts }) };
+ * }
+ * ```
+ *
+ * Without a policy, the relay uses the legacy "immediate re-visibility" fail
+ * behaviour (each fail() is equivalent to `{}`).
+ */
+export type OutboxFailurePolicy = (
+  ctx: OutboxFailureContext,
+) => OutboxFailureDecision | Promise<OutboxFailureDecision>;
 
 /**
  * Thrown by a store when `acknowledge` / `fail` is called by a consumer that
@@ -271,6 +322,23 @@ export interface OutboxStore {
   fail?(eventId: string, error: OutboxErrorInfo, options?: OutboxFailOptions): Promise<void>;
 
   /**
+   * Return events currently in dead-letter state as typed
+   * {@link DeadLetteredEvent} envelopes.
+   *
+   * Closes the loop between {@link OutboxStore.fail} (with `deadLetter: true`)
+   * and {@link import('./EventTransport.js').DeadLetteredEvent} — apps get the
+   * same shape out of the outbox that {@link import('./retry.js').withRetry}
+   * delivers to transports. No hand-building DLQ envelopes.
+   *
+   * Implementations MUST populate `error`, `attempts`, and both
+   * `firstFailedAt` / `lastFailedAt` from whatever they tracked during `fail()`
+   * calls. `handlerName` is optional — stores that don't track it can omit.
+   *
+   * @param limit - Max envelopes to return
+   */
+  getDeadLettered?(limit: number): Promise<DeadLetteredEvent[]>;
+
+  /**
    * Purge old **delivered** events (optional, DB-agnostic contract).
    *
    * Cleanup is scoped to events in the `delivered` state — events still
@@ -326,6 +394,12 @@ export interface RelayResult {
   readonly malformed: number;
   /** Number of fail() calls that themselves threw (store bugs / contention) */
   readonly failHookErrors: number;
+  /**
+   * Number of events moved to dead-letter state this batch via the configured
+   * {@link OutboxFailurePolicy}. Zero when no policy is set or no failure
+   * tripped the `deadLetter` branch.
+   */
+  readonly deadLettered: number;
   /** Whether `publishMany` was used (true) or per-event `publish` (false) */
   readonly usedPublishMany: boolean;
 }
@@ -370,6 +444,17 @@ export interface EventOutboxOptions {
    * throughput, or to debug batch-specific issues.
    */
   readonly usePublishMany?: boolean;
+  /**
+   * Retry/DLQ decision policy. When set, {@link EventOutbox.relayBatch}
+   * invokes this on every failure and uses the returned options for
+   * `store.fail()`. Centralises the "after N fails, dead-letter" rule so
+   * apps don't recompute `exponentialBackoff` + escalation thresholds on
+   * every failure site.
+   *
+   * Without a policy, `fail()` is called with `{}` (immediate re-visibility
+   * on next poll) — legacy behaviour, unchanged.
+   */
+  readonly failurePolicy?: OutboxFailurePolicy;
 }
 
 export class EventOutbox {
@@ -380,6 +465,14 @@ export class EventOutbox {
   private readonly _leaseMs: number;
   private readonly _onError?: OutboxRelayErrorHandler;
   private readonly _usePublishMany: boolean;
+  private readonly _failurePolicy?: OutboxFailurePolicy;
+  /**
+   * In-process attempt counter per event id. Accurate within this relay
+   * process; resets on restart. Populated as failures occur and cleared on
+   * successful ack or dead-letter transition. For durable authoritative
+   * counts, apps can query the store directly inside {@link OutboxFailurePolicy}.
+   */
+  private readonly _attempts = new Map<string, number>();
 
   constructor(opts: EventOutboxOptions) {
     this._store = opts.store;
@@ -389,6 +482,7 @@ export class EventOutbox {
     this._leaseMs = opts.leaseMs ?? DEFAULT_LEASE_MS;
     this._onError = opts.onError;
     this._usePublishMany = opts.usePublishMany ?? true;
+    this._failurePolicy = opts.failurePolicy;
   }
 
   /** Unique consumer ID used for lease ownership when the store supports claims */
@@ -418,7 +512,17 @@ export class EventOutbox {
     if (!event.meta?.id || typeof event.meta.id !== "string") {
       throw new InvalidOutboxEventError("event.meta.id is required");
     }
-    await this._store.save(event, options);
+
+    // Auto-map event.meta.idempotencyKey → OutboxWriteOptions.dedupeKey when
+    // the caller hasn't set one. Closes the common footgun where the event
+    // carries an idempotency hint but the outbox persists duplicates because
+    // the caller forgot to pass it twice.
+    const effectiveOptions: OutboxWriteOptions | undefined =
+      options?.dedupeKey === undefined && event.meta.idempotencyKey
+        ? { ...(options ?? {}), dedupeKey: event.meta.idempotencyKey }
+        : options;
+
+    await this._store.save(event, effectiveOptions);
   }
 
   private _reportError(kind: OutboxRelayErrorKind, error: unknown, event?: DomainEvent): void {
@@ -485,6 +589,7 @@ export class EventOutbox {
       ownershipMismatches: 0,
       malformed: 0,
       failHookErrors: 0,
+      deadLettered: 0,
       usedPublishMany: false,
     };
     if (!this._transport) return empty;
@@ -522,6 +627,7 @@ export class EventOutbox {
       ackFailed: 0,
       ownershipMismatches: 0,
       failHookErrors: 0,
+      deadLettered: 0,
     };
 
     // Decide publish strategy: batched vs per-event
@@ -577,10 +683,34 @@ export class EventOutbox {
           stopBatch = true;
           continue;
         }
+
+        // Track attempts in-process; pass to the policy if configured. First
+        // failure = attempts: 1, second = 2, etc. Cleared on ack or when the
+        // event is dead-lettered (terminal state).
+        const attempts = (this._attempts.get(event.meta.id) ?? 0) + 1;
+        this._attempts.set(event.meta.id, attempts);
+
+        let failOpts: OutboxFailOptions = { consumerId: this._consumerId };
+        if (this._failurePolicy) {
+          try {
+            const decision = await this._failurePolicy({
+              event,
+              error: publishErr,
+              attempts,
+            });
+            failOpts = { ...failOpts, ...decision };
+          } catch (policyErr) {
+            // Policy must not break the relay — fall back to default fail() call
+            this._reportError("fail_failed", policyErr, event);
+          }
+        }
+
         try {
-          await this._store.fail!(event.meta.id, normalizeError(publishErr), {
-            consumerId: this._consumerId,
-          });
+          await this._store.fail!(event.meta.id, normalizeError(publishErr), failOpts);
+          if (failOpts.deadLetter) {
+            counts.deadLettered++;
+            this._attempts.delete(event.meta.id);
+          }
         } catch (failErr) {
           if (failErr instanceof OutboxOwnershipError) {
             counts.ownershipMismatches++;
@@ -597,6 +727,7 @@ export class EventOutbox {
       try {
         await this._store.acknowledge(event.meta.id, { consumerId: this._consumerId });
         counts.relayed++;
+        this._attempts.delete(event.meta.id);
       } catch (ackErr) {
         counts.ackFailed++;
         if (ackErr instanceof OutboxOwnershipError) {
@@ -616,8 +747,23 @@ export class EventOutbox {
       ownershipMismatches: counts.ownershipMismatches,
       malformed,
       failHookErrors: counts.failHookErrors,
+      deadLettered: counts.deadLettered,
       usedPublishMany: canPublishMany && valid.length > 0,
     };
+  }
+
+  /**
+   * Fetch current dead-lettered events as typed {@link DeadLetteredEvent}
+   * envelopes. Delegates to {@link OutboxStore.getDeadLettered} — returns
+   * `[]` when the store doesn't implement it.
+   *
+   * Pairs with {@link OutboxFailurePolicy}: apps set a policy that routes to
+   * `deadLetter: true` after N attempts, then read back with this to alert,
+   * replay, or archive.
+   */
+  async getDeadLettered(limit = 100): Promise<DeadLetteredEvent[]> {
+    if (!this._store.getDeadLettered) return [];
+    return this._store.getDeadLettered(limit);
   }
 
   /**
@@ -651,6 +797,8 @@ interface MemoryEntry {
   leaseOwner: string | null;
   leaseExpiresAt: number;
   deliveredAt: number | null;
+  firstFailedAt: number | null;
+  lastFailedAt: number | null;
   lastError: OutboxErrorInfo | null;
   dedupeKey?: string;
 }
@@ -685,6 +833,8 @@ export class MemoryOutboxStore implements OutboxStore {
       leaseOwner: null,
       leaseExpiresAt: 0,
       deliveredAt: null,
+      firstFailedAt: null,
+      lastFailedAt: null,
       lastError: null,
       dedupeKey: options?.dedupeKey,
     });
@@ -747,9 +897,12 @@ export class MemoryOutboxStore implements OutboxStore {
     if (options?.consumerId && entry.leaseOwner && entry.leaseOwner !== options.consumerId) {
       throw new OutboxOwnershipError(eventId, options.consumerId, entry.leaseOwner);
     }
+    const now = Date.now();
     entry.lastError = error;
     entry.leaseOwner = null;
     entry.leaseExpiresAt = 0;
+    if (entry.firstFailedAt === null) entry.firstFailedAt = now;
+    entry.lastFailedAt = now;
     if (options?.deadLetter) {
       entry.status = "dead_letter";
       return;
@@ -757,6 +910,25 @@ export class MemoryOutboxStore implements OutboxStore {
     entry.status = "pending";
     // Default to immediate re-visibility if no retryAt provided (clears any prior backoff)
     entry.visibleAt = options?.retryAt ? options.retryAt.getTime() : 0;
+  }
+
+  async getDeadLettered(limit: number): Promise<DeadLetteredEvent[]> {
+    const out: DeadLetteredEvent[] = [];
+    for (const entry of this.entries) {
+      if (out.length >= limit) break;
+      if (entry.status !== "dead_letter") continue;
+      out.push({
+        event: entry.event,
+        error: {
+          message: entry.lastError?.message ?? "unknown",
+          ...(entry.lastError?.code !== undefined ? { code: entry.lastError.code } : {}),
+        },
+        attempts: entry.attempts,
+        firstFailedAt: new Date(entry.firstFailedAt ?? entry.lastFailedAt ?? Date.now()),
+        lastFailedAt: new Date(entry.lastFailedAt ?? entry.firstFailedAt ?? Date.now()),
+      });
+    }
+    return out;
   }
 
   async purge(olderThanMs: number): Promise<number> {

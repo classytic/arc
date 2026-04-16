@@ -38,7 +38,7 @@
 
 ```
 src/                          181 files across 32 modules
-  core/                       defineResource, BaseController (939L), QueryResolver, createCrudRouter, createActionRouter
+  core/                       defineResource, BaseController, QueryResolver, createCrudRouter; createActionRouter is internal engine for `actions`
   factory/                    createApp — the main entry point users call
   adapters/                   RepositoryLike interface + mongoose/prisma adapters
   auth/                       authPlugin (JWT), betterAuth adapter, sessionManager, redis-session
@@ -221,7 +221,7 @@ Most modules now have dedicated tests. These still rely on indirect coverage onl
 | Changed file(s) | Run these tests |
 |-----------------|-----------------|
 | `src/core/BaseController.ts` | `npx vitest run tests/core/base-controller.test.ts tests/core/access-control.test.ts tests/core/body-sanitizer.test.ts` |
-| `src/core/createActionRouter.ts` | `npx vitest run tests/core/createActionRouter.test.ts tests/security/action-router-auth.test.ts` |
+| `src/core/createActionRouter.ts` | `npx vitest run tests/core/actions-v2-8-1.test.ts tests/core/routes-and-actions.test.ts tests/security/action-router-auth.test.ts` |
 | `src/core/QueryResolver.ts` | `npx vitest run tests/core/query-resolver.test.ts tests/e2e/query-operators.test.ts tests/e2e/query-features.test.ts` |
 | `src/auth/*` | `npx vitest run tests/auth/` |
 | `src/auth/betterAuth.ts` | `npx vitest run tests/auth/better-auth-adapter.test.ts tests/auth/better-auth-e2e.test.ts` |
@@ -336,6 +336,26 @@ Multiple presets on a single resource can conflict (e.g., `softDelete` + `bulk` 
 ### 10. MCP tools are auto-generated from resources
 
 `resourceToTools()` inspects the resource definition and creates CRUD tool definitions. If you change field rules, permissions, or route structure, the MCP tools change too. Always run MCP tests after resource changes.
+
+### 11. Field-write denial is reject-by-default (v2.9)
+
+`BodySanitizer` throws `ForbiddenError` listing denied fields. Apps migrating from pre-2.9 silent-strip must opt in via `defineResource({ onFieldWriteDenied: 'strip' })`. Write-side field perms now surface misconfigurations instead of hiding them.
+
+### 12. multiTenant injects org on UPDATE (v2.9)
+
+Prior versions only ran `tenantInjection` on CREATE. A member could send `PATCH /orders/:id { organizationId: <other-org> }` and move their own doc to another tenant. v2.9 runs injection on UPDATE too — body-supplied `organizationId` is overwritten with the caller's scope. Elevated scope still bypasses (admin cross-tenant ops).
+
+### 13. Elevation audit event is mandatory (v2.9)
+
+Every successful `x-arc-scope: platform` elevation emits `arc.scope.elevated` on `fastify.events`. Apps don't need to wire `onElevation` to get audit — subscribe to the event instead. The WAL skips `arc.*` so durable-store startup isn't blocked.
+
+### 14. Event contract v2 is additive (v2.9)
+
+`EventMeta` gained optional `schemaVersion`, `causationId`, `partitionKey`. Back-compat — old events work unchanged. `createChildEvent(parent, type, payload)` auto-chains causation + inherits correlation. `DeadLetteredEvent<T>` + optional `transport.deadLetter()` added for native-DLQ transports (Kafka/SQS).
+
+### 15. `verifySignature(body, ...)` throws on parsed body (v2.9)
+
+TypeError when body isn't string/Buffer. Catches the common misuse of passing `req.body` (parsed) instead of `req.rawBody` (exact bytes sender signed). If you see this error in production, register `@fastify/raw-body` before your webhook routes.
 
 ---
 
@@ -473,12 +493,10 @@ See [v3.md](v3.md) for the full design document. Key changes:
 
 - `field.string().required()` — type-safe field definitions
 - `model: Model` — auto-detect adapter (no manual `createMongooseAdapter`)
-- `routes: [...]` — replaces `additionalRoutes` + `wrapHandler`
+- `routes: [...]` — shipped; `additionalRoutes` / `wrapHandler` no longer public (v2.9)
 - `filter: [...]` — single source of truth (no more dual config)
 - `public()`, `auth()`, `roles()`, `owner()` — permission shorthand
-- `createApp({ resources })` — no `toPlugin()` (already shipped in v2.5.2)
-
-**Zero breaking changes** — all v2 config fields accepted with deprecation warnings.
+- `createApp({ resources })` — no `toPlugin()` (shipped in v2.5.2)
 
 ---
 

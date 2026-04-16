@@ -2,7 +2,7 @@
 
 Database-agnostic resource framework for Fastify. Define resources, get CRUD routes, permissions, presets, caching, events, OpenAPI, and MCP tools — without boilerplate.
 
-**v2.8.4** | Fastify 5+ | Node.js 22+ | ESM only | 279+ test files, 3867+ tests
+**v2.9** | Fastify 5+ | Node.js 22+ | ESM only
 
 ## Install
 
@@ -383,6 +383,29 @@ await app.events.subscribe('order.*', async (event) => { ... });
 
 CRUD events (`product.created`, `product.updated`, `product.deleted`) emit automatically.
 
+### Causation Chains & DLQ (v2.9)
+
+```typescript
+import { createEvent, createChildEvent, type DeadLetteredEvent } from '@classytic/arc/events';
+
+const placed = createEvent('order.placed', { orderId: 'o1' }, {
+  correlationId: req.id, userId: user.id,
+});
+await app.events.publish(placed.type, placed.payload, placed.meta);
+
+// Downstream handler emits a child — correlation inherited, causation linked:
+const reserved = createChildEvent(placed, 'inventory.reserved', { sku: 'a' });
+// reserved.meta.correlationId === placed.meta.correlationId (stays stable across chain)
+// reserved.meta.causationId   === placed.meta.id            (direct parent)
+
+// Transports with native DLQ (Kafka, SQS) implement optional deadLetter():
+class KafkaTransport implements EventTransport {
+  async deadLetter(dlq: DeadLetteredEvent) { /* route to .DLQ topic */ }
+}
+```
+
+`EventMeta` also accepts `schemaVersion` (evolve event payloads) and `partitionKey` (ordered delivery hint for Kafka/Kinesis).
+
 ### defineEvent — Typed Events with Schema Validation
 
 Declare events with schemas for runtime validation and introspection:
@@ -721,6 +744,36 @@ Arc sets `"sideEffects": false` in [package.json](package.json), so modern bundl
 | `@classytic/arc/mcp` | MCP tools for AI agents |
 | `@classytic/arc/docs` | OpenAPI generation |
 | `@classytic/arc/cli` | CLI commands (programmatic) |
+
+## v2.9 Highlights
+
+**Security defaults (breaking):**
+- **Field-write perms reject by default** — requests with non-writable fields return 403 with denied-field list. Opt into legacy silent-strip via `defineResource({ onFieldWriteDenied: 'strip' })`.
+- **multiTenant preset injects org on UPDATE** — body-supplied `organizationId` is overwritten with caller's scope (prior: CREATE only; a member could hop their own doc to another tenant).
+- **Elevation always emits `arc.scope.elevated`** — privilege elevation can no longer be silently un-audited. Subscribe via `fastify.events.subscribe('arc.scope.elevated', …)`. `onElevation` callback still supported.
+- **`verifySignature` throws on parsed body** — prevents the common `req.body` vs `req.rawBody` footgun that looks like a wrong secret.
+- **Upload `sanitizeFilename` policy** — rejects path separators, NUL, `.`/`..`, >255 chars by default. Flexible: pass `false` / `'*'` / custom function to override.
+- **Idempotency `namespace`** — optional key folded into fingerprint for shared-store deployments (prod + canary on one Redis).
+
+**Event contract v2 (additive):**
+- `EventMeta` gets `schemaVersion`, `causationId`, `partitionKey`, `source`, `idempotencyKey`, `aggregate: { type, id }`
+- `createChildEvent(parent, type, payload)` — auto-chains causation + inherits correlation / userId / organizationId / source / idempotencyKey (aggregate stays explicit)
+- `DeadLetteredEvent<T>` type + optional `transport.deadLetter()` for first-class DLQ
+- `withRetry({ transport })` auto-routes exhausted events to `transport.deadLetter()` — no custom `$deadLetter` plumbing
+- Downstream packages narrow `aggregate.type` to a closed DDD union via interface extension
+
+**Outbox v2 (additive):**
+- `EventOutbox.store()` auto-maps `event.meta.idempotencyKey` → `OutboxWriteOptions.dedupeKey` (caller's explicit `dedupeKey` still wins)
+- `new EventOutbox({ failurePolicy: ({ attempts, error }) => ({ retryAt?, deadLetter? }) })` — centralises retry + DLQ escalation, no more hand-rolled `exponentialBackoff` at every failure site
+- `outbox.getDeadLettered(limit)` returns typed `DeadLetteredEvent[]` — same shape `withRetry` produces, closes the loop between retry DLQ and outbox DLQ state
+- `RelayResult.deadLettered` — per-batch DLQ transition count for dashboards
+- `MongoOutboxStore` at `@classytic/arc/events/mongo` — durable production store with multi-worker claim, TTL purge, unique dedupe index, session-threaded writes, and fail-loud `onDisconnect: 'throw'` default
+
+**Removed (no replacement kept):**
+- `createActionRouter`, `buildActionBodySchema` — use `defineResource({ actions })`
+- `ResourceConfig.onRegister` — use `actions` or resource `hooks`
+- `PluginResourceResult.additionalRoutes` → `routes: RouteDefinition[]`
+- `PolicyContext` / `PolicyResult` `any` fields → `unknown` (tighten downstream narrowing)
 
 ## v2.8.4 Highlights
 

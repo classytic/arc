@@ -52,6 +52,7 @@ describe("relayBatch — rich result", () => {
       ownershipMismatches: 0,
       malformed: 0,
       failHookErrors: 0,
+      deadLettered: 0,
       usedPublishMany: false,
     });
   });

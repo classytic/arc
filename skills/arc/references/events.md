@@ -116,22 +116,73 @@ const unsub = await fastify.events.subscribe('order.created', handler);
 unsub();
 ```
 
-## Event Structure
+## Event Structure (v2.9)
 
 ```typescript
+interface EventMeta {
+  id: string;              // UUID v4 (fresh per emit; a retry gets a new id)
+  timestamp: Date;
+  schemaVersion?: number;  // bump on payload breaking change
+  correlationId?: string;  // stable across causal chain
+  causationId?: string;    // direct parent event id
+  partitionKey?: string;   // ordering hint (Kafka/Kinesis/Streams)
+  source?: string;         // originating service/package ('commerce', 'billing')
+  idempotencyKey?: string; // cross-transport dedupe hint — stable per operation
+  resource?: string;
+  resourceId?: string;
+  userId?: string;
+  organizationId?: string;
+  aggregate?: { type: string; id: string }; // DDD aggregate marker
+}
+
 interface DomainEvent<T> {
-  type: string;          // e.g., 'order.created'
+  type: string;            // e.g., 'order.created'
   payload: T;
-  meta: {
-    id: string;          // Unique event ID
-    timestamp: Date;
-    source?: string;
-    resource?: string;
-    resourceId?: string;
-    userId?: string;
-    organizationId?: string;
-    correlationId?: string;
-  };
+  meta: EventMeta;
+}
+```
+
+**Arc is source of truth** — `@classytic/primitives/events` mirrors these shapes. Downstream packages import from primitives; arc owns evolution.
+
+### DDD aggregate narrowing
+
+`aggregate.type` is `string` in arc's base contract so it stays framework-neutral. Domain packages narrow it to a closed union via interface extension:
+
+```typescript
+// @classytic/cart
+type CartAggregateType = 'cart' | 'cart-item';
+
+interface CartEventMeta extends EventMeta {
+  aggregate?: { type: CartAggregateType; id: string };
+}
+```
+
+Unlike `correlationId` / `causationId`, `aggregate` is **not inherited** by `createChildEvent`. Child events usually belong to a different aggregate (e.g. an `order.placed` event emitted by the order aggregate spawns `inventory.reserved` owned by the inventory aggregate). Each event names its own aggregate explicitly.
+
+### Causation chains
+
+```typescript
+import { createEvent, createChildEvent } from '@classytic/arc/events';
+
+const placed = createEvent('order.placed', { orderId: 'o1' }, {
+  correlationId: req.id, userId: user.id,
+});
+
+// Downstream handler emits child — causation linked, correlation inherited:
+const reserved = createChildEvent(placed, 'inventory.reserved', { sku: 'a' });
+// reserved.meta.causationId   === placed.meta.id
+// reserved.meta.correlationId === placed.meta.correlationId
+```
+
+### Dead-letter contract
+
+```typescript
+import type { DeadLetteredEvent, EventTransport } from '@classytic/arc/events';
+
+class KafkaTransport implements EventTransport {
+  async deadLetter(dlq: DeadLetteredEvent) {
+    await producer.send({ topic: `${dlq.event.type}.DLQ`, messages: [{ value: JSON.stringify(dlq) }] });
+  }
 }
 ```
 
@@ -299,3 +350,142 @@ const retriedHandler = withRetry(async (event) => {
 
 await fastify.events.subscribe('order.created', retriedHandler);
 ```
+
+### Auto-route exhausted events to transport.deadLetter() (v2.9)
+
+For transports with a native DLQ (Kafka DLQ topic, SQS DLQ queue, etc.), pass
+`transport` to skip custom `$deadLetter` plumbing:
+
+```typescript
+await fastify.events.subscribe(
+  'order.created',
+  withRetry(handler, {
+    maxRetries: 3,
+    transport: fastify.events.transport,  // any EventTransport with deadLetter()
+    name: 'emailProcessor',                // populates DeadLetteredEvent.handlerName
+  }),
+);
+```
+
+On exhaustion, a typed `DeadLetteredEvent` envelope (original event + error +
+attempts + first/last failure timestamps) is handed to `transport.deadLetter()`.
+`onDead` still works — both fire when both are configured.
+
+## Transactional Outbox (v2.9)
+
+**Why the outbox exists:** you write a row + publish an event in the same user
+request. If the transport (Redis/Kafka) is down at that moment, the row
+commits but the event vanishes — silent data divergence. The outbox persists
+the event in the **same DB transaction** as the row, then a background relayer
+guarantees at-least-once delivery to the transport. Multi-worker claim +
+retry/DLQ policy + dedupe make it scale.
+
+`EventOutbox` now offers centralised retry/DLQ and typed DLQ query:
+
+```typescript
+import { EventOutbox, MemoryOutboxStore, exponentialBackoff } from '@classytic/arc/events';
+
+const outbox = new EventOutbox({
+  store: new MemoryOutboxStore(),   // swap for durable store in prod
+  transport: fastify.events.transport,
+
+  // Centralised retry/DLQ — no more hand-rolled exponentialBackoff at every fail site
+  failurePolicy: ({ attempts, error }) => {
+    if (attempts >= 5) return { deadLetter: true };
+    return { retryAt: exponentialBackoff({ attempt: attempts }) };
+  },
+});
+
+// meta.idempotencyKey auto-maps to OutboxWriteOptions.dedupeKey — duplicate
+// saves with the same key are silently absorbed.
+await outbox.store(
+  createEvent('order.placed', payload, { idempotencyKey: `order:${id}:placed` }),
+);
+
+// Rich per-batch outcome — deadLettered is new in v2.9
+const result = await outbox.relayBatch();
+// { relayed, attempted, publishFailed, ackFailed, ownershipMismatches,
+//   malformed, failHookErrors, deadLettered, usedPublishMany }
+
+// Read DLQ state as typed DeadLetteredEvent[]
+const dlq = await outbox.getDeadLettered(100);
+for (const envelope of dlq) {
+  await alertOps(envelope);  // event, error, attempts, firstFailedAt, lastFailedAt
+}
+```
+
+**Store capability tiers:**
+
+| Method | Required | What you lose without it |
+|---|---|---|
+| `save`, `getPending`, `acknowledge` | ✅ | — |
+| `claimPending` | — | Multi-worker relay safety |
+| `fail` | — | Retry / DLQ / per-event failure reporting |
+| `getDeadLettered` | — | `outbox.getDeadLettered()` returns `[]` |
+| `purge` | — | App owns retention (TTL index, cron DELETE, etc.) |
+
+`MemoryOutboxStore` implements all capabilities — use it as a reference when
+writing a durable store for Postgres / DynamoDB / your DB of choice.
+
+### MongoOutboxStore — production durable store
+
+For Mongo-backed apps, arc ships the canonical durable store at the
+`@classytic/arc/events/mongo` subpath (mongoose stays an opt-in peer dep —
+apps that don't import it pay nothing):
+
+```typescript
+import mongoose from 'mongoose';
+import { EventOutbox, exponentialBackoff } from '@classytic/arc/events';
+import { MongoOutboxStore } from '@classytic/arc/events/mongo';
+
+const outbox = new EventOutbox({
+  store: new MongoOutboxStore({
+    connection: mongoose.connection,
+    collectionName: 'arc_outbox_events',     // default
+    retentionMs: 7 * 24 * 60 * 60 * 1000,    // default: 7 days (TTL on delivered docs)
+    onDisconnect: 'throw',                    // 'throw' (prod default) | 'no-op' (dev/test)
+    purgeBatchSize: 500,                      // batched cursor deletion
+  }),
+  transport: redisTransport,
+  failurePolicy: ({ attempts }) =>
+    attempts >= 5 ? { deadLetter: true } : { retryAt: exponentialBackoff({ attempt: attempts }) },
+});
+
+// Inside an HTTP request — persist event in the same DB transaction as the row
+await mongoose.connection.transaction(async (session) => {
+  await Order.create([orderDoc], { session });
+  await outbox.store(
+    createEvent('order.placed', { orderId }, { idempotencyKey: `order:${orderId}:placed` }),
+    { session },   // threaded through to the Mongo driver
+  );
+});
+
+// Background relayer (separate process or cron tick)
+setInterval(async () => {
+  const r = await outbox.relayBatch();
+  metrics.gauge('outbox.deadLettered', r.deadLettered);
+}, 1000);
+
+// Ops: read dead-letter envelopes for alerting / replay
+const dlq = await outbox.getDeadLettered(100);
+```
+
+**What `MongoOutboxStore` guarantees:**
+
+- **Atomic multi-worker claim** — `findOneAndUpdate` with a compound match on
+  `{ status: 'pending', visibleAt ≤ now, lease free }`. Two racing relayers
+  never see the same event. Lease expiry auto-recovers abandoned claims.
+- **Indexed for scale** — `{ status, visibleAt, createdAt }` for claim scans,
+  `{ deliveredAt }` TTL for auto-purge, unique partial `{ dedupeKey }` for
+  `E11000`-backed dedupe, `{ status, _id }` for DLQ reads.
+- **Fails loud by default** — `onDisconnect: 'throw'` surfaces Mongo outages
+  at the write site instead of silently dropping events. Opt into `'no-op'`
+  only for dev/test flows that tolerate event loss.
+- **Session threading** — pass `session` through `save(event, { session })` to
+  commit the event in the same transaction as your business write.
+- **Bounded purge** — `purge(olderThanMs)` deletes delivered docs in
+  cursor-paged batches (default 500), bounding memory + lock time on
+  multi-million-row outboxes.
+- **v2.9 DLQ parity** — tracks `firstFailedAt` / `lastFailedAt` per doc;
+  `getDeadLettered(limit)` returns the same typed `DeadLetteredEvent[]` shape
+  `withRetry` produces.
