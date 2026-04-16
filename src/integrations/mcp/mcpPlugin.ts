@@ -226,22 +226,26 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
   if (!fastify.hasDecorator("mcp")) {
     const registrations = new Map<string, McpRegistration>();
     registrations.set(prefix, registration);
+    // Legacy top-level getters point at the first-inserted registration —
+    // Maps preserve insertion order, so `.values().next().value` is the
+    // first entry. Extracted for readability.
+    const first = (): McpRegistration | undefined => registrations.values().next().value;
     const decorator: McpDecorator = {
       registrations,
       get(p: string) {
         return registrations.get(p);
       },
       get sessions() {
-        return registrations.values().next().value?.sessions ?? null;
+        return first()?.sessions ?? null;
       },
       get toolNames() {
-        return registrations.values().next().value?.toolNames ?? [];
+        return first()?.toolNames ?? [];
       },
       get resourceNames() {
-        return registrations.values().next().value?.resourceNames ?? [];
+        return first()?.resourceNames ?? [];
       },
       get stateful() {
-        return registrations.values().next().value?.stateful ?? false;
+        return first()?.stateful ?? false;
       },
     };
     fastify.decorate("mcp", decorator);
@@ -381,7 +385,7 @@ function registerStatefulRoutes(
     // reliable moment to wire the entry into the cache, since
     // `transport.sessionId` is undefined until then.
     const authRef: AuthRef = { current: authResult };
-    const transport: SessionEntry["transport"] & { sessionId: string | undefined } = new Transport({
+    const transport = new Transport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (newSessionId: string) => {
         cache.set(newSessionId, {
