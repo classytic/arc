@@ -166,31 +166,49 @@ export function applyFieldReadPermissions<T extends Record<string, unknown>>(
 }
 
 /**
+ * Result of applying write permissions — includes both the filtered body
+ * and the list of fields that were stripped so callers can decide whether
+ * to reject the request (secure default) or silently strip (legacy).
+ */
+export interface FieldWritePermissionResult<T extends Record<string, unknown>> {
+  readonly body: T;
+  readonly deniedFields: readonly string[];
+}
+
+/**
  * Apply field-level WRITE permissions to request body.
- * Strips fields that the user doesn't have permission to write.
+ *
+ * Returns both the filtered body and the list of denied fields. Callers are
+ * expected to reject the request when `deniedFields.length > 0` — silently
+ * stripping fields hides misconfigurations and real attacks. See
+ * `BodySanitizer` for the default policy.
  *
  * @param body - The request body (returns a new filtered copy)
  * @param fieldPermissions - Field permission map from resource config
  * @param userRoles - Current user's roles
- * @returns Filtered body
  */
 export function applyFieldWritePermissions<T extends Record<string, unknown>>(
   body: T,
   fieldPermissions: FieldPermissionMap,
   userRoles: readonly string[],
-): T {
+): FieldWritePermissionResult<T> {
   const result = { ...body };
+  const deniedFields: string[] = [];
 
   for (const [field, perm] of Object.entries(fieldPermissions)) {
     switch (perm._type) {
       case "hidden":
         // Hidden fields can never be written
-        delete result[field];
+        if (field in result) {
+          deniedFields.push(field);
+          delete result[field];
+        }
         break;
 
       case "writableBy":
-        // Only writable by specific roles — strip if user lacks them
+        // Only writable by specific roles
         if (field in result && !perm.roles?.some((r) => userRoles.includes(r))) {
+          deniedFields.push(field);
           delete result[field];
         }
         break;
@@ -199,7 +217,7 @@ export function applyFieldWritePermissions<T extends Record<string, unknown>>(
     }
   }
 
-  return result;
+  return { body: result, deniedFields };
 }
 
 // ---------------------------------------------------------------------------

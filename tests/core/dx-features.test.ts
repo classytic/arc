@@ -6,7 +6,7 @@
  *   2. envelope() helper
  *   3. getOrgContext() canonical org extraction
  *   4. createDomainError() factory
- *   5. onRegister lifecycle hook
+ *   5. (reserved)
  *   6. preAuth on routes
  *   7. streamResponse flag
  */
@@ -172,77 +172,6 @@ describe("createDomainError() factory", () => {
     expect(json.success).toBe(false);
     expect(json.code).toBe("SELF_REFERRAL");
     expect(json.error).toBe("Cannot refer yourself");
-  });
-});
-
-// ============================================================================
-// 4. onRegister lifecycle hook
-// ============================================================================
-
-describe("onRegister lifecycle hook", () => {
-  it("called with scoped Fastify instance during registration", async () => {
-    const onRegister = vi.fn();
-    const repo = new Repository(ItemModel);
-
-    const resource = defineResource({
-      name: "item",
-      adapter: createMongooseAdapter({ model: ItemModel, repository: repo }),
-      controller: new BaseController(repo, { resourceName: "item" }),
-      permissions: {
-        list: allowPublic(),
-        get: allowPublic(),
-        create: allowPublic(),
-        update: allowPublic(),
-        delete: allowPublic(),
-      },
-      onRegister,
-    });
-
-    const app = await createApp({
-      preset: "testing",
-      auth: false,
-      logger: false,
-      plugins: async (f) => {
-        await f.register(resource.toPlugin());
-      },
-    });
-
-    await app.ready();
-    expect(onRegister).toHaveBeenCalledTimes(1);
-    // First arg should be a Fastify instance
-    expect(onRegister.mock.calls[0][0]).toHaveProperty("register");
-    expect(onRegister.mock.calls[0][0]).toHaveProperty("addHook");
-
-    await app.close();
-  });
-
-  it("async onRegister is awaited", async () => {
-    let sideEffect = false;
-    const repo = new Repository(ItemModel);
-
-    const resource = defineResource({
-      name: "item",
-      adapter: createMongooseAdapter({ model: ItemModel, repository: repo }),
-      controller: new BaseController(repo, { resourceName: "item" }),
-      permissions: { list: allowPublic() },
-      onRegister: async (_fastify) => {
-        await new Promise((r) => setTimeout(r, 10));
-        sideEffect = true;
-      },
-    });
-
-    const app = await createApp({
-      preset: "testing",
-      auth: false,
-      logger: false,
-      plugins: async (f) => {
-        await f.register(resource.toPlugin());
-      },
-    });
-
-    await app.ready();
-    expect(sideEffect).toBe(true);
-    await app.close();
   });
 });
 

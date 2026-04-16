@@ -99,8 +99,8 @@ const productResource = defineResource({
     delete: roles('admin'),
   },
   cache: { staleTime: 30, gcTime: 300, tags: ['catalog'] }, // QueryCache (opt-in)
-  additionalRoutes: [
-    { method: 'GET', path: '/featured', handler: 'getFeatured', permissions: allowPublic(), wrapHandler: true },
+  routes: [
+    { method: 'GET', path: '/featured', handler: 'getFeatured', permissions: allowPublic() },
   ],
 });
 

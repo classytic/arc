@@ -63,8 +63,8 @@ import type {
   UserLike,
 } from "../types/index.js";
 import { getUserId } from "../types/index.js";
-import { AccessControl } from "./AccessControl.js";
-import { BodySanitizer } from "./BodySanitizer.js";
+import { AccessControl, type FetchDenialReason } from "./AccessControl.js";
+import { BodySanitizer, type FieldWriteDenialPolicy } from "./BodySanitizer.js";
 import { getDefaultQueryParser, QueryResolver } from "./QueryResolver.js";
 
 // ============================================================================
@@ -117,6 +117,16 @@ export interface BaseControllerOptions {
   cache?: ResourceCacheConfig;
   /** Internal preset fields map (slug, tree, etc.) */
   presetFields?: { slugField?: string; parentField?: string };
+  /**
+   * Policy for requests that include fields the caller can't write.
+   *
+   * - `'reject'` (default): 403 with the denied field names. Surfaces
+   *   misconfigurations and attempts to set protected fields instead of
+   *   silently dropping them.
+   * - `'strip'`: legacy silent-drop behaviour. Only opt in when migrating
+   *   code that relied on the pre-2.9 permissive default.
+   */
+  onFieldWriteDenied?: FieldWriteDenialPolicy;
 }
 
 // ============================================================================
@@ -185,6 +195,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     });
     this.bodySanitizer = new BodySanitizer({
       schemaOptions: this.schemaOptions,
+      onFieldWriteDenied: options.onFieldWriteDenied,
     });
     this.queryResolver = new QueryResolver({
       queryParser: this.queryParser,
@@ -253,6 +264,36 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     const repoIdField = (this.repository as RepositoryLike).idField;
     if (repoIdField && repoIdField === this.idField) return id;
     return String(existing[DEFAULT_ID_FIELD] ?? id);
+  }
+
+  // ============================================================================
+  // Error DX — structured 404 responses
+  // ============================================================================
+
+  /**
+   * Centralized 404 response builder. Maps the denial reason from
+   * `fetchDetailed()` into a structured `details.code` so consumers can
+   * programmatically distinguish "doc doesn't exist" from "doc filtered
+   * by policy/org scope" without parsing error strings.
+   *
+   * Error messages are intentionally vague in the `error` field (don't
+   * leak whether the doc exists) — the detail is in `details.code` only.
+   */
+  private notFoundResponse(
+    reason: FetchDenialReason | null = "NOT_FOUND",
+  ): IControllerResponse<never> {
+    const code = reason ?? "NOT_FOUND";
+    const messages: Record<string, string> = {
+      NOT_FOUND: "Resource not found",
+      POLICY_FILTERED: "Resource not found",
+      ORG_SCOPE_DENIED: "Resource not found",
+    };
+    return {
+      success: false,
+      error: messages[code] ?? "Resource not found",
+      status: 404,
+      details: { code },
+    };
   }
 
   // ============================================================================
@@ -429,7 +470,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       if (status === "stale") {
         setImmediate(() => {
           this.executeGetQuery(id, options, req)
-            .then((fresh) => {
+            .then(({ doc: fresh }) => {
               if (fresh) qc.set(key, fresh, cacheConfig);
             })
             .catch(() => {});
@@ -443,14 +484,12 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       }
 
       // MISS — execute, cache, return
-      const item = await this.executeGetQuery(id, options, req);
-      if (!item) {
-        return { success: false, error: "Resource not found", status: 404 };
-      }
-      await qc.set(key, item, cacheConfig);
+      const { doc: cached, reason: cacheReason } = await this.executeGetQuery(id, options, req);
+      if (!cached) return this.notFoundResponse(cacheReason);
+      await qc.set(key, cached, cacheConfig);
       return {
         success: true,
-        data: item,
+        data: cached,
         status: 200,
         headers: { "x-cache": "MISS" },
       };
@@ -458,14 +497,12 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
 
     // No cache
     try {
-      const item = await this.executeGetQuery(id, options, req);
-      if (!item) {
-        return { success: false, error: "Resource not found", status: 404 };
-      }
-      return { success: true, data: item, status: 200 };
+      const { doc, reason } = await this.executeGetQuery(id, options, req);
+      if (!doc) return this.notFoundResponse(reason);
+      return { success: true, data: doc, status: 200 };
     } catch (error: unknown) {
       if (error instanceof Error && error.message?.includes("not found")) {
-        return { success: false, error: "Resource not found", status: 404 };
+        return this.notFoundResponse("NOT_FOUND");
       }
       throw error;
     }
@@ -476,24 +513,36 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     id: string,
     options: ParsedQuery,
     req: IRequestContext,
-  ): Promise<TDoc | null> {
+  ): Promise<{ doc: TDoc | null; reason: FetchDenialReason | null }> {
     const hooks = this.getHooks(req);
-    const fetchItem = async () =>
-      this.accessControl.fetchWithAccessControl<TDoc>(id, req, this.repository, options);
-    const item =
-      hooks && this.resourceName
-        ? await hooks.executeAround<TDoc | null>(
-            this.resourceName,
-            "read",
-            null as TDoc | null,
-            fetchItem,
-            {
-              user: req.user as UserLike | undefined,
-              context: this.meta(req),
-            },
-          )
-        : await fetchItem();
-    return (item ?? null) as TDoc | null;
+    const fetchItem = async () => {
+      const result = await this.accessControl.fetchDetailed<TDoc>(
+        id,
+        req,
+        this.repository,
+        options,
+      );
+      return result;
+    };
+
+    if (hooks && this.resourceName) {
+      // Hooks still receive the doc (or null) — wrap/unwrap the detailed result.
+      const result = await fetchItem();
+      if (!result.doc) return result;
+      const hooked = await hooks.executeAround<TDoc | null>(
+        this.resourceName,
+        "read",
+        null as TDoc | null,
+        async () => result.doc,
+        {
+          user: req.user as UserLike | undefined,
+          context: this.meta(req),
+        },
+      );
+      return { doc: (hooked ?? null) as TDoc | null, reason: null };
+    }
+
+    return fetchItem();
   }
 
   async create(req: IRequestContext): Promise<IControllerResponse<TDoc>> {
@@ -588,14 +637,14 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       data.updatedBy = userId;
     }
 
-    const existing = await this.accessControl.fetchWithAccessControl<TDoc>(
+    const { doc: existing, reason: updateReason } = await this.accessControl.fetchDetailed<TDoc>(
       id,
       req,
       this.repository,
     );
 
     if (!existing) {
-      return { success: false, error: "Resource not found", status: 404 };
+      return this.notFoundResponse(updateReason);
     }
 
     if (!this.accessControl.checkOwnership(existing as AnyRecord, req)) {
@@ -684,14 +733,14 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     const arcContext = this.meta(req);
     const user = req.user as UserLike | undefined;
 
-    const existing = await this.accessControl.fetchWithAccessControl<TDoc>(
+    const { doc: existing, reason: deleteReason } = await this.accessControl.fetchDetailed<TDoc>(
       id,
       req,
       this.repository,
     );
 
     if (!existing) {
-      return { success: false, error: "Resource not found", status: 404 };
+      return this.notFoundResponse(deleteReason);
     }
 
     if (!this.accessControl.checkOwnership(existing as AnyRecord, req)) {

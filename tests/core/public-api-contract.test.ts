@@ -111,7 +111,7 @@ describe("Public API Contract", () => {
       },
       {
         subpath: "@classytic/arc/core",
-        symbols: ["createCrudRouter", "defineResource", "createActionRouter"],
+        symbols: ["createCrudRouter", "defineResource"],
       },
       { subpath: "@classytic/arc/factory", symbols: ["createApp"] },
       {

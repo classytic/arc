@@ -51,10 +51,11 @@ describe("Field Permissions", () => {
     it("should strip hidden fields from writes", () => {
       const body = { name: "John", password: "newpass", secret: "new-secret" };
 
-      const result = applyFieldWritePermissions(body, permissions, ["admin"]);
+      const { body: result, deniedFields } = applyFieldWritePermissions(body, permissions, ["admin"]);
       expect(result.name).toBe("John");
       expect(result).not.toHaveProperty("password");
       expect(result).not.toHaveProperty("secret");
+      expect(deniedFields).toEqual(expect.arrayContaining(["password", "secret"]));
     });
   });
 
@@ -105,8 +106,9 @@ describe("Field Permissions", () => {
       const body = { name: "John", salary: 60000 };
 
       // visibleTo doesn't restrict writes
-      const result = applyFieldWritePermissions(body, permissions, ["viewer"]);
+      const { body: result, deniedFields } = applyFieldWritePermissions(body, permissions, ["viewer"]);
       expect(result.salary).toBe(60000);
+      expect(deniedFields).toEqual([]);
     });
   });
 
@@ -123,18 +125,20 @@ describe("Field Permissions", () => {
     it("should allow write when user has matching role", () => {
       const body = { name: "John", role: "editor", isVerified: true };
 
-      const result = applyFieldWritePermissions(body, permissions, ["admin"]);
+      const { body: result, deniedFields } = applyFieldWritePermissions(body, permissions, ["admin"]);
       expect(result.role).toBe("editor");
       expect(result.isVerified).toBe(true);
+      expect(deniedFields).toEqual([]);
     });
 
-    it("should strip field from writes when user lacks role", () => {
+    it("should report denied fields when user lacks role", () => {
       const body = { name: "John", role: "admin", isVerified: true };
 
-      const result = applyFieldWritePermissions(body, permissions, ["viewer"]);
+      const { body: result, deniedFields } = applyFieldWritePermissions(body, permissions, ["viewer"]);
       expect(result.name).toBe("John");
       expect(result).not.toHaveProperty("role");
       expect(result).not.toHaveProperty("isVerified");
+      expect(deniedFields).toEqual(expect.arrayContaining(["role", "isVerified"]));
     });
 
     it("should NOT affect reads (writableBy is write-only)", () => {
@@ -149,8 +153,9 @@ describe("Field Permissions", () => {
     it("should only strip fields present in the body", () => {
       const body = { name: "John" }; // role is not in body
 
-      const result = applyFieldWritePermissions(body, permissions, ["viewer"]);
+      const { body: result, deniedFields } = applyFieldWritePermissions(body, permissions, ["viewer"]);
       expect(result).toEqual({ name: "John" });
+      expect(deniedFields).toEqual([]);
     });
   });
 
@@ -197,8 +202,9 @@ describe("Field Permissions", () => {
     it("should NOT affect writes (redactFor is read-only)", () => {
       const body = { email: "new@example.com" };
 
-      const result = applyFieldWritePermissions(body, permissions, ["viewer"]);
+      const { body: result, deniedFields } = applyFieldWritePermissions(body, permissions, ["viewer"]);
       expect(result.email).toBe("new@example.com");
+      expect(deniedFields).toEqual([]);
     });
   });
 
@@ -248,16 +254,18 @@ describe("Field Permissions", () => {
       };
 
       // Admin can write role but not password
-      const adminResult = applyFieldWritePermissions(body, permissions, ["admin"]);
-      expect(adminResult).not.toHaveProperty("password");
-      expect(adminResult.role).toBe("admin");
-      expect(adminResult.email).toBe("new@example.com");
+      const adminRes = applyFieldWritePermissions(body, permissions, ["admin"]);
+      expect(adminRes.body).not.toHaveProperty("password");
+      expect(adminRes.body.role).toBe("admin");
+      expect(adminRes.body.email).toBe("new@example.com");
+      expect(adminRes.deniedFields).toEqual(["password"]);
 
       // Viewer can't write password or role
-      const viewerResult = applyFieldWritePermissions(body, permissions, ["viewer"]);
-      expect(viewerResult).not.toHaveProperty("password");
-      expect(viewerResult).not.toHaveProperty("role");
-      expect(viewerResult.email).toBe("new@example.com");
+      const viewerRes = applyFieldWritePermissions(body, permissions, ["viewer"]);
+      expect(viewerRes.body).not.toHaveProperty("password");
+      expect(viewerRes.body).not.toHaveProperty("role");
+      expect(viewerRes.body.email).toBe("new@example.com");
+      expect(viewerRes.deniedFields).toEqual(expect.arrayContaining(["password", "role"]));
     });
   });
 
@@ -349,13 +357,20 @@ describe("Field Permissions", () => {
       // effectiveRoles = ['superadmin'] — does NOT include 'admin'
       expect(effectiveRoles).toEqual(["superadmin"]);
 
-      const result = applyFieldWritePermissions(body, jobFieldPermissions, effectiveRoles);
+      const { body: result, deniedFields } = applyFieldWritePermissions(body, jobFieldPermissions, effectiveRoles);
 
       // BUG: without bypass check, all assignment fields are stripped
       expect(result).not.toHaveProperty("assignedDeliveryManagers");
       expect(result).not.toHaveProperty("assignedAccountManagers");
       expect(result).not.toHaveProperty("assignedRecruiters");
       expect(result.title).toBe("React Dev");
+      expect(deniedFields).toEqual(
+        expect.arrayContaining([
+          "assignedDeliveryManagers",
+          "assignedAccountManagers",
+          "assignedRecruiters",
+        ]),
+      );
     });
 
     it("should preserve writableBy fields for regular org admin", () => {
@@ -371,12 +386,13 @@ describe("Field Permissions", () => {
       const effectiveRoles = resolveEffectiveRoles(["user"], ["admin"]);
       expect(effectiveRoles).toContain("admin");
 
-      const result = applyFieldWritePermissions(body, jobFieldPermissions, effectiveRoles);
+      const { body: result, deniedFields } = applyFieldWritePermissions(body, jobFieldPermissions, effectiveRoles);
 
       // All fields preserved — 'admin' is in writableBy lists
       expect(result.assignedDeliveryManagers).toEqual(["user-id-1"]);
       expect(result.assignedAccountManagers).toEqual([]);
       expect(result.assignedRecruiters).toEqual([]);
+      expect(deniedFields).toEqual([]);
     });
 
     it("should preserve writableBy fields for delivery_manager role", () => {
@@ -387,10 +403,11 @@ describe("Field Permissions", () => {
       };
 
       const effectiveRoles = resolveEffectiveRoles(["user"], ["delivery_manager"]);
-      const result = applyFieldWritePermissions(body, jobFieldPermissions, effectiveRoles);
+      const { body: result, deniedFields } = applyFieldWritePermissions(body, jobFieldPermissions, effectiveRoles);
 
       expect(result.assignedDeliveryManagers).toEqual(["dm-id"]);
       expect(result.assignedAccountManagers).toEqual(["am-id"]);
+      expect(deniedFields).toEqual([]);
     });
 
     it("should strip DM/AM fields for account_manager role", () => {
@@ -402,12 +419,15 @@ describe("Field Permissions", () => {
       };
 
       const effectiveRoles = resolveEffectiveRoles(["user"], ["account_manager"]);
-      const result = applyFieldWritePermissions(body, jobFieldPermissions, effectiveRoles);
+      const { body: result, deniedFields } = applyFieldWritePermissions(body, jobFieldPermissions, effectiveRoles);
 
       // AM can only write recruiters, not DM or AM assignments
       expect(result).not.toHaveProperty("assignedDeliveryManagers");
       expect(result).not.toHaveProperty("assignedAccountManagers");
       expect(result.assignedRecruiters).toEqual(["recruiter-id"]);
+      expect(deniedFields).toEqual(
+        expect.arrayContaining(["assignedDeliveryManagers", "assignedAccountManagers"]),
+      );
     });
   });
 });

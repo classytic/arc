@@ -39,10 +39,10 @@
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
 import type {
-  AdditionalRoute,
   AnyRecord,
   MiddlewareConfig,
   PresetHook,
+  RouteDefinition,
   RouteSchemaOptions,
 } from "../types/index.js";
 
@@ -51,8 +51,8 @@ import type {
 // ---------------------------------------------------------------------------
 
 export interface PluginResourceResult {
-  /** Additional routes to add to the resource */
-  additionalRoutes?: AdditionalRoute[];
+  /** Additional routes to add to the resource (v2.8 `RouteDefinition` shape) */
+  routes?: RouteDefinition[];
   /** Middlewares per operation */
   middlewares?: MiddlewareConfig;
   /** Hooks to register */

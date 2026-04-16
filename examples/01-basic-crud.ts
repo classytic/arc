@@ -71,11 +71,11 @@ export const productResource = defineResource({
   permissions: permissions.publicReadAdminWrite(),
 
   // Custom routes
-  additionalRoutes: [
+  routes: [
     {
       method: 'GET',
       path: '/search',
-      wrapHandler: false,
+      raw: true,
       permissions: allowPublic(),
       summary: 'Search products by name',
       handler: async (req, reply) => {

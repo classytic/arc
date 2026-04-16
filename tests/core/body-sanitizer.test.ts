@@ -14,7 +14,10 @@ import type { IRequestContext, RouteSchemaOptions } from "../../src/types/index.
 // ============================================================================
 
 function createSanitizer(schemaOptions: RouteSchemaOptions = {}) {
-  return new BodySanitizer({ schemaOptions });
+  // Legacy 'strip' policy — these tests cover the mechanics of which fields
+  // are stripped. The default-reject policy is covered in
+  // tests/security/field-write-denied.test.ts.
+  return new BodySanitizer({ schemaOptions, onFieldWriteDenied: "strip" });
 }
 
 function createReq(overrides: Partial<IRequestContext> = {}): IRequestContext {

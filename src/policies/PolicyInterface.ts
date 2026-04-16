@@ -58,21 +58,21 @@ export interface PolicyResult {
   reason?: string;
 
   /**
-   * Query filters to apply (for list operations)
+   * Query filters to apply (for list operations).
+   *
+   * Values are `unknown` because filter dialects differ (MongoDB operator
+   * objects, SQL WHERE AST, structured DSLs) — adapters narrow at the edge.
    *
    * @example
    * ```typescript
    * // Multi-tenant filter
    * { organizationId: user.organizationId }
    *
-   * // Ownership filter
-   * { userId: user.id }
-   *
    * // Complex filter
    * { $or: [{ public: true }, { createdBy: user.id }] }
    * ```
    */
-  filters?: Record<string, any>;
+  filters?: Record<string, unknown>;
 
   /**
    * Fields to include/exclude in response
@@ -92,7 +92,7 @@ export interface PolicyResult {
   };
 
   /**
-   * Additional context for downstream middleware
+   * Additional context for downstream middleware.
    *
    * @example
    * ```typescript
@@ -102,39 +102,32 @@ export interface PolicyResult {
    * }
    * ```
    */
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 /**
- * Policy context provided to can() method
+ * Policy context provided to `can()`.
+ *
+ * Fields are `unknown` by design: the shape depends on the adapter and the
+ * operation (e.g. `document` is the repository's row type, `body` is the
+ * wire DTO). Implementations narrow at the call site with a type guard or
+ * generic — this is the only honest contract across adapters.
  */
 export interface PolicyContext {
-  /**
-   * The document being accessed (for update/delete/get)
-   * Populated by fetchDocument middleware
-   */
-  document?: any;
+  /** The document being accessed (for update/delete/get). Populated by fetchDocument middleware. */
+  document?: unknown;
 
-  /**
-   * Request body (for create/update)
-   */
-  body?: any;
+  /** Request body (for create/update). */
+  body?: unknown;
 
-  /**
-   * Request params (e.g., :id from route)
-   */
-  params?: any;
+  /** Request params (e.g., `:id` from route). */
+  params?: unknown;
 
-  /**
-   * Request query parameters
-   */
-  query?: any;
+  /** Request query parameters. */
+  query?: unknown;
 
-  /**
-   * Additional app-specific context
-   * Can include anything your policy needs to make decisions
-   */
-  [key: string]: any;
+  /** Additional app-specific context keyed by policy-defined names. */
+  [key: string]: unknown;
 }
 
 /**
@@ -243,7 +236,11 @@ export interface PolicyEngine {
    * }
    * ```
    */
-  can(user: any, operation: string, context?: PolicyContext): PolicyResult | Promise<PolicyResult>;
+  can(
+    user: unknown,
+    operation: string,
+    context?: PolicyContext,
+  ): PolicyResult | Promise<PolicyResult>;
 
   /**
    * Generate Fastify middleware for this policy
@@ -287,7 +284,7 @@ export interface PolicyEngine {
  * });
  * ```
  */
-export type PolicyFactory<TConfig = any> = (config: TConfig) => PolicyEngine;
+export type PolicyFactory<TConfig = unknown> = (config: TConfig) => PolicyEngine;
 
 /**
  * Extended Fastify request with policy result

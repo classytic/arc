@@ -546,7 +546,7 @@ Default is `'_id'`. Override for resources keyed by a business identifier (UUID,
 defineResource({
   name: 'job',
   adapter: createMongooseAdapter(JobModel, jobRepository),
-  idField: 'jobId',     // ← one line
+  idField: 'jobId',     // ← one line (or omit and auto-derive from repository.idField — see below)
 });
 
 // GET /jobs/job-5219f346-a4d  → controller runs { jobId: 'job-5219f346-a4d' }
@@ -559,7 +559,22 @@ Changes all three layers:
 - **OpenAPI docs** — `spec.paths['/jobs/{id}']` emits a plain string `id` with description
 - **MCP tools** — auto-generated CRUD tools use `idField` transparently
 
-URL path segment stays `:id` (not `:jobId`) — clients send the ID value, Arc maps it server-side. User-provided `openApiSchemas.params` still overrides everything.
+**Auto-derive from repository** (2.7.x+). If you don't set `idField` on `defineResource` but your `adapter.repository` exposes one (e.g. `new Repository(Model, [], {}, { idField: 'slug' })`), Arc picks it up automatically. Configure in one place, not two.
+
+**URL path segment is ALWAYS `:id` and `req.params.id` is ALWAYS named `id`** — regardless of what `idField` is set to. `idField` controls the *lookup field*, not the *URL parameter name*. This is the same convention Stripe / GitHub / most REST APIs use:
+
+```typescript
+// idField: 'slug'
+// Client sends:  POST /agents/sadman/action
+// In handler:    req.params.id === 'sadman'       ← always keyed 'id'
+//                repo.update(id, data)             ← mongokit resolves by slug via repo.idField
+```
+
+This applies to CRUD routes (`GET/PATCH/DELETE /:id`), action routes (`POST /:id/action`), and any `routes: [...]` entries that use `:id`.
+
+**Common confusion pattern.** A 404 on `PATCH /agents/sadman` when `GET /agents/sadman` returns 200 looks like an `idField` bug but usually isn't. Check whether your **update permission** returns `filters` — arc merges those into the compound DB lookup (`{ slug: 'sadman', ...filters }`), and a filter that excludes the doc is what's returning null. Fix is in the permission, not `idField`.
+
+User-provided `openApiSchemas.params` still overrides everything.
 
 For custom adapters, honor the new `AdapterSchemaContext` passed to `generateSchemas(options, context?)` to emit the right `params.id` pattern from the start. Legacy adapters still work — Arc's safety net strips mismatched ObjectId patterns automatically.
 

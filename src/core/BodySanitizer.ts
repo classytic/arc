@@ -17,14 +17,32 @@ import type {
   IRequestContext,
   RouteSchemaOptions,
 } from "../types/index.js";
+import { ForbiddenError } from "../utils/errors.js";
 
 // ============================================================================
 // Configuration
 // ============================================================================
 
+/**
+ * Policy for handling fields the caller lacks write permission for.
+ *
+ * - `'reject'` (default, secure): throw 403 listing the denied fields so
+ *   misconfigurations and attacks surface instead of silently disappearing.
+ * - `'strip'` (legacy): silently drop the field and continue. Preserved for
+ *   apps that relied on the pre-2.9 behaviour — new code should not use it.
+ */
+export type FieldWriteDenialPolicy = "reject" | "strip";
+
+export const DEFAULT_FIELD_WRITE_DENIAL_POLICY: FieldWriteDenialPolicy = "reject";
+
 export interface BodySanitizerConfig {
   /** Schema options for field sanitization */
   schemaOptions: RouteSchemaOptions;
+  /**
+   * What to do when a request contains fields the caller can't write.
+   * Default: `'reject'` — surface the misconfiguration as a 403.
+   */
+  onFieldWriteDenied?: FieldWriteDenialPolicy;
 }
 
 // ============================================================================
@@ -33,9 +51,11 @@ export interface BodySanitizerConfig {
 
 export class BodySanitizer {
   private schemaOptions: RouteSchemaOptions;
+  private onFieldWriteDenied: FieldWriteDenialPolicy;
 
   constructor(config: BodySanitizerConfig) {
     this.schemaOptions = config.schemaOptions;
+    this.onFieldWriteDenied = config.onFieldWriteDenied ?? DEFAULT_FIELD_WRITE_DENIAL_POLICY;
   }
 
   /**
@@ -70,10 +90,10 @@ export class BodySanitizer {
       }
     }
 
-    // Apply field-level write permissions (strip fields user can't write)
-    // Merges global user roles with org roles for org-scoped resources
-    // Elevated scope (platform admin) skips field restrictions --
-    // consistent with requireOrgRole() which also bypasses for elevated scope.
+    // Apply field-level write permissions.
+    // Merges global user roles with org roles for org-scoped resources.
+    // Elevated scope (platform admin) skips field restrictions — consistent
+    // with requireOrgRole() which also bypasses for elevated scope.
     if (req) {
       const arcContext = meta ?? (req.metadata as ArcInternalMetadata | undefined);
       const scope = arcContext?._scope ?? PUBLIC_SCOPE;
@@ -83,7 +103,17 @@ export class BodySanitizer {
           const globalRoles = getUserRoles(req.user as Record<string, unknown> | undefined);
           const orgRoles = isMember(scope) ? scope.orgRoles : [];
           const effectiveRoles = resolveEffectiveRoles(globalRoles, orgRoles);
-          sanitized = applyFieldWritePermissions(sanitized, fieldPerms, effectiveRoles);
+          const { body: filtered, deniedFields } = applyFieldWritePermissions(
+            sanitized,
+            fieldPerms,
+            effectiveRoles,
+          );
+          if (deniedFields.length > 0 && this.onFieldWriteDenied === "reject") {
+            throw new ForbiddenError(
+              `Not permitted to write field${deniedFields.length === 1 ? "" : "s"}: ${deniedFields.join(", ")}`,
+            );
+          }
+          sanitized = filtered;
         }
       }
     }

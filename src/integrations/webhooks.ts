@@ -128,6 +128,11 @@ export interface VerifySignatureOptions {
  * Works with Arc's own `signPayload` format by default (`sha256=<hex>`),
  * but configurable for any HMAC scheme via options.
  *
+ * ⚠ The `body` argument must be the exact bytes the sender signed. Fastify
+ * parses JSON bodies by default and the re-serialised object will NOT match
+ * the original signature. Register `@fastify/raw-body` or use `preParsing`
+ * to capture `req.rawBody`, then pass that here.
+ *
  * @param body      - Raw request body (string or Buffer — must be the exact bytes the sender signed)
  * @param secret    - Shared secret between sender and receiver
  * @param signature - The signature header value (e.g. `req.headers['x-webhook-signature']`)
@@ -164,6 +169,17 @@ export function verifySignature(
   signature: string | undefined,
   options?: VerifySignatureOptions,
 ): boolean {
+  // Guard against the most common footgun: passing `req.body` (a parsed object)
+  // instead of `req.rawBody` (the exact bytes the sender signed). Fastify
+  // re-serialises JSON, so the HMAC would never match and the failure would
+  // look like a wrong secret. Throw so the misuse surfaces at the call site.
+  if (typeof body !== "string" && !Buffer.isBuffer(body)) {
+    throw new TypeError(
+      "verifySignature: body must be a string or Buffer (the exact bytes the sender signed). " +
+        "Register @fastify/raw-body and pass req.rawBody — not req.body.",
+    );
+  }
+
   if (!signature) return false;
 
   const prefix = options?.prefix ?? "sha256=";
