@@ -39,6 +39,8 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
+import type { RepositoryLike } from "../adapters/interface.js";
+import { repositoryAsIdempotencyStore } from "./repository-idempotency-adapter.js";
 import type { IdempotencyStore } from "./stores/interface.js";
 import { createIdempotencyResult } from "./stores/interface.js";
 import { MemoryIdempotencyStore } from "./stores/memory.js";
@@ -58,7 +60,23 @@ export interface IdempotencyPluginOptions {
   include?: RegExp[];
   /** URL patterns to exclude (regex). Excluded patterns take precedence */
   exclude?: RegExp[];
-  /** Custom store (default: MemoryIdempotencyStore) */
+  /**
+   * Repository managing the idempotency collection. Arc consumes it directly
+   * — no wrapper classes. Requires `getOne`, `deleteMany`, and
+   * `findOneAndUpdate` (mongokit ≥3.8 implements all three). Pass any
+   * `RepositoryLike` that matches.
+   *
+   * Use `store` (below) when your backend isn't a repository (Redis, memory
+   * for tests, custom). `repository` takes precedence when both are passed.
+   */
+  repository?: RepositoryLike;
+  /**
+   * Non-repository store. Use for Redis (the canonical multi-instance
+   * backend when you don't already have a DB repository), memory (tests),
+   * or custom implementations of `IdempotencyStore`.
+   *
+   * Default: `MemoryIdempotencyStore`.
+   */
   store?: IdempotencyStore;
   /** Retry-After header value in seconds when request is in-flight (default: 1) */
   retryAfterSeconds?: number;
@@ -122,10 +140,19 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     methods = ["POST", "PUT", "PATCH"],
     include,
     exclude,
-    store = new MemoryIdempotencyStore({ ttlMs }),
+    repository,
+    store: explicitStore,
     retryAfterSeconds = 1,
     namespace,
   } = opts;
+
+  // Resolve the store:
+  //   1. If `repository` is passed → consume it directly (inline adapter).
+  //   2. Else if `store` is passed → use it.
+  //   3. Else default to MemoryIdempotencyStore for dev/tests.
+  const store: IdempotencyStore = repository
+    ? repositoryAsIdempotencyStore(repository, ttlMs)
+    : (explicitStore ?? new MemoryIdempotencyStore({ ttlMs }));
 
   // Skip if not enabled
   if (!enabled) {

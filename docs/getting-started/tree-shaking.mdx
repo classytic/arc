@@ -77,12 +77,14 @@ import { RedisStreamTransport } from '@classytic/arc/events/redis-stream';
 // OpenTelemetry tracing (requires: @opentelemetry/*)
 import { tracingPlugin } from '@classytic/arc/plugins/tracing';
 
-// MongoDB audit store (requires: mongoose)
-import { MongoAuditStore } from '@classytic/arc/audit/mongodb';
-
-// Redis/MongoDB idempotency stores
+// Redis idempotency store
 import { RedisIdempotencyStore } from '@classytic/arc/idempotency/redis';
-import { MongoIdempotencyStore } from '@classytic/arc/idempotency/mongodb';
+
+// Persistent audit / idempotency / outbox — pass a RepositoryLike:
+//   await fastify.register(auditPlugin, { repository: new Repository(AuditModel) });
+//   await fastify.register(idempotencyPlugin, { repository: new Repository(IdempotencyModel, [...]) });
+//   new EventOutbox({ repository: new Repository(OutboxModel), transport });
+// The kit (mongokit / prismakit / custom) decides which driver gets bundled.
 ```
 
 ### Tier 4: Persistent Runtime Only (NOT Serverless)
@@ -114,11 +116,9 @@ import { streamlinePlugin } from '@classytic/arc/integrations/streamline';
 | `@classytic/arc/events/redis-stream` | ioredis | Yes | Redis Streams transport |
 | `@classytic/arc/plugins` | none | Yes | Fastify plugins (no tracing) |
 | `@classytic/arc/plugins/tracing` | @opentelemetry/* | Yes | OpenTelemetry tracing |
-| `@classytic/arc/audit` | none | Yes | Audit trail (memory store) |
-| `@classytic/arc/audit/mongodb` | mongoose | Yes | MongoDB audit store |
-| `@classytic/arc/idempotency` | none | Yes | Idempotency (memory store) |
+| `@classytic/arc/audit` | none | Yes | Audit trail (memory + `repository` option) |
+| `@classytic/arc/idempotency` | none | Yes | Idempotency (memory + `repository` option) |
 | `@classytic/arc/idempotency/redis` | ioredis | Yes | Redis idempotency store |
-| `@classytic/arc/idempotency/mongodb` | mongoose | Yes | MongoDB idempotency store |
 | `@classytic/arc/auth` | @fastify/jwt or better-auth | Yes | Authentication |
 | `@classytic/arc/org` | none | Yes | Multi-tenant org scoping |
 | `@classytic/arc/testing` | mongodb-memory-server | N/A | Test utilities |

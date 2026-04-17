@@ -1,26 +1,30 @@
 /**
  * Audit Module
  *
- * Optional audit trail with flexible storage options.
- * - MemoryAuditStore: In-process (dev/testing)
- * - MongoAuditStore: MongoDB (production)
+ * Arc's audit plugin consumes a `RepositoryLike` **directly** — no wrapper
+ * classes, no aliases, no proxy stores. Pass your repository (mongokit's
+ * `Repository`, prismakit's repo, custom) to the plugin and arc calls
+ * `repository.create()` + `repository.findAll()` under the hood.
  *
  * @example
+ * ```ts
  * import { auditPlugin } from '@classytic/arc/audit';
+ * import { Repository } from '@classytic/mongokit';
  *
- * // Enable audit with MongoDB storage
  * await fastify.register(auditPlugin, {
  *   enabled: true,
- *   stores: ['mongodb'],
- *   mongoConnection: mongoose.connection,
+ *   repository: new Repository(AuditEntryModel),
  * });
  *
- * // Use in handlers
- * fastify.post('/products', async (request, reply) => {
+ * fastify.post('/products', async (request) => {
  *   const product = await createProduct(request.body);
  *   await fastify.audit.create('product', product._id, product, request.auditContext);
  *   return { success: true, data: product };
  * });
+ * ```
+ *
+ * For non-repository backends (Kafka, S3, custom exporters), implement the
+ * `AuditStore` interface and pass via `customStores: [...]`.
  */
 
 export type { AuditLogger, AuditPluginOptions } from "./auditPlugin.js";
@@ -29,13 +33,6 @@ export {
   auditPlugin as auditPluginFn,
   default as auditPlugin,
 } from "./auditPlugin.js";
-
-// Core stores (lightweight, no external deps)
-export { createAuditEntry, MemoryAuditStore } from "./stores/index.js";
-
-// MongoDB store — use dedicated subpath to avoid pulling mongoose:
-//   import { MongoAuditStore } from '@classytic/arc/audit/mongodb';
-
 export type {
   AuditAction,
   AuditContext,
@@ -44,5 +41,9 @@ export type {
   AuditStore,
   AuditStoreOptions,
   MemoryAuditStoreOptions,
-  MongoAuditStoreOptions,
+} from "./stores/index.js";
+// Stores — memory for tests, plus the AuditStore interface for custom backends.
+export {
+  createAuditEntry,
+  MemoryAuditStore,
 } from "./stores/index.js";

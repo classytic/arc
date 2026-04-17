@@ -2,7 +2,7 @@
  * Idempotency Plugin — end-to-end integration tests
  *
  * Proves the full round-trip: HTTP request → idempotency plugin → store →
- * cached replay. Uses both MemoryIdempotencyStore and MongoIdempotencyStore
+ * cached replay. Uses both MemoryIdempotencyStore and a mongokit Repository
  * to cover the two real-world backends.
  *
  * Scenarios:
@@ -17,12 +17,17 @@
  * 9. Mongo store integration — first-lock bug regression
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  batchOperationsPlugin,
+  methodRegistryPlugin,
+  mongoOperationsPlugin,
+  Repository,
+} from "@classytic/mongokit";
 import Fastify, { type FastifyInstance } from "fastify";
-import { MongoClient } from "mongodb";
+import mongoose, { type Model, Schema } from "mongoose";
 import { MongoMemoryServer } from "mongodb-memory-server";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { idempotencyPlugin } from "../../src/idempotency/idempotencyPlugin.js";
-import { MongoIdempotencyStore } from "../../src/idempotency/stores/mongodb.js";
 
 // ============================================================================
 // Test app factory — registers plugin + a simple POST /orders endpoint
@@ -186,33 +191,40 @@ describe("idempotencyPlugin + MemoryStore — e2e", () => {
 // 2. Mongo store — regression test for first-lock bug
 // ============================================================================
 
-describe("idempotencyPlugin + MongoIdempotencyStore — e2e", () => {
+describe("idempotencyPlugin + repository (mongokit) — e2e", () => {
   let mongod: MongoMemoryServer;
-  let client: MongoClient;
   let app: FastifyInstance;
+  let IdempotencyModel: Model<Record<string, unknown>>;
 
   beforeAll(async () => {
     mongod = await MongoMemoryServer.create();
-    client = await MongoClient.connect(mongod.getUri());
-    const db = client.db("idemp-e2e");
+    await mongoose.connect(mongod.getUri());
 
-    const store = new MongoIdempotencyStore({
-      connection: { db },
-      collection: "idemp_e2e",
-      ttlMs: 60_000,
-    });
-    await new Promise((r) => setTimeout(r, 100));
+    // Open schema — idempotency stores serialize arbitrary response shapes.
+    const schema = new Schema({}, { strict: false, _id: false });
+    IdempotencyModel =
+      mongoose.models.IdempotencyE2e ||
+      mongoose.model("IdempotencyE2e", schema, "idemp_e2e");
 
-    app = await buildApp({ store });
+    // Pass the repository DIRECTLY to the plugin — no wrapper class.
+    // mongokit 3.8+ implements findOneAndUpdate; the plugin uses it for
+    // atomic tryLock / set semantics.
+    const repo = new Repository(IdempotencyModel, [
+      methodRegistryPlugin(),
+      batchOperationsPlugin(),
+      mongoOperationsPlugin(),
+    ]);
+
+    app = await buildApp({ repository: repo });
   });
 
   afterAll(async () => {
     await app?.close();
-    await client?.close();
+    await mongoose.disconnect();
     await mongod?.stop();
   });
 
-  it("first request with Mongo store succeeds (regression: was 409 before fix)", async () => {
+  it("first request with repository-backed idempotency succeeds (regression: was 409 before fix)", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/orders",
@@ -229,7 +241,7 @@ describe("idempotencyPlugin + MongoIdempotencyStore — e2e", () => {
     expect(res.headers["x-idempotency-replayed"]).toBeUndefined();
   });
 
-  it("replay with Mongo store returns cached response", async () => {
+  it("replay via repository returns cached response", async () => {
     const first = await app.inject({
       method: "POST",
       url: "/orders",

@@ -24,7 +24,8 @@
  * import { healthPlugin } from '@classytic/arc/plugins';
  * import { RedisEventTransport } from '@classytic/arc/events/redis';
  * import { tracingPlugin } from '@classytic/arc/plugins/tracing';
- * import { MongoAuditStore } from '@classytic/arc/audit/mongodb';
+ * import { auditPlugin } from '@classytic/arc/audit';
+ * // audit accepts a RepositoryLike directly — no adapter import needed
  * ```
  *
  * ## Subpath Exports
@@ -42,11 +43,9 @@
  * | `@classytic/arc/events/redis-stream` | Redis Streams transport (requires ioredis) |
  * | `@classytic/arc/plugins` | Fastify plugins (health, requestId, etc.) |
  * | `@classytic/arc/plugins/tracing` | OpenTelemetry tracing (requires @opentelemetry/*) |
- * | `@classytic/arc/audit` | Audit trail (MemoryStore only) |
- * | `@classytic/arc/audit/mongodb` | MongoDB audit store (requires mongoose) |
- * | `@classytic/arc/idempotency` | Idempotency (MemoryStore only) |
- * | `@classytic/arc/idempotency/redis` | Redis idempotency store (requires ioredis) |
- * | `@classytic/arc/idempotency/mongodb` | MongoDB idempotency store (requires mongoose) |
+ * | `@classytic/arc/audit` | Audit trail — accepts any `RepositoryLike` directly |
+ * | `@classytic/arc/idempotency` | Idempotency — accepts any `RepositoryLike` directly |
+ * | `@classytic/arc/idempotency/redis` | Redis idempotency store (non-repository backend) |
  * | `@classytic/arc/utils` | Utilities (errors, state machine, circuit breaker) |
  * | `@classytic/arc/org` | Organization/multi-tenant |
  * | `@classytic/arc/auth` | Authentication (JWT, Better Auth) |

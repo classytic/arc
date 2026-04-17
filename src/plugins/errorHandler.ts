@@ -90,6 +90,20 @@ export interface ErrorHandlerOptions {
    * ```
    */
   errorMappers?: ErrorMapper[];
+
+  /**
+   * Classify an error as a duplicate-key / unique-constraint violation →
+   * mapped to `409 Conflict` with `code: "DUPLICATE_KEY"`.
+   *
+   * Mirrors `RepositoryLike.isDuplicateKeyError` for the Fastify layer: errors
+   * that escape a controller (custom routes, user hooks, raw driver calls)
+   * still land here, so the classifier is duplicated at the edge. Defaults
+   * cover MongoDB (`code 11000` / `codeName "DuplicateKey"`), Prisma
+   * (`code "P2002"`), and Postgres (`code "23505"`). Override to add other
+   * backends (DynamoDB `ConditionalCheckFailedException`, etc.) or to disable
+   * the built-in detection.
+   */
+  isDuplicateKeyError?: (err: unknown) => boolean;
 }
 
 interface ErrorResponse {
@@ -102,12 +116,85 @@ interface ErrorResponse {
   stack?: string;
 }
 
+/**
+ * Default duplicate-key detector covering the mainstream drivers arc sees
+ * most. Detection is strictly by known driver codes — never by message
+ * string matching — because false positives on dup-key silently mask real
+ * errors (WriteConflict, NotWritablePrimary, etc.) as 409s. For long-tail
+ * drivers (Neo4j, MSSQL, DynamoDB, custom kits), compose rather than
+ * replace:
+ *
+ * ```ts
+ * import { defaultIsDuplicateKeyError } from '@classytic/arc/plugins';
+ *
+ * errorHandler: {
+ *   isDuplicateKeyError: (err) =>
+ *     defaultIsDuplicateKeyError(err) || isNeo4jDupKey(err),
+ * }
+ * ```
+ *
+ * Drizzle apps get coverage transitively (Drizzle doesn't wrap driver
+ * errors — pg/mysql2/better-sqlite3 codes propagate as-is). Neon is
+ * Postgres-wire-compatible → `23505` covers `@neondatabase/serverless`.
+ */
+export function defaultIsDuplicateKeyError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { code?: number | string; codeName?: string; errno?: number };
+  // MongoDB — native driver error
+  if (e.code === 11000 || e.codeName === "DuplicateKey") return true;
+  // Prisma — PrismaClientKnownRequestError
+  if (e.code === "P2002") return true;
+  // Postgres (pg, postgres.js, Neon serverless) — `unique_violation`
+  if (e.code === "23505") return true;
+  // MySQL / MariaDB (mysql, mysql2) — `ER_DUP_ENTRY`
+  if (e.code === "ER_DUP_ENTRY" || e.errno === 1062) return true;
+  // SQLite (better-sqlite3, node-sqlite3) — match the SPECIFIC uniqueness
+  // constraint only. `SQLITE_CONSTRAINT` alone also covers NOT NULL / CHECK
+  // / FOREIGN KEY violations, which should stay 500s.
+  if (e.code === "SQLITE_CONSTRAINT_UNIQUE" || e.code === "SQLITE_CONSTRAINT_PRIMARYKEY") {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Extract the duplicate-field names for the `details.duplicateFields`
+ * response. Only called when the caller has opted into detail exposure
+ * (`includeStack: true`) — shape differs per driver.
+ */
+function extractDuplicateFields(err: unknown): string[] | null {
+  if (!err || typeof err !== "object") return null;
+  const e = err as {
+    keyValue?: Record<string, unknown>;
+    meta?: { target?: unknown };
+    constraint?: unknown;
+  };
+  // MongoDB: `err.keyValue = { email: 'a@b.com' }`
+  if (e.keyValue && typeof e.keyValue === "object") {
+    return Object.keys(e.keyValue);
+  }
+  // Prisma: `err.meta.target = ['email']` or `'Post_slug_key'`
+  if (e.meta?.target) {
+    if (Array.isArray(e.meta.target)) return e.meta.target.map(String);
+    if (typeof e.meta.target === "string") return [e.meta.target];
+  }
+  // Postgres: `err.constraint = 'users_email_key'` — index name, not fields
+  if (typeof e.constraint === "string") return [e.constraint];
+  return null;
+}
+
 async function errorHandlerPluginFn(
   fastify: FastifyInstance,
   options: ErrorHandlerOptions = {},
 ): Promise<void> {
   const isProduction = process.env.NODE_ENV === "production";
-  const { includeStack = !isProduction, onError, errorMap = {}, errorMappers = [] } = options;
+  const {
+    includeStack = !isProduction,
+    onError,
+    errorMap = {},
+    errorMappers = [],
+    isDuplicateKeyError = defaultIsDuplicateKeyError,
+  } = options;
 
   fastify.setErrorHandler(
     async (error: FastifyError | Error, request: FastifyRequest, reply: FastifyReply) => {
@@ -227,16 +314,20 @@ async function errorHandlerPluginFn(
         response.code = "INVALID_ID";
         response.error = "Invalid identifier format";
       }
-      // Handle duplicate key errors (MongoDB)
-      else if (error.name === "MongoServerError" && (error as { code?: number }).code === 11000) {
+      // Handle duplicate key errors (MongoDB 11000, Prisma P2002, Postgres
+      // 23505, or whatever the caller's `isDuplicateKeyError` classifier
+      // recognises). Kept last so more specific branches above win.
+      else if (isDuplicateKeyError(error)) {
         statusCode = 409;
         response.code = "DUPLICATE_KEY";
         response.error = "Resource already exists";
-        const keyValue = (error as { keyValue?: Record<string, unknown> }).keyValue;
 
         // Security: Don't expose schema field names when details are hidden
-        if (keyValue && includeStack) {
-          response.details = { duplicateFields: Object.keys(keyValue) };
+        if (includeStack) {
+          const duplicateFields = extractDuplicateFields(error);
+          if (duplicateFields && duplicateFields.length > 0) {
+            response.details = { duplicateFields };
+          }
         }
       }
 

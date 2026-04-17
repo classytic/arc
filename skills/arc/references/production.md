@@ -65,22 +65,21 @@ await fastify.register(gracefulShutdownPlugin, {
 
 ## Audit Plugin
 
-Change tracking with pluggable storage:
+Change tracking. Pass a `RepositoryLike` for persistence, or omit for in-memory dev:
 
 ```typescript
 import { auditPlugin } from '@classytic/arc/audit';
+import { Repository } from '@classytic/mongokit';
 
-// Development
-await fastify.register(auditPlugin, { enabled: true, stores: ['memory'] });
+// Development (in-memory)
+await fastify.register(auditPlugin, { enabled: true });
 
-// Production
+// Production — any kit (mongokit / prismakit / custom)
 await fastify.register(auditPlugin, {
   enabled: true,
-  stores: ['mongodb'],
-  mongoConnection: mongoose.connection,
-  mongoCollection: 'audit_logs',
-  ttlDays: 90,     // Auto-cleanup via TTL index
+  repository: new Repository(AuditModel),
 });
+// TTL / retention owned by your DB (TTL index on `timestamp`, cron DELETE, etc.)
 
 // Usage
 await fastify.audit.create('product', product._id, product, request.auditContext);
@@ -146,16 +145,18 @@ fetch('/api/orders', {
 **Storage backends:**
 
 ```typescript
-// Memory (default, dev)
+// Memory (default, dev) — omit both `repository` and `store`
 import { MemoryIdempotencyStore } from '@classytic/arc/idempotency';
 
 // Redis (production, multi-instance)
 import { RedisIdempotencyStore } from '@classytic/arc/idempotency/redis';
 store: new RedisIdempotencyStore({ client: redis, prefix: 'idem:', ttlMs: 86400000 })
 
-// MongoDB (production, no Redis)
-import { MongoIdempotencyStore } from '@classytic/arc/idempotency/mongodb';
-store: new MongoIdempotencyStore({ connection: mongoose.connection, collection: 'arc_idempotency', createIndex: true })
+// DB-backed via RepositoryLike (mongokit / prismakit / custom)
+import { Repository, methodRegistryPlugin, batchOperationsPlugin, mongoOperationsPlugin } from '@classytic/mongokit';
+repository: new Repository(IdempotencyModel, [
+  methodRegistryPlugin(), batchOperationsPlugin(), mongoOperationsPlugin(),
+])
 ```
 
 **IdempotencyStore interface:**
@@ -541,20 +542,25 @@ Transactional outbox pattern — at-least-once delivery even if transport is dow
 
 ```typescript
 import { EventOutbox, MemoryOutboxStore } from '@classytic/arc/events';
+import { Repository } from '@classytic/mongokit';
 
+// Dev
+const outbox = new EventOutbox({ store: new MemoryOutboxStore(), transport: redisTransport });
+
+// Production — any RepositoryLike
 const outbox = new EventOutbox({
-  store: new MemoryOutboxStore(),  // or MongoOutboxStore for production
+  repository: new Repository(OutboxModel),
   transport: redisTransport,
 });
 
-// In business logic (same DB transaction)
-await outbox.store(event);
+// In business logic (same DB transaction via `{ session }`)
+await outbox.store(event, { session });
 
 // Relay cron (runs every few seconds)
 const relayed = await outbox.relay();  // publishes pending → transport
 ```
 
-**OutboxStore interface**: `save(event)`, `getPending(limit)`, `acknowledge(eventId)`.
+**OutboxStore interface**: `save(event)`, `getPending(limit)`, `acknowledge(eventId)` (+ optional `claimPending`, `fail`, `getDeadLettered`, `purge`). When you pass `repository`, arc adapts it internally.
 
 ## RPC Service Client — Schema Versioning
 

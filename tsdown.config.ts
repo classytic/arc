@@ -48,20 +48,17 @@ export default defineConfig({
     "src/plugins/tracing-entry.ts",
     "src/plugins/response-cache.ts",
 
-    // Events — barrel (memory-only) + dedicated transport subpaths
+    // Events — barrel (memory + repo-backed outbox) + Redis transport subpaths
     "src/events/index.ts",
     "src/events/transports/redis.ts",
     "src/events/transports/redis-stream-entry.ts",
-    "src/events/transports/mongo-outbox.ts",
 
-    // Audit — barrel (memory-only) + dedicated MongoDB subpath
+    // Audit — single barrel (plugin accepts `repository` directly)
     "src/audit/index.ts",
-    "src/audit/mongodb.ts",
 
-    // Idempotency — barrel (memory-only) + dedicated Redis/MongoDB subpaths
+    // Idempotency — barrel (memory + repo-backed) + dedicated Redis subpath
     "src/idempotency/index.ts",
     "src/idempotency/redis.ts",
-    "src/idempotency/mongodb.ts",
 
     // Docs
     "src/docs/index.ts",

@@ -427,40 +427,36 @@ for (const envelope of dlq) {
 `MemoryOutboxStore` implements all capabilities — use it as a reference when
 writing a durable store for Postgres / DynamoDB / your DB of choice.
 
-### MongoOutboxStore — production durable store
+### Durable store — pass a `RepositoryLike`
 
-For Mongo-backed apps, arc ships the canonical durable store at the
-`@classytic/arc/events/mongo` subpath (mongoose stays an opt-in peer dep —
-apps that don't import it pay nothing):
+Arc adapts any `Repository` (mongokit / prismakit / your own kit) to the
+`OutboxStore` contract — no dedicated subpath, no store class to
+instantiate:
 
 ```typescript
 import mongoose from 'mongoose';
-import { EventOutbox, exponentialBackoff } from '@classytic/arc/events';
-import { MongoOutboxStore } from '@classytic/arc/events/mongo';
+import { Repository } from '@classytic/mongokit';
+import { EventOutbox, exponentialBackoff, createEvent } from '@classytic/arc/events';
+
+const OutboxModel = mongoose.model('ArcOutbox', OutboxSchema, 'arc_outbox_events');
 
 const outbox = new EventOutbox({
-  store: new MongoOutboxStore({
-    connection: mongoose.connection,
-    collectionName: 'arc_outbox_events',     // default
-    retentionMs: 7 * 24 * 60 * 60 * 1000,    // default: 7 days (TTL on delivered docs)
-    onDisconnect: 'throw',                    // 'throw' (prod default) | 'no-op' (dev/test)
-    purgeBatchSize: 500,                      // batched cursor deletion
-  }),
+  repository: new Repository(OutboxModel),
   transport: redisTransport,
   failurePolicy: ({ attempts }) =>
     attempts >= 5 ? { deadLetter: true } : { retryAt: exponentialBackoff({ attempt: attempts }) },
 });
 
-// Inside an HTTP request — persist event in the same DB transaction as the row
+// Persist event in the same DB transaction as the row
 await mongoose.connection.transaction(async (session) => {
   await Order.create([orderDoc], { session });
   await outbox.store(
     createEvent('order.placed', { orderId }, { idempotencyKey: `order:${orderId}:placed` }),
-    { session },   // threaded through to the Mongo driver
+    { session },
   );
 });
 
-// Background relayer (separate process or cron tick)
+// Background relayer
 setInterval(async () => {
   const r = await outbox.relayBatch();
   metrics.gauge('outbox.deadLettered', r.deadLettered);
@@ -470,22 +466,24 @@ setInterval(async () => {
 const dlq = await outbox.getDeadLettered(100);
 ```
 
-**What `MongoOutboxStore` guarantees:**
+**What you get:**
 
-- **Atomic multi-worker claim** — `findOneAndUpdate` with a compound match on
-  `{ status: 'pending', visibleAt ≤ now, lease free }`. Two racing relayers
-  never see the same event. Lease expiry auto-recovers abandoned claims.
-- **Indexed for scale** — `{ status, visibleAt, createdAt }` for claim scans,
-  `{ deliveredAt }` TTL for auto-purge, unique partial `{ dedupeKey }` for
-  `E11000`-backed dedupe, `{ status, _id }` for DLQ reads.
-- **Fails loud by default** — `onDisconnect: 'throw'` surfaces Mongo outages
-  at the write site instead of silently dropping events. Opt into `'no-op'`
-  only for dev/test flows that tolerate event loss.
-- **Session threading** — pass `session` through `save(event, { session })` to
-  commit the event in the same transaction as your business write.
-- **Bounded purge** — `purge(olderThanMs)` deletes delivered docs in
-  cursor-paged batches (default 500), bounding memory + lock time on
-  multi-million-row outboxes.
-- **v2.9 DLQ parity** — tracks `firstFailedAt` / `lastFailedAt` per doc;
-  `getDeadLettered(limit)` returns the same typed `DeadLetteredEvent[]` shape
-  `withRetry` produces.
+- **Atomic multi-worker claim** — arc's adapter uses `findOneAndUpdate`
+  on `{ status: 'pending', visibleAt ≤ now, lease free }`. Two racing
+  relayers never see the same event; expired leases auto-recover.
+- **Session threading** — `outbox.store(event, { session })` flows
+  through `Repository.create(doc, { session })` so the event commits
+  with your business write.
+- **Dedupe** — `meta.idempotencyKey` maps to `dedupeKey`; your kit's
+  unique index (or equivalent) enforces idempotency.
+- **DLQ** — `getDeadLettered(limit)` returns typed `DeadLetteredEvent[]`.
+  `RelayResult.deadLettered` counts per-batch transitions.
+- **Purge** — `outbox.purge(olderThanMs)` deletes delivered rows; define
+  retention via a TTL index (`deliveredAt`), a cron, or a scheduler —
+  your kit's choice.
+
+You own the schema and indexes. Recommended shape:
+`{ eventId (unique), type, payload, meta, status, attempts, leaseOwner,
+leaseExpiresAt, visibleAt, dedupeKey (unique sparse), lastError,
+createdAt, deliveredAt }` with indexes on `{ status, visibleAt }` and
+`{ deliveredAt }` (TTL).

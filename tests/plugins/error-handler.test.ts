@@ -17,7 +17,10 @@
 
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { errorHandlerPlugin } from "../../src/plugins/errorHandler.js";
+import {
+  defaultIsDuplicateKeyError,
+  errorHandlerPlugin,
+} from "../../src/plugins/errorHandler.js";
 import {
   ArcError,
   ForbiddenError,
@@ -308,6 +311,207 @@ describe("Error Handler Plugin", () => {
       const body = JSON.parse(res.body);
       expect(body.code).toBe("DUPLICATE_KEY");
       expect(body.details).toBeUndefined();
+    });
+
+    it("should NOT 409 on other MongoServerError codes (WriteConflict)", async () => {
+      await createApp({ includeStack: false }, (app) => {
+        app.get("/write-conflict", async () => {
+          const err = new Error("WriteConflict") as any;
+          err.name = "MongoServerError";
+          err.code = 112;
+          err.codeName = "WriteConflict";
+          throw err;
+        });
+      });
+
+      const res = await app.inject({ method: "GET", url: "/write-conflict" });
+      expect(res.statusCode).toBe(500);
+      expect(JSON.parse(res.body).code).not.toBe("DUPLICATE_KEY");
+    });
+  });
+
+  // ========================================================================
+  // Cross-DB duplicate-key detection
+  // ========================================================================
+
+  describe("Duplicate Key Error (cross-DB)", () => {
+    it("should detect MongoDB codeName 'DuplicateKey' (no numeric code)", async () => {
+      await createApp({ includeStack: true }, (app) => {
+        app.get("/mongo-codename", async () => {
+          const err = new Error("dup") as any;
+          err.codeName = "DuplicateKey";
+          err.keyValue = { slug: "abc" };
+          throw err;
+        });
+      });
+
+      const res = await app.inject({ method: "GET", url: "/mongo-codename" });
+      expect(res.statusCode).toBe(409);
+      const body = JSON.parse(res.body);
+      expect(body.code).toBe("DUPLICATE_KEY");
+      expect(body.details.duplicateFields).toEqual(["slug"]);
+    });
+
+    it("should detect Prisma P2002 and surface meta.target", async () => {
+      await createApp({ includeStack: true }, (app) => {
+        app.get("/prisma-dup", async () => {
+          const err = new Error("Unique constraint failed on the fields: (`email`)") as any;
+          err.code = "P2002";
+          err.meta = { target: ["email"] };
+          throw err;
+        });
+      });
+
+      const res = await app.inject({ method: "GET", url: "/prisma-dup" });
+      expect(res.statusCode).toBe(409);
+      const body = JSON.parse(res.body);
+      expect(body.code).toBe("DUPLICATE_KEY");
+      expect(body.details.duplicateFields).toEqual(["email"]);
+    });
+
+    it("should detect Postgres 23505 and surface constraint name", async () => {
+      await createApp({ includeStack: true }, (app) => {
+        app.get("/pg-dup", async () => {
+          const err = new Error('duplicate key value violates unique constraint "users_email_key"') as any;
+          err.code = "23505";
+          err.constraint = "users_email_key";
+          throw err;
+        });
+      });
+
+      const res = await app.inject({ method: "GET", url: "/pg-dup" });
+      expect(res.statusCode).toBe(409);
+      const body = JSON.parse(res.body);
+      expect(body.code).toBe("DUPLICATE_KEY");
+      expect(body.details.duplicateFields).toEqual(["users_email_key"]);
+    });
+
+    it("should honor a custom isDuplicateKeyError classifier", async () => {
+      await createApp(
+        {
+          includeStack: true,
+          isDuplicateKeyError: (err: unknown) =>
+            (err as { name?: string })?.name === "ConditionalCheckFailedException",
+        },
+        (app) => {
+          app.get("/dynamo-dup", async () => {
+            const err = new Error("conditional check failed") as any;
+            err.name = "ConditionalCheckFailedException";
+            throw err;
+          });
+        },
+      );
+
+      const res = await app.inject({ method: "GET", url: "/dynamo-dup" });
+      expect(res.statusCode).toBe(409);
+      expect(JSON.parse(res.body).code).toBe("DUPLICATE_KEY");
+    });
+
+    it("custom classifier returning false suppresses the default detector", async () => {
+      await createApp(
+        {
+          includeStack: false,
+          isDuplicateKeyError: () => false,
+        },
+        (app) => {
+          app.get("/opt-out", async () => {
+            const err = new Error("E11000") as any;
+            err.name = "MongoServerError";
+            err.code = 11000;
+            throw err;
+          });
+        },
+      );
+
+      const res = await app.inject({ method: "GET", url: "/opt-out" });
+      expect(res.statusCode).toBe(500);
+      expect(JSON.parse(res.body).code).not.toBe("DUPLICATE_KEY");
+    });
+
+    it("should detect MySQL ER_DUP_ENTRY (mysql2)", async () => {
+      await createApp({ includeStack: false }, (app) => {
+        app.get("/mysql-dup-code", async () => {
+          const err = new Error("Duplicate entry 'a@b.com' for key 'users.email'") as any;
+          err.code = "ER_DUP_ENTRY";
+          err.errno = 1062;
+          throw err;
+        });
+      });
+
+      const res = await app.inject({ method: "GET", url: "/mysql-dup-code" });
+      expect(res.statusCode).toBe(409);
+      expect(JSON.parse(res.body).code).toBe("DUPLICATE_KEY");
+    });
+
+    it("should detect MySQL via errno 1062 when code is absent", async () => {
+      await createApp({ includeStack: false }, (app) => {
+        app.get("/mysql-dup-errno", async () => {
+          const err = new Error("Duplicate entry") as any;
+          err.errno = 1062;
+          throw err;
+        });
+      });
+
+      const res = await app.inject({ method: "GET", url: "/mysql-dup-errno" });
+      expect(res.statusCode).toBe(409);
+    });
+
+    it("should detect SQLite SQLITE_CONSTRAINT_UNIQUE", async () => {
+      await createApp({ includeStack: false }, (app) => {
+        app.get("/sqlite-dup", async () => {
+          const err = new Error("UNIQUE constraint failed: users.email") as any;
+          err.code = "SQLITE_CONSTRAINT_UNIQUE";
+          throw err;
+        });
+      });
+
+      const res = await app.inject({ method: "GET", url: "/sqlite-dup" });
+      expect(res.statusCode).toBe(409);
+      expect(JSON.parse(res.body).code).toBe("DUPLICATE_KEY");
+    });
+
+    it("should NOT match generic SQLITE_CONSTRAINT (FK / NOT NULL / CHECK)", async () => {
+      await createApp({ includeStack: false }, (app) => {
+        app.get("/sqlite-fk", async () => {
+          const err = new Error("FOREIGN KEY constraint failed") as any;
+          err.code = "SQLITE_CONSTRAINT";
+          throw err;
+        });
+      });
+
+      const res = await app.inject({ method: "GET", url: "/sqlite-fk" });
+      expect(res.statusCode).toBe(500);
+      expect(JSON.parse(res.body).code).not.toBe("DUPLICATE_KEY");
+    });
+
+    it("defaultIsDuplicateKeyError is exported and composable", async () => {
+      // Compose for a fictional driver alongside the built-in coverage
+      const isNeo4jDupKey = (err: unknown): boolean =>
+        (err as { code?: string })?.code ===
+        "Neo.ClientError.Schema.ConstraintValidationFailed";
+      const classifier = (err: unknown): boolean =>
+        defaultIsDuplicateKeyError(err) || isNeo4jDupKey(err);
+
+      await createApp({ includeStack: false, isDuplicateKeyError: classifier }, (app) => {
+        app.get("/neo4j-dup", async () => {
+          const err = new Error("constraint violation") as any;
+          err.code = "Neo.ClientError.Schema.ConstraintValidationFailed";
+          throw err;
+        });
+        // Confirm the default still fires through the composed classifier
+        app.get("/mongo-through-compose", async () => {
+          const err = new Error("E11000") as any;
+          err.name = "MongoServerError";
+          err.code = 11000;
+          throw err;
+        });
+      });
+
+      const neo = await app.inject({ method: "GET", url: "/neo4j-dup" });
+      expect(neo.statusCode).toBe(409);
+
+      const mongo = await app.inject({ method: "GET", url: "/mongo-through-compose" });
+      expect(mongo.statusCode).toBe(409);
     });
   });
 

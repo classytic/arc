@@ -1,70 +1,52 @@
 # Audit Module
 
-Audit trail tracking with pluggable storage backends.
+Audit trail tracking. Pass a `RepositoryLike` (mongokit / prismakit /
+your own kit) for persistence, or omit for in-memory dev.
 
 ## Setup
 
 ```typescript
 import { auditPlugin } from '@classytic/arc/audit';
+import { Repository } from '@classytic/mongokit';
+import mongoose, { Schema } from 'mongoose';
 
-// Development: in-memory
+// Development: in-memory (default, no repository passed)
+await fastify.register(auditPlugin, { enabled: true });
+
+// Production: any RepositoryLike
+const AuditModel = mongoose.model(
+  'ArcAuditEntry',
+  new Schema({}, { strict: false, timestamps: false, _id: false }),
+  'audit_logs',
+);
+
 await fastify.register(auditPlugin, {
   enabled: true,
-  stores: ['memory'],
-});
-
-// Production: MongoDB with TTL
-await fastify.register(auditPlugin, {
-  enabled: true,
-  stores: ['mongodb'],
-  mongoConnection: mongoose.connection,
-  ttlDays: 90,
+  repository: new Repository(AuditModel),
 });
 ```
+
+TTL / retention are owned by your DB — create a TTL index on `timestamp`
+(Mongo), a scheduled DELETE job (SQL), or equivalent. Arc no longer
+creates indexes automatically.
 
 ## Configuration
 
 ```typescript
 interface AuditPluginOptions {
-  enabled?: boolean;           // Enable auditing (default: false)
-  stores?: ('memory' | 'mongodb')[];  // Storage backends
-  mongoConnection?: Connection; // Required for mongodb store
-  mongoCollection?: string;    // Collection name (default: 'audit_logs')
-  ttlDays?: number;            // Auto-cleanup after N days (default: 90)
-  customStores?: AuditStore[]; // Custom store implementations
+  enabled?: boolean;              // Enable auditing (default: false)
+  repository?: RepositoryLike;    // Persistent backend (mongokit / prismakit / custom)
+  customStores?: AuditStore[];    // Extra store implementations (fan-out)
+  autoAudit?: {
+    operations?: Array<'create' | 'update' | 'delete' | 'restore'>;
+    perResource?: boolean;        // opt-in per resource via defineResource({ audit })
+  };
 }
 ```
 
-## Storage Backends
-
-### Memory Store (Development)
-
-```typescript
-await fastify.register(auditPlugin, {
-  enabled: true,
-  stores: ['memory'],
-});
-```
-
-- Fast, no persistence
-- Limited by memory
-- **Use for:** Development, testing
-
-### MongoDB Store (Production)
-
-```typescript
-await fastify.register(auditPlugin, {
-  enabled: true,
-  stores: ['mongodb'],
-  mongoConnection: mongoose.connection,
-  mongoCollection: 'audit_logs',
-  ttlDays: 90,
-});
-```
-
-- Persistent, queryable
-- TTL index for auto-cleanup
-- **Use for:** Production, compliance
+- **No repository passed** → in-memory store (dev/test)
+- **`repository` passed** → all writes go to the repo's backing DB
+- **`customStores`** → fan-out to additional sinks (e.g. Loki, S3)
 
 ## Using Audit Logger
 
@@ -161,8 +143,8 @@ await fastify.register(auditPlugin, {
 
 ## Deployment Guide
 
-| Setup | Store | Notes |
-|-------|-------|-------|
-| Single instance | memory | Fast, no persistence |
-| Multi-instance | mongodb | Shared, persistent |
-| Compliance | mongodb + TTL | Auto-cleanup after retention period |
+| Setup | Backend | Notes |
+|-------|---------|-------|
+| Dev / test | in-memory (omit `repository`) | Fast, no persistence |
+| Multi-instance | `repository: new Repository(AuditModel)` | Shared, persistent |
+| Compliance | same + TTL index on `timestamp` | Auto-cleanup after retention |

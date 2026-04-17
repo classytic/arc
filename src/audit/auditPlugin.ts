@@ -1,47 +1,53 @@
 /**
  * Audit Plugin
  *
- * Optional audit trail with flexible storage options.
- * Disabled by default - enable explicitly for enterprise use cases.
+ * Optional audit trail. Disabled by default — enable explicitly.
  *
  * @example
+ * ```ts
  * import { auditPlugin } from '@classytic/arc/audit';
  *
- * // Development: in-memory
- * await fastify.register(auditPlugin, {
- *   enabled: true,
- *   stores: ['memory'],
- * });
+ * // Development: in-memory default (no options needed)
+ * await fastify.register(auditPlugin, { enabled: true });
  *
- * // Production: MongoDB with TTL
+ * // Production: pass any RepositoryLike — mongokit / prismakit / custom
+ * import { Repository } from '@classytic/mongokit';
  * await fastify.register(auditPlugin, {
  *   enabled: true,
- *   stores: ['mongodb'],
- *   mongoConnection: mongoose.connection,
- *   ttlDays: 90,
+ *   repository: new Repository(AuditEntryModel),
  * });
+ * ```
  */
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
+import type { RepositoryLike } from "../adapters/interface.js";
 import type { RequestContext, UserBase } from "../types/index.js";
+import { repositoryAsAuditStore } from "./repository-audit-adapter.js";
 import type { AuditContext, AuditEntry, AuditStore } from "./stores/interface.js";
 import { createAuditEntry } from "./stores/interface.js";
 import { MemoryAuditStore } from "./stores/memory.js";
-import { MongoAuditStore, type MongoConnection } from "./stores/mongodb.js";
 
 export interface AuditPluginOptions {
   /** Enable audit logging (default: false) */
   enabled?: boolean;
-  /** Storage backends to use */
-  stores?: ("memory" | "mongodb")[];
-  /** MongoDB connection (required if using mongodb store) */
-  mongoConnection?: MongoConnection;
-  /** MongoDB collection name (default: 'audit_logs') */
-  mongoCollection?: string;
-  /** TTL in days for MongoDB (default: 90) */
-  ttlDays?: number;
-  /** Custom stores (advanced) */
+  /**
+   * Repository managing the audit collection. Arc consumes it **directly**
+   * — no wrapping, no aliases, no proxy classes. Pass any object that
+   * implements arc's `RepositoryLike` (mongokit's `Repository`, prismakit's
+   * repo, a custom implementation). Arc calls `repository.create(entry)` to
+   * log and `repository.findAll(filter, options)` to query.
+   *
+   * If neither `repository` nor `customStores` is provided, falls back to
+   * `MemoryAuditStore` (intended for dev / tests only).
+   */
+  repository?: RepositoryLike;
+  /**
+   * Custom audit stores — for backends that aren't repositories (Kafka, S3,
+   * OpenTelemetry exporter, etc.). Each must implement the `AuditStore`
+   * interface. `repository` and `customStores` compose: entries get logged
+   * to every store.
+   */
   customStores?: AuditStore[];
   /**
    * Automatically audit CRUD operations via the hook system (default: true when enabled).
@@ -151,14 +157,7 @@ const auditPlugin: FastifyPluginAsync<AuditPluginOptions> = async (
   fastify: FastifyInstance,
   opts: AuditPluginOptions = {},
 ) => {
-  const {
-    enabled = false,
-    stores: storeTypes = ["memory"],
-    mongoConnection,
-    mongoCollection = "audit_logs",
-    ttlDays = 90,
-    customStores = [],
-  } = opts;
+  const { enabled = false, repository, customStores = [] } = opts;
 
   // Skip if not enabled
   if (!enabled) {
@@ -169,32 +168,15 @@ const auditPlugin: FastifyPluginAsync<AuditPluginOptions> = async (
     return;
   }
 
-  // Initialize stores
-  const stores: AuditStore[] = [...customStores];
-
-  for (const type of storeTypes) {
-    switch (type) {
-      case "memory":
-        stores.push(new MemoryAuditStore());
-        break;
-      case "mongodb":
-        if (!mongoConnection) {
-          throw new Error("Audit: mongoConnection required for mongodb store");
-        }
-        stores.push(
-          new MongoAuditStore({
-            connection: mongoConnection,
-            collection: mongoCollection,
-            ttlDays,
-          }),
-        );
-        break;
-    }
-  }
-
-  if (stores.length === 0) {
-    throw new Error("Audit: at least one store must be configured");
-  }
+  // Assemble stores. When `repository` is passed, we consume it directly —
+  // no adapter class, no indirection. `repositoryAsStore` below is an inline
+  // closure that maps AuditStore vocabulary to RepositoryLike calls. Custom
+  // stores (Kafka, S3, etc.) compose alongside; memory is the final fallback
+  // for dev / tests.
+  const stores: AuditStore[] = [];
+  if (repository) stores.push(repositoryAsAuditStore(repository));
+  stores.push(...customStores);
+  if (stores.length === 0) stores.push(new MemoryAuditStore());
 
   // Log to all stores
   async function logToStores(entry: AuditEntry): Promise<void> {
@@ -385,7 +367,7 @@ const auditPlugin: FastifyPluginAsync<AuditPluginOptions> = async (
     });
   }
 
-  fastify.log?.debug?.({ stores: storeTypes }, "Audit plugin enabled");
+  fastify.log?.debug?.({ stores: stores.map((s) => s.name) }, "Audit plugin enabled");
 };
 
 /** Extract document ID from a result */

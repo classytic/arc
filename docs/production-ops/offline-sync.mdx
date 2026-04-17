@@ -331,8 +331,7 @@ const app = await createApp({
   arcPlugins: {
     audit: {
       enabled: true,
-      stores: ['mongodb'],
-      mongoConnection: mongoose.connection,
+      repository: new Repository(AuditModel),
     },
     idempotency: {
       enabled: true,

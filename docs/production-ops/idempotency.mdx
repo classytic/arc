@@ -15,9 +15,25 @@ With idempotency:
 ```typescript
 import { idempotencyPlugin } from '@classytic/arc/idempotency';
 
+// Development: in-memory (no backend passed)
 await fastify.register(idempotencyPlugin, {
   enabled: true,
   ttlMs: 86400000,  // 24 hours
+});
+
+// Production: pass a RepositoryLike (mongokit / prismakit / custom)
+import { Repository } from '@classytic/mongokit';
+import {
+  methodRegistryPlugin, batchOperationsPlugin, mongoOperationsPlugin,
+} from '@classytic/mongokit';
+
+await fastify.register(idempotencyPlugin, {
+  enabled: true,
+  repository: new Repository(IdempotencyModel, [
+    methodRegistryPlugin(),
+    batchOperationsPlugin(),
+    mongoOperationsPlugin(),
+  ]),
 });
 ```
 
@@ -25,17 +41,22 @@ await fastify.register(idempotencyPlugin, {
 
 ```typescript
 interface IdempotencyPluginOptions {
-  enabled?: boolean;           // Enable (default: false)
-  headerName?: string;         // Header name (default: 'idempotency-key')
-  ttlMs?: number;              // Cache TTL (default: 24 hours)
-  lockTimeoutMs?: number;      // Lock timeout (default: 30 seconds)
-  methods?: string[];          // HTTP methods (default: ['POST', 'PUT', 'PATCH'])
-  include?: RegExp[];          // URL patterns to include
-  exclude?: RegExp[];          // URL patterns to exclude
-  store?: IdempotencyStore;    // Storage backend
-  retryAfterSeconds?: number;  // 409 retry hint (default: 1)
+  enabled?: boolean;              // Enable (default: false)
+  repository?: RepositoryLike;    // Persistent backend (mongokit / prismakit / custom)
+  store?: IdempotencyStore;       // Direct store (Memory, Redis, or custom)
+  headerName?: string;            // Header name (default: 'idempotency-key')
+  ttlMs?: number;                 // Cache TTL (default: 24 hours)
+  lockTimeoutMs?: number;         // Lock timeout (default: 30 seconds)
+  methods?: string[];             // HTTP methods (default: ['POST', 'PUT', 'PATCH'])
+  include?: RegExp[];             // URL patterns to include
+  exclude?: RegExp[];             // URL patterns to exclude
+  retryAfterSeconds?: number;     // 409 retry hint (default: 1)
+  namespace?: string;             // Folded into fingerprint (shared-store safety)
 }
 ```
+
+Pass **either** `repository` **or** `store`, not both. Omit both for
+in-memory dev.
 
 ## Client Usage
 
@@ -126,26 +147,33 @@ await fastify.register(idempotencyPlugin, {
 - Atomic lock operations
 - **Use for:** Production, multi-instance, Kubernetes
 
-### MongoDB Store (Production)
+### MongoDB (or any DB) via Repository
 
 ```typescript
-import mongoose from 'mongoose';
-import { MongoIdempotencyStore } from '@classytic/arc/idempotency';
+import { Repository, methodRegistryPlugin, batchOperationsPlugin, mongoOperationsPlugin } from '@classytic/mongokit';
+import mongoose, { Schema } from 'mongoose';
+
+const IdempotencyModel = mongoose.model(
+  'ArcIdempotency',
+  new Schema({}, { strict: false, timestamps: false, _id: false }),
+  'arc_idempotency',
+);
 
 await fastify.register(idempotencyPlugin, {
   enabled: true,
-  store: new MongoIdempotencyStore({
-    connection: mongoose.connection,
-    collection: 'arc_idempotency',
-    createIndex: true,  // Auto-create TTL index
-  }),
+  repository: new Repository(IdempotencyModel, [
+    methodRegistryPlugin(),
+    batchOperationsPlugin(),
+    mongoOperationsPlugin(),
+  ]),
 });
 ```
 
 **Characteristics:**
 - Shared across instances
-- Uses TTL index for auto-cleanup
-- Good for MongoDB-only stacks
+- TTL index on `expiresAt` (you own the index / schema)
+- Works with any `RepositoryLike` — swap mongokit for prismakit or a
+  custom kit without touching plugin code
 - **Use for:** Production, multi-instance
 
 ## Best Practices
@@ -182,12 +210,12 @@ await fastify.register(idempotencyPlugin, {
 
 ## Deployment Guide
 
-| Environment | Store | Notes |
-|-------------|-------|-------|
-| Development | Memory | Fast iteration |
-| Single instance | Memory | Simple, no deps |
-| Multi-instance | Redis/MongoDB | Shared state required |
-| Kubernetes | Redis | Survives pod restarts |
+| Environment | Backend | Notes |
+|-------------|---------|-------|
+| Development | in-memory (omit both) | Fast iteration |
+| Single instance | in-memory | Simple, no deps |
+| Multi-instance | `repository` (any kit) or `RedisIdempotencyStore` | Shared state required |
+| Kubernetes | Redis or repository-backed | Survives pod restarts |
 
 ## IdempotencyStore Interface
 

@@ -159,6 +159,24 @@ export interface DeleteOptions extends QueryOptions {
 }
 
 /**
+ * Options for the atomic `findOneAndUpdate` compare-and-set primitive.
+ *
+ * Kit-agnostic — every backend implements the core knobs (`sort`,
+ * `returnDocument`, `upsert`, `session`). The index signature lets kits
+ * thread through backend-specific options (mongoose `arrayFilters`,
+ * `collation`, `maxTimeMS`; prisma `select`, `include`; etc.) without arc
+ * having to know about them.
+ */
+export interface FindOneAndUpdateOptions extends QueryOptions {
+  /** Sort spec disambiguating when filter matches multiple docs (FIFO claim). */
+  sort?: Record<string, unknown>;
+  /** Return doc state before or after the update. Default: 'after'. */
+  returnDocument?: "before" | "after";
+  /** Insert if no doc matches. Default: false. */
+  upsert?: boolean;
+}
+
+/**
  * Result of a single delete operation.
  *
  * Matches mongokit's shape. Adapters without soft-delete awareness can omit
@@ -428,10 +446,52 @@ export interface CrudRepository<TDoc> {
   ): Promise<TDoc | null>;
 
   /**
+   * Atomic compare-and-set — match one document and mutate it in a single
+   * round-trip. Returns the resulting document (post-update by default), or
+   * `null` when no match and `upsert` is false.
+   *
+   * **Why this is a first-class contract method (vs an optional capability):**
+   * arc's outbox, distributed-lock, and workflow-semaphore patterns all
+   * depend on compare-and-set semantics. Without an atomic primitive they
+   * either race or require a two-phase pattern that doesn't translate
+   * cleanly to every backend. Every kit targeting arc 2.10+ should
+   * implement this.
+   *
+   * Plugins wire into `before:findOneAndUpdate` / `after:findOneAndUpdate`
+   * and read the filter from `context.query` — the canonical field name.
+   *
+   * @example FIFO claim-lease for an outbox relay
+   * ```ts
+   * const claimed = await outboxRepo.findOneAndUpdate(
+   *   { status: 'pending', visibleAt: { $lte: new Date() } },
+   *   { $set: { status: 'processing', leasedBy: workerId, leaseExpiresAt } },
+   *   { sort: { createdAt: 1 }, returnDocument: 'after' },
+   * );
+   * ```
+   */
+  findOneAndUpdate?(
+    filter: Record<string, unknown>,
+    update: Record<string, unknown> | Record<string, unknown>[],
+    options?: FindOneAndUpdateOptions,
+  ): Promise<TDoc | null>;
+
+  /**
    * Delete a document by primary key. Pass `{ mode: 'hard' }` to bypass
    * soft-delete interception.
    */
   delete(id: string, options?: DeleteOptions): Promise<DeleteResult>;
+
+  /**
+   * Classify an error thrown by a write as a unique-index / duplicate-key
+   * violation. Used by arc's idempotency and outbox adapters to distinguish
+   * "this write already landed" from "transient DB error".
+   *
+   * Each backend signals this differently (MongoDB `code 11000`,
+   * Prisma `P2002`, Postgres `23505`, etc.) — classification lives in the
+   * kit that knows its driver. Arc falls back to a Mongo default if absent;
+   * non-mongo kits must implement to participate in idempotency semantics.
+   */
+  isDuplicateKeyError?(err: unknown): boolean;
 
   // ── Recommended: Compound read ───────────────────────────────────────
 
