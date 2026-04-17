@@ -65,8 +65,13 @@ const app = await createApp({
 Clean DX without growing exclude lists:
 
 ```typescript
-// app.ts — register once with perResource mode
-await fastify.register(auditPlugin, { autoAudit: { perResource: true } });
+import { Repository } from '@classytic/mongokit';
+
+// app.ts — pass any RepositoryLike (mongokit / prismakit / custom)
+await fastify.register(auditPlugin, {
+  autoAudit: { perResource: true },
+  repository: new Repository(AuditModel),  // or omit for in-memory dev
+});
 
 // order.resource.ts — opt in
 defineResource({ name: 'order', audit: true });
@@ -745,6 +750,31 @@ Arc sets `"sideEffects": false` in [package.json](package.json), so modern bundl
 | `@classytic/arc/docs` | OpenAPI generation |
 | `@classytic/arc/cli` | CLI commands (programmatic) |
 
+## v2.9.1 Highlights
+
+`auditPlugin`, `idempotencyPlugin`, and `EventOutbox` take a
+`repository: RepositoryLike` option — pass any `Repository` (mongokit /
+prismakit / your own kit). Arc calls `create` / `getOne` / `findAll` /
+`deleteMany` / `findOneAndUpdate` on it directly:
+
+```typescript
+import { Repository } from '@classytic/mongokit';
+import { auditPlugin } from '@classytic/arc/audit';
+import { idempotencyPlugin } from '@classytic/arc/idempotency';
+import { EventOutbox } from '@classytic/arc/events';
+
+await fastify.register(auditPlugin, { repository: new Repository(AuditModel) });
+await fastify.register(idempotencyPlugin, {
+  repository: new Repository(IdempotencyModel, [
+    methodRegistryPlugin(), batchOperationsPlugin(), mongoOperationsPlugin(),
+  ]),
+});
+new EventOutbox({ repository: new Repository(OutboxModel), transport });
+```
+
+Memory + Redis stores unchanged via `store` / `customStores`. Requires
+`@classytic/mongokit ≥3.8.0`.
+
 ## v2.9 Highlights
 
 **Security defaults (breaking):**
@@ -767,7 +797,7 @@ Arc sets `"sideEffects": false` in [package.json](package.json), so modern bundl
 - `new EventOutbox({ failurePolicy: ({ attempts, error }) => ({ retryAt?, deadLetter? }) })` — centralises retry + DLQ escalation, no more hand-rolled `exponentialBackoff` at every failure site
 - `outbox.getDeadLettered(limit)` returns typed `DeadLetteredEvent[]` — same shape `withRetry` produces, closes the loop between retry DLQ and outbox DLQ state
 - `RelayResult.deadLettered` — per-batch DLQ transition count for dashboards
-- `MongoOutboxStore` at `@classytic/arc/events/mongo` — durable production store with multi-worker claim, TTL purge, unique dedupe index, session-threaded writes, and fail-loud `onDisconnect: 'throw'` default
+- Durable outbox via any `RepositoryLike` — `new EventOutbox({ repository, transport })` (2.9.1); multi-worker claim, TTL purge, dedupe, and session-threaded writes come from the repository's backing kit
 
 **Removed (no replacement kept):**
 - `createActionRouter`, `buildActionBodySchema` — use `defineResource({ actions })`

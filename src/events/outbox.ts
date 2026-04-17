@@ -41,7 +41,14 @@
  * ```
  */
 
+import type { RepositoryLike } from "../adapters/interface.js";
 import type { DeadLetteredEvent, DomainEvent, EventTransport } from "./EventTransport.js";
+import { MemoryOutboxStore } from "./memory-outbox.js";
+import { repositoryAsOutboxStore } from "./repository-outbox-adapter.js";
+
+// Re-export MemoryOutboxStore from the same barrel so existing
+// `import { MemoryOutboxStore } from '@classytic/arc/events'` keeps working.
+export { MemoryOutboxStore };
 
 /** Default outbox retention — delivered events older than this are eligible for purge */
 const DEFAULT_OUTBOX_RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -415,8 +422,23 @@ export type OutboxRelayErrorHandler = (info: {
 }) => void;
 
 export interface EventOutboxOptions {
-  /** Outbox store for persistence */
-  readonly store: OutboxStore;
+  /**
+   * Repository managing the outbox collection. Arc consumes it directly —
+   * no wrapper classes. Requires `create`, `getOne`, `findAll`,
+   * `deleteMany`, and `findOneAndUpdate` from `RepositoryLike` (mongokit
+   * ≥3.8 satisfies all of these). Takes precedence over `store` when both
+   * are passed.
+   *
+   * Use this for the common path where the outbox lives in your primary
+   * database. Use `store` for non-repository backends (memory / custom).
+   */
+  readonly repository?: RepositoryLike;
+  /**
+   * Non-repository outbox store. Use when your backend isn't a repository
+   * (memory for tests, Kafka, DynamoDB, custom). Ignored if `repository`
+   * is also passed.
+   */
+  readonly store?: OutboxStore;
   /** Transport to relay events to (optional — can relay later) */
   readonly transport?: EventTransport;
   /** Max events per relay batch (default: 100) */
@@ -475,7 +497,21 @@ export class EventOutbox {
   private readonly _attempts = new Map<string, number>();
 
   constructor(opts: EventOutboxOptions) {
-    this._store = opts.store;
+    // Resolve store: repository takes precedence; fall back to explicit
+    // store; error if neither is given. The repository path uses an inline
+    // adapter (no public wrapper class) — see `repositoryAsOutboxStore` at
+    // the bottom of this file.
+    if (opts.repository) {
+      this._store = repositoryAsOutboxStore(opts.repository);
+    } else if (opts.store) {
+      this._store = opts.store;
+    } else {
+      throw new Error(
+        "EventOutbox: either `repository` or `store` must be provided. " +
+          "Pass a RepositoryLike (mongokit / prismakit) for the common case, " +
+          "or a concrete OutboxStore (memory / custom) for non-repository backends.",
+      );
+    }
     this._transport = opts.transport;
     this._batchSize = opts.batchSize ?? 100;
     this._consumerId = opts.consumerId ?? `relay-${Math.random().toString(36).slice(2, 10)}`;
@@ -725,7 +761,9 @@ export class EventOutbox {
 
       // Published successfully — acknowledge
       try {
-        await this._store.acknowledge(event.meta.id, { consumerId: this._consumerId });
+        await this._store.acknowledge(event.meta.id, {
+          consumerId: this._consumerId,
+        });
         counts.relayed++;
         this._attempts.delete(event.meta.id);
       } catch (ackErr) {
@@ -780,182 +818,12 @@ export class EventOutbox {
 
 function normalizeError(err: unknown): OutboxErrorInfo {
   if (err instanceof Error) {
-    return { message: err.message, code: (err as Error & { code?: string }).code };
+    return {
+      message: err.message,
+      code: (err as Error & { code?: string }).code,
+    };
   }
   return { message: String(err) };
-}
-
-// ============================================================================
-// MemoryOutboxStore — reference implementation for dev/testing
-// ============================================================================
-
-interface MemoryEntry {
-  event: DomainEvent;
-  status: "pending" | "delivered" | "dead_letter";
-  attempts: number;
-  visibleAt: number;
-  leaseOwner: string | null;
-  leaseExpiresAt: number;
-  deliveredAt: number | null;
-  firstFailedAt: number | null;
-  lastFailedAt: number | null;
-  lastError: OutboxErrorInfo | null;
-  dedupeKey?: string;
-}
-
-/**
- * In-memory outbox store — reference implementation supporting the full
- * capability set (claim/lease, fail/retry, dedupe, visibleAt).
- *
- * For dev/testing only. Production deployments should use a durable store
- * backed by the app's database.
- */
-export class MemoryOutboxStore implements OutboxStore {
-  private readonly entries: MemoryEntry[] = [];
-  private readonly seenDedupeKeys = new Set<string>();
-
-  async save(event: DomainEvent, options?: OutboxWriteOptions): Promise<void> {
-    if (!event?.type || typeof event.type !== "string") {
-      throw new InvalidOutboxEventError("event.type is required");
-    }
-    if (!event.meta?.id || typeof event.meta.id !== "string") {
-      throw new InvalidOutboxEventError("event.meta.id is required");
-    }
-    if (options?.dedupeKey) {
-      if (this.seenDedupeKeys.has(options.dedupeKey)) return;
-      this.seenDedupeKeys.add(options.dedupeKey);
-    }
-    this.entries.push({
-      event,
-      status: "pending",
-      attempts: 0,
-      visibleAt: options?.visibleAt?.getTime() ?? 0,
-      leaseOwner: null,
-      leaseExpiresAt: 0,
-      deliveredAt: null,
-      firstFailedAt: null,
-      lastFailedAt: null,
-      lastError: null,
-      dedupeKey: options?.dedupeKey,
-    });
-  }
-
-  async getPending(limit: number): Promise<DomainEvent[]> {
-    const now = Date.now();
-    return this.entries
-      .filter(
-        (e) =>
-          e.status === "pending" &&
-          e.visibleAt <= now &&
-          (e.leaseOwner === null || e.leaseExpiresAt <= now),
-      )
-      .slice(0, limit)
-      .map((e) => e.event);
-  }
-
-  async claimPending(options?: OutboxClaimOptions): Promise<DomainEvent[]> {
-    const now = Date.now();
-    const limit = options?.limit ?? 100;
-    const leaseMs = options?.leaseMs ?? DEFAULT_LEASE_MS;
-    const consumerId = options?.consumerId ?? "anonymous";
-    const typeFilter = options?.types ? new Set(options.types) : null;
-
-    const claimed: DomainEvent[] = [];
-    for (const entry of this.entries) {
-      if (claimed.length >= limit) break;
-      if (entry.status !== "pending") continue;
-      if (entry.visibleAt > now) continue;
-      if (entry.leaseOwner !== null && entry.leaseExpiresAt > now) continue;
-      if (typeFilter && !typeFilter.has(entry.event.type)) continue;
-
-      entry.leaseOwner = consumerId;
-      entry.leaseExpiresAt = now + leaseMs;
-      entry.attempts++;
-      claimed.push(entry.event);
-    }
-    return claimed;
-  }
-
-  async acknowledge(eventId: string, options?: OutboxAcknowledgeOptions): Promise<void> {
-    const entry = this.entries.find((e) => e.event.meta.id === eventId);
-    // Unknown id is a no-op — keeps relay idempotent after purge/manual delete
-    if (!entry) return;
-    // If already delivered, also a no-op (idempotent)
-    if (entry.status === "delivered") return;
-    // Ownership enforcement: mismatch MUST throw (contract #3)
-    if (options?.consumerId && entry.leaseOwner && entry.leaseOwner !== options.consumerId) {
-      throw new OutboxOwnershipError(eventId, options.consumerId, entry.leaseOwner);
-    }
-    entry.status = "delivered";
-    entry.deliveredAt = Date.now();
-    entry.leaseOwner = null;
-  }
-
-  async fail(eventId: string, error: OutboxErrorInfo, options?: OutboxFailOptions): Promise<void> {
-    const entry = this.entries.find((e) => e.event.meta.id === eventId);
-    if (!entry) return;
-    if (options?.consumerId && entry.leaseOwner && entry.leaseOwner !== options.consumerId) {
-      throw new OutboxOwnershipError(eventId, options.consumerId, entry.leaseOwner);
-    }
-    const now = Date.now();
-    entry.lastError = error;
-    entry.leaseOwner = null;
-    entry.leaseExpiresAt = 0;
-    if (entry.firstFailedAt === null) entry.firstFailedAt = now;
-    entry.lastFailedAt = now;
-    if (options?.deadLetter) {
-      entry.status = "dead_letter";
-      return;
-    }
-    entry.status = "pending";
-    // Default to immediate re-visibility if no retryAt provided (clears any prior backoff)
-    entry.visibleAt = options?.retryAt ? options.retryAt.getTime() : 0;
-  }
-
-  async getDeadLettered(limit: number): Promise<DeadLetteredEvent[]> {
-    const out: DeadLetteredEvent[] = [];
-    for (const entry of this.entries) {
-      if (out.length >= limit) break;
-      if (entry.status !== "dead_letter") continue;
-      out.push({
-        event: entry.event,
-        error: {
-          message: entry.lastError?.message ?? "unknown",
-          ...(entry.lastError?.code !== undefined ? { code: entry.lastError.code } : {}),
-        },
-        attempts: entry.attempts,
-        firstFailedAt: new Date(entry.firstFailedAt ?? entry.lastFailedAt ?? Date.now()),
-        lastFailedAt: new Date(entry.lastFailedAt ?? entry.firstFailedAt ?? Date.now()),
-      });
-    }
-    return out;
-  }
-
-  async purge(olderThanMs: number): Promise<number> {
-    const cutoff = Date.now() - olderThanMs;
-    let purged = 0;
-    for (let i = this.entries.length - 1; i >= 0; i--) {
-      const entry = this.entries[i];
-      if (!entry) continue;
-      if (
-        entry.status === "delivered" &&
-        entry.deliveredAt !== null &&
-        entry.deliveredAt < cutoff
-      ) {
-        // Free the dedupe key so the same key can be reused after delivery.
-        // Without this, seenDedupeKeys grows forever in long-lived processes.
-        if (entry.dedupeKey) this.seenDedupeKeys.delete(entry.dedupeKey);
-        this.entries.splice(i, 1);
-        purged++;
-      }
-    }
-    return purged;
-  }
-
-  /** Test helper: inspect entry by id */
-  _getEntry(eventId: string): Readonly<MemoryEntry> | undefined {
-    return this.entries.find((e) => e.event.meta.id === eventId);
-  }
 }
 
 // ============================================================================

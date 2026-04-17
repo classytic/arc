@@ -112,6 +112,7 @@ export type {
   DeleteManyResult,
   DeleteOptions,
   DeleteResult,
+  FindOneAndUpdateOptions,
   InferDoc,
   KeysetPaginatedResult,
   OffsetPaginatedResult,

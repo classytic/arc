@@ -38,6 +38,29 @@ import type {
  *
  * See [CrudRepository](../types/repository.ts) for full prose-level docs
  * on each method and the design rationale behind the tiering.
+ *
+ * ## Store-backing contract (audit / outbox / idempotency)
+ *
+ * Arc's pluggable stores (audit log, event outbox, HTTP idempotency) all
+ * consume a `RepositoryLike` directly — no wrapper classes, no adapters to
+ * register. If you want to back one of these subsystems with any database,
+ * pass a repository satisfying the method subset below. `mongokit ≥3.8`
+ * implements every method; other kits must match the relevant subset.
+ *
+ * | Subsystem          | Required methods                                        |
+ * |--------------------|---------------------------------------------------------|
+ * | `auditPlugin`      | `create`, `findAll`                                     |
+ * | `idempotencyPlugin`| `getOne`, `deleteMany`, `findOneAndUpdate`              |
+ * | `EventOutbox`      | `create`, `getOne`, `findAll`, `deleteMany`, `findOneAndUpdate` |
+ *
+ * The outbox is the strictest — its atomic FIFO claim-lease loop depends
+ * on `findOneAndUpdate` returning the post-update doc. Kits without atomic
+ * CAS cannot back the outbox; use an in-memory / transport-native store
+ * (`MemoryOutboxStore`, Redis Streams, etc.) instead.
+ *
+ * Every store adapter throws at construction with the list of missing
+ * methods if the repository doesn't satisfy its subset, so misconfigurations
+ * fail fast rather than at first request.
  */
 export interface RepositoryLike {
   // ── Identity ─────────────────────────────────────────────────────────
@@ -68,11 +91,55 @@ export interface RepositoryLike {
   update(id: string, data: unknown, options?: WriteOptions): Promise<unknown>;
 
   /**
+   * Atomic compare-and-set — match one document and mutate it in a single
+   * round-trip. Returns the post-update document (or pre-update when
+   * `returnDocument: 'before'`), or `null` when no document matches and
+   * `upsert` is false.
+   *
+   * Used by the transactional outbox, distributed locks, and workflow
+   * semaphores. Kits without atomic CAS can omit this method — arc stores
+   * that require it throw a clear capability error at construction.
+   *
+   * Options follow mongokit's {@link https://github.com/classytic/mongokit | FindOneAndUpdateOptions}
+   * shape: `{ sort, returnDocument, upsert, session, ... }`. Plugins reading
+   * the hook context find the filter under `context.query` (the canonical
+   * field name across every method on this contract).
+   */
+  findOneAndUpdate?(
+    filter: Record<string, unknown>,
+    update: Record<string, unknown> | Record<string, unknown>[],
+    options?: {
+      sort?: Record<string, unknown>;
+      returnDocument?: "before" | "after";
+      upsert?: boolean;
+      session?: RepositorySession;
+      [key: string]: unknown;
+    },
+  ): Promise<unknown>;
+
+  /**
    * Delete by primary key. Pass `{ mode: 'hard' }` to bypass soft-delete
    * interception (required by arc's hard-delete flow — `?hard=true` on
    * the DELETE route forwards this option).
    */
   delete(id: string, options?: DeleteOptions): Promise<unknown>;
+
+  /**
+   * Classify an error thrown by `create` / `findOneAndUpdate` / `update` as
+   * a unique-index / duplicate-key violation.
+   *
+   * Arc's idempotency and outbox adapters need to distinguish "this write
+   * already landed (idempotent no-op)" from "transient DB error (retry)".
+   * Since every backend signals dup-key differently — MongoDB `code 11000`,
+   * Prisma `P2002`, Postgres `23505`, SQLite `UNIQUE constraint failed` —
+   * we put the classification back in the kit that knows its driver.
+   *
+   * If a kit omits this predicate, arc falls back to a conservative MongoDB
+   * check (`code === 11000 || codeName === "DuplicateKey"`), so mongokit
+   * ≤3.8 keeps working without changes. Non-mongo kits MUST implement it to
+   * participate in idempotency semantics.
+   */
+  isDuplicateKeyError?(err: unknown): boolean;
 
   // ── Recommended: Compound read ───────────────────────────────────────
 

@@ -510,11 +510,23 @@ and manual `publish()` calls through your transport — zero framework changes.
 
 At-least-once delivery guarantee. Store events in the same DB transaction as your write, relay to transport asynchronously.
 
+Two ways to wire the store:
+
 ```typescript
+// 1. Repository (recommended — mongokit / prismakit / your own kit)
+import { EventOutbox } from '@classytic/arc/events';
+import { Repository } from '@classytic/mongokit';
+
+const outbox = new EventOutbox({
+  repository: new Repository(OutboxModel),
+  transport: redisTransport,
+});
+
+// 2. Direct store (dev, or a custom implementation)
 import { EventOutbox, MemoryOutboxStore } from '@classytic/arc/events';
 
 const outbox = new EventOutbox({
-  store: new MemoryOutboxStore(),  // or your own DB-backed store
+  store: new MemoryOutboxStore(),
   transport: redisTransport,
 });
 
@@ -528,6 +540,11 @@ await outbox.store({
 // Relay cron (runs every few seconds)
 const relayed = await outbox.relay();  // publishes pending → transport
 ```
+
+When you pass `repository`, arc adapts it to the `OutboxStore` contract
+internally — `create` / `findAll` / `deleteMany` / `findOneAndUpdate`
+cover save, claim, ack, fail, and DLQ reads. Memory store is still
+available for dev and as a full reference implementation of the contract.
 
 **OutboxStore interface** — Arc is DB-agnostic; you implement this for your database.
 The contract has three required methods and several optional capabilities that stores

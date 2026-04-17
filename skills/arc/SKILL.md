@@ -8,11 +8,11 @@ description: |
   Triggers: arc, fastify resource, defineResource, createApp, BaseController, arc preset,
   arc auth, arc events, arc jobs, arc websocket, arc mcp, arc plugin, arc testing, arc cli,
   arc permissions, arc hooks, arc pipeline, arc factory, arc cache, arc QueryCache.
-version: 2.9.0
+version: 2.9.1
 license: MIT
 metadata:
   author: Classytic
-  version: "2.9.0"
+  version: "2.9.1"
 tags:
   - fastify
   - rest-api
@@ -726,11 +726,11 @@ CRUD events auto-emit: `{resource}.created`, `{resource}.updated`, `{resource}.d
 
 **Transports:** Memory (default) | Redis Pub/Sub (fire-and-forget) | Redis Streams (durable, at-least-once, consumer groups, DLQ)
 
-**Event Outbox** — at-least-once delivery via transactional outbox pattern. Arc ships `OutboxStore` interface + `MemoryOutboxStore` (dev). You implement the store for your DB (Mongoose, Drizzle, Knex, etc.).
+**Event Outbox** — at-least-once delivery via transactional outbox pattern. Pass `repository: RepositoryLike` (mongokit / prismakit / custom) for production, or `store: MemoryOutboxStore()` for dev. Arc adapts the repo to the `OutboxStore` contract internally — `create` / `findAll` / `deleteMany` / `findOneAndUpdate` cover save, claim, ack, fail, DLQ.
 
 **Event contract (v2.9):** `EventMeta` = `id`, `timestamp`, optional `schemaVersion`, `correlationId`, `causationId`, `partitionKey`, `source`, `idempotencyKey`, `resource`, `resourceId`, `userId`, `organizationId`, `aggregate: { type, id }`. `createChildEvent(parent, ...)` inherits correlation/causation/source/idempotencyKey; aggregate stays explicit. `DeadLetteredEvent<T>` + optional `transport.deadLetter()` for typed DLQ. `withRetry({ transport })` auto-routes exhausted events — no custom plumbing for Kafka/SQS. `@classytic/primitives` mirrors these shapes — arc is source of truth.
 
-**Outbox (v2.9):** `EventOutbox.store()` auto-maps `meta.idempotencyKey` → `dedupeKey`. `new EventOutbox({ failurePolicy: ({ attempts }) => ({ retryAt, deadLetter }) })` centralises retry/DLQ. `outbox.getDeadLettered(limit)` returns typed `DeadLetteredEvent[]` from stores that implement `store.getDeadLettered`. `RelayResult.deadLettered` for per-batch DLQ count. Durable `MongoOutboxStore` at `@classytic/arc/events/mongo` — multi-worker claim, TTL purge, unique dedupe index, `onDisconnect: 'throw'` default, session-threaded writes.
+**Outbox (v2.9):** `EventOutbox.store()` auto-maps `meta.idempotencyKey` → `dedupeKey`. `new EventOutbox({ failurePolicy: ({ attempts }) => ({ retryAt, deadLetter }) })` centralises retry/DLQ. `outbox.getDeadLettered(limit)` returns typed `DeadLetteredEvent[]`. `RelayResult.deadLettered` for per-batch DLQ count. Durable store: `new EventOutbox({ repository: new Repository(OutboxModel), transport })` (v2.9.1) — multi-worker claim, session-threaded writes, and dedupe semantics come from the repo's backing kit.
 
 ## Factory — createApp()
 

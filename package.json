@@ -1,6 +1,6 @@
 {
   "name": "@classytic/arc",
-  "version": "2.9.0",
+  "version": "2.9.1",
   "description": "Resource-oriented backend framework for Fastify — clean, minimal, powerful, tree-shakable",
   "type": "module",
   "exports": {
@@ -88,10 +88,6 @@
       "types": "./dist/audit/index.d.mts",
       "default": "./dist/audit/index.mjs"
     },
-    "./audit/mongodb": {
-      "types": "./dist/audit/mongodb.d.mts",
-      "default": "./dist/audit/mongodb.mjs"
-    },
     "./docs": {
       "types": "./dist/docs/index.d.mts",
       "default": "./dist/docs/index.mjs"
@@ -104,10 +100,6 @@
       "types": "./dist/idempotency/redis.d.mts",
       "default": "./dist/idempotency/redis.mjs"
     },
-    "./idempotency/mongodb": {
-      "types": "./dist/idempotency/mongodb.d.mts",
-      "default": "./dist/idempotency/mongodb.mjs"
-    },
     "./events": {
       "types": "./dist/events/index.d.mts",
       "default": "./dist/events/index.mjs"
@@ -119,10 +111,6 @@
     "./events/redis-stream": {
       "types": "./dist/events/transports/redis-stream-entry.d.mts",
       "default": "./dist/events/transports/redis-stream-entry.mjs"
-    },
-    "./events/mongo": {
-      "types": "./dist/events/transports/mongo-outbox.d.mts",
-      "default": "./dist/events/transports/mongo-outbox.mjs"
     },
     "./dynamic": {
       "types": "./dist/dynamic/index.d.mts",
@@ -247,7 +235,7 @@
     "node": ">=22"
   },
   "peerDependencies": {
-    "@classytic/mongokit": ">=3.7.0",
+    "@classytic/mongokit": ">=3.8.0",
     "@classytic/streamline": ">=2.1.0",
     "@fastify/cors": ">=11.0.0",
     "@fastify/helmet": ">=13.0.0",
@@ -366,7 +354,7 @@
   "devDependencies": {
     "@better-auth/mongo-adapter": "^1.6.2",
     "@biomejs/biome": "^2.4.11",
-    "@classytic/mongokit": "^3.7.0",
+    "@classytic/mongokit": "^3.8.0",
     "@classytic/streamline": "^2.1.0",
     "@fastify/cors": "^11.2.0",
     "@fastify/helmet": "^13.0.2",

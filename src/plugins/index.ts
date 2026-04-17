@@ -36,6 +36,7 @@ export type { ErrorHandlerOptions, ErrorMapper } from "./errorHandler.js";
 
 // Global error handling
 export {
+  defaultIsDuplicateKeyError,
   errorHandlerPlugin,
   errorHandlerPlugin as errorHandlerPluginFn,
 } from "./errorHandler.js";

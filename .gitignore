@@ -17,6 +17,9 @@ coverage/
 # Build output
 dist/
 
+# npm pack artifacts (local dev-bridge tarballs)
+*.tgz
+
 # Old generated types (now built by tsup)
 types/
 

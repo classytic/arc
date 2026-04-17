@@ -14,7 +14,6 @@ const config: KnipConfig = {
 
   // Optional peer deps — conditionally required at runtime, not statically imported
   ignoreDependencies: [
-    "bullmq",
     "pino-pretty",
     "@classytic/streamline",
     "@opentelemetry/api",
