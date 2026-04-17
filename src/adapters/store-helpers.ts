@@ -68,9 +68,7 @@ export function createSafeGetOne(
  * also fires on WriteConflict / NotWritablePrimary / transient failures,
  * which must propagate rather than silently become 409s.
  */
-export function createIsDuplicateKeyError(
-  repository: RepositoryLike,
-): (err: unknown) => boolean {
+export function createIsDuplicateKeyError(repository: RepositoryLike): (err: unknown) => boolean {
   const repoPredicate =
     typeof repository.isDuplicateKeyError === "function"
       ? repository.isDuplicateKeyError.bind(repository)
