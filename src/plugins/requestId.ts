@@ -20,6 +20,7 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
+import { isReplyCommitted } from "../utils/reply-guards.js";
 
 export interface RequestIdOptions {
   /** Header name to read/write request ID (default: 'x-request-id') */
@@ -66,6 +67,7 @@ const requestIdPlugin: FastifyPluginAsync<RequestIdOptions> = async (
   // Add to response headers
   if (setResponseHeader) {
     fastify.addHook("onSend", async (request, reply) => {
+      if (isReplyCommitted(reply)) return;
       reply.header(header, request.requestId);
     });
   }

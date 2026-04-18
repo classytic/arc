@@ -21,6 +21,7 @@
 
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
+import { isReplyCommitted } from "../utils/reply-guards.js";
 
 export interface CachingRule {
   /** Path prefix to match (e.g., '/api/products') */
@@ -107,6 +108,9 @@ const cachingPlugin: FastifyPluginAsync<CachingOptions> = async (
 
   // onSend hook — runs just before the response is sent
   fastify.addHook("onSend", async (request, reply, payload) => {
+    // Guard: skip if the reply is already committed (see reply-guards.ts).
+    if (isReplyCommitted(reply)) return payload;
+
     const url = request.url;
 
     // Skip excluded paths
