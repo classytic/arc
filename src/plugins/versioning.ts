@@ -22,6 +22,7 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
+import { isReplyCommitted } from "../utils/reply-guards.js";
 
 // ============================================================================
 // Types
@@ -90,6 +91,7 @@ const versioningPlugin: FastifyPluginAsync<VersioningOptions> = async (
   });
 
   fastify.addHook("onSend", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (isReplyCommitted(reply)) return;
     reply.header(responseHeader, request.apiVersion);
 
     if (deprecatedSet.has(request.apiVersion)) {

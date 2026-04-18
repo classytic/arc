@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.9.2
+
+- **Fix: onSend header mutation no longer trips `ERR_HTTP_HEADERS_SENT`
+  under `light-my-request`.** When an action route, error handler, or
+  404 path flushed the response before the onSend chain resolved, any
+  plugin that called `reply.header(...)` in its onSend hook caused
+  Fastify's `safeWriteHead` to try writing headers twice — producing
+  unhandled rejections in vitest (CRUD POST intermittent, action POST
+  ~100%, GET 404 ~100%). Primary reporter: `cachingPlugin`. Same class
+  of bug applied to `versioningPlugin`, `requestIdPlugin`,
+  `responseCachePlugin`, and `idempotencyPlugin` — all fixed in this
+  patch via a shared `isReplyCommitted(reply)` guard
+  (`src/utils/reply-guards.ts`). No-op under a real HTTP server.
+- Regression tests added — spy on `reply.header` to assert the plugin
+  skips mutation when `reply.raw.headersSent === true`. Tests fail
+  without the guard, pass with it.
+- Shared `repositoryAs*` helpers extracted to `src/adapters/store-helpers.ts`
+  (`isNotFoundError`, `createSafeGetOne`, `createIsDuplicateKeyError`) —
+  outbox + idempotency adapters lose ~76 lines of duplicated cross-kit
+  error handling. Behavior unchanged.
+
 ## 2.9.1
 
 **Breaking — MongoDB wrapper stores removed.** `auditPlugin`,

@@ -229,4 +229,79 @@ describe("Caching Plugin", () => {
       await app.close();
     });
   });
+
+  // --------------------------------------------------------------------------
+  // Regression: headers already committed (2.9.2 — light-my-request race)
+  //
+  // Fixes ERR_HTTP_HEADERS_SENT triggered by the onSend hook's
+  // `reply.header(...)` calls when a prior path (action route, error handler,
+  // 404) flushed the response before the onSend chain ran.
+  // --------------------------------------------------------------------------
+
+  describe("headers already committed (regression 2.9.2)", () => {
+    it("skips reply.header mutation when reply.raw.headersSent is true", async () => {
+      const app = Fastify({ logger: false });
+      await app.register(cachingPlugin);
+
+      const headerCalls: string[] = [];
+
+      app.get("/committed", async (_req, reply) => {
+        // Spy on reply.header so we can assert the plugin's onSend skipped it
+        const original = reply.header.bind(reply);
+        reply.header = (name: string, value: unknown) => {
+          headerCalls.push(name);
+          return original(name, value);
+        };
+        // Simulate the race: headers marked as committed before onSend fires
+        Object.defineProperty(reply.raw, "headersSent", {
+          value: true,
+          configurable: true,
+        });
+        return { items: [] };
+      });
+
+      await app.ready();
+      await app.inject({ method: "GET", url: "/committed" });
+
+      // Without the guard the plugin would push "cache-control" + "etag".
+      // With the guard it bails out — no header mutation attempts.
+      expect(headerCalls).not.toContain("cache-control");
+      expect(headerCalls).not.toContain("etag");
+
+      await app.close();
+    });
+
+    it("skips reply.header mutation on POST when reply.sent is true", async () => {
+      const app = Fastify({ logger: false });
+      await app.register(cachingPlugin);
+
+      const headerCalls: string[] = [];
+
+      app.post("/items", async (_req, reply) => {
+        const original = reply.header.bind(reply);
+        reply.header = (name: string, value: unknown) => {
+          headerCalls.push(name);
+          return original(name, value);
+        };
+        Object.defineProperty(reply.raw, "headersSent", {
+          value: true,
+          configurable: true,
+        });
+        return { created: true };
+      });
+
+      await app.ready();
+      await app.inject({
+        method: "POST",
+        url: "/items",
+        payload: {},
+        headers: { "content-type": "application/json" },
+      });
+
+      // Without the guard, POST path would push "cache-control: no-store"
+      expect(headerCalls).not.toContain("cache-control");
+
+      await app.close();
+    });
+  });
 });
