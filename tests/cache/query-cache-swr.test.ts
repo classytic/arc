@@ -13,7 +13,7 @@ describe("QueryCache SWR Behavior", () => {
   let cache: QueryCache;
 
   beforeEach(() => {
-    store = new MemoryCacheStore({ defaultTtlMs: 300_000 });
+    store = new MemoryCacheStore({ defaultTtlSeconds: 300 });
     cache = new QueryCache(store);
   });
 

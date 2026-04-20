@@ -5,6 +5,7 @@
  * This allows controllers implementing IController to work seamlessly with Fastify.
  */
 
+import type { OffsetPaginationResult } from "@classytic/repo-core/pagination";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { FieldPermissionMap } from "../permissions/fields.js";
 import { applyFieldReadPermissions, resolveEffectiveRoles } from "../permissions/fields.js";
@@ -18,7 +19,6 @@ import type {
   IController,
   IControllerResponse,
   IRequestContext,
-  PaginatedResult,
   RequestContext,
   RequestWithExtras,
 } from "../types/index.js";
@@ -273,7 +273,7 @@ export function sendControllerResponse<T>(
     typeof response.data === "object" &&
     "docs" in response.data
   ) {
-    const paginatedData = response.data as unknown as PaginatedResult<unknown>;
+    const paginatedData = response.data as unknown as OffsetPaginationResult<unknown>;
     const filteredDocs = hasFieldRestrictions
       ? applyPermissions(paginatedData.docs)
       : paginatedData.docs;

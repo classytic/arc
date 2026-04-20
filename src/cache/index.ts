@@ -1,9 +1,4 @@
-export type {
-  CacheLogger,
-  CacheSetOptions,
-  CacheStats,
-  CacheStore,
-} from "./interface.js";
+export type { CacheLogger, CacheStats, CacheStore } from "./interface.js";
 export {
   buildQueryKey,
   hashParams,

@@ -551,7 +551,8 @@ For connecting **any database or ORM** to Arc. See the full guide at [custom-ada
 ### Minimal Interface
 
 ```typescript
-import type { DataAdapter, CrudRepository } from '@classytic/arc/adapters';
+import type { DataAdapter } from '@classytic/arc/adapters';
+import type { StandardRepo } from '@classytic/repo-core/repository';
 
 export function createSupabaseAdapter(options: {
   client: SupabaseClient;

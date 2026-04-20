@@ -15,13 +15,14 @@
 import { describe, expect, it } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
 import type { RequestScope } from "../../src/scope/types.js";
-import type { AnyRecord, CrudRepository, IRequestContext } from "../../src/types/index.js";
+import type { StandardRepo } from "@classytic/repo-core/repository";
+import type { AnyRecord, IRequestContext } from "../../src/types/index.js";
 
 // --------------------------------------------------------------------------
 // Mock repository that tracks filter arguments
 // --------------------------------------------------------------------------
 
-class FilterTrackingRepository implements CrudRepository {
+class FilterTrackingRepository implements StandardRepo {
   public lastGetFilter: AnyRecord | null = null;
   public lastUpdateFilter: AnyRecord | null = null;
   public lastDeleteFilter: AnyRecord | null = null;

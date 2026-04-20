@@ -4,6 +4,8 @@
  * Export all adapter interfaces and implementations.
  */
 
+export type { DrizzleAdapterOptions } from "./drizzle.js";
+export { createDrizzleAdapter, DrizzleAdapter } from "./drizzle.js";
 export type {
   AdapterFactory,
   DataAdapter,

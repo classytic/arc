@@ -17,7 +17,7 @@ describe("QueryCache Event-Driven Invalidation", () => {
   let store: MemoryCacheStore;
 
   beforeEach(async () => {
-    store = new MemoryCacheStore({ defaultTtlMs: 300_000 });
+    store = new MemoryCacheStore({ defaultTtlSeconds: 300 });
     fastify = Fastify({ logger: false });
 
     // Register events plugin first (required for auto-invalidation)
@@ -110,7 +110,7 @@ describe("QueryCache Cross-Resource Invalidation", () => {
   let store: MemoryCacheStore;
 
   beforeEach(async () => {
-    store = new MemoryCacheStore({ defaultTtlMs: 300_000 });
+    store = new MemoryCacheStore({ defaultTtlSeconds: 300 });
     fastify = Fastify({ logger: false });
 
     await fastify.register(eventPlugin);

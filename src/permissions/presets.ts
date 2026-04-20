@@ -20,7 +20,7 @@
  * ```
  */
 
-import { allowPublic, anyOf, requireAuth, requireOwnership, requireRoles } from "./index.js";
+import { allowPublic, anyOf, requireAuth, requireOwnership, requireRoles } from "./core.js";
 import type { PermissionCheck } from "./types.js";
 
 /**

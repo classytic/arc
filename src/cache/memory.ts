@@ -1,4 +1,4 @@
-import type { CacheLogger, CacheSetOptions, CacheStats, CacheStore } from "./interface.js";
+import type { CacheLogger, CacheStats, CacheStore } from "./interface.js";
 
 interface MemoryEntry<TValue> {
   value: TValue;
@@ -7,8 +7,8 @@ interface MemoryEntry<TValue> {
 }
 
 export interface MemoryCacheStoreOptions {
-  /** Default TTL in milliseconds (default: 60_000) */
-  defaultTtlMs?: number;
+  /** Default TTL in seconds (default: 60) */
+  defaultTtlSeconds?: number;
   /** Hard upper bound for entries (default: 1000) */
   maxEntries?: number;
   /** Background cleanup interval in milliseconds (default: 30_000) */
@@ -44,7 +44,7 @@ export class MemoryCacheStore<TValue = unknown> implements CacheStore<TValue> {
   readonly name = "memory-cache";
 
   private readonly cache = new Map<string, MemoryEntry<TValue>>();
-  private readonly defaultTtlMs: number;
+  private readonly defaultTtlSeconds: number;
   private readonly maxEntries: number;
   private readonly maxEntryBytes: number;
   private readonly maxMemoryBytes: number;
@@ -58,7 +58,7 @@ export class MemoryCacheStore<TValue = unknown> implements CacheStore<TValue> {
   private _evictions = 0;
 
   constructor(options: MemoryCacheStoreOptions = {}) {
-    this.defaultTtlMs = options.defaultTtlMs ?? 60_000;
+    this.defaultTtlSeconds = options.defaultTtlSeconds ?? 60;
     this.maxEntries = clamp(options.maxEntries ?? 1000, 1, 100_000);
     this.maxEntryBytes = clamp(options.maxEntryBytes ?? 256 * 1024, 1024, 10 * 1024 * 1024);
     this.maxMemoryBytes = options.maxMemoryBytes ?? 50 * 1024 * 1024; // 50 MiB
@@ -90,9 +90,10 @@ export class MemoryCacheStore<TValue = unknown> implements CacheStore<TValue> {
     return entry.value;
   }
 
-  async set(key: string, value: TValue, options: CacheSetOptions = {}): Promise<void> {
-    const ttlMs = options.ttlMs ?? this.defaultTtlMs;
-    if (!Number.isFinite(ttlMs) || ttlMs <= 0) return;
+  async set(key: string, value: TValue, ttlSeconds?: number): Promise<void> {
+    const effectiveTtlSeconds = ttlSeconds ?? this.defaultTtlSeconds;
+    if (!Number.isFinite(effectiveTtlSeconds) || effectiveTtlSeconds <= 0) return;
+    const ttlMs = effectiveTtlSeconds * 1000;
 
     const size = this.estimateSize(value);
     if (size > this.maxEntryBytes) {
@@ -121,9 +122,16 @@ export class MemoryCacheStore<TValue = unknown> implements CacheStore<TValue> {
     if (entry) this.removeEntry(key, entry);
   }
 
-  async clear(): Promise<void> {
-    this.cache.clear();
-    this.currentBytes = 0;
+  async clear(pattern?: string): Promise<void> {
+    if (pattern === undefined) {
+      this.cache.clear();
+      this.currentBytes = 0;
+      return;
+    }
+    const regex = globToRegExp(pattern);
+    for (const [key, entry] of this.cache) {
+      if (regex.test(key)) this.removeEntry(key, entry);
+    }
   }
 
   async close(): Promise<void> {
@@ -191,4 +199,14 @@ export class MemoryCacheStore<TValue = unknown> implements CacheStore<TValue> {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * Translate a glob pattern (`prefix:*`, `*:tag:v`) into a regex. Only `*`
+ * is honoured; other regex metachars are escaped so patterns can't inject
+ * alternation/lookahead.
+ */
+function globToRegExp(pattern: string): RegExp {
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`);
 }

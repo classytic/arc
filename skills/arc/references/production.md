@@ -366,28 +366,6 @@ const runner = new MigrationRunner(mongoose.connection.db);
 await runner.up([v2]);
 ```
 
-## Policies
-
-Query-level authorization — modify queries based on user:
-
-```typescript
-import { createAccessControlPolicy } from '@classytic/arc/policies';
-
-const editorPolicy = createAccessControlPolicy({
-  statements: [
-    { resource: 'product', action: ['create', 'update'] },
-    { resource: 'order', action: ['read'] },
-  ],
-});
-
-defineResource({
-  permissions: {
-    create: editorPolicy,
-    update: editorPolicy,
-  },
-});
-```
-
 ## OpenAPI & External Paths
 
 Arc auto-generates OpenAPI 3.0 specs from resource definitions. External integrations (auth adapters, custom routes) inject their paths via `ExternalOpenApiPaths`.
@@ -561,25 +539,6 @@ const relayed = await outbox.relay();  // publishes pending → transport
 ```
 
 **OutboxStore interface**: `save(event)`, `getPending(limit)`, `acknowledge(eventId)` (+ optional `claimPending`, `fail`, `getDeadLettered`, `purge`). When you pass `repository`, arc adapts it internally.
-
-## RPC Service Client — Schema Versioning
-
-The service client supports a `schemaVersion` option for contract compatibility between services:
-
-```typescript
-import { createServiceClient } from '@classytic/arc/rpc';
-
-const catalog = createServiceClient({
-  baseUrl: 'http://catalog:3000',
-  schemaVersion: '1.2.0',  // sent as x-arc-schema-version header
-  correlationId: () => request.id,
-  retry: { maxRetries: 2 },
-});
-
-const products = await catalog.resource('product').list();
-```
-
-Receiving services can check `request.headers['x-arc-schema-version']` to detect version mismatches.
 
 ## Bulk Operations Preset
 

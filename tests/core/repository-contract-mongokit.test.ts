@@ -1,7 +1,7 @@
 /**
  * Repository Contract Conformance — mongokit 3.6 Reference
  *
- * Exercises arc's canonical `CrudRepository<TDoc>` surface against a real
+ * Exercises arc's canonical `StandardRepo<TDoc>` surface against a real
  * `@classytic/mongokit` 3.6.0 `Repository` backed by `mongodb-memory-server`
  * with seeded data. Serves two purposes:
  *
@@ -39,15 +39,17 @@ import mongoose, { type Connection, Schema, type Types } from "mongoose";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type {
+  KeysetPaginationResult,
+  OffsetPaginationResult,
+} from "@classytic/repo-core/pagination";
+import type {
   BulkWriteOperation,
-  CrudRepository,
   DeleteManyResult,
   DeleteResult,
-  KeysetPaginatedResult,
-  OffsetPaginatedResult,
-  PaginationResult,
+  StandardRepo,
   UpdateManyResult,
-} from "../../src/types/index.js";
+} from "@classytic/repo-core/repository";
+import type { PaginationResult } from "../../src/types/index.js";
 
 // ============================================================================
 // Seed data
@@ -148,12 +150,12 @@ const SEED: Array<Omit<IProduct, "_id" | "createdAt" | "updatedAt">> = [
 // ============================================================================
 
 type ProductRepo = Repository<IProduct> &
-  CrudRepository<IProduct> & {
-    updateMany: NonNullable<CrudRepository<IProduct>["updateMany"]>;
-    deleteMany: NonNullable<CrudRepository<IProduct>["deleteMany"]>;
-    bulkWrite: NonNullable<CrudRepository<IProduct>["bulkWrite"]>;
-    restore: NonNullable<CrudRepository<IProduct>["restore"]>;
-    getDeleted: NonNullable<CrudRepository<IProduct>["getDeleted"]>;
+  StandardRepo<IProduct> & {
+    updateMany: NonNullable<StandardRepo<IProduct>["updateMany"]>;
+    deleteMany: NonNullable<StandardRepo<IProduct>["deleteMany"]>;
+    bulkWrite: NonNullable<StandardRepo<IProduct>["bulkWrite"]>;
+    restore: NonNullable<StandardRepo<IProduct>["restore"]>;
+    getDeleted: NonNullable<StandardRepo<IProduct>["getDeleted"]>;
   };
 
 let mongoServer: MongoMemoryServer;
@@ -203,7 +205,7 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
   describe("Required — core CRUD", () => {
     it("getAll: returns offset PaginationResult when `page` is given", async () => {
       const result = await repo.getAll({ page: 1, limit: 3 });
-      const offset = result as OffsetPaginatedResult<IProduct>;
+      const offset = result as OffsetPaginationResult<IProduct>;
       expect(offset.docs.length).toBe(3);
       expect(offset.page).toBe(1);
       expect(offset.total).toBe(6);
@@ -222,13 +224,13 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
       expect(result).toHaveProperty("docs");
       const anyResult = result as Record<string, unknown>;
       if ("method" in anyResult && anyResult.method === "keyset") {
-        const keyset = result as KeysetPaginatedResult<IProduct>;
+        const keyset = result as KeysetPaginationResult<IProduct>;
         expect(keyset.docs.length).toBe(2);
         expect(typeof keyset.hasMore).toBe("boolean");
         expect(keyset.next === null || typeof keyset.next === "string").toBe(true);
       } else {
         // Legacy offset shape fallback — still valid under the contract.
-        const offset = result as OffsetPaginatedResult<IProduct>;
+        const offset = result as OffsetPaginationResult<IProduct>;
         expect(offset.docs.length).toBe(2);
       }
     });
@@ -542,9 +544,12 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
 
   describe("Optional — aggregation", () => {
     it("aggregate: runs a pipeline and returns results", async () => {
-      expect(typeof repo.aggregate).toBe("function");
+      // mongokit 3.10 split: raw-pipeline `aggregate()` → `aggregatePipeline()`;
+      // `aggregate(req: AggRequest)` is now the portable IR-style grouping API
+      // shared with sqlitekit / pgkit. This test exercises the pipeline path.
+      expect(typeof repo.aggregatePipeline).toBe("function");
       type GroupRow = { _id: string; totalStock: number; count: number };
-      const rows = await repo.aggregate!<GroupRow>([
+      const rows = await repo.aggregatePipeline!<GroupRow>([
         {
           $group: {
             _id: "$category",
@@ -627,7 +632,7 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
         page: parsed.page,
         limit: parsed.limit,
       });
-      const offset = result as OffsetPaginatedResult<IProduct>;
+      const offset = result as OffsetPaginationResult<IProduct>;
       expect(offset.docs.length).toBe(2);
       // Sorted by -price → Dumbbell (149) before Yoga Mat (45)
       expect(offset.docs[0]!.sku).toBe("DMB-006");

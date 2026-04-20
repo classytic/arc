@@ -8,11 +8,11 @@ description: |
   Triggers: arc, fastify resource, defineResource, createApp, BaseController, arc preset,
   arc auth, arc events, arc jobs, arc websocket, arc mcp, arc plugin, arc testing, arc cli,
   arc permissions, arc hooks, arc pipeline, arc factory, arc cache, arc QueryCache.
-version: 2.9.1
+version: 2.10.2
 license: MIT
 metadata:
   author: Classytic
-  version: "2.9.1"
+  version: "2.10.2"
 tags:
   - fastify
   - rest-api
@@ -692,14 +692,11 @@ class ProductController extends BaseController<Product> {
 import { createMongooseAdapter } from '@classytic/arc';
 const adapter = createMongooseAdapter({ model: ProductModel, repository: productRepo });
 
-// Custom adapter — implement CrudRepository interface:
-interface CrudRepository<TDoc> {
-  getAll(params?): Promise<TDoc[] | PaginatedResult<TDoc>>;
-  getById(id: string): Promise<TDoc | null>;
-  create(data): Promise<TDoc>;
-  update(id: string, data): Promise<TDoc | null>;
-  delete(id: string): Promise<boolean>;
-}
+// Custom adapter — implement MinimalRepo from @classytic/repo-core/repository:
+import type { MinimalRepo } from '@classytic/repo-core/repository';
+// MinimalRepo<TDoc> = five-method floor (getAll, getById, create, update, delete)
+// StandardRepo<TDoc> = MinimalRepo + optional batch ops, CAS, soft-delete, etc.
+// Arc feature-detects optional methods at call sites.
 ```
 
 ## Events
@@ -1178,7 +1175,6 @@ import {
 } from '@classytic/arc/scope';
 import { createTenantKeyGenerator } from '@classytic/arc/scope';
 import { createRoleHierarchy } from '@classytic/arc/permissions';
-import { createServiceClient } from '@classytic/arc/rpc';
 import { metricsPlugin, versioningPlugin } from '@classytic/arc/plugins';
 import { webhookPlugin } from '@classytic/arc/integrations/webhooks';
 import { mcpPlugin, createMcpServer, defineTool, definePrompt, fieldRulesToZod, resourceToTools } from '@classytic/arc/mcp';
