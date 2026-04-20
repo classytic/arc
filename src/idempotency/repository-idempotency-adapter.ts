@@ -1,13 +1,15 @@
 /**
- * Internal: RepositoryLike → IdempotencyStore inline adapter.
+ * RepositoryLike → IdempotencyStore adapter.
  *
  * Maps the idempotency store's verbs (get / set / tryLock / unlock / delete /
  * deleteByPrefix / findByPrefix) onto arc's canonical repository primitives
- * (`getOne` / `deleteMany` / `findOneAndUpdate`). Not exported publicly —
- * `idempotencyPlugin` wraps a passed repository with this helper when you
- * use the `{ repository }` option.
+ * (`getOne` / `deleteMany` / `findOneAndUpdate`). `idempotencyPlugin` wraps
+ * a passed repository with this helper when you use the `{ repository }`
+ * option; the function is also re-exported from `@classytic/arc/idempotency`
+ * so consumers can build and decorate the store (metrics, tracing, key
+ * namespacing) before passing it via `store:`.
  *
- * Requires mongokit ≥3.8 (or equivalent) — `findOneAndUpdate` is essential
+ * Requires mongokit ≥3.10 (or equivalent) — `findOneAndUpdate` is essential
  * for the atomic upsert + conditional-lock handshake.
  */
 

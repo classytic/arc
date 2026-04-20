@@ -64,7 +64,6 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
-import { isReplyCommitted } from "../utils/reply-guards.js";
 import { hasEvents } from "../utils/typeGuards.js";
 
 // ============================================================================
@@ -430,8 +429,6 @@ const responseCachePluginImpl: FastifyPluginAsync<ResponseCacheOptions> = async 
 
   // ---- onSend hook: store in cache (recompute key — user is now populated) ----
   fastify.addHook("onSend", async (request: FastifyRequest, reply: FastifyReply, payload) => {
-    if (isReplyCommitted(reply)) return payload;
-
     const ttl = request.__arcCacheTTL;
     if (!ttl || ttl <= 0) return payload;
 

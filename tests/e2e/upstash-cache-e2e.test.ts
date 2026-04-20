@@ -58,7 +58,7 @@ describeRedis("Upstash Redis — RedisCacheStore production readiness", () => {
     const store = new RedisCacheStore<{ allow: boolean; roles: string[] }>({
       client,
       prefix: `arc-test-basic-${runId}:`,
-      defaultTtlMs: 5_000,
+      defaultTtlSeconds: 5,
     });
 
     await store.set("perm:user-1", { allow: true, roles: ["admin"] });
@@ -99,13 +99,13 @@ describeRedis("Upstash Redis — RedisCacheStore production readiness", () => {
   // 3. TTL expiry (server-side)
   // ────────────────────────────────────────────────────────────────────
 
-  it("honors PX TTL — entries vanish after the TTL elapses", async () => {
+  it("honors EX TTL — entries vanish after the TTL elapses", async () => {
     const store = new RedisCacheStore<string>({
       client,
       prefix: `arc-test-ttl-${runId}:`,
     });
 
-    await store.set("ephemeral", "bye", { ttlMs: 1_000 });
+    await store.set("ephemeral", "bye", 1);
     expect(await store.get("ephemeral")).toBe("bye");
 
     await new Promise((r) => setTimeout(r, 1_300));
@@ -163,7 +163,7 @@ describeRedis("Upstash Redis — RedisCacheStore production readiness", () => {
     const store = new RedisCacheStore<{ n: number }>({
       client,
       prefix: `arc-test-load-${runId}:`,
-      defaultTtlMs: 10_000,
+      defaultTtlSeconds: 10,
     });
 
     const writes = Array.from({ length: 100 }, (_, i) => store.set(`k-${i}`, { n: i }));

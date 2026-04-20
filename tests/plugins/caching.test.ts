@@ -231,76 +231,190 @@ describe("Caching Plugin", () => {
   });
 
   // --------------------------------------------------------------------------
-  // Regression: headers already committed (2.9.2 — light-my-request race)
+  // Regression: ERR_HTTP_HEADERS_SENT under light-my-request (issue 2.9.3)
   //
-  // Fixes ERR_HTTP_HEADERS_SENT triggered by the onSend hook's
-  // `reply.header(...)` calls when a prior path (action route, error handler,
-  // 404) flushed the response before the onSend chain ran.
+  // Reported by downstream apps: caching's onSend hook triggers an unhandled
+  // rejection "Cannot write headers after they are sent" on POSTs, 404 GETs,
+  // and Stripe-style action endpoints, polluting vitest logs and tripping
+  // the `--bail` gate.
+  //
+  // Root cause: an async onSend hook yields control back to the event loop
+  // via microtask. Under light-my-request's Response state tracking, the
+  // chain resumes after reply state has transitioned, so when Fastify's
+  // onSendEnd reaches safeWriteHead it finds headers already committed and
+  // re-throws.
+  //
+  // Fix: move header mutation out of the onSend chain entirely. Use
+  // preSerialization — headers can still be set, runs before the flush,
+  // doesn't participate in the onSendEnd → safeWriteHead path.
   // --------------------------------------------------------------------------
 
-  describe("headers already committed (regression 2.9.2)", () => {
-    it("skips reply.header mutation when reply.raw.headersSent is true", async () => {
+  describe("no unhandled rejections under light-my-request (regression 2.9.3)", () => {
+    // Helper: capture unhandled rejections during the window of `fn()`.
+    async function captureRejections(fn: () => Promise<void>): Promise<unknown[]> {
+      const captured: unknown[] = [];
+      const listener = (err: unknown) => captured.push(err);
+      process.on("unhandledRejection", listener);
+      try {
+        await fn();
+        // Flush two microtask ticks so deferred rejections surface before we
+        // detach the listener. One tick clears most promises; two covers
+        // chained then() callbacks from Fastify's hook runner.
+        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setImmediate(resolve));
+      } finally {
+        process.off("unhandledRejection", listener);
+      }
+      return captured;
+    }
+
+    it("does not emit ERR_HTTP_HEADERS_SENT on 404 GET", async () => {
       const app = Fastify({ logger: false });
       await app.register(cachingPlugin);
+      await app.ready();
 
-      const headerCalls: string[] = [];
-
-      app.get("/committed", async (_req, reply) => {
-        // Spy on reply.header so we can assert the plugin's onSend skipped it
-        const original = reply.header.bind(reply);
-        reply.header = (name: string, value: unknown) => {
-          headerCalls.push(name);
-          return original(name, value);
-        };
-        // Simulate the race: headers marked as committed before onSend fires
-        Object.defineProperty(reply.raw, "headersSent", {
-          value: true,
-          configurable: true,
-        });
-        return { items: [] };
+      const rejections = await captureRejections(async () => {
+        const res = await app.inject({ method: "GET", url: "/does-not-exist" });
+        expect(res.statusCode).toBe(404);
       });
 
-      await app.ready();
-      await app.inject({ method: "GET", url: "/committed" });
-
-      // Without the guard the plugin would push "cache-control" + "etag".
-      // With the guard it bails out — no header mutation attempts.
-      expect(headerCalls).not.toContain("cache-control");
-      expect(headerCalls).not.toContain("etag");
-
+      expect(rejections).toEqual([]);
       await app.close();
     });
 
-    it("skips reply.header mutation on POST when reply.sent is true", async () => {
+    it("does not emit ERR_HTTP_HEADERS_SENT on POST mutation", async () => {
       const app = Fastify({ logger: false });
       await app.register(cachingPlugin);
+      app.post("/items", async () => ({ created: true }));
+      await app.ready();
 
-      const headerCalls: string[] = [];
-
-      app.post("/items", async (_req, reply) => {
-        const original = reply.header.bind(reply);
-        reply.header = (name: string, value: unknown) => {
-          headerCalls.push(name);
-          return original(name, value);
-        };
-        Object.defineProperty(reply.raw, "headersSent", {
-          value: true,
-          configurable: true,
+      const rejections = await captureRejections(async () => {
+        const res = await app.inject({
+          method: "POST",
+          url: "/items",
+          payload: { name: "x" },
+          headers: { "content-type": "application/json" },
         });
-        return { created: true };
+        expect(res.statusCode).toBe(200);
       });
 
+      expect(rejections).toEqual([]);
+      await app.close();
+    });
+
+    it("does not emit ERR_HTTP_HEADERS_SENT on action-style POST", async () => {
+      const app = Fastify({ logger: false });
+      await app.register(cachingPlugin);
+      app.post("/items/:id/approve", async (req) => ({
+        id: (req.params as { id: string }).id,
+        approved: true,
+      }));
       await app.ready();
-      await app.inject({
+
+      const rejections = await captureRejections(async () => {
+        const res = await app.inject({
+          method: "POST",
+          url: "/items/abc123/approve",
+          payload: {},
+          headers: { "content-type": "application/json" },
+        });
+        expect(res.statusCode).toBe(200);
+      });
+
+      expect(rejections).toEqual([]);
+      await app.close();
+    });
+
+    it("still sets Cache-Control: no-store on mutation responses", async () => {
+      const app = Fastify({ logger: false });
+      await app.register(cachingPlugin);
+      app.post("/items", async () => ({ created: true }));
+      await app.ready();
+
+      const res = await app.inject({
         method: "POST",
         url: "/items",
         payload: {},
         headers: { "content-type": "application/json" },
       });
 
-      // Without the guard, POST path would push "cache-control: no-store"
-      expect(headerCalls).not.toContain("cache-control");
+      expect(res.headers["cache-control"]).toBe("no-store");
+      await app.close();
+    });
 
+    it("still generates ETag on 2xx GET responses", async () => {
+      const app = Fastify({ logger: false });
+      await app.register(cachingPlugin);
+      app.get("/items", async () => ({ items: [1, 2, 3] }));
+      await app.ready();
+
+      const res = await app.inject({ method: "GET", url: "/items" });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.headers.etag).toBeDefined();
+      expect(res.headers.etag).toMatch(/^"[a-z0-9]+"$/);
+      await app.close();
+    });
+
+    it("sets cache headers in preSerialization, not onSend", async () => {
+      // This test pins the fix: cache headers must be set during
+      // preSerialization (before the onSendEnd → safeWriteHead path that
+      // races under light-my-request), not during onSend.
+      //
+      // Mechanism: register our observer hooks AFTER cachingPlugin. Fastify
+      // runs hooks in registration order within each phase, so our
+      // preSerialization hook runs AFTER caching's (if caching is in
+      // preSerialization), and our onSend hook runs AFTER caching's
+      // (regardless). A pre-fix caching (onSend) leaves headers absent at
+      // our preSerialization observation point; a post-fix caching
+      // (preSerialization) has them set by the time we observe.
+      const app = Fastify({ logger: false });
+      await app.register(cachingPlugin);
+
+      let headersAtPreSerialization: string[] = [];
+      app.addHook("preSerialization", async (_req, reply, payload) => {
+        headersAtPreSerialization = Object.keys(reply.getHeaders());
+        return payload;
+      });
+
+      app.get("/items", async () => ({ items: [1, 2, 3] }));
+      await app.ready();
+
+      const res = await app.inject({ method: "GET", url: "/items" });
+
+      expect(res.statusCode).toBe(200);
+      // Caching plugin must have set these BEFORE onSend runs.
+      expect(headersAtPreSerialization).toContain("cache-control");
+      expect(headersAtPreSerialization).toContain("etag");
+      await app.close();
+    });
+
+    it("returns 304 without running ETag logic in onSend", async () => {
+      // Conditional request handling (If-None-Match → 304) must also
+      // happen in preSerialization, otherwise setting reply.code(304) +
+      // returning empty payload during the onSend chain races with the
+      // same safeWriteHead path.
+      const app = Fastify({ logger: false });
+      await app.register(cachingPlugin);
+      app.get("/items", async () => ({ items: [1, 2, 3] }));
+      await app.ready();
+
+      // First request to get the ETag
+      const first = await app.inject({ method: "GET", url: "/items" });
+      const etag = first.headers.etag as string;
+      expect(etag).toBeDefined();
+
+      // Second request with If-None-Match
+      const rejections = await captureRejections(async () => {
+        const res = await app.inject({
+          method: "GET",
+          url: "/items",
+          headers: { "if-none-match": etag },
+        });
+        expect(res.statusCode).toBe(304);
+      });
+
+      expect(rejections).toEqual([]);
       await app.close();
     });
   });

@@ -7,13 +7,17 @@ your own kit) for persistence, or omit for in-memory dev.
 
 ```typescript
 import { auditPlugin } from '@classytic/arc/audit';
-import { Repository } from '@classytic/mongokit';
+import {
+  Repository,
+  methodRegistryPlugin,
+  batchOperationsPlugin,
+} from '@classytic/mongokit';
 import mongoose, { Schema } from 'mongoose';
 
 // Development: in-memory (default, no repository passed)
 await fastify.register(auditPlugin, { enabled: true });
 
-// Production: any RepositoryLike
+// Production: mongokit + strict:false passthrough schema
 const AuditModel = mongoose.model(
   'ArcAuditEntry',
   new Schema({}, { strict: false, timestamps: false, _id: false }),
@@ -22,13 +26,49 @@ const AuditModel = mongoose.model(
 
 await fastify.register(auditPlugin, {
   enabled: true,
-  repository: new Repository(AuditModel),
+  repository: new Repository(AuditModel, [
+    methodRegistryPlugin(),
+    batchOperationsPlugin(), // required for purgeOlderThan() — calls deleteMany
+  ]),
 });
 ```
 
-TTL / retention are owned by your DB — create a TTL index on `timestamp`
-(Mongo), a scheduled DELETE job (SQL), or equivalent. Arc no longer
-creates indexes automatically.
+### Why `strict: false`?
+
+Arc owns the `AuditEntry` shape (see
+[`src/audit/stores/interface.ts`](https://github.com/classytic/arc/blob/main/src/audit/stores/interface.ts)).
+A strict Mongoose schema would silently drop any field arc adds in a
+future release. `strict: false` forwards every field as-is, so arc's
+contract — not Mongoose's schema — defines what gets written.
+
+### Why `batchOperationsPlugin`?
+
+`fastify.audit.purge(cutoff)` calls `repository.deleteMany(...)`.
+mongokit's base `Repository` does not expose `deleteMany` — it comes
+from `batchOperationsPlugin` (which requires `methodRegistryPlugin`).
+Without it, `purgeOlderThan` becomes a silent no-op (returns `0`).
+
+### Recommended indexes
+
+You own the indexes. Declare them once at boot — arc does not create
+indexes automatically.
+
+```typescript
+// MongoDB — TTL index retires old entries automatically (30-day example)
+await AuditModel.collection.createIndex(
+  { timestamp: 1 },
+  { expireAfterSeconds: 60 * 60 * 24 * 30 },
+);
+
+// Lookup: "all entries for this document, newest first"
+await AuditModel.collection.createIndex({ resource: 1, documentId: 1, timestamp: -1 });
+
+// Lookup: "who did what in this org"
+await AuditModel.collection.createIndex({ organizationId: 1, timestamp: -1 });
+```
+
+For SQL backends, define the equivalent indexes in your migration and
+run a scheduled `DELETE FROM audit_logs WHERE timestamp < ...` job.
 
 ## Configuration
 

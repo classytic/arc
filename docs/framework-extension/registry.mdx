@@ -92,7 +92,7 @@ interface RegistryEntry {
   prefix: string;
   module: string | null;
   model?: Model<Document>;
-  repository: CrudRepository;
+  repository: StandardRepo; // from @classytic/repo-core/repository
   controller: CrudController;
   permissions: AuthConfig;
   presets: string[];

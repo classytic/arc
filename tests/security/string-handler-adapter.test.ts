@@ -12,15 +12,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/index.js";
 import { allowPublic } from "../../src/permissions/index.js";
-import type {
-  AnyRecord,
-  CrudRepository,
-  DataAdapter,
-  IRequestContext,
-} from "../../src/types/index.js";
+import type { StandardRepo } from "@classytic/repo-core/repository";
+import type { AnyRecord, DataAdapter, IRequestContext } from "../../src/types/index.js";
 
 // Helper to create test adapter
-function createTestAdapter(repository: CrudRepository): DataAdapter {
+function createTestAdapter(repository: StandardRepo): DataAdapter {
   return {
     repository,
     type: "custom",
@@ -29,7 +25,7 @@ function createTestAdapter(repository: CrudRepository): DataAdapter {
 }
 
 // Mock repository
-class TestRepository implements CrudRepository {
+class TestRepository implements StandardRepo {
   async getAll() {
     return [
       { _id: "1", name: "Item 1" },
@@ -56,7 +52,7 @@ class TestRepository implements CrudRepository {
 
 // Test controller with custom method
 class TestController extends BaseController {
-  constructor(repo: CrudRepository) {
+  constructor(repo: StandardRepo) {
     super(repo);
     // Bind custom methods
     this.customAction = this.customAction.bind(this);
@@ -249,7 +245,7 @@ describe("Security: String Handler Response Adapter", () => {
 
   it("should handle async controller methods", async () => {
     class AsyncController extends BaseController {
-      constructor(repo: CrudRepository) {
+      constructor(repo: StandardRepo) {
         super(repo);
         this.asyncMethod = this.asyncMethod.bind(this);
       }

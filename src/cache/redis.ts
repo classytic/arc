@@ -1,4 +1,4 @@
-import type { CacheSetOptions, CacheStats, CacheStore } from "./interface.js";
+import type { CacheStats, CacheStore } from "./interface.js";
 
 export interface RedisCacheClient {
   get(key: string): Promise<string | null>;
@@ -36,8 +36,8 @@ export interface RedisCacheStoreOptions {
   client: RedisCacheClient;
   /** Key prefix for namespacing (default: 'arc:cache:') */
   prefix?: string;
-  /** Default TTL in milliseconds (default: 60_000) */
-  defaultTtlMs?: number;
+  /** Default TTL in seconds (default: 60) */
+  defaultTtlSeconds?: number;
   /** Maximum serialized entry size in bytes. Oversized entries are skipped. */
   maxEntryBytes?: number;
 }
@@ -52,7 +52,7 @@ export class RedisCacheStore<TValue = unknown> implements CacheStore<TValue> {
 
   private readonly client: RedisCacheClient;
   private readonly prefix: string;
-  private readonly defaultTtlMs: number;
+  private readonly defaultTtlSeconds: number;
   private readonly maxEntryBytes: number;
 
   private _hits = 0;
@@ -61,7 +61,7 @@ export class RedisCacheStore<TValue = unknown> implements CacheStore<TValue> {
   constructor(options: RedisCacheStoreOptions) {
     this.client = options.client;
     this.prefix = options.prefix ?? "arc:cache:";
-    this.defaultTtlMs = options.defaultTtlMs ?? 60_000;
+    this.defaultTtlSeconds = options.defaultTtlSeconds ?? 60;
     this.maxEntryBytes = options.maxEntryBytes ?? 0; // 0 = no limit
   }
 
@@ -82,9 +82,9 @@ export class RedisCacheStore<TValue = unknown> implements CacheStore<TValue> {
     }
   }
 
-  async set(key: string, value: TValue, options: CacheSetOptions = {}): Promise<void> {
-    const ttlMs = options.ttlMs ?? this.defaultTtlMs;
-    if (!Number.isFinite(ttlMs) || ttlMs <= 0) return;
+  async set(key: string, value: TValue, ttlSeconds?: number): Promise<void> {
+    const effectiveTtlSeconds = ttlSeconds ?? this.defaultTtlSeconds;
+    if (!Number.isFinite(effectiveTtlSeconds) || effectiveTtlSeconds <= 0) return;
 
     const payload = JSON.stringify(value);
 
@@ -92,20 +92,28 @@ export class RedisCacheStore<TValue = unknown> implements CacheStore<TValue> {
       return; // skip oversized entry
     }
 
-    await this.client.set(this.withPrefix(key), payload, { PX: Math.ceil(ttlMs) });
+    // Prefer EX (seconds) natively — matches Redis `SET key val EX n`.
+    await this.client.set(this.withPrefix(key), payload, {
+      EX: Math.ceil(effectiveTtlSeconds),
+    });
   }
 
   async delete(key: string): Promise<void> {
+    // Note: `this.client.del(...)` stays — ioredis/node-redis/upstash
+    // clients all expose the Redis primitive as `.del()`. Arc's cache
+    // adapter surface exposes `.delete()` for ecosystem consistency.
     await this.client.del(this.withPrefix(key));
   }
 
-  async clear(): Promise<void> {
-    await this.scanAndDelete(`${this.prefix}*`);
-  }
-
-  /** Delete all keys matching `this.prefix + prefix + *`. Returns count deleted. */
-  async deleteByPrefix(prefix: string): Promise<number> {
-    return this.scanAndDelete(`${this.prefix}${prefix}*`);
+  /**
+   * Invalidate keys. Pass a glob pattern to delete a subset (`user:*:v2`);
+   * omit to clear every key under this store's prefix.
+   */
+  async clear(pattern?: string): Promise<void> {
+    const scanPattern = pattern
+      ? `${this.prefix}${pattern.includes("*") ? pattern : `${pattern}*`}`
+      : `${this.prefix}*`;
+    await this.scanAndDelete(scanPattern);
   }
 
   stats(): CacheStats {

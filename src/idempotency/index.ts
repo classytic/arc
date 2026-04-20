@@ -32,6 +32,13 @@ export {
   default as idempotencyPlugin,
   idempotencyPlugin as idempotencyPluginFn,
 } from "./idempotencyPlugin.js";
+/**
+ * Repository → IdempotencyStore adapter. Exposed so consumers can build
+ * and decorate the repo-backed store (metrics, tracing, key namespacing)
+ * before passing it to {@link idempotencyPlugin} via `store:`. Passing
+ * `{ repository }` to the plugin remains the one-liner path.
+ */
+export { repositoryAsIdempotencyStore } from "./repository-idempotency-adapter.js";
 // Types + core (lightweight) stores
 export type {
   IdempotencyLock,

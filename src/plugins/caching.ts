@@ -21,7 +21,6 @@
 
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
-import { isReplyCommitted } from "../utils/reply-guards.js";
 
 export interface CachingRule {
   /** Path prefix to match (e.g., '/api/products') */
@@ -106,11 +105,19 @@ const cachingPlugin: FastifyPluginAsync<CachingOptions> = async (
     return parts.join(", ");
   }
 
-  // onSend hook — runs just before the response is sent
-  fastify.addHook("onSend", async (request, reply, payload) => {
-    // Guard: skip if the reply is already committed (see reply-guards.ts).
-    if (isReplyCommitted(reply)) return payload;
-
+  // preSerialization hook — runs BEFORE serialization and BEFORE onSend.
+  //
+  // Deliberately NOT an onSend hook: under `light-my-request` (vitest test
+  // harness) an async onSend hook races with Fastify's onSendEnd →
+  // safeWriteHead path, producing `ERR_HTTP_HEADERS_SENT` unhandled
+  // rejections on POSTs / 404 GETs / action endpoints. preSerialization
+  // runs before headers are committed, so no race.
+  //
+  // Trade-off: ETag hashes the pre-serialization payload (via JSON.stringify),
+  // not Fastify's schema-serialized bytes. This actually FIXES a pre-2.9.3
+  // bug where `String(obj)` produced `"[object Object]"` for every object
+  // payload, collapsing all ETags to one value. The hash is now meaningful.
+  fastify.addHook("preSerialization", async (request, reply, payload) => {
     const url = request.url;
 
     // Skip excluded paths
@@ -140,9 +147,18 @@ const cachingPlugin: FastifyPluginAsync<CachingOptions> = async (
       reply.header("cache-control", buildCacheControl(rule));
     }
 
-    // ETag generation
-    if (etag && payload) {
-      const body = typeof payload === "string" ? payload : String(payload);
+    // ETag generation — hash the pre-serialization payload. For objects we
+    // use JSON.stringify (deterministic for same-shape objects); for strings
+    // we hash directly; for Buffers we hash the utf-8 view.
+    if (etag && payload != null) {
+      let body: string;
+      if (typeof payload === "string") {
+        body = payload;
+      } else if (Buffer.isBuffer(payload)) {
+        body = payload.toString("utf-8");
+      } else {
+        body = JSON.stringify(payload);
+      }
       const tag = `"${fnv1a(body)}"`;
       reply.header("etag", tag);
 
@@ -150,7 +166,11 @@ const cachingPlugin: FastifyPluginAsync<CachingOptions> = async (
       if (conditional) {
         const ifNoneMatch = request.headers["if-none-match"];
         if (ifNoneMatch && ifNoneMatch === tag) {
+          // 304 has no body. Swap in an identity serializer so returning
+          // "" yields empty bytes instead of JSON's '""'. Keeps us on
+          // Fastify's normal write path (no hijack / no raw writes).
           reply.code(304);
+          reply.serializer((p: unknown) => (typeof p === "string" ? p : ""));
           return "";
         }
       }

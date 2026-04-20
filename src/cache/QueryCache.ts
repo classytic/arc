@@ -65,20 +65,20 @@ export class QueryCache {
   }
 
   async set<T>(key: string, data: T, config: QueryCacheConfig): Promise<void> {
-    const staleTimeMs = (config.staleTime ?? 0) * 1000;
-    const gcTimeMs = (config.gcTime ?? 60) * 1000;
-    const totalTtl = staleTimeMs + gcTimeMs;
+    const staleTimeSec = config.staleTime ?? 0;
+    const gcTimeSec = config.gcTime ?? 60;
+    const totalTtlSec = staleTimeSec + gcTimeSec;
     const now = Date.now();
 
     const envelope: CacheEnvelope<T> = {
       data,
       createdAt: now,
-      staleAfter: now + staleTimeMs,
-      expiresAt: now + totalTtl,
+      staleAfter: now + staleTimeSec * 1000,
+      expiresAt: now + totalTtlSec * 1000,
       tags: config.tags ?? [],
     };
 
-    await this.store.set(key, envelope, { ttlMs: totalTtl });
+    await this.store.set(key, envelope, totalTtlSec);
   }
 
   async invalidate(key: string): Promise<void> {
@@ -96,7 +96,7 @@ export class QueryCache {
     const key = versionKey(resource);
     const newVersion = Date.now();
     // Store version with a very long TTL (24h) — it's tiny data
-    await this.store.set(key, newVersion, { ttlMs: 24 * 60 * 60 * 1000 });
+    await this.store.set(key, newVersion, 24 * 60 * 60);
   }
 
   /** Get current version for a tag */
@@ -109,6 +109,6 @@ export class QueryCache {
   async bumpTagVersion(tag: string): Promise<void> {
     const key = tagVersionKey(tag);
     const newVersion = Date.now();
-    await this.store.set(key, newVersion, { ttlMs: 24 * 60 * 60 * 1000 });
+    await this.store.set(key, newVersion, 24 * 60 * 60);
   }
 }

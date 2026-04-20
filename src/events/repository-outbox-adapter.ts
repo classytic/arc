@@ -1,14 +1,17 @@
 /**
- * Internal: RepositoryLike → OutboxStore inline adapter.
+ * RepositoryLike → OutboxStore adapter.
  *
  * Maps the `OutboxStore` vocabulary (save / claimPending / acknowledge /
  * fail / getDeadLettered / purge) onto arc's own `RepositoryLike` primitives
- * (create / getOne / findAll / deleteMany / findOneAndUpdate). Not exported
- * publicly — `EventOutbox` wraps a passed repository with this helper when
- * you use the `{ repository }` option.
+ * (create / getOne / findAll / deleteMany / findOneAndUpdate). `EventOutbox`
+ * wraps a passed repository with this helper when you use the
+ * `{ repository }` option; the function is also re-exported from
+ * `@classytic/arc/events` so consumers can build and decorate the store
+ * manually (metrics, tracing, multi-transport fan-out).
  *
- * Requires mongokit ≥3.8 (or equivalent) — `findOneAndUpdate` is essential
- * for the atomic FIFO claim-lease loop.
+ * Requires mongokit ≥3.10 (or equivalent) — `findOneAndUpdate` with
+ * aggregation-pipeline support is essential for the atomic FIFO claim-lease
+ * loop and the `$ifNull`-preserving fail() path.
  */
 
 import type { RepositoryLike } from "../adapters/interface.js";
@@ -52,18 +55,33 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
   const missing: string[] = [];
   if (typeof repository.create !== "function") missing.push("create");
   if (typeof repository.getOne !== "function") missing.push("getOne");
-  if (typeof repository.findAll !== "function") missing.push("findAll");
+  // `getAll` (on repo-core's MinimalRepo) is used for bounded reads —
+  // claimPending, getPending, getDeadLettered, and purge batching. We
+  // don't require `findAll` because mongokit's findAll has no skip/limit
+  // (see 2.10.1 bug report): passing { limit: n } is silently dropped and
+  // returns every row.
+  if (typeof repository.getAll !== "function") missing.push("getAll");
   if (typeof repository.deleteMany !== "function") missing.push("deleteMany");
   if (typeof repository.findOneAndUpdate !== "function") missing.push("findOneAndUpdate");
   if (missing.length > 0) {
     throw new Error(
       `EventOutbox: repository is missing required methods: ${missing.join(", ")}. ` +
-        "mongokit ≥3.8 satisfies all five; other kits must implement them to back the outbox.",
+        "mongokit ≥3.10.2 satisfies all five; other kits must implement them to back the outbox.",
     );
   }
   const r = repository as Required<
-    Pick<RepositoryLike, "create" | "getOne" | "findAll" | "deleteMany" | "findOneAndUpdate">
+    Pick<RepositoryLike, "create" | "getOne" | "getAll" | "deleteMany" | "findOneAndUpdate">
   >;
+
+  /**
+   * Unwrap mongokit's pagination envelope ({ docs, total, ... }) — some
+   * kits may return a bare array when pagination is disabled. Handle both.
+   */
+  const unwrapDocs = <T>(result: unknown): T[] => {
+    if (Array.isArray(result)) return result as T[];
+    const envelope = result as { docs?: T[] } | null | undefined;
+    return envelope?.docs ?? [];
+  };
 
   const isDuplicateKeyError = createIsDuplicateKeyError(repository);
   const safeGetOne = createSafeGetOne(repository);
@@ -107,14 +125,17 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
 
     async getPending(limit: number): Promise<DomainEvent[]> {
       const now = new Date();
-      const docs = (await r.findAll(
-        {
+      const result = await r.getAll({
+        filters: {
           status: "pending",
           visibleAt: { $lte: now },
           $or: [{ leaseOwner: null }, { leaseExpiresAt: { $lte: now } }],
         },
-        { sort: { createdAt: 1 }, limit },
-      )) as OutboxDoc[];
+        sort: { createdAt: 1 },
+        page: 1,
+        limit,
+      });
+      const docs = unwrapDocs<OutboxDoc>(result);
       return docs.map((d) => d.event).filter(isWellFormed);
     },
 
@@ -205,7 +226,14 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
         },
       ];
 
-      const updated = await r.findOneAndUpdate(filter, pipeline, { returnDocument: "after" });
+      // `updatePipeline: true` is required by mongokit ≥3.8 to opt into
+      // array-form (aggregation) updates; other kits should treat unknown
+      // options as pass-through / no-op. We use the pipeline form here so
+      // `$ifNull` can preserve firstFailedAt without a round-trip read.
+      const updated = await r.findOneAndUpdate(filter, pipeline, {
+        returnDocument: "after",
+        updatePipeline: true,
+      });
       if (updated) return;
 
       const current = (await safeGetOne({ _id: eventId })) as OutboxDoc | null;
@@ -216,10 +244,13 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
     },
 
     async getDeadLettered(limit: number): Promise<DeadLetteredEvent[]> {
-      const docs = (await r.findAll(
-        { status: "dead_letter" },
-        { sort: { _id: 1 }, limit },
-      )) as OutboxDoc[];
+      const result = await r.getAll({
+        filters: { status: "dead_letter" },
+        sort: { _id: 1 },
+        page: 1,
+        limit,
+      });
+      const docs = unwrapDocs<OutboxDoc>(result);
       return docs
         .filter((d) => isWellFormed(d.event))
         .map((d) => ({
@@ -238,10 +269,14 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
       const cutoff = new Date(Date.now() - olderThanMs);
       let totalDeleted = 0;
       for (;;) {
-        const batch = (await r.findAll(
-          { status: "delivered", deliveredAt: { $lte: cutoff } },
-          { sort: { deliveredAt: 1 }, limit: DEFAULT_PURGE_BATCH, select: "_id" },
-        )) as Array<{ _id: string }>;
+        const result = await r.getAll({
+          filters: { status: "delivered", deliveredAt: { $lte: cutoff } },
+          sort: { deliveredAt: 1 },
+          page: 1,
+          limit: DEFAULT_PURGE_BATCH,
+          select: "_id",
+        });
+        const batch = unwrapDocs<{ _id: string }>(result);
         if (batch.length === 0) break;
         const ids = batch.map((d) => d._id);
         const res = (await r.deleteMany({ _id: { $in: ids } })) as { deletedCount?: number };

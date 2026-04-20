@@ -76,6 +76,13 @@ export {
   MemoryOutboxStore,
   OutboxOwnershipError,
 } from "./outbox.js";
+/**
+ * Repository → OutboxStore adapter. Exposed so consumers can build and
+ * decorate the repo-backed store before passing it to {@link EventOutbox}
+ * (metrics, tracing, multi-transport fan-out). Passing `{ repository }` to
+ * the constructor remains the one-liner path for the common case.
+ */
+export { repositoryAsOutboxStore } from "./repository-outbox-adapter.js";
 export type { RetryOptions } from "./retry.js";
 // Retry & Dead Letter Queue (transport-agnostic)
 export { createDeadLetterPublisher, withRetry } from "./retry.js";

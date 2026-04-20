@@ -19,9 +19,11 @@ Adapters provide a **database-agnostic interface** between Arc and your data lay
 ## The DataAdapter Interface
 
 ```typescript
-interface DataAdapter<TDoc = any> {
-  /** Repository for CRUD operations (required) */
-  repository: CrudRepository<TDoc>;
+import type { StandardRepo, MinimalRepo } from '@classytic/repo-core/repository';
+
+interface DataAdapter<TDoc = unknown> {
+  /** Repository for CRUD operations (required) — any StandardRepo or RepositoryLike */
+  repository: StandardRepo<TDoc> | RepositoryLike<TDoc>;
 
   /** Get schema metadata for introspection (optional) */
   getSchemaMetadata?(): SchemaMetadata;
@@ -46,36 +48,28 @@ interface AdapterSchemaContext {
 
 ### Required: `repository`
 
-Every adapter must provide a repository implementing `CrudRepository`:
+The repository contract lives in `@classytic/repo-core` — arc does not redefine it. Every adapter must provide a repository implementing `MinimalRepo<TDoc>` (the five-method floor) or `StandardRepo<TDoc>` (the full contract with optional batch ops, CAS, soft-delete, etc.):
 
 ```typescript
-interface CrudRepository<TDoc> {
-  getAll(options: QueryOptions): Promise<PaginatedResult<TDoc> | TDoc[]>;
+// From @classytic/repo-core/repository
+interface MinimalRepo<TDoc> {
+  getAll(params?: QueryParams): Promise<OffsetPaginationResult<TDoc> | TDoc[]>;
   getById(id: string, options?: QueryOptions): Promise<TDoc | null>;
-  create(data: Partial<TDoc>, options?: ServiceContext): Promise<TDoc>;
-  update(
-    id: string,
-    data: Partial<TDoc>,
-    options?: ServiceContext,
-  ): Promise<TDoc | null>;
-  delete(
-    id: string,
-    options?: ServiceContext,
-  ): Promise<boolean | { success: boolean }>;
+  create(data: Partial<TDoc>, options?: WriteOptions): Promise<TDoc>;
+  update(id: string, data: Partial<TDoc>, options?: WriteOptions): Promise<TDoc | null>;
+  delete(id: string, options?: DeleteOptions): Promise<DeleteResult>;
 }
 ```
 
+Arc's `RepositoryLike<T>` alias is `MinimalRepo<T> & Partial<StandardRepo<T>>` — the floor plus any optional surface your kit implements. Arc feature-detects optional methods at call sites; you only declare what you support.
+
 ### Recommended: `getOne()`
 
-If your resource uses `idField` (custom ID like `slug`, `sku`, `code`) or permission filters with org-scoping, implement `getOne`:
+If your resource uses `idField` (custom ID like `slug`, `sku`, `code`) or permission filters with org-scoping, implement `getOne` from `StandardRepo`:
 
 ```typescript
-interface CrudRepository<TDoc> {
-  // ... required methods above
-
-  /** Find single doc by compound filter — used by AccessControl for idField + org scoping */
-  getOne?(filter: Record<string, unknown>, options?: QueryOptions): Promise<TDoc | null>;
-}
+// Part of StandardRepo
+getOne?(filter: Record<string, unknown>, options?: QueryOptions): Promise<TDoc | null>;
 ```
 
 Without `getOne`, Arc falls back to `getById` + post-fetch security checks. With `getOne`, Arc sends a single compound query (`{ slug: 'laptop', organizationId: 'org-1' }`) — more efficient and secure.
@@ -183,8 +177,8 @@ defineResource({
 > Prisma support in Arc is currently **experimental**.
 > Arc provides the adapter interface and helper patterns, but you are expected
 > to implement and maintain your own Prisma repository that satisfies
-> `CrudRepository`. For production-ready first-party support today, use
-> MongoDB with `@classytic/mongokit`.
+> `StandardRepo` (from `@classytic/repo-core/repository`). For production-ready
+> first-party support today, use MongoDB with `@classytic/mongokit`.
 
 ```typescript
 import { PrismaClient } from "@prisma/client";
@@ -600,7 +594,7 @@ import { describe, it, expect } from "vitest";
 import { createTestApp } from "@classytic/arc/testing";
 
 describe("Custom Adapter", () => {
-  it("should implement CrudRepository interface", () => {
+  it("should implement the StandardRepo interface", () => {
     const adapter = createMyAdapter(/* ... */);
 
     expect(adapter.repository).toBeDefined();

@@ -1,25 +1,202 @@
 # Changelog
 
-## 2.9.2
+## 2.10 — migration notes (from 2.9.x)
 
-- **Fix: onSend header mutation no longer trips `ERR_HTTP_HEADERS_SENT`
-  under `light-my-request`.** When an action route, error handler, or
-  404 path flushed the response before the onSend chain resolved, any
-  plugin that called `reply.header(...)` in its onSend hook caused
-  Fastify's `safeWriteHead` to try writing headers twice — producing
-  unhandled rejections in vitest (CRUD POST intermittent, action POST
-  ~100%, GET 404 ~100%). Primary reporter: `cachingPlugin`. Same class
-  of bug applied to `versioningPlugin`, `requestIdPlugin`,
-  `responseCachePlugin`, and `idempotencyPlugin` — all fixed in this
-  patch via a shared `isReplyCommitted(reply)` guard
-  (`src/utils/reply-guards.ts`). No-op under a real HTTP server.
-- Regression tests added — spy on `reply.header` to assert the plugin
-  skips mutation when `reply.raw.headersSent === true`. Tests fail
-  without the guard, pass with it.
-- Shared `repositoryAs*` helpers extracted to `src/adapters/store-helpers.ts`
-  (`isNotFoundError`, `createSafeGetOne`, `createIsDuplicateKeyError`) —
-  outbox + idempotency adapters lose ~76 lines of duplicated cross-kit
-  error handling. Behavior unchanged.
+**Tightened `ActionHandler` req type.** The third argument of action
+handlers (`defineResource({ actions: { foo: (id, data, req) => ... } })`)
+is now typed `RequestWithExtras` instead of the bare `FastifyRequest`.
+`RequestWithExtras` adds the arc-populated `arc`, `context`,
+`_policyFilters`, `fieldMask`, `_ownershipCheck` fields that every action
+handler was reaching for via `as any` — now they're on the type.
+
+- **Breaking for code that assigned the handler to a `FastifyRequest`-typed
+  local** (several be-prod files broke here). Fix: let TS infer the param
+  type, or import `RequestWithExtras` from `@classytic/arc` and use it
+  explicitly.
+- Non-breaking if you used `req: any` or inferred — the runtime object
+  is unchanged.
+
+**`EventsDecorator.subscribe` handler signature clarified.** Handlers
+receive a `DomainEvent<T> = { type, payload, meta }` envelope — *not* a
+bare payload. This has always been the runtime shape; the type now
+reflects it:
+
+```ts
+// Before (runtime contract, loosely typed):
+fastify.events.subscribe('order.created', async (event) => {
+  // event was typed `unknown` — you had to cast
+});
+
+// After (explicit envelope type):
+fastify.events.subscribe('order.created', async (event) => {
+  event.type;             // 'order.created'
+  event.payload;          // your typed payload
+  event.meta.timestamp;   // Date
+  event.meta.correlationId;
+});
+```
+
+If you wrote handlers against the old `unknown` type and destructured
+`payload` directly, nothing changes at runtime — only the type is now
+narrower. If you wrote `(payload) => ...` assuming the argument was the
+payload, switch to `(event) => event.payload`.
+
+## 2.10.2 — fix: silent pagination in audit/outbox adapters
+
+**Critical bug fix — 2.10.0 and 2.10.1 are deprecated on npm.**
+
+Arc's `repositoryAsAuditStore.query()`, `repositoryAsOutboxStore.getPending()`,
+`repositoryAsOutboxStore.getDeadLettered()`, and the purge batch loop all
+called `repository.findAll(filter, { skip?, limit })`. mongokit's `findAll`
+signature is `findAll(filter, OperationOptions)` — `OperationOptions` has
+no `skip` or `limit` fields, so those were silently dropped. Consequence:
+
+- `audit.query({ limit: 10 })` returned **every audit row** in the table
+- `outbox.getPending(10)` returned every pending event
+- `outbox.getDeadLettered(5)` returned every DLQ entry
+- `outbox.purge()` fetched every delivered doc per batch iteration (memory
+  blow-up on large outboxes)
+
+**Fix** — switched the four call sites to `repository.getAll(params)`, which
+takes `{ filters, sort, page, limit, select }` and returns the offset
+pagination envelope `{ docs, ... }`. The adapter unwraps `.docs` and
+handles both array + envelope returns for kit flexibility.
+
+**AuditQueryOptions.offset → page conversion** — `AuditStore.query` exposes
+offset-based pagination, mongokit exposes page-based. The adapter now
+converts `page = Math.floor(offset / limit) + 1`. Callers using the
+standard `offset = (page - 1) * limit` pattern get exact results;
+unaligned offsets round down to the nearest page boundary (rare case,
+documented).
+
+**`missing`-methods check updated** — the outbox adapter now requires
+`getAll` (on repo-core's `MinimalRepo` floor, guaranteed to be present)
+instead of the optional `findAll`.
+
+**Regression tests added** in
+[`tests/integration/strict-false-plugins.test.ts`](tests/integration/strict-false-plugins.test.ts):
+
+- `audit.query()` respects limit/offset with 25-row seed
+- `outbox.getPending(5)` bounds to 5 of 15
+- `outbox.getDeadLettered(3)` bounds to 3 of 8
+
+## 2.10.1 — additive: expose repo→store adapters + mongokit ≥3.10.2
+
+**Additive (no breaking changes):**
+
+- `repositoryAsOutboxStore` — now re-exported from `@classytic/arc/events`
+- `repositoryAsAuditStore` — now re-exported from `@classytic/arc/audit`
+- `repositoryAsIdempotencyStore` — now re-exported from `@classytic/arc/idempotency`
+
+The functions were already tested and stable but gated by the `exports`
+field. Use them when you need to compose stores before registration:
+
+- **Audit fan-out** — one entry in `auditPlugin({ customStores: [...] })`
+  wired to your repo, other entries to Kafka/S3/Loki
+- **Decorated outbox/idempotency** — wrap the repo-backed store with
+  metrics, tracing, or key-namespacing before passing as `store:` /
+  `repository:`
+
+Passing `{ repository }` to the plugin remains the one-liner path for the
+common case — nothing changes there.
+
+**Dependency bump:**
+
+- `peerDependencies["@classytic/mongokit"]` bumped `>=3.10.0` → `>=3.10.2`
+- `devDependencies["@classytic/mongokit"]` bumped `^3.10.0` → `^3.10.2`
+- CLI `arc init` scaffolds `@classytic/mongokit@^3.10.2`
+
+## 2.10 — clean-break on repo-core types + outbox fix
+
+### Breaking changes — repo-core is no longer re-exported
+
+Arc 2.10 stops re-exporting types from `@classytic/repo-core`. The repo
+contract has a single canonical home (repo-core); arc only defines types
+it owns.
+
+**Removed from the `@classytic/arc` public surface:**
+
+| Removed name (arc 2.9) | Replacement |
+|---|---|
+| `CrudRepository<T>` | `StandardRepo<T>` from `@classytic/repo-core/repository` |
+| `PaginatedResult<T>` | `OffsetPaginationResult<T>` from `@classytic/repo-core/pagination` |
+| `KeysetPaginatedResult<T>` | `KeysetPaginationResult<T>` (same package) |
+| `OffsetPaginatedResult<T>` | `OffsetPaginationResult<T>` |
+| `WriteOptions`, `QueryOptions`, `FindOneAndUpdateOptions` | import from `@classytic/repo-core/repository` |
+| `UpdateManyResult`, `DeleteResult`, `DeleteManyResult`, `DeleteOptions` | same |
+| `RepositorySession`, `PaginationParams`, `InferDoc` | same |
+| `BulkWriteOperation`, `BulkWriteResult` | same |
+
+**Migration** — codemod your imports:
+
+```ts
+// Before
+import type { CrudRepository, PaginatedResult, WriteOptions } from '@classytic/arc';
+
+// After
+import type { StandardRepo, WriteOptions } from '@classytic/repo-core/repository';
+import type { OffsetPaginationResult } from '@classytic/repo-core/pagination';
+```
+
+**Still exported from `@classytic/arc`** (arc-owned, not in repo-core):
+
+- `RepositoryLike<T>` = `MinimalRepo<T> & Partial<StandardRepo<T>>` — arc's
+  "floor + optionals" composition, used everywhere arc feature-detects kit
+  capabilities at runtime.
+- `PaginationResult<T>` — discriminated union of the offset/keyset shapes,
+  used by `BaseController.list` and `getDeleted` where either is valid.
+
+### Bugfix: outbox `fail()` on mongokit
+
+- **Fix: `repositoryAsOutboxStore.fail()` now passes `updatePipeline: true`
+  to `findOneAndUpdate`.** mongokit ≥3.8 blocks array-form (aggregation)
+  updates by default as a safety rail; arc's outbox uses the pipeline
+  form so `$ifNull` can preserve `firstFailedAt` across retries without a
+  round-trip read. Without the flag, every `fail()` call — retry or DLQ
+  transition — threw `"Update pipelines (array updates) are disabled"`.
+  Caught by [`tests/integration/strict-false-plugins.test.ts`](tests/integration/strict-false-plugins.test.ts).
+
+- **Docs: `audit`, `events`, `idempotency` production-ops pages now
+  document the required mongokit plugins** (`methodRegistryPlugin` +
+  `batchOperationsPlugin`) and the rationale for the `strict: false`
+  passthrough schema. Previously users hitting "repository is missing
+  required methods: deleteMany" had to read the adapter source to
+  diagnose.
+
+## 2.9.3
+
+- **Fix: `cachingPlugin` `ERR_HTTP_HEADERS_SENT` under `light-my-request`.**
+  Moved header mutation from `onSend` → `preSerialization`. The onSend
+  hook ran after Fastify's chain had already scheduled `safeWriteHead`;
+  under the vitest test harness (`app.inject()`) the async microtask
+  yield let the response commit between our hook and `onSendEnd`,
+  re-throwing "Cannot write headers after they are sent". preSerialization
+  runs before the flush window, so no race. (2.9.2 attempted an
+  `isReplyCommitted` guard — same reporter confirmed it didn't fix the
+  actual bug; reverted.) 304 responses now use `reply.serializer()` to
+  bypass JSON's `'""'` encoding for the empty body. ETag hashing now
+  uses `JSON.stringify(payload)` instead of `String(payload)` — fixes a
+  prior bug where every object response hashed to the same
+  `"[object Object]"` tag.
+- **Fix: auditPlugin retention (unbounded disk growth).** Added
+  `retention: { maxAgeMs, purgeIntervalMs? }` option. The plugin
+  registers an unref'd `setInterval` that calls `audit.purge(cutoff)`
+  and cleans up in `onClose`. `AuditStore` gains
+  `purgeOlderThan?(cutoff)` — optional, so append-only stores (Kafka,
+  S3) are skipped silently. Repository adapter maps to
+  `repository.deleteMany({ timestamp: { $lt: cutoff } })`.
+  `fastify.audit.purge(cutoff)` is always available for manual / cron
+  use regardless of whether `retention` is set. Mongo apps can still
+  declare a server-side TTL index on the collection — both approaches
+  coexist.
+- Shared `repositoryAs*` helpers extracted to
+  `src/adapters/store-helpers.ts` (`isNotFoundError`,
+  `createSafeGetOne`, `createIsDuplicateKeyError`) — outbox + idempotency
+  adapters lose ~76 lines of duplicated cross-kit error handling.
+  Behavior unchanged.
+
+**2.9.2 was unpublished.** Its `isReplyCommitted` guard did not fix the
+reported race; 2.9.3 is the correct fix.
 
 ## 2.9.1
 

@@ -33,6 +33,13 @@ export {
   auditPlugin as auditPluginFn,
   default as auditPlugin,
 } from "./auditPlugin.js";
+/**
+ * Repository → AuditStore adapter. Use when you want a repo-backed store
+ * as one entry in `customStores: [...]` (fan-out to DB + Kafka/S3/etc.),
+ * or to decorate the repo store with metrics/tracing before registration.
+ * Passing `{ repository }` to the plugin remains the one-liner path.
+ */
+export { repositoryAsAuditStore } from "./repository-audit-adapter.js";
 export type {
   AuditAction,
   AuditContext,

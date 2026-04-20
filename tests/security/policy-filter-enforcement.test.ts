@@ -13,7 +13,8 @@
 import { ObjectId } from "mongodb";
 import { beforeEach, describe, expect, it } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
-import type { AnyRecord, CrudRepository, IRequestContext } from "../../src/types/index.js";
+import type { StandardRepo } from "@classytic/repo-core/repository";
+import type { AnyRecord, IRequestContext } from "../../src/types/index.js";
 
 /**
  * Helper to create context with policy filters in the correct location
@@ -34,7 +35,7 @@ function createContextWithPolicyFilters(
 }
 
 // Mock repository
-class MockRepository implements CrudRepository {
+class MockRepository implements StandardRepo {
   private items: Map<string, AnyRecord> = new Map();
 
   constructor(initialData: AnyRecord[] = []) {

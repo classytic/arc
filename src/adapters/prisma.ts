@@ -36,10 +36,10 @@
  * ```
  */
 
+import type { StandardRepo } from "@classytic/repo-core/repository";
 import { DEFAULT_LIMIT, DEFAULT_MAX_LIMIT, RESERVED_QUERY_PARAMS } from "../constants.js";
 import type {
   AnyRecord,
-  CrudRepository,
   OpenApiSchemas,
   ParsedQuery,
   QueryParserInterface,
@@ -410,7 +410,7 @@ export interface PrismaAdapterOptions<TModel> {
   /** Model name (e.g., 'user', 'product') */
   modelName: string;
   /** Repository instance implementing CRUD operations */
-  repository: CrudRepository<TModel>;
+  repository: StandardRepo<TModel>;
   /** Optional: Prisma DMMF (Data Model Meta Format) for schema extraction */
   dmmf?: PrismaDmmf;
   /** Optional: Custom query parser (default: PrismaQueryParser) */
@@ -424,7 +424,7 @@ export interface PrismaAdapterOptions<TModel> {
 export class PrismaAdapter<TModel = unknown> implements DataAdapter<TModel> {
   readonly type = "prisma" as const;
   readonly name: string;
-  readonly repository: CrudRepository<TModel>;
+  readonly repository: StandardRepo<TModel>;
   readonly queryParser: PrismaQueryParser;
 
   private client: PrismaClientLike;

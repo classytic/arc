@@ -71,7 +71,22 @@
  * ```
  */
 
-import type { RepositoryLike } from "../adapters/interface.js";
+/**
+ * Feature-detected search surface. Arc's `RepositoryLike` is the cross-kit
+ * minimum (repo-core's `MinimalRepo & Partial<StandardRepo>`) and does not
+ * declare search/vector/embed methods — those are kit-specific (mongokit's
+ * `elasticSearchPlugin` + `vectorPlugin`, pgkit's `pgvector` extension,
+ * sqlitekit FTS5, or a standalone Pinecone/Algolia adapter). We type the
+ * `repository` option locally so the preset can auto-wire handlers when a
+ * kit happens to ship these methods, without forcing every repo to declare
+ * them.
+ */
+export interface SearchableRepository {
+  search?(query: unknown, options?: unknown): Promise<unknown>;
+  searchSimilar?(query: unknown, options?: unknown): Promise<unknown>;
+  embed?(input: unknown): Promise<number[]>;
+}
+
 import { allowPublic, requireAuth } from "../permissions/index.js";
 import type { ControllerHandler, IControllerResponse, IRequestContext } from "../types/handlers.js";
 import type {
@@ -144,7 +159,7 @@ export interface SearchPresetOptions {
    * Sections set to `true` REQUIRE `repository` (otherwise the route is
    * skipped silently). Sections with an explicit `handler` ignore this field.
    */
-  repository?: Pick<RepositoryLike, "search" | "searchSimilar" | "embed">;
+  repository?: SearchableRepository;
 
   /** Full-text / engine-backed search route. Opt-in. */
   search?: SearchSection;

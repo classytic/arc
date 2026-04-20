@@ -61,7 +61,7 @@ describe("MemoryCacheStore — production scenarios", () => {
 
   it("maintains a bounded entry count under sustained writes", async () => {
     const maxEntries = 100;
-    const store = track(new MemoryCacheStore<number>({ maxEntries, defaultTtlMs: 60_000 }));
+    const store = track(new MemoryCacheStore<number>({ maxEntries, defaultTtlSeconds: 60 }));
 
     for (let i = 0; i < 5_000; i++) {
       await store.set(`k-${i}`, i);
@@ -106,7 +106,7 @@ describe("MemoryCacheStore — production scenarios", () => {
   it("runs the background cleanup interval to evict expired entries", async () => {
     const store = track(
       new MemoryCacheStore<string>({
-        defaultTtlMs: 20,
+        defaultTtlSeconds: 0.02,
         cleanupIntervalMs: 1_000, // clamped minimum — must stay >= 1s
       }),
     );
