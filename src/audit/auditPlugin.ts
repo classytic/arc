@@ -50,6 +50,24 @@ export interface AuditPluginOptions {
    */
   customStores?: AuditStore[];
   /**
+   * Retention policy — optional. Entries older than `maxAgeMs` are purged
+   * on a timer (`purgeIntervalMs`, default 24h). Stores that implement
+   * `purgeOlderThan` participate; append-only stores are skipped.
+   *
+   * Apps on MongoDB can instead declare a TTL index on the audit
+   * collection's `timestamp` field — server-side TTL is cheaper than a
+   * periodic delete. Both approaches coexist: `fastify.audit.purge(...)`
+   * is always available for manual / cron-driven purges.
+   *
+   * Set `purgeIntervalMs: 0` to skip the timer (manual purge only).
+   */
+  retention?: {
+    /** Max entry age in ms. Entries with `timestamp < now - maxAgeMs` are purged. */
+    maxAgeMs: number;
+    /** Interval between purges in ms. Default 86_400_000 (24h). 0 disables the timer. */
+    purgeIntervalMs?: number;
+  };
+  /**
    * Automatically audit CRUD operations via the hook system (default: true when enabled).
    * When enabled, create/update/delete operations are auto-logged without manual calls.
    *
@@ -151,6 +169,13 @@ export interface AuditLogger {
 
   /** Query audit logs (if stores support it) */
   query: (options: import("./stores/interface.js").AuditQueryOptions) => Promise<AuditEntry[]>;
+
+  /**
+   * Purge audit entries older than `cutoff` across every registered store.
+   * Returns the total number of entries deleted. Stores that don't support
+   * deletion (append-only emitters) are skipped silently.
+   */
+  purge: (cutoff: Date) => Promise<number>;
 }
 
 const auditPlugin: FastifyPluginAsync<AuditPluginOptions> = async (
@@ -230,6 +255,18 @@ const auditPlugin: FastifyPluginAsync<AuditPluginOptions> = async (
       }
       return [];
     },
+
+    async purge(cutoff) {
+      // Fan out across every store that supports deletion. Append-only
+      // stores (Kafka/S3 emitters without purgeOlderThan) are skipped.
+      let total = 0;
+      for (const store of stores) {
+        if (store.purgeOlderThan) {
+          total += await store.purgeOlderThan(cutoff);
+        }
+      }
+      return total;
+    },
   };
 
   fastify.decorate("audit", audit);
@@ -269,8 +306,27 @@ const auditPlugin: FastifyPluginAsync<AuditPluginOptions> = async (
     }
   });
 
+  // Retention — periodic auto-purge. `purgeIntervalMs: 0` disables the
+  // timer; manual `fastify.audit.purge(...)` still works.
+  const retention = opts.retention;
+  let retentionTimer: NodeJS.Timeout | null = null;
+  if (retention) {
+    const interval = retention.purgeIntervalMs ?? 86_400_000;
+    if (interval > 0) {
+      retentionTimer = setInterval(() => {
+        const cutoff = new Date(Date.now() - retention.maxAgeMs);
+        audit.purge(cutoff).catch((err) => {
+          fastify.log?.warn?.({ err }, "audit retention purge failed");
+        });
+      }, interval);
+      // Don't keep the event loop alive just for this.
+      retentionTimer.unref?.();
+    }
+  }
+
   // Cleanup on close
   fastify.addHook("onClose", async () => {
+    if (retentionTimer) clearInterval(retentionTimer);
     await Promise.all(stores.map((store) => store.close?.()));
   });
 
@@ -409,6 +465,7 @@ function createNoopLogger(): AuditLogger {
     restore: noop,
     custom: noop,
     query: async () => [],
+    purge: async () => 0,
   };
 }
 

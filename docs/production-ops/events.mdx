@@ -515,10 +515,24 @@ Two ways to wire the store:
 ```typescript
 // 1. Repository (recommended — mongokit / prismakit / your own kit)
 import { EventOutbox } from '@classytic/arc/events';
-import { Repository } from '@classytic/mongokit';
+import {
+  Repository,
+  methodRegistryPlugin,
+  batchOperationsPlugin,
+} from '@classytic/mongokit';
+import mongoose, { Schema } from 'mongoose';
+
+const OutboxModel = mongoose.model(
+  'ArcOutbox',
+  new Schema({}, { strict: false, timestamps: false, _id: false }),
+  'event_outbox',
+);
 
 const outbox = new EventOutbox({
-  repository: new Repository(OutboxModel),
+  repository: new Repository(OutboxModel, [
+    methodRegistryPlugin(),
+    batchOperationsPlugin(), // required — outbox.purge() calls deleteMany
+  ]),
   transport: redisTransport,
 });
 
@@ -545,6 +559,42 @@ When you pass `repository`, arc adapts it to the `OutboxStore` contract
 internally — `create` / `findAll` / `deleteMany` / `findOneAndUpdate`
 cover save, claim, ack, fail, and DLQ reads. Memory store is still
 available for dev and as a full reference implementation of the contract.
+
+### Required plugins for mongokit-backed outbox
+
+| Method used by adapter | Source |
+|------------------------|--------|
+| `create` / `getOne` / `findAll` / `findOneAndUpdate` | base `Repository` |
+| `deleteMany` | `batchOperationsPlugin` (+ `methodRegistryPlugin`) |
+
+Without `batchOperationsPlugin`, `EventOutbox` throws at construction
+with `"repository is missing required methods: deleteMany"`.
+
+### Why `strict: false`?
+
+Arc owns the stored outbox doc shape (see `repository-outbox-adapter.ts`).
+A strict Mongoose schema would drop fields arc adds in future releases.
+`strict: false` forwards every field as-is, so arc's contract defines
+the on-disk layout.
+
+### Recommended indexes
+
+Declare these at boot — arc creates none automatically. The claim path
+is the hot query; indexing it is essential under any real load.
+
+```typescript
+// Hot path: claimPending filter — { status, visibleAt, leaseOwner/leaseExpiresAt }
+await OutboxModel.collection.createIndex({ status: 1, visibleAt: 1 });
+
+// Purge scan — delivered docs older than cutoff
+await OutboxModel.collection.createIndex({ status: 1, deliveredAt: 1 });
+
+// Optional: unique dedupe (when you pass options.dedupeKey to store())
+await OutboxModel.collection.createIndex(
+  { dedupeKey: 1 },
+  { unique: true, partialFilterExpression: { dedupeKey: { $type: 'string' } } },
+);
+```
 
 **OutboxStore interface** — Arc is DB-agnostic; you implement this for your database.
 The contract has three required methods and several optional capabilities that stores

@@ -1,10 +1,13 @@
 /**
- * Internal: RepositoryLike → AuditStore inline adapter.
+ * RepositoryLike → AuditStore adapter.
  *
- * Maps the audit store's two verbs (`log` / `query`) onto arc's canonical
- * repository primitives (`create` / `findAll`). Not exported publicly —
- * `auditPlugin` wraps a passed repository with this helper when you use
- * the `{ repository }` option.
+ * Maps the audit store's verbs (`log` / `query` / `purgeOlderThan`) onto
+ * arc's canonical repository primitives (`create` / `findAll` /
+ * `deleteMany`). `auditPlugin` wraps a passed repository with this helper
+ * when you use the `{ repository }` option; the function is also re-exported
+ * from `@classytic/arc/audit` so consumers can use it as one entry in
+ * `customStores: [...]` (fan-out to DB + Kafka/S3) or wrap it with
+ * metrics/tracing before registration.
  */
 
 import type { RepositoryLike } from "../adapters/interface.js";
@@ -55,10 +58,25 @@ export function repositoryAsAuditStore(repository: RepositoryLike): AuditStore {
       await repository.create(doc);
     },
 
+    async purgeOlderThan(cutoff: Date): Promise<number> {
+      if (!repository.deleteMany) {
+        // Kits without `deleteMany` (e.g. vanilla mongokit without
+        // batchOperationsPlugin) can't purge via arc. Users should add the
+        // plugin, register a TTL index on the collection, or run their
+        // own cron — we return 0 rather than throw so callers can try all
+        // stores uniformly via Promise.all.
+        return 0;
+      }
+      const result = (await repository.deleteMany({
+        timestamp: { $lt: cutoff },
+      })) as { deletedCount?: number };
+      return result.deletedCount ?? 0;
+    },
+
     async query(opts = {}): Promise<AuditEntry[]> {
-      if (!repository.findAll) {
+      if (!repository.getAll) {
         throw new Error(
-          "auditPlugin: repository.findAll is required for query(). mongokit ≥3.6 implements it; other kits should match.",
+          "auditPlugin: repository.getAll is required for query(). It's on repo-core's MinimalRepo floor — every kit (mongokit, sqlitekit, custom) implements it.",
         );
       }
       const filter: Record<string, unknown> = {};
@@ -76,11 +94,22 @@ export function repositoryAsAuditStore(repository: RepositoryLike): AuditStore {
         if (opts.to) range.$lte = opts.to;
         filter.timestamp = range;
       }
-      const docs = (await repository.findAll(filter, {
+
+      // mongokit's findAll has no skip/limit (options type doesn't include
+      // them — they're silently dropped). Use getAll's offset pagination
+      // envelope and unwrap .docs. AuditQueryOptions exposes offset-based
+      // pagination, mongokit exposes page-based; convert — callers using
+      // the standard `offset = (page-1)*limit` pattern get exact results,
+      // unaligned offsets round down to the nearest page boundary.
+      const limit = opts.limit ?? 100;
+      const page = Math.floor((opts.offset ?? 0) / limit) + 1;
+      const result = (await repository.getAll({
+        filters: filter,
         sort: { timestamp: -1 },
-        skip: opts.offset ?? 0,
-        limit: opts.limit ?? 100,
-      })) as StoredAuditDoc[];
+        page,
+        limit,
+      })) as { docs?: StoredAuditDoc[] } | StoredAuditDoc[];
+      const docs: StoredAuditDoc[] = Array.isArray(result) ? result : (result.docs ?? []);
       return docs.map((d) => ({
         id: String(d._id ?? d.id ?? ""),
         resource: d.resource ?? "",

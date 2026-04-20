@@ -5,13 +5,15 @@
  * Uses Vitest for mocking (compatible with Jest API).
  */
 
+import type { OffsetPaginationResult } from "@classytic/repo-core/pagination";
+import type { StandardRepo } from "@classytic/repo-core/repository";
 import { type Mock, vi } from "vitest";
-import type { AnyRecord, CrudRepository, PaginatedResult } from "../types/index.js";
+import type { AnyRecord } from "../types/index.js";
 
 /**
  * Extended repository interface for testing (includes optional preset methods)
  */
-export interface MockRepository<T> extends CrudRepository<T> {
+export interface MockRepository<T> extends StandardRepo<T> {
   // Optional preset methods for testing
   getBySlug?: Mock;
   getDeleted?: Mock;
@@ -38,6 +40,7 @@ export function createMockRepository<T extends AnyRecord = AnyRecord>(
   const defaultMock: MockRepository<T> = {
     // MongoKit-compatible CRUD methods
     getAll: vi.fn().mockResolvedValue({
+      method: "offset",
       docs: [],
       total: 0,
       page: 1,
@@ -45,7 +48,7 @@ export function createMockRepository<T extends AnyRecord = AnyRecord>(
       pages: 0,
       hasNext: false,
       hasPrev: false,
-    } as PaginatedResult<T>),
+    } as unknown as OffsetPaginationResult<T>),
 
     getById: vi.fn().mockResolvedValue(null),
 
@@ -134,7 +137,7 @@ export function createMockReply() {
 /**
  * Create a mock controller for testing
  */
-export function createMockController(repository: CrudRepository<AnyRecord>) {
+export function createMockController(repository: StandardRepo<AnyRecord>) {
   return {
     repository,
     list: vi.fn(),

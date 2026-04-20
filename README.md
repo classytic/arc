@@ -2,7 +2,7 @@
 
 Database-agnostic resource framework for Fastify. Define resources, get CRUD routes, permissions, presets, caching, events, OpenAPI, and MCP tools — without boilerplate.
 
-**v2.9** | Fastify 5+ | Node.js 22+ | ESM only
+**v2.10** | Fastify 5+ | Node.js 22+ | ESM only
 
 ## Install
 
@@ -65,12 +65,14 @@ const app = await createApp({
 Clean DX without growing exclude lists:
 
 ```typescript
-import { Repository } from '@classytic/mongokit';
+import { Repository, methodRegistryPlugin, batchOperationsPlugin } from '@classytic/mongokit';
 
 // app.ts — pass any RepositoryLike (mongokit / prismakit / custom)
 await fastify.register(auditPlugin, {
   autoAudit: { perResource: true },
-  repository: new Repository(AuditModel),  // or omit for in-memory dev
+  // batchOperationsPlugin enables deleteMany, required for purgeOlderThan()
+  repository: new Repository(AuditModel, [methodRegistryPlugin(), batchOperationsPlugin()]),
+  // or omit `repository` for in-memory dev
 });
 
 // order.resource.ts — opt in
@@ -737,7 +739,6 @@ Arc sets `"sideEffects": false` in [package.json](package.json), so modern bundl
 | `@classytic/arc/presets` | Preset functions + interfaces |
 | `@classytic/arc/audit` | Audit trail |
 | `@classytic/arc/idempotency` | Idempotency |
-| `@classytic/arc/policies` | Policy engine |
 | `@classytic/arc/schemas` | TypeBox helpers |
 | `@classytic/arc/utils` | Errors, circuit breaker, state machine, query parser |
 | `@classytic/arc/testing` | Test utilities, mocks, in-memory DB |
@@ -750,101 +751,29 @@ Arc sets `"sideEffects": false` in [package.json](package.json), so modern bundl
 | `@classytic/arc/docs` | OpenAPI generation |
 | `@classytic/arc/cli` | CLI commands (programmatic) |
 
-## v2.9.1 Highlights
+## Type imports
 
-`auditPlugin`, `idempotencyPlugin`, and `EventOutbox` take a
-`repository: RepositoryLike` option — pass any `Repository` (mongokit /
-prismakit / your own kit). Arc calls `create` / `getOne` / `findAll` /
-`deleteMany` / `findOneAndUpdate` on it directly:
+Arc owns framework types (`IController`, `IRequestContext`, `ResourceConfig`, `RepositoryLike`, `PaginationResult`). The repository contract lives in `@classytic/repo-core` — import those types directly:
 
 ```typescript
-import { Repository } from '@classytic/mongokit';
-import { auditPlugin } from '@classytic/arc/audit';
-import { idempotencyPlugin } from '@classytic/arc/idempotency';
-import { EventOutbox } from '@classytic/arc/events';
+// Arc framework types
+import type { IRequestContext, RepositoryLike, PaginationResult } from '@classytic/arc';
 
-await fastify.register(auditPlugin, { repository: new Repository(AuditModel) });
-await fastify.register(idempotencyPlugin, {
-  repository: new Repository(IdempotencyModel, [
-    methodRegistryPlugin(), batchOperationsPlugin(), mongoOperationsPlugin(),
-  ]),
-});
-new EventOutbox({ repository: new Repository(OutboxModel), transport });
+// Repository contract (repo-core is the single source of truth)
+import type { StandardRepo, WriteOptions, QueryOptions } from '@classytic/repo-core/repository';
+import type { OffsetPaginationResult } from '@classytic/repo-core/pagination';
 ```
 
-Memory + Redis stores unchanged via `store` / `customStores`. Requires
-`@classytic/mongokit ≥3.8.0`.
+> Arc 2.10 dropped the legacy `CrudRepository`, `PaginatedResult`, and pass-through `WriteOptions`/`QueryOptions` re-exports. See [CHANGELOG.md](CHANGELOG.md#210) for the migration table.
 
-## v2.9 Highlights
+## v2.10 Highlights
 
-**Security defaults (breaking):**
-- **Field-write perms reject by default** — requests with non-writable fields return 403 with denied-field list. Opt into legacy silent-strip via `defineResource({ onFieldWriteDenied: 'strip' })`.
-- **multiTenant preset injects org on UPDATE** — body-supplied `organizationId` is overwritten with caller's scope (prior: CREATE only; a member could hop their own doc to another tenant).
-- **Elevation always emits `arc.scope.elevated`** — privilege elevation can no longer be silently un-audited. Subscribe via `fastify.events.subscribe('arc.scope.elevated', …)`. `onElevation` callback still supported.
-- **`verifySignature` throws on parsed body** — prevents the common `req.body` vs `req.rawBody` footgun that looks like a wrong secret.
-- **Upload `sanitizeFilename` policy** — rejects path separators, NUL, `.`/`..`, >255 chars by default. Flexible: pass `false` / `'*'` / custom function to override.
-- **Idempotency `namespace`** — optional key folded into fingerprint for shared-store deployments (prod + canary on one Redis).
+- **Clean-break on repo-core types** — `CrudRepository` / `PaginatedResult` / pass-through repo options removed from arc's public surface. Import `StandardRepo`, `OffsetPaginationResult`, etc. directly from `@classytic/repo-core`. See [CHANGELOG.md](CHANGELOG.md) for the rewrite table.
+- **Outbox bugfix** — `repositoryAsOutboxStore.fail()` now passes `updatePipeline: true` to `findOneAndUpdate`, so retry / DLQ transitions work on mongokit ≥3.10.
+- **Plugin requirements documented** — audit / outbox / idempotency require mongokit's `methodRegistryPlugin` + `batchOperationsPlugin` for `deleteMany`; README snippets + production-ops docs now show the correct chain.
+- **Removed** — `@classytic/arc/policies` (use `permissions/`), `@classytic/arc/rpc`, `@classytic/arc/dynamic` (use `factory/loadResources`).
 
-**Event contract v2 (additive):**
-- `EventMeta` gets `schemaVersion`, `causationId`, `partitionKey`, `source`, `idempotencyKey`, `aggregate: { type, id }`
-- `createChildEvent(parent, type, payload)` — auto-chains causation + inherits correlation / userId / organizationId / source / idempotencyKey (aggregate stays explicit)
-- `DeadLetteredEvent<T>` type + optional `transport.deadLetter()` for first-class DLQ
-- `withRetry({ transport })` auto-routes exhausted events to `transport.deadLetter()` — no custom `$deadLetter` plumbing
-- Downstream packages narrow `aggregate.type` to a closed DDD union via interface extension
-
-**Outbox v2 (additive):**
-- `EventOutbox.store()` auto-maps `event.meta.idempotencyKey` → `OutboxWriteOptions.dedupeKey` (caller's explicit `dedupeKey` still wins)
-- `new EventOutbox({ failurePolicy: ({ attempts, error }) => ({ retryAt?, deadLetter? }) })` — centralises retry + DLQ escalation, no more hand-rolled `exponentialBackoff` at every failure site
-- `outbox.getDeadLettered(limit)` returns typed `DeadLetteredEvent[]` — same shape `withRetry` produces, closes the loop between retry DLQ and outbox DLQ state
-- `RelayResult.deadLettered` — per-batch DLQ transition count for dashboards
-- Durable outbox via any `RepositoryLike` — `new EventOutbox({ repository, transport })` (2.9.1); multi-worker claim, TTL purge, dedupe, and session-threaded writes come from the repository's backing kit
-
-**Removed (no replacement kept):**
-- `createActionRouter`, `buildActionBodySchema` — use `defineResource({ actions })`
-- `ResourceConfig.onRegister` — use `actions` or resource `hooks`
-- `PluginResourceResult.additionalRoutes` → `routes: RouteDefinition[]`
-- `PolicyContext` / `PolicyResult` `any` fields → `unknown` (tighten downstream narrowing)
-
-## v2.8.4 Highlights
-
-- **MCP ↔ AI SDK bridge** — expose AI SDK `tool()` definitions over MCP without duplicating code. `bridgeToMcp(bridge)` adapts any AI SDK tool into an MCP tool with automatic auth, guard delegation, and `{ error } → isError` envelope translation. `buildMcpToolsFromBridges(bridges, { include, exclude })` registers a whole catalog at once with per-environment filtering.
-
-```typescript
-import { bridgeToMcp, buildMcpToolsFromBridges, type McpBridge } from '@classytic/arc/mcp';
-
-export const triggerJobBridge: McpBridge = {
-  name: 'trigger_job',
-  description: 'Start a job.',
-  inputSchema: { phase: z.enum(['investigate', 'fix']) },
-  annotations: { destructiveHint: true },
-  buildTool: (ctx) => buildTriggerJobTool(getUserId(ctx) ?? ''),
-};
-
-await app.register(mcpPlugin, {
-  resources,
-  extraTools: buildMcpToolsFromBridges([triggerJobBridge]),
-});
-```
-
-## v2.8.1 Highlights
-
-- **Per-action discriminated validation** — `actions` schemas now enforce required fields via a `oneOf` body schema; missing inputs are rejected at the HTTP layer by AJV (no more silent bypass)
-- **Actions in OpenAPI** — `POST /:id/action` endpoint auto-generated from `ResourceDefinition.actions`, with per-action descriptions and the same discriminated body schema as the runtime router
-- **Route/action metadata preserved** — `mcp: false`, `description`, `annotations` no longer dropped during `routes → additionalRoutes` normalization
-- **Canonical source retained** — `ResourceDefinition.routes` and `ResourceDefinition.actions` now kept as declared, so OpenAPI/MCP/registry can read the original shape
-- **Outbox hardening** — expanded `OutboxStore` contract (`claimPending`, `fail`, write options, dedupe, visibleAt), ownership-mismatch throws, onError reporting, safe multi-worker relay
-- **`slugLookup` fallback** — works with MongoKit's default Repository (no custom `getBySlug` needed)
-
-## v2.8.0 Highlights
-
-- **MCP Integration** — expose resources as AI agent tools (stateless by default, service scope, multi-tenancy)
-- **Reply Helpers** — `reply.ok()`, `reply.fail()`, `reply.paginated()`, `reply.stream()` (opt-in)
-- **Error Mappers** — class-based `instanceof` domain error → HTTP response mapping
-- **Multipart Body** — `multipartBody()` middleware for file upload in CRUD routes
-- **Service Scope** — `kind: "service"` RequestScope for machine-to-machine auth (MCP + WebSocket)
-- **BigInt Serialization** — `serializeBigInt: true` auto-converts BigInt → Number
-- **Event WAL** — skips internal `arc.*` events to prevent startup timeout with durable stores
-- **Security** — `auth: false` produces null `ctx.user` (prevents anonymous bypass of `!!ctx.user` guards)
+See [CHANGELOG.md](CHANGELOG.md) for the full v2.9 / v2.8 / v2.7 history.
 
 ## License
 

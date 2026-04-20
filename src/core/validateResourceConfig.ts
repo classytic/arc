@@ -90,7 +90,7 @@ export function validateResourceConfig(
       errors.push({
         field: "adapter.repository",
         message: "Adapter must provide a repository",
-        suggestion: "Ensure your adapter returns a valid CrudRepository",
+        suggestion: "Ensure your adapter returns a valid StandardRepo (see @classytic/repo-core)",
       });
     }
 

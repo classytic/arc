@@ -11,10 +11,11 @@
  *
  * @example
  * import { BaseController } from '@classytic/arc';
+ * import type { StandardRepo } from '@classytic/repo-core/repository';
  *
  * // Use Arc's default query parser (works out of the box)
  * class ProductController extends BaseController {
- *   constructor(repository: CrudRepository) {
+ *   constructor(repository: StandardRepo<Product>) {
  *     super(repository);
  *   }
  * }
@@ -35,6 +36,8 @@
  * });
  */
 
+import type { OffsetPaginationResult } from "@classytic/repo-core/pagination";
+import type { PaginationParams } from "@classytic/repo-core/repository";
 import type { RepositoryLike } from "../adapters/interface.js";
 import { buildQueryKey } from "../cache/keys.js";
 import type { QueryCacheConfig } from "../cache/QueryCache.js";
@@ -52,9 +55,6 @@ import type {
   IController,
   IControllerResponse,
   IRequestContext,
-  OffsetPaginatedResult,
-  PaginatedResult,
-  PaginationParams,
   PaginationResult,
   ParsedQuery,
   QueryParserInterface,
@@ -347,7 +347,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
   // CRUD Operations
   // ============================================================================
 
-  async list(req: IRequestContext): Promise<IControllerResponse<PaginatedResult<TDoc>>> {
+  async list(req: IRequestContext): Promise<IControllerResponse<OffsetPaginationResult<TDoc>>> {
     const options = this.queryResolver.resolve(req, this.meta(req));
     const cacheConfig = this.resolveCacheConfig("list");
     const qc = req.server?.queryCache;
@@ -364,7 +364,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
         userId,
         orgId,
       );
-      const { data, status } = await qc.get<PaginatedResult<TDoc>>(key);
+      const { data, status } = await qc.get<OffsetPaginationResult<TDoc>>(key);
 
       if (status === "fresh") {
         return {
@@ -410,7 +410,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
   private async executeListQuery(
     options: ParsedQuery,
     req: IRequestContext,
-  ): Promise<PaginatedResult<TDoc>> {
+  ): Promise<OffsetPaginationResult<TDoc>> {
     const hooks = this.getHooks(req);
     const repoGetAll = async () => this.repository.getAll(options as PaginationParams<TDoc>);
     const result =
@@ -427,19 +427,11 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
           )
         : await repoGetAll();
 
-    if (Array.isArray(result)) {
-      return {
-        docs: result as TDoc[],
-        page: 1,
-        limit: result.length,
-        total: result.length,
-        pages: 1,
-        hasNext: false,
-        hasPrev: false,
-      };
-    }
-
-    return result as PaginatedResult<TDoc>;
+    // Forward the kit's response verbatim. Per repo-core's `MinimalRepo`
+    // contract, `getAll(params)` returns an `OffsetPaginationResult` or
+    // `KeysetPaginationResult` envelope — arc doesn't reshape or synthesize.
+    // Kits that return a bare array are non-conforming.
+    return result as OffsetPaginationResult<TDoc>;
   }
 
   async get(req: IRequestContext): Promise<IControllerResponse<TDoc>> {
@@ -801,11 +793,19 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
 
     let result: unknown;
     if (hooks && this.resourceName) {
-      result = await hooks.executeAround(this.resourceName, "delete", existing, repoDelete, {
-        user,
-        context: arcContext,
-        meta: { id },
-      });
+      // `delete` returns `DeleteResult` (not `TDoc`), so we erase the around
+      // hook's generic and treat the return as unknown at this call site.
+      result = await hooks.executeAround<unknown>(
+        this.resourceName,
+        "delete",
+        existing,
+        repoDelete,
+        {
+          user,
+          context: arcContext,
+          meta: { id },
+        },
+      );
     } else {
       result = await repoDelete();
     }
@@ -908,32 +908,12 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     const parsed = this.queryResolver.resolve(req, this.meta(req));
     const result = await repo.getDeleted(parsed, parsed);
 
-    // Bare-array shape — legacy adapters that return `TDoc[]` get wrapped
-    // in a synthetic offset envelope so downstream consumers always see a
-    // PaginationResult.
-    if (Array.isArray(result)) {
-      const docs = result as TDoc[];
-      return {
-        success: true,
-        data: {
-          method: "offset",
-          docs,
-          page: 1,
-          limit: docs.length,
-          total: docs.length,
-          pages: 1,
-          hasNext: false,
-          hasPrev: false,
-        } satisfies OffsetPaginatedResult<TDoc>,
-        status: 200,
-      };
-    }
-
-    // Pagination result — either offset or keyset. Pass through unchanged;
-    // `method` discriminator lets clients narrow.
+    // Forward the kit's response verbatim. Per repo-core's `StandardRepo`
+    // contract, `getDeleted(params, options)` returns an `OffsetPaginationResult`
+    // or `KeysetPaginationResult` envelope; clients narrow on `method`.
     return {
       success: true,
-      data: result as PaginatedResult<TDoc>,
+      data: result as PaginationResult<TDoc>,
       status: 200,
     };
   }

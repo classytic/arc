@@ -1,18 +1,37 @@
 /**
- * Generic Cache Store Interface
+ * Cache Store Interface — aligned with `@classytic/repo-core/cache.CacheAdapter`.
  *
- * Shared contract for reusable cache backends (memory, Redis, etc.).
- * Used by runtime systems such as dynamic permission matrices and QueryCache.
+ * Arc's cache layer speaks the same `get / set(ttlSeconds?) / del / clear(pattern?)`
+ * transport-level contract published by `@classytic/repo-core`. One Redis
+ * implementation drops into Arc's `QueryCache`, mongokit's cache plugin,
+ * sqlitekit's cache plugin, and every future kit without wrapper shims.
+ *
+ * Arc extends the bare adapter with two optional observability fields —
+ * `name` (for diagnostics) and `stats()` (for the response-cache plugin) —
+ * that are opt-in: consumers implementing only `CacheAdapter` still
+ * structurally satisfy `CacheStore`, so a raw repo-core adapter plugs
+ * directly into Arc.
+ *
+ * ## TTL unit
+ *
+ * `ttlSeconds`, not milliseconds. Matches Redis (`SET … EX seconds`) which
+ * is the dominant backend. `0` or `undefined` means no expiry; implementations
+ * may apply their own default.
+ *
+ * ## Not-found semantics
+ *
+ * `get()` returns `undefined` on miss / expired. Matches repo-core.
+ *
+ * ## Sync-or-async
+ *
+ * Method returns are `Promise<T> | T` — in-memory `Map` adapters can be
+ * synchronous; Redis adapters are async. Consumers always `await`, so
+ * sync values just short-circuit the microtask.
  */
 
 export interface CacheLogger {
   warn(message: string, ...args: unknown[]): void;
   error(message: string, ...args: unknown[]): void;
-}
-
-export interface CacheSetOptions {
-  /** Time-to-live in milliseconds */
-  ttlMs?: number;
 }
 
 export interface CacheStats {
@@ -29,32 +48,35 @@ export interface CacheStats {
 }
 
 export interface CacheStore<TValue = unknown> {
-  /** Store name for logs/diagnostics */
-  readonly name: string;
+  /** Store name for logs/diagnostics. Optional to match repo-core's bare `CacheAdapter`. */
+  readonly name?: string;
 
   /**
-   * Get cached value by key.
-   * Returns undefined when missing or expired.
+   * Get a value by key. Returns `undefined` when not found or expired.
    */
-  get(key: string): Promise<TValue | undefined>;
+  get(key: string): Promise<TValue | undefined> | TValue | undefined;
 
   /**
-   * Set a cache value.
-   * Store implementation handles TTL and eviction policy.
+   * Store a value with optional TTL (seconds). `0` or `undefined` means
+   * no expiry; implementations may apply a default.
    */
-  set(key: string, value: TValue, options?: CacheSetOptions): Promise<void>;
+  set(key: string, value: TValue, ttlSeconds?: number): Promise<void> | void;
 
   /**
-   * Delete a single cache key.
+   * Delete a single key. No-op when the key doesn't exist.
    */
-  delete(key: string): Promise<void>;
+  delete(key: string): Promise<void> | void;
 
   /**
-   * Clear all keys in this store namespace.
-   * Optional because distributed stores may not support cheap global clear.
+   * Invalidate keys matching a glob pattern (typically `prefix:*`), or
+   * every key when `pattern` is omitted.
+   *
+   * Optional — simpler adapters that can't enumerate keys (some KV stores)
+   * may omit this and rely on TTL for eventual consistency. Consumers that
+   * need strict invalidation must check for its presence: `store.clear?.(pattern)`.
    */
-  clear?(): Promise<void>;
+  clear?(pattern?: string): Promise<void> | void;
 
-  /** Cache statistics for observability. */
+  /** Cache statistics for observability. Optional. */
   stats?(): CacheStats;
 }

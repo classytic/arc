@@ -128,7 +128,7 @@ describe("createDynamicPermissionMatrix", () => {
     const resolver = vi.fn(async () => roleMap);
     const perms = createDynamicPermissionMatrix({
       resolveRolePermissions: resolver,
-      cache: { ttlMs: 60_000 },
+      cache: { ttlSeconds: 60 },
     });
 
     const check = perms.canAction("product", "create");
@@ -148,7 +148,7 @@ describe("createDynamicPermissionMatrix", () => {
     const perms = createDynamicPermissionMatrix({
       resolveRolePermissions: resolver,
       cache: {
-        ttlMs: 60_000,
+        ttlSeconds: 60,
         key: (ctx) => String((ctx.user as { id?: string } | null)?.id ?? "anon"),
       },
     });
@@ -195,7 +195,7 @@ describe("createDynamicPermissionMatrix", () => {
     const perms = createDynamicPermissionMatrix({
       resolveRolePermissions: resolver,
       cacheStore,
-      cache: { ttlMs: 60_000 },
+      cache: { ttlSeconds: 60 },
     });
 
     const check = perms.canAction("product", "create");
@@ -221,7 +221,7 @@ describe("createDynamicPermissionMatrix", () => {
 
       const perms = createDynamicPermissionMatrix({
         resolveRolePermissions: async () => roleMap,
-        cache: { ttlMs: 60_000 },
+        cache: { ttlSeconds: 60 },
       });
 
       // Before connect: no events
@@ -253,7 +253,7 @@ describe("createDynamicPermissionMatrix", () => {
       const resolver = vi.fn(async () => roleMap);
       const perms = createDynamicPermissionMatrix({
         resolveRolePermissions: resolver,
-        cache: { ttlMs: 60_000 },
+        cache: { ttlSeconds: 60 },
       });
 
       // Populate cache
@@ -289,7 +289,7 @@ describe("createDynamicPermissionMatrix", () => {
       const resolver = vi.fn(async () => roleMap);
       const perms = createDynamicPermissionMatrix({
         resolveRolePermissions: resolver,
-        cache: { ttlMs: 60_000 },
+        cache: { ttlSeconds: 60 },
       });
 
       // Populate cache
@@ -332,7 +332,7 @@ describe("createDynamicPermissionMatrix", () => {
 
       const perms = createDynamicPermissionMatrix({
         resolveRolePermissions: async () => roleMap,
-        cache: { ttlMs: 60_000 },
+        cache: { ttlSeconds: 60 },
       });
 
       await perms.connectEvents(mockEvents, {
@@ -362,7 +362,7 @@ describe("createDynamicPermissionMatrix", () => {
 
       const perms = createDynamicPermissionMatrix({
         resolveRolePermissions: async () => roleMap,
-        cache: { ttlMs: 60_000 },
+        cache: { ttlSeconds: 60 },
       });
 
       await perms.connectEvents(mockEvents);
@@ -387,7 +387,7 @@ describe("createDynamicPermissionMatrix", () => {
 
       const perms = createDynamicPermissionMatrix({
         resolveRolePermissions: async () => roleMap,
-        cache: { ttlMs: 60_000 },
+        cache: { ttlSeconds: 60 },
       });
 
       await perms.connectEvents(mockEvents, { eventType: "custom.policy.changed" });

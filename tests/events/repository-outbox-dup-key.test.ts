@@ -22,7 +22,10 @@ function makeRepository(
   return {
     create: createImpl,
     getOne: async () => null,
-    findAll: async () => [],
+    // 2.10.2 switched from findAll → getAll for bounded reads (mongokit's
+    // findAll has no skip/limit). Return a pagination envelope so the adapter
+    // unwraps .docs correctly.
+    getAll: async () => ({ docs: [], total: 0, page: 1, limit: 0, pages: 0 }),
     deleteMany: async () => ({ deletedCount: 0 }),
     findOneAndUpdate: async () => null,
     ...(isDuplicateKeyError ? { isDuplicateKeyError } : {}),

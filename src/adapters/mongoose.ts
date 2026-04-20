@@ -5,14 +5,11 @@
  * Proper generics eliminate the need for 'as any' casts.
  */
 
+import type { StandardRepo } from "@classytic/repo-core/repository";
 import type { Model } from "mongoose";
 import { SYSTEM_FIELDS } from "../constants.js";
-import type {
-  AnyRecord,
-  CrudRepository,
-  OpenApiSchemas,
-  RouteSchemaOptions,
-} from "../types/index.js";
+import type { AnyRecord, OpenApiSchemas, RouteSchemaOptions } from "../types/index.js";
+import { mergeFieldRuleConstraints } from "./field-rule-helpers.js";
 import type {
   AdapterSchemaContext,
   DataAdapter,
@@ -54,7 +51,7 @@ export interface MongooseAdapterOptions<TDoc = unknown> {
   /** Mongoose model instance — preserves document type for type safety */
   model: Model<TDoc>;
   /** Repository implementing CRUD operations - accepts any repository-like object */
-  repository: CrudRepository<TDoc> | RepositoryLike;
+  repository: StandardRepo<TDoc> | RepositoryLike<TDoc>;
   /**
    * External schema generator plugin for OpenAPI docs.
    * When provided, replaces the built-in basic type conversion.
@@ -91,7 +88,7 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
   readonly type = "mongoose" as const;
   readonly name: string;
   readonly model: Model<TDoc>;
-  readonly repository: CrudRepository<TDoc> | RepositoryLike;
+  readonly repository: StandardRepo<TDoc> | RepositoryLike<TDoc>;
   private readonly schemaGenerator?: (
     model: Model<TDoc>,
     options?: RouteSchemaOptions,
@@ -109,7 +106,7 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
 
     if (!isRepository(options.repository)) {
       throw new TypeError(
-        "MongooseAdapter: Invalid repository. Expected CrudRepository instance.\n" +
+        "MongooseAdapter: Invalid repository. Expected StandardRepo instance.\n" +
           "Usage: createMongooseAdapter({ model: YourModel, repository: yourRepo })",
       );
     }
@@ -177,9 +174,14 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
     context?: AdapterSchemaContext,
   ): OpenApiSchemas | Record<string, unknown> | null {
     try {
-      // Delegate to external schema generator plugin when available
+      // Delegate to external schema generator plugin when available.
+      // Post-process with `mergeFieldRuleConstraints` so kit-produced
+      // schemas honor arc's portable field-rule constraints identically to
+      // the built-in fallback below.
       if (this.schemaGenerator) {
-        return this.schemaGenerator(this.model, schemaOptions, context);
+        const generated = this.schemaGenerator(this.model, schemaOptions, context);
+        mergeFieldRuleConstraints(generated, schemaOptions);
+        return generated;
       }
 
       // Built-in basic conversion (fallback)
@@ -453,14 +455,14 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
  */
 export function createMongooseAdapter<TDoc = unknown>(
   model: Model<TDoc>,
-  repository: CrudRepository<TDoc> | RepositoryLike,
+  repository: StandardRepo<TDoc> | RepositoryLike<TDoc>,
 ): DataAdapter<TDoc>;
 export function createMongooseAdapter<TDoc = unknown>(
   options: MongooseAdapterOptions<TDoc>,
 ): DataAdapter<TDoc>;
 export function createMongooseAdapter<TDoc = unknown>(
   modelOrOptions: Model<TDoc> | MongooseAdapterOptions<TDoc>,
-  repository?: CrudRepository<TDoc> | RepositoryLike,
+  repository?: StandardRepo<TDoc> | RepositoryLike<TDoc>,
 ): DataAdapter<TDoc> {
   if (isMongooseModel(modelOrOptions)) {
     if (!repository) {

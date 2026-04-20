@@ -127,7 +127,7 @@ export {
  * - MongoDB: `import { Repository } from '@classytic/mongokit'`
  *
  * Arc provides adapters (createMongooseAdapter, createPrismaAdapter) that work
- * with any repository implementing the CrudRepository interface.
+ * with any repository implementing the `StandardRepo` contract from `@classytic/repo-core`.
  */
 
 // ============================================================================
@@ -225,18 +225,12 @@ export type {
   ArcRequest,
   // Plugin options
   AuthPluginOptions,
-  BulkWriteOperation,
-  BulkWriteResult,
   ConfigError,
   ControllerLike,
   CrudController,
-  CrudRepository,
   CrudRouteKey,
   CrudRouterOptions,
   CrudSchemas,
-  DeleteManyResult,
-  DeleteOptions,
-  DeleteResult,
   EventDefinition,
   FastifyRequestExtras,
   FastifyWithAuth,
@@ -256,22 +250,17 @@ export type {
   // Framework-agnostic controller types (MongoKit-compatible)
   IRequestContext,
   JWTPayload,
-  KeysetPaginatedResult,
   MiddlewareConfig,
-  OffsetPaginatedResult,
   OwnershipCheck,
-  PaginatedResult,
-  PaginationParams,
+  // Pagination discriminated union (arc-owned; individual shapes ship from repo-core)
   PaginationResult,
   PresetFunction,
   // Presets
   PresetResult,
-  QueryOptions,
   RateLimitConfig,
   // Registry
   RegistryEntry,
   RegistryStats,
-  RepositorySession,
   // Request context
   RequestContext,
   RequestIdOptions,
@@ -289,12 +278,10 @@ export type {
   TypedController,
   TypedRepository,
   TypedResourceConfig,
-  UpdateManyResult,
   UserBase,
   UserOrganization,
   ValidateOptions,
   ValidationResult,
-  WriteOptions,
 } from "./types/index.js";
 // DX helpers (value exports from types)
 export { envelope } from "./types/index.js";

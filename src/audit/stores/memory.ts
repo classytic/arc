@@ -70,6 +70,12 @@ export class MemoryAuditStore implements AuditStore {
     return results;
   }
 
+  async purgeOlderThan(cutoff: Date): Promise<number> {
+    const before = this.entries.length;
+    this.entries = this.entries.filter((e) => e.timestamp >= cutoff);
+    return before - this.entries.length;
+  }
+
   async close(): Promise<void> {
     this.entries = [];
   }

@@ -80,10 +80,12 @@ function validateDistributedRuntime(options: CreateAppOptions): string[] {
     missing.push("events transport");
   }
 
-  // Cache store — only when caching is enabled
+  // Cache store — only when caching is enabled. An adapter without a
+  // `name` (the bare repo-core `CacheAdapter` shape) is treated as
+  // external — caller opted in explicitly.
   if (options.arcPlugins?.caching) {
     const cache = options.stores?.cache;
-    if (!cache || MEMORY_STORE_NAMES.has(cache.name)) {
+    if (!cache || (cache.name !== undefined && MEMORY_STORE_NAMES.has(cache.name))) {
       missing.push("cache store");
     }
   }
@@ -100,10 +102,11 @@ function validateDistributedRuntime(options: CreateAppOptions): string[] {
     );
   }
 
-  // QueryCache store — only when queryCache is enabled
+  // QueryCache store — only when queryCache is enabled. Unnamed adapters
+  // are treated as external (see `cache` above).
   if (options.arcPlugins?.queryCache) {
     const qc = options.stores?.queryCache;
-    if (!qc || MEMORY_STORE_NAMES.has(qc.name)) {
+    if (!qc || (qc.name !== undefined && MEMORY_STORE_NAMES.has(qc.name))) {
       missing.push("queryCache store");
     }
   }

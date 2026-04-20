@@ -21,9 +21,6 @@ export default defineConfig({
     // Scope
     "src/scope/index.ts",
 
-    // RPC
-    "src/rpc/index.ts",
-
     // Auth & Org
     "src/auth/index.ts",
     "src/org/index.ts",
@@ -63,15 +60,9 @@ export default defineConfig({
     // Docs
     "src/docs/index.ts",
 
-    // Dynamic Loader
-    "src/dynamic/index.ts",
-
     // Testing
     "src/testing/index.ts",
     "src/testing/storageContract.ts",
-
-    // Policies
-    "src/policies/index.ts",
 
     // Schemas (TypeBox)
     "src/schemas/index.ts",

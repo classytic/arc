@@ -176,7 +176,7 @@ async function installDependencies(
 
   // Pin optional peer deps to versions that match Arc's peerDependencies range.
   // Using `@latest` here is unsafe because users could install a version below
-  // Arc's minimum (e.g. mongoose < 9.4.1, mongokit < 3.5.5) and hit silent
+  // Arc's minimum (e.g. mongoose < 9.4.1, mongokit < 3.10.2) and hit silent
   // runtime breakage. The semver caret floors at the minimum Arc supports while
   // still allowing minor + patch upgrades.
   if (config.auth === "better-auth") {
@@ -186,7 +186,7 @@ async function installDependencies(
   }
 
   if (config.adapter === "mongokit") {
-    deps.push("@classytic/mongokit@^3.5.5", "mongoose@^9.4.1");
+    deps.push("@classytic/mongokit@^3.10.2", "@classytic/repo-core@^0.1.0", "mongoose@^9.4.1");
   }
 
   const devDeps = ["vitest@latest", "pino-pretty@latest"];

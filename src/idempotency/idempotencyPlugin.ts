@@ -40,7 +40,6 @@ import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
 import type { RepositoryLike } from "../adapters/interface.js";
-import { isReplyCommitted } from "../utils/reply-guards.js";
 import { repositoryAsIdempotencyStore } from "./repository-idempotency-adapter.js";
 import type { IdempotencyStore } from "./stores/interface.js";
 import { createIdempotencyResult } from "./stores/interface.js";
@@ -340,11 +339,6 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
       return payload;
     }
 
-    // Guard: if headers are already committed (test-harness race), we can
-    // still update the idempotency store (side-effect matters), but skip
-    // the reply.header() mutation at the end to avoid ERR_HTTP_HEADERS_SENT.
-    const committed = isReplyCommitted(reply);
-
     // Only cache successful responses (2xx)
     const statusCode = reply.statusCode;
     if (statusCode < 200 || statusCode >= 300) {
@@ -386,11 +380,8 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     // Unlock (result is now cached)
     await store.unlock(fullKey, request.id);
 
-    // Add idempotency key header to response (skip when reply already
-    // committed to avoid ERR_HTTP_HEADERS_SENT under light-my-request)
-    if (!committed) {
-      reply.header(HEADER_IDEMPOTENCY_KEY, request.idempotencyKey);
-    }
+    // Add idempotency key header to response
+    reply.header(HEADER_IDEMPOTENCY_KEY, request.idempotencyKey);
 
     return payload;
   });

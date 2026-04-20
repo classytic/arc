@@ -2,10 +2,10 @@
  * Repository Contract — Type-Level Assignability
  *
  * Compile-time proof that mongokit's real `Repository<T>` output type
- * structurally satisfies arc's canonical `CrudRepository<T>` contract. If
+ * structurally satisfies arc's canonical `StandardRepo<T>` contract. If
  * this file compiles, a 3rd-party consumer can write:
  *
- *   const repo: CrudRepository<Product> = new Repository<Product>(Model);
+ *   const repo: StandardRepo<Product> = new Repository<Product>(Model);
  *
  * without any `as` cast or explicit narrowing.
  *
@@ -24,7 +24,8 @@ import { Repository } from "@classytic/mongokit";
 import mongoose, { type Types } from "mongoose";
 import { describe, it, expect } from "vitest";
 
-import type { CrudRepository, DataAdapter, RepositoryLike } from "../../src/index.js";
+import type { StandardRepo } from "@classytic/repo-core/repository";
+import type { DataAdapter, RepositoryLike } from "../../src/index.js";
 
 // ============================================================================
 // Dummy entity
@@ -56,13 +57,13 @@ declare const OrderModel: mongoose.Model<IOrder>;
 
 /**
  * **The key assertion.** If mongokit's `Repository<IOrder>` does NOT
- * structurally satisfy arc's `CrudRepository<IOrder>`, this line is a
+ * structurally satisfy arc's `StandardRepo<IOrder>`, this line is a
  * compile error. Running `npx tsc --noEmit` is the gate.
  *
  * Using a function return type (not a top-level `const`) so the compiler
  * must actually resolve the assignability; tree-shaking can't eliminate it.
  */
-function _assertMongokitIsCrudRepository(): CrudRepository<IOrder> {
+function _assertMongokitIsCrudRepository(): StandardRepo<IOrder> {
   const repo = new Repository<IOrder>(OrderModel);
   return repo;
 }
@@ -78,7 +79,7 @@ function _assertMongokitIsRepositoryLike(): RepositoryLike {
 }
 
 /**
- * The `DataAdapter.repository` field accepts `CrudRepository<T> |
+ * The `DataAdapter.repository` field accepts `StandardRepo<T> |
  * RepositoryLike` — mongokit should fit without casting.
  */
 function _assertMongokitFitsDataAdapter(): DataAdapter<IOrder>["repository"] {
@@ -93,7 +94,7 @@ function _assertMongokitFitsDataAdapter(): DataAdapter<IOrder>["repository"] {
  * implementors: if this POJO-style assertion compiles for your kit, you
  * are wire-compatible with arc.
  */
-function _assertMinimalKitSatisfiesContract(): CrudRepository<IOrder> {
+function _assertMinimalKitSatisfiesContract(): StandardRepo<IOrder> {
   return {
     getAll: async () => ({
       method: "offset",
@@ -117,7 +118,7 @@ function _assertMinimalKitSatisfiesContract(): CrudRepository<IOrder> {
  * proves a kit that DOES implement the optional surface doesn't need any
  * cast to satisfy the contract either.
  */
-function _assertOptionalSurfaceTypes(): CrudRepository<IOrder> {
+function _assertOptionalSurfaceTypes(): StandardRepo<IOrder> {
   return {
     getAll: async () => ({
       method: "offset",

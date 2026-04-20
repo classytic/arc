@@ -26,8 +26,13 @@ const config: KnipConfig = {
     "@opentelemetry/auto-instrumentations-node",
   ],
 
-  // Files whose exports are consumed by downstream apps / kit authors
-  ignore: ["src/adapters/types.ts"],
+  // Files whose exports are consumed by downstream apps / kit authors,
+  // OR type-only CI-gate fixtures that intentionally have no importer.
+  ignore: [
+    "src/adapters/types.ts",
+    // Type-level compatibility gate — verified by `tsc --noEmit`, not bundled to dist.
+    "src/adapters/repo-core-compat.ts",
+  ],
 
   // Public API exports for downstream consumers, not used in src/ itself
   ignoreExportsUsedInFile: true,

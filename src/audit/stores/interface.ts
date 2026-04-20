@@ -70,6 +70,16 @@ export interface AuditStore {
   /** Query audit logs (optional - not all stores support querying) */
   query?(options: AuditQueryOptions): Promise<AuditEntry[]>;
 
+  /**
+   * Purge entries older than `cutoff`, return count deleted. Optional —
+   * stores that don't support deletion (append-only emitters like Kafka,
+   * S3 archivers) simply omit this method and are skipped by
+   * `fastify.audit.purge(...)`. Mongo-backed repositories can also rely
+   * on a server-side TTL index instead of calling this; the method is
+   * the DB-agnostic escape hatch.
+   */
+  purgeOlderThan?(cutoff: Date): Promise<number>;
+
   /** Close/cleanup (optional) */
   close?(): Promise<void>;
 }

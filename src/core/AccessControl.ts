@@ -7,13 +7,13 @@
  * Designed to be used standalone or composed into controllers.
  */
 
+import type { QueryOptions } from "@classytic/repo-core/repository";
 import { DEFAULT_ID_FIELD, MAX_REGEX_LENGTH } from "../constants.js";
 import { getOrgId as getOrgIdFromScope, isElevated } from "../scope/types.js";
 import type {
   AnyRecord,
   ArcInternalMetadata,
   IRequestContext,
-  QueryOptions,
   RequestContext,
 } from "../types/index.js";
 

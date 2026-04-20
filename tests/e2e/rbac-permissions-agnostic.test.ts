@@ -41,7 +41,16 @@ function createInMemoryRepo() {
         items = items.filter((item) => Object.entries(filters).every(([k, v]) => item[k] === v));
       }
 
-      return items;
+      return {
+        method: "offset" as const,
+        docs: items,
+        total: items.length,
+        page: 1,
+        limit: items.length || 20,
+        pages: 1,
+        hasNext: false,
+        hasPrev: false,
+      };
     }),
     getById: vi.fn(async (id: string) => store.get(id) ?? null),
     create: vi.fn(async (data: AnyRecord) => {

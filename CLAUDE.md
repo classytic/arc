@@ -8,7 +8,7 @@
 **@classytic/arc** — Resource-oriented backend framework on Fastify.
 One `defineResource()` → REST API + auth + permissions + events + caching + OpenAPI + MCP.
 
-**v2.9** | Node.js 22+ | TypeScript 6+ | ESM-only | Fastify 5+ | ~300 test files
+**v2.10** | Node.js 22+ | TypeScript 6+ | ESM-only | Fastify 5+ | ~290 test files
 
 ## Commands
 
@@ -44,7 +44,7 @@ npm run smoke                                      # Verify CLI + imports
 - `BaseController<TDoc = AnyRecord>` — `TDoc` inferred from Model, `unknown` default forces narrowing
 - `EventMeta` (v2.9): `id`, `timestamp`, `schemaVersion?`, `correlationId?`, `causationId?`, `partitionKey?`, `source?`, `idempotencyKey?`, `resource?`, `resourceId?`, `userId?`, `organizationId?`, `aggregate?: { type: string; id: string }` — arc is source of truth; `@classytic/primitives` mirrors it. Domain packages narrow `aggregate.type` to a closed union via interface extension. `aggregate` is NOT inherited by `createChildEvent`; `source` + `idempotencyKey` ARE.
 - Outbox (v2.9): `EventOutbox.store()` auto-maps `meta.idempotencyKey` → `OutboxWriteOptions.dedupeKey`. `failurePolicy({ event, error, attempts }) => { retryAt?, deadLetter? }` centralises retry/DLQ. `store.getDeadLettered?(limit)` returns `DeadLetteredEvent[]`. `RelayResult.deadLettered` counts per batch. Durable store (v2.9.1): `new EventOutbox({ repository, transport })` — arc adapts any `RepositoryLike` (mongokit/prismakit/custom) to the outbox contract internally; same pattern for `auditPlugin({ repository })` and `idempotencyPlugin({ repository })`.
-- `PolicyContext` / `PolicyResult`: `unknown` (not `any`) — adapters narrow at the edge
+- Permissions (v2.10): `permissions/` split into `core.ts` (auth/role/ownership + `allOf`/`anyOf`/`not`/`when`/`denyAll`), `scope.ts` (org/service/team/scope-context), `dynamic.ts` (matrices). New `not(check, reason?)` combinator inverts a check. Public import path `@classytic/arc/permissions` unchanged.
 
 ## Test Mapping (run the right tests)
 
@@ -66,40 +66,37 @@ npm run smoke                                      # Verify CLI + imports
 | `src/utils/*` | `npx vitest run tests/utils/` |
 | `src/org/*` | `npx vitest run tests/e2e/org-scope-plugin.test.ts` |
 | `src/pipeline/*` | `npx vitest run tests/pipeline/` |
-| `src/policies/*` | `npx vitest run tests/policies/ tests/security/policy-filter-*.test.ts` |
 | `src/middleware/*` | `npx vitest run tests/middleware/` |
 | `src/migrations/*` | `npx vitest run tests/migrations/` |
 | `src/schemas/*` | `npx vitest run tests/schemas/` |
 | `src/logger/*` | `npx vitest run tests/logger/` |
-| `src/rpc/*` | `npx vitest run tests/rpc/` |
 | `src/discovery/*` | `npx vitest run tests/discovery/` |
 | `src/utils/queryParser*` | `npx vitest run tests/utils/ tests/property/` |
 | `src/auth/authPlugin*` | `npx vitest run tests/auth/ tests/property/jwt-bearer*` |
 
 **Never run the full suite during dev** — use targeted tests. `test:ci` is for release/CI; perf tests run separately on purpose to avoid GC-noise flakes.
 
-## Architecture (32 modules)
+## Architecture (29 modules)
 
 ```
 src/
-  core/          — defineResource, BaseController (939L), QueryResolver, createCrudRouter, routes + actions on defineResource (v2.8)
+  core/          — defineResource, BaseController, QueryResolver, createCrudRouter, routes + actions
   factory/       — createApp (main entry point)
   adapters/      — RepositoryLike interface + mongoose/prisma adapters
   auth/          — JWT, Better Auth, sessions
-  permissions/   — RBAC (989L), role hierarchy, field-level
+  permissions/   — core (auth/roles/ownership + combinators), scope (org/service/team), dynamic (matrices), fields, presets, roleHierarchy
   scope/         — RequestScope discriminated union
   events/        — EventPlugin, transports (memory, redis pub/sub, redis streams)
-  hooks/         — HookSystem (724L), before/after lifecycle
+  hooks/         — HookSystem, before/after lifecycle
   cache/         — QueryCache, stores, SWR
   plugins/       — health, tracing, requestId, response-cache, versioning, rate-limit, metrics, SSE
-  policies/      — row-level security, field masking
   integrations/  — jobs (BullMQ), websocket, SSE, MCP (stateless/stateful, service scope), webhooks
   migrations/    — MigrationRunner + MigrationStore (DB-agnostic)
-  cli/           — init (3434L), generate, doctor, describe, introspect, docs
+  cli/           — init, generate, doctor, describe, introspect, docs
   testing/       — HttpTestHarness, mocks, auth helpers
-  docs/          — OpenAPI (924L), Scalar UI
+  docs/          — OpenAPI, Scalar UI
   utils/         — queryParser, stateMachine, compensate, retry, circuitBreaker
-  types/         — shared types (1443L), Fastify declaration merges
+  types/         — shared types, Fastify declaration merges
   schemas/       — JSON Schema from field rules
   pipeline/      — guard, pipe, intercept, transform
   middleware/    — request-level middleware, multipartBody (file upload for CRUD)
@@ -108,11 +105,9 @@ src/
   idempotency/   — idempotency plugin + stores
   context/       — async request context
   registry/      — resource registry, introspection
-  discovery/     — dynamic resource loading
-  dynamic/       — ArcDynamicLoader
+  discovery/     — auto-discovery + filesystem resource loader (also factory/loadResources)
   logger/        — injectable logger interface
-  rpc/           — inter-service client
-  presets/       — bulk, softDelete, ownedByUser, slugLookup, tree, multiTenant, audited
+  presets/       — bulk, softDelete, ownedByUser, slugLookup, tree, multiTenant, audited, search, files-upload
 ```
 
 ## Gotchas
@@ -132,6 +127,12 @@ src/
 13. **multiTenant injects org on UPDATE too** (v2.9) — body-supplied `organizationId` is overwritten with caller's scope
 14. `verifySignature(body, ...)` throws `TypeError` if body isn't string/Buffer — pass `req.rawBody`, not parsed body
 
+## Removed in v2.10 (no longer exported)
+
+- `@classytic/arc/policies` — pluggable policy engine; `permissions/` covers every documented use case (RBAC, ownership, tenant filters via `requireOrgInScope`)
+- `@classytic/arc/rpc` — inter-service HTTP client; orphaned with no internal users
+- `@classytic/arc/dynamic` — `ArcDynamicLoader`; `factory/loadResources` is the only filesystem loader
+
 ## Removed in v2.9 (no longer exported)
 
 - `createActionRouter` / `buildActionBodySchema` — use `defineResource({ actions: { ... } })`
@@ -143,7 +144,9 @@ src/
 | Peer | Min | Required? |
 |------|-----|-----------|
 | fastify | >=5.0.0 | **Yes** |
-| @classytic/mongokit | >=3.5.6 | No |
+| @classytic/mongokit | >=3.10.2 | No |
+| @classytic/repo-core | >=0.1.0 | No |
+| @classytic/sqlitekit | >=0.1.0 | No |
 | mongoose | >=9.0.0 | No |
 | better-auth | >=1.6.2 | No |
 | ioredis | >=5.0.0 | No |

@@ -245,12 +245,11 @@ describe("Compensation + MongoKit Transaction", () => {
 
   it("works with MongoKit repository withTransaction", async () => {
     const { withCompensation } = await import("../../src/utils/compensation.js");
-    const { Repository } = await import("@classytic/mongokit");
+    const { Repository, withTransaction } = await import("@classytic/mongokit");
 
     await InventoryModel.create({ sku: "doohickey", quantity: 3 });
 
     const orderRepo = new Repository(OrderModel);
-    const inventoryRepo = new Repository(InventoryModel);
 
     const externalNotify = vi.fn().mockRejectedValue(new Error("Email service down"));
 
@@ -258,8 +257,12 @@ describe("Compensation + MongoKit Transaction", () => {
       {
         name: "create-order",
         execute: async (ctx) => {
-          // Use MongoKit's withTransaction
-          const order = await orderRepo.withTransaction(async (session) => {
+          // Cross-model write: the standalone `withTransaction(connection, fn)`
+          // helper shares one session across orderRepo.create + direct
+          // InventoryModel.$inc. MongoKit 3.10's instance-method
+          // `repo.withTransaction(txRepo => ...)` is for single-repo flows
+          // where every CRUD call routes through txRepo.
+          const order = await withTransaction(connection, async (session) => {
             const created = await orderRepo.create(
               { userId: "u3", items: ["doohickey"], total: 15, status: "processing" },
               { session },

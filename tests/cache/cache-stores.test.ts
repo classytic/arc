@@ -7,7 +7,7 @@ describe("Cache Stores", () => {
     it("enforces hard maxEntries and evicts LRU", async () => {
       const store = new MemoryCacheStore<string>({
         maxEntries: 2,
-        defaultTtlMs: 10_000,
+        defaultTtlSeconds: 10,
       });
 
       await store.set("a", "A");
@@ -26,8 +26,12 @@ describe("Cache Stores", () => {
     });
 
     it("expires values by TTL", async () => {
+      // 0.005s = 5ms; the set path multiplies by 1000 internally so the
+      // entry expires almost immediately. Using seconds as the unit means
+      // sub-second TTLs are fractional — that's fine, the underlying
+      // `setTimeout`/`Date.now()` math is in ms either way.
       const store = new MemoryCacheStore<string>({
-        defaultTtlMs: 5,
+        defaultTtlSeconds: 0.005,
       });
 
       await store.set("short", "value");
@@ -64,11 +68,11 @@ describe("Cache Stores", () => {
       const store = new RedisCacheStore<{ allow: boolean }>({
         client,
         prefix: "test:",
-        defaultTtlMs: 1234,
+        defaultTtlSeconds: 60,
       });
 
       await store.set("k1", { allow: true });
-      expect(set).toHaveBeenCalledWith("test:k1", JSON.stringify({ allow: true }), { PX: 1234 });
+      expect(set).toHaveBeenCalledWith("test:k1", JSON.stringify({ allow: true }), { EX: 60 });
 
       await store.delete("k1");
       expect(del).toHaveBeenCalledWith("test:k1");

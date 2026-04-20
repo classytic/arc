@@ -87,7 +87,7 @@ describe("Type Inference & DX", () => {
         delete: async () => true,
       };
 
-      // Should compile — RepositoryLike is accepted alongside CrudRepository
+      // Should compile — RepositoryLike is accepted alongside StandardRepo
       const adapter = createMongooseAdapter(ProductModel, customRepo);
       expect(adapter.type).toBe("mongoose");
     });

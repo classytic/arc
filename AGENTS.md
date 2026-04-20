@@ -11,7 +11,7 @@
 
 | Fact | Value |
 |------|-------|
-| Version | 2.9.0 |
+| Version | 2.10.2 |
 | Runtime | Node.js 22+ (ESM-only) |
 | Language | TypeScript 6+ (strict mode) |
 | Build | tsdown (not tsc, not esbuild directly) |
@@ -42,34 +42,31 @@ src/                          181 files across 32 modules
   factory/                    createApp — the main entry point users call
   adapters/                   RepositoryLike interface + mongoose/prisma adapters
   auth/                       authPlugin (JWT), betterAuth adapter, sessionManager, redis-session
-  permissions/                RBAC (989L), role hierarchy, field-level permissions, presets
+  permissions/                core (auth/roles/ownership + allOf/anyOf/not/when/denyAll), scope (org/service/team), dynamic (matrices), fields, presets, roleHierarchy
   scope/                      RequestScope discriminated union (public|authenticated|member|service|elevated)
   events/                     EventPlugin, transports (memory, redis pub/sub, redis streams), defineEvent
-  hooks/                      HookSystem (724L) — before/after lifecycle on resources
+  hooks/                      HookSystem — before/after lifecycle on resources
   cache/                      QueryCache, query-cache plugin, scope-aware cache keys
   plugins/                    health, tracing, requestId, response-cache, versioning, rate-limit, metrics, SSE, gracefulShutdown
-  policies/                   PolicyInterface (row-level security, field masking)
   integrations/               jobs (BullMQ), streamline, websocket, SSE, MCP, webhooks
     mcp/                      createMcpServer, resourceToTools, defineTool, definePrompt, sessionCache
   migrations/                 MigrationRunner + MigrationStore interface (DB-agnostic)
-  cli/                        arc init (3434L), generate, doctor, describe, introspect, docs
+  cli/                        arc init, generate, doctor, describe, introspect, docs
   testing/                    HttpTestHarness, mock helpers, createJwtAuthProvider, dbHelpers
-  docs/                       OpenAPI spec generator (924L), Scalar UI, externalPaths
+  docs/                       OpenAPI spec generator, Scalar UI, externalPaths
   utils/                      queryParser, stateMachine, compensate, retry, circuitBreaker, schemaConverter
-  types/                      shared type definitions (1443L), Fastify declaration merges
+  types/                      shared type definitions, Fastify declaration merges
   schemas/                    JSON Schema generation from field rules
   pipeline/                   guard, pipe, intercept, transform — execution pipeline stages
   middleware/                 request-level middleware system
   org/                        organizationPlugin, orgMembership, org types
-  audit/                      auditPlugin, MongoDB audit store
+  audit/                      auditPlugin, store interface + memory + repository adapter
   idempotency/                idempotencyPlugin, MongoDB + Redis stores
   context/                    async request context (AsyncLocalStorage)
   registry/                   resource registry, introspection plugin
-  discovery/                  dynamic resource loading
-  dynamic/                    ArcDynamicLoader
+  discovery/                  filesystem auto-discovery (also factory/loadResources)
   logger/                     injectable logger interface
-  rpc/                        serviceClient for inter-service calls
-  presets/                    bulk, softDelete, ownedByUser, slugLookup, tree, multiTenant, audited
+  presets/                    bulk, softDelete, ownedByUser, slugLookup, tree, multiTenant, audited, search, filesUpload
   constants.ts                shared constants
 ```
 
@@ -77,13 +74,15 @@ src/                          181 files across 32 modules
 
 | File | Lines | Complexity | Test coverage |
 |------|-------|------------|---------------|
-| `src/cli/commands/init.ts` | 3,434 | High — scaffolding | Low (3 test files) |
-| `src/types/index.ts` | 1,443 | Medium — type defs | `tests/types/` |
-| `src/permissions/index.ts` | 989 | High — RBAC engine | `tests/permissions/` |
-| `src/core/BaseController.ts` | 939 | High — request pipeline | `tests/core/base-controller.test.ts` |
-| `src/docs/openapi.ts` | 924 | Medium — spec gen | `tests/docs/` |
-| `src/hooks/HookSystem.ts` | 724 | Medium — lifecycle | `tests/hooks/` |
-| `src/factory/types.ts` | 621 | Low — type defs | Covered by factory tests |
+| `src/cli/commands/init.ts` | ~3,400 | High — scaffolding | Low (3 test files) |
+| `src/types/index.ts` | ~1,650 | Medium — type defs (split planned for v2.11) | `tests/types/` |
+| `src/core/BaseController.ts` | ~1,440 | High — composes AccessControl + BodySanitizer + QueryResolver | `tests/core/base-controller.test.ts` |
+| `src/docs/openapi.ts` | ~920 | Medium — spec gen | `tests/docs/` |
+| `src/hooks/HookSystem.ts` | ~720 | Medium — lifecycle | `tests/hooks/` |
+| `src/factory/types.ts` | ~620 | Low — type defs | Covered by factory tests |
+| `src/permissions/dynamic.ts` | ~480 | Medium — runtime matrix + cache + cross-node invalidation | `tests/permissions/` |
+| `src/permissions/core.ts` | ~390 | Medium — primitives + combinators | `tests/permissions/` |
+| `src/permissions/scope.ts` | ~360 | Medium — org/service/team/scope-context checks | `tests/permissions/` |
 
 ---
 
@@ -190,13 +189,11 @@ tests/                         184 test files, 2700+ tests
   factory/                     cors, resources-option, load-resources
   adapters/                    type-inference
   audit/                       audit-trail, auto-audit
-  rpc/                         service-client, resilience
-  dynamic/                     ArcDynamicLoader
   utils/                       query-parser, circuit-breaker, schemaConverter, response-schemas, error-cause
   types/                       type-ergonomics, type-inference
   e2e/                         full-app, rbac, elevation, org-scope, multi-tenant, no-auth, populate, query-*
   scenarios/                   jwt-org, dynamic-matrix, custom-auth, single-tenant, permission-presets
-  security/                    policy injection, body fidelity, release blockers, auth checks
+  security/                    body fidelity, release blockers, auth checks, idempotency-body-hash
   setup.ts                     shared Vitest setup
 ```
 
@@ -212,7 +209,7 @@ Most modules now have dedicated tests. These still rely on indirect coverage onl
 | `registry/` | 3 | Resource registry — tested via `plugins/plugin-registry.test.ts` |
 | `testing/` | 7 | Test utilities — used everywhere but not self-tested |
 
-**Recently added dedicated tests:** pipeline/ (4 files), org/, policies/, middleware/, cache/keys, schemas/, logger/, migrations/
+**Recently added dedicated tests:** pipeline/ (4 files), org/, middleware/, cache/keys, schemas/, logger/, migrations/
 
 ### Which Tests to Run (by file changed)
 
@@ -241,15 +238,12 @@ Most modules now have dedicated tests. These still rely on indirect coverage onl
 | `src/utils/*` | `npx vitest run tests/utils/` |
 | `src/adapters/*` | `npx vitest run tests/adapters/ tests/core/base-controller.test.ts` |
 | `src/org/*` | `npx vitest run tests/e2e/org-scope-plugin.test.ts tests/scenarios/jwt-org-scoping.test.ts` |
-| `src/policies/*` | `npx vitest run tests/policies/ tests/security/policy-filter-*.test.ts` |
 | `src/pipeline/*` | `npx vitest run tests/pipeline/ tests/core/base-controller.test.ts` |
 | `src/middleware/*` | `npx vitest run tests/middleware/` |
 | `src/migrations/*` | `npx vitest run tests/migrations/` |
 | `src/schemas/*` | `npx vitest run tests/schemas/ tests/core/auto-schema-generation.test.ts` |
 | `src/logger/*` | `npx vitest run tests/logger/` |
 | `src/idempotency/*` | `npx vitest run tests/security/idempotency-body-hash.test.ts` |
-| `src/rpc/*` | `npx vitest run tests/rpc/` |
-| `src/dynamic/*` | `npx vitest run tests/dynamic/` |
 | `src/types/*` | `npx vitest run tests/types/` |
 | Any `src/testing/*` | `npx vitest run tests/e2e/full-app.test.ts` (uses HttpTestHarness) |
 
@@ -507,7 +501,7 @@ When touching auth, permissions, MCP, or data handling:
 - [ ] Token revocation: `isRevoked` remains fail-closed (errors = denied)
 - [ ] Public routes: `request.user` is undefined — code guards properly
 - [ ] Field permissions: hidden fields not leaked in responses or MCP schemas
-- [ ] Policy filters: cannot be bypassed via query manipulation
+- [ ] Permission filters: row-level filters from `requireOwnership` / `multiTenantPreset` cannot be bypassed via query manipulation
 - [ ] Event data: sensitive fields stripped before publishing
 - [ ] MCP auth: tools enforce same permissions as REST endpoints
 - [ ] Session ownership: validate session belongs to requesting user

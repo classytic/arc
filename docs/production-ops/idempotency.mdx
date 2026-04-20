@@ -150,7 +150,7 @@ await fastify.register(idempotencyPlugin, {
 ### MongoDB (or any DB) via Repository
 
 ```typescript
-import { Repository, methodRegistryPlugin, batchOperationsPlugin, mongoOperationsPlugin } from '@classytic/mongokit';
+import { Repository, methodRegistryPlugin, batchOperationsPlugin } from '@classytic/mongokit';
 import mongoose, { Schema } from 'mongoose';
 
 const IdempotencyModel = mongoose.model(
@@ -163,15 +163,28 @@ await fastify.register(idempotencyPlugin, {
   enabled: true,
   repository: new Repository(IdempotencyModel, [
     methodRegistryPlugin(),
-    batchOperationsPlugin(),
-    mongoOperationsPlugin(),
+    batchOperationsPlugin(), // required — deleteByPrefix / delete call deleteMany
   ]),
 });
+
+// Declare indexes once (arc creates none automatically)
+await IdempotencyModel.collection.createIndex(
+  { expiresAt: 1 },
+  { expireAfterSeconds: 0 }, // TTL — Mongo auto-deletes expired entries
+);
 ```
+
+**Why `strict: false`?** Arc owns the idempotency doc shape
+(`result`, `lock`, `createdAt`, `expiresAt`). A strict schema would
+drop fields arc adds in future releases.
+
+**Why `batchOperationsPlugin`?** `deleteByPrefix` (regex key sweep) and
+`delete` both call `repository.deleteMany`, which mongokit exposes
+only via this plugin. Without it, the plugin throws at registration.
 
 **Characteristics:**
 - Shared across instances
-- TTL index on `expiresAt` (you own the index / schema)
+- TTL index on `expiresAt` (you own it — arc does not create indexes)
 - Works with any `RepositoryLike` — swap mongokit for prismakit or a
   custom kit without touching plugin code
 - **Use for:** Production, multi-instance

@@ -5,8 +5,8 @@
  * Eliminates the need for 'as any' casts in application code.
  */
 
+import type { StandardRepo } from "@classytic/repo-core/repository";
 import type { Document, Model } from "mongoose";
-import type { CrudRepository } from "../types/index.js";
 
 // ============================================================================
 // Type Inference Helpers
@@ -29,7 +29,7 @@ export type InferMongooseDoc<M> = M extends Model<infer D> ? D : never;
  * const productRepo = new ProductRepository();
  * type ProductDoc = InferRepoDoc<typeof productRepo>;
  */
-export type InferRepoDoc<R> = R extends CrudRepository<infer D> ? D : never;
+export type InferRepoDoc<R> = R extends StandardRepo<infer D> ? D : never;
 
 /**
  * Infer document type from data adapter
@@ -38,7 +38,7 @@ export type InferRepoDoc<R> = R extends CrudRepository<infer D> ? D : never;
  * const adapter = createMongooseAdapter({ model, repository });
  * type Doc = InferAdapterDoc<typeof adapter>;
  */
-export type InferAdapterDoc<A> = A extends { repository: CrudRepository<infer D> } ? D : never;
+export type InferAdapterDoc<A> = A extends { repository: StandardRepo<infer D> } ? D : never;
 
 /**
  * Extract clean document type (removes Mongoose-specific fields)
@@ -63,12 +63,12 @@ export type MongooseDocument = Document & Record<string, unknown>;
 /**
  * Ensures type is a valid repository
  */
-export type ValidRepository<TDoc> = CrudRepository<TDoc> & {
-  getAll: CrudRepository<TDoc>["getAll"];
-  getById: CrudRepository<TDoc>["getById"];
-  create: CrudRepository<TDoc>["create"];
-  update: CrudRepository<TDoc>["update"];
-  delete: CrudRepository<TDoc>["delete"];
+export type ValidRepository<TDoc> = StandardRepo<TDoc> & {
+  getAll: StandardRepo<TDoc>["getAll"];
+  getById: StandardRepo<TDoc>["getById"];
+  create: StandardRepo<TDoc>["create"];
+  update: StandardRepo<TDoc>["update"];
+  delete: StandardRepo<TDoc>["delete"];
 };
 
 /**
@@ -92,7 +92,7 @@ export function isMongooseModel(value: unknown): value is Model<Document> {
 /**
  * Check if value is a repository
  */
-export function isRepository(value: unknown): value is CrudRepository<unknown> {
+export function isRepository(value: unknown): value is StandardRepo<unknown> {
   return (
     typeof value === "object" &&
     value !== null &&

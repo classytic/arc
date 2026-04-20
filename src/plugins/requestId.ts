@@ -20,7 +20,6 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
-import { isReplyCommitted } from "../utils/reply-guards.js";
 
 export interface RequestIdOptions {
   /** Header name to read/write request ID (default: 'x-request-id') */
@@ -49,8 +48,18 @@ const requestIdPlugin: FastifyPluginAsync<RequestIdOptions> = async (
     fastify.decorateRequest("requestId", "");
   }
 
-  // Assign request ID on each request
-  fastify.addHook("onRequest", async (request) => {
+  // Assign request ID + set response header on each request.
+  //
+  // The `reply.header()` call is intentionally in onRequest, NOT onSend.
+  // An async onSend hook races with Fastify's onSendEnd → safeWriteHead
+  // path and produces ERR_HTTP_HEADERS_SENT unhandled rejections for
+  // slow responses (same class of bug the caching.ts plugin fixes by
+  // using preSerialization). onRequest has both request + reply
+  // available, runs before any body is sent, and fires for EVERY
+  // response — including 204 no-body and raw streams where
+  // preSerialization would be skipped. The header is queued and
+  // flushed with the response; no race window.
+  fastify.addHook("onRequest", async (request, reply) => {
     const incomingId = request.headers[header];
     // Sanitize incoming ID: max 128 chars, alphanumeric + dashes/underscores/dots only.
     // Rejects crafted values that could pollute logs or headers.
@@ -62,15 +71,11 @@ const requestIdPlugin: FastifyPluginAsync<RequestIdOptions> = async (
     (request as { id: string }).id = requestId;
     // Set on our decorated property
     request.requestId = requestId;
-  });
 
-  // Add to response headers
-  if (setResponseHeader) {
-    fastify.addHook("onSend", async (request, reply) => {
-      if (isReplyCommitted(reply)) return;
-      reply.header(header, request.requestId);
-    });
-  }
+    if (setResponseHeader) {
+      reply.header(header, requestId);
+    }
+  });
 
   fastify.log?.debug?.("Request ID plugin registered");
 };

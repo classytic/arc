@@ -14,7 +14,7 @@ describe("QueryCache", () => {
   let cache: QueryCache;
 
   beforeEach(() => {
-    store = new MemoryCacheStore({ defaultTtlMs: 60_000 });
+    store = new MemoryCacheStore({ defaultTtlSeconds: 60 });
     cache = new QueryCache(store);
   });
 
