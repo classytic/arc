@@ -309,8 +309,15 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
       return;
     }
 
-    // Store full key for onSend hook
+    // Store full key for preSerialization (body cache) + onResponse (unlock)
     request._idempotencyFullKey = fullKey;
+
+    // Echo the idempotency key on the response. Set here in the middleware —
+    // NOT in a later hook — so it survives empty 2xx responses (204,
+    // reply.send() with no body) where preSerialization is skipped by
+    // Fastify. Route is already confirmed to use idempotency since we
+    // reached this point.
+    reply.header(HEADER_IDEMPOTENCY_KEY, idempotencyKey);
   };
 
   // Decorate with utilities + middleware
@@ -327,27 +334,32 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     middleware: idempotencyMiddleware,
   });
 
-  // Store response after successful request
-  fastify.addHook("onSend", async (request, reply, payload) => {
-    // Skip if this was a replayed response
-    if (request.idempotencyReplayed) {
-      return payload;
-    }
+  // Cache the response body on 2xx via preSerialization.
+  //
+  // Hook choice rationale:
+  // - NOT onSend — async onSend races with Fastify's onSendEnd →
+  //   safeWriteHead flush path and yields ERR_HTTP_HEADERS_SENT unhandled
+  //   rejections on slow responses.
+  // - preSerialization — runs before headers/body commit, safe for
+  //   `reply.header(...)` if we needed it (we don't, header is set in
+  //   the middleware). IMPORTANT: Fastify skips preSerialization when
+  //   the payload is `null` / `undefined` — so lock release can NOT
+  //   live here, or empty-body responses (204, `reply.send()` with no
+  //   arg, status-only replies) would leak the lock until TTL. The
+  //   onResponse hook below handles unlock universally.
+  fastify.addHook("preSerialization", async (request, reply, payload) => {
+    // Replayed responses don't hold a lock and don't need re-caching.
+    if (request.idempotencyReplayed) return payload;
 
     const fullKey = request._idempotencyFullKey;
-    if (!fullKey) {
-      return payload;
-    }
+    if (!fullKey) return payload;
 
-    // Only cache successful responses (2xx)
+    // Only cache successful responses (2xx). Non-2xx still unlocks —
+    // handled by onResponse below.
     const statusCode = reply.statusCode;
-    if (statusCode < 200 || statusCode >= 300) {
-      // Unlock without caching
-      await store.unlock(fullKey, request.id);
-      return payload;
-    }
+    if (statusCode < 200 || statusCode >= 300) return payload;
 
-    // Extract headers to cache (exclude certain headers)
+    // Extract headers to cache (exclude connection / per-hop / date / cookies)
     const headersToCache: Record<string, string> = {};
     const excludeHeaders = new Set([
       "content-length",
@@ -365,7 +377,8 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
       }
     }
 
-    // Parse body if it's a string
+    // Parse body if a handler pre-serialized with `reply.send(JSON.stringify(...))`.
+    // Normal preSerialization path gives us the raw object.
     let body: unknown;
     try {
       body = typeof payload === "string" ? JSON.parse(payload) : payload;
@@ -373,25 +386,29 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
       body = payload;
     }
 
-    // Store the result
     const result = createIdempotencyResult(statusCode, body, headersToCache, ttlMs);
     await store.set(fullKey, result);
-
-    // Unlock (result is now cached)
-    await store.unlock(fullKey, request.id);
-
-    // Add idempotency key header to response
-    reply.header(HEADER_IDEMPOTENCY_KEY, request.idempotencyKey);
 
     return payload;
   });
 
-  // Handle errors - ensure lock is released
-  fastify.addHook("onError", async (request) => {
+  // Universal unlock — fires for EVERY response after flush, regardless of:
+  //   - status code (2xx / 4xx / 5xx)
+  //   - body presence (empty 204s, status-only replies, streamed bodies)
+  //   - error path (after onError runs — that hook used to be the backup
+  //     for error cases but is now subsumed by this one)
+  //
+  // Running after flush means no header-race risk. Running for every path
+  // means no silent lock leaks (the bug class that prompted the 2.10.2
+  // re-cut). `store.unlock` is expected to be idempotent per the store
+  // contract, so the handful of paths that previously called unlock from
+  // both onError + onSend are safely collapsed here.
+  fastify.addHook("onResponse", async (request) => {
+    // Replays never acquired a lock.
+    if (request.idempotencyReplayed) return;
     const fullKey = request._idempotencyFullKey;
-    if (fullKey) {
-      await store.unlock(fullKey, request.id);
-    }
+    if (!fullKey) return;
+    await store.unlock(fullKey, request.id);
   });
 
   // Cleanup on close

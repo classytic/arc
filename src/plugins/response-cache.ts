@@ -427,54 +427,71 @@ const responseCachePluginImpl: FastifyPluginAsync<ResponseCacheOptions> = async 
     reply.code(entry.statusCode).send(entry.body);
   };
 
-  // ---- onSend hook: store in cache (recompute key — user is now populated) ----
-  fastify.addHook("onSend", async (request: FastifyRequest, reply: FastifyReply, payload) => {
-    const ttl = request.__arcCacheTTL;
-    if (!ttl || ttl <= 0) return payload;
+  // ---- preSerialization hook: store in cache (recompute key — user is now populated) ----
+  //
+  // Deliberately NOT an onSend hook: an async onSend hook races with
+  // Fastify's onSendEnd → safeWriteHead path, producing
+  // ERR_HTTP_HEADERS_SENT unhandled rejections for slow responses.
+  // preSerialization runs before headers/body are committed, so the
+  // `x-cache: MISS` header is queued safely.
+  //
+  // Trade-off: payload arrives pre-serialization as the raw object (not
+  // the fast-json-stringify byte output). We JSON.stringify it here for
+  // caching — slightly different bytes than what the wire sees, but the
+  // `content-type` / `etag` headers we capture below come from the reply
+  // object, which stays consistent.
+  fastify.addHook(
+    "preSerialization",
+    async (request: FastifyRequest, reply: FastifyReply, payload) => {
+      const ttl = request.__arcCacheTTL;
+      if (!ttl || ttl <= 0) return payload;
 
-    if (request.method !== "GET" && request.method !== "HEAD") return payload;
+      if (request.method !== "GET" && request.method !== "HEAD") return payload;
 
-    // Only cache 2xx responses
-    const statusCode = reply.statusCode;
-    if (statusCode < 200 || statusCode >= 300) return payload;
+      // Only cache 2xx responses
+      const statusCode = reply.statusCode;
+      if (statusCode < 200 || statusCode >= 300) return payload;
 
-    // Recompute key with now-populated user identity (auth has run by this point)
-    const key = buildKey(request);
-    if (!key) return payload;
+      // Recompute key with now-populated user identity (auth has run by this point)
+      const key = buildKey(request);
+      if (!key) return payload;
 
-    if (xCacheHeader) {
-      reply.header("x-cache", "MISS");
-    }
+      if (xCacheHeader) {
+        reply.header("x-cache", "MISS");
+      }
 
-    // Store in cache — handle Buffer correctly (String(buffer) produces '[object Buffer]')
-    let body: string;
-    if (typeof payload === "string") {
-      body = payload;
-    } else if (Buffer.isBuffer(payload)) {
-      body = payload.toString("utf-8");
-    } else if (payload != null) {
-      body = JSON.stringify(payload);
-    } else {
-      body = "";
-    }
+      // Store in cache — preSerialization gives the raw value. Handle string
+      // (already serialized by the handler), Buffer (raw binary), object
+      // (default), and null.
+      let body: string;
+      if (typeof payload === "string") {
+        body = payload;
+      } else if (Buffer.isBuffer(payload)) {
+        body = payload.toString("utf-8");
+      } else if (payload != null) {
+        body = JSON.stringify(payload);
+      } else {
+        body = "";
+      }
 
-    // Capture cacheable headers
-    const headers: Record<string, string> = {};
-    const contentType = reply.getHeader("content-type");
-    if (contentType) headers["content-type"] = String(contentType);
-    const etag = reply.getHeader("etag");
-    if (etag) headers.etag = String(etag);
+      // Capture cacheable headers
+      const headers: Record<string, string> = {};
+      const contentType = reply.getHeader("content-type");
+      if (contentType) headers["content-type"] = String(contentType);
+      const etag = reply.getHeader("etag");
+      if (etag) headers.etag = String(etag);
 
-    cache.set(key, {
-      body,
-      statusCode,
-      headers,
-      createdAt: Date.now(),
-      ttl: ttl * 1000, // Convert to ms
-    });
+      cache.set(key, {
+        body,
+        statusCode,
+        headers,
+        createdAt: Date.now(),
+        ttl: ttl * 1000, // Convert to ms
+      });
 
-    return payload;
-  });
+      return payload;
+    },
+  );
 
   // ---- Decorator ----
   fastify.decorate("responseCache", {

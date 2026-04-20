@@ -1,6 +1,6 @@
 {
   "name": "@classytic/arc",
-  "version": "2.10.2",
+  "version": "2.10.3",
   "description": "Resource-oriented backend framework for Fastify — clean, minimal, powerful, tree-shakable",
   "type": "module",
   "exports": {
