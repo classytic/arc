@@ -308,3 +308,124 @@ describe("idempotencyPlugin — error handling", () => {
     await app.close();
   });
 });
+
+// ============================================================================
+// 4. Empty-body responses must unlock — regression for the preSerialization
+//    lock-leak. Fastify skips preSerialization when payload is null/undefined,
+//    so 204 replies and `reply.send()`-with-no-arg previously kept the lock
+//    held until TTL. onResponse now handles unlock universally.
+// ============================================================================
+
+describe("idempotencyPlugin — empty-body responses release the lock", () => {
+  async function buildEmptyBodyApp() {
+    const app = Fastify({ logger: false });
+    await app.register(idempotencyPlugin, { enabled: true, ttlMs: 60_000 });
+
+    app.addHook("preHandler", async (req) => {
+      const userId = req.headers["x-user-id"];
+      if (typeof userId === "string") {
+        (req as Record<string, unknown>).user = { id: userId, _id: userId };
+      }
+    });
+
+    app.post(
+      "/204-endpoint",
+      { preHandler: [app.idempotency.middleware] },
+      async (_req, reply) => {
+        reply.code(204).send();
+      },
+    );
+
+    app.post(
+      "/empty-200",
+      { preHandler: [app.idempotency.middleware] },
+      async (_req, reply) => {
+        reply.code(200).send();
+      },
+    );
+
+    app.post(
+      "/non-2xx-empty",
+      { preHandler: [app.idempotency.middleware] },
+      async (_req, reply) => {
+        reply.code(404).send();
+      },
+    );
+
+    await app.ready();
+    return app;
+  }
+
+  it("204 No Content releases the lock so a second identical request can proceed", async () => {
+    const app = await buildEmptyBodyApp();
+    try {
+      const first = await app.inject({
+        method: "POST",
+        url: "/204-endpoint",
+        headers: { "idempotency-key": "empty-204-1", "x-user-id": "user-A" },
+      });
+      expect(first.statusCode).toBe(204);
+      // Header was set in the middleware — must survive an empty-body reply
+      expect(first.headers["x-idempotency-key"]).toBe("empty-204-1");
+
+      // Second request with the SAME key proves the lock was released.
+      // 204 responses have no body to cache, so the second request
+      // executes fresh and gets a fresh 204. Assert the exact code so
+      // any future regression (accidental 500, 409, etc.) fails loudly.
+      const second = await app.inject({
+        method: "POST",
+        url: "/204-endpoint",
+        headers: { "idempotency-key": "empty-204-1", "x-user-id": "user-A" },
+      });
+      expect(second.statusCode).toBe(204);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("empty-body 200 releases the lock for subsequent requests", async () => {
+    const app = await buildEmptyBodyApp();
+    try {
+      const first = await app.inject({
+        method: "POST",
+        url: "/empty-200",
+        headers: { "idempotency-key": "empty-200-1", "x-user-id": "user-B" },
+      });
+      expect(first.statusCode).toBe(200);
+      expect(first.headers["x-idempotency-key"]).toBe("empty-200-1");
+
+      const second = await app.inject({
+        method: "POST",
+        url: "/empty-200",
+        headers: { "idempotency-key": "empty-200-1", "x-user-id": "user-B" },
+      });
+      expect(second.statusCode).toBe(200);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("non-2xx empty reply (404) releases the lock — no silent lock leak on failure paths", async () => {
+    const app = await buildEmptyBodyApp();
+    try {
+      const first = await app.inject({
+        method: "POST",
+        url: "/non-2xx-empty",
+        headers: { "idempotency-key": "empty-404-1", "x-user-id": "user-C" },
+      });
+      expect(first.statusCode).toBe(404);
+
+      // Retry with the same key: lock was released → handler runs again,
+      // returns 404 again. Assert the exact code so a regression that
+      // flips this to 409 (stale lock) or 500 is caught immediately.
+      const second = await app.inject({
+        method: "POST",
+        url: "/non-2xx-empty",
+        headers: { "idempotency-key": "empty-404-1", "x-user-id": "user-C" },
+      });
+      expect(second.statusCode).toBe(404);
+    } finally {
+      await app.close();
+    }
+  });
+});

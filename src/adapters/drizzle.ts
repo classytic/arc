@@ -120,8 +120,8 @@ function columnToJsonSchema(column: DrizzleColumnLike): Record<string, unknown> 
 
   if (dataType === "string") {
     const result: Record<string, unknown> = { type: "string" };
-    if (Array.isArray(enumValues) && enumValues.length > 0) result["enum"] = [...enumValues];
-    if (typeof length === "number" && length > 0) result["maxLength"] = length;
+    if (Array.isArray(enumValues) && enumValues.length > 0) result.enum = [...enumValues];
+    if (typeof length === "number" && length > 0) result.maxLength = length;
     return result;
   }
 
@@ -142,10 +142,10 @@ function columnToFieldMetadata(column: DrizzleColumnLike): FieldMetadata {
   };
 
   const type: FieldMetadata["type"] =
-    (dataType && typeMap[dataType]) ?? (enumValues && enumValues.length ? "enum" : "object");
+    (dataType && typeMap[dataType]) ?? (enumValues?.length ? "enum" : "object");
 
   const meta: FieldMetadata = { type, required: !!column.notNull && !column.hasDefault };
-  if (enumValues && enumValues.length) meta.enum = [...enumValues];
+  if (enumValues?.length) meta.enum = [...enumValues];
   if (typeof column.length === "number") meta.maxLength = column.length;
   return meta;
 }

@@ -126,6 +126,7 @@ src/
 12. **Elevation always emits `arc.scope.elevated`** — apps that want audit can subscribe; `onElevation` callback still works
 13. **multiTenant injects org on UPDATE too** (v2.9) — body-supplied `organizationId` is overwritten with caller's scope
 14. `verifySignature(body, ...)` throws `TypeError` if body isn't string/Buffer — pass `req.rawBody`, not parsed body
+15. **Plugins set response headers at `onRequest` or `preSerialization`, never `onSend`** (v2.10.2) — async `onSend` races with Fastify's `onSendEnd → safeWriteHead` flush path and produces `ERR_HTTP_HEADERS_SENT` under slow responses. Use `onRequest` when the header is derivable from the request (requestId, versioning), `preSerialization` when the payload is needed (caching, response-cache, idempotency). `isReplyCommitted()` in [src/utils/reply-guards.ts](src/utils/reply-guards.ts) remains for third-party plugin authors; arc's own plugins no longer use it.
 
 ## Removed in v2.10 (no longer exported)
 

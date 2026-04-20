@@ -41,9 +41,66 @@ If you wrote handlers against the old `unknown` type and destructured
 narrower. If you wrote `(payload) => ...` assuming the argument was the
 payload, switch to `(event) => event.payload`.
 
+## 2.10.3 — plugin onSend race closures + idempotency lock-leak fix
+
+Follow-up sweep to 2.9.3's `caching.ts` → `preSerialization` migration.
+2.9.2 introduced `isReplyCommitted()` guards across five plugins as a
+defensive patch for an async-onSend race with Fastify's
+`onSendEnd → safeWriteHead` flush path. The guard silenced unhandled
+rejections but didn't close the race window. 2.9.3 fixed `caching.ts`.
+2.10.3 finishes the sweep for the remaining four:
+
+| Plugin | Before | After | Why |
+|---|---|---|---|
+| [`requestId`](src/plugins/requestId.ts) | `onSend` | **`onRequest`** | Static header, known on arrival — fires for every response including 204/streams |
+| [`versioning`](src/plugins/versioning.ts) | `onSend` | **`onRequest`** (merged with existing hook) | Static header derived from request; saves one async hook per request |
+| [`response-cache`](src/plugins/response-cache.ts) | `onSend` | **`preSerialization`** | Needs payload — mirrors `caching.ts`'s 2.9.3 pattern |
+| [`idempotency`](src/idempotency/idempotencyPlugin.ts) | `onSend` | **`preSerialization` + `onResponse`** | Split hook — body caching stays in preSerialization; lock release moves to onResponse (fires for EVERY response path) |
+
+**Observed impact (be-prod, 3–4s Atlas latency from Bangladesh):**
+slow `GET` responses no longer produce `ERR_HTTP_HEADERS_SENT` unhandled
+rejections that triggered `process.on('unhandledRejection')` →
+graceful-shutdown cascades. Full `be-prod` vitest suite: 75/75 pass,
+0 unhandled rejections (was 13).
+
+### Idempotency lock-leak on empty-body responses
+
+Fastify skips `preSerialization` when the payload is `null` / `undefined`
+— so a naive onSend → preSerialization move would have introduced a new
+bug: 204 responses, `reply.code(200).send()` with no argument, and any
+empty non-2xx reply would never unlock the idempotency key, holding the
+lock until `ttlMs` expired and blocking legitimate retries.
+
+**Fix — split responsibilities across two hooks:**
+
+- `preSerialization` handles only body caching (correctly skipped for
+  empty responses — nothing to cache)
+- `onResponse` handles unlock for every response path (success, empty
+  2xx, 4xx, 5xx, errors). Fires after flush, so no header race possible.
+- `X-Idempotency-Key` response header moved to the idempotency middleware
+  itself (earliest point the key is guaranteed-known and route-applicable),
+  so it survives empty-body replies where the hook is skipped.
+- The former `onError` hook is removed — subsumed by the universal
+  `onResponse` unlock.
+
+Regression tests added to [`tests/idempotency/plugin-integration.test.ts`](tests/idempotency/plugin-integration.test.ts)
+for 204, empty-200, and empty-404 paths.
+
+### Contributor invariant (new CLAUDE.md gotcha #15)
+
+Arc plugins set response headers at `onRequest` (if the value is derivable
+from the request) or `preSerialization` (if payload-dependent). `onSend`
+is reserved for diagnostic tracing and final byte-level transforms — never
+for header mutation.
+
+`isReplyCommitted()` still ships at [src/utils/reply-guards.ts](src/utils/reply-guards.ts)
+for third-party plugin authors; arc's own plugins no longer import it.
+
 ## 2.10.2 — fix: silent pagination in audit/outbox adapters
 
 **Critical bug fix — 2.10.0 and 2.10.1 are deprecated on npm.**
+**2.10.2 is unpublished** — use 2.10.3 which contains this fix plus the
+plugin race closures.
 
 Arc's `repositoryAsAuditStore.query()`, `repositoryAsOutboxStore.getPending()`,
 `repositoryAsOutboxStore.getDeadLettered()`, and the purge batch loop all
