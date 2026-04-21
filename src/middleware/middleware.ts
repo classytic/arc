@@ -6,7 +6,7 @@
  *
  * @example
  * ```typescript
- * import { middleware } from '@classytic/arc';
+ * import { middleware } from '@classytic/arc/middleware';
  *
  * const verifyEmail = middleware('verifyEmail', {
  *   operations: ['create', 'update'],

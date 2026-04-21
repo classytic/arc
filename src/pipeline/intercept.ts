@@ -6,7 +6,7 @@
  *
  * @example
  * ```typescript
- * import { intercept } from '@classytic/arc';
+ * import { intercept } from '@classytic/arc/pipeline';
  *
  * const timing = intercept('timing', async (ctx, next) => {
  *   const start = performance.now();

@@ -602,7 +602,7 @@ await app.register(eventGatewayPlugin, {
 Functional composition for cross-cutting concerns:
 
 ```typescript
-import { pipe, guard, transform, intercept } from '@classytic/arc';
+import { pipe, guard, transform, intercept } from '@classytic/arc/pipeline';
 
 const isActive = guard('isActive', (ctx) => ctx.query?.filters?.isActive !== false);
 const slugify = transform('slugify', (ctx) => ({ ...ctx, body: { ...ctx.body, slug: toSlug(ctx.body.name) } }));

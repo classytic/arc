@@ -2,6 +2,7 @@
 
 > **Full guide:** See [@file AGENTS.md](AGENTS.md) for architecture details, gotchas, test mapping, patterns, and security checklist.
 > **v3 plans:** See [@file v3.md](v3.md) for design notes and migration path.
+> **Wiki:** [@file wiki/index.md](wiki/index.md) — concept pages. Load specific pages on demand instead of re-reading `src/` or `AGENTS.md`. After any change that invalidates a page: edit it, update `wiki/index.md` if adding/renaming, append one line to `wiki/log.md` (`YYYY-MM-DD — <page> — <change>`). Keep pages tight; link with `[[page-name]]` instead of duplicating.
 
 ## Identity
 
@@ -127,12 +128,20 @@ src/
 13. **multiTenant injects org on UPDATE too** (v2.9) — body-supplied `organizationId` is overwritten with caller's scope
 14. `verifySignature(body, ...)` throws `TypeError` if body isn't string/Buffer — pass `req.rawBody`, not parsed body
 15. **Plugins set response headers at `onRequest` or `preSerialization`, never `onSend`** (v2.10.2) — async `onSend` races with Fastify's `onSendEnd → safeWriteHead` flush path and produces `ERR_HTTP_HEADERS_SENT` under slow responses. Use `onRequest` when the header is derivable from the request (requestId, versioning), `preSerialization` when the payload is needed (caching, response-cache, idempotency). `isReplyCommitted()` in [src/utils/reply-guards.ts](src/utils/reply-guards.ts) remains for third-party plugin authors; arc's own plugins no longer use it.
+16. **Four new subpaths in v2.10.4** — `@classytic/arc/middleware` (`multipartBody`, `ParsedFile`, `middleware`, `sortMiddlewares`), `@classytic/arc/pipeline` (`guard`, `intercept`, `pipe`, `transform`, `executePipeline`, `NextFunction`), `@classytic/arc/context` (`requestContext`), `@classytic/arc/logger` (`arcLog`, `configureArcLogger`). These symbols are **no longer** re-exported from the root `@classytic/arc` — import from the subpath. The root-barrel shortcut was pulling module graphs into every consumer; removing it restores the "root = essentials only" policy already stated in [src/index.ts](src/index.ts).
 
 ## Removed in v2.10 (no longer exported)
 
 - `@classytic/arc/policies` — pluggable policy engine; `permissions/` covers every documented use case (RBAC, ownership, tenant filters via `requireOrgInScope`)
 - `@classytic/arc/rpc` — inter-service HTTP client; orphaned with no internal users
 - `@classytic/arc/dynamic` — `ArcDynamicLoader`; `factory/loadResources` is the only filesystem loader
+
+## Removed from root barrel in v2.10.4 (moved to subpaths)
+
+- `requestContext`, `RequestStore` — `@classytic/arc/context`
+- `arcLog`, `configureArcLogger`, `ArcLogger`, `ArcLoggerOptions`, `ArcLogWriter` — `@classytic/arc/logger`
+- `middleware`, `sortMiddlewares`, `NamedMiddleware` — `@classytic/arc/middleware` (also now exposes `multipartBody`, `ParsedFile`, `MultipartBodyOptions` which had no public path at all before)
+- `guard`, `intercept`, `pipe`, `transform`, `Guard`, `Interceptor`, `PipelineConfig`, `PipelineContext`, `PipelineStep`, `Transform` — `@classytic/arc/pipeline` (also now exposes `executePipeline`, `NextFunction`, `OperationFilter`)
 
 ## Removed in v2.9 (no longer exported)
 

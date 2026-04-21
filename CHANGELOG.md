@@ -41,6 +41,53 @@ If you wrote handlers against the old `unknown` type and destructured
 narrower. If you wrote `(payload) => ...` assuming the argument was the
 payload, switch to `(event) => event.payload`.
 
+## 2.10.4 — expose `middleware` / `pipeline` / `context` / `logger` subpaths
+
+Four barrel modules had source, tests, and `index.ts` barrels but no
+`package.json` export entry and no `tsdown` build entry — so consumers
+could only reach them through the root barrel, which either re-exported
+a subset (leaking the rest) or didn't re-export them at all. Surfaced by
+the fajr-be-arc team when `@classytic/arc/middleware` 404'd on import —
+the only way to get `multipartBody` was to inline a ~160-line copy of
+[src/middleware/multipartBody.ts](src/middleware/multipartBody.ts) into
+the app, with no way to pick up upstream fixes.
+
+| Subpath | Symbols newly reachable |
+|---|---|
+| `@classytic/arc/middleware` | `multipartBody`, `ParsedFile`, `MultipartBodyOptions` (were unreachable from any public path), plus `middleware`, `sortMiddlewares`, `NamedMiddleware` |
+| `@classytic/arc/pipeline` | `executePipeline`, `NextFunction`, `OperationFilter` (were unreachable — `NextFunction` is the parameter type for `intercept` handlers, so anyone writing interceptors hit TS2724), plus `guard`, `intercept`, `pipe`, `transform`, `Guard`, `Interceptor`, `PipelineConfig`, `PipelineContext`, `PipelineStep`, `Transform` |
+| `@classytic/arc/context` | `requestContext`, `RequestStore` |
+| `@classytic/arc/logger` | `arcLog`, `configureArcLogger`, `ArcLogger`, `ArcLoggerOptions`, `ArcLogWriter` |
+
+**Root re-exports removed** for the same four modules. The root barrel's
+own doc comment already stated "this main entry exports ONLY the
+essentials — all other features live in dedicated subpaths — Node.js does
+NOT tree-shake, so barrel re-exports load eagerly at runtime," but
+`requestContext`, `middleware`/`sortMiddlewares`/`NamedMiddleware`,
+`guard`/`intercept`/`pipe`/`transform` (+ pipeline types), and
+`arcLog`/`configureArcLogger` (+ logger types) were still re-exported
+from root and pulled their transitive graphs into every consumer that
+imported anything from `@classytic/arc`. Removing them brings root in
+line with the documented policy.
+
+**Consumer migration** — mechanical search-and-replace:
+
+```ts
+// Before
+import { requestContext, arcLog, guard, intercept, middleware } from '@classytic/arc';
+
+// After
+import { requestContext } from '@classytic/arc/context';
+import { arcLog } from '@classytic/arc/logger';
+import { guard, intercept } from '@classytic/arc/pipeline';
+import { middleware } from '@classytic/arc/middleware';
+```
+
+Regression guard: [tests/smoke/exports.test.ts](tests/smoke/exports.test.ts)
+now asserts both that the four new subpaths resolve and that each one's
+headline symbols (`multipartBody`, `executePipeline`, `requestContext.run`,
+`arcLog`) are reachable. A future accidental drop would fail `npm run test:ci`.
+
 ## 2.10.3 — plugin onSend race closures + idempotency lock-leak fix
 
 Follow-up sweep to 2.9.3's `caching.ts` → `preSerialization` migration.

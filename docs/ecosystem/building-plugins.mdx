@@ -420,7 +420,8 @@ export const retryOnConflict = intercept('retryOnConflict', {
 ### Usage
 
 ```typescript
-import { pipe, defineResource } from '@classytic/arc';
+import { defineResource } from '@classytic/arc';
+import { pipe } from '@classytic/arc/pipeline';
 import { autoSlug, sanitizeHtml, cacheResponse, timing } from 'arc-pipeline-utils';
 
 defineResource({

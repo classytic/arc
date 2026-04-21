@@ -6,7 +6,8 @@
  *
  * @example
  * ```typescript
- * import { pipe, guard, transform, intercept, defineResource } from '@classytic/arc';
+ * import { defineResource } from '@classytic/arc';
+ * import { pipe, guard, transform, intercept } from '@classytic/arc/pipeline';
  *
  * // Compose a pipeline
  * const productResource = defineResource({
