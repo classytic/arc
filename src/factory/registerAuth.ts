@@ -45,8 +45,10 @@ export async function registerAuth(
       const { plugin, openapi } = authConfig.betterAuth;
       await fastify.register(plugin);
       trackPlugin("auth-better-auth");
-      if (openapi && !fastify.arc.externalOpenApiPaths.includes(openapi)) {
-        fastify.arc.externalOpenApiPaths.push(openapi);
+      // arcCorePlugin is registered earlier in registerArcPlugins → arc is live here.
+      const arc = fastify.arc;
+      if (arc && openapi && !arc.externalOpenApiPaths.includes(openapi)) {
+        arc.externalOpenApiPaths.push(openapi);
       }
       fastify.log.debug("Better Auth authentication enabled");
       break;

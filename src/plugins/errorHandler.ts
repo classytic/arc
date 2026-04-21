@@ -22,9 +22,20 @@ import { isArcError } from "../utils/errors.js";
 
 /** Class-based error mapper — maps thrown error instances to HTTP responses */
 export interface ErrorMapper<T extends Error = Error> {
-  /** Error class to match (uses instanceof) */
-  type: new (
-    ...args: unknown[]
+  /**
+   * Error class to match. Checked at runtime via `instanceof` — the constructor
+   * arity/signature is not called by the plugin, so the signature is typed
+   * permissively to accept real-world error classes:
+   *
+   * - **Abstract classes** (e.g. base domain errors) — `abstract new` is accepted.
+   * - **Specific constructor signatures** (e.g. `new InvalidTransitionError(from, to, id?)`)
+   *   — `any[]` avoids forcing consumers to widen to `unknown[]` or cast.
+   *
+   * What matters for dispatch is the `instanceof` check, not the ctor shape.
+   */
+  type: abstract new (
+    // biome-ignore lint/suspicious/noExplicitAny: permissive ctor signature is deliberate — see jsdoc above
+    ...args: any[]
   ) => T;
   /** Convert the error to an HTTP response shape */
   toResponse: (error: T) => {

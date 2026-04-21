@@ -128,7 +128,10 @@ src/
 13. **multiTenant injects org on UPDATE too** (v2.9) — body-supplied `organizationId` is overwritten with caller's scope
 14. `verifySignature(body, ...)` throws `TypeError` if body isn't string/Buffer — pass `req.rawBody`, not parsed body
 15. **Plugins set response headers at `onRequest` or `preSerialization`, never `onSend`** (v2.10.2) — async `onSend` races with Fastify's `onSendEnd → safeWriteHead` flush path and produces `ERR_HTTP_HEADERS_SENT` under slow responses. Use `onRequest` when the header is derivable from the request (requestId, versioning), `preSerialization` when the payload is needed (caching, response-cache, idempotency). `isReplyCommitted()` in [src/utils/reply-guards.ts](src/utils/reply-guards.ts) remains for third-party plugin authors; arc's own plugins no longer use it.
-16. **Four new subpaths in v2.10.4** — `@classytic/arc/middleware` (`multipartBody`, `ParsedFile`, `middleware`, `sortMiddlewares`), `@classytic/arc/pipeline` (`guard`, `intercept`, `pipe`, `transform`, `executePipeline`, `NextFunction`), `@classytic/arc/context` (`requestContext`), `@classytic/arc/logger` (`arcLog`, `configureArcLogger`). These symbols are **no longer** re-exported from the root `@classytic/arc` — import from the subpath. The root-barrel shortcut was pulling module graphs into every consumer; removing it restores the "root = essentials only" policy already stated in [src/index.ts](src/index.ts).
+16. **Four new subpaths in v2.10.5** — `@classytic/arc/middleware` (`multipartBody`, `ParsedFile`, `middleware`, `sortMiddlewares`), `@classytic/arc/pipeline` (`guard`, `intercept`, `pipe`, `transform`, `executePipeline`, `NextFunction`), `@classytic/arc/context` (`requestContext`), `@classytic/arc/logger` (`arcLog`, `configureArcLogger`). These symbols are **no longer** re-exported from the root `@classytic/arc` — import from the subpath. The root-barrel shortcut was pulling module graphs into every consumer; removing it restores the "root = essentials only" policy already stated in [src/index.ts](src/index.ts).
+17. **BaseController threads tenant into repo options (v2.10.5)** — every CRUD call (`create`, `update`, `delete`, `getAll`, `getById`/`getOne` via `fetchDetailed`) spreads `{ [tenantField]: orgId }` at the TOP of the options object. Plugin-scoped repos (mongokit's `multiTenantPlugin`) read `context.organizationId` directly — not `context.data.organizationId`. Multi-field tenancy via `multiTenantPreset` stashes resolved fields on `request._tenantFields`, which the helper merges too. See [src/core/BaseController.ts](src/core/BaseController.ts) `tenantRepoOptions()`.
+18. **Actions with no permission now fail-closed (v2.10.5)** — `actions: { send: async (...) => ... }` shorthand used to silently become auth-only. Now the fallback chain is: per-action `permissions` → resource-level `actionPermissions` → `permissions.update` (with a warn) → boot-time throw. Public actions must opt in via `allowPublic()` explicitly.
+19. **`FastifyInstance.arc` is optional in v2.10.5** — the declare-module merge now types `arc?: ArcCore`. Apps that never register `arcCorePlugin` get correct "possibly undefined" types; apps that do can still use `fastify.arc!` or narrow. Fixes host `interface X extends FastifyInstance { arc?: MyArc }` collisions.
 
 ## Removed in v2.10 (no longer exported)
 
@@ -136,7 +139,7 @@ src/
 - `@classytic/arc/rpc` — inter-service HTTP client; orphaned with no internal users
 - `@classytic/arc/dynamic` — `ArcDynamicLoader`; `factory/loadResources` is the only filesystem loader
 
-## Removed from root barrel in v2.10.4 (moved to subpaths)
+## Removed from root barrel in v2.10.5 (moved to subpaths)
 
 - `requestContext`, `RequestStore` — `@classytic/arc/context`
 - `arcLog`, `configureArcLogger`, `ArcLogger`, `ArcLoggerOptions`, `ArcLogWriter` — `@classytic/arc/logger`

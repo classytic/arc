@@ -127,6 +127,18 @@ function resolveSpec(scope: RequestScope, spec: TenantFieldSpec): string | undef
   return undefined;
 }
 
+/**
+ * Stash the resolved tenant field map on the request so `BaseController`
+ * can forward it to the repository layer as top-level options. Needed by
+ * plugin-scoped repos (mongokit's `multiTenantPlugin`) that read tenant
+ * from `context.<field>` rather than from filter/query/data stamping.
+ */
+function stashTenantFields(request: RequestWithExtras, resolved: Record<string, string>): void {
+  if (Object.keys(resolved).length === 0) return;
+  const target = request as RequestWithExtras & { _tenantFields?: AnyRecord };
+  target._tenantFields = { ...(target._tenantFields ?? {}), ...resolved };
+}
+
 /** Resolve every spec — returns the partial map of fields that have a value. */
 function resolveAll(
   scope: RequestScope,
@@ -161,6 +173,7 @@ function createTenantFilter(specs: readonly TenantFieldSpec[]): RouteHandler {
       const { resolved } = resolveAll(scope, specs);
       if (Object.keys(resolved).length > 0) {
         request._policyFilters = { ...(request._policyFilters ?? {}), ...resolved };
+        stashTenantFields(request, resolved);
       }
       return;
     }
@@ -171,6 +184,7 @@ function createTenantFilter(specs: readonly TenantFieldSpec[]): RouteHandler {
       const { resolved, missing } = resolveAll(scope, specs);
       if (missing.length === 0) {
         request._policyFilters = { ...(request._policyFilters ?? {}), ...resolved };
+        stashTenantFields(request, resolved);
         return;
       }
       // Some dimensions present, others missing → 403 with the specific
@@ -215,6 +229,7 @@ function createFlexibleTenantFilter(specs: readonly TenantFieldSpec[]): RouteHan
       const { resolved } = resolveAll(scope, specs);
       if (Object.keys(resolved).length > 0) {
         request._policyFilters = { ...(request._policyFilters ?? {}), ...resolved };
+        stashTenantFields(request, resolved);
       }
       return;
     }
@@ -226,6 +241,7 @@ function createFlexibleTenantFilter(specs: readonly TenantFieldSpec[]): RouteHan
       const { resolved, missing } = resolveAll(scope, specs);
       if (missing.length === 0) {
         request._policyFilters = { ...(request._policyFilters ?? {}), ...resolved };
+        stashTenantFields(request, resolved);
         return;
       }
       reply.code(403).send({
@@ -245,6 +261,14 @@ function createFlexibleTenantFilter(specs: readonly TenantFieldSpec[]): RouteHan
  * Create tenant injection middleware.
  * Walks the configured tenant fields and writes each into the request body.
  * Fails closed if any required dimension is missing for non-elevated callers.
+ *
+ * Also stashes the resolved fields on `request._tenantFields` so
+ * `BaseController.tenantRepoOptions()` can forward them to the repo layer
+ * as top-level options — needed by plugin-scoped repos like mongokit's
+ * `multiTenantPlugin`, which reads tenant from `context.<field>` rather
+ * than from `data.<field>`. Without this forwarding, multi-field preset
+ * writes (update/delete) work only when the plugin's `allowDataInjection`
+ * fallback covers the operation's policy key, which is write-only.
  */
 function createTenantInjection(specs: readonly TenantFieldSpec[]): RouteHandler {
   return async (request: RequestWithExtras, reply: FastifyReply): Promise<void> => {
@@ -273,6 +297,13 @@ function createTenantInjection(specs: readonly TenantFieldSpec[]): RouteHandler 
     if (request.body) {
       Object.assign(request.body as AnyRecord, resolved);
     }
+
+    // Forward to BaseController so reads/updates/deletes get tenant at the
+    // top of the repo context, not just on the create payload.
+    (request as RequestWithExtras & { _tenantFields?: AnyRecord })._tenantFields = {
+      ...((request as RequestWithExtras & { _tenantFields?: AnyRecord })._tenantFields ?? {}),
+      ...resolved,
+    };
   };
 }
 

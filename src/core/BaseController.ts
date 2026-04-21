@@ -237,6 +237,57 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     return this.tenantField || undefined;
   }
 
+  /**
+   * Build top-level tenant options to thread into the repository call.
+   *
+   * **Why this exists:** repo plugins (e.g. `@classytic/mongokit`'s
+   * `multiTenantPlugin`) read tenant scope from the TOP of the repository
+   * operation context — `context.organizationId`, not `context.data.organizationId`
+   * or `context.context.organizationId`. Without this stamping, a tenant-scoped
+   * repository throws `Missing 'organizationId' in context for '<op>'` even
+   * though arc already injected the tenant into the request body.
+   *
+   * **What this returns:**
+   * - `{ [tenantField]: orgId }` when the resource is tenant-scoped and the
+   *   caller's scope carries an org ID (member, service key bound to an org,
+   *   elevated admin impersonating an org).
+   * - `{}` otherwise — platform-universal resources (`tenantField: false`),
+   *   public/anonymous reads, elevated admins without an org target.
+   *
+   * **Call sites:** every `this.repository.*` CRUD entry — `create`, `update`,
+   * `delete`, `getAll` (via list), plus merged into `QueryOptions` for the
+   * access-controlled read path (`accessControl.fetchDetailed` → `getById`/`getOne`).
+   *
+   * **Name of the field:** uses the instance's own `tenantField` configuration
+   * (default `organizationId`). Matches mongokit's `multiTenantPlugin` default
+   * `contextKey` so host apps don't need to override either side.
+   *
+   * Multi-field tenancy (via `multiTenantPreset({ tenantFields: [...] })`)
+   * resolves additional fields at middleware time and stashes them on
+   * `_tenantFields` — {@link tenantRepoOptions} merges those in too.
+   */
+  private tenantRepoOptions(req: IRequestContext): AnyRecord {
+    const out: AnyRecord = {};
+
+    if (this.tenantField) {
+      const arcContext = this.meta(req);
+      const scope = arcContext?._scope;
+      const orgId = scope ? getOrgIdFromScope(scope) : undefined;
+      if (orgId) out[this.tenantField] = orgId;
+    }
+
+    // Additional tenant dimensions resolved by multiTenantPreset
+    // (multi-field tenancy — org + branch, org + project, etc.).
+    const presetFields = (req as IRequestContext & { _tenantFields?: AnyRecord })._tenantFields;
+    if (presetFields && typeof presetFields === "object") {
+      for (const [key, value] of Object.entries(presetFields)) {
+        if (value != null && out[key] == null) out[key] = value;
+      }
+    }
+
+    return out;
+  }
+
   /** Extract typed Arc internal metadata from request */
   private meta(req: IRequestContext): ArcInternalMetadata | undefined {
     return req.metadata as ArcInternalMetadata | undefined;
@@ -412,7 +463,14 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     req: IRequestContext,
   ): Promise<OffsetPaginationResult<TDoc>> {
     const hooks = this.getHooks(req);
-    const repoGetAll = async () => this.repository.getAll(options as PaginationParams<TDoc>);
+    // Thread tenant scope at the top level so plugin-scoped repos
+    // (e.g. mongokit's multiTenantPlugin) see `context.organizationId`
+    // without relying on filter/query stamping.
+    const getAllParams = {
+      ...(options as PaginationParams<TDoc>),
+      ...this.tenantRepoOptions(req),
+    };
+    const repoGetAll = async () => this.repository.getAll(getAllParams as PaginationParams<TDoc>);
     const result =
       hooks && this.resourceName
         ? await hooks.executeAround<unknown>(
@@ -440,7 +498,14 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       return { success: false, error: "ID parameter is required", status: 400 };
     }
 
-    const options = this.queryResolver.resolve(req, this.meta(req));
+    // Merge tenant scope into the options that flow to the repo layer so
+    // plugin-scoped repos (e.g. mongokit multiTenantPlugin) see the tenant
+    // at the top of `context` for `getById` / `getOne` operations.
+    const baseOptions = this.queryResolver.resolve(req, this.meta(req));
+    const options = {
+      ...(baseOptions as Record<string, unknown>),
+      ...this.tenantRepoOptions(req),
+    } as typeof baseOptions;
     const cacheConfig = this.resolveCacheConfig("byId");
     const qc = req.server?.queryCache;
 
@@ -588,6 +653,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       this.repository.create(processedData as Partial<TDoc>, {
         user,
         context: arcContext,
+        ...this.tenantRepoOptions(req),
       });
 
     let item: unknown;
@@ -636,6 +702,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       id,
       req,
       this.repository,
+      this.tenantRepoOptions(req),
     );
 
     if (!existing) {
@@ -685,6 +752,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       this.repository.update(repoId, processedData as Partial<TDoc>, {
         user,
         context: arcContext,
+        ...this.tenantRepoOptions(req),
       });
 
     let item: unknown;
@@ -732,6 +800,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       id,
       req,
       this.repository,
+      this.tenantRepoOptions(req),
     );
 
     if (!existing) {
@@ -788,6 +857,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       this.repository.delete(repoId, {
         user,
         context: arcContext,
+        ...this.tenantRepoOptions(req),
         ...(deleteMode ? { mode: deleteMode } : {}),
       });
 
@@ -852,7 +922,11 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
   async getBySlug(req: IRequestContext): Promise<IControllerResponse<TDoc>> {
     const slugField = this._presetFields.slugField ?? "slug";
     const slug = (req.params[slugField] ?? req.params.slug) as string;
-    const options = this.queryResolver.resolve(req, this.meta(req));
+    const baseOptions = this.queryResolver.resolve(req, this.meta(req));
+    const options = {
+      ...(baseOptions as Record<string, unknown>),
+      ...this.tenantRepoOptions(req),
+    } as typeof baseOptions;
 
     const repo = this.repository as TRepository & {
       getBySlug?: (slug: string, options?: unknown) => Promise<TDoc | null>;

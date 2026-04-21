@@ -41,7 +41,125 @@ If you wrote handlers against the old `unknown` type and destructured
 narrower. If you wrote `(payload) => ...` assuming the argument was the
 payload, switch to `(event) => event.payload`.
 
-## 2.10.4 — expose `middleware` / `pipeline` / `context` / `logger` subpaths
+## 2.10.5 — BaseController tenant threading + action-permission fallback + type fixes + new subpaths
+
+Supersedes 2.10.4 (unpublished). Bundles the 2.10.4 subpath work with
+five host-reported fixes.
+
+### 1. `BaseController` threads tenant into every repo call (plugin-scope fix)
+
+**What was broken:** a repo wired with `@classytic/mongokit`'s
+`multiTenantPlugin({ required: true })` threw `Missing 'organizationId' in
+context for '<op>'` on every CRUD call, because arc only stamped the
+tenant into the request body — not into the top-level repository
+operation context the plugin reads from. Packages that knew about this
+worked around it with a hand-rolled `skipWhen` checking `data[tenantField]`;
+packages that didn't (e.g. `@classytic/pricelist`) broke at runtime.
+
+**What changed:** `BaseController` now derives the tenant once per
+request (`tenantRepoOptions(req)`) from `arcContext._scope` and the
+`multiTenantPreset`-resolved fields, then spreads it at the TOP of every
+repo call — `create`, `update`, `delete`, `getAll` (list), and merged
+into `QueryOptions` for the access-controlled read path
+(`accessControl.fetchDetailed` → `getById` / `getOne`). The diagnostic
+`getOne(idOnly)` fallback in `AccessControl` also forwards the options
+now, so the "is this cross-tenant or genuinely missing" probe runs under
+the caller's scope instead of unscoped. Multi-field tenancy via
+`multiTenantPreset({ tenantFields: [...] })` flows through too — the
+preset stashes resolved fields on `request._tenantFields`, which
+`tenantRepoOptions` merges alongside the single-field scope value.
+
+**Why this matters:** host apps can now drop a `multiTenantPlugin` onto
+their repo without custom `skipWhen` logic — `required: true` works
+straight through arc's CRUD pipeline. Validated against both kits with
+seeded data:
+
+- [tests/integration/mongokit-multi-tenant.test.ts](tests/integration/mongokit-multi-tenant.test.ts)
+  — 9 scenarios against `@classytic/mongokit`'s `multiTenantPlugin({ required: true })`.
+- [tests/integration/sqlitekit-multi-tenant.test.ts](tests/integration/sqlitekit-multi-tenant.test.ts)
+  — 8 scenarios against `@classytic/sqlitekit`'s `multiTenantPlugin({ requireOnWrite: true, resolveTenantId })`.
+
+Both kits expose different plugin surfaces (`contextKey: 'organizationId'`
+vs `resolveTenantId(ctx)`) but arc's top-of-context stamping satisfies
+each without kit-specific code.
+
+Peer dep bumps: `@classytic/mongokit` is now `>=3.10.3` (was `>=3.10.2`)
+to pick up 3.10.3's `allowDataInjection` option. `@classytic/sqlitekit`
+is included as a test-time dev dep at `>=0.1.1`. Arc's fix interoperates
+with both without kit-specific code.
+
+### 2. Shorthand-action permission fallback (security)
+
+**What was broken:** the function-shorthand action form —
+`actions: { send: async (id, data, req) => ... }` — registered a handler
+with no permission gate. When the resource also had no top-level
+`actionPermissions`, the action fell through to "authenticated-only":
+any logged-in user could invoke it, regardless of role. This was a
+silent authz hole: the shorthand looked identical to the object form
+that ships with an explicit `permissions: requireRoles([...])`, but
+skipped authorization entirely.
+
+**What changed:** the normalizer now applies a fallback chain when an
+action has no explicit gate:
+
+1. `ActionDefinition.permissions` — per-action check.
+2. Resource-level `actionPermissions` — global gate for all actions.
+3. **Resource-level `permissions.update`** — sensible default: actions
+   mutate state, so inheriting the update gate is safer than auth-only.
+4. **Boot-time throw** — if none of the above are set, `defineResource`
+   refuses to register. The message explains how to fix it (declare one
+   of the three, or use `allowPublic()` if public is truly intended).
+
+When the update-fallback kicks in (step 3), the arc logger emits a
+structured warning so upgrading apps can migrate to explicit perms
+without being silently rescued forever.
+
+**Migration:** apps running shorthand actions against resources with
+`permissions.update` set are safe — the new fallback promotes them from
+auth-only to admin-gated (or whatever the update gate is) and logs once.
+Apps with shorthand actions and no update gate will throw at boot and
+need to declare a permission explicitly. Public actions must opt in via
+`allowPublic()` — accidental auth-only is no longer possible.
+
+Tests live in [tests/core/routes-and-actions.test.ts](tests/core/routes-and-actions.test.ts)
+under `"v2.10.5: action permission fallback chain (security)"`.
+
+### 3. `ErrorMapper<T>` accepts abstract classes and specific ctor signatures
+
+**What was broken:** `ErrorMapper<T>['type']` was typed
+`new (...args: unknown[]) => T`. Abstract base errors (like
+`@classytic/flow`'s `FlowError`) and concrete classes with specific
+signatures (like `new InvalidTransitionError(from, to, id?)`) couldn't
+be assigned without consumers casting through `as never` / `as any`.
+
+**What changed:** widened to `abstract new (...args: any[]) => T`. The
+`instanceof` check at runtime is what actually drives dispatch — the
+ctor signature is just for type binding, and a permissive one lets
+real-world error classes register without gymnastics.
+
+### 4. `FastifyInstance.arc` is optional — no more collision with host augmentations
+
+**What was broken:** `arcCorePlugin.ts` augmented `FastifyInstance` with
+a non-optional `arc: ArcCore`. Any consumer of any `@classytic/arc/*`
+subpath got this merged into every `FastifyInstance` — including apps
+that never register `arcCorePlugin`. Worse, hosts trying to narrow with
+`interface X extends FastifyInstance { arc?: MyArc }` collided because
+`arc?: MyArc` isn't assignable to the parent's `arc: ArcCore`.
+
+**What changed:** the declaration is now `arc?: ArcCore`. Apps that
+register `arcCorePlugin` treat it as present at runtime (its internal
+call sites narrow explicitly — see
+[src/factory/registerAuth.ts](src/factory/registerAuth.ts),
+[src/factory/createApp.ts](src/factory/createApp.ts)). Apps that don't
+register it now get a correct "possibly undefined" type instead of a
+silent lie.
+
+**Migration for consumers who read `fastify.arc` directly:** prefer
+`fastify.arc?.registry.getAll()` or narrow via
+`if (fastify.arc) { ... }`. A non-null assertion (`fastify.arc!`) is
+fine inside code that runs *after* `createApp`.
+
+### 5. Expose `middleware` / `pipeline` / `context` / `logger` subpaths
 
 Four barrel modules had source, tests, and `index.ts` barrels but no
 `package.json` export entry and no `tsdown` build entry — so consumers
@@ -83,10 +201,23 @@ import { guard, intercept } from '@classytic/arc/pipeline';
 import { middleware } from '@classytic/arc/middleware';
 ```
 
-Regression guard: [tests/smoke/exports.test.ts](tests/smoke/exports.test.ts)
-now asserts both that the four new subpaths resolve and that each one's
-headline symbols (`multipartBody`, `executePipeline`, `requestContext.run`,
-`arcLog`) are reachable. A future accidental drop would fail `npm run test:ci`.
+Regression guards: [tests/smoke/exports.test.ts](tests/smoke/exports.test.ts)
+asserts that the four new subpaths resolve and that each one's headline
+symbols (`multipartBody`, `executePipeline`, `requestContext.run`,
+`arcLog`) are reachable. [tests/core/public-api-contract.test.ts](tests/core/public-api-contract.test.ts)
+pins the exact set of `package.json` export keys plus runtime-symbol
+assertions for the new subpaths. A future accidental drop fails
+`npm run test:ci`.
+
+### Deferred
+
+Two issues were raised alongside these fixes but shipped no demand
+evidence in audited host apps and were intentionally left for a later
+release:
+
+- **Generic adapter factory** (`createGenericAdapter({ list, get, create, update, delete })`) for non-mongokit engines
+  — host apps (be-prod, fajr) wrap every third-party engine (`@classytic/flow`, `@classytic/order`, `@classytic/promo`, `@classytic/loyalty`) through `createAdapter` with a mongokit-compatible repo already. Zero demand signal. Revisit when a host tries to expose a genuinely non-mongokit backend (REST proxy, in-memory, SQL adapter) through arc's auto-CRUD.
+- **Per-route `rateLimit` override** inside `RouteDefinition` — audited hosts solve per-route variation by splitting resources (`guest-order` vs `order`, `payment-webhook` vs `payment`) and applying resource-level `rateLimit` to each. Zero TODO comments, zero Fastify-passthrough workarounds. Revisit if a host reports genuine single-resource/multi-limit friction.
 
 ## 2.10.3 — plugin onSend race closures + idempotency lock-leak fix
 

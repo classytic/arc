@@ -754,6 +754,197 @@ describe("v2.8: edge cases", () => {
   });
 });
 
+describe("v2.10.5: action permission fallback chain (security)", () => {
+  /**
+   * Pre-2.10.5, `actions: { send: async (...) => ... }` on a resource with
+   * no `actionPermissions` fell through to auth-only (silent authz hole).
+   * Now: fall back to `permissions.update` when nothing else is set, throw
+   * at boot when nothing to fall back to.
+   */
+
+  it("shorthand action inherits resource's permissions.update when nothing else is set", async () => {
+    await setupTestDatabase();
+
+    const Model = createMockModel("PermFallbackA");
+    const repo = createMockRepository(Model);
+    const [seeded] = await Model.create([{ name: "Invoice-1" }]);
+
+    // Capture the warning the normalizer emits when the fallback kicks in.
+    const warnings: unknown[] = [];
+
+    const resource = defineResource({
+      name: "invoicePermFallback",
+      displayName: "Invoice (perm fallback)",
+      prefix: "/invoice-pf",
+      adapter: createMongooseAdapter({ model: Model as unknown as mongoose.Model<unknown>, repository: repo }),
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        // update gate — must be inherited by the shorthand `send` action
+        update: requireRoles(["admin"]),
+        delete: requireRoles(["admin"]),
+      },
+      actions: {
+        // Function shorthand — no per-action permissions, no actionPermissions.
+        // Should inherit `permissions.update` via the new fallback chain.
+        send: async (id) => ({ id, sent: true }),
+      },
+    });
+
+    const app = await createApp({
+      preset: "testing",
+      auth: false,
+      logger: {
+        level: "warn",
+        // Pino's dest can be a Writable; use a minimal object sink.
+        stream: {
+          write: (chunk: string) => {
+            try {
+              warnings.push(JSON.parse(chunk));
+            } catch {
+              warnings.push(chunk);
+            }
+          },
+        } as unknown as NodeJS.WritableStream,
+      },
+      plugins: async (f) => {
+        await f.register(resource.toPlugin());
+      },
+    });
+    await app.ready();
+
+    // Unauthenticated call should be rejected (fallback made this
+    // admin-gated, not auth-only).
+    const anon = await app.inject({
+      method: "POST",
+      url: `/invoice-pf/${seeded._id}/action`,
+      payload: { action: "send" },
+    });
+    expect(anon.statusCode).toBe(401);
+
+    // The normalizer emitted a fallback warning.
+    const sawFallbackWarn = warnings.some(
+      (w) =>
+        typeof w === "object" &&
+        w !== null &&
+        (w as { fallback?: string }).fallback === "permissions.update",
+    );
+    expect(sawFallbackWarn).toBe(true);
+
+    await app.close();
+    await teardownTestDatabase();
+  });
+
+  it("throws at boot when a shorthand action has nothing to fall back to", async () => {
+    await setupTestDatabase();
+
+    const Model = createMockModel("PermFallbackB");
+    const repo = createMockRepository(Model);
+
+    // Build the resource — should throw when .toPlugin() registers because
+    // there's no per-action perm, no actionPermissions, and no
+    // permissions.update to inherit from.
+    const resource = defineResource({
+      name: "noGateAction",
+      displayName: "No-gate action",
+      prefix: "/no-gate",
+      adapter: createMongooseAdapter({ model: Model as unknown as mongoose.Model<unknown>, repository: repo }),
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+      },
+      actions: {
+        unsafeSend: async (id) => ({ id, sent: true }),
+      },
+    });
+
+    await expect(async () => {
+      const app = await createApp({
+        preset: "testing",
+        auth: false,
+        logger: false,
+        plugins: async (f) => {
+          await f.register(resource.toPlugin());
+        },
+      });
+      await app.ready();
+      await app.close();
+    }).rejects.toThrow(/no permission gate/i);
+
+    await teardownTestDatabase();
+  });
+
+  it("explicit per-action permissions suppress the fallback (no warn)", async () => {
+    await setupTestDatabase();
+
+    const Model = createMockModel("PermFallbackC");
+    const repo = createMockRepository(Model);
+    const [seeded] = await Model.create([{ name: "Explicit" }]);
+
+    const warnings: unknown[] = [];
+
+    const resource = defineResource({
+      name: "explicitGate",
+      displayName: "Explicit gate",
+      prefix: "/explicit",
+      adapter: createMongooseAdapter({ model: Model as unknown as mongoose.Model<unknown>, repository: repo }),
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: requireRoles(["admin"]),
+        delete: requireRoles(["admin"]),
+      },
+      actions: {
+        send: {
+          handler: async (id) => ({ id, sent: true }),
+          permissions: allowPublic(),
+        },
+      },
+    });
+
+    const app = await createApp({
+      preset: "testing",
+      auth: false,
+      logger: {
+        level: "warn",
+        stream: {
+          write: (chunk: string) => {
+            try {
+              warnings.push(JSON.parse(chunk));
+            } catch {
+              warnings.push(chunk);
+            }
+          },
+        } as unknown as NodeJS.WritableStream,
+      },
+      plugins: async (f) => {
+        await f.register(resource.toPlugin());
+      },
+    });
+    await app.ready();
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/explicit/${seeded._id}/action`,
+      payload: { action: "send" },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const sawFallbackWarn = warnings.some(
+      (w) =>
+        typeof w === "object" &&
+        w !== null &&
+        (w as { fallback?: string }).fallback === "permissions.update",
+    );
+    expect(sawFallbackWarn).toBe(false);
+
+    await app.close();
+    await teardownTestDatabase();
+  });
+});
+
 describe("v2.8: type safety", () => {
   // 17. ActionHandlerFn type accepts proper function signatures
   it("ActionHandlerFn type accepts proper function signatures", () => {
