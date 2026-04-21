@@ -31,7 +31,16 @@ import { softDeletePreset, treePreset } from '@classytic/arc/presets';
 import { createHookSystem, beforeCreate } from '@classytic/arc/hooks';
 
 // Pipeline (guard/transform/intercept)
-import { guard, transform, pipe } from '@classytic/arc';
+import { guard, transform, pipe } from '@classytic/arc/pipeline';
+
+// Middleware (multipartBody, named middleware)
+import { multipartBody, middleware } from '@classytic/arc/middleware';
+
+// Request context (AsyncLocalStorage)
+import { requestContext } from '@classytic/arc/context';
+
+// Logger (debug / warning surface)
+import { arcLog } from '@classytic/arc/logger';
 
 // Types only (zero runtime cost)
 import type { ResourceConfig, UserBase } from '@classytic/arc/types';

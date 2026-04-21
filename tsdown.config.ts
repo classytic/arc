@@ -31,6 +31,12 @@ export default defineConfig({
     "src/registry/index.ts",
     "src/utils/index.ts",
 
+    // Context (AsyncLocalStorage), Logger, Middleware, Pipeline — zero-dep primitives
+    "src/context/index.ts",
+    "src/logger/index.ts",
+    "src/middleware/index.ts",
+    "src/pipeline/index.ts",
+
     // Factory
     "src/factory/index.ts",
 

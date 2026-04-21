@@ -41,6 +41,10 @@ describe("Subpath resolution", () => {
     "@classytic/arc/audit",
     "@classytic/arc/plugins/response-cache",
     "@classytic/arc/mcp",
+    "@classytic/arc/middleware",
+    "@classytic/arc/pipeline",
+    "@classytic/arc/context",
+    "@classytic/arc/logger",
   ];
 
   for (const path of subpaths) {
@@ -160,6 +164,42 @@ describe("Key symbols from @classytic/arc/factory", () => {
   it("exports createApp", async () => {
     const mod = await import("@classytic/arc/factory");
     expect(typeof mod.createApp).toBe("function");
+  });
+});
+
+describe("Key symbols from @classytic/arc/middleware", () => {
+  it("exports multipartBody, middleware, sortMiddlewares", async () => {
+    const mod = await import("@classytic/arc/middleware");
+    expect(typeof mod.multipartBody).toBe("function");
+    expect(typeof mod.middleware).toBe("function");
+    expect(typeof mod.sortMiddlewares).toBe("function");
+  });
+});
+
+describe("Key symbols from @classytic/arc/pipeline", () => {
+  it("exports guard, intercept, pipe, transform, executePipeline", async () => {
+    const mod = await import("@classytic/arc/pipeline");
+    expect(typeof mod.guard).toBe("function");
+    expect(typeof mod.intercept).toBe("function");
+    expect(typeof mod.pipe).toBe("function");
+    expect(typeof mod.transform).toBe("function");
+    expect(typeof mod.executePipeline).toBe("function");
+  });
+});
+
+describe("Key symbols from @classytic/arc/context", () => {
+  it("exports requestContext", async () => {
+    const mod = await import("@classytic/arc/context");
+    expect(typeof mod.requestContext).toBe("object");
+    expect(typeof mod.requestContext.run).toBe("function");
+  });
+});
+
+describe("Key symbols from @classytic/arc/logger", () => {
+  it("exports arcLog and configureArcLogger", async () => {
+    const mod = await import("@classytic/arc/logger");
+    expect(typeof mod.arcLog).toBe("function");
+    expect(typeof mod.configureArcLogger).toBe("function");
   });
 });
 

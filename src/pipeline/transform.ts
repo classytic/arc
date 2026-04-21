@@ -6,7 +6,7 @@
  *
  * @example
  * ```typescript
- * import { transform } from '@classytic/arc';
+ * import { transform } from '@classytic/arc/pipeline';
  *
  * const slugify = transform('slugify', {
  *   operations: ['create'],

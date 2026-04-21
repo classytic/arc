@@ -1,6 +1,6 @@
 {
   "name": "@classytic/arc",
-  "version": "2.10.3",
+  "version": "2.10.4",
   "description": "Resource-oriented backend framework for Fastify — clean, minimal, powerful, tree-shakable",
   "type": "module",
   "exports": {
@@ -63,6 +63,22 @@
     "./hooks": {
       "types": "./dist/hooks/index.d.mts",
       "default": "./dist/hooks/index.mjs"
+    },
+    "./middleware": {
+      "types": "./dist/middleware/index.d.mts",
+      "default": "./dist/middleware/index.mjs"
+    },
+    "./pipeline": {
+      "types": "./dist/pipeline/index.d.mts",
+      "default": "./dist/pipeline/index.mjs"
+    },
+    "./context": {
+      "types": "./dist/context/index.d.mts",
+      "default": "./dist/context/index.mjs"
+    },
+    "./logger": {
+      "types": "./dist/logger/index.d.mts",
+      "default": "./dist/logger/index.mjs"
     },
     "./registry": {
       "types": "./dist/registry/index.d.mts",

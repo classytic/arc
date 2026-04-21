@@ -6,7 +6,7 @@
  *
  * @example
  * ```typescript
- * import { guard } from '@classytic/arc';
+ * import { guard } from '@classytic/arc/pipeline';
  *
  * const isActive = guard('isActive', (ctx) => {
  *   if (!ctx.user?.isActive) throw new ForbiddenError('Account suspended');

@@ -787,7 +787,7 @@ afterUpdate(hooks, 'product', async (ctx) => { await invalidateCache(ctx.result.
 ## Pipeline
 
 ```typescript
-import { guard, transform, intercept } from '@classytic/arc';
+import { guard, transform, intercept } from '@classytic/arc/pipeline';
 
 defineResource({
   pipe: {

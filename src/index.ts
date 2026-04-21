@@ -38,6 +38,10 @@
  * | `@classytic/arc/adapters` | Database adapters + PrismaQueryParser |
  * | `@classytic/arc/presets` | Preset functions (softDelete, tree, etc.) |
  * | `@classytic/arc/hooks` | Hook helpers (beforeCreate, afterUpdate) |
+ * | `@classytic/arc/middleware` | Middleware helpers (multipartBody, named/priority middleware) |
+ * | `@classytic/arc/pipeline` | Functional guard / intercept / pipe / transform |
+ * | `@classytic/arc/context` | AsyncLocalStorage request context |
+ * | `@classytic/arc/logger` | Internal debug/warning logger (arcLog) |
  * | `@classytic/arc/events` | Event bus (MemoryTransport only) |
  * | `@classytic/arc/events/redis` | Redis Pub/Sub transport (requires ioredis) |
  * | `@classytic/arc/events/redis-stream` | Redis Streams transport (requires ioredis) |
@@ -134,11 +138,6 @@ export {
 // Constants — single source of truth for defaults and magic values (zero deps)
 // ============================================================================
 export * from "./constants.js";
-export type { RequestStore } from "./context/index.js";
-// ============================================================================
-// Request Context — AsyncLocalStorage (zero deps)
-// ============================================================================
-export { requestContext } from "./context/index.js";
 
 // ============================================================================
 // Validation — resource config validation (zero deps, pure functions)
@@ -148,11 +147,6 @@ export {
   formatValidationErrors,
   validateResourceConfig,
 } from "./core/validateResourceConfig.js";
-export type { NamedMiddleware } from "./middleware/index.js";
-// ============================================================================
-// Middleware — named, priority-based (zero deps, pure functions)
-// ============================================================================
-export { middleware, sortMiddlewares } from "./middleware/index.js";
 export type {
   DynamicPermissionMatrix,
   DynamicPermissionMatrixConfig,
@@ -201,18 +195,6 @@ export {
   requireTeamMembership,
   when,
 } from "./permissions/index.js";
-export type {
-  Guard,
-  Interceptor,
-  PipelineConfig,
-  PipelineContext,
-  PipelineStep,
-  Transform,
-} from "./pipeline/index.js";
-// ============================================================================
-// Pipeline — functional guard/transform/intercept (zero deps, pure functions)
-// ============================================================================
-export { guard, intercept, pipe, transform } from "./pipeline/index.js";
 // ============================================================================
 // Types — re-export all types (zero runtime cost, eliminated at compile time)
 // ============================================================================
@@ -302,7 +284,7 @@ export {
 // MOVED TO DEDICATED SUBPATHS (no longer re-exported from main barrel)
 // ============================================================================
 //
-// These were previously re-exported here but pulled in heavy dependencies.
+// These were previously re-exported here but barrel re-exports hurt tree-shaking.
 // Import from their dedicated subpaths instead:
 //
 // Factory (pulls in security plugins):
@@ -322,12 +304,17 @@ export {
 // Registry:
 //   import { ResourceRegistry } from '@classytic/arc/registry';
 //
-
-export type { ArcLogger, ArcLoggerOptions, ArcLogWriter } from "./logger/index.js";
-// ============================================================================
-// Logger — centralized debug/warning system (zero deps)
-// ============================================================================
-export { arcLog, configureArcLogger } from "./logger/index.js";
+// Request Context (AsyncLocalStorage):
+//   import { requestContext, type RequestStore } from '@classytic/arc/context';
+//
+// Middleware (multipartBody, named middleware):
+//   import { multipartBody, middleware, sortMiddlewares } from '@classytic/arc/middleware';
+//
+// Pipeline (guard, intercept, pipe, transform):
+//   import { guard, intercept, pipe, transform } from '@classytic/arc/pipeline';
+//
+// Logger (arcLog, configureArcLogger):
+//   import { arcLog, configureArcLogger } from '@classytic/arc/logger';
 
 // Version from package.json (injected at build time via tsdown define)
 // Replaced at build time by tsdown `define` option.

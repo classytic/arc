@@ -9,7 +9,7 @@
  *
  * @example
  * ```typescript
- * import { requestContext } from '@classytic/arc';
+ * import { requestContext } from '@classytic/arc/context';
  *
  * // Anywhere in the call stack — no parameter passing needed
  * async function auditAction(action: string) {
