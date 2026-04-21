@@ -232,9 +232,19 @@ export class AccessControl {
         // distinguish "missing" from "filtered". This is a DIAGNOSTIC query
         // so we DON'T apply it for writes — security is already enforced by
         // the compound filter returning null.
+        //
+        // Pass `queryOptions` (which already carries the caller's tenant from
+        // `BaseController.tenantRepoOptions`) so plugin-scoped repos
+        // (mongokit's multiTenantPlugin) see `context.organizationId` and
+        // don't throw "Missing 'organizationId' in context for 'getOne'".
+        // The tenant on the context matches the compound filter we just
+        // tried, so the diagnostic query is still an ID-only predicate but
+        // runs under the caller's scope rather than unscoped.
         if (hasCompoundFilters) {
           const idOnly: AnyRecord = { [this.idField]: id };
-          const rawDoc = await (repository.getOne as (f: AnyRecord) => Promise<unknown>)(idOnly);
+          const rawDoc = await (
+            repository.getOne as (f: AnyRecord, o?: QueryOptions) => Promise<unknown>
+          )(idOnly, queryOptions);
           if (rawDoc) {
             // Doc exists but didn't match the compound filter. Determine why.
             const arcContext = this._meta(req);

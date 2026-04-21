@@ -219,8 +219,13 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   await registerUtilityPlugins(fastify, config);
 
   // ── 4. Arc core + events ──
+  // Note: `trackPlugin` is only invoked AFTER `registerArcCore` has registered
+  // arcCorePlugin, so `fastify.arc` is always present at call time. The
+  // declaration is optional (see arcCorePlugin.ts) so we narrow explicitly.
   const trackPlugin = (name: string, opts?: Record<string, unknown>) => {
-    fastify.arc.plugins.set(name, {
+    const arc = fastify.arc;
+    if (!arc) return;
+    arc.plugins.set(name, {
       name,
       options: opts,
       registeredAt: new Date().toISOString(),

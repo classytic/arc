@@ -880,6 +880,9 @@ export class ResourceDefinition<TDoc = AnyRecord> {
               self.actions,
               self.actionPermissions,
               self.tag,
+              self.permissions,
+              self.name,
+              typedInstance.log,
             );
             createActionRouter(instance as unknown as FastifyInstance, actionConfig);
           }
@@ -987,12 +990,32 @@ function capitalize(str: string): string {
 // ============================================================================
 
 /**
- * Normalize ActionsMap into the ActionRouterConfig shape that createActionRouter expects.
+ * Normalize `ActionsMap` into the `ActionRouterConfig` shape that
+ * `createActionRouter` expects.
+ *
+ * **Permission fallback chain (fail-closed, v2.10.5):**
+ * Actions mutate state, so "no permission declared" historically meant
+ * "authenticated users can call it" — a silent authz hole for apps using
+ * the function shorthand `actions: { send: async (id, data, req) => ... }`.
+ *
+ * The chain is now:
+ *   1. `ActionDefinition.permissions` — explicit per-action check.
+ *   2. Resource-level `actionPermissions` — explicit global-for-actions.
+ *   3. Resource-level `permissions.update` — sensible default (actions mutate).
+ *   4. Boot-time error — forces the author to pick an explicit gate.
+ *
+ * When step 3 fires, we log a warning (not a throw) so upgrading apps
+ * aren't bricked by the behavior change, but the gap is visible. Apps
+ * that genuinely want public actions must declare `allowPublic()`
+ * explicitly — auth-by-accident is no longer a supported state.
  */
 function normalizeActionsToRouterConfig(
   actions: ActionsMap,
   globalAuth: PermissionCheck | undefined,
   tag: string,
+  resourcePermissions: ResourceConfig<unknown>["permissions"] | undefined,
+  resourceName: string,
+  log: { warn?: (obj: unknown, msg?: string) => void } | undefined,
 ): {
   tag: string;
   actions: Record<
@@ -1010,18 +1033,54 @@ function normalizeActionsToRouterConfig(
   const permissions: Record<string, PermissionCheck> = {};
   const schemas: Record<string, Record<string, unknown>> = {};
 
+  const updateFallback = resourcePermissions?.update as PermissionCheck | undefined;
+
   for (const [name, entry] of Object.entries(actions)) {
+    let explicit: PermissionCheck | undefined;
+
     if (typeof entry === "function") {
       handlers[name] = entry;
     } else {
       const def = entry as ActionDefinition;
       handlers[name] = def.handler;
-      if (def.permissions) permissions[name] = def.permissions;
-      // Pass the schema through as-is — createActionRouter's normalizeActionSchema
-      // handles all three shapes (full JSON Schema, Zod v4, legacy field map).
-      // description/mcp are intentionally NOT passed to the router — they're
-      // metadata for OpenAPI/MCP generators which read from ResourceDefinition.actions.
+      if (def.permissions) {
+        explicit = def.permissions;
+        permissions[name] = def.permissions;
+      }
       if (def.schema) schemas[name] = def.schema as Record<string, unknown>;
+    }
+
+    // Apply fallback chain if no explicit per-action gate was set.
+    // `globalAuth` is handled inside `createActionRouter` already — we only
+    // need to cover the "neither per-action nor globalAuth" case by filling
+    // `actionPermissions[name]` from the update permission.
+    if (!explicit && !globalAuth && updateFallback) {
+      permissions[name] = updateFallback;
+      log?.warn?.(
+        {
+          resource: resourceName,
+          action: name,
+          fallback: "permissions.update",
+        },
+        `[Arc] Action '${resourceName}.${name}' has no explicit permission — ` +
+          `falling back to the resource's \`permissions.update\` gate. ` +
+          `Declare \`actions.${name}.permissions\` (or resource \`actionPermissions\`) to silence this.`,
+      );
+    }
+
+    // Nothing to fall back to → fail loud at boot. Authenticated-only
+    // actions are never silently allowed; callers must opt in with
+    // `allowPublic()` or `requireAuth()` if that's actually desired.
+    if (!explicit && !globalAuth && !updateFallback) {
+      throw new Error(
+        `[Arc] Resource '${resourceName}': action '${name}' has no permission gate ` +
+          `and the resource defines no \`permissions.update\` fallback. ` +
+          `Declare one of:\n` +
+          `  - \`actions.${name}.permissions: <PermissionCheck>\` (per-action)\n` +
+          `  - \`actionPermissions: <PermissionCheck>\` (resource-wide)\n` +
+          `  - \`permissions.update: <PermissionCheck>\` (inherited by actions)\n` +
+          `Use \`allowPublic()\` if you genuinely want the action unauthenticated.`,
+      );
     }
   }
 
