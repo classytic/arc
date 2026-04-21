@@ -33,6 +33,7 @@ describe("Public API Contract", () => {
       "./auth/redis",
       "./cache",
       "./cli",
+      "./context",
       "./core",
       "./discovery",
       "./docs",
@@ -50,12 +51,15 @@ describe("Public API Contract", () => {
       "./integrations/webhooks",
       "./integrations/websocket",
       "./integrations/websocket-redis",
+      "./logger",
       "./mcp",
       "./mcp/testing",
+      "./middleware",
       "./migrations",
       "./org",
       "./org/types",
       "./permissions",
+      "./pipeline",
       "./plugins",
       "./plugins/response-cache",
       "./plugins/tracing",
@@ -143,6 +147,16 @@ describe("Public API Contract", () => {
         subpath: "@classytic/arc/migrations",
         symbols: ["defineMigration", "MigrationRunner"],
       },
+      {
+        subpath: "@classytic/arc/middleware",
+        symbols: ["multipartBody", "middleware", "sortMiddlewares"],
+      },
+      {
+        subpath: "@classytic/arc/pipeline",
+        symbols: ["guard", "intercept", "pipe", "transform", "executePipeline"],
+      },
+      { subpath: "@classytic/arc/context", symbols: ["requestContext"] },
+      { subpath: "@classytic/arc/logger", symbols: ["arcLog", "configureArcLogger"] },
     ];
 
     for (const { subpath, symbols } of checks) {
