@@ -4,8 +4,27 @@
  * Generates rate limit keys based on request scope:
  * - member → organizationId (per-tenant isolation)
  * - authenticated → userId (per-user)
- * - elevated → organizationId or userId
+ * - service → organizationId (required on service scope)
+ * - elevated → organizationId ?? userId ?? IP
  * - public → IP address (fallback)
+ *
+ * ## IP fallback caveat
+ *
+ * When no scope is present on the request (e.g. calls that hit the app
+ * before auth runs, such as `/api/auth/get-session` or pre-branch-selection
+ * lookups that can't supply an `x-organization-id` header) the generator
+ * falls back to the caller's IP. In a multi-user NAT / office / shared-VPN
+ * scenario **one browser can exhaust the shared IP bucket** for every
+ * other user behind that IP.
+ *
+ * Mitigations:
+ * 1. Exempt heartbeat / pre-auth paths from rate limiting via the
+ *    top-level `rateLimit: { skipPaths: ['/api/auth/*'] }` option.
+ * 2. Supply a custom `strategy` to this generator that reads a session
+ *    cookie or signed token and derives a per-user key earlier in the
+ *    request lifecycle.
+ * 3. Tighten `trustProxy` so the fallback uses the real client IP, not
+ *    a shared load-balancer IP.
  *
  * @example
  * ```typescript
@@ -16,6 +35,7 @@
  *     max: 100,
  *     timeWindow: '1 minute',
  *     keyGenerator: createTenantKeyGenerator(),
+ *     skipPaths: ['/api/auth/*'], // heartbeat endpoints bypass the bucket
  *   },
  * });
  * ```

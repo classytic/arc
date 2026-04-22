@@ -26,4 +26,11 @@ describe("developmentPreset — pino-pretty fallback", () => {
     expect(typeof logger).toBe("object");
     expect(logger).not.toBeNull();
   });
+
+  it("rateLimit is disabled by default (matches testing/edge)", () => {
+    // Dev servers get HMR traffic and auth heartbeats that share the IP
+    // bucket with the rest of the app; enforcing a limit surprises users.
+    // Production presets still must opt in to a concrete value.
+    expect(developmentPreset.rateLimit).toBe(false);
+  });
 });

@@ -8,6 +8,7 @@
  */
 
 import { z } from "zod";
+import { resolveActionPermission } from "../../core/actionPermissions.js";
 import { BaseController } from "../../core/BaseController.js";
 import type { ResourceDefinition } from "../../core/defineResource.js";
 import { normalizePermissionResult } from "../../permissions/applyPermissionResult.js";
@@ -259,8 +260,16 @@ export function resourceToTools(
         : `${actionName}_${resource.name}`;
 
       const handler = typeof entry === "function" ? entry : def.handler;
-      const actionPerms =
-        (typeof def !== "function" ? def.permissions : undefined) ?? resource.actionPermissions;
+      // Resolve via the shared chain so MCP honours the SAME fallback that
+      // the HTTP router applies. Without this, `actions: { approve: fn }`
+      // plus `permissions.update: requireAuth()` leaves the generated tool
+      // with `undefined` — which `evaluatePermission()` treats as allow,
+      // silently bypassing auth through the MCP surface.
+      const actionPerms = resolveActionPermission({
+        action: entry,
+        resourcePermissions: resource.permissions as ResourcePermissions | undefined,
+        resourceActionPermissions: resource.actionPermissions as PermissionCheck | undefined,
+      });
 
       tools.push({
         name: toolName,

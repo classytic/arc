@@ -32,6 +32,11 @@ const products = sqliteTable("products", {
   // Arc defaults list sort to "-createdAt" (Mongo convention). Any kit
   // that strictly validates sort columns against its schema needs this
   // field. sqlitekit's `timestampPlugin` auto-stamps it on create/update.
+  // Resources without a `createdAt` column opt out via
+  // `defineResource({ defaultSort: false })` — this test keeps the
+  // column because it also exercises `timestampPlugin`. See
+  // `tests/integration/sqlitekit-no-createdat.test.ts` for the
+  // explicit portability proof.
   createdAt: text("createdAt"),
   updatedAt: text("updatedAt"),
 });

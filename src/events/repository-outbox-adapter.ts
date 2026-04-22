@@ -9,11 +9,22 @@
  * `@classytic/arc/events` so consumers can build and decorate the store
  * manually (metrics, tracing, multi-transport fan-out).
  *
- * Requires mongokit ≥3.10 (or equivalent) — `findOneAndUpdate` with
- * aggregation-pipeline support is essential for the atomic FIFO claim-lease
- * loop and the `$ifNull`-preserving fail() path.
+ * Portability: filters compose via `@classytic/repo-core/filter` and
+ * updates via `@classytic/repo-core/update`. The primary-key column name
+ * is read from `repository.idField` — mongokit defaults to `_id`,
+ * sqlitekit / pgkit / prismakit to the schema's declared PK. The adapter
+ * therefore runs on any kit that implements `StandardRepo.findOneAndUpdate`
+ * + `getOne` + `getAll` + `deleteMany` + `create`.
+ *
+ * `fail()` uses a lease-gated read-then-write pair to preserve
+ * `firstFailedAt` across retries without relying on Mongo's aggregation-
+ * pipeline `$ifNull`. Leases guarantee single-writer during the failure
+ * window (`claimPending` filters out non-owned rows), so the two calls are
+ * safe under concurrent relayers.
  */
 
+import { and, anyOf, eq as eqFilter, lte, ne, or } from "@classytic/repo-core/filter";
+import { update } from "@classytic/repo-core/update";
 import type { RepositoryLike } from "../adapters/interface.js";
 import { createIsDuplicateKeyError, createSafeGetOne } from "../adapters/store-helpers.js";
 import type { DeadLetteredEvent, DomainEvent } from "./EventTransport.js";
@@ -28,8 +39,13 @@ import {
   type OutboxWriteOptions,
 } from "./outbox.js";
 
-interface OutboxDoc {
-  readonly _id: string;
+/**
+ * Outbox row shape. The PK field is determined by the kit's
+ * `repository.idField` (mongokit → `_id`, sqlitekit → `id`). Using a
+ * generic index signature keeps the interface driver-agnostic without
+ * fighting the type system over a dynamic key.
+ */
+interface OutboxDoc extends Record<string, unknown> {
   readonly event: DomainEvent;
   readonly type: string;
   status: "pending" | "delivered" | "dead_letter";
@@ -73,6 +89,9 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
     Pick<RepositoryLike, "create" | "getOne" | "getAll" | "deleteMany" | "findOneAndUpdate">
   >;
 
+  // Primary-key column name — kits declare on `MinimalRepo.idField`.
+  const idField = repository.idField ?? "_id";
+
   /**
    * Unwrap mongokit's pagination envelope ({ docs, total, ... }) — some
    * kits may return a bare array when pagination is disabled. Handle both.
@@ -88,6 +107,19 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
   const isWellFormed = (event: DomainEvent | undefined): boolean =>
     !!event && typeof event.type === "string" && !!event.meta?.id;
 
+  /**
+   * Filter matching every row that's eligible to be claimed by a relayer:
+   * status=pending, visible now, and either unleased or under an expired
+   * lease. Used by `getPending` and `claimPending` — defined once so the
+   * two code paths stay in lockstep.
+   */
+  const claimableFilter = (now: Date) =>
+    and(
+      eqFilter("status", "pending"),
+      lte("visibleAt", now),
+      or(eqFilter("leaseOwner", null), lte("leaseExpiresAt", now)),
+    );
+
   return {
     async save(event: DomainEvent, options?: OutboxWriteOptions): Promise<void> {
       if (!event?.type || typeof event.type !== "string") {
@@ -98,7 +130,7 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
       }
       const now = new Date();
       const doc: OutboxDoc = {
-        _id: event.meta.id,
+        [idField]: event.meta.id,
         event,
         type: event.type,
         status: "pending",
@@ -126,11 +158,7 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
     async getPending(limit: number): Promise<DomainEvent[]> {
       const now = new Date();
       const result = await r.getAll({
-        filters: {
-          status: "pending",
-          visibleAt: { $lte: now },
-          $or: [{ leaseOwner: null }, { leaseExpiresAt: { $lte: now } }],
-        },
+        filters: claimableFilter(now),
         sort: { createdAt: 1 },
         page: 1,
         limit,
@@ -143,9 +171,7 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
       const limit = options?.limit ?? DEFAULT_CLAIM_LIMIT;
       const leaseMs = options?.leaseMs ?? DEFAULT_LEASE_MS;
       const consumerId = options?.consumerId ?? "anonymous";
-      const typeFilter = options?.types?.length
-        ? ({ type: { $in: options.types } } as Record<string, unknown>)
-        : {};
+      const typeFilter = options?.types?.length ? anyOf("type", options.types) : null;
 
       const claimed: DomainEvent[] = [];
       // Atomic per-doc FIFO claim via findOneAndUpdate. The compound filter
@@ -154,14 +180,13 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
       for (let i = 0; i < limit; i++) {
         const now = new Date();
         const leaseExpiresAt = new Date(now.getTime() + leaseMs);
+        const filter = typeFilter ? and(claimableFilter(now), typeFilter) : claimableFilter(now);
         const doc = (await r.findOneAndUpdate(
-          {
-            status: "pending",
-            visibleAt: { $lte: now },
-            $or: [{ leaseOwner: null }, { leaseExpiresAt: { $lte: now } }],
-            ...typeFilter,
-          },
-          { $set: { leaseOwner: consumerId, leaseExpiresAt }, $inc: { attempts: 1 } },
+          filter,
+          update({
+            set: { leaseOwner: consumerId, leaseExpiresAt },
+            inc: { attempts: 1 },
+          }),
           { sort: { createdAt: 1 }, returnDocument: "after" },
         )) as OutboxDoc | null;
         if (!doc) break;
@@ -172,27 +197,26 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
 
     async acknowledge(eventId: string, options?: OutboxAcknowledgeOptions): Promise<void> {
       const now = new Date();
-      const filter: Record<string, unknown> = {
-        _id: eventId,
-        status: { $ne: "delivered" },
-      };
-      if (options?.consumerId) filter.leaseOwner = options.consumerId;
+      const baseFilter = and(eqFilter(idField, eventId), ne("status", "delivered"));
+      const filter = options?.consumerId
+        ? and(baseFilter, eqFilter("leaseOwner", options.consumerId))
+        : baseFilter;
 
       const updated = await r.findOneAndUpdate(
         filter,
-        {
-          $set: {
+        update({
+          set: {
             status: "delivered",
             deliveredAt: now,
             leaseOwner: null,
             leaseExpiresAt: null,
           },
-        },
+        }),
         { returnDocument: "after" },
       );
       if (updated) return;
 
-      const current = (await safeGetOne({ _id: eventId })) as OutboxDoc | null;
+      const current = (await safeGetOne(eqFilter(idField, eventId))) as OutboxDoc | null;
       if (!current) return; // unknown id → contract no-op
       if (current.status === "delivered") return; // already acked → idempotent
       if (options?.consumerId && current.leaseOwner !== options.consumerId) {
@@ -208,45 +232,50 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
       const now = new Date();
       const targetStatus: OutboxDoc["status"] = options?.deadLetter ? "dead_letter" : "pending";
       const visibleAt = options?.retryAt ?? now;
-      const filter: Record<string, unknown> = { _id: eventId };
-      if (options?.consumerId) filter.leaseOwner = options.consumerId;
+      const baseFilter = eqFilter(idField, eventId);
+      const filter = options?.consumerId
+        ? and(baseFilter, eqFilter("leaseOwner", options.consumerId))
+        : baseFilter;
 
-      // Aggregation pipeline preserves firstFailedAt across retries via $ifNull.
-      const pipeline: Record<string, unknown>[] = [
-        {
-          $set: {
+      // Two-step read-then-write to preserve `firstFailedAt` portably.
+      // Mongo's aggregation-pipeline `$ifNull` would do this in a single
+      // atomic update, but it's unavailable on SQL kits. Lease ownership
+      // (claimPending → fail) ensures single-writer during the failure
+      // window, so the two calls are safe. Worst-case race under an
+      // expired lease rewrites `firstFailedAt` once — the DLQ semantics
+      // stay correct.
+      const current = (await safeGetOne(baseFilter)) as OutboxDoc | null;
+      if (!current) return;
+      if (options?.consumerId && current.leaseOwner !== options.consumerId) {
+        throw new OutboxOwnershipError(eventId, options.consumerId, current.leaseOwner);
+      }
+
+      const errorInfo: OutboxErrorInfo = error.code
+        ? { message: error.message, code: error.code }
+        : { message: error.message };
+      const firstFailedAt = current.firstFailedAt ?? now;
+
+      await r.findOneAndUpdate(
+        filter,
+        update({
+          set: {
             status: targetStatus,
             visibleAt,
             leaseOwner: null,
             leaseExpiresAt: null,
             lastFailedAt: now,
-            lastError: { message: error.message, ...(error.code ? { code: error.code } : {}) },
-            firstFailedAt: { $ifNull: ["$firstFailedAt", now] },
+            lastError: errorInfo,
+            firstFailedAt,
           },
-        },
-      ];
-
-      // `updatePipeline: true` is required by mongokit ≥3.8 to opt into
-      // array-form (aggregation) updates; other kits should treat unknown
-      // options as pass-through / no-op. We use the pipeline form here so
-      // `$ifNull` can preserve firstFailedAt without a round-trip read.
-      const updated = await r.findOneAndUpdate(filter, pipeline, {
-        returnDocument: "after",
-        updatePipeline: true,
-      });
-      if (updated) return;
-
-      const current = (await safeGetOne({ _id: eventId })) as OutboxDoc | null;
-      if (!current) return;
-      if (options?.consumerId && current.leaseOwner !== options.consumerId) {
-        throw new OutboxOwnershipError(eventId, options.consumerId, current.leaseOwner);
-      }
+        }),
+        { returnDocument: "after" },
+      );
     },
 
     async getDeadLettered(limit: number): Promise<DeadLetteredEvent[]> {
       const result = await r.getAll({
-        filters: { status: "dead_letter" },
-        sort: { _id: 1 },
+        filters: eqFilter("status", "dead_letter"),
+        sort: { [idField]: 1 },
         page: 1,
         limit,
       });
@@ -270,16 +299,22 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
       let totalDeleted = 0;
       for (;;) {
         const result = await r.getAll({
-          filters: { status: "delivered", deliveredAt: { $lte: cutoff } },
+          filters: and(eqFilter("status", "delivered"), lte("deliveredAt", cutoff)),
           sort: { deliveredAt: 1 },
           page: 1,
           limit: DEFAULT_PURGE_BATCH,
-          select: "_id",
+          // `select` is a kit-native projection hint — mongokit accepts a
+          // string field name, SQL kits accept a column list. Requesting
+          // only the PK keeps the purge round-trip lean without coupling
+          // the adapter to either projection dialect (kits that don't
+          // recognize the hint simply hydrate every column — correct but
+          // less efficient).
+          select: idField,
         });
-        const batch = unwrapDocs<{ _id: string }>(result);
+        const batch = unwrapDocs<OutboxDoc>(result);
         if (batch.length === 0) break;
-        const ids = batch.map((d) => d._id);
-        const res = (await r.deleteMany({ _id: { $in: ids } })) as { deletedCount?: number };
+        const ids = batch.map((d) => d[idField] as string);
+        const res = (await r.deleteMany(anyOf(idField, ids))) as { deletedCount?: number };
         totalDeleted += res.deletedCount ?? 0;
         if (batch.length < DEFAULT_PURGE_BATCH) break;
       }

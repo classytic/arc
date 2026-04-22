@@ -36,8 +36,32 @@
  * });
  */
 
-import type { OffsetPaginationResult } from "@classytic/repo-core/pagination";
+import type {
+  KeysetPaginationResult,
+  OffsetPaginationResult,
+} from "@classytic/repo-core/pagination";
 import type { PaginationParams } from "@classytic/repo-core/repository";
+
+/**
+ * Union of every return shape repo-core's `MinimalRepo.getAll()` is
+ * contractually allowed to produce. Keeping arc's list surface in sync
+ * with that contract (v2.10.6) — previously arc narrowed to
+ * `OffsetPaginationResult<TDoc>` and treated bare arrays as
+ * "non-conforming," which drifted from repo-core's published shape.
+ *
+ * - `OffsetPaginationResult<TDoc>` — when the query uses offset pagination
+ *   (`page` parameter).
+ * - `KeysetPaginationResult<TDoc>` — when the query uses keyset/cursor
+ *   pagination (`sort` + optional `after`).
+ * - `TDoc[]` — raw array when neither drives pagination; valid per
+ *   repo-core's `MinimalRepo.getAll` docstring.
+ *
+ * Arc passes the kit's response verbatim; callers / consumers should
+ * narrow on shape (`Array.isArray(result)` → bare array, presence of
+ * `page`/`total` → offset, presence of `nextCursor` → keyset).
+ */
+type ListResult<TDoc> = OffsetPaginationResult<TDoc> | KeysetPaginationResult<TDoc> | TDoc[];
+
 import type { RepositoryLike } from "../adapters/interface.js";
 import { buildQueryKey } from "../cache/keys.js";
 import type { QueryCacheConfig } from "../cache/QueryCache.js";
@@ -92,8 +116,23 @@ export interface BaseControllerOptions {
   maxLimit?: number;
   /** Default limit for pagination (default: 20) */
   defaultLimit?: number;
-  /** Default sort field (default: '-createdAt') */
-  defaultSort?: string;
+  /**
+   * Default sort applied when the request doesn't specify one.
+   *
+   *   - `string` (default: `'-createdAt'`) — sort descending on the field.
+   *     Uses the Mongo convention `-fieldName` for DESC; matches the
+   *     mongokit / mongokit-sort parser. Applied only if the resource's
+   *     schema actually has the column.
+   *   - `false` — disable the default sort. Requests that pass no `sort`
+   *     get whatever order the adapter returns (PK order on most kits).
+   *     **Use this for SQL/Drizzle resources that don't declare a
+   *     `createdAt` column** — the default would otherwise compile to
+   *     `ORDER BY "createdAt" DESC` against a missing column.
+   *
+   * The `-createdAt` default is kept for back-compat with existing
+   * mongokit users; going forward, set this explicitly per resource.
+   */
+  defaultSort?: string | false;
   /** Resource name for hook execution (e.g., 'product' -> 'product.created') */
   resourceName?: string;
   /**
@@ -159,7 +198,8 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
   protected queryParser: QueryParserInterface;
   protected maxLimit: number;
   protected defaultLimit: number;
-  protected defaultSort: string;
+  /** `undefined` means "no default sort" (caller passed `false`). */
+  protected defaultSort: string | undefined;
   protected resourceName?: string;
   protected tenantField: string | false;
   protected idField: string = DEFAULT_ID_FIELD;
@@ -181,7 +221,10 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     this.queryParser = options.queryParser ?? getDefaultQueryParser();
     this.maxLimit = options.maxLimit ?? 100;
     this.defaultLimit = options.defaultLimit ?? DEFAULT_LIMIT;
-    this.defaultSort = options.defaultSort ?? DEFAULT_SORT;
+    // `false` → opt out entirely (no default sort). `undefined` → framework
+    // default (`-createdAt`, mongokit convention). Any string passes through.
+    this.defaultSort =
+      options.defaultSort === false ? undefined : (options.defaultSort ?? DEFAULT_SORT);
     this.resourceName = options.resourceName;
     this.tenantField =
       options.tenantField !== undefined ? options.tenantField : DEFAULT_TENANT_FIELD;
@@ -209,7 +252,12 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
       queryParser: this.queryParser,
       maxLimit: this.maxLimit,
       defaultLimit: this.defaultLimit,
-      defaultSort: this.defaultSort,
+      // Forward the raw option (`string | false | undefined`) so
+      // QueryResolver can tell "no opt-out set" (→ use framework
+      // default) from "explicit false" (→ no default sort at all).
+      // `this.defaultSort` collapses `false → undefined` for internal
+      // use and would lose that distinction if passed through.
+      defaultSort: options.defaultSort,
       schemaOptions: this.schemaOptions,
       tenantField: this.tenantField,
     });
@@ -398,7 +446,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
   // CRUD Operations
   // ============================================================================
 
-  async list(req: IRequestContext): Promise<IControllerResponse<OffsetPaginationResult<TDoc>>> {
+  async list(req: IRequestContext): Promise<IControllerResponse<ListResult<TDoc>>> {
     const options = this.queryResolver.resolve(req, this.meta(req));
     const cacheConfig = this.resolveCacheConfig("list");
     const qc = req.server?.queryCache;
@@ -415,7 +463,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
         userId,
         orgId,
       );
-      const { data, status } = await qc.get<OffsetPaginationResult<TDoc>>(key);
+      const { data, status } = await qc.get<ListResult<TDoc>>(key);
 
       if (status === "fresh") {
         return {
@@ -461,7 +509,7 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
   private async executeListQuery(
     options: ParsedQuery,
     req: IRequestContext,
-  ): Promise<OffsetPaginationResult<TDoc>> {
+  ): Promise<ListResult<TDoc>> {
     const hooks = this.getHooks(req);
     // Thread tenant scope at the top level so plugin-scoped repos
     // (e.g. mongokit's multiTenantPlugin) see `context.organizationId`
@@ -485,11 +533,11 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
           )
         : await repoGetAll();
 
-    // Forward the kit's response verbatim. Per repo-core's `MinimalRepo`
-    // contract, `getAll(params)` returns an `OffsetPaginationResult` or
-    // `KeysetPaginationResult` envelope — arc doesn't reshape or synthesize.
-    // Kits that return a bare array are non-conforming.
-    return result as OffsetPaginationResult<TDoc>;
+    // Forward the kit's response verbatim. Per repo-core's
+    // `MinimalRepo.getAll` contract, the return shape MAY be an offset
+    // envelope, a keyset envelope, or a bare array. Arc doesn't reshape
+    // or synthesize — consumers narrow on shape.
+    return result as ListResult<TDoc>;
   }
 
   async get(req: IRequestContext): Promise<IControllerResponse<TDoc>> {

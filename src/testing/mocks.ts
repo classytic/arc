@@ -66,6 +66,16 @@ export function createMockRepository<T extends AnyRecord = AnyRecord>(
 
     delete: vi.fn().mockResolvedValue({ success: true, message: "Deleted" }),
 
+    // Required on `StandardRepo` as of repo-core 0.2.0 — both mongokit
+    // 3.11+ and sqlitekit 0.1.1+ ship these as class primitives, so
+    // mocks must provide a sensible default too (previously they were
+    // optional and silently absent).
+    updateMany: vi
+      .fn()
+      .mockResolvedValue({ acknowledged: true, matchedCount: 0, modifiedCount: 0 }),
+
+    deleteMany: vi.fn().mockResolvedValue({ acknowledged: true, deletedCount: 0 }),
+
     // Optional preset methods
     getBySlug: vi.fn().mockResolvedValue(null),
     getDeleted: vi.fn().mockResolvedValue([]),

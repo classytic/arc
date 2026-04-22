@@ -134,6 +134,69 @@ describe("registerSecurityPlugins", () => {
     expect(res.headers["x-ratelimit-limit"]).toBe("5");
   });
 
+  it("skipPaths with prefix wildcard exempts matching paths from the bucket", async () => {
+    app = createTestFastify();
+    await registerSecurityPlugins(app, {
+      rateLimit: {
+        max: 2,
+        timeWindow: "1 minute",
+        skipPaths: ["/api/auth/*", "/healthz"],
+      },
+    });
+    app.get("/api/auth/get-session", async () => ({ ok: true }));
+    app.get("/healthz", async () => ({ ok: true }));
+    app.get("/api/orders", async () => ({ ok: true }));
+    await app.ready();
+
+    // Auth heartbeat — should never hit the limit even after many calls.
+    for (let i = 0; i < 5; i++) {
+      const r = await app.inject({ method: "GET", url: "/api/auth/get-session" });
+      expect(r.statusCode).toBe(200);
+    }
+    // Exact match also exempt.
+    const health = await app.inject({ method: "GET", url: "/healthz" });
+    expect(health.statusCode).toBe(200);
+
+    // Non-exempt route still rate limited at max=2.
+    const r1 = await app.inject({ method: "GET", url: "/api/orders" });
+    const r2 = await app.inject({ method: "GET", url: "/api/orders" });
+    const r3 = await app.inject({ method: "GET", url: "/api/orders" });
+    expect(r1.statusCode).toBe(200);
+    expect(r2.statusCode).toBe(200);
+    expect(r3.statusCode).toBe(429);
+  });
+
+  it("skipPaths composes with a user-supplied allowList function", async () => {
+    app = createTestFastify();
+    let allowListCalls = 0;
+    await registerSecurityPlugins(app, {
+      rateLimit: {
+        max: 1,
+        timeWindow: "1 minute",
+        skipPaths: ["/skip-path"],
+        allowList: (_req, _key) => {
+          allowListCalls++;
+          return false; // never allows via custom function
+        },
+      },
+    });
+    app.get("/skip-path", async () => ({ ok: true }));
+    app.get("/limited", async () => ({ ok: true }));
+    await app.ready();
+
+    // skipPaths short-circuits — allowList must not be consulted here.
+    await app.inject({ method: "GET", url: "/skip-path" });
+    await app.inject({ method: "GET", url: "/skip-path" });
+    expect(allowListCalls).toBe(0);
+
+    // Non-skip path falls through to allowList (still false) → limit applies.
+    const ok = await app.inject({ method: "GET", url: "/limited" });
+    const denied = await app.inject({ method: "GET", url: "/limited" });
+    expect(ok.statusCode).toBe(200);
+    expect(denied.statusCode).toBe(429);
+    expect(allowListCalls).toBeGreaterThan(0);
+  });
+
   it("throws when distributed runtime + rate limit without store", async () => {
     app = createTestFastify();
     await expect(registerSecurityPlugins(app, { runtime: "distributed" })).rejects.toThrow(

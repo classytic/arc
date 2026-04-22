@@ -20,7 +20,22 @@ type CorsOptions = Record<string, unknown> & {
   allowedHeaders?: string[];
 };
 type HelmetOptions = Record<string, unknown>;
-type RateLimitOpts = Record<string, unknown> & { max?: number; timeWindow?: string | number };
+type RateLimitOpts = Record<string, unknown> & {
+  max?: number;
+  timeWindow?: string | number;
+  /**
+   * Path patterns to exempt from rate limiting. Supports exact match
+   * (`/health`) or prefix match with trailing `*` (`/api/auth/*`).
+   *
+   * Implemented by synthesising a `@fastify/rate-limit` `allowList`
+   * function. When combined with a user-supplied `allowList`, both
+   * are OR-ed together (path OR ip/custom match skips the limit).
+   *
+   * Use this for endpoints that are hit frequently but independently
+   * of user traffic — session heartbeat, webhooks, health probes.
+   */
+  skipPaths?: string[];
+};
 
 import type { CacheStore } from "../cache/interface.js";
 import type { ExternalOpenApiPaths } from "../docs/externalPaths.js";

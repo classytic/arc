@@ -193,7 +193,17 @@ describe("AccessControl", () => {
   // checkPolicyFilters
   // --------------------------------------------------------------------------
 
-  describe("checkPolicyFilters()", () => {
+  describe("checkPolicyFilters() — delegation contract", () => {
+    /**
+     * v2.10.6 removed arc's in-memory MongoDB-syntax matcher. `checkPolicyFilters`
+     * now has three paths:
+     *
+     * 1. No `_policyFilters` set → short-circuit `true` (nothing to check).
+     * 2. Adapter supplied `matchesFilter` → delegate to it and return the result.
+     * 3. No adapter matcher → return `true` and warn once; primary filter
+     *    enforcement happens at the DB layer via `buildIdFilter → getOne`.
+     */
+
     it("returns true when no policy filters are set", () => {
       const ac = createAccessControl();
       const req = createReq();
@@ -202,232 +212,13 @@ describe("AccessControl", () => {
       expect(ac.checkPolicyFilters(item, req)).toBe(true);
     });
 
-    it("returns true when item matches simple equality filter", () => {
+    it("returns true when _policyFilters is an empty object (nothing to check)", () => {
       const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: { status: "active" },
-      });
-
-      expect(ac.checkPolicyFilters({ status: "active", name: "Test" }, req)).toBe(true);
-    });
-
-    it("returns false when item does not match simple equality filter", () => {
-      const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: { status: "active" },
-      });
-
-      expect(ac.checkPolicyFilters({ status: "archived", name: "Test" }, req)).toBe(false);
-    });
-
-    it("handles $in operator", () => {
-      const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: { status: { $in: ["active", "pending"] } },
-      });
-
-      expect(ac.checkPolicyFilters({ status: "active" }, req)).toBe(true);
-      expect(ac.checkPolicyFilters({ status: "pending" }, req)).toBe(true);
-      expect(ac.checkPolicyFilters({ status: "archived" }, req)).toBe(false);
-    });
-
-    it("handles $ne operator", () => {
-      const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: { status: { $ne: "deleted" } },
-      });
-
-      expect(ac.checkPolicyFilters({ status: "active" }, req)).toBe(true);
-      expect(ac.checkPolicyFilters({ status: "deleted" }, req)).toBe(false);
-    });
-
-    it("handles $gt and $lt operators", () => {
-      const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: { price: { $gt: 10, $lt: 100 } },
-      });
-
-      expect(ac.checkPolicyFilters({ price: 50 }, req)).toBe(true);
-      expect(ac.checkPolicyFilters({ price: 5 }, req)).toBe(false);
-      expect(ac.checkPolicyFilters({ price: 100 }, req)).toBe(false);
-    });
-
-    it("handles $gte and $lte operators", () => {
-      const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: { price: { $gte: 10, $lte: 100 } },
-      });
-
-      expect(ac.checkPolicyFilters({ price: 10 }, req)).toBe(true);
-      expect(ac.checkPolicyFilters({ price: 100 }, req)).toBe(true);
-      expect(ac.checkPolicyFilters({ price: 9 }, req)).toBe(false);
-    });
-
-    it("handles $exists operator", () => {
-      const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: { deletedAt: { $exists: false } },
-      });
-
+      const req = createReq({ _policyFilters: {} });
       expect(ac.checkPolicyFilters({ name: "Test" }, req)).toBe(true);
-      expect(ac.checkPolicyFilters({ name: "Test", deletedAt: new Date() }, req)).toBe(false);
     });
 
-    it("handles $nin operator", () => {
-      const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: { status: { $nin: ["deleted", "archived"] } },
-      });
-
-      expect(ac.checkPolicyFilters({ status: "active" }, req)).toBe(true);
-      expect(ac.checkPolicyFilters({ status: "deleted" }, req)).toBe(false);
-    });
-
-    it("handles $regex operator with safe pattern", () => {
-      const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: { name: { $regex: "^Test" } },
-      });
-
-      expect(ac.checkPolicyFilters({ name: "Testing" }, req)).toBe(true);
-      expect(ac.checkPolicyFilters({ name: "Product" }, req)).toBe(false);
-    });
-
-    it("handles $and operator", () => {
-      const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: {
-          $and: [{ status: "active" }, { department: "engineering" }],
-        },
-      });
-
-      expect(ac.checkPolicyFilters({ status: "active", department: "engineering" }, req)).toBe(
-        true,
-      );
-      expect(ac.checkPolicyFilters({ status: "active", department: "sales" }, req)).toBe(false);
-    });
-
-    it("handles $or operator", () => {
-      const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: {
-          $or: [{ status: "active" }, { status: "pending" }],
-        },
-      });
-
-      expect(ac.checkPolicyFilters({ status: "active" }, req)).toBe(true);
-      expect(ac.checkPolicyFilters({ status: "pending" }, req)).toBe(true);
-      expect(ac.checkPolicyFilters({ status: "archived" }, req)).toBe(false);
-    });
-
-    it("enforces sibling constraints alongside $or", () => {
-      const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: {
-          $or: [{ ownerId: "u1" }, { reviewerId: "u1" }],
-          status: "published",
-        },
-      });
-
-      // Matches $or AND sibling status
-      expect(ac.checkPolicyFilters({ ownerId: "u1", status: "published" }, req)).toBe(true);
-      expect(ac.checkPolicyFilters({ reviewerId: "u1", status: "published" }, req)).toBe(true);
-
-      // Matches $or but NOT sibling status — should be denied
-      expect(ac.checkPolicyFilters({ ownerId: "u1", status: "draft" }, req)).toBe(false);
-      expect(ac.checkPolicyFilters({ reviewerId: "u1", status: "draft" }, req)).toBe(false);
-
-      // Matches sibling status but NOT $or — should be denied
-      expect(ac.checkPolicyFilters({ ownerId: "u2", status: "published" }, req)).toBe(false);
-    });
-
-    it("enforces sibling constraints alongside $and", () => {
-      const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: {
-          $and: [{ role: "editor" }, { active: true }],
-          department: "engineering",
-        },
-      });
-
-      // All match
-      expect(
-        ac.checkPolicyFilters({ role: "editor", active: true, department: "engineering" }, req),
-      ).toBe(true);
-
-      // $and passes but sibling fails
-      expect(
-        ac.checkPolicyFilters({ role: "editor", active: true, department: "sales" }, req),
-      ).toBe(false);
-
-      // sibling passes but $and fails
-      expect(
-        ac.checkPolicyFilters({ role: "viewer", active: true, department: "engineering" }, req),
-      ).toBe(false);
-    });
-
-    it("enforces sibling constraints with both $and and $or", () => {
-      const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: {
-          $and: [{ active: true }],
-          $or: [{ ownerId: "u1" }, { reviewerId: "u1" }],
-          status: "published",
-        },
-      });
-
-      // All three conditions met
-      expect(ac.checkPolicyFilters({ active: true, ownerId: "u1", status: "published" }, req)).toBe(
-        true,
-      );
-
-      // Missing $and condition
-      expect(
-        ac.checkPolicyFilters({ active: false, ownerId: "u1", status: "published" }, req),
-      ).toBe(false);
-
-      // Missing $or condition
-      expect(ac.checkPolicyFilters({ active: true, ownerId: "u2", status: "published" }, req)).toBe(
-        false,
-      );
-
-      // Missing sibling condition
-      expect(ac.checkPolicyFilters({ active: true, ownerId: "u1", status: "draft" }, req)).toBe(
-        false,
-      );
-    });
-
-    it("handles nested dot-notation paths", () => {
-      const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: { "owner.id": "user-1" },
-      });
-
-      expect(ac.checkPolicyFilters({ owner: { id: "user-1" } }, req)).toBe(true);
-      expect(ac.checkPolicyFilters({ owner: { id: "user-2" } }, req)).toBe(false);
-    });
-
-    it("handles array field with implicit matching", () => {
-      const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: { tags: "important" },
-      });
-
-      expect(ac.checkPolicyFilters({ tags: ["important", "urgent"] }, req)).toBe(true);
-      expect(ac.checkPolicyFilters({ tags: ["low"] }, req)).toBe(false);
-    });
-
-    it("handles $in with array item value", () => {
-      const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: { roles: { $in: ["admin", "manager"] } },
-      });
-
-      expect(ac.checkPolicyFilters({ roles: ["admin", "user"] }, req)).toBe(true);
-      expect(ac.checkPolicyFilters({ roles: ["viewer"] }, req)).toBe(false);
-    });
-
-    it("delegates to adapter matchesFilter when provided", () => {
+    it("delegates to adapter matchesFilter when provided (true case)", () => {
       const customMatcher = vi.fn().mockReturnValue(true);
       const ac = createAccessControl({ matchesFilter: customMatcher });
       const req = createReq({
@@ -441,13 +232,56 @@ describe("AccessControl", () => {
       expect(customMatcher).toHaveBeenCalledWith(item, { status: "active" });
     });
 
-    it("uses adapter matchesFilter return value (false case)", () => {
+    it("delegates to adapter matchesFilter when provided (false case)", () => {
       const customMatcher = vi.fn().mockReturnValue(false);
       const ac = createAccessControl({ matchesFilter: customMatcher });
       const req = createReq({
         _policyFilters: { status: "active" },
       });
 
+      expect(ac.checkPolicyFilters({ status: "active" }, req)).toBe(false);
+      expect(customMatcher).toHaveBeenCalled();
+    });
+
+    it("passes any filter shape through to the adapter verbatim (no arc-side interpretation)", () => {
+      const customMatcher = vi.fn().mockReturnValue(true);
+      const ac = createAccessControl({ matchesFilter: customMatcher });
+      // Mix of flat equality, operators, dot paths, $and/$or — all opaque to arc now.
+      const filters = {
+        status: { $in: ["active", "pending"] },
+        "owner.id": "u1",
+        $or: [{ role: "admin" }, { role: "manager" }],
+      };
+      const req = createReq({ _policyFilters: filters });
+      const item = { status: "active", owner: { id: "u1" } };
+
+      ac.checkPolicyFilters(item, req);
+
+      expect(customMatcher).toHaveBeenCalledWith(item, filters);
+    });
+
+    it("uses the built-in flat-equality default when no adapter matcher is supplied (defense-in-depth)", () => {
+      // Policy filters present + no adapter matcher → arc falls back to
+      // `simpleEqualityMatcher` so the common flat-equality case is still
+      // enforced. Previously (briefly in 2.10.6-dev) this returned true
+      // unconditionally, opening a policy-bypass for custom getBySlug
+      // implementations.
+      const ac = createAccessControl();
+      const req = createReq({
+        _policyFilters: { status: "active" },
+      });
+      expect(ac.checkPolicyFilters({ status: "archived" }, req)).toBe(false);
+      expect(ac.checkPolicyFilters({ status: "active" }, req)).toBe(true);
+    });
+
+    it("fails closed on operator-shaped filters without an adapter matcher", () => {
+      // `simpleEqualityMatcher` rejects operator objects ($in, $ne, etc.)
+      // so hosts that rely on operators either wire a matcher or see 404s
+      // — never a silent bypass.
+      const ac = createAccessControl();
+      const req = createReq({
+        _policyFilters: { status: { $in: ["active", "pending"] } },
+      });
       expect(ac.checkPolicyFilters({ status: "active" }, req)).toBe(false);
     });
   });
@@ -682,8 +516,14 @@ describe("AccessControl", () => {
       expect(result).toBeNull();
     });
 
-    it("returns null when post-hoc policy filter check fails", async () => {
-      const ac = createAccessControl();
+    it("returns null when post-hoc policy filter check fails (via adapter matcher)", async () => {
+      // v2.10.6: arc no longer ships an in-memory policy-filter matcher.
+      // The adapter is the single source of truth for filter evaluation;
+      // this test wires a matcher that returns false to simulate the
+      // filter missing the item, and expects fetchWithAccessControl to
+      // map that to null.
+      const matchesFilter = vi.fn().mockReturnValue(false);
+      const ac = createAccessControl({ matchesFilter });
       const item = { _id: "abc", name: "Test", status: "archived" };
       const repo = {
         getById: vi.fn().mockResolvedValue(item),
@@ -695,6 +535,7 @@ describe("AccessControl", () => {
       const result = await ac.fetchWithAccessControl("abc", req, repo);
 
       expect(result).toBeNull();
+      expect(matchesFilter).toHaveBeenCalledWith(item, { status: "active" });
     });
 
     it("returns null when getById returns null", async () => {
@@ -833,8 +674,15 @@ describe("AccessControl", () => {
       expect(ac.validateItemAccess({ organizationId: "org-2", name: "Test" }, req)).toBe(false);
     });
 
-    it("validates policy filters", () => {
-      const ac = createAccessControl();
+    it("validates policy filters (via adapter matcher)", () => {
+      // v2.10.6: arc delegates to the adapter's matcher — wire a stub
+      // that returns true/false based on the item's status.
+      const matchesFilter = vi.fn((item, filters) => {
+        const i = item as { status?: string };
+        const f = filters as { status?: string };
+        return i.status === f.status;
+      });
+      const ac = createAccessControl({ matchesFilter });
       const req = createReq({
         _policyFilters: { status: "active" },
       });
@@ -843,8 +691,13 @@ describe("AccessControl", () => {
       expect(ac.validateItemAccess({ status: "archived", name: "Test" }, req)).toBe(false);
     });
 
-    it("validates both org scope AND policy filters", () => {
-      const ac = createAccessControl();
+    it("validates both org scope AND policy filters (adapter matcher decides the filter leg)", () => {
+      const matchesFilter = vi.fn((item, filters) => {
+        const i = item as { status?: string };
+        const f = filters as { status?: string };
+        return i.status === f.status;
+      });
+      const ac = createAccessControl({ matchesFilter });
       const req = createReq({
         _scope: { kind: "member", organizationId: "org-1", orgRoles: [] },
         _policyFilters: { status: "active" },
@@ -852,88 +705,34 @@ describe("AccessControl", () => {
 
       // Both pass
       expect(ac.validateItemAccess({ organizationId: "org-1", status: "active" }, req)).toBe(true);
-      // Org fails
+      // Org fails (arc-side scope check, unaffected by adapter matcher)
       expect(ac.validateItemAccess({ organizationId: "org-2", status: "active" }, req)).toBe(false);
-      // Policy fails
+      // Policy fails (adapter matcher returns false)
       expect(ac.validateItemAccess({ organizationId: "org-1", status: "archived" }, req)).toBe(
         false,
       );
     });
-  });
 
-  // --------------------------------------------------------------------------
-  // ReDoS Protection
-  // --------------------------------------------------------------------------
-
-  describe("ReDoS protection", () => {
-    it("rejects overly long regex patterns via $regex filter", () => {
-      const ac = createAccessControl();
-      const longPattern = "a".repeat(250);
-      const req = createReq({
-        _policyFilters: { name: { $regex: longPattern } },
-      });
-
-      // Long regex should be rejected (returns null from safeRegex), so matching fails
-      expect(ac.checkPolicyFilters({ name: "a".repeat(250) }, req)).toBe(false);
-    });
-
-    it("rejects dangerous nested quantifier patterns", () => {
+    it("enforces flat-equality policy filters via the built-in default when no adapter matcher is supplied", () => {
+      // Defense-in-depth default (v2.10.6): arc falls back to
+      // `simpleEqualityMatcher` for flat-equality filters so custom
+      // `getBySlug` implementations that don't filter at their DB layer
+      // still get policy-filter enforcement on the post-fetch check.
       const ac = createAccessControl();
       const req = createReq({
-        _policyFilters: { name: { $regex: "(a+)+" } },
+        _policyFilters: { status: "active" },
       });
 
-      // Dangerous pattern should be rejected
-      expect(ac.checkPolicyFilters({ name: "aaa" }, req)).toBe(false);
-    });
-
-    it("accepts safe regex patterns", () => {
-      const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: { name: { $regex: "^Test" } },
-      });
-
-      expect(ac.checkPolicyFilters({ name: "Testing123" }, req)).toBe(true);
-    });
-
-    it("rejects patterns with nested quantifiers (.*){3,}", () => {
-      const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: { name: { $regex: "(.*)(.*)(.*)(a)" } },
-      });
-
-      // Patterns with many .* sequences are suspicious
-      // The exact behavior depends on DANGEROUS_REGEX — just verify it handles them
-      const result = ac.checkPolicyFilters({ name: "a" }, req);
-      // The pattern has 3+ .* sequences which triggers DANGEROUS_REGEX
-      expect(typeof result).toBe("boolean");
+      expect(ac.validateItemAccess({ status: "active", name: "Ok" }, req)).toBe(true);
+      expect(ac.validateItemAccess({ status: "archived", name: "Blocked" }, req)).toBe(false);
     });
   });
 
-  // --------------------------------------------------------------------------
-  // Security: prototype pollution prevention
-  // --------------------------------------------------------------------------
-
-  describe("prototype pollution prevention", () => {
-    it("returns undefined for __proto__ paths", () => {
-      const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: { "__proto__.polluted": "yes" },
-      });
-
-      // Should not match — forbidden path
-      const item = { name: "Test" };
-      expect(ac.checkPolicyFilters(item, req)).toBe(false);
-    });
-
-    it("returns undefined for constructor paths", () => {
-      const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: { "constructor.prototype": "yes" },
-      });
-
-      const item = { name: "Test" };
-      expect(ac.checkPolicyFilters(item, req)).toBe(false);
-    });
-  });
+  // Note: The previous "ReDoS protection" and "prototype pollution
+  // prevention" suites tested the in-memory Mongo matcher that was
+  // removed in v2.10.6. Those guards are the adapter's responsibility
+  // now — mongokit/sqlitekit/Prisma evaluate filters at the DB layer,
+  // which has its own engine-specific protections. Arc doesn't pretend
+  // to implement Mongo syntax in JS anymore, so the guards have no
+  // target to protect.
 });

@@ -143,6 +143,57 @@ describe("AccessControl error DX — distinct failure codes", () => {
     });
   });
 
+  describe("GET — plugin-scoped repo (mongokit multiTenantPlugin style)", () => {
+    // Regression: the diagnostic ID-only probe prefers an unscoped call so
+    // cross-tenant access classifies as ORG_SCOPE_DENIED. Plugin-scoped
+    // repos (mongokit) reject a bare `getOne()` with
+    // "Missing 'organizationId' in context" — the implementation must retry
+    // with the caller's scope rather than masking that as NOT_FOUND.
+    it("retries with queryOptions when unscoped probe throws a context error", async () => {
+      const docInCallerOrg = { _id: "doc-1", name: "Sadman", projectId: "proj-42" };
+      const getOne = vi.fn(async (filter: Record<string, unknown>, options?: unknown) => {
+        // Compound lookup (has policy filter): misses.
+        if (filter.projectId !== undefined) return null;
+        // Unscoped diagnostic: plugin refuses without context.
+        if (!options) {
+          throw new Error("Missing 'organizationId' in context for 'getOne'");
+        }
+        // Scoped fallback: sees the in-tenant doc.
+        return docInCallerOrg;
+      });
+      const repo = makeRepo({ getOne });
+      const ctrl = new BaseController(repo, { resourceName: "agent" });
+
+      const req = makeRequestWithPolicyFilters({ projectId: null }, { params: { id: "doc-1" } });
+      const result = await ctrl.get(req);
+
+      // In-tenant doc excluded by policy → POLICY_FILTERED remains accurate.
+      expect(result.success).toBe(false);
+      expect(result.status).toBe(404);
+      expect((result.details as Record<string, unknown>)?.code).toBe("POLICY_FILTERED");
+      // Both probes were attempted: unscoped first, then scoped.
+      expect(getOne.mock.calls.length).toBeGreaterThanOrEqual(3);
+    });
+
+    it("propagates unrelated errors from the scoped probe instead of silent NOT_FOUND", async () => {
+      const repo = makeRepo({
+        getOne: vi.fn(async (filter: Record<string, unknown>, options?: unknown) => {
+          if (filter.projectId !== undefined) return null; // compound miss
+          if (!options) throw new Error("Missing 'organizationId' in context");
+          throw new Error("boom: the database is on fire");
+        }),
+      });
+      const ctrl = new BaseController(repo, { resourceName: "agent" });
+
+      const req = makeRequestWithPolicyFilters({ projectId: null }, { params: { id: "doc-1" } });
+
+      // A real DB failure must NOT be downgraded to a clean 404. Adapters
+      // signal missing docs by returning null; anything else propagates so
+      // the framework maps it to 500.
+      await expect(ctrl.get(req)).rejects.toThrow(/database is on fire/);
+    });
+  });
+
   describe("PATCH — same three paths", () => {
     it("returns NOT_FOUND for missing doc", async () => {
       const repo = makeRepo({ getOne: vi.fn(async () => null) });

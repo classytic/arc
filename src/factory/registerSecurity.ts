@@ -11,9 +11,57 @@
  * - Raw body (webhooks)
  */
 
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { FastifyPlugin } from "./shared.js";
 import type { CreateAppOptions } from "./types.js";
+
+type RateLimitAllowList =
+  | string[]
+  | ((req: FastifyRequest, key: string) => boolean | Promise<boolean>);
+
+/**
+ * Translate `skipPaths` sugar into a `@fastify/rate-limit` `allowList`
+ * function. A user-supplied `allowList` (array of IPs or function) is
+ * preserved and OR-ed with the path match.
+ */
+function buildRateLimitOpts(input: Record<string, unknown>): Record<string, unknown> {
+  const { skipPaths, allowList, ...rest } = input as Record<string, unknown> & {
+    skipPaths?: string[];
+    allowList?: RateLimitAllowList;
+  };
+
+  if (!skipPaths || skipPaths.length === 0) {
+    return allowList === undefined ? rest : { ...rest, allowList };
+  }
+
+  const matchesPath = compilePathMatcher(skipPaths);
+
+  const combined: RateLimitAllowList = async (req, key) => {
+    const path = (req.url ?? "").split("?", 1)[0] ?? "";
+    if (matchesPath(path)) return true;
+    if (typeof allowList === "function") return await allowList(req, key);
+    if (Array.isArray(allowList)) return allowList.includes(key);
+    return false;
+  };
+
+  return { ...rest, allowList: combined };
+}
+
+function compilePathMatcher(patterns: string[]): (path: string) => boolean {
+  const prefixes: string[] = [];
+  const exact = new Set<string>();
+  for (const p of patterns) {
+    if (p.endsWith("*")) prefixes.push(p.slice(0, -1));
+    else exact.add(p);
+  }
+  return (path: string): boolean => {
+    if (exact.has(path)) return true;
+    for (const pre of prefixes) {
+      if (path.startsWith(pre)) return true;
+    }
+    return false;
+  };
+}
 
 // Plugin registry: name → { package, loader, optional }
 const PLUGIN_REGISTRY: Record<
@@ -136,7 +184,9 @@ export async function registerSecurityPlugins(
   // Rate limiting — DDoS protection
   if (config.rateLimit !== false) {
     const rateLimit = (await loadPlugin("rateLimit"))!;
-    const rateLimitOpts = config.rateLimit ?? { max: 100, timeWindow: "1 minute" };
+    const rateLimitOpts = buildRateLimitOpts(
+      config.rateLimit ?? { max: 100, timeWindow: "1 minute" },
+    );
     await fastify.register(rateLimit, rateLimitOpts);
 
     const hasStore = typeof rateLimitOpts === "object" && "store" in rateLimitOpts;

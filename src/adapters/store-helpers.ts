@@ -9,6 +9,7 @@
  * Not exported from the adapters barrel — internal to arc's store adapters.
  */
 
+import type { FilterInput } from "@classytic/repo-core/repository";
 import type { RepositoryLike } from "./interface.js";
 
 /**
@@ -36,10 +37,14 @@ export function isNotFoundError(err: unknown): boolean {
  * Build a `safeGetOne(filter)` that papers over the throw-vs-null split
  * in kit implementations. Real errors propagate; miss returns `null`.
  * Throws if the repository lacks `getOne` — callers must check.
+ *
+ * Accepts `FilterInput` (the repo-core union) so callers can compose
+ * portable Filter IR (`and(eq(...), gt(...))`) OR pass a flat kit-native
+ * record. Both forms reach the kit's `getOne` unchanged — kits dispatch.
  */
 export function createSafeGetOne(
   repository: RepositoryLike,
-): (filter: Record<string, unknown>) => Promise<unknown | null> {
+): (filter: FilterInput) => Promise<unknown | null> {
   if (typeof repository.getOne !== "function") {
     throw new Error("createSafeGetOne: repository.getOne is required");
   }

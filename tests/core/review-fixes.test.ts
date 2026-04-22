@@ -18,6 +18,7 @@ import {
   CircuitBreakerRegistry,
   createCircuitBreakerRegistry,
 } from "../../src/utils/circuitBreaker.js";
+import { simpleEqualityMatcher } from "../../src/utils/simpleEqualityMatcher.js";
 import { createMockModel, createMockRepository, mockUser, setupGlobalHooks } from "../setup.js";
 
 setupGlobalHooks();
@@ -271,7 +272,10 @@ describe("C2: ArcInternalMetadata typed access via _meta()", () => {
     const Model = createMockModel("MetaTestProduct");
     const repository = createMockRepository(Model);
 
-    const ctrl = new BaseController(repository);
+    // v2.10.6: AccessControl delegates policy-filter evaluation to the
+    // adapter/controller's matcher. Wire simpleEqualityMatcher so this
+    // toy repo exercises the enforcement contract.
+    const ctrl = new BaseController(repository, { matchesFilter: simpleEqualityMatcher });
     const req = createReq(hooks, {
       metadata: {
         arc: { hooks },

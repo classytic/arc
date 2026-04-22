@@ -41,10 +41,26 @@ If you wrote handlers against the old `unknown` type and destructured
 narrower. If you wrote `(payload) => ...` assuming the argument was the
 payload, switch to `(event) => event.payload`.
 
-## 2.10.5 — BaseController tenant threading + action-permission fallback + type fixes + new subpaths
+## 2.10.6 — tenant threading + action fallback + DX type fixes + dead-code cleanup
 
-Supersedes 2.10.4 (unpublished). Bundles the 2.10.4 subpath work with
-five host-reported fixes.
+Supersedes 2.10.4 and 2.10.5 (both unpublished). Bundles every fix from
+the in-flight 2.10.5 drafts plus a second round of host-reported fixes,
+two reviewer-flagged regressions, and a cleanup that removed a 200-LOC
+MongoDB-syntax fallback engine from `AccessControl`. All changes land in
+one release so the published version line stays clean.
+
+### Quick migration checklist
+
+| If you… | Do this |
+|---|---|
+| Imported `requestContext` / `arcLog` / `guard` / `middleware` from `@classytic/arc` root | Move to `@classytic/arc/{context,logger,pipeline,middleware}` subpaths. |
+| Relied on `rateLimit: { max: 1000, timeWindow: "1 minute" }` in the `development` preset | The dev preset is now `rateLimit: false` (matches `testing` / `edge`). See "dev-preset rate limit" below. |
+| Used `fastify.arc.xxx` without a null check | Add `?.` or `if (fastify.arc)` — the declaration is now `arc?: ArcCore`. |
+| Hit a `ControllerLike` cast (`as unknown as ControllerLike`) | Remove the cast — the index signature is gone. |
+| Register `ErrorMapper` with `as unknown as ErrorMapper` | Use `defineErrorMapper<T>(...)` from `@classytic/arc/utils`. |
+| Shipped a resource with shorthand action `{ send: async (...) => ... }` and no permission | Either declare `actions.send.permissions: …`, `actionPermissions: …`, or `permissions.update: …` — shorthand actions now throw at boot if no gate can be inherited. |
+| Consume `BaseController.list`'s return type as `OffsetPaginationResult<T>` | Broaden to the `ListResult<T>` union or narrow with `Array.isArray(data)` / `'nextCursor' in data`. |
+| Wrote custom repo adapters with a handwritten Mongo-style `matchesFilter` | Keep your adapter matcher — arc still delegates to it. Otherwise arc now falls back to a tiny flat-equality matcher (covers `{ownerId:…}`, `{organizationId:…}` etc.). Operator filters (`$in`, `$ne`) without an adapter matcher fail-closed. |
 
 ### 1. `BaseController` threads tenant into every repo call (plugin-scope fix)
 
@@ -208,6 +224,223 @@ symbols (`multipartBody`, `executePipeline`, `requestContext.run`,
 pins the exact set of `package.json` export keys plus runtime-symbol
 assertions for the new subpaths. A future accidental drop fails
 `npm run test:ci`.
+
+### 6. Auto-mark `tenantField` as `systemManaged` + `preserveForElevated`
+
+**What was broken:** every multi-tenant resource had to restate the
+boilerplate `schemaOptions.fieldRules: { organizationId: { systemManaged: true } }`
+to prevent member clients from forging
+`POST /invoices { organizationId: 'victim-org' }`. Forget to set it
+and the client's value wins until arc's `BaseController.create` stamps
+it from scope — fine for member callers, but broken for elevated-admin
+cross-tenant creates where scope has no pinned org.
+
+**What changed:** `defineResource` auto-injects both
+`systemManaged: true` AND a new `preserveForElevated: true` rule on the
+configured `tenantField`. `BodySanitizer` honors `preserveForElevated`
+so elevated admins without a pinned org can still stamp the target org
+via the request body (the only channel available to them). Member and
+service callers continue to have the field stripped, and
+`BaseController.create` re-stamps from scope whenever one exists.
+Tests in [tests/core/v2-10-6-fixes.test.ts](tests/core/v2-10-6-fixes.test.ts)
+cover the four code paths — member strip, member re-stamp, elevated
+preserve, elevated pinned re-stamp.
+
+Hosts who explicitly declared `fieldRules: { organizationId: {...} }`
+take precedence — arc only fills in when the rule is missing.
+
+### 7. New `FieldRule.preserveForElevated` flag
+
+**What's new:** `RouteSchemaOptions.fieldRules[field].preserveForElevated?: boolean`
+opts a field out of `BodySanitizer`'s systemManaged / readonly /
+immutable strip when the caller's scope is elevated. Used by the
+auto-injection above, and available for hosts that want
+elevation-only body overrides on other fields (e.g. `createdBy` from
+an admin impersonation flow).
+
+### 8. First-class `req.scope` projection on `IRequestContext`
+
+**What was broken:** controller overrides that needed tenant/user info
+dug through `req.metadata._scope` and called `getOrgId` / `getUserId`
+manually. Cross-cutting code (e.g. building a Flow / Order engine
+context from an Arc handler) kept re-implementing the same getter.
+
+**What changed:** `IRequestContext.scope` is now a first-class
+`{ organizationId?, userId?, orgRoles? }` projection, populated by
+`fastifyAdapter.createRequestContext`. Full scope shape (discriminated
+union of `member` / `service` / `elevated` / `public`) still lives at
+`req.metadata._scope` for code that branches on `scope.kind`; the
+projection just surfaces the three keys every tenant-scoped override
+reaches for.
+
+```ts
+async create(req: IRequestContext) {
+  const flowCtx = {
+    organizationId: req.scope?.organizationId,
+    actorId: req.scope?.userId,
+    actorRoles: req.scope?.orgRoles,
+  };
+  // … hand off to @classytic/flow
+}
+```
+
+### 9. `ControllerLike` dropped its `[key: string]: unknown` index signature
+
+**What was broken:** class instances with private fields or extra
+domain methods (`#redactionRules`, `redact(...)`, etc.) didn't
+structurally assign to `ControllerLike` because classes don't carry an
+index signature. Every custom controller assignment needed
+`as unknown as ControllerLike`.
+
+**What changed:** index signature removed. The five optional CRUD slots
+(`list`, `get`, `create`, `update`, `delete`) are what arc actually
+invokes at runtime; extra methods on the class don't need to be part
+of the contract. Real class instances assign without a cast now.
+
+### 10. `defineErrorMapper<T>(...)` helper
+
+**What was broken:** even after widening `ErrorMapper<T>['type']` to
+`abstract new (...args: any[]) => T` (see section 3), the
+`toResponse(err: T)` callback is still contravariant. Putting
+`ErrorMapper<FlowError>` into an `ErrorMapper[]` (which defaults to
+`ErrorMapper<Error>`) failed to type-check, and hosts ended up with
+`as unknown as ErrorMapper` at every registration site.
+
+**What changed:** new helper `defineErrorMapper<T>(mapper)` exported
+from `@classytic/arc/utils`. Wraps the cast once, inside arc, with a
+documented runtime invariant (dispatch is `instanceof`-driven, so
+`toResponse` is never called with a non-`T` error). Registration sites
+become:
+
+```ts
+import { defineErrorMapper } from '@classytic/arc/utils';
+
+errorMappers: [
+  defineErrorMapper<FlowError>({
+    type: FlowError,
+    toResponse: (err) => ({ status: 400, code: err.domainCode, message: err.message }),
+  }),
+];
+```
+
+### 11. Shorthand-action permission fallback — fail-closed
+
+**What was broken:** `actions: { send: async (id, data, req) => ... }`
+shorthand fell through to "authenticated-only" when the resource had
+no `actionPermissions` global. Silent authz hole — any logged-in user
+could invoke mutating actions regardless of role.
+
+**What changed:** `normalizeActionsToRouterConfig` applies a fail-closed
+fallback chain:
+1. Per-action `permissions` (explicit per-action gate)
+2. Resource-level `actionPermissions` (global for all actions)
+3. Resource-level `permissions.update` (sensible default — actions mutate state)
+4. Boot-time throw if none of the above are declared
+
+When step 3 fires, arc logs one warning so upgrading hosts can migrate
+to explicit gates. Step 4 forces authors to declare `allowPublic()`
+when they genuinely want a public action — accidental auth-only is no
+longer reachable. Tests in [tests/core/routes-and-actions.test.ts](tests/core/routes-and-actions.test.ts)
+cover all three fallback paths plus the boot-time throw.
+
+### 12. AccessControl: removed the 200-LOC Mongo fallback matcher
+
+**What was broken:** `AccessControl.checkPolicyFilters` shipped a full
+MongoDB-syntax evaluator (`$eq` / `$ne` / `$gt` / `$in` / `$regex` /
+`$and` / `$or` / dot-paths, with ReDoS + prototype-pollution guards).
+It was **dead code for mongokit users** — the primary fetch path uses
+`getOne(compoundFilter)` which evaluates the filter at the DB layer,
+so the in-memory matcher never fired. And it was **silently wrong for
+non-Mongo adapters** — applying Mongo syntax against a row shaped by
+SQL / Prisma / REST would misclassify quietly.
+
+**What changed:** 200+ LOC removed from `AccessControl`. The class now
+delegates policy-filter evaluation to the adapter's
+`DataAdapter.matchesFilter` when supplied. For adapters that don't
+supply one, arc falls back to a new `simpleEqualityMatcher` helper
+(from `@classytic/arc/utils`) — a ~20-LOC flat-key equality evaluator
+that covers 95% of real policy filters (ownership, tenant), rejects
+operator-shaped values (fail-closed), and doesn't pretend to be Mongo.
+
+Hosts that previously relied on the Mongo engine for operators need to
+either (a) use mongokit, whose compound-filter path evaluates
+operators at the DB layer — nothing to do; or (b) wire a richer
+`matchesFilter` on their adapter. A one-shot log warn fires when arc
+encounters operator-shaped filters without an adapter matcher so the
+gap is visible.
+
+Cleanups also landed: dead elevation branch in `checkOrgScope` removed,
+Mongo-first docstring added to the module header, `ReDoS protection`
+and `prototype pollution prevention` test suites removed (they tested
+the removed engine; the guards are now the adapter's / DB's
+responsibility — mongokit/sqlitekit/Prisma have their own engine-level
+protections).
+
+### 13. `ListResult<TDoc>` aligns with repo-core's `getAll` contract
+
+**What was broken:** `repo-core`'s
+`MinimalRepo.getAll()` explicitly permits three return shapes — offset
+envelope, keyset envelope, or raw array. Arc narrowed to
+`OffsetPaginationResult<TDoc>` and its internal comment called bare
+arrays "non-conforming" — directly contradicting the published
+contract. Consumers returning keyset shapes or bare arrays hit a
+type mismatch.
+
+**What changed:** new `ListResult<TDoc> = OffsetPaginationResult<TDoc>
+| KeysetPaginationResult<TDoc> | TDoc[]` union. `BaseController.list`,
+`BaseController.executeListQuery`, and `IController.list` all return
+it. Arc passes the kit's response through verbatim; consumers narrow
+on shape (`Array.isArray(data)`, presence of `total` → offset,
+presence of `nextCursor` → keyset). Regression tests in
+[tests/core/v2-10-6-review-fixes.test.ts](tests/core/v2-10-6-review-fixes.test.ts)
+cover all three shapes.
+
+### 14. Regression guards — plugin-scoped repo method binding + cross-tenant create
+
+Two reviewer-flagged regressions shipped with 2.10.5 drafts were
+caught and fixed before publication:
+
+- **Plugin-scoped `getOne` lost `this` binding.** `AccessControl.fetchDetailed`
+  extracted `repository.getOne` without binding → mongokit / sqlitekit /
+  any repo-core descendant threw
+  `Cannot read properties of undefined (reading '_buildContext')` on
+  cross-tenant reads. Fixed by binding the method before invoke.
+- **Elevated cross-tenant create stripped the body tenant.** Auto-marking
+  `tenantField` as `systemManaged` (see section 6) broke the
+  elevated-without-org write path — `BodySanitizer` stripped the
+  body tenant, and `BaseController.create` had nothing to re-stamp from.
+  Fixed by pairing with the new `preserveForElevated: true` flag (see
+  section 7), which exempts elevated scopes from the strip for
+  explicitly-marked fields.
+
+Regression tests in [tests/core/v2-10-6-regressions.test.ts](tests/core/v2-10-6-regressions.test.ts)
+lock both fixes in with real mongodb-memory-server scenarios.
+
+### Dev preset — `rateLimit: false` (behavior change)
+
+The `development` preset's rate limit is now **disabled** (`rateLimit: false`)
+to match the `testing` and `edge` presets. Dev servers commonly get
+rapid-fire requests from HMR reloads, test runners, and auth heartbeat
+endpoints (Better Auth's `get-session`) — all sharing the same IP
+bucket — and tripping the previous `{ max: 1000, timeWindow: "1 minute" }`
+limit produced spurious 429s that looked like real bugs.
+
+**Migration for workflows that relied on seeing 429s locally:**
+
+```ts
+// Option A — opt into a concrete limit explicitly
+await createApp({
+  preset: 'development',
+  rateLimit: { max: 100, timeWindow: '1 minute' },
+});
+
+// Option B — use the testing preset (also rateLimit: false) if you
+// were using development only for its defaults
+await createApp({ preset: 'testing' });
+```
+
+Production continues to require an explicit `rateLimit` — the
+`production` preset doesn't assume one.
 
 ### Deferred
 

@@ -16,10 +16,11 @@
 
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
+import { resolveActionPermission } from "../core/actionPermissions.js";
 import { buildActionBodySchema } from "../core/createActionRouter.js";
 import type { PermissionCheck } from "../permissions/types.js";
 import { getUserRoles } from "../permissions/types.js";
-import type { FastifyWithDecorators, RegistryEntry } from "../types/index.js";
+import type { ActionEntry, FastifyWithDecorators, RegistryEntry } from "../types/index.js";
 import { convertRouteSchema } from "../utils/schemaConverter.js";
 import type { ExternalOpenApiPaths } from "./externalPaths.js";
 
@@ -673,18 +674,21 @@ function generateResourcePaths(
       descLines.push(`- \`${a.name}\`${roleStr}${descStr}`);
     }
 
-    // Determine whether the action endpoint requires auth.
-    // Runtime fallback chain: per-action permissions → resource.actionPermissions.
-    // If the fallback requires auth and an action has no per-action permissions,
-    // that action requires auth at runtime — so OpenAPI must reflect that.
-    const fallbackPerm = resource.actionPermissions as PermissionCheck | undefined;
-    const fallbackRequiresAuth = typeof fallbackPerm === "function" && !fallbackPerm._isPublic;
-
+    // Determine whether the action endpoint requires auth. Use the shared
+    // `resolveActionPermission` so docs reflect the SAME fallback chain the
+    // runtime router and MCP tools apply — without it, a resource that only
+    // sets `permissions.update: requireAuth()` would advertise the action
+    // endpoint as unauthenticated even though REST rejects it at runtime.
     const anyAuthRequired = resource.actions.some((a) => {
-      const p = a.permissions as PermissionCheck | undefined;
-      if (typeof p === "function") return !p._isPublic;
-      // No per-action permission → falls back to actionPermissions
-      return fallbackRequiresAuth;
+      const effective = resolveActionPermission({
+        // RegistryEntry action items aren't full `ActionEntry` values (they
+        // lack `handler`), but the resolver only reads `.permissions` on the
+        // non-function branch — which matches the shape we have here.
+        action: { permissions: a.permissions } as unknown as ActionEntry,
+        resourcePermissions: resource.permissions,
+        resourceActionPermissions: resource.actionPermissions,
+      });
+      return typeof effective === "function" && !effective._isPublic;
     });
 
     if (!paths[actionPath]) paths[actionPath] = {};

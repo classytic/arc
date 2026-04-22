@@ -138,11 +138,12 @@ export const developmentPreset: Partial<CreateAppOptions> = {
     ],
   },
 
-  // Rate limiting - very relaxed
-  rateLimit: {
-    max: 1000,
-    timeWindow: "1 minute",
-  },
+  // Rate limiting - disabled in dev (matches testing and edge presets).
+  // Dev servers get rapid-fire requests from HMR, test runners, and
+  // auth heartbeat endpoints (e.g. Better Auth's get-session) that share
+  // the IP bucket with the rest of the app and trip limits unexpectedly.
+  // Production must opt in to a concrete limit.
+  rateLimit: false,
 
   // Note: Compression not included (use proxy/CDN instead)
 
