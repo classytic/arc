@@ -41,7 +41,91 @@ If you wrote handlers against the old `unknown` type and destructured
 narrower. If you wrote `(payload) => ...` assuming the argument was the
 payload, switch to `(event) => event.payload`.
 
-## 2.10.7 — finish the tenant auto-inject (adapter schema forwarding)
+## 2.10.8 — `config.hooks` handlers get `context` + `scope` (same shape as controllers)
+
+Supersedes 2.10.7 (unpublished). 2.10.7's inline `config.hooks` wrapper
+projected the internal `HookContext` → public `ResourceHookContext` as
+`{ data, user, meta }` — dropping `context` entirely. Hosts who wanted
+tenant/user info in an inline hook (e.g. to emit a scoped audit record
+from `afterCreate`) had to bypass the documented API and push raw
+handlers into `resource._pendingHooks`. Half-wired DX, same pattern as
+the 2.10.7 schemaOptions forwarding bug but on a different seam.
+
+### 1. `ResourceHookContext` exposes `context` + first-class `scope`
+
+New fields on the public hook context type:
+
+```ts
+interface ResourceHookContext {
+  data: AnyRecord;
+  user?: UserBase;
+  context?: AnyRecord;       // ← NEW: full RequestContext (with `_scope`)
+  scope?: {                  // ← NEW: lightweight projection
+    organizationId?: string;
+    userId?: string;
+    orgRoles?: string[];
+  };
+  meta?: AnyRecord;          // unchanged (update/delete pass `{id, existing}`)
+}
+```
+
+The `scope` projection matches `IRequestContext.scope` from v2.10.6, so
+inline hooks and controller overrides read tenant/user through the same
+API:
+
+```ts
+hooks: {
+  afterCreate: (ctx) => {
+    auditLog.write({
+      org: ctx.scope?.organizationId,
+      actor: ctx.scope?.userId,
+      id: ctx.data._id,
+    });
+  },
+}
+```
+
+Advanced cases that need to discriminate on `scope.kind` or reach
+auth-adapter-specific fields can still read `ctx.context._scope`.
+
+### 2. Shared `buildRequestScopeProjection` util (zero redundancy)
+
+The projection logic now lives at `src/scope/projection.ts` and is used
+by **both** consumers:
+
+- `fastifyAdapter.createRequestContext` — populates `IRequestContext.scope`
+  for controller handlers (2.10.6).
+- `defineResource.toCtx` — populates `ResourceHookContext.scope` for
+  inline hooks (2.10.8).
+
+One implementation keeps both surfaces in lockstep — when arc grows a
+new scope-derived field (e.g. `teamId`), every entry point picks it up
+automatically. Same "shared util" pattern used by 2.10.7's
+`autoInjectTenantFieldRules`.
+
+### 3. Regression tests that would have caught both 2.10.6 and 2.10.8
+
+Added [tests/core/v2-10-8-hooks-context.test.ts](tests/core/v2-10-8-hooks-context.test.ts)
+— real mongodb-memory-server + real scope-stamping preHandler, so the
+full `preHandler → fastifyAdapter → BaseController → hooks → wrapper →
+user's handler` path runs end-to-end. Four scenarios:
+
+1. `beforeCreate` sees `ctx.scope.organizationId` — the first-class projection.
+2. `afterCreate` sees `ctx.context._scope` — the full context for advanced lookups.
+3. `beforeUpdate` / `afterUpdate` see scope AND the update `meta: { id, existing }`.
+4. An end-to-end "audit log scoped by tenant" hook works using only
+   `ctx.scope` — proving the documented API is complete-on-arrival.
+
+Also ran the full 4243-test suite to verify no drift in neighboring
+hook-consumer code (arcCorePlugin event emitter, auditPlugin, etc.).
+
+**Consumer impact:** apps that wrote `resource._pendingHooks.push({...})`
+as a workaround for accessing tenant/user inside `config.hooks` can
+delete that boilerplate and move to the documented `hooks: { … }` API.
+Nothing else breaks — the wrapper ADDS fields; old handlers that only
+read `data` / `user` / `meta` continue to work.
+
+## 2.10.7 — finish the tenant auto-inject (adapter schema forwarding) (unpublished)
 
 Supersedes 2.10.6 (unpublished). 2.10.6 shipped the tenant `systemManaged`
 + `preserveForElevated` auto-inject but wired it only half-way: the

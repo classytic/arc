@@ -20,9 +20,6 @@ dist/
 # npm pack artifacts (local dev-bridge tarballs)
 *.tgz
 
-# Old generated types (now built by tsup)
-types/
-
 # Package manager files (keep package-lock.json for npm packages)
 # package-lock.json  <- Keep this for reproducible builds
 yarn.lock

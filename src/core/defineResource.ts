@@ -43,6 +43,8 @@ import type { DataAdapter } from "../adapters/interface.js";
 import { CRUD_OPERATIONS } from "../constants.js";
 import { applyPresets } from "../presets/index.js";
 import type { RegisterOptions } from "../registry/ResourceRegistry.js";
+import { buildRequestScopeProjection } from "../scope/projection.js";
+import type { RequestScope } from "../scope/types.js";
 import type {
   ActionDefinition,
   ActionsMap,
@@ -58,6 +60,7 @@ import type {
   PermissionCheck,
   QueryParserInterface,
   RateLimitConfig,
+  RequestContext,
   RequestWithExtras,
   ResourceCacheConfig,
   ResourceConfig,
@@ -285,11 +288,30 @@ export function defineResource<TDoc = AnyRecord>(
     };
     const inlineHooks: PendingHook[] = [];
 
-    const toCtx = (ctx: AnyRecord) => ({
-      data: (ctx.data ?? ctx.result ?? {}) as AnyRecord,
-      user: ctx.user as import("../types/index.js").UserBase | undefined,
-      meta: ctx.meta as AnyRecord | undefined,
-    });
+    // `toCtx` adapts the internal `HookContext` (what BaseController
+    // passes to HookSystem — `{ resource, operation, phase, data, result,
+    // user, context, meta }`) into the public `ResourceHookContext` that
+    // `config.hooks.{beforeCreate, afterCreate, …}` handlers sign for
+    // (`{ data, user, context, scope, meta }`).
+    //
+    // v2.10.8 fix: previously this wrapper dropped `context` entirely, so
+    // inline hook handlers had no way to reach `_scope.organizationId` /
+    // `_scope.userId`. Hosts worked around it by pushing raw handlers
+    // into `resource._pendingHooks`. Now `context` is forwarded and a
+    // first-class `scope` projection (same shape as `IRequestContext.scope`
+    // from v2.10.6) is computed from `context._scope` so inline hooks
+    // don't need boilerplate.
+    const toCtx = (ctx: AnyRecord) => {
+      const context = ctx.context as RequestContext | undefined;
+      const rawScope = (context as { _scope?: RequestScope } | undefined)?._scope;
+      return {
+        data: (ctx.data ?? ctx.result ?? {}) as AnyRecord,
+        user: ctx.user as import("../types/index.js").UserBase | undefined,
+        context: context as unknown as AnyRecord | undefined,
+        scope: buildRequestScopeProjection(rawScope),
+        meta: ctx.meta as AnyRecord | undefined,
+      };
+    };
 
     if (h.beforeCreate) {
       const fn = h.beforeCreate;
