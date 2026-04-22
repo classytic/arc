@@ -34,7 +34,19 @@
 // Re-export Fastify primitives users commonly need
 // ──────────────────────────────────────────────────────────────────────
 export type { RouteHandlerMethod } from "fastify";
-
+// ──────────────────────────────────────────────────────────────────────
+// Base controller options — canonical definition lives in core/
+// ──────────────────────────────────────────────────────────────────────
+export type { BaseControllerOptions } from "../core/BaseController.js";
+// ──────────────────────────────────────────────────────────────────────
+// Permissions — types only (functions live on `@classytic/arc/permissions`)
+// ──────────────────────────────────────────────────────────────────────
+export type {
+  PermissionCheck,
+  PermissionContext,
+  PermissionResult,
+  UserBase,
+} from "../permissions/types.js";
 // ──────────────────────────────────────────────────────────────────────
 // Scope — re-export the scope union + helpers (universal across handlers)
 // ──────────────────────────────────────────────────────────────────────
@@ -51,17 +63,17 @@ export {
   isMember,
   PUBLIC_SCOPE,
 } from "../scope/types.js";
-
 // ──────────────────────────────────────────────────────────────────────
-// Permissions — types only (functions live on `@classytic/arc/permissions`)
+// Auth
 // ──────────────────────────────────────────────────────────────────────
 export type {
-  PermissionCheck,
-  PermissionContext,
-  PermissionResult,
-  UserBase,
-} from "../permissions/types.js";
-
+  Authenticator,
+  AuthenticatorContext,
+  AuthHelpers,
+  AuthPluginOptions,
+  JwtContext,
+  TokenPair,
+} from "./auth.js";
 // ──────────────────────────────────────────────────────────────────────
 // Base — primitives, user shape, response envelope, ArcRequest
 // (also installs the Fastify declaration merge)
@@ -76,7 +88,42 @@ export type {
   UserOrganization,
 } from "./base.js";
 export { envelope, getUserId } from "./base.js";
+// ──────────────────────────────────────────────────────────────────────
+// Fastify-specific shapes
+// ──────────────────────────────────────────────────────────────────────
+export type {
+  ArcDecorator,
+  EventsDecorator,
+  FastifyRequestExtras,
+  FastifyWithAuth,
+  FastifyWithDecorators,
+  MiddlewareHandler,
+  RequestWithExtras,
+} from "./fastify.js";
+// ──────────────────────────────────────────────────────────────────────
+// Handler / route shapes — kept in dedicated module
+// ──────────────────────────────────────────────────────────────────────
+export type {
+  ControllerHandler,
+  ControllerLike,
+  FastifyHandler,
+  IController,
+  IControllerResponse,
+  IRequestContext,
+  RouteHandler,
+} from "./handlers.js";
 
+// ──────────────────────────────────────────────────────────────────────
+// Plugins
+// ──────────────────────────────────────────────────────────────────────
+export type {
+  CrudRouterOptions,
+  GracefulShutdownOptions,
+  HealthCheck,
+  HealthOptions,
+  IntrospectionPluginOptions,
+  RequestIdOptions,
+} from "./plugins.js";
 // ──────────────────────────────────────────────────────────────────────
 // Query / Request context
 // ──────────────────────────────────────────────────────────────────────
@@ -91,20 +138,25 @@ export type {
   RequestContext,
   ServiceContext,
 } from "./query.js";
-
 // ──────────────────────────────────────────────────────────────────────
-// Fastify-specific shapes
+// Registry / introspection
 // ──────────────────────────────────────────────────────────────────────
 export type {
-  ArcDecorator,
-  EventsDecorator,
-  FastifyRequestExtras,
-  FastifyWithAuth,
-  FastifyWithDecorators,
-  MiddlewareHandler,
-  RequestWithExtras,
-} from "./fastify.js";
-
+  IntrospectionData,
+  RegistryEntry,
+  RegistryStats,
+  ResourceMetadata,
+} from "./registry.js";
+// ──────────────────────────────────────────────────────────────────────
+// Pagination — discriminated union (arc-owned). The individual offset /
+// keyset shapes ship from `@classytic/repo-core/pagination`; arc adds the
+// union for BaseController's list/getDeleted return types.
+//
+// Kit contracts (`StandardRepo`, `QueryOptions`, `WriteOptions`, etc.)
+// live in `@classytic/repo-core/repository` — import them directly from
+// repo-core. Arc does not re-export them.
+// ──────────────────────────────────────────────────────────────────────
+export type { PaginationResult } from "./repository.js";
 // ──────────────────────────────────────────────────────────────────────
 // Resource definition + routes + actions + schemas + presets + hooks + events
 // ──────────────────────────────────────────────────────────────────────
@@ -134,46 +186,6 @@ export type {
   RouteMethod,
   RouteSchemaOptions,
 } from "./resource.js";
-
-// ──────────────────────────────────────────────────────────────────────
-// Auth
-// ──────────────────────────────────────────────────────────────────────
-export type {
-  Authenticator,
-  AuthenticatorContext,
-  AuthHelpers,
-  AuthPluginOptions,
-  JwtContext,
-  TokenPair,
-} from "./auth.js";
-
-// ──────────────────────────────────────────────────────────────────────
-// Plugins
-// ──────────────────────────────────────────────────────────────────────
-export type {
-  CrudRouterOptions,
-  GracefulShutdownOptions,
-  HealthCheck,
-  HealthOptions,
-  IntrospectionPluginOptions,
-  RequestIdOptions,
-} from "./plugins.js";
-
-// ──────────────────────────────────────────────────────────────────────
-// Registry / introspection
-// ──────────────────────────────────────────────────────────────────────
-export type {
-  IntrospectionData,
-  RegistryEntry,
-  RegistryStats,
-  ResourceMetadata,
-} from "./registry.js";
-
-// ──────────────────────────────────────────────────────────────────────
-// Validation
-// ──────────────────────────────────────────────────────────────────────
-export type { ConfigError, ValidateOptions, ValidationResult } from "./validation.js";
-
 // ──────────────────────────────────────────────────────────────────────
 // Type-level utilities
 // ──────────────────────────────────────────────────────────────────────
@@ -185,32 +197,7 @@ export type {
   TypedRepository,
   TypedResourceConfig,
 } from "./utility.js";
-
 // ──────────────────────────────────────────────────────────────────────
-// Handler / route shapes — kept in dedicated module
+// Validation
 // ──────────────────────────────────────────────────────────────────────
-export type {
-  ControllerHandler,
-  ControllerLike,
-  FastifyHandler,
-  IController,
-  IControllerResponse,
-  IRequestContext,
-  RouteHandler,
-} from "./handlers.js";
-
-// ──────────────────────────────────────────────────────────────────────
-// Pagination — discriminated union (arc-owned). The individual offset /
-// keyset shapes ship from `@classytic/repo-core/pagination`; arc adds the
-// union for BaseController's list/getDeleted return types.
-//
-// Kit contracts (`StandardRepo`, `QueryOptions`, `WriteOptions`, etc.)
-// live in `@classytic/repo-core/repository` — import them directly from
-// repo-core. Arc does not re-export them.
-// ──────────────────────────────────────────────────────────────────────
-export type { PaginationResult } from "./repository.js";
-
-// ──────────────────────────────────────────────────────────────────────
-// Base controller options — canonical definition lives in core/
-// ──────────────────────────────────────────────────────────────────────
-export type { BaseControllerOptions } from "../core/BaseController.js";
+export type { ConfigError, ValidateOptions, ValidationResult } from "./validation.js";

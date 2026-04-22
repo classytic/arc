@@ -137,11 +137,7 @@ export interface AuthPluginOptions {
    * Custom auth failure handler. Customize the 401 response when
    * authentication fails.
    */
-  onFailure?: (
-    request: FastifyRequest,
-    reply: FastifyReply,
-    error?: Error,
-  ) => void | Promise<void>;
+  onFailure?: (request: FastifyRequest, reply: FastifyReply, error?: Error) => void | Promise<void>;
   /**
    * Expose detailed auth error messages in 401 responses. When `false`
    * (default), returns generic "Authentication required". Decoupled from
