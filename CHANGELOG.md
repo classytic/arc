@@ -41,7 +41,62 @@ If you wrote handlers against the old `unknown` type and destructured
 narrower. If you wrote `(payload) => ...` assuming the argument was the
 payload, switch to `(event) => event.payload`.
 
-## 2.10.6 — tenant threading + action fallback + DX type fixes + dead-code cleanup
+## 2.10.7 — finish the tenant auto-inject (adapter schema forwarding)
+
+Supersedes 2.10.6 (unpublished). 2.10.6 shipped the tenant `systemManaged`
++ `preserveForElevated` auto-inject but wired it only half-way: the
+rule landed on `resolvedConfig.schemaOptions` (which `BodySanitizer`
+reads), but `defineResource` still forwarded the raw `config.schemaOptions`
+to `adapter.generateSchemas()`. Result: runtime correctly stripped
+`organizationId` from create bodies, but the generated OpenAPI / MCP
+body schemas still advertised it as a writable input field. Every
+multi-tenant host had to restate the boilerplate at the adapter layer
+for their docs to match runtime behaviour.
+
+### 1. Fix the forwarding (one-liner that makes the auto-inject real)
+
+`defineResource` now passes `resolvedConfig.schemaOptions` to
+`adapter.generateSchemas()` instead of the raw input. Adapters see the
+injected `{ systemManaged: true, preserveForElevated: true }` rule, so
+OpenAPI and MCP generators strip the tenant field from `createBody` /
+`updateBody` without any host-side restatement.
+
+### 2. Centralize the inject in a shared util (zero redundancy)
+
+Extracted to `src/core/schemaOptions.ts`'s
+`autoInjectTenantFieldRules(schemaOptions, tenantField)`. One function,
+one caller, one source of truth. Future downstream consumers that need
+"the effective post-resolve schemaOptions for a resource" can import
+this instead of reinventing the merge — prevents the 2.10.6 bug class
+from recurring when someone adds a new adapter entry point.
+
+Extensive unit tests cover the helper in isolation
+([tests/core/schemaOptions-util.test.ts](tests/core/schemaOptions-util.test.ts)):
+no-op when `tenantField` is `false` / `undefined`, respects caller
+opt-outs (`systemManaged: false`), preserves sibling rules, uses the
+configured field name (not hard-coded to `organizationId`), never
+mutates the input. Integration tests in
+[tests/core/v2-10-7-schema-inject-regression.test.ts](tests/core/v2-10-7-schema-inject-regression.test.ts)
+prove the end-to-end `defineResource → adapter.generateSchemas` flow
+receives the injected rule.
+
+### 3. Normalize all `config` reads after preset resolution
+
+Audited `defineResource.ts` for every remaining `config.X` read that
+happened after `resolvedConfig` was established. Normalized each to
+`resolvedConfig.X` — `idField`, `name`, `adapter`, `queryParser`,
+`openApiSchemas`, `module`. Presets don't mutate most of these today,
+but using a single source of truth removes the "which copy wins"
+ambiguity permanently.
+
+**Consumer impact:** for multi-tenant hosts, you can now remove
+`schemaOptions: { fieldRules: { organizationId: { systemManaged: true } } }`
+from your `defineResource` call — arc's auto-inject now covers both
+runtime (sanitizer) and docs (OpenAPI / MCP). Hosts who had that
+boilerplate can delete it; hosts who didn't are no longer shipping
+half-protected resources.
+
+## 2.10.6 — tenant threading + action fallback + DX type fixes + dead-code cleanup (unpublished)
 
 Supersedes 2.10.4 and 2.10.5 (both unpublished). Bundles every fix from
 the in-flight 2.10.5 drafts plus a second round of host-reported fixes,
