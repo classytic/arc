@@ -11,7 +11,13 @@ import type { FieldPermissionMap } from "../permissions/fields.js";
 import { applyFieldReadPermissions, resolveEffectiveRoles } from "../permissions/fields.js";
 import { getUserRoles } from "../permissions/types.js";
 import type { RequestScope } from "../scope/types.js";
-import { isElevated, isMember, PUBLIC_SCOPE } from "../scope/types.js";
+import {
+  getOrgId as getOrgIdFromScope,
+  getUserId as getUserIdFromScope,
+  isElevated,
+  isMember,
+  PUBLIC_SCOPE,
+} from "../scope/types.js";
 import type { ServerAccessor } from "../types/handlers.js";
 import type {
   AnyRecord,
@@ -113,6 +119,19 @@ export function createRequestContext(req: FastifyRequest): IRequestContext {
     log: req.log,
   };
 
+  // Lift the two fields every tenant-scoped controller reaches for into a
+  // first-class projection so overrides don't have to dig through
+  // `metadata._scope`. Full scope shape still lives on metadata._scope for
+  // code that branches on `scope.kind`. See `RequestScopeProjection`.
+  const rawScope = reqWithExtras.scope as RequestScope | undefined;
+  const scopeProjection = rawScope
+    ? {
+        organizationId: getOrgIdFromScope(rawScope),
+        userId: getUserIdFromScope(rawScope),
+        orgRoles: isMember(rawScope) ? rawScope.orgRoles : undefined,
+      }
+    : undefined;
+
   return {
     query: (reqWithExtras.query ?? {}) as Record<string, unknown>,
     body: (reqWithExtras.body ?? {}) as Record<string, unknown>,
@@ -135,13 +154,15 @@ export function createRequestContext(req: FastifyRequest): IRequestContext {
       : null,
     // Typed org/auth context — use this in controller overrides
     context: requestContext,
+    // First-class scope projection (v2.10.6) — see RequestScopeProjection
+    scope: scopeProjection,
     // Internal metadata — includes context + Arc internals
     metadata: {
       ...reqWithExtras.context,
       // Include Arc metadata for hook execution
       arc: reqWithExtras.arc,
       // Include scope for org ID and elevation checks
-      _scope: reqWithExtras.scope as RequestScope | undefined,
+      _scope: rawScope,
       // Include ownership check for access control
       _ownershipCheck: reqWithExtras._ownershipCheck,
       // Policy filters — ONLY from trusted middleware (req._policyFilters)

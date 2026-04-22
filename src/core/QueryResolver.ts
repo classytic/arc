@@ -33,8 +33,14 @@ export interface QueryResolverConfig {
   maxLimit?: number;
   /** Default limit for pagination (default: 20) */
   defaultLimit?: number;
-  /** Default sort field (default: '-createdAt') */
-  defaultSort?: string;
+  /**
+   * Default sort applied when the request doesn't specify one.
+   *   - `string` — e.g. `'-createdAt'` (Mongo convention: leading `-` = DESC).
+   *   - `false` — disable the default; resolved query has no `sort` clause.
+   *     Use for SQL kits without a `createdAt` column.
+   * Defaults to `'-createdAt'` for back-compat with mongokit consumers.
+   */
+  defaultSort?: string | false;
   /** Schema options for field sanitization */
   schemaOptions?: RouteSchemaOptions;
   /** Field name used for multi-tenant scoping (default: 'organizationId'). Set to `false` to disable. */
@@ -59,7 +65,8 @@ export class QueryResolver {
   private queryParser: QueryParserInterface;
   private maxLimit: number;
   private defaultLimit: number;
-  private defaultSort: string;
+  /** `undefined` means "no default sort" (caller passed `false`). */
+  private defaultSort: string | undefined;
   private schemaOptions: RouteSchemaOptions;
   private tenantField: string | false;
 
@@ -67,7 +74,10 @@ export class QueryResolver {
     this.queryParser = config.queryParser ?? getDefaultQueryParser();
     this.maxLimit = config.maxLimit ?? 100;
     this.defaultLimit = config.defaultLimit ?? DEFAULT_LIMIT;
-    this.defaultSort = config.defaultSort ?? DEFAULT_SORT;
+    // `false` → opt out entirely (no default sort). `undefined` → framework
+    // default (`-createdAt`, mongokit convention). Any string passes through.
+    this.defaultSort =
+      config.defaultSort === false ? undefined : (config.defaultSort ?? DEFAULT_SORT);
     this.schemaOptions = config.schemaOptions ?? {};
     this.tenantField = config.tenantField !== undefined ? config.tenantField : DEFAULT_TENANT_FIELD;
   }

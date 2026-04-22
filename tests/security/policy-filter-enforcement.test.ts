@@ -13,6 +13,7 @@
 import { ObjectId } from "mongodb";
 import { beforeEach, describe, expect, it } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
+import { simpleEqualityMatcher } from "../../src/utils/simpleEqualityMatcher.js";
 import type { StandardRepo } from "@classytic/repo-core/repository";
 import type { AnyRecord, IRequestContext } from "../../src/types/index.js";
 
@@ -86,7 +87,12 @@ describe("Security: Policy Filter Enforcement", () => {
       { _id: "3", name: "Item 3", tenantId: "tenant-b", ownerId: "user-3" },
     ]);
 
-    controller = new BaseController(repo);
+    // v2.10.6: Arc's AccessControl delegates policy-filter evaluation to the
+    // adapter/controller's matcher — it no longer ships an in-memory Mongo
+    // engine. Wire arc's built-in simpleEqualityMatcher so this MockRepository
+    // (which doesn't filter at the DB layer) still exercises the enforcement
+    // contract. Mongokit/sqlitekit users get this for free via their DB.
+    controller = new BaseController(repo, { matchesFilter: simpleEqualityMatcher });
   });
 
   describe("get() operation", () => {
@@ -164,17 +170,22 @@ describe("Security: Policy Filter Enforcement", () => {
       expect(result.status).toBe(200);
     });
 
-    it("should match $in filters by value for ObjectId-like values", async () => {
+    it("should match filters by value for ObjectId-like values (flat equality)", async () => {
+      // v2.10.6: arc no longer ships an in-memory $in matcher. The original
+      // test covered `{ jobId: { $in: [oid] } }` — that's an operator-shaped
+      // filter that requires a dialect-aware matcher (mongokit handles it
+      // natively at the DB layer; custom minimal repos need to supply a
+      // matcher that understands operators). This test now covers the flat
+      // ObjectId-coercion case that `simpleEqualityMatcher` DOES handle.
       const jobIdA = new ObjectId();
       const repoWithObjectId = new MockRepository([
         {
           _id: "oid-1",
           name: "Interview 1",
-          // Simulate Mongo document value type
           jobId: jobIdA,
         },
       ]);
-      const ctrl = new BaseController(repoWithObjectId);
+      const ctrl = new BaseController(repoWithObjectId, { matchesFilter: simpleEqualityMatcher });
 
       const context = createContextWithPolicyFilters(
         {
@@ -185,8 +196,9 @@ describe("Security: Policy Filter Enforcement", () => {
           headers: {},
         },
         {
-          // Different ObjectId instance, same value string
-          jobId: { $in: [new ObjectId(jobIdA.toHexString())] },
+          // Different ObjectId instance, same hex value — arc's matcher
+          // coerces both sides to strings to match by value.
+          jobId: new ObjectId(jobIdA.toHexString()),
         },
       );
 

@@ -1,6 +1,6 @@
 {
   "name": "@classytic/arc",
-  "version": "2.10.5",
+  "version": "2.10.6",
   "description": "Resource-oriented backend framework for Fastify — clean, minimal, powerful, tree-shakable",
   "type": "module",
   "exports": {
@@ -239,8 +239,8 @@
     "node": ">=22"
   },
   "peerDependencies": {
-    "@classytic/mongokit": ">=3.10.3",
-    "@classytic/repo-core": ">=0.1.0",
+    "@classytic/mongokit": ">=3.11.0",
+    "@classytic/repo-core": ">=0.2.0",
     "@classytic/streamline": ">=2.1.0",
     "@fastify/cors": ">=11.0.0",
     "@fastify/helmet": ">=13.0.0",
@@ -363,9 +363,9 @@
     "@better-auth/drizzle-adapter": "^1.6.2",
     "@better-auth/mongo-adapter": "^1.6.2",
     "@biomejs/biome": "^2.4.11",
-    "@classytic/mongokit": "^3.10.3",
-    "@classytic/repo-core": "^0.1.0",
-    "@classytic/sqlitekit": "^0.1.1",
+    "@classytic/mongokit": "^3.11.0",
+    "@classytic/repo-core": "^0.2.0",
+    "@classytic/sqlitekit": "^0.2.0",
     "@classytic/streamline": "^2.1.0",
     "@fastify/cors": "^11.2.0",
     "@fastify/helmet": "^13.0.2",

@@ -11,6 +11,7 @@
 
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { DataAdapter, RepositoryLike } from "../../src/adapters/interface.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -27,20 +28,30 @@ import type { AnyRecord } from "../../src/types/index.js";
 // In-Memory Repository (zero DB dependencies)
 // ============================================================================
 
-function createInMemoryRepo() {
+/**
+ * Build a `RepositoryLike<AnyRecord>` backed by a `Map`. Declaring the
+ * return type means BaseController / defineResource accept the repo
+ * without any `as any` at the call site — which is the whole point of
+ * the "DB-agnostic" promise: a minimal repo should just slot in.
+ *
+ * `getOne` / `deleteMany` stay present because some permission paths
+ * (AccessControl's compound-filter lookup, ownership enforcement on
+ * ordered deletes) probe them at runtime. They're optional on
+ * `StandardRepo` and `RepositoryLike`, but providing them keeps the
+ * harness faithful to what mongokit / sqlitekit ship.
+ */
+function createInMemoryRepo(): RepositoryLike<AnyRecord> {
   const store = new Map<string, AnyRecord>();
   let counter = 0;
+
+  const matches = (item: AnyRecord, filter: Record<string, unknown>): boolean =>
+    Object.entries(filter).every(([k, v]) => item[k] === v);
 
   return {
     getAll: vi.fn(async (params?: AnyRecord) => {
       let items = Array.from(store.values());
-
-      // Apply filters (used by ownership scoping: { createdBy: userId })
-      const filters = params?.filters as AnyRecord | undefined;
-      if (filters) {
-        items = items.filter((item) => Object.entries(filters).every(([k, v]) => item[k] === v));
-      }
-
+      const filters = params?.filters as Record<string, unknown> | undefined;
+      if (filters) items = items.filter((item) => matches(item, filters));
       return {
         method: "offset" as const,
         docs: items,
@@ -53,36 +64,62 @@ function createInMemoryRepo() {
       };
     }),
     getById: vi.fn(async (id: string) => store.get(id) ?? null),
-    create: vi.fn(async (data: AnyRecord) => {
+    getOne: vi.fn(async (filter: Record<string, unknown>) => {
+      for (const item of store.values()) {
+        if (matches(item, filter)) return item;
+      }
+      return null;
+    }),
+    create: vi.fn(async (data: Partial<AnyRecord>) => {
       const id = `mem-${++counter}`;
-      const item = { ...data, _id: id };
+      const item = { ...data, _id: id } as AnyRecord;
       store.set(id, item);
       return item;
     }),
-    update: vi.fn(async (id: string, data: AnyRecord, params?: AnyRecord) => {
-      // Apply filters for ownership scoping
-      const filters = params?.filters as AnyRecord | undefined;
+    update: vi.fn(async (id: string, data: Partial<AnyRecord>, params?: AnyRecord) => {
+      const filters = params?.filters as Record<string, unknown> | undefined;
       const existing = store.get(id);
       if (!existing) return null;
-      if (filters && Object.entries(filters).some(([k, v]) => existing[k] !== v)) {
-        return null; // Ownership filter didn't match
-      }
-      const updated = { ...existing, ...data };
+      if (filters && !matches(existing, filters)) return null;
+      const updated = { ...existing, ...data } as AnyRecord;
       store.set(id, updated);
       return updated;
     }),
     delete: vi.fn(async (id: string) => {
-      return store.delete(id);
+      const existed = store.delete(id);
+      return {
+        success: existed,
+        message: existed ? "deleted" : "not found",
+        id,
+      };
+    }),
+    deleteMany: vi.fn(async (filter: Record<string, unknown>) => {
+      let deleted = 0;
+      for (const [id, item] of store) {
+        if (matches(item, filter)) {
+          store.delete(id);
+          deleted++;
+        }
+      }
+      return { acknowledged: true, deletedCount: deleted };
     }),
   };
 }
 
-/** Minimal adapter that wires an in-memory repo into defineResource */
-function createInMemoryAdapter(repo: ReturnType<typeof createInMemoryRepo>) {
+/**
+ * Minimal `DataAdapter<AnyRecord>` wiring the in-memory repo into
+ * `defineResource`. `type: 'custom'` is the canonical value for
+ * non-ORM backends; `name` identifies the resource for introspection.
+ * No casts — the object satisfies the public contract.
+ */
+function createInMemoryAdapter(
+  repo: RepositoryLike<AnyRecord>,
+  name: string,
+): DataAdapter<AnyRecord> {
   return {
     repository: repo,
-    model: null,
-    toFastifyPlugin: () => async () => {},
+    type: "custom",
+    name,
   };
 }
 
@@ -105,10 +142,10 @@ describe("RBAC Permissions E2E — DB-Agnostic (no Mongoose)", () => {
   const publicRepo = createInMemoryRepo();
 
   beforeAll(async () => {
-    const articleController = new BaseController(articleRepo as any);
+    const articleController = new BaseController(articleRepo);
     const articleResource = defineResource({
       name: "article",
-      adapter: createInMemoryAdapter(articleRepo) as any,
+      adapter: createInMemoryAdapter(articleRepo, "article"),
       controller: articleController,
       prefix: "/articles",
       tag: "Articles",
@@ -121,10 +158,10 @@ describe("RBAC Permissions E2E — DB-Agnostic (no Mongoose)", () => {
       },
     });
 
-    const publicController = new BaseController(publicRepo as any);
+    const publicController = new BaseController(publicRepo);
     const publicResource = defineResource({
       name: "publicItem",
-      adapter: createInMemoryAdapter(publicRepo) as any,
+      adapter: createInMemoryAdapter(publicRepo, "publicItem"),
       controller: publicController,
       prefix: "/public-items",
       tag: "PublicItems",

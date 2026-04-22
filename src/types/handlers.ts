@@ -85,6 +85,35 @@ export interface ServerAccessor {
  * }
  * ```
  */
+/**
+ * First-class projection of `request._scope` for controller handlers.
+ *
+ * **v2.10.6:** previously, pulling tenant/user/role info from inside a
+ * controller override meant digging through `req.metadata._scope` and
+ * calling `getOrgId(scope)` / `getUserId(user)` manually. This projection
+ * lifts the two fields most hosts need directly onto `req` so cross-kit
+ * controller code reads:
+ *
+ * ```ts
+ * async create(req: IRequestContext) {
+ *   const flowCtx = { organizationId: req.scope?.organizationId, actorId: req.scope?.userId };
+ * }
+ * ```
+ *
+ * Full scope shape (discriminated union of `member` / `service` / `elevated` / `public`)
+ * still lives on `req.metadata._scope` for code that needs to branch on
+ * `scope.kind` — this projection just surfaces the two keys every
+ * tenant-scoped resource reaches for.
+ */
+export interface RequestScopeProjection {
+  /** Tenant the caller is scoped to (org member, service key bound to an org, or elevated admin's target org). */
+  organizationId?: string;
+  /** Caller's user id when authenticated — undefined for public / service-only scopes. */
+  userId?: string;
+  /** Org-level roles (e.g. `['admin', 'warehouse-manager']`) — separate from global `user.roles`. */
+  orgRoles?: string[];
+}
+
 export interface IRequestContext<
   TBody = unknown,
   TParams extends Record<string, string> = Record<string, string>,
@@ -106,6 +135,13 @@ export interface IRequestContext<
   organizationId?: string;
   /** Team ID (for team-scoped resources) */
   teamId?: string;
+  /**
+   * First-class tenant/user scope projection — lifted from `metadata._scope`
+   * so controller overrides don't have to dig through Arc internals.
+   * See {@link RequestScopeProjection}. `undefined` for routes that run
+   * without auth / scope resolution.
+   */
+  scope?: RequestScopeProjection;
   /**
    * Organization/auth context from middleware.
    * Contains orgRoles, orgScope, organizationId, and any custom fields
@@ -250,10 +286,17 @@ export type FastifyHandler<
 export type RouteHandler = ControllerHandler | FastifyHandler;
 
 /**
- * Controller interface for CRUD operations (strict)
+ * Controller interface for CRUD operations (strict).
+ *
+ * `list`'s return type aligns with repo-core's `MinimalRepo.getAll()`
+ * contract — the kit MAY return an offset envelope, a keyset envelope,
+ * or a raw array. Arc's `BaseController` forwards the kit's response
+ * verbatim; consumers narrow on shape
+ * (`Array.isArray(data)` → bare array, presence of `total` → offset,
+ * presence of `nextCursor` → keyset).
  */
 export interface IController<TDoc = unknown> {
-  list(req: IRequestContext): Promise<IControllerResponse<{ docs: TDoc[]; total: number }>>;
+  list(req: IRequestContext): Promise<IControllerResponse<unknown>>;
   get(req: IRequestContext): Promise<IControllerResponse<TDoc>>;
   create(req: IRequestContext): Promise<IControllerResponse<TDoc>>;
   update(req: IRequestContext): Promise<IControllerResponse<TDoc>>;
@@ -261,8 +304,18 @@ export interface IController<TDoc = unknown> {
 }
 
 /**
- * Flexible controller interface - accepts controllers with any handler style
- * Use this when your controller uses Fastify native handlers
+ * Flexible controller interface — accepts controllers with any handler style,
+ * including class instances with extra methods / private fields.
+ *
+ * **v2.10.6:** the previous `[key: string]: unknown` index signature made
+ * real class instances fail structural assignment (`new ScrapController()`
+ * needed a `as unknown as ControllerLike` cast, because class instances
+ * don't have an index signature). Dropped — arc only invokes the CRUD
+ * methods at runtime, so the rest of the shape is the caller's concern.
+ *
+ * The five CRUD slots stay optional so partial controllers (e.g. read-only)
+ * assign too. Additional domain methods on the controller are allowed by
+ * construction (they're just not part of this contract).
  */
 export interface ControllerLike {
   list?: unknown;
@@ -270,5 +323,4 @@ export interface ControllerLike {
   create?: unknown;
   update?: unknown;
   delete?: unknown;
-  [key: string]: unknown; // Allow additional methods
 }

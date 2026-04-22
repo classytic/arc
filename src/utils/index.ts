@@ -23,6 +23,8 @@ export type {
   CompensationStep,
 } from "./compensation.js";
 export { defineCompensation, withCompensation } from "./compensation.js";
+// Typed ErrorMapper helper — avoids `as unknown as ErrorMapper` at registration sites
+export { defineErrorMapper } from "./defineErrorMapper.js";
 // Typed route guard helper
 export type { Guard, GuardConfig } from "./defineGuard.js";
 export { defineGuard } from "./defineGuard.js";
@@ -76,6 +78,8 @@ export {
   isZodSchema,
   toJsonSchema,
 } from "./schemaConverter.js";
+// Minimal flat-equality matcher for `DataAdapter.matchesFilter` on custom/minimal repos
+export { simpleEqualityMatcher } from "./simpleEqualityMatcher.js";
 export type { StateMachine, TransitionConfig } from "./stateMachine.js";
 // State Machine
 export { createStateMachine } from "./stateMachine.js";

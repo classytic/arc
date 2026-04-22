@@ -1,21 +1,46 @@
 /**
- * AccessControl - Composable access control logic extracted from BaseController.
+ * AccessControl — composable access-control logic extracted from BaseController.
  *
  * Handles ID filtering, policy filter checking, org/tenant scope validation,
  * ownership verification, and fetch-with-access-control patterns.
  *
- * Designed to be used standalone or composed into controllers.
+ * ## Policy-filter enforcement model (v2.10.6)
+ *
+ * Arc delegates policy-filter matching to the **database** on every primary
+ * fetch: `buildIdFilter` composes a compound filter (id + `_policyFilters` +
+ * tenant) and `fetchDetailed` passes it to `repository.getOne(compoundFilter)`.
+ * The DB evaluates its own dialect — MongoDB operators for mongokit, SQL
+ * predicates for sqlitekit/pgkit, Prisma `WhereInput` for Prisma. Arc never
+ * re-implements that.
+ *
+ * The only path that needs in-memory policy-filter validation is
+ * `validateItemAccess` — used by `getBySlug` and cache revalidation, where
+ * a doc has already been fetched through a non-compound path. For that
+ * path, Arc delegates to `DataAdapter.matchesFilter` if the adapter supplies
+ * one. If not, arc trusts the fetch path's own filtering and short-circuits
+ * to `true`; a one-time warn surfaces the gap so adapter authors notice.
+ *
+ * Prior versions of arc shipped a ~200-LOC MongoDB-syntax fallback engine
+ * here (`$eq` / `$ne` / `$in` / `$regex` / `$and` / `$or` / dot-paths with
+ * ReDoS + prototype-pollution guards). That engine is removed in 2.10.6 —
+ * it was dead code for mongokit users (the compound-filter path never
+ * hits it) and actively wrong for non-Mongo adapters (applying Mongo
+ * syntax to rows shaped by a different dialect silently misclassified).
  */
 
 import type { QueryOptions } from "@classytic/repo-core/repository";
-import { DEFAULT_ID_FIELD, MAX_REGEX_LENGTH } from "../constants.js";
-import { getOrgId as getOrgIdFromScope, isElevated } from "../scope/types.js";
+import { DEFAULT_ID_FIELD } from "../constants.js";
+import { arcLog } from "../logger/index.js";
+import { getOrgId as getOrgIdFromScope } from "../scope/types.js";
 import type {
   AnyRecord,
   ArcInternalMetadata,
   IRequestContext,
   RequestContext,
 } from "../types/index.js";
+import { simpleEqualityMatcher } from "../utils/simpleEqualityMatcher.js";
+
+const log = arcLog("access-control");
 
 // ============================================================================
 // Fetch Result — detailed denial reason for DX-friendly 404 responses
@@ -66,14 +91,14 @@ export class AccessControl {
     item: unknown,
     filters: Record<string, unknown>,
   ) => boolean;
-
-  /** Patterns that indicate dangerous regex (nested quantifiers, excessive backtracking).
-   *  Uses [^...] character classes instead of .+ to avoid backtracking in the detector itself. */
-  private static readonly DANGEROUS_REGEX =
-    /(\{[0-9]+,\}[^{]*\{[0-9]+,\})|(\+[^+]*\+)|(\*[^*]*\*)|(\.\*){3,}|\\1/;
-
-  /** Forbidden paths that could lead to prototype pollution */
-  private static readonly FORBIDDEN_PATHS = ["__proto__", "constructor", "prototype"];
+  /**
+   * One-shot latch for the "adapter didn't supply matchesFilter, in-memory
+   * policy-filter re-check is skipped" warning. The primary fetch path
+   * (`getOne(compoundFilter)`) already applied filters at the DB layer;
+   * this warn only fires when `validateItemAccess` runs and the adapter
+   * hasn't provided a native matcher for the post-hoc re-check.
+   */
+  private _warnedNoMatcher = false;
 
   constructor(config: AccessControlConfig) {
     this.tenantField = config.tenantField;
@@ -111,25 +136,83 @@ export class AccessControl {
   }
 
   /**
-   * Check if item matches policy filters (for get/update/delete operations)
-   * Validates that fetched item satisfies all policy constraints
+   * Check if a post-fetch item matches the request's `_policyFilters`.
    *
-   * Delegates to adapter-provided matchesFilter if available (for SQL, etc.),
-   * otherwise falls back to built-in MongoDB-style matching.
+   * **When this runs:** only on paths where the primary fetch path did NOT
+   * apply policy filters at the DB layer — notably `validateItemAccess`
+   * (used by `getBySlug` and cache revalidation). The main `fetchDetailed`
+   * path builds a compound filter (`buildIdFilter`) and passes it to
+   * `repository.getOne(compoundFilter)`, so the DB has already enforced
+   * the filter and an in-memory re-check would be redundant.
+   *
+   * **Evaluation order (fail-closed):**
+   * 1. No `_policyFilters` set → `true` (nothing to enforce).
+   * 2. Adapter supplied `matchesFilter` → delegate to it verbatim. Adapters
+   *    are expected to handle every filter shape the host emits
+   *    (mongokit/sqlitekit evaluate at the DB layer; Prisma/custom engines
+   *    can wrap their own predicate engine).
+   * 3. No adapter matcher → fall back to `simpleEqualityMatcher` — arc's
+   *    built-in flat-key equality helper. This is defense-in-depth for the
+   *    common case: arc's own permission helpers emit flat filters
+   *    (`{userId: …}`, `{organizationId: …}`), which this matcher evaluates
+   *    correctly. Operator-shaped filters (`$in`, `$ne`, `$regex`, `$and`,
+   *    `$or`) are **rejected** (the matcher returns `false`) — fail-closed
+   *    rather than fail-open. A one-shot warn flags the gap so adapter
+   *    authors can wire a richer matcher.
+   *
+   * Arc deliberately does NOT ship a full MongoDB-syntax matcher:
+   * re-implementing Mongo in JS was dead code for mongokit users (the DB
+   * did it) and silently wrong for non-Mongo adapters. The flat-equality
+   * fallback is small (~20 LOC), correct in both dialects, and closes the
+   * previous `getBySlug`-style policy-bypass path.
    */
   checkPolicyFilters(item: AnyRecord, req: IRequestContext): boolean {
     // Policy filters are set by permission middleware via req.metadata._policyFilters
     const arcContext = this._meta(req);
     const policyFilters = arcContext?._policyFilters;
-    if (!policyFilters) return true;
+    if (!policyFilters || Object.keys(policyFilters).length === 0) return true;
 
-    // Prefer adapter-provided matching (supports SQL, Prisma, etc.)
+    // Adapter-supplied matcher wins — it's the only way to correctly
+    // evaluate operator-shaped filters (`$in`, `$regex`, `$and`, etc.).
     if (this._adapterMatchesFilter) {
       return this._adapterMatchesFilter(item, policyFilters);
     }
 
-    // Fallback: built-in MongoDB-style matching
-    return this.defaultMatchesPolicyFilters(item, policyFilters);
+    // Defense-in-depth default: flat-equality enforcement. Rejects
+    // operator-shaped values (fail-closed) so custom `getBySlug`
+    // implementations that don't filter at their DB layer still have the
+    // 95%-case flat filters caught here.
+    const hasOperator = Object.values(policyFilters).some(
+      (v) =>
+        v !== null &&
+        typeof v === "object" &&
+        !Array.isArray(v) &&
+        Object.getPrototypeOf(v) === Object.prototype &&
+        Object.keys(v).some((k) => k.startsWith("$")),
+    );
+    if (hasOperator) this._warnNoMatcher(policyFilters);
+    return simpleEqualityMatcher(item, policyFilters);
+  }
+
+  /**
+   * Emit a one-shot warn when policy filters contain operators (`$in`,
+   * `$ne`, `$regex`, etc.) and no `DataAdapter.matchesFilter` is wired —
+   * arc's flat-equality fallback fail-closes on operators, so the host
+   * sees 404s on docs that should match. Latched on `_warnedNoMatcher`
+   * so subsequent requests stay quiet.
+   */
+  private _warnNoMatcher(policyFilters: AnyRecord): void {
+    if (this._warnedNoMatcher) return;
+    this._warnedNoMatcher = true;
+    log.warn(
+      "`_policyFilters` contains operator-shaped entries (e.g. `$in`, `$ne`, `$regex`) " +
+        "but `DataAdapter.matchesFilter` is not set. Arc's flat-equality fallback cannot " +
+        "evaluate operators and will reject these items on non-compound fetches " +
+        "(`validateItemAccess`, `getBySlug`, cache revalidation). Wire up `matchesFilter` " +
+        "on your adapter — use `matchFilter` from `@classytic/repo-core/filter` for IR-based " +
+        "adapters, or your DB's native predicate engine.",
+      { policyFilterKeys: Object.keys(policyFilters) },
+    );
   }
 
   /**
@@ -147,9 +230,10 @@ export class AccessControl {
     if (!this.tenantField) return true;
     const scope = (arcContext as ArcInternalMetadata | undefined)?._scope;
     const orgId = scope ? getOrgIdFromScope(scope) : undefined;
+    // No item, or no active org scope (including elevated admins viewing
+    // across tenants) → skip. The elevated-without-org case is already
+    // covered by `!orgId` here, no separate branch needed.
     if (!item || !orgId) return true;
-    // Elevated scope without org → skip check (admin viewing all)
-    if (scope && isElevated(scope) && !orgId) return true;
     const itemOrgId = item[this.tenantField];
     // SECURITY: Deny records missing the tenant field when org scope is active.
     // This prevents legacy/unscoped records from leaking across orgs.
@@ -228,23 +312,57 @@ export class AccessControl {
         if (doc) return { doc, reason: null };
 
         // The compound filter didn't match — the doc may still exist without
-        // the policy/tenant fields. Attempt a raw ID-only lookup to
-        // distinguish "missing" from "filtered". This is a DIAGNOSTIC query
-        // so we DON'T apply it for writes — security is already enforced by
-        // the compound filter returning null.
+        // the policy/tenant fields. Attempt a DIAGNOSTIC ID-only lookup to
+        // distinguish "missing" from "filtered". This is read-only
+        // introspection; security is already enforced by the compound
+        // filter having returned null.
         //
-        // Pass `queryOptions` (which already carries the caller's tenant from
-        // `BaseController.tenantRepoOptions`) so plugin-scoped repos
-        // (mongokit's multiTenantPlugin) see `context.organizationId` and
-        // don't throw "Missing 'organizationId' in context for 'getOne'".
-        // The tenant on the context matches the compound filter we just
-        // tried, so the diagnostic query is still an ID-only predicate but
-        // runs under the caller's scope rather than unscoped.
+        // Strategy: prefer an UNSCOPED probe so we can still classify
+        // cross-tenant access as `ORG_SCOPE_DENIED`. Some plugin-scoped
+        // repositories (notably mongokit's `multiTenantPlugin`) reject a
+        // bare `getOne()` with "Missing 'organizationId' in context" — when
+        // that happens, retry under the caller's scope. The scoped retry
+        // loses cross-tenant visibility (a doc in another org becomes
+        // `NOT_FOUND`), but preserves POLICY_FILTERED accuracy within the
+        // caller's tenant and avoids propagating an unrelated error.
         if (hasCompoundFilters) {
           const idOnly: AnyRecord = { [this.idField]: id };
-          const rawDoc = await (
+          // Bind to the repository so the method keeps its `this` when
+          // re-invoked. Extracting `repository.getOne` without binding
+          // breaks kits that reach into `this._buildContext` (mongokit,
+          // sqlitekit, any repo-core descendant) — those threw a 500
+          // `Cannot read properties of undefined (reading '_buildContext')`
+          // before this binding was added.
+          const rawGetOne = (
             repository.getOne as (f: AnyRecord, o?: QueryOptions) => Promise<unknown>
-          )(idOnly, queryOptions);
+          ).bind(repository) as (f: AnyRecord, o?: QueryOptions) => Promise<unknown>;
+
+          let rawDoc: unknown = null;
+          try {
+            rawDoc = await rawGetOne(idOnly);
+          } catch (unscopedErr) {
+            // `status: 404` already means "missing" — no need to retry.
+            if (translateStatus404(unscopedErr)) {
+              return { doc: null, reason: "NOT_FOUND" };
+            }
+            // Plugin-scoped repo refused the unscoped probe. Fall back to
+            // the caller's scope so we still get in-tenant diagnostic.
+            // Cross-tenant visibility is lost here (a doc in another org
+            // becomes `NOT_FOUND` rather than `ORG_SCOPE_DENIED`), but
+            // POLICY_FILTERED accuracy within the caller's tenant is
+            // preserved and we avoid propagating an unrelated error.
+            try {
+              rawDoc = await rawGetOne(idOnly, queryOptions);
+            } catch (scopedErr) {
+              if (translateStatus404(scopedErr)) {
+                return { doc: null, reason: "NOT_FOUND" };
+              }
+              // Give up on diagnostic detail — surface the underlying error
+              // so callers see real failures instead of a silent downgrade.
+              throw scopedErr;
+            }
+          }
+
           if (rawDoc) {
             // Doc exists but didn't match the compound filter. Determine why.
             const arcContext = this._meta(req);
@@ -308,185 +426,5 @@ export class AccessControl {
   /** Extract typed Arc internal metadata from request */
   private _meta(req: IRequestContext): ArcInternalMetadata | undefined {
     return req.metadata as ArcInternalMetadata | undefined;
-  }
-
-  /**
-   * Check if a value matches a MongoDB query operator
-   */
-  private matchesOperator(itemValue: unknown, operator: string, filterValue: unknown): boolean {
-    const equalsByValue = (a: unknown, b: unknown): boolean => String(a) === String(b);
-
-    switch (operator) {
-      case "$eq":
-        return equalsByValue(itemValue, filterValue);
-      case "$ne":
-        return !equalsByValue(itemValue, filterValue);
-      case "$gt":
-        return (
-          typeof itemValue === "number" &&
-          typeof filterValue === "number" &&
-          itemValue > filterValue
-        );
-      case "$gte":
-        return (
-          typeof itemValue === "number" &&
-          typeof filterValue === "number" &&
-          itemValue >= filterValue
-        );
-      case "$lt":
-        return (
-          typeof itemValue === "number" &&
-          typeof filterValue === "number" &&
-          itemValue < filterValue
-        );
-      case "$lte":
-        return (
-          typeof itemValue === "number" &&
-          typeof filterValue === "number" &&
-          itemValue <= filterValue
-        );
-      case "$in":
-        if (!Array.isArray(filterValue)) return false;
-        if (Array.isArray(itemValue)) {
-          return itemValue.some((v) => filterValue.some((fv) => equalsByValue(v, fv)));
-        }
-        return filterValue.some((fv) => equalsByValue(itemValue, fv));
-      case "$nin":
-        if (!Array.isArray(filterValue)) return false;
-        if (Array.isArray(itemValue)) {
-          return itemValue.every((v) => filterValue.every((fv) => !equalsByValue(v, fv)));
-        }
-        return filterValue.every((fv) => !equalsByValue(itemValue, fv));
-      case "$exists":
-        return filterValue ? itemValue !== undefined : itemValue === undefined;
-      case "$regex":
-        if (
-          typeof itemValue === "string" &&
-          (typeof filterValue === "string" || filterValue instanceof RegExp)
-        ) {
-          const regex =
-            typeof filterValue === "string" ? AccessControl.safeRegex(filterValue) : filterValue;
-          return regex?.test(itemValue) ?? false;
-        }
-        return false;
-      default:
-        return false;
-    }
-  }
-
-  /**
-   * Check if item matches a single filter condition
-   * Supports nested paths (e.g., "owner.id", "metadata.status")
-   */
-  private matchesFilter(item: AnyRecord, key: string, filterValue: unknown): boolean {
-    // Support nested paths with dot notation
-    const itemValue = key.includes(".") ? this.getNestedValue(item, key) : item[key];
-
-    // Handle MongoDB query operators
-    if (filterValue && typeof filterValue === "object" && !Array.isArray(filterValue)) {
-      const operators = Object.keys(filterValue);
-      // Check if this is an operator object (e.g., { $in: [...], $ne: ... })
-      if (operators.some((op) => op.startsWith("$"))) {
-        for (const [operator, opValue] of Object.entries(filterValue as AnyRecord)) {
-          if (!this.matchesOperator(itemValue, operator, opValue)) {
-            return false;
-          }
-        }
-        return true;
-      }
-    }
-
-    // MongoDB implicit array matching: { field: value } matches if field is
-    // an array containing value. Check element-wise before falling back to
-    // simple equality.
-    if (Array.isArray(itemValue)) {
-      return itemValue.some((v) => String(v) === String(filterValue));
-    }
-
-    // Simple equality check - convert to strings for ObjectId compatibility
-    // ObjectId instances are only === if they're the same reference,
-    // so we need to compare string representations for value equality
-    return String(itemValue) === String(filterValue);
-  }
-
-  /**
-   * Built-in MongoDB-style policy filter matching.
-   * Supports: $eq, $ne, $gt, $gte, $lt, $lte, $in, $nin, $exists, $regex, $and, $or
-   */
-  private defaultMatchesPolicyFilters(item: AnyRecord, policyFilters: AnyRecord): boolean {
-    // Check $and operator — all conditions must match
-    if (policyFilters.$and && Array.isArray(policyFilters.$and)) {
-      const andMatches = policyFilters.$and.every((condition: AnyRecord) => {
-        return Object.entries(condition).every(([key, value]) => {
-          return this.matchesFilter(item, key, value);
-        });
-      });
-      if (!andMatches) return false;
-    }
-
-    // Check $or operator — at least one condition must match
-    if (policyFilters.$or && Array.isArray(policyFilters.$or)) {
-      const orMatches = policyFilters.$or.some((condition: AnyRecord) => {
-        return Object.entries(condition).every(([key, value]) => {
-          return this.matchesFilter(item, key, value);
-        });
-      });
-      if (!orMatches) return false;
-    }
-
-    // Check each non-logical sibling constraint (always evaluated,
-    // even when $and/$or are present on the same filter object)
-    for (const [key, value] of Object.entries(policyFilters)) {
-      if (key.startsWith("$")) continue;
-
-      if (!this.matchesFilter(item, key, value)) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  /**
-   * Get nested value from object using dot notation (e.g., "owner.id")
-   * Security: Validates path against forbidden patterns to prevent prototype pollution
-   */
-  private getNestedValue(obj: AnyRecord, path: string): unknown {
-    // Security: Prevent prototype pollution attacks
-    if (AccessControl.FORBIDDEN_PATHS.some((p) => path.toLowerCase().includes(p))) {
-      return undefined;
-    }
-
-    const keys = path.split(".");
-    let value: unknown = obj;
-
-    for (const key of keys) {
-      if (value == null) return undefined;
-      // Security: Block forbidden keys at each level
-      if (AccessControl.FORBIDDEN_PATHS.includes(key.toLowerCase())) {
-        return undefined;
-      }
-      value = (value as AnyRecord)[key];
-    }
-
-    return value;
-  }
-
-  // ============================================================================
-  // Static Helpers
-  // ============================================================================
-
-  /**
-   * Create a safe RegExp from a string, guarding against ReDoS.
-   * Returns null if the pattern is invalid or dangerous.
-   */
-  private static safeRegex(pattern: string): RegExp | null {
-    if (pattern.length > MAX_REGEX_LENGTH) return null;
-    if (AccessControl.DANGEROUS_REGEX.test(pattern)) return null;
-    try {
-      return new RegExp(pattern);
-    } catch {
-      return null;
-    }
   }
 }

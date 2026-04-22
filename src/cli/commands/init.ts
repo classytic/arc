@@ -186,7 +186,7 @@ async function installDependencies(
   }
 
   if (config.adapter === "mongokit") {
-    deps.push("@classytic/mongokit@^3.10.2", "@classytic/repo-core@^0.1.0", "mongoose@^9.4.1");
+    deps.push("@classytic/mongokit@^3.11.0", "@classytic/repo-core@^0.2.0", "mongoose@^9.4.1");
   }
 
   const devDeps = ["vitest@latest", "pino-pretty@latest"];

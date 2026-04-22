@@ -69,6 +69,7 @@ import type {
 } from "../types/index.js";
 import { convertOpenApiSchemas, convertRouteSchema } from "../utils/schemaConverter.js";
 import { hasEvents } from "../utils/typeGuards.js";
+import { resolveActionPermission } from "./actionPermissions.js";
 import { BaseController } from "./BaseController.js";
 import { createCrudRouter } from "./createCrudRouter.js";
 import { assertValidConfig } from "./validateResourceConfig.js";
@@ -189,6 +190,49 @@ export function defineResource<TDoc = AnyRecord>(
 
   resolvedConfig._appliedPresets = originalPresets;
 
+  // 3a. Auto-mark the tenant field as `systemManaged` + `preserveForElevated` (v2.10.6).
+  //
+  // Every multi-tenant resource needs the tenant column stripped from
+  // inbound bodies so member clients can't forge `organizationId: 'victim-org'`.
+  // `BodySanitizer` already does the strip when
+  // `schemaOptions.fieldRules[tenantField].systemManaged` is true — this
+  // just makes arc inject the rule automatically instead of forcing every
+  // resource to restate it.
+  //
+  // Paired with `preserveForElevated: true` so elevated admins (platform /
+  // superadmin scopes) can still pick a target org via the request body.
+  // Without that flag, an elevated admin with no pinned org would lose
+  // their body-supplied tenant — `BaseController.create` can't restore it
+  // from scope either (elevated-without-org has no orgId in
+  // `getOrgIdFromScope(scope)`), so the doc would land with a null tenant.
+  //
+  // Safe across the existing code paths:
+  //  - Member / service callers: body tenant stripped (scope re-stamps).
+  //  - Elevated + pinned org: body tenant stripped (scope re-stamps to
+  //    the pinned org).
+  //  - Elevated + no pinned org: body tenant survives; scope has no org
+  //    to re-stamp → doc takes the body value verbatim (cross-org write).
+  //  - Hosts that explicitly declare `fieldRules: { organizationId: {...} }`
+  //    take precedence — arc only fills in when the rule is missing.
+  if (resolvedConfig.tenantField !== false && typeof resolvedConfig.tenantField !== "undefined") {
+    const tenantField = resolvedConfig.tenantField || "organizationId";
+    const existing = resolvedConfig.schemaOptions?.fieldRules ?? {};
+    const existingRule = existing[tenantField];
+    if (!existingRule || existingRule.systemManaged === undefined) {
+      resolvedConfig.schemaOptions = {
+        ...(resolvedConfig.schemaOptions ?? {}),
+        fieldRules: {
+          ...existing,
+          [tenantField]: {
+            ...(existingRule ?? {}),
+            systemManaged: true,
+            preserveForElevated: existingRule?.preserveForElevated ?? true,
+          },
+        },
+      };
+    }
+  }
+
   // 4. Create or use provided controller using the full resolved config
   let controller = resolvedConfig.controller;
   if (!controller && hasCrudRoutes && repository) {
@@ -212,6 +256,13 @@ export function defineResource<TDoc = AnyRecord>(
       maxLimit: maxLimitFromParser,
       tenantField: resolvedConfig.tenantField,
       idField: resolvedConfig.idField,
+      // Forward the resource-level opt-out so non-Mongo schemas can
+      // declare `defaultSort: false` without constructing their own
+      // BaseController. `undefined` falls back to BaseController's own
+      // default (`-createdAt`) for back-compat.
+      ...(resolvedConfig.defaultSort !== undefined
+        ? { defaultSort: resolvedConfig.defaultSort }
+        : {}),
       matchesFilter: config.adapter?.matchesFilter,
       cache: resolvedConfig.cache,
       onFieldWriteDenied: resolvedConfig.onFieldWriteDenied,
@@ -1033,29 +1084,37 @@ function normalizeActionsToRouterConfig(
   const permissions: Record<string, PermissionCheck> = {};
   const schemas: Record<string, Record<string, unknown>> = {};
 
-  const updateFallback = resourcePermissions?.update as PermissionCheck | undefined;
-
   for (const [name, entry] of Object.entries(actions)) {
-    let explicit: PermissionCheck | undefined;
+    const explicit =
+      typeof entry !== "function" && entry.permissions
+        ? (entry.permissions as PermissionCheck)
+        : undefined;
 
     if (typeof entry === "function") {
       handlers[name] = entry;
     } else {
       const def = entry as ActionDefinition;
       handlers[name] = def.handler;
-      if (def.permissions) {
-        explicit = def.permissions;
-        permissions[name] = def.permissions;
-      }
+      if (def.permissions) permissions[name] = def.permissions;
       if (def.schema) schemas[name] = def.schema as Record<string, unknown>;
     }
 
-    // Apply fallback chain if no explicit per-action gate was set.
-    // `globalAuth` is handled inside `createActionRouter` already — we only
-    // need to cover the "neither per-action nor globalAuth" case by filling
-    // `actionPermissions[name]` from the update permission.
-    if (!explicit && !globalAuth && updateFallback) {
-      permissions[name] = updateFallback;
+    // Resolve the effective gate via the shared resolver so HTTP, MCP, and
+    // OpenAPI apply the SAME fallback chain. HTTP also needs to emit a warn
+    // when the chain hits `permissions.update`, and fail-loud at boot when
+    // nothing resolves — neither of those belong in the resolver itself.
+    const effective = resolveActionPermission({
+      action: entry,
+      resourcePermissions,
+      resourceActionPermissions: undefined,
+      globalAuth,
+    });
+
+    const hitUpdateFallback =
+      !explicit && !globalAuth && effective && effective === resourcePermissions?.update;
+
+    if (hitUpdateFallback) {
+      permissions[name] = effective as PermissionCheck;
       log?.warn?.(
         {
           resource: resourceName,
@@ -1071,7 +1130,7 @@ function normalizeActionsToRouterConfig(
     // Nothing to fall back to → fail loud at boot. Authenticated-only
     // actions are never silently allowed; callers must opt in with
     // `allowPublic()` or `requireAuth()` if that's actually desired.
-    if (!explicit && !globalAuth && !updateFallback) {
+    if (!effective) {
       throw new Error(
         `[Arc] Resource '${resourceName}': action '${name}' has no permission gate ` +
           `and the resource defines no \`permissions.update\` fallback. ` +

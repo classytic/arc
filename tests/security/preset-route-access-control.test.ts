@@ -11,6 +11,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
+import { simpleEqualityMatcher } from "../../src/utils/simpleEqualityMatcher.js";
 import type { AnyRecord, IRequestContext } from "../../src/types/index.js";
 
 // ============================================================================
@@ -83,8 +84,12 @@ describe("Security: Preset Route Access Control", () => {
         { _id: "1", slug: "my-item", status: "draft", organizationId: "org-1" },
       ]);
 
+      // v2.10.6: wire simpleEqualityMatcher — arc no longer implements
+      // Mongo syntax in memory, so the test must supply the matcher the
+      // same way a custom adapter would.
       const controller = new BaseController(repo, {
         presetFields: { slugField: "slug" },
+        matchesFilter: simpleEqualityMatcher,
       });
 
       const ctx = createContext(
@@ -215,7 +220,9 @@ describe("Security: Preset Route Access Control", () => {
         { _id: "1", name: "Deleted Item", status: "archived", deletedAt: new Date() },
       ]);
 
-      const controller = new BaseController(repo);
+      // v2.10.6: wire simpleEqualityMatcher so the toy repo still exercises
+      // policy-filter enforcement. See policy-filter-enforcement.test.ts.
+      const controller = new BaseController(repo, { matchesFilter: simpleEqualityMatcher });
 
       const ctx = createContext(
         { params: { id: "1" } },

@@ -78,14 +78,26 @@ export class BodySanitizer {
       delete sanitized[field];
     }
 
-    // Strip fields marked as systemManaged, readonly, or immutable (on updates) in fieldRules
+    // Resolve the caller's scope once — used below to honor the
+    // `preserveForElevated` opt-in on individual field rules.
+    const scopeForRules = req
+      ? ((meta ?? (req.metadata as ArcInternalMetadata | undefined))?._scope ?? PUBLIC_SCOPE)
+      : undefined;
+    const scopeIsElevated = scopeForRules ? isElevated(scopeForRules) : false;
+
+    // Strip fields marked as systemManaged, readonly, or immutable (on updates) in fieldRules.
+    // `preserveForElevated: true` short-circuits the strip for elevated
+    // scopes — needed for cross-tenant admin writes where the tenant
+    // field is the only way to pick a target org (defineResource auto-sets
+    // this flag on `tenantField`; see src/core/defineResource.ts).
     const fieldRules = this.schemaOptions.fieldRules ?? {};
     for (const [field, rules] of Object.entries(fieldRules)) {
-      if (rules.systemManaged || rules.readonly) {
+      const bypass = Boolean(rules.preserveForElevated) && scopeIsElevated;
+      if ((rules.systemManaged || rules.readonly) && !bypass) {
         delete sanitized[field];
       }
       // Immutable fields cannot be changed after creation
-      if (_operation === "update" && (rules.immutable || rules.immutableAfterCreate)) {
+      if (_operation === "update" && (rules.immutable || rules.immutableAfterCreate) && !bypass) {
         delete sanitized[field];
       }
     }

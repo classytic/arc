@@ -9,16 +9,28 @@
  * so consumers can build and decorate the store (metrics, tracing, key
  * namespacing) before passing it via `store:`.
  *
- * Requires mongokit ≥3.10 (or equivalent) — `findOneAndUpdate` is essential
- * for the atomic upsert + conditional-lock handshake.
+ * Portability: filters compose via `@classytic/repo-core/filter` builders
+ * (`and` / `or` / `eq` / `gt` / `lt` / `exists` / `startsWith`) and updates
+ * via `@classytic/repo-core/update` (`update({ set, unset, setOnInsert })`).
+ * Both IRs compile to Mongo operators on mongokit, SQL predicates on
+ * sqlitekit / pgkit, and `WhereInput` / `update` on prismakit. The store
+ * therefore runs identically on every backend that implements the
+ * `StandardRepo.findOneAndUpdate` + `getOne` + `deleteMany` surface.
  */
 
+import { and, eq as eqFilter, exists, gt, lt, or, startsWith } from "@classytic/repo-core/filter";
+import { update } from "@classytic/repo-core/update";
 import type { RepositoryLike } from "../adapters/interface.js";
 import { createIsDuplicateKeyError, createSafeGetOne } from "../adapters/store-helpers.js";
 import type { IdempotencyResult, IdempotencyStore } from "./stores/interface.js";
 
-interface IdempotencyDoc {
-  _id: string;
+/**
+ * Idempotency document shape. The primary-key field is determined by the
+ * kit's `repository.idField` (defaults to `_id` on mongokit, `id` on
+ * sqlitekit) — using `Record<string, unknown>` keeps the interface
+ * driver-agnostic without fighting the type system over a dynamic key.
+ */
+interface IdempotencyDoc extends Record<string, unknown> {
   result?: {
     statusCode: number;
     headers: Record<string, string>;
@@ -47,15 +59,19 @@ export function repositoryAsIdempotencyStore(
     Pick<RepositoryLike, "getOne" | "deleteMany" | "findOneAndUpdate">
   >;
 
+  // Primary-key column name. Kits declare this on `MinimalRepo.idField`
+  // (mongokit → '_id', sqlitekit → 'id', others per their schema). Without
+  // it we'd hardcode the Mongo convention and break on SQL-backed stores.
+  const idField = repository.idField ?? "_id";
+
   const isDuplicateKeyError = createIsDuplicateKeyError(repository);
   const safeGetOne = createSafeGetOne(repository);
-  const escapeRegex = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
   return {
     name: "repository",
 
     async get(key: string): Promise<IdempotencyResult | undefined> {
-      const doc = (await safeGetOne({ _id: key })) as IdempotencyDoc | null;
+      const doc = (await safeGetOne(eqFilter(idField, key))) as IdempotencyDoc | null;
       if (!doc?.result) return undefined;
       if (new Date(doc.expiresAt) < new Date()) return undefined;
       return {
@@ -70,9 +86,9 @@ export function repositoryAsIdempotencyStore(
 
     async set(key: string, result: Omit<IdempotencyResult, "key">): Promise<void> {
       await r.findOneAndUpdate(
-        { _id: key },
-        {
-          $set: {
+        eqFilter(idField, key),
+        update({
+          set: {
             result: {
               statusCode: result.statusCode,
               headers: result.headers,
@@ -81,8 +97,8 @@ export function repositoryAsIdempotencyStore(
             createdAt: result.createdAt,
             expiresAt: result.expiresAt,
           },
-          $unset: { lock: "" },
-        },
+          unset: ["lock"],
+        }),
         { upsert: true, returnDocument: "after" },
       );
     },
@@ -95,15 +111,16 @@ export function repositoryAsIdempotencyStore(
         // findOneAndUpdate with upsert + compound filter: acquire lock only
         // when no active lock exists. Returns the (pre- or post-update) doc
         // on success; throws a dup-key error on upsert race → return false.
+        //
+        // Filter IR handles dot-path fields (`lock.expiresAt`) identically
+        // across kits — mongokit dot-accesses, SQL kits treat as nested JSON
+        // or require flattened columns (backend-specific, documented per kit).
         const doc = await r.findOneAndUpdate(
-          {
-            _id: key,
-            $or: [{ lock: { $exists: false } }, { "lock.expiresAt": { $lt: now } }],
-          },
-          {
-            $set: { lock: { requestId, expiresAt: lockExpiresAt } },
-            $setOnInsert: { createdAt: now, expiresAt: docExpiresAt },
-          },
+          and(eqFilter(idField, key), or(exists("lock", false), lt("lock.expiresAt", now))),
+          update({
+            set: { lock: { requestId, expiresAt: lockExpiresAt } },
+            setOnInsert: { createdAt: now, expiresAt: docExpiresAt },
+          }),
           { upsert: true, returnDocument: "after" },
         );
         return doc !== null && doc !== undefined;
@@ -114,35 +131,45 @@ export function repositoryAsIdempotencyStore(
     },
 
     async unlock(key: string, requestId: string): Promise<void> {
-      await r.findOneAndUpdate({ _id: key, "lock.requestId": requestId }, { $unset: { lock: "" } });
+      await r.findOneAndUpdate(
+        and(eqFilter(idField, key), eqFilter("lock.requestId", requestId)),
+        update({ unset: ["lock"] }),
+      );
     },
 
     async isLocked(key: string): Promise<boolean> {
-      const doc = (await safeGetOne({ _id: key })) as IdempotencyDoc | null;
+      const doc = (await safeGetOne(eqFilter(idField, key))) as IdempotencyDoc | null;
       if (!doc?.lock) return false;
       return new Date(doc.lock.expiresAt) > new Date();
     },
 
     async delete(key: string): Promise<void> {
-      await r.deleteMany({ _id: key });
+      await r.deleteMany(eqFilter(idField, key));
     },
 
     async deleteByPrefix(prefix: string): Promise<number> {
-      const result = (await r.deleteMany({
-        _id: { $regex: `^${escapeRegex(prefix)}` },
-      })) as { deletedCount?: number };
+      // `startsWith` is portable — mongokit compiles to `$regex`, SQL kits
+      // compile to `LIKE 'prefix%'`, Prisma to `startsWith`. Wildcard chars
+      // in `prefix` (`%`, `_`) are escaped by the builder automatically.
+      const result = (await r.deleteMany(startsWith(idField, prefix, "sensitive"))) as {
+        deletedCount?: number;
+      };
       return result.deletedCount ?? 0;
     },
 
     async findByPrefix(prefix: string): Promise<IdempotencyResult | undefined> {
-      const doc = (await safeGetOne({
-        _id: { $regex: `^${escapeRegex(prefix)}` },
-        result: { $exists: true },
-        expiresAt: { $gt: new Date() },
-      })) as IdempotencyDoc | null;
+      const doc = (await safeGetOne(
+        and(
+          startsWith(idField, prefix, "sensitive"),
+          exists("result", true),
+          gt("expiresAt", new Date()),
+        ),
+      )) as IdempotencyDoc | null;
       if (!doc?.result) return undefined;
       return {
-        key: doc._id,
+        // Extract the matched doc's key via the configured `idField` —
+        // returning `doc._id` would break on SQL kits where the column is `id`.
+        key: String(doc[idField] ?? prefix),
         statusCode: doc.result.statusCode,
         headers: doc.result.headers,
         body: doc.result.body,
