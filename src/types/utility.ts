@@ -18,11 +18,8 @@ import type { ResourceConfig } from "./resource.js";
  * type Doc2 = InferDocType<typeof resource>;    // From ResourceConfig
  * ```
  */
-export type InferDocType<T> = T extends DataAdapter<infer D>
-  ? D
-  : T extends ResourceConfig<infer D>
-    ? D
-    : never;
+export type InferDocType<T> =
+  T extends DataAdapter<infer D> ? D : T extends ResourceConfig<infer D> ? D : never;
 
 /**
  * Infer document type from a `DataAdapter`. Falls back to `unknown`

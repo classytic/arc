@@ -8,9 +8,9 @@
  * Use `raw: false` for ControllerHandler, `raw: true` for FastifyHandler.
  */
 
-import type { FastifyRequest, FastifyReply } from 'fastify';
-import type { UserBase } from '../permissions/types.js';
-import type { RequestContext } from './index.js';
+import type { FastifyReply, FastifyRequest } from "fastify";
+import type { UserBase } from "../permissions/types.js";
+import type { RequestContext } from "./index.js";
 
 /**
  * Minimal server accessor — exposes safe, read-only server decorators.
@@ -20,14 +20,40 @@ import type { RequestContext } from './index.js';
 export interface ServerAccessor {
   /** Event bus — publish domain events from any handler */
   events?: {
-    publish: <T>(type: string, payload: T, meta?: Partial<Record<string, unknown>>) => Promise<void>;
+    publish: <T>(
+      type: string,
+      payload: T,
+      meta?: Partial<Record<string, unknown>>,
+    ) => Promise<void>;
   };
   /** Audit logger — log custom audit entries */
   audit?: {
-    create: (resource: string, documentId: string, data: Record<string, unknown>, context?: Record<string, unknown>) => Promise<void>;
-    update: (resource: string, documentId: string, before: Record<string, unknown>, after: Record<string, unknown>, context?: Record<string, unknown>) => Promise<void>;
-    delete: (resource: string, documentId: string, data: Record<string, unknown>, context?: Record<string, unknown>) => Promise<void>;
-    custom: (resource: string, documentId: string, action: string, data?: Record<string, unknown>, context?: Record<string, unknown>) => Promise<void>;
+    create: (
+      resource: string,
+      documentId: string,
+      data: Record<string, unknown>,
+      context?: Record<string, unknown>,
+    ) => Promise<void>;
+    update: (
+      resource: string,
+      documentId: string,
+      before: Record<string, unknown>,
+      after: Record<string, unknown>,
+      context?: Record<string, unknown>,
+    ) => Promise<void>;
+    delete: (
+      resource: string,
+      documentId: string,
+      data: Record<string, unknown>,
+      context?: Record<string, unknown>,
+    ) => Promise<void>;
+    custom: (
+      resource: string,
+      documentId: string,
+      action: string,
+      data?: Record<string, unknown>,
+      context?: Record<string, unknown>,
+    ) => Promise<void>;
   };
   /** Logger — structured logging */
   log?: {
@@ -38,8 +64,12 @@ export interface ServerAccessor {
   };
   /** QueryCache — stale-while-revalidate data cache */
   queryCache?: {
-    get: <T>(key: string) => Promise<{ data: T; status: 'fresh' | 'stale' | 'miss' }>;
-    set: <T>(key: string, data: T, config: { staleTime?: number; gcTime?: number; tags?: string[] }) => Promise<void>;
+    get: <T>(key: string) => Promise<{ data: T; status: "fresh" | "stale" | "miss" }>;
+    set: <T>(
+      key: string,
+      data: T,
+      config: { staleTime?: number; gcTime?: number; tags?: string[] },
+    ) => Promise<void>;
     getResourceVersion: (resource: string) => Promise<number>;
     bumpResourceVersion: (resource: string) => Promise<void>;
   };
@@ -273,12 +303,8 @@ export type ControllerHandler<
  * }]
  * ```
  */
-export type FastifyHandler<
-  RouteGeneric extends Record<string, unknown> = Record<string, unknown>,
-> = (
-  request: FastifyRequest<RouteGeneric>,
-  reply: FastifyReply
-) => Promise<unknown> | unknown;
+export type FastifyHandler<RouteGeneric extends Record<string, unknown> = Record<string, unknown>> =
+  (request: FastifyRequest<RouteGeneric>, reply: FastifyReply) => Promise<unknown> | unknown;
 
 /**
  * Union type for route handlers
