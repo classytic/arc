@@ -72,6 +72,7 @@ import { hasEvents } from "../utils/typeGuards.js";
 import { resolveActionPermission } from "./actionPermissions.js";
 import { BaseController } from "./BaseController.js";
 import { createCrudRouter } from "./createCrudRouter.js";
+import { autoInjectTenantFieldRules } from "./schemaOptions.js";
 import { assertValidConfig } from "./validateResourceConfig.js";
 
 interface ExtendedResourceConfig<TDoc = AnyRecord> extends ResourceConfig<TDoc> {
@@ -192,46 +193,20 @@ export function defineResource<TDoc = AnyRecord>(
 
   // 3a. Auto-mark the tenant field as `systemManaged` + `preserveForElevated` (v2.10.6).
   //
-  // Every multi-tenant resource needs the tenant column stripped from
-  // inbound bodies so member clients can't forge `organizationId: 'victim-org'`.
-  // `BodySanitizer` already does the strip when
-  // `schemaOptions.fieldRules[tenantField].systemManaged` is true — this
-  // just makes arc inject the rule automatically instead of forcing every
-  // resource to restate it.
-  //
-  // Paired with `preserveForElevated: true` so elevated admins (platform /
-  // superadmin scopes) can still pick a target org via the request body.
-  // Without that flag, an elevated admin with no pinned org would lose
-  // their body-supplied tenant — `BaseController.create` can't restore it
-  // from scope either (elevated-without-org has no orgId in
-  // `getOrgIdFromScope(scope)`), so the doc would land with a null tenant.
-  //
-  // Safe across the existing code paths:
-  //  - Member / service callers: body tenant stripped (scope re-stamps).
-  //  - Elevated + pinned org: body tenant stripped (scope re-stamps to
-  //    the pinned org).
-  //  - Elevated + no pinned org: body tenant survives; scope has no org
-  //    to re-stamp → doc takes the body value verbatim (cross-org write).
-  //  - Hosts that explicitly declare `fieldRules: { organizationId: {...} }`
-  //    take precedence — arc only fills in when the rule is missing.
-  if (resolvedConfig.tenantField !== false && typeof resolvedConfig.tenantField !== "undefined") {
-    const tenantField = resolvedConfig.tenantField || "organizationId";
-    const existing = resolvedConfig.schemaOptions?.fieldRules ?? {};
-    const existingRule = existing[tenantField];
-    if (!existingRule || existingRule.systemManaged === undefined) {
-      resolvedConfig.schemaOptions = {
-        ...(resolvedConfig.schemaOptions ?? {}),
-        fieldRules: {
-          ...existing,
-          [tenantField]: {
-            ...(existingRule ?? {}),
-            systemManaged: true,
-            preserveForElevated: existingRule?.preserveForElevated ?? true,
-          },
-        },
-      };
-    }
-  }
+  // Full rationale + edge cases live in `autoInjectTenantFieldRules`
+  // (src/core/schemaOptions.ts). Delegated to a shared util so every
+  // downstream reader sees the same post-inject schemaOptions —
+  // `BodySanitizer` (via `resolvedConfig.schemaOptions`), the adapter's
+  // `generateSchemas()` call below (same reference), the MCP tool
+  // generator (via `resource.schemaOptions`, which is spread from
+  // `resolvedConfig`), and the OpenAPI builder (reads the adapter's
+  // `openApiSchemas` output). 2.10.6 shipped with a forwarding bug where
+  // the adapter got raw `config.schemaOptions`; 2.10.7 closes that gap
+  // and this centralization prevents the bug class from recurring.
+  resolvedConfig.schemaOptions = autoInjectTenantFieldRules(
+    resolvedConfig.schemaOptions,
+    resolvedConfig.tenantField,
+  );
 
   // 4. Create or use provided controller using the full resolved config
   let controller = resolvedConfig.controller;
@@ -398,15 +373,31 @@ export function defineResource<TDoc = AnyRecord>(
   // ────────────────────────────────────────────────────────────────────────────
   if (!config.skipRegistry) {
     try {
-      // Start with adapter-generated schemas (createBody, updateBody, response, params)
+      // Start with adapter-generated schemas (createBody, updateBody, response, params).
+      // Pass `resolvedConfig.schemaOptions` — not the raw `config` — so adapters
+      // see the same `fieldRules` that `BodySanitizer` reads. Step 3a above
+      // auto-injects `{ systemManaged: true, preserveForElevated: true }` on
+      // the tenant field; without this forwarding, the OpenAPI / MCP body
+      // schemas would still emit `organizationId` as a required input field
+      // while the runtime sanitizer strips it — a half-wired auto-inject that
+      // forced every multi-tenant host to restate the rule at the adapter
+      // layer for their docs to match runtime behaviour.
+      // **Every downstream read comes from `resolvedConfig`, never raw `config`**.
+      // This is a deliberate, audited convention — 2.10.6 shipped with a
+      // single `config.schemaOptions` slip that broke the auto-inject
+      // forwarding to adapters, so every access here is normalized through
+      // `resolvedConfig` to close the bug class.
       let openApiSchemas: OpenApiSchemas | undefined;
-      if (config.adapter?.generateSchemas) {
+      if (resolvedConfig.adapter?.generateSchemas) {
         // Pass resource-level context so adapters can shape params/response etc.
         const adapterContext = {
-          idField: config.idField,
-          resourceName: config.name,
+          idField: resolvedConfig.idField,
+          resourceName: resolvedConfig.name,
         };
-        const generated = config.adapter.generateSchemas(config.schemaOptions, adapterContext);
+        const generated = resolvedConfig.adapter.generateSchemas(
+          resolvedConfig.schemaOptions,
+          adapterContext,
+        );
         if (generated) openApiSchemas = generated;
       }
 
@@ -416,8 +407,8 @@ export function defineResource<TDoc = AnyRecord>(
       // formats (UUIDs, slugs, ORD-2026-0001) must not be rejected by AJV
       // before BaseController runs the actual lookup.
       if (
-        config.idField &&
-        config.idField !== "_id" &&
+        resolvedConfig.idField &&
+        resolvedConfig.idField !== "_id" &&
         openApiSchemas?.params &&
         typeof openApiSchemas.params === "object"
       ) {
@@ -439,7 +430,7 @@ export function defineResource<TDoc = AnyRecord>(
             delete cleanedId.minLength;
             delete cleanedId.maxLength;
             if (!cleanedId.description) {
-              cleanedId.description = `${config.idField} (custom ID field)`;
+              cleanedId.description = `${resolvedConfig.idField} (custom ID field)`;
             }
             openApiSchemas = {
               ...openApiSchemas,
@@ -453,7 +444,7 @@ export function defineResource<TDoc = AnyRecord>(
       }
 
       // Layer queryParser's listQuery on top — parser wins over adapter
-      const queryParser = config.queryParser as QueryParserInterface | undefined;
+      const queryParser = resolvedConfig.queryParser as QueryParserInterface | undefined;
       if (queryParser?.getQuerySchema) {
         const querySchema = queryParser.getQuerySchema();
         if (querySchema) {
@@ -465,8 +456,8 @@ export function defineResource<TDoc = AnyRecord>(
       }
 
       // User-provided schemas win over everything (per-slot merge)
-      if (config.openApiSchemas) {
-        openApiSchemas = { ...openApiSchemas, ...config.openApiSchemas };
+      if (resolvedConfig.openApiSchemas) {
+        openApiSchemas = { ...openApiSchemas, ...resolvedConfig.openApiSchemas };
       }
 
       // Auto-convert Zod schemas to JSON Schema (no-op for plain JSON Schema)
@@ -476,7 +467,7 @@ export function defineResource<TDoc = AnyRecord>(
 
       // Store registry metadata for lazy registration when toPlugin() is called
       resource._registryMeta = {
-        module: config.module,
+        module: resolvedConfig.module,
         openApiSchemas,
       };
     } catch {
