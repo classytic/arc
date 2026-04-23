@@ -23,7 +23,7 @@ import { createApp } from "../../src/factory/index.js";
 import { allowPublic } from "../../src/permissions/index.js";
 import { getOrgContext } from "../../src/scope/types.js";
 import type { ArcRequest } from "../../src/types/index.js";
-import { envelope } from "../../src/types/index.js";
+import { envelope } from "../../src/utils/envelope.js";
 import { ArcError, createDomainError, isArcError } from "../../src/utils/errors.js";
 
 // ============================================================================

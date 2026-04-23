@@ -48,21 +48,13 @@ export type {
   UserBase,
 } from "../permissions/types.js";
 // ──────────────────────────────────────────────────────────────────────
-// Scope — re-export the scope union + helpers (universal across handlers)
+// Scope — types only. Runtime helpers (AUTHENTICATED_SCOPE, PUBLIC_SCOPE,
+// isAuthenticated, isElevated, isMember, getOrgId, getOrgRoles, getTeamId,
+// hasOrgAccess) were removed from this barrel in v2.11.0 so the `/types`
+// subpath can stay genuinely type-only. Import from `@classytic/arc/scope`.
 // ──────────────────────────────────────────────────────────────────────
 export type { ElevationEvent, ElevationOptions } from "../scope/elevation.js";
 export type { RequestScope } from "../scope/types.js";
-export {
-  AUTHENTICATED_SCOPE,
-  getOrgId,
-  getOrgRoles,
-  getTeamId,
-  hasOrgAccess,
-  isAuthenticated,
-  isElevated,
-  isMember,
-  PUBLIC_SCOPE,
-} from "../scope/types.js";
 // ──────────────────────────────────────────────────────────────────────
 // Auth
 // ──────────────────────────────────────────────────────────────────────
@@ -87,7 +79,8 @@ export type {
   UserLike,
   UserOrganization,
 } from "./base.js";
-export { envelope, getUserId } from "./base.js";
+// `envelope` and `getUserId` moved to `@classytic/arc/utils` in v2.11.0 —
+// this subpath is now strictly type-only.
 // ──────────────────────────────────────────────────────────────────────
 // Fastify-specific shapes
 // ──────────────────────────────────────────────────────────────────────
