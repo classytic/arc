@@ -271,6 +271,198 @@ sanitized replacement. Honors `ARC_SUPPRESS_WARNINGS=1` for hosts that
 want quiet production logs. No behavior change — same escape/truncate
 output — only observability.
 
+### 8. `systemManaged` fields stripped from body-schema `required[]`
+
+**What was broken (pricelist / be-prod report):** engines built on
+`@classytic/primitives` default to `tenant: { required: true }` in
+`resolveTenantConfig()`. That stamps `organizationId: { required: true }`
+on the Mongoose schema — and arc's adapter-generated `createBody` /
+`updateBody` reflected that into `required[]`. Fastify preValidation
+runs **before** arc's preHandler chain, so `multiTenantPreset`'s
+tenant-injection hook never got a chance to run: requests with a valid
+`x-organization-id` header 400'd with
+`must have required property 'organizationId'` even though the
+framework had already promised to inject the value. Only workaround
+was `createEngine({ tenant: { required: false } })` at every consumer
+— a leaky abstraction every new engine-backed resource had to remember.
+
+**What changed:**
+
+- New `stripSystemManagedFromBodyRequired` util in
+  [src/core/schemaOptions.ts](src/core/schemaOptions.ts) — walks
+  `schemaOptions.fieldRules` and strips every `systemManaged: true`
+  field from `createBody.required[]` + `updateBody.required[]`.
+  `properties` is left intact so elevated admins can still pick a
+  target tenant via the body.
+- `defineResource` calls it after adapter schema generation, using the
+  resolved (post-preset) `schemaOptions` as the source of truth.
+- `multiTenantPreset` now returns
+  `schemaOptions: { fieldRules: { [tenantField]: { systemManaged, preserveForElevated } } }`
+  for every tenant dimension. Hosts using `multiTenantPreset` **without**
+  a resource-level `tenantField` (the exact pricelist repro) are now
+  covered automatically — no more per-consumer
+  `tenant: { required: false }` workaround.
+
+Universal protection — every field that an arc preset, host config,
+or future injection mechanism marks `systemManaged: true` gets the
+wire-contract + runtime-sanitizer pairing for free. `auditedPreset`'s
+`createdBy`/`updatedBy` already declared the rule and were protected
+pre-2.11 on the built-in mongoose path; they're now double-covered
+regardless of whether the adapter uses its built-in generator or a
+kit-custom one.
+
+### 9. `BaseController` split — god class → `BaseCrudController` + 4 mixins
+
+**What changed:** `BaseController` was a 1,589-line god class bundling
+CRUD, soft-delete, tree, slug, and bulk ops. 2.11 splits those concerns
+into dedicated files and reassembles them via the standard TS mixin
+pattern:
+
+```
+BaseController = SoftDelete ∘ Tree ∘ Slug ∘ Bulk ∘ BaseCrudController
+```
+
+File layout:
+
+- [src/core/BaseCrudController.ts](src/core/BaseCrudController.ts) — core machinery + `list`/`get`/`create`/`update`/`delete` (~869 LOC)
+- [src/core/mixins/softDelete.ts](src/core/mixins/softDelete.ts) — `getDeleted`, `restore`
+- [src/core/mixins/tree.ts](src/core/mixins/tree.ts) — `getTree`, `getChildren`
+- [src/core/mixins/slug.ts](src/core/mixins/slug.ts) — `getBySlug`
+- [src/core/mixins/bulk.ts](src/core/mixins/bulk.ts) — `bulkCreate`, `bulkUpdate`, `bulkDelete`
+- [src/core/BaseController.ts](src/core/BaseController.ts) — 120-line composition with interface-merge for generic threading
+
+Shared helpers moved from `private` → `protected` so mixins can extend
+cleanly without duck-typing.
+
+**Host code that `extends BaseController` keeps working unchanged** —
+the composition is semantically identical to the pre-2.11 god class.
+4259 existing tests passed with zero edits.
+
+**New capability:** hosts that only need CRUD can now extend
+`BaseCrudController` directly for a slim ~869-LOC surface instead of
+the ~1,650-LOC composed one. Hosts can also pick specific mixins:
+
+```ts
+import { BaseCrudController, SoftDeleteMixin, BulkMixin } from '@classytic/arc';
+class OrderController extends SoftDeleteMixin(BulkMixin(BaseCrudController)) {}
+```
+
+**Public surface:** `BaseCrudController`, all four mixin factories
+(`BulkMixin`, `SlugMixin`, `SoftDeleteMixin`, `TreeMixin`), their
+extension-interface types (`BulkExt`, `SlugExt`, `SoftDeleteExt`,
+`TreeExt`), and the `ListResult<TDoc>` union are exported from the
+root `@classytic/arc` barrel and from `@classytic/arc/core`.
+
+**Full generic precision — `BaseController<Product>` really threads
+`Product`.** A companion `interface BaseController<TDoc, TRepo>` is
+declaration-merged with the runtime class, redeclaring every CRUD and
+preset method typed over `TDoc`. Result:
+
+```ts
+const ctrl = new BaseController<Product>(repo);
+ctrl.get(req)        // → Promise<IControllerResponse<Product>>
+ctrl.bulkCreate(req) // → Promise<IControllerResponse<Product[]>>
+ctrl.getDeleted(req) // → Promise<IControllerResponse<PaginationResult<Product>>>
+```
+
+`TDoc extends AnyRecord` constraint added to `BaseController`,
+`BaseCrudController`, `defineResource`, `defineResourceVariants` so
+the mixin stack's concrete `AnyRecord[]` returns remain assignable to
+the narrowed `TDoc[]` the interface promises.
+
+**Tests:** 10 composition-isolation tests + 7 vitest-`expectTypeOf`
+type-precision tests in `tests/core/mixins/` lock down the split and
+the generic-threading fix.
+
+### 9b. `resourceToTools.ts` split — 850 → 260 LOC (MCP policy hub)
+
+**What changed:** the 2.10.8 audit flagged `resourceToTools` as the
+next concentrated complexity hotspot after `BaseController`. 850 LOC
+mixing CRUD tool generation, custom-route wrapping, action translation,
+permission fallback resolution, naming, description generation, and
+Zod schema synthesis. Split into 4 internal units per the reviewer's
+explicit guidance (not over-engineered into many tiny files):
+
+- [src/integrations/mcp/input-schema.ts](src/integrations/mcp/input-schema.ts) — `buildInputSchema`, adapter-body extraction, JSON-schema type mapping
+- [src/integrations/mcp/crud-tools.ts](src/integrations/mcp/crud-tools.ts) — CRUD handler + annotations + descriptions
+- [src/integrations/mcp/route-tools.ts](src/integrations/mcp/route-tools.ts) — custom-route → tool translation + slugify
+- [src/integrations/mcp/action-tools.ts](src/integrations/mcp/action-tools.ts) — declarative-action → tool translation + schema conversion
+- [src/integrations/mcp/tool-helpers.ts](src/integrations/mcp/tool-helpers.ts) — shared permission evaluation, envelope conversion, controller auto-creation
+- [src/integrations/mcp/resourceToTools.ts](src/integrations/mcp/resourceToTools.ts) — 260-line orchestrator
+
+Zero behavior change — same tool output, same handler dispatch, same
+permission contract. 306/306 MCP tests pass.
+
+### 10. `@classytic/arc/types` is truly type-only
+
+**What changed:** the `/types` subpath claimed "TypeScript types only"
+in the docs but exported runtime values: `AUTHENTICATED_SCOPE`,
+`PUBLIC_SCOPE`, `isAuthenticated`, `isElevated`, `isMember`, `getOrgId`,
+`getOrgRoles`, `getTeamId`, `hasOrgAccess`, `envelope`, `getUserId`.
+An API lie the 2.10.8 audit flagged.
+
+- Scope runtime helpers were always exported from `@classytic/arc/scope`
+  too; the duplicate re-exports in `/types` are removed.
+- `envelope` moved to `@classytic/arc/utils/envelope`.
+- `getUserId(user: UserLike)` moved to `@classytic/arc/utils/userHelpers`.
+  (The scope-flavored `getUserId(scope: RequestScope)` in `/scope` is
+  a different signature and stays put.)
+- `src/types/base.ts` now contains only types + the Fastify declaration
+  merge. Zero runtime emit.
+- Root barrel still re-exports `envelope` and `getUserId` for DX.
+
+Migration: if your imports looked like
+`import { isElevated } from '@classytic/arc/types'`, change to
+`import { isElevated } from '@classytic/arc/scope'`. For `envelope` /
+`getUserId`, use `@classytic/arc/utils` or the root `@classytic/arc`.
+No internal arc code needed touching — every internal consumer was
+already going through the correct subpath.
+
+### 11. Root barrel discipline
+
+**What changed:** the audit flagged `export * from "./constants.js"` at
+[src/index.ts:140](src/index.ts#L140) as a wildcard re-export that
+bypassed the "root = essentials only" policy. Also,
+`validateResourceConfig` / `assertValidConfig` / `formatValidationErrors`
+were surfaced on the root despite being dev tooling (used at boot,
+CLI, and test time — not runtime essentials for defining a resource).
+
+- Replaced `export *` with an explicit named re-export list of 15
+  values + 4 types. Same symbols exposed — the barrel is now auditable
+  and future internal-only constants don't leak implicitly.
+- Moved `validateResourceConfig` + `assertValidConfig` +
+  `formatValidationErrors` (and their types `ConfigError`,
+  `ValidationResult`, `ValidateOptions`) from the root to
+  `@classytic/arc/utils`.
+
+Migration: if your code does
+`import { validateResourceConfig } from '@classytic/arc'`, change to
+`import { validateResourceConfig } from '@classytic/arc/utils'`.
+
+## Migration guide (2.10.x → 2.11.0)
+
+For most apps, only two paths may need touching:
+
+```diff
+# If you imported validation helpers from the root:
+- import { validateResourceConfig, assertValidConfig } from '@classytic/arc';
++ import { validateResourceConfig, assertValidConfig } from '@classytic/arc/utils';
+
+# If you imported scope helpers from /types:
+- import { isElevated, getOrgId, PUBLIC_SCOPE } from '@classytic/arc/types';
++ import { isElevated, getOrgId, PUBLIC_SCOPE } from '@classytic/arc/scope';
+```
+
+Everything else — `BaseController` subclasses, `defineResource` calls,
+permissions, presets, factory setup — works without edits. The
+BaseController god-class split is a natural mixin composition that
+preserves the instance shape and prototype chain (`instanceof
+BaseController` still works).
+
+Engine-backed resources with `multiTenantPreset` can **drop** the
+`createEngine({ tenant: { required: false } })` workaround — arc
+handles the `required[]` strip at the resource layer now.
+
 ## 2.10.8 — `config.hooks` handlers get `context` + `scope` (same shape as controllers)
 
 Supersedes 2.10.7 (unpublished). 2.10.7's inline `config.hooks` wrapper
