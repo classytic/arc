@@ -135,18 +135,39 @@ export {
  */
 
 // ============================================================================
-// Constants — single source of truth for defaults and magic values (zero deps)
-// ============================================================================
-export * from "./constants.js";
-
-// ============================================================================
-// Validation — resource config validation (zero deps, pure functions)
+// Constants — single source of truth for defaults and magic values (zero deps).
+// Explicit named re-exports (v2.11.0) — no `export *` so the barrel surface
+// is auditable and future internal-only constants don't leak implicitly.
 // ============================================================================
 export {
-  assertValidConfig,
-  formatValidationErrors,
-  validateResourceConfig,
-} from "./core/validateResourceConfig.js";
+  CRUD_OPERATIONS,
+  DEFAULT_ID_FIELD,
+  DEFAULT_LIMIT,
+  DEFAULT_MAX_LIMIT,
+  DEFAULT_SORT,
+  DEFAULT_TENANT_FIELD,
+  DEFAULT_UPDATE_METHOD,
+  HOOK_OPERATIONS,
+  HOOK_PHASES,
+  MAX_FILTER_DEPTH,
+  MAX_REGEX_LENGTH,
+  MAX_SEARCH_LENGTH,
+  MUTATION_OPERATIONS,
+  RESERVED_QUERY_PARAMS,
+  SYSTEM_FIELDS,
+} from "./constants.js";
+export type {
+  CrudOperation,
+  HookOperation,
+  HookPhase,
+  MutationOperation,
+} from "./constants.js";
+
+// ============================================================================
+// Validation — resource config validation. Relocated to `@classytic/arc/utils`
+// in v2.11.0 (dev tooling, not runtime essentials). Removed from root barrel
+// to enforce the "root = essentials only" policy.
+// ============================================================================
 export type {
   DynamicPermissionMatrix,
   DynamicPermissionMatrixConfig,

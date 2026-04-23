@@ -84,6 +84,18 @@ export {
 export { simpleEqualityMatcher } from "./simpleEqualityMatcher.js";
 // User-object helpers (moved from `/types` in v2.11.0)
 export { getUserId } from "./userHelpers.js";
+// Resource config validation — dev tooling moved here from the root barrel in
+// v2.11.0 so `@classytic/arc` can honor its "root = essentials only" policy.
+export type {
+  ConfigError,
+  ValidateOptions,
+  ValidationResult,
+} from "../core/validateResourceConfig.js";
+export {
+  assertValidConfig,
+  formatValidationErrors,
+  validateResourceConfig,
+} from "../core/validateResourceConfig.js";
 export type { StateMachine, TransitionConfig } from "./stateMachine.js";
 // State Machine
 export { createStateMachine } from "./stateMachine.js";
