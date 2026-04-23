@@ -103,7 +103,7 @@ interface ExtendedResourceConfig<TDoc = AnyRecord> extends ResourceConfig<TDoc> 
  * This is the MAIN entry point for creating Arc resources.
  * The adapter provides both repository and schema metadata.
  */
-export function defineResource<TDoc = AnyRecord>(
+export function defineResource<TDoc extends AnyRecord = AnyRecord>(
   config: ResourceConfig<TDoc>,
 ): ResourceDefinition<TDoc> {
   // Fail-fast validation
