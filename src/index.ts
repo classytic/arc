@@ -112,17 +112,24 @@ export {
 // from the root barrel to avoid pulling mongoose/prisma types into consumers
 // who don't use those adapters. Import from '@classytic/arc/adapters' instead.
 
-export type { BaseControllerOptions } from "./core/index.js";
+export type { BaseControllerOptions, ListResult } from "./core/index.js";
 // ============================================================================
-// Core — defineResource, BaseController
+// Core — defineResource, controller split (v2.11.0)
 // ============================================================================
 export {
   BaseController,
+  BaseCrudController,
+  BulkMixin,
   defineResource,
   defineResourceVariants,
   getControllerScope,
   ResourceDefinition,
+  SlugMixin,
+  SoftDeleteMixin,
+  TreeMixin,
 } from "./core/index.js";
+// Mixin extension interfaces — useful when typing custom mixin compositions
+export type { BulkExt, SlugExt, SoftDeleteExt, TreeExt } from "./core/index.js";
 
 /**
  * Note: Arc is database-agnostic

@@ -100,7 +100,7 @@ type VariantsResult<TDoc, V extends VariantsMap<TDoc>> = {
  *          `ResourceDefinition` ready for `.toPlugin()` registration.
  */
 export function defineResourceVariants<
-  TDoc = AnyRecord,
+  TDoc extends AnyRecord = AnyRecord,
   V extends VariantsMap<TDoc> = VariantsMap<TDoc>,
 >(base: Omit<ResourceConfig<TDoc>, "name" | "prefix">, variants: V): VariantsResult<TDoc, V> {
   const out = {} as VariantsResult<TDoc, V>;
