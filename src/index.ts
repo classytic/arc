@@ -239,6 +239,12 @@ export type {
   PresetFunction,
   // Presets
   PresetResult,
+  // Query parser contract — surfaced at the root so callers can annotate
+  // `queryParser: QueryParserInterface` without reaching into
+  // `@classytic/arc/types`. Also works around the alias-chain ergonomics
+  // issue where type-only re-exports couldn't be picked up by some
+  // bundlers without the direct root export.
+  QueryParserInterface,
   RateLimitConfig,
   // Registry
   RegistryEntry,

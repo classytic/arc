@@ -33,7 +33,10 @@ import {
   MAX_SEARCH_LENGTH,
   RESERVED_QUERY_PARAMS,
 } from "../constants.js";
+import { arcLog } from "../logger/index.js";
 import type { ParsedQuery, PopulateOption, QueryParserInterface } from "../types/index.js";
+
+const log = arcLog("queryParser");
 
 // ============================================================================
 // Dangerous Patterns (ReDoS protection)
@@ -379,11 +382,23 @@ export class ArcQueryParser implements QueryParserInterface {
         if (allOperators && operatorKeys.length > 0) {
           // All operators known and allowed — convert: { gte: '40', lte: '100' } → { $gte: 40, $lte: 100 }
           const mongoFilters: Record<string, unknown> = {};
+          let needsCaseInsensitive = false;
           for (const [op, opValue] of Object.entries(operatorObj)) {
             const mongoOp = this.operators[op];
             if (mongoOp) {
               mongoFilters[mongoOp] = this.parseFilterValue(opValue, op);
+              // v2.10.9 — `contains` / `like` promise case-insensitive
+              // matching in their OpenAPI descriptions. Emit `$options: 'i'`
+              // so the engine honors that promise. `regex` stays
+              // caller-controlled. See the bracket-notation path below
+              // for the companion stamp.
+              if (op === "contains" || op === "like") {
+                needsCaseInsensitive = true;
+              }
             }
+          }
+          if (needsCaseInsensitive) {
+            mongoFilters.$options = "i";
           }
           filters[key] = mongoFilters;
           continue;
@@ -414,7 +429,20 @@ export class ArcQueryParser implements QueryParserInterface {
         if (!filters[fieldName]) {
           filters[fieldName] = {};
         }
-        (filters[fieldName] as Record<string, unknown>)[mongoOp] = parsedValue;
+        const fieldFilter = filters[fieldName] as Record<string, unknown>;
+        fieldFilter[mongoOp] = parsedValue;
+
+        // v2.10.9 — `contains` and `like` advertise case-insensitive
+        // matching in their OpenAPI descriptions ("Contains substring
+        // (case-insensitive)" / "Pattern match (case-insensitive)") but
+        // previously emitted `{ $regex: pattern }` without `$options`,
+        // so Mongo evaluated them case-sensitively. The `regex` operator
+        // is left untouched — callers supplying a raw regex pattern
+        // control flags themselves (and can still use `[contains]` or
+        // `[like]` if they want the documented case-insensitive shape).
+        if (operator === "contains" || operator === "like") {
+          fieldFilter.$options = "i";
+        }
       } else if (!operator) {
         // Direct equality: status=active → { status: 'active' }
         filters[fieldName] = this.parseFilterValue(value);
@@ -555,12 +583,24 @@ export class ArcQueryParser implements QueryParserInterface {
 
   private sanitizeRegex(pattern: string): string {
     // Limit length
+    const truncated = pattern.length > this.maxRegexLength;
     let sanitized = pattern.slice(0, this.maxRegexLength);
 
     // Check for dangerous patterns
     if (DANGEROUS_REGEX_PATTERNS.test(sanitized)) {
-      // Escape the entire pattern to treat as literal string
+      // Escape the entire pattern to treat as literal string.
+      // v2.10.9 — surface a warning so callers stop silently debugging
+      // a pattern that was neutered to a literal. Gated through `arcLog`
+      // which honors `ARC_SUPPRESS_WARNINGS=1` for hosts that want quiet
+      // production logs.
       sanitized = sanitized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      log.warn(
+        `regex pattern matched a ReDoS-dangerous shape and was escaped to a literal string. original="${pattern}" sanitized="${sanitized}"`,
+      );
+    } else if (truncated) {
+      log.warn(
+        `regex pattern exceeded maxRegexLength (${this.maxRegexLength}) and was truncated. original-length=${pattern.length}`,
+      );
     }
 
     return sanitized;

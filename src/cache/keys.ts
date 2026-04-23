@@ -45,6 +45,13 @@ function stableStringify(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (typeof value !== "object") return String(value);
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  // RegExp has no enumerable own keys, so Object.keys(/foo/i) is []. Without
+  // special-casing, every regex stringifies to "{}" and two unrelated regex
+  // filters collide on the same cache key. Dormant under ArcQueryParser
+  // (plain strings) but hit the moment a host swaps in a parser that
+  // emits real RegExp (e.g. mongokit's QueryParser).
+  if (value instanceof RegExp) return `/${value.source}/${value.flags}`;
+  if (value instanceof Date) return `d${value.getTime()}`;
 
   const sorted = Object.keys(value as Record<string, unknown>).sort();
   return (

@@ -41,6 +41,236 @@ If you wrote handlers against the old `unknown` type and destructured
 narrower. If you wrote `(payload) => ...` assuming the argument was the
 payload, switch to `(event) => event.payload`.
 
+## 2.11.0 — architecture cleanup + pending bug-fix rollup
+
+**Breaking. No back-compat shims.** 2.11.0 folds the queued 2.10.9 bug
+fixes together with three architecture cleanups an audit surfaced
+against 2.10.8. Hosts will need to touch `extends BaseController`
+usages and a small set of imports — see the **Migration guide** at the
+bottom of this entry.
+
+### Bug fixes (originally queued for 2.10.9, rolled forward)
+
+Seven pre-existing bugs, two reviewer PRs against 2.10.8. All seven
+have shipped since the original arc beta (`c133a0d`, January 2026) —
+**not** introduced by the recent 2.10.x work. CLI-generated projects
+have always had the behavioral ones.
+
+- Two behavioral (`queryParser` not wired into custom controllers;
+  `[contains]`/`[like]` case-sensitive despite docs).
+- One correctness time bomb (cache-key collision for `RegExp` filters).
+- Two production-hardening options (`strictResourceDir`,
+  `strictResources`) + a DX fix (`resourceDir` accepts `import.meta.url`)
+  surfacing a silent-404 failure mode a reporter hit in deploy.
+- Two DX papercuts (`QueryParserInterface` now importable from the root;
+  `sanitizeRegex` now warns when it neuters a pattern).
+
+### 1. User-supplied controllers never received the resource's `queryParser`
+
+**What was broken:** `defineResource({ controller, queryParser })` threaded
+the parser into Fastify's `listQuery` schema (so `/resources?limit=…`
+validation worked), but skipped the user-supplied controller's own
+`QueryResolver`. The controller kept the default `ArcQueryParser` from
+its own `super()` call — so on resources with custom controllers, every
+operator filter (`[contains]`, `[like]`, `[ne]`, …) was evaluated by
+the wrong parser. Auto-constructed-controller resources in the same
+app worked correctly; the asymmetry was silent.
+
+This affected every `arc init` scaffold, because
+[src/cli/commands/init.ts](src/cli/commands/init.ts) ships this exact
+shape:
+
+```ts
+const exampleResource = defineResource<ExampleDocument>({
+  name: 'example',
+  adapter: createAdapter(Example, exampleRepository),
+  controller: exampleController,   // ← user-supplied
+  queryParser,                     // ← never reached the controller
+  presets: ['softDelete', 'bulk'],
+});
+```
+
+**What changed:**
+
+- New `BaseController.setQueryParser(qp)` method — replaces
+  `this.queryParser` and rebuilds `this.queryResolver` with the same
+  config (`maxLimit`, `defaultLimit`, `defaultSort`, `schemaOptions`,
+  `tenantField`). Idempotent; safe to call repeatedly.
+- `defineResource` now invokes it via duck-typing whenever the caller
+  supplies both `controller` and `queryParser`. Controllers that don't
+  implement `setQueryParser` (custom non-`BaseController` classes) are
+  left untouched — no throw, no warn.
+
+Tests in [tests/core/v2-10-9-queryparser-injection.test.ts](tests/core/v2-10-9-queryparser-injection.test.ts):
+the helper in isolation, the `defineResource` wiring for BaseController
+subclasses, the no-op case for bare custom controllers, the no-op case
+when no `queryParser` is declared, and a parity assertion showing both
+controller paths now emit the same filter shape.
+
+### 2. `[contains]` and `[like]` now honor their documented case-insensitivity
+
+**What was broken:** the operator descriptions in
+[src/utils/queryParser.ts](src/utils/queryParser.ts) literally say
+*"Contains substring (case-insensitive)"* and *"Pattern match
+(case-insensitive)"*, but the parser emitted `{ $regex: "<pattern>" }`
+without `$options: 'i'`. On MongoDB that's case-sensitive. On a live
+service (`/inventory/suppliers`, row `"Bigboss Factory"`):
+
+| query | result (pre-fix) |
+|---|---|
+| `name[contains]=bigboss` | 0 |
+| `name[contains]=BIGBOSS` | 0 |
+| `name[contains]=Bigboss` | 1 |
+
+**What changed:** both the bracket-notation path and the qs-parsed
+nested-object path now stamp `$options: "i"` when the operator is
+`contains` or `like`. The `regex` operator is **deliberately not
+changed** — raw-regex callers control flags themselves via `(?i)` or an
+explicit `$options`; arc shouldn't silently rewrite their intent.
+
+```ts
+parser.parse({ name: { contains: "bigboss" } }).filters
+// v2.10.9:  { name: { $regex: "bigboss", $options: "i" } }  ← matches "Bigboss Factory"
+// pre-fix:  { name: { $regex: "bigboss" } }                  ← misses
+```
+
+**Security note:** arc's `sanitizeRegex` (ReDoS guard, length cap) runs
+BEFORE the `$options` stamp. Dangerous patterns are still escaped to
+literal strings; only the matching mode changes.
+
+**Consumer impact:** any app that had queries like
+`status[contains]=Active` (stored as `"active"`) that were returning
+empty results despite obvious case-variant matches — those start
+working on upgrade. Apps that were relying on the buggy case-sensitive
+behavior for `contains`/`like` should migrate to the `regex` operator
+and supply their own flags.
+
+### 3. `QueryCache` keyed by `RegExp` values silently collided
+
+**What was broken:** `cache/keys.ts`'s `stableStringify` treated
+`RegExp` as a plain object. `Object.keys(/foo/i)` is `[]`, so every
+regex collapsed to `"{}"` and two unrelated regex filters hashed to
+the same cache key:
+
+```ts
+hashParams({ name: { $regex: /foo/i } }) // → djb2("{name:{$regex:{}}}")
+hashParams({ name: { $regex: /bar/i } }) // → SAME hash — collision
+```
+
+Dormant under `ArcQueryParser` (which returns plain strings). Ticking
+for any host pairing `queryCache` with mongokit's `QueryParser`, which
+emits real `RegExp` objects — the moment one user searched "foo" and
+another searched "bar", they'd get each other's cached results.
+
+**What changed:** `stableStringify` now serializes:
+- `RegExp` → `` `/${source}/${flags}` `` (matches intuition, no collision)
+- `Date` → `` `d${getTime()}` `` (caught in the same pass — dates had
+  the same "no enumerable own keys" problem)
+
+Four new tests in
+[tests/cache/cache-keys.test.ts](tests/cache/cache-keys.test.ts)
+covering distinct-source, distinct-flags, regex-vs-string-shape, and
+the Date companion fix.
+
+### 4. `QueryParserInterface` now importable from the root (`@classytic/arc`)
+
+**What was broken:** the type was exported from
+`@classytic/arc/types` but not re-exported by the root barrel.
+Consumers annotating custom controllers had no ergonomic import path
+and fell back to `as unknown as never` casts.
+
+**What changed:** [src/index.ts](src/index.ts) adds
+`QueryParserInterface` to the existing `export type { ... }` block.
+
+**Tree-shake verified:** the root bundle `dist/index.mjs` has zero
+runtime references to `QueryParserInterface` (types are erased).
+Smoke-tested with a simulated mongokit user importing only the type:
+compiled output contained zero arc imports and zero bytes of arc code.
+Users who pair mongokit's `QueryParser` (value) with arc's
+`QueryParserInterface` (type) pay exactly mongokit's parser size.
+
+```ts
+import { QueryParser } from '@classytic/mongokit';
+import type { QueryParserInterface } from '@classytic/arc';   // ← now works
+```
+
+### 5. `createApp({ resourceDir })` hardening — zero-discovery warn, `strictResourceDir`, `file://` URL form
+
+**What was broken:** three overlapping papercuts in one code path.
+
+1. **Silent zero-discovery.** `loadResources(dir)` returned `[]` when
+   the directory was missing, empty, or filename-mismatched. The app
+   booted with only auth routes, and every `/api/v1/*` served 404 for
+   an unknown window before anyone noticed.
+2. **`resourceDir: 'src/resources'` string form resolves against
+   `process.cwd()`.** Works in dev (cwd is the project root), silently
+   wrong in prod (cwd is wherever the process launched, which rarely
+   points at `dist/`). Docs already nudged toward
+   `loadResources(import.meta.url)`, but `createApp({ resourceDir })`
+   accepted only strings — so hosts had no way to combine the two.
+3. **`createApp` had no way to fail-fast.** Production hosts wanting
+   "loudly broken > silently empty" had to pre-check the array length
+   by hand.
+
+**What changed:**
+
+- After discovery resolves, if `resources.length === 0` and
+  `config.resourceDir` was provided, arc logs a `warn` with the raw
+  input AND the absolute resolved path. Always on — cost is one log
+  line on misconfig, zero in the happy path.
+- New `CreateAppOptions.strictResourceDir?: boolean` (default `false`).
+  When `true`, the same zero-discovery condition throws instead of
+  warning. Recommended for production.
+- `resourceDir` now accepts `import.meta.url` (`file://` URL) directly,
+  mirroring `loadResources`'s own signature. Bare strings still work;
+  `file://` URLs resolve to their containing directory — so the same
+  value can be used whether the caller prefers the createApp option or
+  the explicit `loadResources` form.
+
+```ts
+// Recommended shape for v2.10.9+:
+await createApp({
+  resourceDir: import.meta.url,      // ← URL form, dist/-safe
+  strictResourceDir: true,           // ← fail boot on misconfig
+  // ...
+});
+```
+
+### 6. `strictResources` — promote duplicate-name warn to error
+
+**What was broken:** arc detected duplicate resource names at
+`registerResources` time but only emitted `fastify.log.warn`. A reporter
+had 17 ghost `*.resource.js` files in `dist/` from a stale build; the
+warns scrolled past in the startup log stream, and the app eventually
+died downstream with a less obvious Mongoose "model already exists"
+trace. Arc knew first but didn't raise the signal.
+
+**What changed:** new `CreateAppOptions.strictResources?: boolean`
+(default `false`). When `true`, a duplicate-name match throws instead
+of warns, with the same message plus the "stale dist/" hint. Warning
+path unchanged — back-compat preserved.
+
+```ts
+await createApp({
+  resources: await loadResources(import.meta.url),
+  strictResources: process.env.NODE_ENV === "production",
+});
+```
+
+### 7. `sanitizeRegex` no longer silently neuters ReDoS-looking patterns
+
+**What was broken:** when a regex pattern matched
+`DANGEROUS_REGEX_PATTERNS`, `sanitizeRegex` would escape the entire
+pattern to a literal string and return it — no warning, no signal.
+Hosts with a legitimately-complex regex would see `[contains]` filters
+behave as plain substring matches and have no way to discover why.
+
+**What changed:** both the escape path AND the length-truncation path
+now emit a single `arcLog.warn` line with the original pattern and the
+sanitized replacement. Honors `ARC_SUPPRESS_WARNINGS=1` for hosts that
+want quiet production logs. No behavior change — same escape/truncate
+output — only observability.
+
 ## 2.10.8 — `config.hooks` handlers get `context` + `scope` (same shape as controllers)
 
 Supersedes 2.10.7 (unpublished). 2.10.7's inline `config.hooks` wrapper
@@ -806,6 +1036,17 @@ import type { OffsetPaginationResult } from '@classytic/repo-core/pagination';
 reported race; 2.9.3 is the correct fix.
 
 ## 2.9.1
+
+> **Migration — `IndexOptionsConflict` on upgrade.** Arc ≤2.9.0 auto-created
+> an unnamed index on `audit_logs.timestamp`; 2.9.1+ expects the host to
+> own it with a specific name + TTL (`ttl_timestamp`). If you hit
+> `IndexOptionsConflict` on the first boot after upgrading, drop the
+> legacy unnamed `timestamp_1` index before restarting so the new
+> `ttl_timestamp` can be created cleanly:
+>
+> ```js
+> db.audit_logs.dropIndex('timestamp_1')
+> ```
 
 **Breaking — MongoDB wrapper stores removed.** `auditPlugin`,
 `idempotencyPlugin`, and `EventOutbox` now take `repository: RepositoryLike`

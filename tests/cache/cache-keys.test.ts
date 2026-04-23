@@ -100,4 +100,36 @@ describe("hashParams()", () => {
     const h2 = hashParams({ ids: [2, 1] });
     expect(h1).not.toBe(h2);
   });
+
+  // v2.10.9 — stableStringify used to treat RegExp as a plain object, and
+  // Object.keys(/foo/i) is []. Result: every RegExp collapsed to "{}" and
+  // two unrelated regex filters collided on the same cache key. Dormant
+  // under ArcQueryParser (plain strings), live the moment mongokit's
+  // QueryParser — which returns real RegExp — is wired into queryCache.
+  it("distinguishes RegExp values with different sources", () => {
+    const h1 = hashParams({ name: { $regex: /foo/i } });
+    const h2 = hashParams({ name: { $regex: /bar/i } });
+    expect(h1).not.toBe(h2);
+  });
+
+  it("distinguishes RegExp values with different flags", () => {
+    const h1 = hashParams({ name: { $regex: /foo/i } });
+    const h2 = hashParams({ name: { $regex: /foo/ } });
+    expect(h1).not.toBe(h2);
+  });
+
+  it("RegExp and equivalent $regex string do not collide", () => {
+    const h1 = hashParams({ name: { $regex: /foo/i } });
+    const h2 = hashParams({ name: { $regex: "foo", $options: "i" } });
+    // Different shapes → different keys. The point of the fix is that a
+    // regex object no longer collapses to `{}`; whether it matches the
+    // ArcQueryParser shape is a caller concern.
+    expect(h1).not.toBe(h2);
+  });
+
+  it("Date values hash by millisecond, not by {}", () => {
+    const d1 = new Date("2026-01-01T00:00:00Z");
+    const d2 = new Date("2026-02-01T00:00:00Z");
+    expect(hashParams({ createdAt: d1 })).not.toBe(hashParams({ createdAt: d2 }));
+  });
 });
