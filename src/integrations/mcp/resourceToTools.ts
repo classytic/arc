@@ -1,31 +1,50 @@
 /**
- * @classytic/arc — Resource → MCP Tools Generator
+ * @classytic/arc — Resource → MCP Tools orchestrator.
  *
- * Converts a ResourceDefinition into an array of ToolDefinitions.
- * Core auto-generation logic that powers Level 1 (mcpPlugin).
+ * Top-level entry point for generating `ToolDefinition[]` from a
+ * `ResourceDefinition`. Delegates the heavy lifting to four focused
+ * internal units (v2.11.0 split):
+ *
+ * - [input-schema.ts](./input-schema.ts)   — CRUD input-shape generation
+ * - [crud-tools.ts](./crud-tools.ts)       — CRUD handler + annotations + descriptions
+ * - [route-tools.ts](./route-tools.ts)     — custom-route → tool translation
+ * - [action-tools.ts](./action-tools.ts)   — declarative-action → tool translation
+ *
+ * This file's job is purely orchestration: pick the controller, gather
+ * field rules once, and loop over CRUD / routes / actions delegating
+ * each tool's construction to the matching unit.
  *
  * All tool handlers call BaseController methods — same pipeline as REST.
  */
 
 import { z } from "zod";
 import { resolveActionPermission } from "../../core/actionPermissions.js";
-import { BaseController } from "../../core/BaseController.js";
 import type { ResourceDefinition } from "../../core/defineResource.js";
-import { normalizePermissionResult } from "../../permissions/applyPermissionResult.js";
-import type { PermissionCheck, PermissionResult } from "../../permissions/types.js";
-import type {
-  IControllerResponse,
-  IRequestContext,
-  ResourcePermissions,
-} from "../../types/index.js";
+import type { PermissionCheck } from "../../permissions/types.js";
+import type { ResourcePermissions } from "../../types/index.js";
 import { pluralize } from "../../utils/pluralize.js";
-import { buildRequestContext, type McpOperation } from "./buildRequestContext.js";
-import { type FieldRuleEntry, fieldRulesToZod } from "./fieldRulesToZod.js";
-import { jsonSchemaToZodShape } from "./jsonSchemaToZod.js";
+import {
+  ALL_CRUD_OPS,
+  CRUD_ANNOTATIONS,
+  createCrudHandler,
+  defaultCrudDescription,
+} from "./crud-tools.js";
+import { createActionToolHandler, convertActionSchemaToZod } from "./action-tools.js";
+import { type FieldRuleEntry } from "./fieldRulesToZod.js";
+import {
+  buildInputSchema,
+  deriveFieldRulesFromAdapter,
+  getAdapterBodies,
+} from "./input-schema.js";
+import {
+  createCustomRouteHandler,
+  createMcpHandlerPassthrough,
+  slugifyRoute,
+} from "./route-tools.js";
+import { createMcpController } from "./tool-helpers.js";
 import type {
   CallToolResult,
   CrudOperation,
-  McpAuthResult,
   McpResourceConfig,
   ToolAnnotations,
   ToolDefinition,
@@ -40,20 +59,6 @@ export interface ResourceToToolsConfig extends McpResourceConfig {
   /** Per-operation tool name overrides: `{ get: 'get_job_by_id' }` */
   names?: Partial<Record<CrudOperation, string>>;
 }
-
-// ============================================================================
-// Constants
-// ============================================================================
-
-const ALL_CRUD_OPS: CrudOperation[] = ["list", "get", "create", "update", "delete"];
-
-const ANNOTATIONS: Record<CrudOperation, ToolAnnotations> = {
-  list: { readOnlyHint: true },
-  get: { readOnlyHint: true },
-  create: { destructiveHint: false },
-  update: { destructiveHint: true, idempotentHint: true },
-  delete: { destructiveHint: true, idempotentHint: true },
-};
 
 // ============================================================================
 // Main
@@ -77,9 +82,8 @@ export function resourceToTools(
   config: ResourceToToolsConfig = {},
 ): ToolDefinition[] {
   // Use existing controller, or auto-create one from adapter for MCP.
-  // Controller is required for CRUD and additionalRoute tools, but NOT for
-  // actions (which carry their own handler). So we don't early-return here
-  // — resources with only `actions` (no adapter/controller) still produce tools.
+  // Controller is required for CRUD and string-handler routes, but NOT for
+  // actions (which carry their own handler) or function-handler routes.
   const controller =
     resource.controller ?? (resource.adapter ? createMcpController(resource) : undefined);
 
@@ -90,19 +94,13 @@ export function resourceToTools(
   const readonlyFields = resource.schemaOptions?.readonlyFields;
 
   // DX fallback chain when the user didn't supply explicit fieldRules:
-  //
-  //   1. Pull the adapter's generated body schemas (createBody/updateBody)
-  //      once and reuse them in two ways:
-  //      a) `jsonSchemaToZodShape` for create/update — preserves nested
-  //         objects, arrays, refs, composition (the high-fidelity path)
-  //      b) `deriveFieldRulesFromAdapter` for the list/filter path which
-  //         still uses the flat FieldRuleEntry shape
-  //   2. If the user DID supply fieldRules, those win — they may intentionally
-  //      hide fields or provide tighter constraints than the adapter knows.
+  //   1. Pull the adapter's generated body schemas once, used two ways:
+  //      a) `jsonSchemaToZodShape` for create/update (high-fidelity)
+  //      b) `deriveFieldRulesFromAdapter` for the list/filter path
+  //   2. If the user DID supply fieldRules, those win.
   const adapterBodies = explicitFieldRules ? undefined : getAdapterBodies(resource);
   const fieldRules = explicitFieldRules ?? deriveFieldRulesFromAdapter(resource);
 
-  // Auto-derive from QueryParser when schemaOptions doesn't have the fields
   const filterableFields =
     resource.schemaOptions?.filterableFields ?? resource.queryParser?.allowedFilterFields;
   const sortableFields = resource.queryParser?.allowedSortFields;
@@ -113,19 +111,12 @@ export function resourceToTools(
   const tools: ToolDefinition[] = [];
   const prefix = config.toolNamePrefix;
 
-  // CRUD tools require a controller — skip entirely for actions-only /
-  // pure-custom-route resources (those still emit tools from `routes` + `actions`
-  // below).
+  // ── CRUD tools ──
   if (controller) {
-    // Determine enabled operations — only disabledRoutes matters, NOT disableDefaultRoutes
-    let ops = ALL_CRUD_OPS.filter((op) => {
-      if (resource.disabledRoutes?.includes(op)) return false;
-      return true;
-    });
+    let ops = ALL_CRUD_OPS.filter((op) => !resource.disabledRoutes?.includes(op));
     if (config.operations) ops = ops.filter((op) => config.operations?.includes(op));
 
     for (const op of ops) {
-      // Support per-operation name overrides: names: { get: 'get_job_by_id' }
       const name =
         config.names?.[op] ??
         (op === "list"
@@ -136,12 +127,12 @@ export function resourceToTools(
         name,
         description:
           config.descriptions?.[op] ??
-          defaultDescription(op, resource.displayName, hasSoftDelete, {
+          defaultCrudDescription(op, resource.displayName, hasSoftDelete, {
             filterableFields,
             allowedOperators,
             sortableFields,
           }),
-        annotations: ANNOTATIONS[op],
+        annotations: CRUD_ANNOTATIONS[op],
         inputSchema: buildInputSchema(op, fieldRules, {
           hiddenFields,
           readonlyFields,
@@ -150,19 +141,16 @@ export function resourceToTools(
           allowedOperators,
           adapterBodies,
         }),
-        handler: createHandler(op, controller, resource.name, resource.permissions),
+        handler: createCrudHandler(op, controller, resource.name, resource.permissions),
       });
     }
   }
 
-  // Custom `routes` (v2.8 single source) → MCP tools. Runs REGARDLESS of
-  // controller presence — a route with `mcpHandler` needs no controller, and
-  // a pipeline-wrapped route with a function handler doesn't either. Only the
-  // controller-bound string-handler path below requires a controller.
-  //   - `mcp: false`     → skip this route
-  //   - `raw: true`      → tool only if `mcpHandler` is provided
-  //   - function handler + `raw: false/undefined` → wrapped tool via createCustomRouteHandler
-  //   - string handler   → needs a controller; skipped silently when absent
+  // ── Custom routes → MCP tools ──
+  //
+  // Runs REGARDLESS of controller presence — `mcpHandler` and function-handler
+  // routes don't need one. Only string-handler routes (which dispatch by name
+  // on the controller) require a controller.
   for (const route of resource.routes ?? []) {
     if (route.mcp === false) continue;
 
@@ -173,8 +161,6 @@ export function resourceToTools(
     const wrapHandler = !route.raw;
     if (!wrapHandler && !mcpHandler) continue;
     if (!mcpHandler && !["POST", "PUT", "PATCH", "DELETE"].includes(route.method)) continue;
-
-    // String handlers reach the controller by name — skip when there's no controller.
     if (!mcpHandler && typeof route.handler === "string" && !controller) continue;
 
     const opName = route.operation ?? slugifyRoute(route.method, route.path);
@@ -193,45 +179,29 @@ export function resourceToTools(
     const inputShape: Record<string, z.ZodTypeAny> = {};
     if (hasId) inputShape.id = z.string().describe("Resource ID");
 
-    if (mcpHandler) {
-      tools.push({
-        name: prefix ? `${prefix}_${opName}_${resource.name}` : `${opName}_${resource.name}`,
-        description: toolDescription,
-        annotations: toolAnnotations,
-        inputSchema: inputShape,
-        handler: async (input, _ctx) => {
-          try {
-            return await mcpHandler(input);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-          }
-        },
-      });
-    } else {
-      tools.push({
-        name: prefix ? `${prefix}_${opName}_${resource.name}` : `${opName}_${resource.name}`,
-        description: toolDescription,
-        annotations: toolAnnotations,
-        inputSchema: inputShape,
-        handler: createCustomRouteHandler(route, controller, hasId),
-      });
-    }
-  } // end: custom routes → MCP tools
+    const toolName = prefix
+      ? `${prefix}_${opName}_${resource.name}`
+      : `${opName}_${resource.name}`;
 
-  // v2.8.1 — Generate MCP tools from declarative `actions`.
-  // Naming convention: `{action}_{resource}` (e.g., `approve_order`)
-  // Each action becomes a tool with `id` (resource ID) + action-specific input fields.
-  // Handler calls `controller.executeAction(id, actionName, data)` or falls
-  // back to a direct controller method call.
+    tools.push({
+      name: toolName,
+      description: toolDescription,
+      annotations: toolAnnotations,
+      inputSchema: inputShape,
+      handler: mcpHandler
+        ? createMcpHandlerPassthrough(mcpHandler)
+        : createCustomRouteHandler(route, controller, hasId),
+    });
+  }
+
+  // ── Declarative actions → MCP tools (v2.8.1) ──
   if (resource.actions) {
     for (const [actionName, entry] of Object.entries(resource.actions)) {
       const def = typeof entry === "function" ? { handler: entry } : entry;
-
-      // Respect mcp: false on per-action definitions
       if (typeof def !== "function" && "mcp" in def && def.mcp === false) continue;
 
-      const mcpCfg = typeof def !== "function" && typeof def.mcp === "object" ? def.mcp : undefined;
+      const mcpCfg =
+        typeof def !== "function" && typeof def.mcp === "object" ? def.mcp : undefined;
       const description =
         (mcpCfg as Record<string, unknown> | undefined)?.description ??
         (typeof def !== "function" ? def.description : undefined) ??
@@ -241,12 +211,11 @@ export function resourceToTools(
         ? { ...((mcpCfg as Record<string, unknown>).annotations as ToolAnnotations) }
         : { destructiveHint: true };
 
-      // Build input schema: always requires `id`, plus action-specific fields from schema
+      // Build input schema: always requires `id`, plus action-specific fields
       const inputShape: Record<string, z.ZodTypeAny> = {
         id: z.string().describe("Resource ID"),
       };
 
-      // Extract action-specific fields from the schema (if provided)
       const rawSchema = typeof def !== "function" ? def.schema : undefined;
       if (rawSchema && typeof rawSchema === "object") {
         const converted = convertActionSchemaToZod(rawSchema as Record<string, unknown>);
@@ -288,563 +257,4 @@ export function resourceToTools(
   }
 
   return tools;
-}
-
-// ============================================================================
-// Input Schema Generation
-// ============================================================================
-
-interface AdapterBodies {
-  createBody?: Record<string, unknown>;
-  updateBody?: Record<string, unknown>;
-}
-
-function buildInputSchema(
-  op: CrudOperation,
-  fieldRules: Record<string, FieldRuleEntry> | undefined,
-  opts: {
-    hiddenFields?: string[];
-    readonlyFields?: string[];
-    extraHideFields?: string[];
-    filterableFields?: readonly string[];
-    allowedOperators?: readonly string[];
-    /**
-     * Raw JSON Schema body shapes from the adapter, used as a high-fidelity
-     * source for create/update tool input schemas when no explicit fieldRules
-     * are present. Bypassing the flat FieldRuleEntry intermediate layer
-     * preserves nested objects, arrays, refs, and composition.
-     */
-    adapterBodies?: AdapterBodies;
-  },
-): Record<string, z.ZodTypeAny> {
-  switch (op) {
-    case "list":
-      return fieldRulesToZod(fieldRules, { mode: "list", ...opts });
-    case "get":
-      return { id: z.string().describe("Resource ID") };
-    case "create": {
-      // Prefer rich JSON Schema → Zod when no explicit user fieldRules.
-      if (!fieldRules && opts.adapterBodies?.createBody) {
-        const shape = jsonSchemaToZodShape(
-          opts.adapterBodies.createBody as Parameters<typeof jsonSchemaToZodShape>[0],
-          "create",
-        );
-        if (shape) return shape;
-      }
-      return fieldRulesToZod(fieldRules, { mode: "create", ...opts });
-    }
-    case "update": {
-      const idShape = { id: z.string().describe("Resource ID") };
-      if (!fieldRules && opts.adapterBodies?.updateBody) {
-        const shape = jsonSchemaToZodShape(
-          opts.adapterBodies.updateBody as Parameters<typeof jsonSchemaToZodShape>[0],
-          "update",
-        );
-        if (shape) return { ...idShape, ...shape };
-      }
-      return {
-        ...idShape,
-        ...fieldRulesToZod(fieldRules, { mode: "update", ...opts }),
-      };
-    }
-    case "delete":
-      return { id: z.string().describe("Resource ID") };
-  }
-}
-
-/**
- * Pull the adapter's `createBody` / `updateBody` schemas, if any.
- * Returns `undefined` when the adapter doesn't generate schemas or throws.
- */
-function getAdapterBodies(resource: ResourceDefinition): AdapterBodies | undefined {
-  const adapter = resource.adapter;
-  if (!adapter || typeof adapter.generateSchemas !== "function") return undefined;
-  try {
-    const generated = adapter.generateSchemas(resource.schemaOptions, {
-      idField: resource.idField,
-      resourceName: resource.name,
-    });
-    if (!generated || typeof generated !== "object") return undefined;
-    const schemas = generated as Record<string, unknown>;
-    return {
-      createBody: schemas.createBody as Record<string, unknown> | undefined,
-      updateBody: schemas.updateBody as Record<string, unknown> | undefined,
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-// ============================================================================
-// Handlers
-// ============================================================================
-
-type ControllerMethod = (ctx: IRequestContext) => Promise<IControllerResponse>;
-
-function createHandler(
-  op: CrudOperation,
-  controller: unknown,
-  resourceName: string,
-  permissions?: ResourcePermissions,
-): ToolDefinition["handler"] {
-  const ctrl = controller as unknown as Record<string, ControllerMethod>;
-
-  return async (input, ctx) => {
-    try {
-      const method = ctrl[op];
-      if (typeof method !== "function") {
-        return {
-          content: [{ type: "text", text: `Operation "${op}" not available on ${resourceName}` }],
-          isError: true,
-        };
-      }
-
-      // Evaluate permission check → extract the full normalized result so
-      // BOTH filters and scope are honored (same contract as CRUD/action routes).
-      const permResult = await evaluatePermission(
-        permissions?.[op as keyof ResourcePermissions],
-        ctx.session,
-        resourceName,
-        op,
-        input,
-      );
-      if (permResult && !permResult.granted) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Permission denied: ${op} on ${resourceName}${
-                permResult.reason ? ` — ${permResult.reason}` : ""
-              }`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      const reqCtx = buildRequestContext(
-        input,
-        ctx.session,
-        op as McpOperation,
-        permResult?.filters,
-        permResult?.scope,
-      );
-      return toCallToolResult(await method(reqCtx));
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      ctx.log("error", `${resourceName}.${op}: ${msg}`).catch(() => {});
-      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-    }
-  };
-}
-
-function createCustomRouteHandler(
-  route: { handler: unknown; operation?: string; method: string; path: string },
-  controller: unknown,
-  hasId: boolean,
-): ToolDefinition["handler"] {
-  const ctrl = controller as unknown as Record<string, ControllerMethod> | undefined;
-  const handlerName =
-    typeof route.handler === "string"
-      ? route.handler
-      : (route.operation ?? slugifyRoute(route.method, route.path));
-
-  return async (input, ctx) => {
-    try {
-      // Function-handler case — arc's pipeline-wrapped handler is the route's
-      // own `handler`. No controller lookup needed.
-      if (typeof route.handler === "function") {
-        const reqCtx = buildRequestContext(input, ctx.session, hasId ? "update" : "create");
-        const fn = route.handler as (
-          req: ReturnType<typeof buildRequestContext>,
-        ) => Promise<unknown>;
-        const out = (await fn(reqCtx)) as unknown;
-        const envelope =
-          out !== null && typeof out === "object" && "success" in out
-            ? (out as { success: boolean; data?: unknown })
-            : { success: true, data: out };
-        return toCallToolResult(envelope);
-      }
-
-      // String-handler case — look up on the controller.
-      if (!ctrl) {
-        return {
-          content: [{ type: "text", text: `Handler "${handlerName}" has no controller available` }],
-          isError: true,
-        };
-      }
-      const method = ctrl[handlerName];
-      if (typeof method !== "function") {
-        return {
-          content: [{ type: "text", text: `Handler "${handlerName}" not found on controller` }],
-          isError: true,
-        };
-      }
-      const reqCtx = buildRequestContext(input, ctx.session, hasId ? "update" : "create");
-      return toCallToolResult(await method(reqCtx));
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-    }
-  };
-}
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-/**
- * Evaluate a resource's permission check in MCP context.
- *
- * Returns the full normalized `PermissionResult` so the caller can honor
- * ALL side-effects (filters + scope) consistently with CRUD/action routes.
- * Returns `null` when no permission is defined (= allow, no side effects).
- *
- * Promoting booleans to `PermissionResult` via the shared `normalizePermissionResult`
- * helper keeps the contract aligned with the rest of Arc — there is a single
- * normalization path for every call site.
- */
-async function evaluatePermission(
-  check: PermissionCheck | undefined,
-  session: McpAuthResult | null,
-  resource: string,
-  action: string,
-  input: Record<string, unknown>,
-): Promise<PermissionResult | null> {
-  if (!check) return null; // no permission defined = allow
-
-  // Build PermissionContext for MCP — spread full session so permission
-  // functions can access orgId, branchId, roles, etc. from the auth result
-  const user = session ? { id: session.userId, _id: session.userId, ...session } : null;
-  const fakeRequest = {
-    user,
-    headers: {},
-    params: {},
-    query: {},
-    body: input,
-  } as unknown as import("fastify").FastifyRequest;
-
-  const result = await check({
-    user,
-    request: fakeRequest,
-    resource,
-    action,
-    resourceId: typeof input.id === "string" ? input.id : undefined,
-    params: {},
-    data: input,
-  });
-
-  return normalizePermissionResult(result);
-}
-
-/**
- * Derive a fieldRules-shaped object from the adapter's auto-generated body
- * schemas. Used as a fallback when the resource doesn't supply explicit
- * fieldRules — this lets MCP create/update tools accept the same body fields
- * that the REST routes already accept.
- *
- * Returns `undefined` if no usable schema can be extracted, in which case
- * `fieldRulesToZod` falls back to its own behavior (empty shape).
- */
-function deriveFieldRulesFromAdapter(
-  resource: ResourceDefinition,
-): Record<string, FieldRuleEntry> | undefined {
-  const adapter = resource.adapter;
-  if (!adapter || typeof adapter.generateSchemas !== "function") return undefined;
-
-  let generated: unknown;
-  try {
-    generated = adapter.generateSchemas(resource.schemaOptions, {
-      idField: resource.idField,
-      resourceName: resource.name,
-    });
-  } catch {
-    return undefined;
-  }
-  if (!generated || typeof generated !== "object") return undefined;
-
-  const schemas = generated as Record<string, unknown>;
-  // Prefer createBody (it has required fields), fall back to updateBody.
-  const createBody = schemas.createBody as
-    | { properties?: Record<string, unknown>; required?: string[] }
-    | undefined;
-  const updateBody = schemas.updateBody as
-    | { properties?: Record<string, unknown>; required?: string[] }
-    | undefined;
-
-  const properties = createBody?.properties ?? updateBody?.properties;
-  if (!properties || typeof properties !== "object") return undefined;
-
-  const requiredSet = new Set<string>(createBody?.required ?? []);
-  const rules: Record<string, FieldRuleEntry> = {};
-
-  for (const [name, propSchema] of Object.entries(properties)) {
-    if (!propSchema || typeof propSchema !== "object") continue;
-    const prop = propSchema as Record<string, unknown>;
-    const rawType = prop.type;
-    // JSON Schema "type" can be a string or an array (e.g. ["string","null"]).
-    // Pick the first string variant we can map.
-    const candidateTypes: string[] = Array.isArray(rawType)
-      ? rawType.filter((t): t is string => typeof t === "string")
-      : typeof rawType === "string"
-        ? [rawType]
-        : [];
-    const arcType = mapJsonSchemaTypeToArcType(candidateTypes[0]);
-
-    const rule: FieldRuleEntry = { type: arcType };
-    if (requiredSet.has(name)) rule.required = true;
-    if (typeof prop.description === "string") rule.description = prop.description;
-    if (Array.isArray(prop.enum)) rule.enum = prop.enum.filter((v) => typeof v === "string");
-    if (typeof prop.minLength === "number") rule.minLength = prop.minLength;
-    if (typeof prop.maxLength === "number") rule.maxLength = prop.maxLength;
-    if (typeof prop.minimum === "number") rule.min = prop.minimum;
-    if (typeof prop.maximum === "number") rule.max = prop.maximum;
-    if (typeof prop.pattern === "string") rule.pattern = prop.pattern;
-
-    rules[name] = rule;
-  }
-
-  return Object.keys(rules).length > 0 ? rules : undefined;
-}
-
-function mapJsonSchemaTypeToArcType(jsonType: string | undefined): string {
-  switch (jsonType) {
-    case "string":
-      return "string";
-    case "number":
-    case "integer":
-      return "number";
-    case "boolean":
-      return "boolean";
-    case "array":
-      return "array";
-    case "object":
-      return "object";
-    default:
-      return "string";
-  }
-}
-
-function toCallToolResult(result: IControllerResponse): CallToolResult {
-  if (!result.success) {
-    return { content: [{ type: "text", text: result.error ?? "Operation failed" }], isError: true };
-  }
-  const output = result.meta ? { data: result.data, ...result.meta } : result.data;
-  return { content: [{ type: "text", text: JSON.stringify(output, null, 2) }] };
-}
-
-function defaultDescription(
-  op: CrudOperation,
-  displayName: string,
-  softDelete: boolean,
-  queryMeta?: {
-    filterableFields?: readonly string[];
-    allowedOperators?: readonly string[];
-    sortableFields?: readonly string[];
-  },
-): string {
-  const name = displayName.toLowerCase();
-  switch (op) {
-    case "list": {
-      const parts = [`List ${pluralize(name)} with optional filters and pagination.`];
-      if (queryMeta?.filterableFields?.length) {
-        parts.push(`Filterable fields: ${queryMeta.filterableFields.join(", ")}.`);
-      }
-      if (queryMeta?.allowedOperators?.length) {
-        parts.push(
-          `Filter operators: ${queryMeta.allowedOperators.join(", ")} (use field[op]=value syntax).`,
-        );
-      }
-      if (queryMeta?.sortableFields?.length) {
-        parts.push(`Sortable fields: ${queryMeta.sortableFields.join(", ")}.`);
-      }
-      return parts.join(" ");
-    }
-    case "get":
-      return `Get a single ${name} by ID`;
-    case "create":
-      return `Create a new ${name}`;
-    case "update":
-      return `Update an existing ${name} by ID`;
-    case "delete":
-      return softDelete
-        ? `Delete a ${name} by ID (soft delete — marks as deleted, not permanently removed)`
-        : `Delete a ${name} by ID`;
-  }
-}
-
-function slugifyRoute(method: string, path: string): string {
-  const clean = path
-    .replace(/:[^/]+/g, "")
-    .replace(/^\/+|\/+$/g, "")
-    .replace(/\//g, "_");
-  return clean ? `${method.toLowerCase()}_${clean}` : method.toLowerCase();
-}
-
-/**
- * Auto-create a BaseController from the resource's adapter for MCP use.
- * Called when the resource has an adapter but no controller
- * (e.g. `disableDefaultRoutes: true` skips controller creation in defineResource).
- */
-function createMcpController(resource: ResourceDefinition): unknown {
-  const repository = resource.adapter?.repository;
-  if (!repository) return undefined;
-
-  return new BaseController(repository, {
-    resourceName: resource.name,
-    schemaOptions: resource.schemaOptions,
-    tenantField: resource.tenantField,
-    idField: resource.idField,
-    matchesFilter: resource.adapter?.matchesFilter,
-  });
-}
-
-// ============================================================================
-// Action → MCP Tool helpers (v2.8.1)
-// ============================================================================
-
-/**
- * Convert an action schema (JSON Schema, Zod, or legacy field map) to a Zod
- * shape for MCP tool input. This mirrors `normalizeActionSchema` in
- * `createActionRouter.ts` but produces Zod types for the MCP SDK.
- */
-function convertActionSchemaToZod(raw: Record<string, unknown>): Record<string, z.ZodTypeAny> {
-  // Check if it's a Zod schema directly (has `_zod` marker)
-  if ("_zod" in raw && typeof (raw as Record<string, unknown>).shape === "object") {
-    const shape = (raw as Record<string, unknown>).shape as Record<string, z.ZodTypeAny>;
-    return { ...shape };
-  }
-
-  // Full JSON Schema with `type: 'object'` + `properties`
-  if (
-    (raw.type === "object" || "properties" in raw) &&
-    typeof raw.properties === "object" &&
-    raw.properties !== null
-  ) {
-    const props = raw.properties as Record<string, Record<string, unknown>>;
-    const requiredSet = new Set<string>(
-      Array.isArray(raw.required) ? (raw.required as string[]) : [],
-    );
-    return jsonSchemaPropsToZod(props, requiredSet);
-  }
-
-  // Legacy field map: each top-level key is a property
-  const result: Record<string, z.ZodTypeAny> = {};
-  for (const [fieldName, fieldSchema] of Object.entries(raw)) {
-    if (fieldName === "type" || fieldName === "properties" || fieldName === "required") continue;
-    if (!fieldSchema || typeof fieldSchema !== "object") continue;
-    const fs = fieldSchema as Record<string, unknown>;
-    const desc = typeof fs.description === "string" ? fs.description : `${fieldName} field`;
-    const isOptional = fs.required === false;
-    const base = jsonSchemaTypeToZod(fs);
-    result[fieldName] = isOptional ? base.optional().describe(desc) : base.describe(desc);
-  }
-  return result;
-}
-
-function jsonSchemaPropsToZod(
-  props: Record<string, Record<string, unknown>>,
-  requiredSet: Set<string>,
-): Record<string, z.ZodTypeAny> {
-  const result: Record<string, z.ZodTypeAny> = {};
-  for (const [name, schema] of Object.entries(props)) {
-    const desc = typeof schema.description === "string" ? schema.description : name;
-    const base = jsonSchemaTypeToZod(schema);
-    result[name] = requiredSet.has(name) ? base.describe(desc) : base.optional().describe(desc);
-  }
-  return result;
-}
-
-function jsonSchemaTypeToZod(schema: Record<string, unknown>): z.ZodTypeAny {
-  const type = typeof schema.type === "string" ? schema.type : "string";
-  // Handle enum before type switch — enum is a constraint, not a type
-  if (Array.isArray(schema.enum) && schema.enum.length > 0) {
-    return z.enum(schema.enum as [string, ...string[]]);
-  }
-  switch (type) {
-    case "number":
-    case "integer":
-      return z.number();
-    case "boolean":
-      return z.boolean();
-    case "array":
-      return z.array(z.unknown());
-    case "object":
-      return z.record(z.string(), z.unknown());
-    default:
-      return z.string();
-  }
-}
-
-/**
- * Create an MCP tool handler for a declarative action.
- *
- * Uses the SAME `evaluatePermission()` and `buildRequestContext()` as
- * CRUD tools — single code path for permission side effects, scope
- * construction, and request context assembly. This eliminates the
- * DRY/drift risk flagged in the review: REST and MCP action tools now
- * share identical context-building machinery.
- */
-function createActionToolHandler(
-  actionName: string,
-  handler: (id: string, data: Record<string, unknown>, req: unknown) => Promise<unknown>,
-  permissions: PermissionCheck | undefined,
-  resourceName: string,
-  _resourcePermissions: ResourcePermissions | undefined,
-): ToolDefinition["handler"] {
-  return async (input, ctx) => {
-    const session = ctx.session;
-
-    // Same evaluatePermission() as CRUD tools — honors scope, filters,
-    // all PermissionResult side effects identically in MCP and REST.
-    const permResult = await evaluatePermission(
-      permissions,
-      session,
-      resourceName,
-      actionName,
-      input,
-    );
-    if (permResult && !permResult.granted) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              success: false,
-              error: permResult.reason ?? `Permission denied for action '${actionName}'`,
-            }),
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    // Use the shared context builder — same factory as CRUD tools.
-    // The `action` operation type puts id in params, everything else in body,
-    // with correct `kind`-discriminated scope from session + permission override.
-    const inputWithAction = { ...input, action: actionName };
-    const reqCtx = buildRequestContext(
-      inputWithAction,
-      session,
-      "action",
-      permResult?.filters,
-      permResult?.scope,
-    );
-
-    const id = typeof input.id === "string" ? input.id : "";
-    const { id: _discardId, ...data } = input;
-
-    try {
-      // Pass the full IRequestContext as the `req` argument so action
-      // handlers see user, scope, metadata, and filters in the same
-      // shape as when called from the HTTP router.
-      const result = await handler(id, data, reqCtx);
-      return {
-        content: [{ type: "text", text: JSON.stringify({ success: true, data: result }) }],
-      };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-    }
-  };
 }
