@@ -51,6 +51,7 @@ import type {
   PresetResult,
   RequestWithExtras,
   RouteHandler,
+  RouteSchemaOptions,
 } from "../types/index.js";
 
 /**
@@ -336,8 +337,35 @@ export function multiTenantPreset(options: MultiTenantOptions = {}): PresetResul
   const getFilter = (route: CrudRouteKey): RouteHandler =>
     allowPublic.includes(route) ? flexibleTenantFilter : strictTenantFilter;
 
+  // v2.11.0 — declare `systemManaged: true` on every tenant dimension so
+  // the adapter-generated body schema strips them from `required[]` and
+  // `BodySanitizer` strips them from inbound member bodies. Closes the
+  // `@classytic/primitives` engine-default `required: true` conflict:
+  // Fastify preValidation used to reject `POST /pricelists` with
+  // `must have required property 'organizationId'` even though the client
+  // correctly passed `x-organization-id` and `multiTenantPreset` was
+  // about to inject the value. `preserveForElevated: true` keeps the
+  // elevated-admin-picks-org-via-body channel open.
+  //
+  // Hosts that declared `tenantField` at the resource level ALSO get
+  // these rules via `autoInjectTenantFieldRules` in `defineResource`;
+  // both paths converge on the same `resolvedConfig.schemaOptions.fieldRules`
+  // shape — defense in depth.
+  // Type mirrors the inline shape on `RouteSchemaOptions.fieldRules` —
+  // the exported `FieldRule` type is a leaner variant that doesn't carry
+  // `systemManaged` / `preserveForElevated`, so it's not usable here.
+  type FieldRuleEntry = NonNullable<RouteSchemaOptions["fieldRules"]>[string];
+  const fieldRules: Record<string, FieldRuleEntry> = {};
+  for (const spec of specs) {
+    fieldRules[spec.field] = {
+      systemManaged: true,
+      preserveForElevated: true,
+    };
+  }
+
   return {
     name: "multiTenant",
+    schemaOptions: { fieldRules },
     middlewares: {
       list: [getFilter("list")],
       get: [getFilter("get")],

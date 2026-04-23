@@ -71,3 +71,139 @@ export function autoInjectTenantFieldRules(
     },
   };
 }
+
+// ============================================================================
+// Strip framework-injected fields from body schema `required[]`
+// ============================================================================
+
+type JsonSchemaLike = {
+  type?: string;
+  properties?: Record<string, unknown>;
+  required?: readonly string[];
+  [key: string]: unknown;
+};
+
+/**
+ * Remove a field from a JSON Schema's `required[]` array. Leaves `properties`
+ * intact so advanced callers can still send the value — the field just isn't
+ * mandatory at validation time.
+ *
+ * Returns a fresh schema (no mutation). No-op when the schema is undefined,
+ * lacks a `required[]`, or the field is already absent from it.
+ */
+function stripFromRequired(
+  schema: JsonSchemaLike | undefined,
+  fieldName: string,
+): JsonSchemaLike | undefined {
+  if (!schema || typeof schema !== "object") return schema;
+  const required = schema.required;
+  if (!Array.isArray(required) || !required.includes(fieldName)) return schema;
+
+  const filtered = required.filter((f) => f !== fieldName);
+  const next: JsonSchemaLike = { ...schema };
+  if (filtered.length > 0) {
+    next.required = filtered;
+  } else {
+    delete next.required;
+  }
+  return next;
+}
+
+/**
+ * Strip framework-injected fields from the `required[]` list of every
+ * body-shaped slot in an adapter's generated schemas (v2.11.0).
+ *
+ * A "framework-injected field" is any field marked `systemManaged: true`
+ * in `schemaOptions.fieldRules`. Arc populates those fields from the
+ * request scope / preset middleware / controller — the client is never
+ * expected to supply them, so they must not be in the wire contract's
+ * `required[]` even if the underlying engine's Mongoose/Zod schema
+ * declares them as required at the DB layer.
+ *
+ * **The primary gotcha this closes:** engines built on
+ * `@classytic/primitives` (mongokit, pricelist, and every downstream
+ * `@classytic/*` engine) default to `tenant: { required: true }` in
+ * `resolveTenantConfig()`. That stamps `organizationId: { required: true }`
+ * on the Mongoose schema, which the adapter faithfully reflects into the
+ * generated `createBody` / `updateBody` schema's `required[]`. Fastify's
+ * preValidation runs BEFORE arc's preHandler chain, so
+ * `multiTenantPreset`'s tenant-injection hook never gets a chance to run —
+ * the request is rejected with `must have required property 'organizationId'`
+ * even though the client correctly supplied `x-organization-id` and the
+ * framework had already promised to inject the value.
+ *
+ * The only workaround before 2.11 was
+ * `createEngine({ tenant: { required: false } })` at every consumer site —
+ * a leaky abstraction every new engine-backed resource had to remember.
+ *
+ * **Secondary coverage (defense-in-depth):** the same transform also fires
+ * for `auditedPreset`'s `createdBy` / `updatedBy`, any future preset that
+ * marks fields `systemManaged`, and any host-declared `fieldRules` with
+ * `systemManaged: true`. Every framework-injected field gets the wire
+ * contract / runtime pairing for free.
+ *
+ * **Leaves `properties` intact** — elevated admins or advanced callers can
+ * still send systemManaged fields in the body. `BodySanitizer` enforces
+ * the runtime policy (`preserveForElevated`, `strip` vs `reject`, etc.).
+ *
+ * **No-op when:**
+ * - `schemaOptions.fieldRules` is undefined / empty
+ * - No rule has `systemManaged: true`
+ * - The generated schemas object is undefined (adapter didn't generate any)
+ *
+ * Applies to both `createBody` and `updateBody` — update middleware also
+ * injects tenant/audit fields, so the update wire contract has the same
+ * problem as create.
+ */
+export function stripSystemManagedFromBodyRequired<
+  T extends { createBody?: unknown; updateBody?: unknown } | undefined,
+>(schemas: T, schemaOptions: RouteSchemaOptions | undefined): T {
+  if (!schemas) return schemas;
+  const rules = schemaOptions?.fieldRules;
+  if (!rules) return schemas;
+
+  const systemManagedFields = Object.entries(rules)
+    .filter(([, rule]) => rule?.systemManaged === true)
+    .map(([field]) => field);
+  if (systemManagedFields.length === 0) return schemas;
+
+  const next = { ...schemas } as Record<string, unknown>;
+
+  let createBody = schemas.createBody as JsonSchemaLike | undefined;
+  for (const field of systemManagedFields) {
+    createBody = stripFromRequired(createBody, field);
+  }
+  if (createBody !== schemas.createBody) next.createBody = createBody;
+
+  let updateBody = schemas.updateBody as JsonSchemaLike | undefined;
+  for (const field of systemManagedFields) {
+    updateBody = stripFromRequired(updateBody, field);
+  }
+  if (updateBody !== schemas.updateBody) next.updateBody = updateBody;
+
+  return next as T;
+}
+
+/**
+ * @deprecated v2.11.0 — use `stripSystemManagedFromBodyRequired` instead,
+ * which is driven by `schemaOptions.fieldRules` (universal protection for
+ * every preset-injected field, not just tenant). Kept for one minor so
+ * late-landed callers can migrate; direct callers inside arc already moved.
+ */
+export function stripTenantFieldFromBodyRequired<
+  T extends { createBody?: unknown; updateBody?: unknown } | undefined,
+>(schemas: T, tenantField: string | false | undefined): T {
+  if (!schemas) return schemas;
+  if (tenantField === false || tenantField === undefined) return schemas;
+
+  const fieldName = tenantField || "organizationId";
+  const next = { ...schemas } as Record<string, unknown>;
+
+  const createBody = stripFromRequired(schemas.createBody as JsonSchemaLike | undefined, fieldName);
+  if (createBody !== schemas.createBody) next.createBody = createBody;
+
+  const updateBody = stripFromRequired(schemas.updateBody as JsonSchemaLike | undefined, fieldName);
+  if (updateBody !== schemas.updateBody) next.updateBody = updateBody;
+
+  return next as T;
+}
