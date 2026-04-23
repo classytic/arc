@@ -75,7 +75,10 @@ import { hasEvents } from "../utils/typeGuards.js";
 import { resolveActionPermission } from "./actionPermissions.js";
 import { BaseController } from "./BaseController.js";
 import { createCrudRouter } from "./createCrudRouter.js";
-import { autoInjectTenantFieldRules } from "./schemaOptions.js";
+import {
+  autoInjectTenantFieldRules,
+  stripSystemManagedFromBodyRequired,
+} from "./schemaOptions.js";
 import { assertValidConfig } from "./validateResourceConfig.js";
 
 interface ExtendedResourceConfig<TDoc = AnyRecord> extends ResourceConfig<TDoc> {
@@ -440,6 +443,24 @@ export function defineResource<TDoc = AnyRecord>(
         );
         if (generated) openApiSchemas = generated;
       }
+
+      // v2.11.0 — strip every framework-injected field (any rule with
+      // `systemManaged: true`) from the create/update body `required[]`
+      // arrays. Covers the reported `multiTenantPreset` + engine-required
+      // tenant conflict plus the broader class: `auditedPreset`'s
+      // `createdBy`/`updatedBy`, any future preset that marks a field
+      // systemManaged, and any host-declared rule. Full rationale +
+      // call-order lives in `stripSystemManagedFromBodyRequired`
+      // (src/core/schemaOptions.ts). Runs AFTER `autoInjectTenantFieldRules`
+      // and AFTER preset merge, so the resolved `schemaOptions.fieldRules`
+      // is the canonical source of "what will arc inject" — matching the
+      // shared-util pattern that BodySanitizer reads from (defense in depth
+      // between wire contract and runtime). Leaves `properties` intact so
+      // elevated admins can still send the value via the body.
+      openApiSchemas = stripSystemManagedFromBodyRequired(
+        openApiSchemas,
+        resolvedConfig.schemaOptions,
+      );
 
       // Safety net: if idField is overridden to a non-default value, strip any
       // ObjectId pattern left on params.id by legacy adapters/plugins that
