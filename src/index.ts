@@ -271,8 +271,9 @@ export type {
   ValidateOptions,
   ValidationResult,
 } from "./types/index.js";
-// DX helpers (value exports from types)
-export { envelope } from "./types/index.js";
+// DX helpers (v2.11.0: relocated to `/utils` as part of the `/types`
+// type-only cleanup — root re-exports for DX).
+export { envelope, getUserId } from "./utils/index.js";
 // ============================================================================
 // Errors — commonly needed alongside defineResource (zero deps, pure classes)
 // ============================================================================

@@ -57,13 +57,6 @@ export type UserLike = UserBase & {
   email?: string;
 };
 
-/** Extract user ID from a user object (supports both id and _id). */
-export function getUserId(user: UserLike | null | undefined): string | undefined {
-  if (!user) return undefined;
-  const id = user.id ?? user._id;
-  return id ? String(id) : undefined;
-}
-
 export interface UserOrganization {
   userId: string;
   organizationId: string;
@@ -108,24 +101,6 @@ export type ArcRequest = FastifyRequest & {
   signal: AbortSignal;
 };
 
-/**
- * Wrap data in Arc's standard `{ success: true, data }` envelope.
- *
- * @example
- * ```typescript
- * handler: async (req, reply) => {
- *   const data = await getResults();
- *   return envelope(data);  // → { success: true, data }
- * }
- * ```
- */
-export function envelope<T>(
-  data: T,
-  meta?: Record<string, unknown>,
-): {
-  success: true;
-  data: T;
-  [key: string]: unknown;
-} {
-  return { success: true, data, ...meta };
-}
+// `envelope()` and `getUserId()` moved to `@classytic/arc/utils` in v2.11.0
+// so this file can stay truly type-only (the `/types` subpath contract).
+// See `src/utils/envelope.ts` and `src/utils/userHelpers.ts`.

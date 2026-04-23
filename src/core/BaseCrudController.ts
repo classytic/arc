@@ -64,7 +64,7 @@ import type {
   RouteSchemaOptions,
   UserLike,
 } from "../types/index.js";
-import { getUserId } from "../types/index.js";
+import { getUserId } from "../utils/userHelpers.js";
 import { AccessControl, type FetchDenialReason } from "./AccessControl.js";
 import { BodySanitizer, type FieldWriteDenialPolicy } from "./BodySanitizer.js";
 import { getDefaultQueryParser, QueryResolver } from "./QueryResolver.js";
