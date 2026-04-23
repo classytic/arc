@@ -426,17 +426,29 @@ describe("ArcQueryParser", () => {
   // ============================================================================
 
   describe("Filtering — Regex operators (like/contains/regex)", () => {
-    it("should parse like operator as regex", () => {
+    it("should parse like operator as case-insensitive regex (v2.10.9)", () => {
+      // `like` is documented as "Pattern match (case-insensitive)" — the
+      // parser emits `$options: 'i'` so mongokit / mongoose honor that.
+      // Regression guard for the silently-case-sensitive-fuzzy-search bug
+      // surfaced in be-prod's supplier search (`name[contains]=bigboss`
+      // missing "Bigboss Factory").
       const result = parser.parse({ name: { like: "john" } });
-      expect(result.filters).toEqual({ name: { $regex: "john" } });
+      expect(result.filters).toEqual({ name: { $regex: "john", $options: "i" } });
     });
 
-    it("should parse contains operator as regex", () => {
+    it("should parse contains operator as case-insensitive regex (v2.10.9)", () => {
+      // Same rationale as `like` — docs advertise "Contains substring
+      // (case-insensitive)", parser now implements that promise.
       const result = parser.parse({ title: { contains: "hello" } });
-      expect(result.filters).toEqual({ title: { $regex: "hello" } });
+      expect(result.filters).toEqual({ title: { $regex: "hello", $options: "i" } });
     });
 
-    it("should parse regex operator", () => {
+    it("should parse regex operator WITHOUT forcing case-insensitive (v2.10.9)", () => {
+      // Unlike `contains` / `like`, the `regex` operator hands raw control
+      // to the caller — they supply their own pattern and are expected to
+      // include `(?i)` / `$options` if they want case-insensitivity. Arc
+      // must not silently add `$options: 'i'` here or case-sensitive
+      // regex queries would silently become case-insensitive.
       const result = parser.parse({ email: { regex: "^test@" } });
       expect(result.filters).toEqual({ email: { $regex: "^test@" } });
     });

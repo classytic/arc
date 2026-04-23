@@ -213,6 +213,24 @@ export function defineResource<TDoc = AnyRecord>(
 
   // 4. Create or use provided controller using the full resolved config
   let controller = resolvedConfig.controller;
+
+  // v2.10.9 — forward the resource-level `queryParser` to user-supplied
+  // controllers too. Before this, `defineResource({ controller, queryParser })`
+  // threaded the parser into Fastify's listQuery schema but never into the
+  // controller's own `QueryResolver`, so operator filters like `[contains]`
+  // / `[like]` silently fell back to the default `ArcQueryParser` on any
+  // resource that shipped a custom controller — including every resource
+  // scaffolded by `arc init`. Now we inject the parser via a duck-typed
+  // `setQueryParser()` call. Controllers that don't implement the method
+  // (custom non-BaseController implementations) are left untouched — no
+  // throw, no warn, caller is explicitly opting out of the contract.
+  if (controller && resolvedConfig.queryParser) {
+    const ctrl = controller as { setQueryParser?: (qp: QueryParserInterface) => void };
+    if (typeof ctrl.setQueryParser === "function") {
+      ctrl.setQueryParser(resolvedConfig.queryParser as QueryParserInterface);
+    }
+  }
+
   if (!controller && hasCrudRoutes && repository) {
     // Extract maxLimit from queryParser schema so BaseController's QueryResolver
     // and Fastify validation stay in sync with the parser's configured limit.

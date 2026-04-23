@@ -56,11 +56,36 @@ export async function registerResources(
   // resourceDir → auto-discover when no explicit resources array provided
   if (!config.resources?.length && config.resourceDir) {
     const { loadResources } = await import("./loadResources.js");
-    const { resolve } = await import("node:path");
-    const dir = resolve(config.resourceDir);
+    const { resolve, dirname } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    // v2.10.9 — accept `import.meta.url` directly. Before this, a string
+    // like 'src/resources' was the only form, and it resolved against
+    // process.cwd() — which mismatches `dist/` layouts at runtime and
+    // produced "deployed app 404s everything" outages. The file:// URL
+    // form mirrors loadResources's own signature so hosts can use the
+    // same value for both.
+    const rawDir = config.resourceDir;
+    const dir = rawDir.startsWith("file://")
+      ? dirname(fileURLToPath(rawDir))
+      : resolve(rawDir);
+    const discovered = await loadResources(dir, { logger: fastify.log });
+    if (discovered.length === 0) {
+      // v2.10.9 — fail-fast on zero-discovery. Silent-empty was the exact
+      // shape of a reported production outage: misconfigured resourceDir
+      // booted with only auth routes, every /api/v1/* served 404 for an
+      // unknown window before anyone noticed.
+      const msg =
+        `[arc] loadResources: resourceDir "${rawDir}" resolved to "${dir}" but ` +
+        "yielded 0 resources. Check the path, file naming (*.resource.{ts,js,mts,mjs}), " +
+        "and runtime layout (src/ vs dist/). Use `strictResourceDir: true` to fail boot.";
+      if (config.strictResourceDir) {
+        throw new Error(msg);
+      }
+      fastify.log.warn(msg);
+    }
     config = {
       ...config,
-      resources: await loadResources(dir, { logger: fastify.log }),
+      resources: discovered,
     };
   }
   if (config.resources?.length) {
@@ -69,10 +94,19 @@ export async function registerResources(
     for (const resource of config.resources) {
       if (resource.name) {
         if (seen.has(resource.name)) {
-          fastify.log.warn(
+          const msg =
             `Duplicate resource name "${resource.name}" detected. ` +
-              "This will cause route conflicts. Check your resources array and loadResources() output.",
-          );
+            "This will cause route conflicts. Check your resources array and loadResources() output. " +
+            "Common cause: stale compiled files in dist/ alongside src/. Use `strictResources: true` to fail boot.";
+          // v2.10.9 — opt-in strict mode. A reporter hit Mongoose model
+          // collisions downstream of arc's registry because 17 ghost
+          // .resource.js files from a stale dist/ registered duplicate
+          // names; a warn was easy to miss in the log stream. Strict
+          // mode raises the signal before the downstream collision.
+          if (config.strictResources) {
+            throw new Error(msg);
+          }
+          fastify.log.warn(msg);
         }
         seen.add(resource.name);
       }

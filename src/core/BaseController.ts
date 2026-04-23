@@ -208,8 +208,15 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
   readonly accessControl: AccessControl;
   /** Composable body sanitization (field permissions, system fields) */
   readonly bodySanitizer: BodySanitizer;
-  /** Composable query resolution (parsing, pagination, sort, select/populate) */
-  readonly queryResolver: QueryResolver;
+  /**
+   * Composable query resolution (parsing, pagination, sort, select/populate).
+   *
+   * Not `readonly` — `setQueryParser()` rebuilds this resolver to swap in a
+   * different parser (e.g. mongokit's `QueryParser`). `defineResource` calls
+   * it automatically when a resource supplies both `controller` and
+   * `queryParser`; direct consumers can also call it.
+   */
+  queryResolver: QueryResolver;
 
   private _matchesFilter?: (item: unknown, filters: Record<string, unknown>) => boolean;
   private _presetFields: { slugField?: string; parentField?: string } = {};
@@ -268,6 +275,43 @@ export class BaseController<TDoc = AnyRecord, TRepository extends RepositoryLike
     this.create = this.create.bind(this);
     this.update = this.update.bind(this);
     this.delete = this.delete.bind(this);
+  }
+
+  // ============================================================================
+  // Query-parser injection (post-construction)
+  // ============================================================================
+
+  /**
+   * Swap the controller's query parser. Rebuilds the internal `QueryResolver`
+   * with the new parser while preserving every other config (`maxLimit`,
+   * `defaultLimit`, `defaultSort`, `schemaOptions`, `tenantField`).
+   *
+   * **Why this exists (v2.10.9):** when a host supplies both
+   * `defineResource({ controller, queryParser })`, `defineResource` used to
+   * forward the `queryParser` only to the auto-constructed controller path;
+   * user-supplied controllers kept their own (default) `ArcQueryParser`, so
+   * operator filters like `[contains]` / `[like]` silently behaved
+   * differently between resources with and without a custom controller.
+   * The `setQueryParser` method is the injection point that closes that
+   * gap — `defineResource` calls it automatically on user-supplied
+   * controllers when the resource declares a `queryParser`.
+   *
+   * **Idempotent + safe to call repeatedly.** Does NOT touch `maxLimit`
+   * or `defaultLimit` — those are construction-time decisions the caller
+   * already expressed. If you want `maxLimit` re-derived from the new
+   * parser's `getQuerySchema().properties.limit.maximum`, pass it
+   * explicitly via the constructor instead.
+   */
+  setQueryParser(queryParser: QueryParserInterface): void {
+    this.queryParser = queryParser;
+    this.queryResolver = new QueryResolver({
+      queryParser: this.queryParser,
+      maxLimit: this.maxLimit,
+      defaultLimit: this.defaultLimit,
+      defaultSort: this.defaultSort,
+      schemaOptions: this.schemaOptions,
+      tenantField: this.tenantField,
+    });
   }
 
   // ============================================================================

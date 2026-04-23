@@ -652,25 +652,69 @@ export interface CreateAppOptions {
 
   /**
    * Auto-discover resources from a directory instead of passing an explicit
-   * `resources` array. Resolves relative to `process.cwd()`.
+   * `resources` array.
    *
-   * This replaces the common pattern:
-   * ```ts
-   * resources: await loadResources(import.meta.url)
-   * ```
+   * Accepts either a filesystem path OR `import.meta.url` (a `file://` URL).
+   * **Prefer the URL form in production** — bare strings resolve relative to
+   * `process.cwd()`, which diverges from `dist/` at runtime and was the root
+   * cause of a reported "deployed app serves 404 on every route" incident.
    *
    * When both `resourceDir` and `resources` are provided, `resources` wins
    * (explicit always beats convention).
    *
    * @example
    * ```ts
+   * // Recommended (v2.10.9+): URL form works in both src/ and dist/
+   * const app = await createApp({
+   *   resourceDir: import.meta.url,
+   *   resourcePrefix: '/api/v1',
+   * });
+   *
+   * // String form — resolves against process.cwd(), mind the dist/ gap
    * const app = await createApp({
    *   resourceDir: 'src/resources',
-   *   resourcePrefix: '/api/v1',
    * });
    * ```
    */
   resourceDir?: string;
+
+  /**
+   * Throw instead of silently booting with zero resources when `resourceDir`
+   * yields an empty result. Off by default to preserve back-compat — turning
+   * it on in production catches the "typoed path / stale dist/ layout"
+   * failure mode before the app accepts traffic.
+   *
+   * Only takes effect when `resourceDir` is set.
+   *
+   * @example
+   * ```ts
+   * await createApp({
+   *   resourceDir: import.meta.url,
+   *   strictResourceDir: process.env.NODE_ENV === 'production',
+   * });
+   * ```
+   *
+   * @default false
+   */
+  strictResourceDir?: boolean;
+
+  /**
+   * Throw instead of warn when two resources share the same `name`. Off by
+   * default to preserve back-compat; turn on in production to catch stale
+   * `dist/` files (a common source of `Mongoose model already exists`
+   * collisions downstream of arc's own registry).
+   *
+   * @example
+   * ```ts
+   * await createApp({
+   *   resources: await loadResources(import.meta.url),
+   *   strictResources: process.env.NODE_ENV === 'production',
+   * });
+   * ```
+   *
+   * @default false
+   */
+  strictResources?: boolean;
 
   /**
    * Custom plugin registration — runs after Arc core (security, auth, events)
