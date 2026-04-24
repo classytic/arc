@@ -665,21 +665,43 @@ defineResource({
 
 **Response header:** `x-cache: HIT | STALE | MISS`
 
-## BaseController
+## Controllers (v2.11 mixin split)
+
+`BaseController` was split in 2.11 from a 1,589-LOC god class into a mixin composition. `extends BaseController<Product>` still works exactly the same — a declaration-merged interface threads `TDoc` through every CRUD + preset method.
 
 ```typescript
 import { BaseController } from '@classytic/arc';
 import type { IRequestContext, IControllerResponse } from '@classytic/arc';
 
+// Full surface: CRUD + SoftDelete + Tree + Slug + Bulk
 class ProductController extends BaseController<Product> {
   constructor() { super(productRepo); }
 
-  async getFeatured(req: IRequestContext): Promise<IControllerResponse> {
+  async getFeatured(req: IRequestContext): Promise<IControllerResponse<Product[]>> {
     const products = await this.repository.getAll({ filters: { isFeatured: true } });
     return { success: true, data: products };
   }
 }
 ```
+
+**Slim CRUD-only surface** (869 LOC instead of 1,650):
+
+```typescript
+import { BaseCrudController } from '@classytic/arc';
+class ReportController extends BaseCrudController<Report> {}
+```
+
+**Pick specific mixins:**
+
+```typescript
+import { BaseCrudController, SoftDeleteMixin, BulkMixin } from '@classytic/arc';
+class OrderController extends SoftDeleteMixin(BulkMixin(BaseCrudController)) {}
+// → list/get/create/update/delete + getDeleted/restore + bulkCreate/bulkUpdate/bulkDelete
+```
+
+**Mixin surface:** `SoftDeleteMixin` (`getDeleted`, `restore`) · `TreeMixin` (`getTree`, `getChildren`) · `SlugMixin` (`getBySlug`) · `BulkMixin` (`bulkCreate`, `bulkUpdate`, `bulkDelete`). Each exported from `@classytic/arc` and `@classytic/arc/core`.
+
+**Shared helpers** (protected on `BaseCrudController` so mixins can extend): `meta(req)`, `getHooks(req)`, `tenantRepoOptions(req)`, `resolveRepoId(id, existing)`, `notFoundResponse(reason)`, `resolveCacheConfig(op)`, `cacheScope(req)`.
 
 **IRequestContext:** `{ params, query, body, user, headers, context, metadata, server }` — `user` is `Record<string, unknown> | undefined` (guard with `if (req.user)` on public routes)
 
