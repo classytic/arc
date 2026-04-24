@@ -2,7 +2,7 @@
 
 **Summary**: Things that bite if you don't know about them. Each has a number used across wiki links.
 **Sources**: AGENTS.md §6, CLAUDE.md.
-**Last updated**: 2026-04-24 (v2.11 additions + #25 action-router parity).
+**Last updated**: 2026-04-25 (#26 — `fieldRules.nullable` + `RouteSchemaOptions extends SchemaBuilderOptions`).
 
 ---
 
@@ -55,6 +55,12 @@
 24. **`resourceToTools` split into 4 units (v2.11).** When editing MCP tool generation, go to the matching file — `crud-tools.ts`, `route-tools.ts`, `action-tools.ts`, or `input-schema.ts`. `resourceToTools.ts` is now a 260-LOC orchestrator; edits there should be rare. Shared helpers live in `tool-helpers.ts`. See [[mcp]].
 
 25. **Action routes share the canonical preHandler order with CRUD (v2.11).** `createActionRouter` installs `buildActionPermissionMw` into the `permissionMw` slot of `buildPreHandlerChain` — same position CRUD uses. Ordering: `preAuth → arc → auth → permission → pluginMw → routeGuards`. Pre-2.11.0 the per-action permission check ran inside the route handler (after `pluginMw` + `routeGuards`), so `idempotencyMw` recorded unauthorized requests and guards saw unfiltered `request.scope` / `_policyFilters`. Three co-landing fixes: (a) `buildActionPipelineHandler` returns `Promise<IControllerResponse<unknown>>` so pipeline interceptors that fail with `{success:false, status, error, details, meta}` flow straight to the client with every field intact; (b) invalid-action 400s route through `sendControllerResponse` in both the prehandler and the defensive fallback — one wire shape; (c) `buildAuthMiddlewareForPermissions` accepts `ReadonlyArray<PermissionCheck | undefined>` and treats undefined as "public by omission" so `{ ping: undefined, promote: requireRoles([...]) }` doesn't 401 the public action. See [src/core/routerShared.ts](../src/core/routerShared.ts) and [[core]].
+
+26. **`RouteSchemaOptions extends SchemaBuilderOptions` + `fieldRules.nullable` (v2.11).** Two aligned fixes closing host-side casts at the kit/arc schemagen boundary.
+
+    **(a)** Arc imports `SchemaBuilderOptions` + `FieldRule` from `@classytic/repo-core/schema` (peerDep `>=0.2.0`). `RouteSchemaOptions extends SchemaBuilderOptions`; `ArcFieldRule extends FieldRule`. Hosts pass `schemaGenerator: buildCrudSchemasFromModel` directly — no `Parameters<typeof buildCrudSchemasFromModel>[1]` cast, no wrapper lambda. Arc's per-field extensions (`preserveForElevated`, `nullable`, `minLength`/`maxLength`/`min`/`max`/`pattern`, `description`) live on the richer `ArcFieldRule`; kits only see the repo-core floor. Compile-time relationship locked in `tests/adapters/schema-builder-options-compat.test.ts` via 3 `AssertAssignable` checks.
+
+    **(b)** `fieldRules[field].nullable: true` widens kit-generated JSON-Schema `type` to include `null` AND appends `null` to `enum` if present (AJV's `enum` keyword rejects null independently of `type`). Post-kit transform in `mergeFieldRuleConstraints` — portable across adapters. Built-in mongoose fallback also detects `{ default: null }` on the Mongoose path and widens automatically, mirroring mongokit's convention. Rescues the Zod → Mongoose round-trip where `.nullable()` is dropped because Mongoose has no first-class nullable marker unless `default: null` is also set. See [[adapters]] and [docs/framework-extension/custom-adapters.mdx](../docs/framework-extension/custom-adapters.mdx#field-rules--shaping-kit-generated-schemas).
 
 ## Related
 - [[rules]]? — see [[identity]] for non-negotiables
