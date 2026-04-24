@@ -235,4 +235,133 @@ describe("registerResources — unit", () => {
     await registerResources(app, {});
     await app.ready();
   });
+
+  // ── v2.11 review fixes ──
+
+  describe("explicit `resources: []` disables auto-discovery from resourceDir", () => {
+    // Regression: pre-fix `!config.resources?.length` treated an explicit
+    // empty array as absent, so auto-discovery still ran and registered
+    // whatever it found. That breaks shared-config patterns where a base
+    // config declares `resourceDir: import.meta.url` and a caller overrides
+    // with `resources: []` to intentionally disable registration (health
+    // check subprocesses, CLI jobs, test shims).
+    it("explicit empty array suppresses resourceDir auto-discovery", async () => {
+      app = await createBareApp();
+      // Point `resourceDir` at the resources/ tree used by the standalone
+      // discovery tests — it definitely yields > 0 resources. The test
+      // passes only if we see ZERO registrations despite the dir pointing
+      // at a populated tree, proving the empty array won.
+      const { resolve } = await import("node:path");
+      const populatedTree = resolve(process.cwd(), "tests/factory/fixtures/resources-dir");
+
+      // We don't care if the fixture dir exists here — if it does, we'd
+      // otherwise discover resources; if it doesn't, loadResources returns
+      // [] anyway. Either way, `resources: []` should short-circuit before
+      // we ever call loadResources.
+      await registerResources(app, {
+        resourceDir: populatedTree,
+        resources: [],
+      });
+      await app.ready();
+      // Success = no throw. A live resource registration failure would
+      // surface as a Fastify boot error.
+    });
+
+    it("absent `resources` with `resourceDir` still triggers auto-discovery", async () => {
+      // Positive control — the priority fix doesn't break the normal path.
+      // A resourceDir that doesn't exist yields zero, which is non-strict
+      // behaviour (the final zero-count WARN handles diagnostics).
+      app = await createBareApp();
+      await registerResources(app, {
+        resourceDir: "/does/not/exist/nowhere",
+      });
+      await app.ready();
+    });
+  });
+
+  describe("registration failure preserves the original error via `cause`", () => {
+    it("throws an error whose `.cause` is the underlying adapter/plugin throw", async () => {
+      // Regression: before v2.11 the catch-and-rethrow stringified the
+      // message into a new Error and dropped the original reference.
+      // `err.cause` chains stacks and property walkability without losing
+      // the surface-level diagnostic the wrapper adds.
+      app = await createBareApp();
+
+      const original = new Error("adapter boom: db unreachable") as Error & { code?: string };
+      original.code = "ECONNREFUSED";
+
+      const failingResource = {
+        name: "flaky",
+        toPlugin: () => async () => {
+          throw original;
+        },
+      } as unknown as Parameters<typeof registerResources>[1]["resources"] extends
+        | readonly (infer T)[]
+        | undefined
+        ? T
+        : never;
+
+      try {
+        await registerResources(app, { resources: [failingResource] });
+        await app.ready();
+        throw new Error("expected registerResources to throw");
+      } catch (err) {
+        expect(err).toBeInstanceOf(Error);
+        const wrapper = err as Error & { cause?: unknown };
+        expect(wrapper.message).toContain('Resource "flaky" failed to register');
+        // This is the key invariant: the original throw is preserved on `cause`.
+        expect(wrapper.cause).toBe(original);
+        expect((wrapper.cause as Error & { code?: string }).code).toBe("ECONNREFUSED");
+      }
+    });
+  });
+
+  describe("zero-discovery emits a single combined diagnostic", () => {
+    // Regression: pre-fix emitted one WARN at discovery time AND a second
+    // WARN in the final zero-count summary — together they read like two
+    // separate problems. Now discovery stashes the flag, and the final
+    // summary folds in the same hints, producing ONE WARN.
+    it("non-strict resourceDir that yields zero → exactly one WARN", async () => {
+      const warns: string[] = [];
+      const logger = {
+        level: "warn",
+        stream: {
+          write: (line: string) => {
+            const parsed = JSON.parse(line);
+            if (parsed.level === 40) warns.push(String(parsed.msg));
+          },
+        },
+      };
+      app = Fastify({
+        // biome-ignore lint/suspicious/noExplicitAny: Fastify logger shape varies
+        logger: logger as any,
+      });
+      const { arcCorePlugin } = await import("../../src/plugins/index.js");
+      await app.register(arcCorePlugin, { emitEvents: false });
+
+      await registerResources(app, {
+        resourceDir: "/does/not/exist/also/nope",
+        strictResourceDir: false,
+      });
+      await app.ready();
+
+      const zeroWarns = warns.filter((m) => m.includes("0 resources registered"));
+      expect(zeroWarns).toHaveLength(1);
+      // The single WARN should carry BOTH the raw + resolved path AND the
+      // file-naming / layout hint — the fold point.
+      expect(zeroWarns[0]).toContain("resourceDir");
+      expect(zeroWarns[0]).toContain("resolved to");
+      expect(zeroWarns[0]).toMatch(/\*\.resource\.\{ts,js,mts,mjs\}/);
+    });
+
+    it("strictResourceDir: true still throws immediately (not folded into the summary)", async () => {
+      app = await createBareApp();
+      await expect(
+        registerResources(app, {
+          resourceDir: "/does/not/exist/strict",
+          strictResourceDir: true,
+        }),
+      ).rejects.toThrow(/yielded 0 resources/);
+    });
+  });
 });

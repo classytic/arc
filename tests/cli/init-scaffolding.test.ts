@@ -116,6 +116,19 @@ describe("arc init — JWT + Single Tenant", () => {
     expect(pkg.imports).toHaveProperty("#resources/*");
   });
 
+  it("scaffolded package.json advertises the same Node engine as @classytic/arc itself", async () => {
+    // Regression guard — pre-fix the scaffold claimed `>=20` while arc
+    // itself requires `>=22`, so a freshly-generated app could advertise
+    // support for a runtime that the framework does not support. Lock both
+    // sides to the same requirement so either version bump keeps them in
+    // sync (or the test fails at the bump point and forces a decision).
+    const scaffoldPkg = await readJson(path.join(projectPath, "package.json"));
+    const rootPkg = await readJson(path.join(__dirname, "..", "..", "package.json"));
+    expect(scaffoldPkg.engines?.node).toBeDefined();
+    expect(rootPkg.engines?.node).toBeDefined();
+    expect(scaffoldPkg.engines.node).toBe(rootPkg.engines.node);
+  });
+
   it("should create tsconfig.json for TypeScript", async () => {
     const tsconfig = await readJson(path.join(projectPath, "tsconfig.json"));
     expect(tsconfig.compilerOptions.target).toBe("ES2022");

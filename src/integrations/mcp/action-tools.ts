@@ -12,91 +12,33 @@
  * so the REST ↔ MCP parity holds for actions as well as CRUD.
  */
 
-import { z } from "zod";
-import { buildRequestContext } from "./buildRequestContext.js";
+import type { z } from "zod";
+import {
+  normalizeSchemaIR,
+  schemaIRToZodShape,
+  shouldRejectAdditionalProperties,
+} from "../../core/schemaIR.js";
 import type { PermissionCheck } from "../../permissions/types.js";
 import type { ResourcePermissions } from "../../types/index.js";
+import { buildRequestContext } from "./buildRequestContext.js";
 import { evaluatePermission } from "./tool-helpers.js";
 import type { ToolDefinition } from "./types.js";
 
 /**
- * Convert an action's `schema` field into a Zod shape for MCP input. Handles
- * three accepted shapes:
+ * Convert an action's `schema` field into a Zod shape for MCP input.
  *
- *   1. Zod schema directly (detected via `_zod` marker)
- *   2. Full JSON Schema with `type: 'object'` + `properties`
- *   3. Legacy field map — each top-level key is a property
- *
- * Mirrors `normalizeActionSchema` in `createActionRouter.ts`, but produces
- * Zod types for the MCP SDK instead of JSON Schema for Fastify.
+ * Delegates to the shared schema IR ([../../core/schemaIR.ts]). Same
+ * normalization path AJV sees on the HTTP side via `buildActionBodySchema`,
+ * so authors get one schema declaration for both surfaces. If the author
+ * declares `additionalProperties: false`, the flag is preserved on the IR;
+ * the MCP tool handler enforces it at request time (MCP's flat-shape input
+ * format can't express strict mode natively — see [./types.ts]).
  */
 export function convertActionSchemaToZod(
   raw: Record<string, unknown>,
 ): Record<string, z.ZodTypeAny> {
-  // Zod schema — passthrough
-  if ("_zod" in raw && typeof (raw as Record<string, unknown>).shape === "object") {
-    const shape = (raw as Record<string, unknown>).shape as Record<string, z.ZodTypeAny>;
-    return { ...shape };
-  }
-
-  // Full JSON Schema with properties
-  if (
-    (raw.type === "object" || "properties" in raw) &&
-    typeof raw.properties === "object" &&
-    raw.properties !== null
-  ) {
-    const props = raw.properties as Record<string, Record<string, unknown>>;
-    const requiredSet = new Set<string>(
-      Array.isArray(raw.required) ? (raw.required as string[]) : [],
-    );
-    return jsonSchemaPropsToZod(props, requiredSet);
-  }
-
-  // Legacy field map
-  const result: Record<string, z.ZodTypeAny> = {};
-  for (const [fieldName, fieldSchema] of Object.entries(raw)) {
-    if (fieldName === "type" || fieldName === "properties" || fieldName === "required") continue;
-    if (!fieldSchema || typeof fieldSchema !== "object") continue;
-    const fs = fieldSchema as Record<string, unknown>;
-    const desc = typeof fs.description === "string" ? fs.description : `${fieldName} field`;
-    const isOptional = fs.required === false;
-    const base = jsonSchemaTypeToZod(fs);
-    result[fieldName] = isOptional ? base.optional().describe(desc) : base.describe(desc);
-  }
-  return result;
-}
-
-function jsonSchemaPropsToZod(
-  props: Record<string, Record<string, unknown>>,
-  requiredSet: Set<string>,
-): Record<string, z.ZodTypeAny> {
-  const result: Record<string, z.ZodTypeAny> = {};
-  for (const [name, schema] of Object.entries(props)) {
-    const desc = typeof schema.description === "string" ? schema.description : name;
-    const base = jsonSchemaTypeToZod(schema);
-    result[name] = requiredSet.has(name) ? base.describe(desc) : base.optional().describe(desc);
-  }
-  return result;
-}
-
-function jsonSchemaTypeToZod(schema: Record<string, unknown>): z.ZodTypeAny {
-  const type = typeof schema.type === "string" ? schema.type : "string";
-  if (Array.isArray(schema.enum) && schema.enum.length > 0) {
-    return z.enum(schema.enum as [string, ...string[]]);
-  }
-  switch (type) {
-    case "number":
-    case "integer":
-      return z.number();
-    case "boolean":
-      return z.boolean();
-    case "array":
-      return z.array(z.unknown());
-    case "object":
-      return z.record(z.string(), z.unknown());
-    default:
-      return z.string();
-  }
+  const ir = normalizeSchemaIR(raw);
+  return schemaIRToZodShape(ir);
 }
 
 /**
@@ -114,9 +56,43 @@ export function createActionToolHandler(
   permissions: PermissionCheck | undefined,
   resourceName: string,
   _resourcePermissions: ResourcePermissions | undefined,
+  /**
+   * Raw schema the action was declared with (Zod or JSON Schema). Used ONLY
+   * to detect `additionalProperties: false` — the IR is normalised again here
+   * rather than threaded in, because the caller already converts it to a Zod
+   * shape for `inputSchema` and the cost is negligible.
+   */
+  rawSchema?: Record<string, unknown>,
 ): ToolDefinition["handler"] {
+  const ir = rawSchema ? normalizeSchemaIR(rawSchema) : undefined;
+  const strict = ir ? shouldRejectAdditionalProperties(ir) : false;
+  // Pre-compute the allowed key set ONCE — every action call re-reads it to
+  // reject unknown keys, matching HTTP AJV strict-mode semantics. The MCP
+  // SDK's flat `inputSchema` can't express z.object().strict() on its own,
+  // so strict enforcement lives here at the handler boundary.
+  const allowedKeys = strict && ir ? new Set(["id", ...Object.keys(ir.properties)]) : undefined;
+
   return async (input, ctx) => {
     const session = ctx.session;
+
+    if (allowedKeys) {
+      const extras = Object.keys(input).filter((k) => !allowedKeys.has(k));
+      if (extras.length > 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                success: false,
+                error: `Unknown properties not allowed: ${extras.join(", ")}`,
+                details: { action: actionName, unexpected: extras },
+              }),
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
 
     const permResult = await evaluatePermission(
       permissions,

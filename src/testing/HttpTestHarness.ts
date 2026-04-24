@@ -1,38 +1,34 @@
 /**
- * HTTP Test Harness
+ * HttpTestHarness — auto-generate HTTP-level CRUD/permission/validation tests
  *
- * Generates HTTP-level CRUD tests for Arc resources using `app.inject()`.
- * Unlike TestHarness (which tests Mongoose models directly), this exercises
- * the full request lifecycle: HTTP routes, auth, permissions, pipeline,
- * field permissions, and the Arc response envelope.
+ * Exercises the full request lifecycle via `app.inject()` — routes, auth,
+ * permissions, pipeline, field permissions, action endpoints (since v2.11
+ * action routes share the preHandler chain with CRUD), and the arc response
+ * envelope. Not a replacement for targeted tests, but it covers the
+ * repetitive baseline every resource needs for free.
  *
- * Supports both eager and deferred options:
- * - **Eager**: Pass options directly when app is available at construction time
- * - **Deferred**: Pass a getter function when app comes from async setup (beforeAll)
+ * Auth is provided by a `TestAuthProvider` (see `authSession.ts`) — a single
+ * abstraction replaces the old `createJwtAuthProvider` / `createBetterAuthProvider`
+ * call pair. The harness reads role-based headers via `auth.as(role).headers`.
  *
- * @example Eager (app available at module level)
+ * @example
  * ```typescript
- * const harness = createHttpTestHarness(jobResource, {
- *   app,
- *   fixtures: { valid: { title: 'Test' } },
- *   auth: createJwtAuthProvider({ app, users, adminRole: 'admin' }),
+ * import { describe, beforeAll, afterAll } from 'vitest';
+ * import { createTestApp, createHttpTestHarness, expectArc } from '@classytic/arc/testing';
+ *
+ * let ctx;
+ * beforeAll(async () => {
+ *   ctx = await createTestApp({ resources: [jobResource], authMode: 'jwt' });
+ *   ctx.auth.register('admin', { user: { id: '1', roles: ['admin'] } });
  * });
- * harness.runAll();
- * ```
+ * afterAll(() => ctx.close());
  *
- * @example Deferred (app from beforeAll)
- * ```typescript
- * let ctx: TestContext;
- * beforeAll(async () => { ctx = await setupTestOrg(); });
- * afterAll(async () => { await teardownTestOrg(ctx); });
- *
- * const harness = createHttpTestHarness(jobResource, () => ({
+ * createHttpTestHarness(jobResource, () => ({
  *   app: ctx.app,
- *   apiPrefix: '',
- *   fixtures: { valid: { title: 'Test' } },
- *   auth: createBetterAuthProvider({ tokens: { admin: ctx.users.admin.token }, orgId: ctx.orgId, adminRole: 'admin' }),
- * }));
- * harness.runAll();
+ *   auth: ctx.auth,
+ *   adminRole: 'admin',
+ *   fixtures: { valid: { title: 'Test' }, invalid: {} },
+ * })).runAll();
  * ```
  */
 
@@ -40,282 +36,153 @@ import type { FastifyInstance } from "fastify";
 import { afterAll, describe, expect, it } from "vitest";
 import { CRUD_OPERATIONS } from "../constants.js";
 import type { ResourceDefinition } from "../core/defineResource.js";
+import type { PermissionCheck } from "../permissions/types.js";
+import type { TestAuthProvider } from "./authSession.js";
 
-// ============================================================================
-// Auth Provider Interface
-// ============================================================================
+type CrudOp = "list" | "get" | "create" | "update" | "delete";
+type UpdateVerb = "PATCH" | "PUT";
 
 /**
- * Abstraction for generating auth headers in tests.
- * Supports JWT, Better Auth, or any custom auth mechanism.
+ * An op is "protected" (should 401 without a token) unless the resource
+ * explicitly wired `allowPublic()` — that's the same rule arc's router uses
+ * via `requiresAuthentication`. Treats absent permission as public (matches
+ * the router's behaviour for historical reasons); the harness only emits the
+ * unauthenticated 401 assertion when the op is actually protected.
  */
-export interface AuthProvider {
-  /** Get HTTP headers for a given role key */
-  getHeaders(role: string): Record<string, string>;
-  /** Available role keys (e.g. ['admin', 'member', 'viewer']) */
-  availableRoles: string[];
-  /** Role key that has full CRUD access */
-  adminRole: string;
+function opRequiresAuth(resource: ResourceDefinition<unknown>, op: CrudOp): boolean {
+  const permissions = resource.permissions as
+    | Record<string, PermissionCheck | undefined>
+    | undefined;
+  const check = permissions?.[op];
+  if (!check) return false;
+  return check._isPublic !== true;
 }
 
 // ============================================================================
-// Auth Provider Factories
-// ============================================================================
-
-/**
- * Create an auth provider for JWT-based apps.
- *
- * Generates JWT tokens on the fly using the app's JWT plugin.
- *
- * @example
- * ```typescript
- * const auth = createJwtAuthProvider({
- *   app,
- *   users: {
- *     admin: { payload: { id: '1', roles: ['admin'] }, organizationId: 'org1' },
- *     viewer: { payload: { id: '2', roles: ['viewer'] } },
- *   },
- *   adminRole: 'admin',
- * });
- * ```
- */
-export function createJwtAuthProvider(options: {
-  app: FastifyInstance;
-  users: Record<string, { payload: Record<string, unknown>; organizationId?: string }>;
-  adminRole: string;
-}): AuthProvider {
-  const { app, users, adminRole } = options;
-
-  return {
-    getHeaders(role: string): Record<string, string> {
-      const user = users[role];
-      if (!user) {
-        throw new Error(
-          `createJwtAuthProvider: Unknown role '${role}'. Available: ${Object.keys(users).join(", ")}`,
-        );
-      }
-      const token = (app as any).jwt?.sign?.(user.payload) || "mock-token";
-      const headers: Record<string, string> = {
-        authorization: `Bearer ${token}`,
-      };
-      if (user.organizationId) {
-        headers["x-organization-id"] = user.organizationId;
-      }
-      return headers;
-    },
-    availableRoles: Object.keys(users),
-    adminRole,
-  };
-}
-
-/**
- * Create an auth provider for Better Auth apps.
- *
- * Uses pre-existing tokens (from signUp/signIn) rather than generating them.
- *
- * @example
- * ```typescript
- * const auth = createBetterAuthProvider({
- *   tokens: {
- *     admin: ctx.users.admin.token,
- *     member: ctx.users.member.token,
- *   },
- *   orgId: ctx.orgId,
- *   adminRole: 'admin',
- * });
- * ```
- */
-export function createBetterAuthProvider(options: {
-  tokens: Record<string, string>;
-  orgId: string;
-  adminRole: string;
-}): AuthProvider {
-  const { tokens, orgId, adminRole } = options;
-
-  return {
-    getHeaders(role: string): Record<string, string> {
-      const token = tokens[role];
-      if (!token) {
-        throw new Error(
-          `createBetterAuthProvider: No token for role '${role}'. Available: ${Object.keys(tokens).join(", ")}`,
-        );
-      }
-      return {
-        authorization: `Bearer ${token}`,
-        "x-organization-id": orgId,
-      };
-    },
-    availableRoles: Object.keys(tokens),
-    adminRole,
-  };
-}
-
-// ============================================================================
-// HTTP Test Harness
+// Options
 // ============================================================================
 
 export interface HttpTestHarnessOptions<T = unknown> {
-  /** Fastify app instance (must be ready) */
+  /** Fastify app (must be ready). */
   app: FastifyInstance;
-  /** Test data fixtures */
+  /** Auth provider (from `createTestApp` or one of the auth factories). */
+  auth: TestAuthProvider;
+  /** Role name registered on `auth` that has full CRUD access. */
+  adminRole: string;
+  /** Request bodies for CRUD probes. */
   fixtures: {
-    /** Valid payload for creating a resource */
     valid: Partial<T>;
-    /** Payload for updating a resource (defaults to valid) */
     update?: Partial<T>;
-    /** Invalid payload that should fail validation */
     invalid?: Partial<T>;
   };
-  /** Auth provider for generating request headers */
-  auth: AuthProvider;
-  /** API path prefix (default: '/api' for eager, '' for deferred) */
+  /** URL prefix (default: `""`; apps mounted under `/api` pass `/api`). */
   apiPrefix?: string;
 }
 
-/** Options can be passed directly or as a getter for deferred resolution */
 type OptionsOrGetter<T> = HttpTestHarnessOptions<T> | (() => HttpTestHarnessOptions<T>);
 
-/**
- * HTTP-level test harness for Arc resources.
- *
- * Generates tests that exercise the full HTTP lifecycle:
- * routes, auth, permissions, pipeline, and response envelope.
- *
- * Supports deferred options via a getter function, which is essential
- * when the app instance comes from async `beforeAll()` setup.
- */
+// ============================================================================
+// Harness
+// ============================================================================
+
 export class HttpTestHarness<T = unknown> {
   private resource: ResourceDefinition<unknown>;
   private optionsOrGetter: OptionsOrGetter<T>;
-  private eagerBaseUrl: string | null;
   private enabledRoutes: Set<string>;
-  private updateMethod: string;
+  /**
+   * Update verbs exercised by this harness instance. One entry for single-method
+   * resources (`"PATCH"` or `"PUT"`), two for `updateMethod: "both"` so both
+   * verbs are covered — the framework mounts both, and the harness should
+   * probe both.
+   */
+  private updateMethods: readonly UpdateVerb[];
 
   constructor(resource: ResourceDefinition<unknown>, optionsOrGetter: OptionsOrGetter<T>) {
     this.resource = resource;
     this.optionsOrGetter = optionsOrGetter;
 
-    // For eager mode, compute baseUrl immediately.
-    // For deferred mode, baseUrl is resolved lazily from the getter options.
-    if (typeof optionsOrGetter === "function") {
-      this.eagerBaseUrl = null;
-    } else {
-      const apiPrefix = optionsOrGetter.apiPrefix ?? "/api";
-      this.eagerBaseUrl = `${apiPrefix}${resource.prefix}`;
-    }
-
-    // Determine which CRUD routes are enabled (from resource, not options)
     const disabled = new Set(resource.disabledRoutes ?? []);
     this.enabledRoutes = new Set(
       resource.disableDefaultRoutes ? [] : CRUD_OPERATIONS.filter((op) => !disabled.has(op)),
     );
 
-    this.updateMethod = resource.updateMethod === "PUT" ? "PUT" : "PATCH";
+    const um = resource.updateMethod;
+    this.updateMethods =
+      um === "both"
+        ? (["PATCH", "PUT"] as const)
+        : um === "PUT"
+          ? (["PUT"] as const)
+          : (["PATCH"] as const);
   }
 
-  /** Resolve options (supports both direct and deferred) */
   private getOptions(): HttpTestHarnessOptions<T> {
     return typeof this.optionsOrGetter === "function"
       ? this.optionsOrGetter()
       : this.optionsOrGetter;
   }
 
-  /**
-   * Resolve the base URL for requests.
-   *
-   * - Eager mode: uses pre-computed baseUrl from constructor
-   * - Deferred mode: reads apiPrefix from the getter options at runtime
-   *
-   * Must only be called inside it()/afterAll() callbacks (after beforeAll has run).
-   */
   private getBaseUrl(): string {
-    if (this.eagerBaseUrl !== null) return this.eagerBaseUrl;
     const opts = this.getOptions();
     const apiPrefix = opts.apiPrefix ?? "";
     return `${apiPrefix}${this.resource.prefix}`;
   }
 
-  /**
-   * Run all test suites: CRUD + permissions + validation
-   */
+  private adminHeaders(): Record<string, string> {
+    const opts = this.getOptions();
+    return { ...opts.auth.as(opts.adminRole).headers };
+  }
+
   runAll(): void {
     this.runCrud();
     this.runPermissions();
     this.runValidation();
   }
 
-  /**
-   * Run HTTP-level CRUD tests.
-   *
-   * Tests each enabled CRUD operation through app.inject():
-   * - POST (create) → 200/201 with { success: true, data }
-   * - GET (list) → 200 with array or paginated response
-   * - GET /:id → 200 with { success: true, data }
-   * - PATCH/PUT /:id → 200 with { success: true, data }
-   * - DELETE /:id → 200
-   * - GET /:id with non-existent ID → 404
-   */
   runCrud(): void {
-    const { resource, enabledRoutes, updateMethod } = this;
-
-    // Track created IDs for cleanup and cross-test references
+    const { resource, enabledRoutes, updateMethods } = this;
     let createdId: string | null = null;
 
     describe(`${resource.displayName} HTTP CRUD`, () => {
       afterAll(async () => {
-        // Cleanup: delete the created resource if still exists
         if (createdId && enabledRoutes.has("delete")) {
-          const { app, auth } = this.getOptions();
-          const baseUrl = this.getBaseUrl();
+          const { app } = this.getOptions();
           await app.inject({
             method: "DELETE",
-            url: `${baseUrl}/${createdId}`,
-            headers: auth.getHeaders(auth.adminRole),
+            url: `${this.getBaseUrl()}/${createdId}`,
+            headers: this.adminHeaders(),
           });
         }
       });
 
       if (enabledRoutes.has("create")) {
         it("POST should create a resource", async () => {
-          const { app, auth, fixtures } = this.getOptions();
-          const baseUrl = this.getBaseUrl();
-          const adminHeaders = auth.getHeaders(auth.adminRole);
-
+          const { app, fixtures } = this.getOptions();
           const res = await app.inject({
             method: "POST",
-            url: baseUrl,
-            headers: adminHeaders,
-            payload: fixtures.valid,
+            url: this.getBaseUrl(),
+            headers: this.adminHeaders(),
+            payload: fixtures.valid as Record<string, unknown>,
           });
-
           expect(res.statusCode).toBeLessThan(300);
           const body = JSON.parse(res.body);
           expect(body.success).toBe(true);
-          expect(body.data).toBeDefined();
-          expect(body.data._id).toBeDefined();
-
-          // Store for subsequent tests
+          expect(body.data?._id).toBeDefined();
           createdId = body.data._id;
         });
       }
 
       if (enabledRoutes.has("list")) {
         it("GET should list resources", async () => {
-          const { app, auth } = this.getOptions();
-          const baseUrl = this.getBaseUrl();
-
+          const { app } = this.getOptions();
           const res = await app.inject({
             method: "GET",
-            url: baseUrl,
-            headers: auth.getHeaders(auth.adminRole),
+            url: this.getBaseUrl(),
+            headers: this.adminHeaders(),
           });
-
           expect(res.statusCode).toBe(200);
           const body = JSON.parse(res.body);
           expect(body.success).toBe(true);
-          // Arc list responses use `data` or `docs` depending on the query parser
           const list = body.data ?? body.docs;
-          expect(list).toBeDefined();
           expect(Array.isArray(list)).toBe(true);
         });
       }
@@ -323,228 +190,204 @@ export class HttpTestHarness<T = unknown> {
       if (enabledRoutes.has("get")) {
         it("GET /:id should return the resource", async () => {
           if (!createdId) return;
-
-          const { app, auth } = this.getOptions();
-          const baseUrl = this.getBaseUrl();
+          const { app } = this.getOptions();
           const res = await app.inject({
             method: "GET",
-            url: `${baseUrl}/${createdId}`,
-            headers: auth.getHeaders(auth.adminRole),
+            url: `${this.getBaseUrl()}/${createdId}`,
+            headers: this.adminHeaders(),
           });
-
           expect(res.statusCode).toBe(200);
-          const body = JSON.parse(res.body);
-          expect(body.success).toBe(true);
-          expect(body.data).toBeDefined();
-          expect(body.data._id).toBe(createdId);
+          expect(JSON.parse(res.body).data?._id).toBe(createdId);
         });
 
         it("GET /:id with non-existent ID should return 404", async () => {
-          const { app, auth } = this.getOptions();
-          const baseUrl = this.getBaseUrl();
-          const fakeId = "000000000000000000000000";
+          const { app } = this.getOptions();
           const res = await app.inject({
             method: "GET",
-            url: `${baseUrl}/${fakeId}`,
-            headers: auth.getHeaders(auth.adminRole),
+            url: `${this.getBaseUrl()}/000000000000000000000000`,
+            headers: this.adminHeaders(),
           });
-
           expect(res.statusCode).toBe(404);
-          const body = JSON.parse(res.body);
-          expect(body.success).toBe(false);
+          expect(JSON.parse(res.body).success).toBe(false);
         });
       }
 
       if (enabledRoutes.has("update")) {
-        it(`${updateMethod} /:id should update the resource`, async () => {
-          if (!createdId) return;
-
-          const { app, auth, fixtures } = this.getOptions();
-          const baseUrl = this.getBaseUrl();
-          const updatePayload = fixtures.update || fixtures.valid;
-          const res = await app.inject({
-            method: updateMethod as any,
-            url: `${baseUrl}/${createdId}`,
-            headers: auth.getHeaders(auth.adminRole),
-            payload: updatePayload,
+        // When `updateMethod: "both"` is set on the resource, arc mounts BOTH
+        // PUT and PATCH — iterate both here so neither verb is silently
+        // skipped. Single-method resources fall through with one iteration.
+        for (const verb of updateMethods) {
+          it(`${verb} /:id should update the resource`, async () => {
+            if (!createdId) return;
+            const { app, fixtures } = this.getOptions();
+            const payload = (fixtures.update ?? fixtures.valid) as Record<string, unknown>;
+            const res = await app.inject({
+              method: verb,
+              url: `${this.getBaseUrl()}/${createdId}`,
+              headers: this.adminHeaders(),
+              payload,
+            });
+            expect(res.statusCode).toBe(200);
+            expect(JSON.parse(res.body).success).toBe(true);
           });
 
-          expect(res.statusCode).toBe(200);
-          const body = JSON.parse(res.body);
-          expect(body.success).toBe(true);
-          expect(body.data).toBeDefined();
-        });
-
-        it(`${updateMethod} /:id with non-existent ID should return 404`, async () => {
-          const { app, auth, fixtures } = this.getOptions();
-          const baseUrl = this.getBaseUrl();
-          const fakeId = "000000000000000000000000";
-          const res = await app.inject({
-            method: updateMethod as any,
-            url: `${baseUrl}/${fakeId}`,
-            headers: auth.getHeaders(auth.adminRole),
-            payload: fixtures.update || fixtures.valid,
+          it(`${verb} /:id with non-existent ID should return 404`, async () => {
+            const { app, fixtures } = this.getOptions();
+            const payload = (fixtures.update ?? fixtures.valid) as Record<string, unknown>;
+            const res = await app.inject({
+              method: verb,
+              url: `${this.getBaseUrl()}/000000000000000000000000`,
+              headers: this.adminHeaders(),
+              payload,
+            });
+            expect(res.statusCode).toBe(404);
           });
-
-          expect(res.statusCode).toBe(404);
-        });
+        }
       }
 
       if (enabledRoutes.has("delete")) {
         it("DELETE /:id should delete the resource", async () => {
-          const { app, auth, fixtures } = this.getOptions();
-          const baseUrl = this.getBaseUrl();
-          const adminHeaders = auth.getHeaders(auth.adminRole);
-
-          // Create a separate resource for deletion to avoid affecting other tests
+          const { app, fixtures } = this.getOptions();
           let deleteId: string | undefined;
-
           if (enabledRoutes.has("create")) {
             const createRes = await app.inject({
               method: "POST",
-              url: baseUrl,
-              headers: adminHeaders,
-              payload: fixtures.valid,
+              url: this.getBaseUrl(),
+              headers: this.adminHeaders(),
+              payload: fixtures.valid as Record<string, unknown>,
             });
             deleteId = JSON.parse(createRes.body).data?._id;
           }
-
           if (!deleteId) return;
 
           const res = await app.inject({
             method: "DELETE",
-            url: `${baseUrl}/${deleteId}`,
-            headers: adminHeaders,
+            url: `${this.getBaseUrl()}/${deleteId}`,
+            headers: this.adminHeaders(),
           });
-
           expect(res.statusCode).toBe(200);
 
-          // Verify it's gone
           if (enabledRoutes.has("get")) {
             const getRes = await app.inject({
               method: "GET",
-              url: `${baseUrl}/${deleteId}`,
-              headers: adminHeaders,
+              url: `${this.getBaseUrl()}/${deleteId}`,
+              headers: this.adminHeaders(),
             });
             expect(getRes.statusCode).toBe(404);
           }
         });
 
         it("DELETE /:id with non-existent ID should return 404", async () => {
-          const { app, auth } = this.getOptions();
-          const baseUrl = this.getBaseUrl();
-          const fakeId = "000000000000000000000000";
+          const { app } = this.getOptions();
           const res = await app.inject({
             method: "DELETE",
-            url: `${baseUrl}/${fakeId}`,
-            headers: auth.getHeaders(auth.adminRole),
+            url: `${this.getBaseUrl()}/000000000000000000000000`,
+            headers: this.adminHeaders(),
           });
-
           expect(res.statusCode).toBe(404);
         });
       }
     });
   }
 
-  /**
-   * Run permission tests.
-   *
-   * Tests that:
-   * - Unauthenticated requests return 401
-   * - Admin role gets 2xx for all operations
-   */
   runPermissions(): void {
-    const { resource, enabledRoutes, updateMethod } = this;
+    const { resource, enabledRoutes, updateMethods } = this;
+
+    // Only emit the unauthenticated-401 assertion for ops that are actually
+    // protected (i.e. have a permission check and it's not `allowPublic`).
+    // Resources with `allowPublic()` on an op would otherwise produce false
+    // failures here.
+    const protectedOps = {
+      list: opRequiresAuth(resource, "list"),
+      get: opRequiresAuth(resource, "get"),
+      create: opRequiresAuth(resource, "create"),
+      update: opRequiresAuth(resource, "update"),
+      delete: opRequiresAuth(resource, "delete"),
+    };
 
     describe(`${resource.displayName} HTTP Permissions`, () => {
-      if (enabledRoutes.has("list")) {
+      // Unauthenticated — only emitted for protected ops
+      if (enabledRoutes.has("list") && protectedOps.list) {
         it("GET list without auth should return 401", async () => {
           const { app } = this.getOptions();
-          const baseUrl = this.getBaseUrl();
-          const res = await app.inject({ method: "GET", url: baseUrl });
+          const res = await app.inject({ method: "GET", url: this.getBaseUrl() });
           expect(res.statusCode).toBe(401);
         });
       }
-
-      if (enabledRoutes.has("get")) {
-        it("GET get without auth should return 401", async () => {
+      if (enabledRoutes.has("get") && protectedOps.get) {
+        it("GET /:id without auth should return 401", async () => {
           const { app } = this.getOptions();
-          const baseUrl = this.getBaseUrl();
           const res = await app.inject({
             method: "GET",
-            url: `${baseUrl}/000000000000000000000000`,
+            url: `${this.getBaseUrl()}/000000000000000000000000`,
           });
           expect(res.statusCode).toBe(401);
         });
       }
-
-      if (enabledRoutes.has("create")) {
-        it("POST create without auth should return 401", async () => {
+      if (enabledRoutes.has("create") && protectedOps.create) {
+        it("POST without auth should return 401", async () => {
           const { app, fixtures } = this.getOptions();
-          const baseUrl = this.getBaseUrl();
-          const res = await app.inject({ method: "POST", url: baseUrl, payload: fixtures.valid });
-          expect(res.statusCode).toBe(401);
-        });
-      }
-
-      if (enabledRoutes.has("update")) {
-        it(`${updateMethod} update without auth should return 401`, async () => {
-          const { app, fixtures } = this.getOptions();
-          const baseUrl = this.getBaseUrl();
-          const res = await app.inject({
-            method: updateMethod as any,
-            url: `${baseUrl}/000000000000000000000000`,
-            payload: fixtures.update || fixtures.valid,
-          });
-          expect(res.statusCode).toBe(401);
-        });
-      }
-
-      if (enabledRoutes.has("delete")) {
-        it("DELETE delete without auth should return 401", async () => {
-          const { app } = this.getOptions();
-          const baseUrl = this.getBaseUrl();
-          const res = await app.inject({
-            method: "DELETE",
-            url: `${baseUrl}/000000000000000000000000`,
-          });
-          expect(res.statusCode).toBe(401);
-        });
-      }
-
-      // Admin access tests
-      if (enabledRoutes.has("list")) {
-        it("admin should access list endpoint", async () => {
-          const { app, auth } = this.getOptions();
-          const baseUrl = this.getBaseUrl();
-          const res = await app.inject({
-            method: "GET",
-            url: baseUrl,
-            headers: auth.getHeaders(auth.adminRole),
-          });
-          expect(res.statusCode).toBeLessThan(400);
-        });
-      }
-
-      if (enabledRoutes.has("create")) {
-        it("admin should access create endpoint", async () => {
-          const { app, auth, fixtures } = this.getOptions();
-          const baseUrl = this.getBaseUrl();
           const res = await app.inject({
             method: "POST",
-            url: baseUrl,
-            headers: auth.getHeaders(auth.adminRole),
-            payload: fixtures.valid,
+            url: this.getBaseUrl(),
+            payload: fixtures.valid as Record<string, unknown>,
+          });
+          expect(res.statusCode).toBe(401);
+        });
+      }
+      if (enabledRoutes.has("update") && protectedOps.update) {
+        for (const verb of updateMethods) {
+          it(`${verb} without auth should return 401`, async () => {
+            const { app, fixtures } = this.getOptions();
+            const payload = (fixtures.update ?? fixtures.valid) as Record<string, unknown>;
+            const res = await app.inject({
+              method: verb,
+              url: `${this.getBaseUrl()}/000000000000000000000000`,
+              payload,
+            });
+            expect(res.statusCode).toBe(401);
+          });
+        }
+      }
+      if (enabledRoutes.has("delete") && protectedOps.delete) {
+        it("DELETE without auth should return 401", async () => {
+          const { app } = this.getOptions();
+          const res = await app.inject({
+            method: "DELETE",
+            url: `${this.getBaseUrl()}/000000000000000000000000`,
+          });
+          expect(res.statusCode).toBe(401);
+        });
+      }
+
+      // Admin access — every enabled op should succeed (public ops too, via admin headers).
+      if (enabledRoutes.has("list")) {
+        it("admin should access list endpoint", async () => {
+          const { app } = this.getOptions();
+          const res = await app.inject({
+            method: "GET",
+            url: this.getBaseUrl(),
+            headers: this.adminHeaders(),
           });
           expect(res.statusCode).toBeLessThan(400);
-
-          // Cleanup
+        });
+      }
+      if (enabledRoutes.has("create")) {
+        it("admin should access create endpoint", async () => {
+          const { app, fixtures } = this.getOptions();
+          const res = await app.inject({
+            method: "POST",
+            url: this.getBaseUrl(),
+            headers: this.adminHeaders(),
+            payload: fixtures.valid as Record<string, unknown>,
+          });
+          expect(res.statusCode).toBeLessThan(400);
           const body = JSON.parse(res.body);
           if (body.data?._id && enabledRoutes.has("delete")) {
             await app.inject({
               method: "DELETE",
-              url: `${baseUrl}/${body.data._id}`,
-              headers: auth.getHeaders(auth.adminRole),
+              url: `${this.getBaseUrl()}/${body.data._id}`,
+              headers: this.adminHeaders(),
             });
           }
         });
@@ -552,56 +395,30 @@ export class HttpTestHarness<T = unknown> {
     });
   }
 
-  /**
-   * Run validation tests.
-   *
-   * Tests that invalid payloads return 400.
-   */
   runValidation(): void {
     const { resource, enabledRoutes } = this;
-
     if (!enabledRoutes.has("create")) return;
 
     describe(`${resource.displayName} HTTP Validation`, () => {
-      it("POST with invalid payload should not return 2xx", async () => {
-        const { app, auth, fixtures } = this.getOptions();
-        const baseUrl = this.getBaseUrl();
+      it("POST with invalid payload should be rejected", async () => {
+        const { app, fixtures } = this.getOptions();
         if (!fixtures.invalid) return;
-
         const res = await app.inject({
           method: "POST",
-          url: baseUrl,
-          headers: auth.getHeaders(auth.adminRole),
-          payload: fixtures.invalid,
+          url: this.getBaseUrl(),
+          headers: this.adminHeaders(),
+          payload: fixtures.invalid as Record<string, unknown>,
         });
-
-        // Invalid payload should be rejected — 400 (schema validation) or
-        // 422/500 (model validation) depending on whether JSON Schema is configured
         expect(res.statusCode).toBeGreaterThanOrEqual(400);
-        const body = JSON.parse(res.body);
-        expect(body.success).toBe(false);
+        expect(JSON.parse(res.body).success).toBe(false);
       });
     });
   }
 }
 
 /**
- * Create an HTTP test harness for an Arc resource.
- *
- * Accepts options directly or as a getter function for deferred resolution.
- *
- * @example Deferred (recommended for async setup)
- * ```typescript
- * let ctx: TestContext;
- * beforeAll(async () => { ctx = await setupTestOrg(); });
- *
- * createHttpTestHarness(jobResource, () => ({
- *   app: ctx.app,
- *   apiPrefix: '',
- *   fixtures: { valid: { title: 'Test' } },
- *   auth: createBetterAuthProvider({ ... }),
- * })).runAll();
- * ```
+ * Create an HTTP test harness. `optionsOrGetter` may be a plain object
+ * (for eager app setup) or a getter function (for async `beforeAll` apps).
  */
 export function createHttpTestHarness<T = unknown>(
   resource: ResourceDefinition<unknown>,

@@ -408,20 +408,22 @@ describe("Generated App — Test Files", () => {
     expect(content).toContain("expect");
   });
 
-  it("should generate example test with CRUD test pattern", async () => {
+  it("should generate example test with CRUD test pattern (2.11 surface)", async () => {
     const content = await readText(path.join(projectPath, "tests/example.test.ts"));
-    // Should test at least list endpoint
+    // Tests the list endpoint via the 2.11 testing surface.
     expect(content).toContain("GET");
-    expect(content).toContain("statusCode");
+    // expectArc matchers replace raw statusCode assertions.
+    expect(content).toContain("expectArc");
   });
 
-  it("should generate example test with app lifecycle", async () => {
+  it("should generate example test with app lifecycle (createTestApp)", async () => {
     const content = await readText(path.join(projectPath, "tests/example.test.ts"));
-    // Should have setup/teardown
+    // Setup/teardown present.
     expect(content).toMatch(/beforeAll|beforeEach/);
     expect(content).toMatch(/afterAll|afterEach/);
-    // Should use createAppInstance from app factory
-    expect(content).toContain("createAppInstance");
+    // 2.11 testing surface — createTestApp from @classytic/arc/testing
+    // replaces the pre-2.11 createAppInstance import in test files.
+    expect(content).toContain("createTestApp");
   });
 
   it("should generate auth test when using JWT", async () => {
@@ -488,9 +490,14 @@ describe("Generated App — Package.json Patterns", () => {
     expect(pkg.imports["#plugins/*"]).toBe("./src/plugins/*");
   });
 
-  it("should require Node >= 20", async () => {
+  it("should require the same Node engine as @classytic/arc itself", async () => {
+    // Pre-fix this asserted `">=20"` while arc's own `engines.node` was
+    // `">=22"` — scaffolded apps advertised support for a runtime the
+    // framework doesn't support. Pin to arc's root requirement so either
+    // version bump keeps the two in sync or the test fails at the bump.
     const pkg = await readJson(path.join(projectPath, "package.json"));
-    expect(pkg.engines.node).toBe(">=20");
+    const rootPkg = await readJson(path.join(__dirname, "..", "..", "package.json"));
+    expect(pkg.engines.node).toBe(rootPkg.engines.node);
   });
 });
 

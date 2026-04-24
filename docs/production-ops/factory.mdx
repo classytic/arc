@@ -23,7 +23,7 @@ await app.listen({ port: 3000, host: '0.0.0.0' });
 
 ### Resource Registration
 
-Three ways to register resources (pick one):
+Four ways to register resources (pick one):
 
 ```typescript
 // Auto-discover from directory (recommended for large apps)
@@ -36,6 +36,22 @@ const app = await createApp({
   resources: [productResource, orderResource],
 });
 
+// Factory function — runs AFTER bootstrap, before route wiring
+// (canonical answer to "my repository lives in an async-booted engine")
+const app = await createApp({
+  bootstrap: [async () => { await ensureCatalogEngine(); }],
+  resources: async () => {
+    const cat = await ensureCatalogEngine();
+    return [
+      defineResource({
+        name: 'product',
+        adapter: createMongooseAdapter(cat.models.Product, cat.repositories.product),
+        // ...
+      }),
+    ];
+  },
+});
+
 // Via plugins callback (full Fastify control)
 const app = await createApp({
   plugins: async (fastify) => {
@@ -46,15 +62,20 @@ const app = await createApp({
 
 `loadResources` options: `exclude`, `include`, `suffix` (default: `.resource`), `recursive` (default: true), `silent` (suppress warnings).
 
+**When to use the factory form** — resource definitions are evaluated at module-import time, so any resource whose adapter depends on an async-booted engine (e.g. `@classytic/catalog`, `@classytic/flow` patterns using `await createX(...)`) can't be defined statically. Before 2.11.x, hosts wrote per-resource lazy-bridge adapters that awaited `ensureEngine()` on every CRUD call — pure boilerplate. The factory slot runs between `bootstrap[]` and route wiring, so `defineResource(...)` calls inside it see the engine already live.
+
+**Contract** — an explicit `resources` option always wins over `resourceDir` auto-discovery, including when it's an empty array OR a factory returning `[]`. Use `resources: []` or `resources: () => []` to intentionally disable resource loading (test subprocesses, CLI jobs, health-check stubs).
+
 ### Boot Order
 
 ```
 1. Arc core (security, auth, events)
-2. plugins()        ← infra (DB, SSE, docs)
-3. bootstrap[]      ← domain init (singletons, event handlers)
-4. resources[]      ← routes (under resourcePrefix, split by skipGlobalPrefix)
-5. afterResources() ← post-registration wiring
-6. onReady()        ← Fastify ready
+2. plugins()                  ← infra (DB, SSE, docs)
+3. bootstrap[]                ← domain init (engines, singletons)
+4. resources factory (if any) ← resolved here — engine state is live
+5. resources[]                ← routes (under resourcePrefix, split by skipGlobalPrefix)
+6. afterResources()           ← post-registration wiring
+7. onReady()                  ← Fastify ready
 ```
 
 ```typescript

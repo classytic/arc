@@ -142,6 +142,82 @@ describe("Security: Action Router Auth Handling", () => {
     });
   });
 
+  describe("mixed omitted-public + protected actions", () => {
+    // Regression guard: when an action has no entry in `actionPermissions`
+    // AND there's no `globalAuth` fallback, it's "public by omission" — the
+    // dynamic permission prehandler treats the undefined permission as "skip
+    // the check". The route-level auth MUST treat the same slot as public,
+    // otherwise `fastify.authenticate` 401s the request before the permission
+    // prehandler can let it through.
+    //
+    // Previous revision filtered undefineds out of the permissions array,
+    // collapsing `{ status: undefined, approve: protectedAction() }` to
+    // `[protectedAction()]` → route picked `authenticate` → public `status`
+    // got 401. Only caught if a public action is explicitly marked with
+    // `allowPublic()`; omission silently broke.
+    let app: FastifyInstance;
+    let authCalled: boolean;
+
+    beforeAll(async () => {
+      app = Fastify();
+      authCalled = false;
+
+      (app as any).authenticate = async (req: any) => {
+        authCalled = true;
+        if (!req.user) {
+          throw new Error("Unauthorized");
+        }
+      };
+
+      createActionRouter(app, {
+        tag: "Test",
+        actions: {
+          status: async (id) => ({ id, status: "active" }),
+          approve: async (id, _data, req) => ({ id, approvedBy: (req.user as any)?.id }),
+        },
+        actionPermissions: {
+          // `status` deliberately omitted — public by omission
+          approve: protectedAction(),
+        },
+      });
+
+      await app.ready();
+    });
+
+    afterAll(async () => {
+      await app.close();
+    });
+
+    it("public-by-omission action returns 200 without auth (not 401)", async () => {
+      authCalled = false;
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/test-id/action",
+        payload: { action: "status" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body).success).toBe(true);
+      // `fastify.authenticate` must NOT have fired — the route selected
+      // `optionalAuthenticate` because one action slot is public-by-omission.
+      expect(authCalled).toBe(false);
+    });
+
+    it("protected action still rejects without a token", async () => {
+      const res = await app.inject({
+        method: "POST",
+        url: "/test-id/action",
+        payload: { action: "approve" },
+      });
+
+      // Per-action permission check sees `user: null` and denies — same
+      // fail-closed path as the explicit-allowPublic mixed case.
+      expect(res.statusCode).toBeGreaterThanOrEqual(401);
+      expect(JSON.parse(res.body).success).toBe(false);
+    });
+  });
+
   describe("all public actions", () => {
     let app: FastifyInstance;
     let authCalled: boolean;

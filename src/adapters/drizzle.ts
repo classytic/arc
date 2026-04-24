@@ -25,7 +25,6 @@
  * `buildCrudSchemasFromTable` instead. Arc stays backend-agnostic.
  */
 
-import type { StandardRepo } from "@classytic/repo-core/repository";
 import type { AnyRecord, OpenApiSchemas, RouteSchemaOptions } from "../types/index.js";
 import { mergeFieldRuleConstraints } from "./field-rule-helpers.js";
 import type {
@@ -75,7 +74,7 @@ export interface DrizzleAdapterOptions<TDoc = unknown> {
   table: DrizzleTableLike;
 
   /** Repository implementing the repo-core contract. */
-  repository: StandardRepo<TDoc> | RepositoryLike<TDoc>;
+  repository: RepositoryLike<TDoc>;
 
   /**
    * External schema generator. When provided, replaces the built-in
@@ -158,7 +157,7 @@ export class DrizzleAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
   readonly type = "drizzle" as const;
   readonly name: string;
   readonly table: DrizzleTableLike;
-  readonly repository: StandardRepo<TDoc> | RepositoryLike<TDoc>;
+  readonly repository: RepositoryLike<TDoc>;
   private readonly schemaGenerator?: DrizzleAdapterOptions<TDoc>["schemaGenerator"];
 
   constructor(options: DrizzleAdapterOptions<TDoc>) {

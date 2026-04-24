@@ -38,7 +38,7 @@
  * ```
  */
 
-import type { FastifyInstance, FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync } from "fastify";
 import type { DataAdapter } from "../adapters/interface.js";
 import { CRUD_OPERATIONS } from "../constants.js";
 import { arcLog } from "../logger/index.js";
@@ -76,10 +76,7 @@ import { hasEvents } from "../utils/typeGuards.js";
 import { resolveActionPermission } from "./actionPermissions.js";
 import { BaseController } from "./BaseController.js";
 import { createCrudRouter } from "./createCrudRouter.js";
-import {
-  autoInjectTenantFieldRules,
-  stripSystemManagedFromBodyRequired,
-} from "./schemaOptions.js";
+import { autoInjectTenantFieldRules, stripSystemManagedFromBodyRequired } from "./schemaOptions.js";
 import { assertValidConfig } from "./validateResourceConfig.js";
 
 interface ExtendedResourceConfig<TDoc = AnyRecord> extends ResourceConfig<TDoc> {
@@ -99,203 +96,346 @@ interface ExtendedResourceConfig<TDoc = AnyRecord> extends ResourceConfig<TDoc> 
 }
 
 /**
- * Define a resource with database adapter
+ * Define a resource with database adapter.
  *
- * This is the MAIN entry point for creating Arc resources.
- * The adapter provides both repository and schema metadata.
+ * This is the MAIN entry point for creating Arc resources — the adapter
+ * provides both repository and schema metadata.
+ *
+ * Staged into seven named phases so future refactors touch one phase at a
+ * time instead of threading changes through a 450-line function:
+ *
+ *   1. validate                  — fail-fast structural checks
+ *   2. resolveIdField            — auto-derive `idField` from repository
+ *   3. applyPresetsAndAutoInject — clone + apply presets + tenant-field rules
+ *   4. resolveController         — reuse user controller or auto-create BaseController
+ *   5. buildResource             — construct ResourceDefinition + validate methods
+ *   6. wireHooks                 — push preset + inline `config.hooks` onto _pendingHooks
+ *   7. resolveOpenApiSchemas     — adapter schemas → parser listQuery → user override
+ *
+ * Each phase has a single responsibility; `resolvedConfig` is the canonical
+ * post-preset, post-auto-inject config that every later phase reads. Raw
+ * `config` is only consulted for things presets don't touch (adapter,
+ * skipRegistry, skipValidation, hooks — which are wired separately from
+ * preset hooks).
  */
-export function defineResource<TDoc extends AnyRecord = AnyRecord>(
+// v2.11 — `TDoc` is UNCONSTRAINED at this layer. The previous
+// `TDoc extends AnyRecord` bound leaked out of BaseController's
+// mixin-composition requirement into every host's adapter boundary:
+// Mongoose's `HydratedDocument<T>`, Prisma's generated row types, and
+// any domain interface without an explicit index signature all failed
+// to satisfy `Record<string, unknown>` even though at runtime they ARE
+// string-keyed objects. Hosts were forced to cast at every adapter
+// (`as RepositoryLike<Record<string, unknown>>`) — a type escape with
+// no runtime purpose, since arc's pipeline only reads known envelope
+// fields.
+//
+// The cast moved inside `resolveOrAutoCreateController` where
+// `BaseController<TDoc extends AnyRecord>` actually requires it. One
+// internal boundary cast replaces N host-side casts.
+export function defineResource<TDoc = AnyRecord>(
   config: ResourceConfig<TDoc>,
 ): ResourceDefinition<TDoc> {
-  // Fail-fast validation
+  // Phase 1 — validate
   if (!config.skipValidation) {
-    assertValidConfig(config as ResourceConfig<AnyRecord>, {
-      skipControllerCheck: true,
-    });
+    validateDefineResourceConfig(config);
+  }
 
-    // Validate permissions are PermissionCheck functions
-    if (config.permissions) {
-      for (const [key, value] of Object.entries(config.permissions)) {
-        if (value !== undefined && typeof value !== "function") {
-          throw new Error(
-            `[Arc] Resource '${config.name}': permissions.${key} must be a PermissionCheck function.\n` +
-              `Use allowPublic(), requireAuth(), or requireRoles(['role']) from @classytic/arc/permissions.`,
-          );
-        }
-      }
-    }
+  // Phase 2 — resolve idField from repository before presets see it
+  const repository = config.adapter?.repository;
+  const configWithId = resolveIdField(config, repository);
 
-    // Validate routes
-    for (const route of config.routes ?? []) {
-      if (typeof route.permissions !== "function") {
+  // Phase 3 — apply presets + auto-inject tenant-field system-managed rules
+  const resolvedConfig = applyPresetsAndAutoInject<TDoc>(configWithId);
+
+  // Compute once: does this resource register any default CRUD routes?
+  const hasCrudRoutes = computeHasCrudRoutes(resolvedConfig);
+
+  // Phase 4 — reuse user controller or auto-create BaseController.
+  //
+  // The cast here is the one internal boundary where `TDoc` must widen to
+  // satisfy `BaseController<TDoc extends AnyRecord>`. At runtime every
+  // document is a string-keyed object, so the widening is safe; at the
+  // type layer it lets hosts pass narrow domain types (Mongoose
+  // `HydratedDocument<T>`, Prisma row types) without polluting their
+  // interfaces with an index signature. Kept local to arc so hosts
+  // never see it — the whole point of relaxing `defineResource`'s
+  // `TDoc` bound.
+  const narrowedConfig = resolvedConfig as unknown as ExtendedResourceConfig<TDoc & AnyRecord>;
+  const narrowedAdapter = configWithId.adapter as
+    | import("../adapters/interface.js").DataAdapter<TDoc & AnyRecord>
+    | undefined;
+  const controller = resolveOrAutoCreateController(
+    narrowedConfig,
+    narrowedAdapter,
+    repository,
+    hasCrudRoutes,
+  );
+
+  // Phase 5 — build the ResourceDefinition and validate controller methods
+  const resource = new ResourceDefinition({
+    ...resolvedConfig,
+    adapter: configWithId.adapter,
+    controller,
+  } as unknown as ResolvedResourceConfig<TDoc>);
+
+  if (!config.skipValidation && controller) {
+    resource._validateControllerMethods();
+  }
+
+  // Phase 6 — wire preset hooks + inline config.hooks onto the resource
+  wireHooks(
+    resource as unknown as ResourceDefinition<TDoc & AnyRecord>,
+    narrowedConfig,
+    configWithId.hooks,
+  );
+
+  // Phase 7 — resolve OpenAPI schemas (adapter → systemManaged strip → idField
+  //           pattern clean → queryParser listQuery → user override). Non-fatal:
+  //           warns on failure so the resource still boots; `_registryMeta`
+  //           stays undefined on failure so registry consumers see a clean
+  //           "no metadata" signal instead of a half-built object.
+  if (!config.skipRegistry) {
+    const registryMeta = resolveOpenApiSchemas(narrowedConfig);
+    if (registryMeta) resource._registryMeta = registryMeta;
+  }
+
+  return resource;
+}
+
+// ============================================================================
+// Phase 1 — validate
+// ============================================================================
+
+function validateDefineResourceConfig<TDoc>(config: ResourceConfig<TDoc>): void {
+  assertValidConfig(config as ResourceConfig<AnyRecord>, {
+    skipControllerCheck: true,
+  });
+
+  // Permissions must be PermissionCheck functions
+  if (config.permissions) {
+    for (const [key, value] of Object.entries(config.permissions)) {
+      if (value !== undefined && typeof value !== "function") {
         throw new Error(
-          `[Arc] Resource '${config.name}' route ${route.method} ${route.path}: ` +
-            `permissions is required and must be a PermissionCheck function.`,
+          `[Arc] Resource '${config.name}': permissions.${key} must be a PermissionCheck function.\n` +
+            `Use allowPublic(), requireAuth(), or requireRoles(['role']) from @classytic/arc/permissions.`,
         );
       }
     }
+  }
 
-    // Validate actions (v2.8)
-    if (config.actions) {
-      const CRUD_OPS = new Set(["create", "update", "delete", "list", "get"]);
-      for (const [name, entry] of Object.entries(config.actions)) {
-        if (CRUD_OPS.has(name)) {
+  // Custom routes must declare permissions explicitly (fail-closed)
+  for (const route of config.routes ?? []) {
+    if (typeof route.permissions !== "function") {
+      throw new Error(
+        `[Arc] Resource '${config.name}' route ${route.method} ${route.path}: ` +
+          `permissions is required and must be a PermissionCheck function.`,
+      );
+    }
+  }
+
+  // Actions (v2.8) — name must not collide with CRUD ops; handler + permissions
+  // must have the right shapes.
+  if (config.actions) {
+    const CRUD_OPS = new Set<string>(["create", "update", "delete", "list", "get"]);
+    for (const [name, entry] of Object.entries(config.actions)) {
+      if (CRUD_OPS.has(name)) {
+        throw new Error(
+          `[Arc] Resource '${config.name}': action '${name}' conflicts with CRUD operation.\n` +
+            `Use a different name (e.g., '${name}_item', 'do_${name}').`,
+        );
+      }
+      if (typeof entry !== "function") {
+        const def = entry as ActionDefinition;
+        if (typeof def.handler !== "function") {
           throw new Error(
-            `[Arc] Resource '${config.name}': action '${name}' conflicts with CRUD operation.\n` +
-              `Use a different name (e.g., '${name}_item', 'do_${name}').`,
+            `[Arc] Resource '${config.name}': actions.${name}.handler must be a function.`,
           );
         }
-        if (typeof entry !== "function") {
-          const def = entry as ActionDefinition;
-          if (typeof def.handler !== "function") {
-            throw new Error(
-              `[Arc] Resource '${config.name}': actions.${name}.handler must be a function.`,
-            );
-          }
-          if (def.permissions !== undefined && typeof def.permissions !== "function") {
-            throw new Error(
-              `[Arc] Resource '${config.name}': actions.${name}.permissions must be a PermissionCheck function.`,
-            );
-          }
+        if (def.permissions !== undefined && typeof def.permissions !== "function") {
+          throw new Error(
+            `[Arc] Resource '${config.name}': actions.${name}.permissions must be a PermissionCheck function.`,
+          );
         }
       }
     }
   }
+}
 
-  // Extract repository from adapter (if provided)
-  const repository = config.adapter?.repository;
+// ============================================================================
+// Phase 2 — resolveIdField
+// ============================================================================
 
-  // Auto-derive idField from the repository when the user didn't set one
-  // explicitly. MongoKit-style repositories declare their primary key field
-  // via `repository.idField`. By picking it up here, the user only has to
-  // configure idField in ONE place (the repo) and Arc threads it through:
-  //   - BaseController.idField (lookup pass-through)
-  //   - AJV params schema strip (UUIDs/slugs not rejected by ObjectId pattern)
-  //   - ResourceDefinition.idField (introspection / OpenAPI)
-  // Set it on `config` BEFORE preset resolution so presets see the same value.
-  if (config.idField === undefined && repository) {
-    const repoIdField = (repository as { idField?: unknown }).idField;
-    if (typeof repoIdField === "string" && repoIdField !== "_id") {
-      config = { ...config, idField: repoIdField };
-    }
+/**
+ * Auto-derive `idField` from the repository when the user didn't set one
+ * explicitly. MongoKit-style repositories declare their primary key field
+ * via `repository.idField`. By picking it up here (BEFORE preset resolution),
+ * the user configures idField in ONE place (the repo) and arc threads it
+ * through `BaseController`, AJV params schema, `ResourceDefinition.idField`,
+ * and preset field wiring consistently.
+ *
+ * Returns a fresh config — never mutates the caller's reference.
+ */
+function resolveIdField<TDoc>(
+  config: ResourceConfig<TDoc>,
+  repository: unknown,
+): ResourceConfig<TDoc> {
+  if (config.idField !== undefined || !repository) return config;
+  const repoIdField = (repository as { idField?: unknown }).idField;
+  if (typeof repoIdField === "string" && repoIdField !== "_id") {
+    return { ...config, idField: repoIdField };
   }
+  return config;
+}
 
-  // Check if any CRUD routes will actually be created
-  const crudRoutes = CRUD_OPERATIONS;
-  const disabledRoutes = new Set(config.disabledRoutes ?? []);
-  const hasCrudRoutes =
-    !config.disableDefaultRoutes && crudRoutes.some((route) => !disabledRoutes.has(route));
+// ============================================================================
+// Phase 3 — applyPresetsAndAutoInject
+// ============================================================================
 
-  // 2. Track presets
+/**
+ * Produce the canonical `resolvedConfig` — a fresh clone of the caller's
+ * config with presets applied and tenant-field schema rules auto-injected.
+ *
+ * v2.11.0: always returns a fresh object so downstream mutations
+ * (`_appliedPresets`, `schemaOptions` auto-inject, `_controllerOptions`,
+ * `_pendingHooks`) never leak onto the caller's config. Before 2.11 the
+ * no-preset branch returned the raw caller reference, which mutated
+ * resource-config fragments hosts were reusing.
+ *
+ * Full rationale for tenant-field auto-inject lives in
+ * `autoInjectTenantFieldRules` (src/core/schemaOptions.ts). Centralised here
+ * so every downstream reader (`BodySanitizer`, adapter `generateSchemas()`,
+ * MCP tool generator, OpenAPI builder) sees the same post-inject shape.
+ */
+function applyPresetsAndAutoInject<TDoc>(
+  config: ResourceConfig<TDoc>,
+): ExtendedResourceConfig<TDoc> {
   const originalPresets = (config.presets ?? []).map((p) =>
     typeof p === "string" ? p : (p as { name: string }).name,
   );
 
-  // 3. Apply presets FIRST before controller instantiation.
-  //
-  // v2.11.0: always produce a fresh object so downstream mutations
-  // (`_appliedPresets`, `schemaOptions` auto-inject, `_controllerOptions`,
-  // `_pendingHooks`) never leak onto the caller's config. `applyPresets`
-  // already returns a shallow-cloned result; the no-preset branch needs
-  // its own `{ ...config }` to match. Before 2.11 this path returned the
-  // raw caller reference, which mutated resource-config fragments hosts
-  // were reusing (e.g. shared defaults factored out for `defineResourceVariants`).
   const resolvedConfig = (
     config.presets?.length ? applyPresets(config, config.presets) : { ...config }
   ) as ExtendedResourceConfig<TDoc>;
 
   resolvedConfig._appliedPresets = originalPresets;
-
-  // 3a. Auto-mark the tenant field as `systemManaged` + `preserveForElevated` (v2.10.6).
-  //
-  // Full rationale + edge cases live in `autoInjectTenantFieldRules`
-  // (src/core/schemaOptions.ts). Delegated to a shared util so every
-  // downstream reader sees the same post-inject schemaOptions —
-  // `BodySanitizer` (via `resolvedConfig.schemaOptions`), the adapter's
-  // `generateSchemas()` call below (same reference), the MCP tool
-  // generator (via `resource.schemaOptions`, which is spread from
-  // `resolvedConfig`), and the OpenAPI builder (reads the adapter's
-  // `openApiSchemas` output). 2.10.6 shipped with a forwarding bug where
-  // the adapter got raw `config.schemaOptions`; 2.10.7 closes that gap
-  // and this centralization prevents the bug class from recurring.
   resolvedConfig.schemaOptions = autoInjectTenantFieldRules(
     resolvedConfig.schemaOptions,
     resolvedConfig.tenantField,
   );
 
-  // 4. Create or use provided controller using the full resolved config
+  return resolvedConfig;
+}
+
+function computeHasCrudRoutes<TDoc>(config: ResourceConfig<TDoc>): boolean {
+  const disabled = new Set(config.disabledRoutes ?? []);
+  return !config.disableDefaultRoutes && CRUD_OPERATIONS.some((op) => !disabled.has(op));
+}
+
+// ============================================================================
+// Phase 4 — resolveOrAutoCreateController
+// ============================================================================
+
+/**
+ * Pick the controller for the resource:
+ *   - user-supplied controller → forward `queryParser` to it (duck-typed)
+ *   - no controller + CRUD routes + repository → auto-create BaseController
+ *   - otherwise → undefined (custom-routes-only resource)
+ *
+ * Duck-typed `setQueryParser()` forwarding (v2.10.9) ensures operator filters
+ * like `[contains]` / `[like]` work in custom controllers too. Controllers
+ * that don't implement the method get a boot-time warn (v2.11) so authors
+ * of hand-rolled controllers see the dropped parser instead of silently
+ * debugging stale filter semantics. `BaseController` subclasses pick it up
+ * automatically.
+ */
+function resolveOrAutoCreateController<TDoc extends AnyRecord>(
+  resolvedConfig: ExtendedResourceConfig<TDoc>,
+  adapter: ResourceConfig<TDoc>["adapter"],
+  repository: unknown,
+  hasCrudRoutes: boolean,
+): IController<TDoc> | undefined {
   let controller = resolvedConfig.controller;
 
-  // v2.10.9 — forward the resource-level `queryParser` to user-supplied
-  // controllers too. Before this, `defineResource({ controller, queryParser })`
-  // threaded the parser into Fastify's listQuery schema but never into the
-  // controller's own `QueryResolver`, so operator filters like `[contains]`
-  // / `[like]` silently fell back to the default `ArcQueryParser` on any
-  // resource that shipped a custom controller — including every resource
-  // scaffolded by `arc init`. Now we inject the parser via a duck-typed
-  // `setQueryParser()` call. Controllers that don't implement the method
-  // (custom non-BaseController implementations) are left untouched — no
-  // throw, no warn, caller is explicitly opting out of the contract.
   if (controller && resolvedConfig.queryParser) {
     const ctrl = controller as { setQueryParser?: (qp: QueryParserInterface) => void };
     if (typeof ctrl.setQueryParser === "function") {
       ctrl.setQueryParser(resolvedConfig.queryParser as QueryParserInterface);
+    } else {
+      // v2.11 — warn when the parser can't be threaded. Hand-rolled
+      // controllers without `setQueryParser` silently fall back to their
+      // internal default, which produces hard-to-diagnose drift between
+      // the OpenAPI schema (which reflects `resolvedConfig.queryParser`)
+      // and the actual filter semantics the controller applies. One warn
+      // at boot turns a 90-minute debug into a visible log line. Honors
+      // `ARC_SUPPRESS_WARNINGS=1`.
+      arcLog("defineResource").warn(
+        `Resource "${resolvedConfig.name}" declares a custom \`queryParser\` but its controller ` +
+          "does not expose `setQueryParser(qp)`. The parser will NOT be threaded into the " +
+          "controller's query resolution — operator filters (`[contains]`, `[like]`, etc.) may " +
+          "fall back to the controller's internal default. Extend `BaseController` / " +
+          "`BaseCrudController` (both implement `setQueryParser`) OR add the method to your " +
+          "custom controller to honor the resource-level parser.",
+      );
     }
   }
 
-  if (!controller && hasCrudRoutes && repository) {
-    // Extract maxLimit from queryParser schema so BaseController's QueryResolver
-    // and Fastify validation stay in sync with the parser's configured limit.
-    const qp = resolvedConfig.queryParser as QueryParserInterface | undefined;
-    let maxLimitFromParser: number | undefined;
-    if (qp?.getQuerySchema) {
-      const qpSchema = qp.getQuerySchema();
-      const limitProp = qpSchema?.properties?.limit as { maximum?: number } | undefined;
-      if (limitProp?.maximum) {
-        maxLimitFromParser = limitProp.maximum;
-      }
+  if (controller || !hasCrudRoutes || !repository) {
+    return controller as unknown as IController<TDoc> | undefined;
+  }
+
+  // Auto-create BaseController. Extract maxLimit from queryParser schema so
+  // BaseController's QueryResolver and Fastify validation stay in sync with
+  // the parser's configured limit.
+  const qp = resolvedConfig.queryParser as QueryParserInterface | undefined;
+  let maxLimitFromParser: number | undefined;
+  if (qp?.getQuerySchema) {
+    const qpSchema = qp.getQuerySchema();
+    const limitProp = qpSchema?.properties?.limit as { maximum?: number } | undefined;
+    if (limitProp?.maximum) {
+      maxLimitFromParser = limitProp.maximum;
     }
-
-    // Auto-create BaseController if CRUD routes exist
-    controller = new BaseController<TDoc>(repository, {
-      resourceName: resolvedConfig.name,
-      schemaOptions: resolvedConfig.schemaOptions,
-      queryParser: resolvedConfig.queryParser as QueryParserInterface | undefined,
-      maxLimit: maxLimitFromParser,
-      tenantField: resolvedConfig.tenantField,
-      idField: resolvedConfig.idField,
-      // Forward the resource-level opt-out so non-Mongo schemas can
-      // declare `defaultSort: false` without constructing their own
-      // BaseController. `undefined` falls back to BaseController's own
-      // default (`-createdAt`) for back-compat.
-      ...(resolvedConfig.defaultSort !== undefined
-        ? { defaultSort: resolvedConfig.defaultSort }
-        : {}),
-      matchesFilter: config.adapter?.matchesFilter,
-      cache: resolvedConfig.cache,
-      onFieldWriteDenied: resolvedConfig.onFieldWriteDenied,
-      presetFields: resolvedConfig._controllerOptions
-        ? {
-            slugField: resolvedConfig._controllerOptions.slugField,
-            parentField: resolvedConfig._controllerOptions.parentField,
-          }
-        : undefined,
-    }) as IController<TDoc>;
   }
 
-  // 5. Build definition
-  const resource = new ResourceDefinition({
-    ...resolvedConfig,
-    adapter: config.adapter,
-    controller,
-  } as ResolvedResourceConfig<TDoc>);
+  controller = new BaseController<TDoc>(repository, {
+    resourceName: resolvedConfig.name,
+    schemaOptions: resolvedConfig.schemaOptions,
+    queryParser: resolvedConfig.queryParser as QueryParserInterface | undefined,
+    maxLimit: maxLimitFromParser,
+    tenantField: resolvedConfig.tenantField,
+    idField: resolvedConfig.idField,
+    ...(resolvedConfig.defaultSort !== undefined
+      ? { defaultSort: resolvedConfig.defaultSort }
+      : {}),
+    matchesFilter: adapter?.matchesFilter,
+    cache: resolvedConfig.cache,
+    onFieldWriteDenied: resolvedConfig.onFieldWriteDenied,
+    presetFields: resolvedConfig._controllerOptions
+      ? {
+          slugField: resolvedConfig._controllerOptions.slugField,
+          parentField: resolvedConfig._controllerOptions.parentField,
+        }
+      : undefined,
+  }) as IController<TDoc>;
 
-  // Validate controller methods
-  if (!config.skipValidation && controller) {
-    resource._validateControllerMethods();
-  }
+  return controller as unknown as IController<TDoc>;
+}
 
-  // Collect hooks from presets — stored on resource, registered at plugin time via fastify.arc.hooks
+// ============================================================================
+// Phase 6 — wireHooks (preset hooks + inline config.hooks)
+// ============================================================================
+
+/**
+ * Push preset-collected hooks and inline `config.hooks` onto the resource's
+ * `_pendingHooks`. The inline `config.hooks` handlers get a
+ * `ResourceHookContext` projection (v2.10.8) so they can reach `scope` /
+ * `context` without reaching into internal fields.
+ */
+function wireHooks<TDoc extends AnyRecord>(
+  resource: ResourceDefinition<TDoc>,
+  resolvedConfig: ExtendedResourceConfig<TDoc>,
+  inlineHooksConfig: ResourceConfig<TDoc>["hooks"],
+): void {
+  // Preset hooks — already normalised by `applyPresets`
   if (resolvedConfig._hooks?.length) {
     resource._pendingHooks.push(
       ...resolvedConfig._hooks.map((hook) => ({
@@ -307,255 +447,183 @@ export function defineResource<TDoc extends AnyRecord = AnyRecord>(
     );
   }
 
-  // Wire up inline ResourceHooks from config.hooks
-  if (config.hooks) {
-    const h = config.hooks;
-    type PendingHook = {
-      operation: "create" | "update" | "delete";
-      phase: "before" | "after";
-      handler: (ctx: AnyRecord) => unknown;
-      priority: number;
+  // Inline `config.hooks.{before,after}{Create,Update,Delete}` — 6 nearly-
+  // identical blocks collapsed into a table + loop.
+  if (!inlineHooksConfig) return;
+
+  const toCtx = (ctx: AnyRecord) => {
+    const context = ctx.context as RequestContext | undefined;
+    const rawScope = (context as { _scope?: RequestScope } | undefined)?._scope;
+    return {
+      data: (ctx.data ?? ctx.result ?? {}) as AnyRecord,
+      user: ctx.user as import("../types/index.js").UserBase | undefined,
+      context: context as unknown as AnyRecord | undefined,
+      scope: buildRequestScopeProjection(rawScope),
+      meta: ctx.meta as AnyRecord | undefined,
     };
-    const inlineHooks: PendingHook[] = [];
+  };
 
-    // `toCtx` adapts the internal `HookContext` (what BaseController
-    // passes to HookSystem — `{ resource, operation, phase, data, result,
-    // user, context, meta }`) into the public `ResourceHookContext` that
-    // `config.hooks.{beforeCreate, afterCreate, …}` handlers sign for
-    // (`{ data, user, context, scope, meta }`).
-    //
-    // v2.10.8 fix: previously this wrapper dropped `context` entirely, so
-    // inline hook handlers had no way to reach `_scope.organizationId` /
-    // `_scope.userId`. Hosts worked around it by pushing raw handlers
-    // into `resource._pendingHooks`. Now `context` is forwarded and a
-    // first-class `scope` projection (same shape as `IRequestContext.scope`
-    // from v2.10.6) is computed from `context._scope` so inline hooks
-    // don't need boilerplate.
-    const toCtx = (ctx: AnyRecord) => {
-      const context = ctx.context as RequestContext | undefined;
-      const rawScope = (context as { _scope?: RequestScope } | undefined)?._scope;
-      return {
-        data: (ctx.data ?? ctx.result ?? {}) as AnyRecord,
-        user: ctx.user as import("../types/index.js").UserBase | undefined,
-        context: context as unknown as AnyRecord | undefined,
-        scope: buildRequestScopeProjection(rawScope),
-        meta: ctx.meta as AnyRecord | undefined,
-      };
-    };
+  type InlineHookSpec = {
+    key: keyof NonNullable<ResourceConfig<TDoc>["hooks"]>;
+    operation: "create" | "update" | "delete";
+    phase: "before" | "after";
+  };
 
-    if (h.beforeCreate) {
-      const fn = h.beforeCreate;
-      inlineHooks.push({
-        operation: "create",
-        phase: "before",
-        priority: 10,
-        handler: (ctx) => fn(toCtx(ctx)),
-      });
-    }
-    if (h.afterCreate) {
-      const fn = h.afterCreate;
-      inlineHooks.push({
-        operation: "create",
-        phase: "after",
-        priority: 10,
-        handler: (ctx) => fn(toCtx(ctx)),
-      });
-    }
-    if (h.beforeUpdate) {
-      const fn = h.beforeUpdate;
-      inlineHooks.push({
-        operation: "update",
-        phase: "before",
-        priority: 10,
-        handler: (ctx) => fn(toCtx(ctx)),
-      });
-    }
-    if (h.afterUpdate) {
-      const fn = h.afterUpdate;
-      inlineHooks.push({
-        operation: "update",
-        phase: "after",
-        priority: 10,
-        handler: (ctx) => fn(toCtx(ctx)),
-      });
-    }
-    if (h.beforeDelete) {
-      const fn = h.beforeDelete;
-      inlineHooks.push({
-        operation: "delete",
-        phase: "before",
-        priority: 10,
-        handler: (ctx) => fn(toCtx(ctx)),
-      });
-    }
-    if (h.afterDelete) {
-      const fn = h.afterDelete;
-      inlineHooks.push({
-        operation: "delete",
-        phase: "after",
-        priority: 10,
-        handler: (ctx) => fn(toCtx(ctx)),
-      });
-    }
+  const INLINE_HOOK_SPECS: readonly InlineHookSpec[] = [
+    { key: "beforeCreate", operation: "create", phase: "before" },
+    { key: "afterCreate", operation: "create", phase: "after" },
+    { key: "beforeUpdate", operation: "update", phase: "before" },
+    { key: "afterUpdate", operation: "update", phase: "after" },
+    { key: "beforeDelete", operation: "delete", phase: "before" },
+    { key: "afterDelete", operation: "delete", phase: "after" },
+  ];
 
-    resource._pendingHooks.push(...inlineHooks);
+  const h = inlineHooksConfig as Record<string, (ctx: unknown) => unknown>;
+  for (const spec of INLINE_HOOK_SPECS) {
+    const fn = h[spec.key as string];
+    if (typeof fn !== "function") continue;
+    resource._pendingHooks.push({
+      operation: spec.operation,
+      phase: spec.phase,
+      priority: 10,
+      handler: (ctx) => fn(toCtx(ctx)),
+    });
   }
+}
 
-  // ────────────────────────────────────────────────────────────────────────────
-  // OpenAPI Schema Resolution — clear, unified priority order
-  // ────────────────────────────────────────────────────────────────────────────
-  //
-  // Each schema slot (createBody, updateBody, response, params, listQuery) is
-  // resolved independently from these sources, in priority order:
-  //
-  //   listQuery:
-  //     1. config.openApiSchemas.listQuery   (user override — wins)
-  //     2. queryParser.getQuerySchema()      (parser is source of truth)
-  //     3. adapter.generateSchemas().listQuery (fallback — placeholder only)
-  //
-  //   createBody / updateBody / response / params:
-  //     1. config.openApiSchemas.{slot}      (user override — wins)
-  //     2. adapter.generateSchemas().{slot}  (auto-generated from DB schema)
-  //
-  // Why parser beats adapter for listQuery: the QueryParser knows the real
-  // query semantics (filter operators, max limit, sort whitelist, pagination
-  // mode). The adapter only knows the persistence shape — it can't infer
-  // operator suffixes like `name_contains` or runtime constraints like
-  // `limit.maximum`. Only the user can override the parser.
-  // ────────────────────────────────────────────────────────────────────────────
-  if (!config.skipRegistry) {
-    try {
-      // Start with adapter-generated schemas (createBody, updateBody, response, params).
-      // Pass `resolvedConfig.schemaOptions` — not the raw `config` — so adapters
-      // see the same `fieldRules` that `BodySanitizer` reads. Step 3a above
-      // auto-injects `{ systemManaged: true, preserveForElevated: true }` on
-      // the tenant field; without this forwarding, the OpenAPI / MCP body
-      // schemas would still emit `organizationId` as a required input field
-      // while the runtime sanitizer strips it — a half-wired auto-inject that
-      // forced every multi-tenant host to restate the rule at the adapter
-      // layer for their docs to match runtime behaviour.
-      // **Every downstream read comes from `resolvedConfig`, never raw `config`**.
-      // This is a deliberate, audited convention — 2.10.6 shipped with a
-      // single `config.schemaOptions` slip that broke the auto-inject
-      // forwarding to adapters, so every access here is normalized through
-      // `resolvedConfig` to close the bug class.
-      let openApiSchemas: OpenApiSchemas | undefined;
-      if (resolvedConfig.adapter?.generateSchemas) {
-        // Pass resource-level context so adapters can shape params/response etc.
-        const adapterContext = {
-          idField: resolvedConfig.idField,
-          resourceName: resolvedConfig.name,
-        };
-        const generated = resolvedConfig.adapter.generateSchemas(
-          resolvedConfig.schemaOptions,
-          adapterContext,
-        );
-        if (generated) openApiSchemas = generated;
-      }
+// ============================================================================
+// Phase 7 — resolveOpenApiSchemas
+// ============================================================================
 
-      // v2.11.0 — strip every framework-injected field (any rule with
-      // `systemManaged: true`) from the create/update body `required[]`
-      // arrays. Covers the reported `multiTenantPreset` + engine-required
-      // tenant conflict plus the broader class: `auditedPreset`'s
-      // `createdBy`/`updatedBy`, any future preset that marks a field
-      // systemManaged, and any host-declared rule. Full rationale +
-      // call-order lives in `stripSystemManagedFromBodyRequired`
-      // (src/core/schemaOptions.ts). Runs AFTER `autoInjectTenantFieldRules`
-      // and AFTER preset merge, so the resolved `schemaOptions.fieldRules`
-      // is the canonical source of "what will arc inject" — matching the
-      // shared-util pattern that BodySanitizer reads from (defense in depth
-      // between wire contract and runtime). Leaves `properties` intact so
-      // elevated admins can still send the value via the body.
-      openApiSchemas = stripSystemManagedFromBodyRequired(
-        openApiSchemas,
-        resolvedConfig.schemaOptions,
-      );
-
-      // Safety net: if idField is overridden to a non-default value, strip any
-      // ObjectId pattern left on params.id by legacy adapters/plugins that
-      // didn't honor the AdapterSchemaContext.idField argument. Custom ID
-      // formats (UUIDs, slugs, ORD-2026-0001) must not be rejected by AJV
-      // before BaseController runs the actual lookup.
-      if (
-        resolvedConfig.idField &&
-        resolvedConfig.idField !== "_id" &&
-        openApiSchemas?.params &&
-        typeof openApiSchemas.params === "object"
-      ) {
-        const params = openApiSchemas.params as AnyRecord;
-        const properties = params.properties as AnyRecord | undefined;
-        const idProp = properties?.id as AnyRecord | undefined;
-        if (idProp && typeof idProp === "object") {
-          const pattern = idProp.pattern;
-          const isObjectIdPattern =
-            typeof pattern === "string" &&
-            (pattern === "^[0-9a-fA-F]{24}$" ||
-              pattern === "^[a-f\\d]{24}$" ||
-              pattern === "^[a-fA-F0-9]{24}$" ||
-              /^\^\[[a-fA-F0-9\\d]+\]\{24\}\$$/.test(pattern));
-          if (isObjectIdPattern) {
-            // Clone to avoid mutating the adapter's cached output
-            const cleanedId: AnyRecord = { ...idProp };
-            delete cleanedId.pattern;
-            delete cleanedId.minLength;
-            delete cleanedId.maxLength;
-            if (!cleanedId.description) {
-              cleanedId.description = `${resolvedConfig.idField} (custom ID field)`;
-            }
-            openApiSchemas = {
-              ...openApiSchemas,
-              params: {
-                ...params,
-                properties: { ...properties, id: cleanedId },
-              } as AnyRecord,
-            };
-          }
-        }
-      }
-
-      // Layer queryParser's listQuery on top — parser wins over adapter
-      const queryParser = resolvedConfig.queryParser as QueryParserInterface | undefined;
-      if (queryParser?.getQuerySchema) {
-        const querySchema = queryParser.getQuerySchema();
-        if (querySchema) {
-          openApiSchemas = {
-            ...openApiSchemas,
-            listQuery: querySchema as unknown as AnyRecord,
-          };
-        }
-      }
-
-      // User-provided schemas win over everything (per-slot merge)
-      if (resolvedConfig.openApiSchemas) {
-        openApiSchemas = { ...openApiSchemas, ...resolvedConfig.openApiSchemas };
-      }
-
-      // Auto-convert Zod schemas to JSON Schema (no-op for plain JSON Schema)
-      if (openApiSchemas) {
-        openApiSchemas = convertOpenApiSchemas(openApiSchemas);
-      }
-
-      // Store registry metadata for lazy registration when toPlugin() is called
-      resource._registryMeta = {
-        module: resolvedConfig.module,
-        openApiSchemas,
-      };
-    } catch (err) {
-      // v2.11.0: schema-generation errors are still non-fatal (the resource
-      // boots + serves traffic), but no longer silent. A thrown adapter
-      // `generateSchemas()` / `convertOpenApiSchemas()` / parser query-schema
-      // merge used to degrade OpenAPI + MCP metadata with ZERO signal —
-      // docs/introspection silently drifted from runtime. Warn so hosts
-      // notice the contract drift in logs. Honors `ARC_SUPPRESS_WARNINGS=1`.
-      arcLog("defineResource").warn(
-        `OpenAPI/MCP schema generation failed for resource "${resolvedConfig.name}": ${
-          err instanceof Error ? err.message : String(err)
-        }. Resource will boot without registry metadata — OpenAPI docs and MCP tool schemas will be missing.`,
-      );
-    }
+/**
+ * Resolve OpenAPI schemas for a resource with a unified priority order:
+ *
+ *   listQuery:
+ *     1. config.openApiSchemas.listQuery    (user override — wins)
+ *     2. queryParser.getQuerySchema()       (parser is source of truth)
+ *     3. adapter.generateSchemas().listQuery (fallback placeholder)
+ *
+ *   createBody / updateBody / response / params:
+ *     1. config.openApiSchemas.{slot}       (user override — wins)
+ *     2. adapter.generateSchemas().{slot}   (auto-generated from DB schema)
+ *
+ * Why parser beats adapter for listQuery: the QueryParser knows the real
+ * query semantics (filter operators, max limit, sort whitelist, pagination).
+ * The adapter only knows persistence — it can't infer `name_contains` or
+ * `limit.maximum`.
+ *
+ * **Every downstream read comes from `resolvedConfig`, never raw `config`.**
+ * This is an audited convention — 2.10.6 shipped with a single
+ * `config.schemaOptions` slip that broke auto-inject forwarding, so every
+ * access is normalised through `resolvedConfig` to close the bug class.
+ *
+ * Non-fatal: if any phase throws, returns registry metadata anyway (with
+ * `openApiSchemas: undefined`) and warns. The resource still boots — docs
+ * and MCP tool schemas degrade visibly instead of silently drifting.
+ */
+function resolveOpenApiSchemas<TDoc extends AnyRecord>(
+  resolvedConfig: ExtendedResourceConfig<TDoc>,
+): RegisterOptions | undefined {
+  try {
+    let openApiSchemas = generateAdapterSchemas(resolvedConfig);
+    openApiSchemas = stripSystemManagedFromBodyRequired(
+      openApiSchemas,
+      resolvedConfig.schemaOptions,
+    );
+    openApiSchemas = cleanLegacyObjectIdParams(openApiSchemas, resolvedConfig.idField);
+    openApiSchemas = layerQueryParserListQuery(openApiSchemas, resolvedConfig.queryParser);
+    openApiSchemas = mergeUserOpenApiOverrides(openApiSchemas, resolvedConfig.openApiSchemas);
+    if (openApiSchemas) openApiSchemas = convertOpenApiSchemas(openApiSchemas);
+    return { module: resolvedConfig.module, openApiSchemas };
+  } catch (err) {
+    // v2.11.0: schema-generation errors are non-fatal but not silent — the
+    // resource boots and serves traffic, docs/introspection will be missing.
+    // Honors `ARC_SUPPRESS_WARNINGS=1`.
+    arcLog("defineResource").warn(
+      `OpenAPI/MCP schema generation failed for resource "${resolvedConfig.name}": ${
+        err instanceof Error ? err.message : String(err)
+      }. Resource will boot without registry metadata — OpenAPI docs and MCP tool schemas will be missing.`,
+    );
+    return undefined;
   }
+}
 
-  return resource;
+function generateAdapterSchemas<TDoc extends AnyRecord>(
+  resolvedConfig: ExtendedResourceConfig<TDoc>,
+): OpenApiSchemas | undefined {
+  if (!resolvedConfig.adapter?.generateSchemas) return undefined;
+  const adapterContext = {
+    idField: resolvedConfig.idField,
+    resourceName: resolvedConfig.name,
+  };
+  return resolvedConfig.adapter.generateSchemas(resolvedConfig.schemaOptions, adapterContext) as
+    | OpenApiSchemas
+    | undefined;
+}
+
+/**
+ * Safety net: when `idField` is overridden to a non-default value (UUIDs,
+ * slugs, ORD-2026-0001), strip any ObjectId pattern left on `params.id` by
+ * legacy adapters or plugins that didn't honor `AdapterSchemaContext.idField`.
+ * Custom IDs must not be rejected by AJV before BaseController runs the
+ * actual lookup.
+ */
+function cleanLegacyObjectIdParams(
+  openApiSchemas: OpenApiSchemas | undefined,
+  idField: string | undefined,
+): OpenApiSchemas | undefined {
+  if (!openApiSchemas || !idField || idField === "_id") return openApiSchemas;
+  const params = openApiSchemas.params as AnyRecord | undefined;
+  if (!params || typeof params !== "object") return openApiSchemas;
+  const properties = params.properties as AnyRecord | undefined;
+  const idProp = properties?.id as AnyRecord | undefined;
+  if (!idProp || typeof idProp !== "object") return openApiSchemas;
+
+  const pattern = idProp.pattern;
+  const isObjectIdPattern =
+    typeof pattern === "string" &&
+    (pattern === "^[0-9a-fA-F]{24}$" ||
+      pattern === "^[a-f\\d]{24}$" ||
+      pattern === "^[a-fA-F0-9]{24}$" ||
+      /^\^\[[a-fA-F0-9\\d]+\]\{24\}\$$/.test(pattern));
+  if (!isObjectIdPattern) return openApiSchemas;
+
+  const cleanedId: AnyRecord = { ...idProp };
+  delete cleanedId.pattern;
+  delete cleanedId.minLength;
+  delete cleanedId.maxLength;
+  if (!cleanedId.description) {
+    cleanedId.description = `${idField} (custom ID field)`;
+  }
+  return {
+    ...openApiSchemas,
+    params: {
+      ...params,
+      properties: { ...properties, id: cleanedId },
+    } as AnyRecord,
+  };
+}
+
+function layerQueryParserListQuery(
+  openApiSchemas: OpenApiSchemas | undefined,
+  queryParser: QueryParserInterface | unknown | undefined,
+): OpenApiSchemas | undefined {
+  const qp = queryParser as QueryParserInterface | undefined;
+  if (!qp?.getQuerySchema) return openApiSchemas;
+  const querySchema = qp.getQuerySchema();
+  if (!querySchema) return openApiSchemas;
+  return {
+    ...openApiSchemas,
+    listQuery: querySchema as unknown as AnyRecord,
+  } as OpenApiSchemas;
+}
+
+function mergeUserOpenApiOverrides(
+  openApiSchemas: OpenApiSchemas | undefined,
+  userOverrides: OpenApiSchemas | undefined,
+): OpenApiSchemas | undefined {
+  if (!userOverrides) return openApiSchemas;
+  return { ...openApiSchemas, ...userOverrides };
 }
 
 interface ResolvedResourceConfig<TDoc = AnyRecord> extends ResourceConfig<TDoc> {
@@ -995,7 +1063,15 @@ export class ResourceDefinition<TDoc = AnyRecord> {
             fields: self.fields,
           });
 
-          // Register first-class actions (v2.8) — after CRUD routes, inside prefix scope
+          // Register first-class actions (v2.8) — after CRUD routes, inside prefix scope.
+          //
+          // Actions share every cross-cutting primitive with CRUD via
+          // `routerShared`: arc decorator (field masking), auth/permission
+          // middlewares, pipeline execution, idempotency, rate-limit.
+          // Resource-level `fields`, `permissions`, `routeGuards`, `pipe`,
+          // `rateLimit`, and `schemaOptions` thread through here so an action
+          // endpoint that mutates documents applies the same wiring a PATCH
+          // would apply to the same resource.
           if (self.actions && Object.keys(self.actions).length > 0) {
             const { createActionRouter } = await import("./createActionRouter.js");
             const actionConfig = normalizeActionsToRouterConfig(
@@ -1006,7 +1082,16 @@ export class ResourceDefinition<TDoc = AnyRecord> {
               self.name,
               typedInstance.log,
             );
-            createActionRouter(instance as unknown as FastifyInstance, actionConfig);
+            createActionRouter(typedInstance, {
+              ...actionConfig,
+              resourceName: self.name,
+              fields: self.fields,
+              schemaOptions: self.schemaOptions,
+              permissions: self.permissions as Record<string, PermissionCheck> | undefined,
+              routeGuards: self.routeGuards,
+              pipeline: self.pipe,
+              rateLimit: self.rateLimit,
+            });
           }
 
           if (self.events && Object.keys(self.events).length > 0) {

@@ -8,11 +8,11 @@ description: |
   Triggers: arc, fastify resource, defineResource, createApp, BaseController, arc preset,
   arc auth, arc events, arc jobs, arc websocket, arc mcp, arc plugin, arc testing, arc cli,
   arc permissions, arc hooks, arc pipeline, arc factory, arc cache, arc QueryCache.
-version: 2.10.3
+version: 2.11.0
 license: MIT
 metadata:
   author: Classytic
-  version: "2.10.3"
+  version: "2.11.0"
 tags:
   - fastify
   - rest-api
@@ -68,21 +68,17 @@ await app.register(productResource.toPlugin());
 await app.listen({ port: 8040, host: '0.0.0.0' });
 ```
 
-## v2.9 Security Defaults (breaking)
+## Security defaults (active in 2.11)
 
-- **Field-write perms: `reject` (default)** — requests carrying non-writable fields get 403 with denied-field list. Opt into silent strip: `defineResource({ onFieldWriteDenied: 'strip' })`.
+- **Field-write perms: `reject`** — requests carrying non-writable fields get 403 with denied-field list. Opt into silent strip: `defineResource({ onFieldWriteDenied: 'strip' })`.
 - **multiTenant injects org on UPDATE** — body-supplied `organizationId` overwritten with caller's scope. Closes tenant-hop vector.
-- **Elevation always emits `arc.scope.elevated` event** — audit via `fastify.events.subscribe(...)`.
-- **`verifySignature(body, ...)` throws on parsed body** — pass `req.rawBody`, not `req.body`.
-- **Upload `sanitizeFilename`** — strict by default (no `/ \ .. \0 >255ch`). Pass `false` / `'*'` / custom fn to relax.
+- **Elevation emits `arc.scope.elevated`** — audit via `fastify.events.subscribe(...)`.
+- **`verifySignature(body, ...)`** throws on parsed body — pass `req.rawBody`.
+- **Upload `sanitizeFilename`** strict by default. Pass `false` / `'*'` / custom fn to relax.
 - **Idempotency `namespace`** option for shared-store prod+canary deployments.
+- **`systemManaged` fields auto-strip from `required[]`** — framework-injected fields (tenant, audit) removed from create/update `required[]` so Fastify preValidation doesn't reject before arc's injection runs.
 
-## Removed in v2.9
-
-- `createActionRouter`, `buildActionBodySchema` — use `actions` on `defineResource`
-- `ResourceConfig.onRegister` — use `actions` or resource `hooks`
-- `AdditionalRoute` type + `resource.additionalRoutes` field — use `RouteDefinition` and `resource.routes` (single source of truth; no normalised mirror)
-- `wrapHandler` on route defs — derived from `!route.raw` at use-site (set `raw: true` to opt out of the arc pipeline)
+For removed APIs and version-by-version breaking changes, see [CHANGELOG.md](../../CHANGELOG.md). For the full tenant-pipeline walkthrough, see [docs/production-ops/tenant-pipeline.mdx](../../docs/production-ops/tenant-pipeline.mdx).
 
 ## defineResource()
 
@@ -105,17 +101,18 @@ const productResource = defineResource({
   },
   cache: { staleTime: 30, gcTime: 300, tags: ['catalog'] },
 
-  // v2.8.1: routeGuards — auto-apply to ALL routes (CRUD + custom + preset)
+  // routeGuards — auto-apply to ALL routes (CRUD + custom + preset)
   routeGuards: [modeGuard, orgGuard.preHandler],
 
-  // v2.8.1: fieldRules constraints → auto-map to OpenAPI + AJV validation
+  // fieldRules — portable constraints + framework-injection hints
   schemaOptions: {
     fieldRules: {
       name: { minLength: 2, maxLength: 200, description: 'Product name' },
       price: { min: 0, max: 100000 },
       sku: { pattern: '^[A-Z]{3}-\\d{3}$' },
       status: { enum: ['draft', 'active', 'archived'] },
-      deletedAt: { systemManaged: true },
+      deletedAt: { systemManaged: true },                 // arc stamps it — strip from body + required[]
+      priceMode: { nullable: true },                      // Zod .nullable() lost through Mongoose — widen to accept null
     },
   },
 
@@ -142,7 +139,7 @@ await fastify.register(productResource.toPlugin());
 // + softDelete preset adds: GET /deleted, POST /:id/restore
 ```
 
-## routeGuards + defineGuard (v2.8.1)
+## routeGuards + defineGuard
 
 Resource-level guards that apply to **every** route (CRUD + custom + preset):
 
@@ -183,9 +180,9 @@ defineResource({
 
 **Execution order:** auth → permissions → cache/idempotency → `routeGuards` → per-route `preHandler`
 
-## fieldRules → OpenAPI + AJV (v2.8.1)
+## fieldRules → OpenAPI + AJV
 
-One definition, two outputs — constraints auto-map to OpenAPI schema + Fastify AJV validation:
+One definition, two outputs — constraints auto-map to OpenAPI schema + Fastify AJV validation. Extends repo-core's `FieldRule` floor with arc extensions.
 
 ```typescript
 schemaOptions: {
@@ -194,14 +191,29 @@ schemaOptions: {
     price: { min: 0, max: 100000 },
     sku: { pattern: '^[A-Z]{3}-\\d{3}$' },
     status: { enum: ['draft', 'active', 'archived'] },
-    password: { hidden: true },           // blocked from select + OpenAPI
-    deletedAt: { systemManaged: true },   // blocked from input schemas
-    slug: { immutable: true },            // excluded from update body
+    password: { hidden: true },                   // blocked from select + OpenAPI
+    deletedAt: { systemManaged: true },           // blocked from input schemas; framework stamps it
+    slug: { immutable: true },                    // excluded from update body
+    priceMode: { nullable: true },                // widen JSON-Schema type to include null
+    organizationId: { systemManaged: true, preserveForElevated: true }, // tenant field (auto-injected)
   },
 },
 ```
 
-Mongoose model-level constraints (`minlength`, `maxlength`, `min`, `max`, `enum`) take precedence. `fieldRules` supplements what the model doesn't declare.
+| Flag | Effect |
+|---|---|
+| `systemManaged` | Strip from body on ingest, drop from `required[]`. Framework stamps the value (tenant, audit, engine-derived slug). |
+| `preserveForElevated` | Elevated admins keep the field on ingest (platform-level cross-tenant writes). |
+| `immutable` / `immutableAfterCreate` | Omit from update body. Inheritance: repo-core floor. |
+| `optional` | Strip from `required[]` without touching `properties`. |
+| `nullable` | Widen JSON-Schema `type` to include null (+ appends `null` to `enum` if present). |
+| `hidden` | Block from response projection + OpenAPI. |
+| `minLength` / `maxLength` / `min` / `max` / `pattern` / `enum` | Map to AJV validators + OpenAPI constraints. |
+| `description` | Maps to OpenAPI `description`. |
+
+Mongoose model-level constraints (`minlength`, `maxlength`, `min`, `max`, `enum`) take precedence. `fieldRules` supplements what the model doesn't declare. Kit schema generators see only the repo-core floor; arc's extensions apply post-kit via `mergeFieldRuleConstraints`.
+
+See [docs/framework-extension/custom-adapters.mdx — Field Rules](../../docs/framework-extension/custom-adapters.mdx#field-rules--shaping-kit-generated-schemas) for the `systemManaged` decision table.
 
 ## Authentication
 
@@ -710,9 +722,15 @@ class OrderController extends SoftDeleteMixin(BulkMixin(BaseCrudController)) {}
 ## Adapters (Database-Agnostic)
 
 ```typescript
-// Mongoose
+// Mongoose — canonical arc factory
 import { createMongooseAdapter } from '@classytic/arc';
-const adapter = createMongooseAdapter({ model: ProductModel, repository: productRepo });
+import { buildCrudSchemasFromModel } from '@classytic/mongokit';
+
+const adapter = createMongooseAdapter({
+  model: ProductModel,
+  repository: productRepo,
+  schemaGenerator: buildCrudSchemasFromModel,   // ← no cast; RouteSchemaOptions extends SchemaBuilderOptions
+});
 
 // Custom adapter — implement MinimalRepo from @classytic/repo-core/repository:
 import type { MinimalRepo } from '@classytic/repo-core/repository';
@@ -720,6 +738,10 @@ import type { MinimalRepo } from '@classytic/repo-core/repository';
 // StandardRepo<TDoc> = MinimalRepo + optional batch ops, CAS, soft-delete, etc.
 // Arc feature-detects optional methods at call sites.
 ```
+
+- `createMongooseAdapter` is the **canonical arc export**. Use directly — no cast on `schemaGenerator` (arc's `RouteSchemaOptions extends SchemaBuilderOptions`; `ArcFieldRule extends FieldRule`).
+- `createAdapter` is a **CLI-scaffolded host wrapper** (`src/lib/adapter.ts`). Keep for scaffolded apps; hand-built apps should import `createMongooseAdapter` directly.
+- Built-in mongoose fallback detects `{ default: null }` on schema paths and widens the emitted JSON-Schema type automatically — no `fieldRules` entry needed for that case.
 
 ## Events
 
@@ -894,6 +916,36 @@ const result = await withCompensation('checkout', [
 });
 // result: { success, completedSteps, results, failedStep?, error?, compensationErrors? }
 ```
+
+## Testing
+
+Three entry points — pick by what you're testing. Full details in [references/testing.md](references/testing.md).
+
+```typescript
+import {
+  createTestApp,                 // turnkey Fastify + in-memory Mongo + auth + fixtures
+  createHttpTestHarness,         // auto-generates ~16 CRUD/permission/validation tests
+  expectArc,                     // fluent envelope matchers
+  createTestFixtures,            // DB-agnostic seeding with per-record destroyers
+} from '@classytic/arc/testing';
+
+const ctx = await createTestApp({
+  resources: [productResource],
+  authMode: 'jwt',                    // 'jwt' | 'better-auth' | 'none'
+  db: 'in-memory',                    // default
+  connectMongoose: true,              // one-liner for Mongoose-backed resources
+});
+ctx.auth.register('admin', { user: { id: '1', roles: ['admin'] }, orgId: 'org-1' });
+
+const res = await ctx.app.inject({
+  method: 'POST', url: '/products',
+  headers: ctx.auth.as('admin').headers,
+  payload: { name: 'Widget' },
+});
+expectArc(res).ok().hidesField('password');
+```
+
+`TestAppContext` = `{ app, auth, fixtures, dbUri, close }`. `authMode: 'better-auth'` requires the caller to also pass `auth: { type: 'better-auth', ... }`.
 
 ## CLI
 
@@ -1160,9 +1212,8 @@ import { defineResource, BaseController, allowPublic } from '@classytic/arc';
 import { createApp } from '@classytic/arc/factory';
 import { MemoryCacheStore, RedisCacheStore, QueryCache } from '@classytic/arc/cache';
 import { createBetterAuthAdapter, extractBetterAuthOpenApi } from '@classytic/arc/auth';
-// 2.7.1+: optional Mongoose stub-models bridge for `populate()` against
-// Better Auth collections — only loaded if you import it (subpath gate
-// keeps Mongoose out of Prisma/Drizzle/Kysely bundles).
+// Optional Mongoose stub-models bridge for `populate()` against Better Auth
+// collections — subpath gate keeps Mongoose out of Prisma/Drizzle/Kysely bundles.
 import { registerBetterAuthMongooseModels } from '@classytic/arc/auth/mongoose';
 import type { ExternalOpenApiPaths } from '@classytic/arc/docs';
 import { eventPlugin } from '@classytic/arc/events';
@@ -1180,7 +1231,7 @@ import { createTestApp } from '@classytic/arc/testing';
 import { Type, ArcListResponse } from '@classytic/arc/schemas';
 import { createStateMachine, CircuitBreaker, withCompensation, defineCompensation } from '@classytic/arc/utils';
 import { defineMigration } from '@classytic/arc/migrations';
-// Scope accessors — full surface as of 2.7.1
+// Scope accessors
 import {
   // Type guards
   isMember, isService, isElevated, isAuthenticated, hasOrgAccess,

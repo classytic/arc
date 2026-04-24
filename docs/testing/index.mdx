@@ -1,62 +1,94 @@
 # Testing
 
-Arc provides a complete testing toolkit for resource-based APIs. All utilities are exported from `@classytic/arc/testing`.
+Arc ships a small, focused test toolkit at `@classytic/arc/testing`. Three primary entry points; pick by what you're testing.
 
 ```bash
 npm install -D vitest mongodb-memory-server
 ```
 
-## Architecture
+## Which harness when
 
-Arc testing works at three levels:
+| You're testing… | Use | Why |
+|---|---|---|
+| **Framework behavior** — routes, auth, permissions, pipeline, action endpoints, field masking | [`createHttpTestHarness`](./http-harness) | Auto-generates CRUD + permission + validation tests against a live app. Exercises the same code path production hits. |
+| **Custom scenarios** — one-off flows, cross-resource interactions, app-lifecycle edge cases | [`createTestApp`](./test-app) | Turnkey Fastify + in-memory Mongo + auth provider + fixture tracker, ~3 lines of setup. You drive `app.inject()` directly. |
+| **Adapter contracts** — your custom `RepositoryLike` / `Storage` implementation | `runStorageContract` | DB-agnostic conformance suite. No Mongoose assumption. |
 
-| Level | Class | What it tests |
-|-------|-------|---------------|
-| **HTTP** | `HttpTestHarness` | Full request lifecycle — routes, auth, permissions, pipeline, field permissions, response envelope |
-| **Action** | `createActionRouter` | Unified action endpoints — validation, permissions, idempotency, error handling, response serialization |
-| **Model** | `TestHarness` | Mongoose model directly — schema validation, presets, field permissions (no HTTP) |
+Everything else composes with one of these three — [auth sessions](./auth-session), [fixtures](./fixtures), and [assertions](./assertions) are shared primitives consumed by all three entry points.
 
-**Use `HttpTestHarness`** for integration tests. It exercises the same code path your users hit.
-
-## Quick Start
+## Quick Start — HTTP harness
 
 ```typescript
 import { beforeAll, afterAll } from 'vitest';
-import {
-  createHttpTestHarness,
-  createBetterAuthProvider,
-} from '@classytic/arc/testing';
-import { setupTestOrg, teardownTestOrg } from './helpers/setup.js';
+import { createTestApp, createHttpTestHarness } from '@classytic/arc/testing';
 import jobResource from '../src/resources/job/job.resource.js';
 
 let ctx;
-beforeAll(async () => { ctx = await setupTestOrg(); }, 60_000);
-afterAll(async () => { await teardownTestOrg(ctx); });
+beforeAll(async () => {
+  ctx = await createTestApp({ resources: [jobResource], authMode: 'jwt' });
+  ctx.auth.register('admin', { user: { id: '1', roles: ['admin'] } });
+});
+afterAll(() => ctx.close());
 
-// Auto-generates ~16 HTTP-level tests
 createHttpTestHarness(jobResource, () => ({
   app: ctx.app,
+  auth: ctx.auth,
+  adminRole: 'admin',
   fixtures: {
     valid: { title: 'Test Job' },
     update: { title: 'Updated Job' },
     invalid: {},
   },
-  auth: createBetterAuthProvider({
-    tokens: { admin: ctx.users.admin.token },
-    orgId: ctx.orgId,
-    adminRole: 'admin',
-  }),
 })).runAll();
 ```
 
-This generates tests for:
-- **CRUD** — POST create, GET list, GET by ID, PATCH update, DELETE, 404 handling
-- **Permissions** — 401 for unauthenticated, admin access verified
-- **Validation** — invalid payloads rejected
+Generates ~16 tests: CRUD happy-path, 404 probes, unauthenticated 401s, admin access, invalid-payload rejection.
+
+## Quick Start — custom scenarios
+
+```typescript
+import { createTestApp, expectArc } from '@classytic/arc/testing';
+
+const ctx = await createTestApp({ resources: [jobResource] });
+ctx.auth.register('admin', { user: { id: '1', roles: ['admin'] } });
+
+const res = await ctx.app.inject({
+  method: 'GET',
+  url: '/jobs',
+  headers: ctx.auth.as('admin').headers,
+});
+expectArc(res).ok().paginated({ page: 1, limit: 20 });
+
+await ctx.close();
+```
+
+## Quick Start — adapter contract
+
+```typescript
+import { runStorageContract } from '@classytic/arc/testing';
+import { createMyStorage } from '../src/storage/myStorage.js';
+
+runStorageContract({
+  async setup() {
+    const storage = createMyStorage();
+    return { storage, teardown: async () => storage.close() };
+  },
+});
+```
+
+Runs the full Storage contract (upload, download, delete, metadata, multi-part, error cases) against your implementation.
 
 ## Sections
 
-1. [HTTP Test Harness](./http-harness) — auto-generate HTTP-level CRUD, permission, and validation tests
-2. [Action Router](./action-router) — test `createActionRouter` action endpoints (validation, permissions, idempotency, error handling)
-3. [Auth Helpers](./auth-helpers) — Better Auth test primitives and composite org setup
-4. [Utilities](./utilities) — mocks, request builder, DB helpers, and test app factory
+1. [Test App](./test-app) — `createTestApp`, lifecycle, options
+2. [HTTP Test Harness](./http-harness) — `createHttpTestHarness`, CRUD/permission/validation auto-coverage
+3. [Auth Sessions](./auth-session) — `TestAuthSession`, `TestAuthProvider`, JWT / Better Auth / custom
+4. [Fixtures](./fixtures) — `TestFixtures`, DB-agnostic record seeding
+5. [Assertions](./assertions) — `expectArc`, envelope / pagination / field-masking matchers
+6. [Better Auth Helpers](./auth-helpers) — `setupBetterAuthTestApp` orchestrator + flow-level helpers for apps using Better Auth
+7. [Utilities](./utilities) — `mocks`, `preloadResources`, `createMinimalTestApp`
+
+## What's NOT here
+
+- **Mongoose-only harnesses.** The pre-rewrite `TestHarness` advertised DB-agnosticism but was hard-bound to Mongoose. Removed in 2.11. Write targeted unit tests instead, or use `createTestApp({ db: false })` with your own adapter.
+- **Separate JWT vs Better Auth providers.** Unified into [`TestAuthSession`](./auth-session) — one abstraction, register roles with `user` (JWT payload) or `token` (pre-signed) or both.

@@ -183,27 +183,3 @@ export function stripSystemManagedFromBodyRequired<
 
   return next as T;
 }
-
-/**
- * @deprecated v2.11.0 — use `stripSystemManagedFromBodyRequired` instead,
- * which is driven by `schemaOptions.fieldRules` (universal protection for
- * every preset-injected field, not just tenant). Kept for one minor so
- * late-landed callers can migrate; direct callers inside arc already moved.
- */
-export function stripTenantFieldFromBodyRequired<
-  T extends { createBody?: unknown; updateBody?: unknown } | undefined,
->(schemas: T, tenantField: string | false | undefined): T {
-  if (!schemas) return schemas;
-  if (tenantField === false || tenantField === undefined) return schemas;
-
-  const fieldName = tenantField || "organizationId";
-  const next = { ...schemas } as Record<string, unknown>;
-
-  const createBody = stripFromRequired(schemas.createBody as JsonSchemaLike | undefined, fieldName);
-  if (createBody !== schemas.createBody) next.createBody = createBody;
-
-  const updateBody = stripFromRequired(schemas.updateBody as JsonSchemaLike | undefined, fieldName);
-  if (updateBody !== schemas.updateBody) next.updateBody = updateBody;
-
-  return next as T;
-}

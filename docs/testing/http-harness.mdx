@@ -1,219 +1,126 @@
 # HTTP Test Harness
 
-Auto-generates HTTP-level CRUD tests for Arc resources using Fastify's `app.inject()`. Tests the full request lifecycle: routing, authentication, permissions, pipeline, field permissions, and the Arc response envelope.
+`createHttpTestHarness` auto-generates CRUD, permission, and validation tests against a live arc app. It exercises the full request lifecycle — routing, auth, permissions, pipeline, action endpoints, field masking, response envelope — so a single call gives every resource baseline coverage for free.
 
 ## Setup
 
 ```typescript
-import {
-  createHttpTestHarness,
-  createBetterAuthProvider,
-  createJwtAuthProvider,
-} from '@classytic/arc/testing';
-```
+import { beforeAll, afterAll } from 'vitest';
+import { createTestApp, createHttpTestHarness } from '@classytic/arc/testing';
+import jobResource from '../src/resources/job/job.resource.js';
 
-## Auth Providers
-
-The harness uses an `AuthProvider` to generate request headers. Choose based on your auth type:
-
-### Better Auth
-
-```typescript
-const auth = createBetterAuthProvider({
-  tokens: {
-    admin: ctx.users.admin.token,
-    member: ctx.users.member.token,
-    viewer: ctx.users.viewer.token,
-  },
-  orgId: ctx.orgId,
-  adminRole: 'admin',
-});
-```
-
-### JWT
-
-```typescript
-const auth = createJwtAuthProvider({
-  app,
-  users: {
-    admin: { payload: { id: '1', roles: ['admin'] }, organizationId: 'org1' },
-    viewer: { payload: { id: '2', roles: ['viewer'] } },
-  },
-  adminRole: 'admin',
-});
-```
-
-### Custom
-
-Implement the `AuthProvider` interface:
-
-```typescript
-interface AuthProvider {
-  getHeaders(role: string): Record<string, string>;
-  availableRoles: string[];
-  adminRole: string;
-}
-```
-
-## Creating the Harness
-
-### Eager (app available at module level)
-
-```typescript
-const harness = createHttpTestHarness(productResource, {
-  app,
-  fixtures: {
-    valid: { name: 'Test Product', price: 100 },
-    update: { name: 'Updated Product' },
-    invalid: {},
-  },
-  auth,
-});
-```
-
-### Deferred (app from async setup)
-
-When `app` comes from `beforeAll()`, pass a getter function. The harness resolves it lazily inside `it()` callbacks:
-
-```typescript
 let ctx;
-beforeAll(async () => { ctx = await setupTestOrg(); }, 60_000);
-afterAll(async () => { await teardownTestOrg(ctx); });
+beforeAll(async () => {
+  ctx = await createTestApp({ resources: [jobResource], authMode: 'jwt' });
+  ctx.auth.register('admin',  { user: { id: '1', roles: ['admin']  } });
+  ctx.auth.register('member', { user: { id: '2', roles: ['member'] } });
+});
+afterAll(() => ctx.close());
 
-const harness = createHttpTestHarness(productResource, () => ({
+createHttpTestHarness(jobResource, () => ({
   app: ctx.app,
+  auth: ctx.auth,
+  adminRole: 'admin',
   fixtures: {
-    valid: { name: 'Test Product', price: 100 },
-    update: { name: 'Updated Product' },
+    valid:   { title: 'Test Job' },
+    update:  { title: 'Updated Job' },
+    invalid: {},                     // missing required fields
   },
-  auth: createBetterAuthProvider({
-    tokens: { admin: ctx.users.admin.token },
-    orgId: ctx.orgId,
-    adminRole: 'admin',
-  }),
-}));
+})).runAll();
 ```
 
-## Running Tests
+This generates ~16 tests:
+
+- **CRUD** — `POST` create, `GET` list, `GET /:id`, `PATCH` or `PUT` (or both) `/:id`, `DELETE /:id`, 404 probes
+- **Permissions** — unauthenticated 401 **only for protected ops**, admin succeeds on every op
+- **Validation** — invalid payload is rejected with 4xx + `success: false`
+
+The harness reads `resource.permissions` to decide which ops get a "without auth should 401" assertion. Ops declared with `allowPublic()` (or with no permission at all) are skipped — arc correctly serves them to anonymous requests, so asserting 401 would produce a false failure.
+
+The harness also iterates every update verb your resource exposes. `updateMethod: 'both'` runs PATCH AND PUT tests; single-method resources run one.
+
+## Deferred vs eager options
+
+Options can be a plain object (app ready at module level) OR a getter (app from async `beforeAll`). Prefer the getter form — test setup almost always needs `beforeAll`:
 
 ```typescript
-// All suites (recommended)
-harness.runAll();
+// Eager (rare)
+createHttpTestHarness(resource, { app, auth, adminRole: 'admin', fixtures }).runAll();
 
-// Individual suites
+// Deferred (recommended)
+createHttpTestHarness(resource, () => ({
+  app: ctx.app, auth: ctx.auth, adminRole: 'admin', fixtures
+})).runAll();
+```
+
+## Selective runs
+
+`runAll()` runs CRUD + Permissions + Validation. Run them in isolation:
+
+```typescript
+const harness = createHttpTestHarness(resource, () => options);
 harness.runCrud();
 harness.runPermissions();
 harness.runValidation();
 ```
 
-## Generated Tests
+## What it respects
 
-### `runCrud()`
+The harness reads the resource definition:
 
-Tests each enabled CRUD operation via HTTP. Automatically reads `resource.prefix`, `resource.disabledRoutes`, and `resource.updateMethod` to determine which routes exist.
+- `disabledRoutes: ['delete']` → delete tests are skipped
+- `disableDefaultRoutes: true` → no CRUD tests (useful for action-only or custom-routes-only resources)
+- `updateMethod: 'PUT' | 'PATCH' | 'both'` → exercises every verb the resource exposes (`'both'` runs PATCH AND PUT)
+- `permissions[op]` → determines whether a "401 without auth" assertion is emitted (public ops skip it)
 
-| Test | Method | Assertion |
-|------|--------|-----------|
-| POST create | `POST /api/{prefix}` | `< 300`, `success: true`, `data._id` exists |
-| GET list | `GET /api/{prefix}` | `200`, `success: true`, array response (`data` or `docs`) |
-| GET by ID | `GET /api/{prefix}/:id` | `200`, `success: true`, matching `_id` |
-| GET 404 | `GET /api/{prefix}/:fakeId` | `404`, `success: false` |
-| PATCH/PUT update | `PATCH /api/{prefix}/:id` | `200`, `success: true` |
-| PATCH/PUT 404 | `PATCH /api/{prefix}/:fakeId` | `404` |
-| DELETE | `DELETE /api/{prefix}/:id` | `200`, then verify `GET` returns 404 |
-| DELETE 404 | `DELETE /api/{prefix}/:fakeId` | `404` |
+## Action endpoints
 
-### `runPermissions()`
+Since v2.11, arc's action routes (`POST /:id/action`) share the preHandler chain with CRUD. The HTTP harness doesn't auto-generate action tests (action payloads are resource-specific), but action endpoints hit the same auth/permission/pipeline middleware, so CRUD harness coverage already validates the chain.
 
-Tests authentication enforcement for each enabled route:
+For action-specific assertions, use `createTestApp` directly:
 
-| Test | Assertion |
-|------|-----------|
-| Each CRUD operation without auth | `401` |
-| Admin list access | `< 400` |
-| Admin create access | `< 400` (with cleanup) |
+```typescript
+import { createTestApp, expectArc } from '@classytic/arc/testing';
 
-### `runValidation()`
+const ctx = await createTestApp({ resources: [orderResource], authMode: 'jwt' });
+ctx.auth.register('admin', { user: { id: '1', roles: ['admin'] } });
 
-Tests that invalid payloads are rejected:
+const res = await ctx.app.inject({
+  method: 'POST',
+  url: `/orders/${orderId}/action`,
+  headers: ctx.auth.as('admin').headers,
+  payload: { action: 'approve' },
+});
+expectArc(res).ok().showsField('status');
+```
 
-| Test | Assertion |
-|------|-----------|
-| POST with `fixtures.invalid` | `>= 400`, `success: false` |
+## API
 
-## Options Reference
+### `createHttpTestHarness(resource, options | optionsGetter)`
+
+- `resource` — a `defineResource(...)` result
+- `options` / `optionsGetter` — `HttpTestHarnessOptions` or a function returning one
+
+Returns `HttpTestHarness` with `runAll()`, `runCrud()`, `runPermissions()`, `runValidation()`.
+
+### `HttpTestHarnessOptions<T>`
 
 ```typescript
 interface HttpTestHarnessOptions<T> {
-  app: FastifyInstance;       // Fastify app (must be ready)
+  app: FastifyInstance;         // Fastify instance (must be ready)
+  auth: TestAuthProvider;       // from createTestApp or createJwtAuthProvider
+  adminRole: string;            // role name registered on `auth` with full access
   fixtures: {
-    valid: Partial<T>;        // Valid create payload
-    update?: Partial<T>;      // Update payload (defaults to valid)
-    invalid?: Partial<T>;     // Should trigger validation error
+    valid: Partial<T>;          // body for POST create
+    update?: Partial<T>;        // body for PATCH/PUT update (defaults to `valid`)
+    invalid?: Partial<T>;       // body that should be rejected
   };
-  auth: AuthProvider;         // Auth header generator
-  apiPrefix?: string;         // Default: '/api'
+  apiPrefix?: string;           // URL prefix (default: "")
 }
 ```
 
-## Resource Auto-Detection
+## Related
 
-The harness reads resource configuration to adapt its tests:
-
-| Field | Effect |
-|-------|--------|
-| `prefix` | Base URL (e.g. `/jobs` → `GET /api/jobs`) |
-| `disabledRoutes` | Skips tests for disabled operations |
-| `disableDefaultRoutes` | Skips all CRUD tests |
-| `updateMethod` | Uses `PUT` or `PATCH` (default: `PATCH`) |
-| `displayName` | Used in `describe()` block names |
-
-## Example: Full Test File
-
-```typescript
-import { beforeAll, afterAll } from 'vitest';
-import {
-  createHttpTestHarness,
-  createBetterAuthProvider,
-} from '@classytic/arc/testing';
-import { setupTestOrg, teardownTestOrg, type TestContext } from './helpers/setup.js';
-import jobResource from '../src/resources/job/job.resource.js';
-
-let ctx: TestContext;
-beforeAll(async () => { ctx = await setupTestOrg(); }, 60_000);
-afterAll(async () => { await teardownTestOrg(ctx); });
-
-// Auto-generate CRUD + permission + validation tests
-createHttpTestHarness(jobResource, () => ({
-  app: ctx.app,
-  fixtures: {
-    valid: { title: 'Test Job', description: 'Auto-generated' },
-    update: { title: 'Updated Job' },
-    invalid: {},
-  },
-  auth: createBetterAuthProvider({
-    tokens: {
-      admin: ctx.users.admin.token,
-      dm: ctx.users.dm.token,
-      recruiter: ctx.users.recruiter.token,
-    },
-    orgId: ctx.orgId,
-    adminRole: 'admin',
-  }),
-})).runAll();
-```
-
-## vs TestHarness (Model-Level)
-
-| Feature | HttpTestHarness | TestHarness |
-|---------|----------------|-------------|
-| Tests HTTP routes | Yes | No |
-| Tests auth/permissions | Yes | No |
-| Tests pipeline guards | Yes | No |
-| Tests response envelope | Yes | No |
-| Tests field permissions | via HTTP | Pure function |
-| Tests schema validation | Yes (model-level) | Yes |
-| Tests presets | No | Yes |
-| Requires running app | Yes | No (model only) |
-
-**Recommendation**: Use `HttpTestHarness` for integration tests. Use `TestHarness` or `createConfigTestSuite()` for unit-testing field permissions, pipeline config, and event definitions without a running app.
+- [Test App](./test-app) — how `createTestApp` wires app + auth + fixtures
+- [Auth Sessions](./auth-session) — registering roles + producing headers
+- [Assertions](./assertions) — `expectArc` for richer custom scenarios

@@ -97,7 +97,7 @@ defineResource({
 |----------|-------------|
 | `allowPublic()` | No authentication required |
 | `requireAuth()` | Any authenticated user |
-| `requireRoles('admin', 'editor')` | At least one role matches — checks BOTH platform and org roles by default (2.7.1+). Variadic or array form. |
+| `requireRoles('admin', 'editor')` | At least one role matches — checks BOTH platform and org roles by default. Variadic or array form. |
 | `requireRoles(['admin'], { includeOrgRoles: false })` | Platform-only opt-out |
 | `requireOrgMembership()` | Any org-bound caller (member, service, or elevated) |
 | `requireOrgRole('admin')` | Org membership role — humans only; services use `requireServiceScope` |
@@ -107,7 +107,7 @@ defineResource({
 | `requireTeamMembership()` | Active team in current org |
 | `requireOwnership('userId')` | Resource owner only (elevated bypasses) |
 | `denyAll(reason?)` | Always deny |
-| `allOf(p1, p2)` | AND — all must pass (2.7.1+: scope and filters propagate between children) |
+| `allOf(p1, p2)` | AND — all must pass; scope and filters propagate between children |
 | `anyOf(p1, p2)` | OR — any can pass |
 
 > **Mixed human + machine routes**: `requireOrgRole` denies service scopes
@@ -169,7 +169,7 @@ schemas reference BA collections (e.g. `ref: 'user'`, `ref: 'organization'`),
 Mongoose `populate()` throws `MissingSchemaError` because no Mongoose model
 exists for those collections.
 
-**Fix (2.7.1+):** Use the optional helper at the dedicated subpath
+**Fix:** Use the optional helper at the dedicated subpath
 `@classytic/arc/auth/mongoose`. It registers `strict: false` stub Mongoose
 models for the BA collections you're using, with full plugin coverage and
 auto-handling of `usePlural` / custom model names. Lives behind a subpath

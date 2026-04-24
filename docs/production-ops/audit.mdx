@@ -70,6 +70,92 @@ await AuditModel.collection.createIndex({ organizationId: 1, timestamp: -1 });
 For SQL backends, define the equivalent indexes in your migration and
 run a scheduled `DELETE FROM audit_logs WHERE timestamp < ...` job.
 
+### Migrating from arc ≤ 2.9.0
+
+Arc ≤ 2.9.0 auto-created an unnamed index on `audit_logs.timestamp`.
+Arc 2.9.1+ expects the host to own the index. Why arc doesn't own it:
+arc's data contract is `@classytic/repo-core`'s `RepositoryLike` —
+kit-agnostic CRUD + filter + pagination. Indexes are deliberately NOT
+part of that contract because Mongo partial filters, SQL `EXPLAIN`
+hints, and Prisma `@fulltext` don't fit a common shape. Each kit's
+host owns the recipe that matches its driver.
+
+#### MongoDB / mongokit hosts
+
+The pre-2.9.1 behaviour created an unnamed `timestamp_1` index. On
+upgrade, hosts that provide their own `ttl_timestamp` index with
+`expireAfterSeconds` hit:
+
+```
+IndexOptionsConflict: Index with name: timestamp_1 already exists with different options
+```
+
+The idempotent recipe below handles both the fresh-install and
+upgrade-in-place cases — safe to run on every boot. Reaches directly
+for the Mongoose collection API because that's where indexes live on
+the Mongo backend:
+
+```typescript
+const indexes = await AuditModel.collection.indexes();
+const legacy = indexes.find(
+  (ix) => ix.name === 'timestamp_1' && ix.expireAfterSeconds === undefined,
+);
+if (legacy) {
+  await AuditModel.collection.dropIndex('timestamp_1');
+}
+
+await AuditModel.collection.createIndex(
+  { timestamp: 1 },
+  {
+    name: 'ttl_timestamp',
+    expireAfterSeconds: 60 * 60 * 24 * 30, // 30 days — tune per retention policy
+  },
+);
+```
+
+The explicit `name: 'ttl_timestamp'` pins the index under a stable
+identifier so future changes to the TTL (or a second index over
+`timestamp`) don't collide with Mongo's auto-naming.
+
+#### SQL / sqlitekit / Prisma hosts
+
+The pre-2.9.1 auto-created index only shipped on the Mongo backend —
+SQL/Prisma hosts never hit `IndexOptionsConflict` because they own
+their `audit_logs` table schema end-to-end via their migration tool.
+Declare the index in whatever migration runner you use:
+
+```sql
+-- Raw SQL / knex / drizzle-kit
+CREATE INDEX ttl_timestamp ON audit_logs (timestamp);
+CREATE INDEX audit_logs_resource_document_ts
+  ON audit_logs (resource, document_id, timestamp DESC);
+CREATE INDEX audit_logs_org_ts ON audit_logs (organization_id, timestamp DESC);
+```
+
+```prisma
+// schema.prisma — compiled via `prisma migrate`
+model AuditEntry {
+  id             String   @id @default(uuid())
+  timestamp      DateTime
+  resource       String
+  documentId     String
+  organizationId String?
+
+  @@index([timestamp], name: "ttl_timestamp")
+  @@index([resource, documentId, timestamp(sort: Desc)])
+  @@index([organizationId, timestamp(sort: Desc)])
+  @@map("audit_logs")
+}
+```
+
+The `expireAfterSeconds` TTL that Mongo gives you doesn't have a
+direct SQL equivalent. Schedule a cleanup job instead — cron, a
+queued worker, or your DB's native scheduler:
+
+```sql
+DELETE FROM audit_logs WHERE timestamp < NOW() - INTERVAL '30 days';
+```
+
 ## Configuration
 
 ```typescript

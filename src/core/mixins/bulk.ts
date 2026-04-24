@@ -16,7 +16,7 @@
  * ```
  */
 
-import { isElevated, getOrgId as getOrgIdFromScope } from "../../scope/types.js";
+import { getOrgId as getOrgIdFromScope, isElevated } from "../../scope/types.js";
 import type {
   AnyRecord,
   ArcInternalMetadata,
@@ -24,7 +24,7 @@ import type {
   IRequestContext,
   UserLike,
 } from "../../types/index.js";
-import { BaseCrudController } from "../BaseCrudController.js";
+import type { BaseCrudController } from "../BaseCrudController.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: standard TS mixin Constructor pattern
 type Constructor<T> = new (...args: any[]) => T;
@@ -311,9 +311,7 @@ export function BulkMixin<TBase extends Constructor<BaseCrudController>>(
      * Both forms perform a single `repo.deleteMany()` DB call — no per-doc
      * fetch loop. Per-doc lifecycle hooks do NOT fire.
      */
-    async bulkDelete(
-      req: IRequestContext,
-    ): Promise<IControllerResponse<{ deletedCount: number }>> {
+    async bulkDelete(req: IRequestContext): Promise<IControllerResponse<{ deletedCount: number }>> {
       const repo = this.repository as unknown as {
         deleteMany?: (
           filter: Record<string, unknown>,

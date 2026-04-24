@@ -148,7 +148,7 @@ import { streamlinePlugin } from '@classytic/arc/integrations/streamline';
 // BAD — wildcard imports defeat all isolation
 import * as arc from '@classytic/arc';
 
-// BAD — old pattern that pulled Redis into events barrel (fixed in v2.1)
+// BAD — pre-2.1 pattern that pulled Redis into the events barrel
 import { RedisEventTransport } from '@classytic/arc/events';
 // Use instead:
 import { RedisEventTransport } from '@classytic/arc/events/redis';

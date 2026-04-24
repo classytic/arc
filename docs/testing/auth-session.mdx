@@ -1,0 +1,148 @@
+# Auth Sessions
+
+`TestAuthSession` is a single abstraction for every auth flow arc supports — JWT, Better Auth, custom issuers. You register named roles once, then resolve a session's headers inside each test. Replaces the pre-2.11 fragmented `createJwtAuthProvider` / `createBetterAuthProvider` / `TestRequestBuilder.withAuth` / `createTestAuth`.
+
+## Model
+
+```
+Provider  = registry of roles      (createJwtAuthProvider, createBetterAuthProvider, createCustomAuthProvider)
+  ↓ .register(role, config)
+Role      = a named set of credentials  ({ user?, token?, orgId?, extraHeaders? })
+  ↓ .as(role)
+Session   = resolved headers        (.headers, .token, .user, .orgId)
+  ↓ .withExtra(headers)
+Session'  = new session with extra headers (immutable)
+```
+
+## JWT apps
+
+```typescript
+import { createTestApp } from '@classytic/arc/testing';
+
+const ctx = await createTestApp({ resources: [jobResource], authMode: 'jwt' });
+
+// Register roles ONCE per test file
+ctx.auth.register('admin',  { user: { id: '1', roles: ['admin']  }, orgId: 'org-1' });
+ctx.auth.register('member', { user: { id: '2', roles: ['member'] }, orgId: 'org-1' });
+
+// Resolve a session per request
+const admin = ctx.auth.as('admin');
+const res = await ctx.app.inject({
+  url: '/jobs',
+  headers: admin.headers,   // { authorization: 'Bearer ...', 'x-organization-id': 'org-1' }
+});
+```
+
+The provider signs each role's `user` payload via `app.jwt.sign()`. Requires `@fastify/jwt` registered (the default `createTestApp` auth config handles this).
+
+## Better Auth apps
+
+Better Auth doesn't expose an in-process signer — you get tokens from `signUp`/`signIn` flows. Register each role with the resulting `token`:
+
+```typescript
+const ctx = await createTestApp({ resources: [jobResource], authMode: 'better-auth' });
+
+// Obtain tokens however your app does — signUp, signIn, test fixtures, etc.
+const adminToken  = await ctx.app.inject({ ... }).then(r => r.json().session.token);
+const memberToken = /* ... */;
+
+ctx.auth.register('admin',  { token: adminToken,  orgId: 'org-1' });
+ctx.auth.register('member', { token: memberToken, orgId: 'org-1' });
+
+const admin = ctx.auth.as('admin');
+```
+
+## Custom / external issuers
+
+For custom auth (session cookies, third-party IdPs, fixture-prestamped tokens):
+
+```typescript
+import { createCustomAuthProvider } from '@classytic/arc/testing';
+
+const auth = createCustomAuthProvider((role, config) => {
+  // Your minting logic — generate/fetch a token based on role + config
+  return mintMyToken({ role, user: config.user });
+}, { defaultOrgId: 'org-1' });
+
+auth.register('admin', { user: { id: '1' } });
+```
+
+## `withExtra` — per-request header overrides
+
+Sessions are immutable. `withExtra` returns a new session with extra headers merged in:
+
+```typescript
+const base = ctx.auth.as('admin');
+
+// One-off request with a trace header
+const traced = base.withExtra({ 'x-trace-id': 'trace-123' });
+await ctx.app.inject({ url: '/jobs', headers: traced.headers });
+
+// Original `base` is unchanged
+expect(base.headers).not.toHaveProperty('x-trace-id');
+```
+
+Useful for idempotency keys, tracing, tenant overrides, or one-off headers a specific test needs.
+
+## Anonymous sessions
+
+For 401 tests:
+
+```typescript
+const anon = ctx.auth.anonymous();
+const res = await ctx.app.inject({ url: '/jobs', headers: anon.headers }); // {} — no token
+expectArc(res).unauthorized();
+```
+
+## Mixing JWT and pre-signed tokens on the same provider
+
+The JWT provider accepts `token` roles too — useful when some roles need a real sig and others use a fixture token:
+
+```typescript
+ctx.auth.register('admin', { user: { id: '1', roles: ['admin'] } }); // signed on the fly
+ctx.auth.register('bot',   { token: PRESTAMPED_JWT });               // verbatim
+```
+
+## API
+
+### `TestAuthProvider`
+
+```typescript
+interface TestAuthProvider {
+  register(role: string, config: RoleConfig): void;
+  as(role: string): TestAuthSession;
+  anonymous(): TestAuthSession;
+  readonly roles: readonly string[];
+}
+```
+
+### `RoleConfig`
+
+```typescript
+interface RoleConfig {
+  user?: Record<string, unknown>;        // JWT payload to sign (JWT provider)
+  token?: string;                        // Pre-signed bearer (Better Auth, custom)
+  orgId?: string;                        // Falls back to provider defaultOrgId
+  extraHeaders?: Record<string, string>; // Merged into every session
+}
+```
+
+Exactly one of `user` / `token` is required (register-time check). The rest are optional.
+
+### `TestAuthSession`
+
+```typescript
+interface TestAuthSession {
+  readonly role: string;
+  readonly token: string;
+  readonly orgId: string | undefined;
+  readonly user: Record<string, unknown> | undefined;
+  readonly headers: Readonly<Record<string, string>>;
+  withExtra(headers: Record<string, string>): TestAuthSession;
+}
+```
+
+## Related
+
+- [Test App](./test-app) — `ctx.auth` comes from here
+- [Assertions](./assertions) — `expectArc(res).unauthorized()`, `.forbidden()` for 401/403 checks

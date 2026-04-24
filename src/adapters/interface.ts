@@ -37,10 +37,41 @@ import type { MinimalRepo, StandardRepo } from "@classytic/repo-core/repository"
 import type { OpenApiSchemas, RouteSchemaOptions } from "../types/index.js";
 
 /**
- * Arc's structural repository contract: the repo-core minimum plus any
- * standard-repo methods a given kit implements. All optional methods are
- * feature-detected at call sites — arc never assumes capabilities it
- * hasn't probed.
+ * Arc's structural repository contract.
+ *
+ * Defined as `MinimalRepo<TDoc> & Partial<StandardRepo<TDoc>>` — the
+ * repo-core 5-method floor (required) plus every other `StandardRepo`
+ * method (optional). This compound is the single shape arc accepts
+ * across its entire API surface:
+ *
+ *   - `defineResource({ adapter: { repository, ... } })`
+ *   - `auditPlugin({ repository })`, `idempotencyPlugin({ repository })`
+ *   - `new EventOutbox({ repository, transport })`
+ *
+ * **Why compound and not `StandardRepo` alone:** forcing every kit to
+ * implement the full `StandardRepo` surface would break kits with
+ * partial capabilities (sqlitekit has no aggregation, prismakit has no
+ * native atomic CAS the same way). Feature-detection at the arc layer
+ * lets each kit declare only what it implements; arc's audit / outbox /
+ * idempotency plugins check `typeof repo.method === 'function'` at
+ * construction and throw with the list of missing primitives if a
+ * required subset isn't covered. See the store-backing contract matrix
+ * in the file header.
+ *
+ * **Why compound and not `MinimalRepo` alone:** arc's internal plugins
+ * still need the `StandardRepo` type info at call sites where they use
+ * optionals like `findOneAndUpdate` / `deleteMany`. Without the
+ * `Partial<StandardRepo>` half, every access would require
+ * `as StandardRepo` casts and the feature-detect pattern would be
+ * runtime-only with no type-level backing.
+ *
+ * **Hosts importing repo-core directly.** `MinimalRepo` and
+ * `StandardRepo` are repo-core's contract — hosts that want to reference
+ * them by name should `import type { MinimalRepo, StandardRepo } from
+ * '@classytic/repo-core/repository'` rather than go through arc. Arc
+ * doesn't re-export them from its root barrel on purpose: creating a
+ * second source of truth would force arc to either drift from repo-core
+ * or force-sync every time the contract iterates.
  *
  * ```ts
  * const adapter: DataAdapter<Product> = {
@@ -55,12 +86,13 @@ export type RepositoryLike<TDoc = unknown> = MinimalRepo<TDoc> & Partial<Standar
 
 export interface DataAdapter<TDoc = unknown> {
   /**
-   * Repository implementing CRUD operations. Accepts the typed
-   * `StandardRepo<TDoc>` (repo-core's standard contract) or the structural
-   * `RepositoryLike` (minimum + optionals). Arc feature-detects optional
+   * Repository implementing CRUD operations. Any value that satisfies
+   * `RepositoryLike<TDoc>` — which includes `StandardRepo<TDoc>` (all
+   * methods implemented), `MinimalRepo<TDoc>` (5-method floor), or
+   * anything in between a kit declares. Arc feature-detects optional
    * methods at runtime — kits only declare what they support.
    */
-  repository: StandardRepo<TDoc> | RepositoryLike<TDoc>;
+  repository: RepositoryLike<TDoc>;
 
   /** Adapter identifier for introspection */
   readonly type: "mongoose" | "prisma" | "drizzle" | "typeorm" | "custom";

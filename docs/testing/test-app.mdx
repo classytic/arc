@@ -1,0 +1,190 @@
+# Test App
+
+`createTestApp` is the turnkey factory for arc test scenarios. One call spins up a Fastify instance with arc's test defaults, an in-memory MongoDB (optional), an auth provider, and a fixture tracker — every piece attached to the returned context.
+
+Use it when you're **driving `app.inject()` yourself** (custom scenarios, cross-resource flows, app-lifecycle edge cases). For auto-generated CRUD tests, wrap the result in [`createHttpTestHarness`](./http-harness) instead.
+
+## Basic usage
+
+```typescript
+import { beforeAll, afterAll, describe, it } from 'vitest';
+import { createTestApp, expectArc } from '@classytic/arc/testing';
+import jobResource from '../src/resources/job/job.resource.js';
+
+describe('Job API', () => {
+  let ctx;
+
+  beforeAll(async () => {
+    ctx = await createTestApp({
+      resources: [jobResource],
+      authMode: 'jwt',
+    });
+    ctx.auth.register('admin', { user: { id: '1', roles: ['admin'] } });
+  });
+
+  afterAll(() => ctx.close());
+
+  it('admin can list jobs', async () => {
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: '/jobs',
+      headers: ctx.auth.as('admin').headers,
+    });
+    expectArc(res).ok().paginated({ page: 1 });
+  });
+});
+```
+
+## Scope — what this factory does AND doesn't do
+
+| ✓ Does | ✗ Does NOT |
+|---|---|
+| Start in-memory Mongo (`db: 'in-memory'`) and expose `dbUri` | Thread `dbUri` into your resource adapters automatically |
+| Optionally connect Mongoose to that URI via `connectMongoose: true` | Configure Prisma / sqlitekit / custom adapters for you |
+| Apply arc's test defaults + the matching auth plugin for `authMode` | Infer a Better Auth config — you must supply `auth: {...}` yourself |
+| Register every resource as a plugin under its own prefix | Create fixture factories — you register those |
+| Tear everything down in the right order on `close()` | Reset global state outside its own lifecycle |
+
+Resource adapter wiring is app-level concern. For Mongoose-backed resources, set `connectMongoose: true` so `mongoose.connect(dbUri)` runs before app boot. Other adapters connect themselves to `ctx.dbUri` (or their own URI) in your test setup.
+
+## Options
+
+```typescript
+interface CreateTestAppOptions extends Partial<CreateAppOptions> {
+  /** Resources to auto-register. */
+  resources?: ReadonlyArray<ResourceDefinition>;
+
+  /**
+   * 'in-memory'  — spin up MongoMemoryServer, tear down on close() (default)
+   * { uri }      — external Mongo URI; lifecycle is your responsibility
+   * false        — no DB wiring; for pure Fastify unit tests
+   */
+  db?: 'in-memory' | { uri: string } | false;
+
+  /**
+   * When true, runs `mongoose.connect(dbUri)` before the app boots and
+   * `mongoose.disconnect()` on close(). Turns the 'in-memory' path into a
+   * one-liner for Mongoose-backed resources. Defaults to false.
+   */
+  connectMongoose?: boolean;
+
+  /**
+   * Test-session provider attached to ctx.auth:
+   *   - 'jwt' (default) — provider signs tokens via app.jwt.sign(). Factory
+   *     also applies a default JWT auth config UNLESS you supply your own.
+   *   - 'better-auth' — provider uses pre-signed tokens. **You MUST supply
+   *     `auth: { type: 'better-auth', ... }` in options** — the factory
+   *     does NOT infer a Better Auth config. A mismatch (authMode:
+   *     'better-auth' + no auth config) throws at setup time so tests
+   *     don't silently hit the wrong middleware.
+   *   - 'none' — no ctx.auth; no default auth plugin.
+   */
+  authMode?: 'jwt' | 'better-auth' | 'none';
+
+  /** Injected as 'x-organization-id' unless a role overrides. */
+  defaultOrgId?: string;
+
+  // ...all other CreateAppOptions (preset, plugins, hooks, etc.)
+}
+```
+
+## Returned context
+
+```typescript
+interface TestAppContext {
+  app: FastifyInstance;
+  auth: TestAuthProvider | undefined;  // undefined when authMode: 'none'
+  fixtures: TestFixtures;              // always attached
+  dbUri?: string;                      // present when db is 'in-memory' or { uri }
+  close(): Promise<void>;              // idempotent
+}
+```
+
+- **`app`** — the ready Fastify instance. Use `app.inject()` for requests.
+- **`auth`** — the [auth provider](./auth-session). Register roles and resolve sessions.
+- **`fixtures`** — the [fixture tracker](./fixtures). Register factories and seed records.
+- **`dbUri`** — in-memory Mongo URI (for wiring `mongoose.connect()` or passing to resource adapters).
+- **`close()`** — tears down fixtures + app + in-memory Mongo in that order. Safe to call multiple times.
+
+## Defaults
+
+`createTestApp` applies these defaults (overridable via options):
+
+| Option | Default |
+|---|---|
+| `preset` | `'testing'` |
+| `logger` | `false` |
+| `helmet`, `cors`, `rateLimit`, `underPressure` | `false` |
+| `auth` | `{ type: 'jwt', jwt: { secret: 'test-secret-32-chars-minimum-len' } }` when `authMode: 'jwt'` AND no caller `auth`; otherwise no default |
+
+All are overridable. If you need a real logger or helmet headers in a test, set them explicitly. For Better Auth or custom auth plugins, pass `auth: {...}` directly — the factory does not infer it from `authMode`.
+
+## Better Auth example
+
+```typescript
+import { createTestApp } from '@classytic/arc/testing';
+import { createBetterAuthAdapter } from '@classytic/arc/auth';
+import { auth as betterAuthInstance } from '../src/auth.js';
+
+const ctx = await createTestApp({
+  resources: [jobResource],
+  authMode: 'better-auth',
+  auth: {
+    type: 'betterAuth',
+    betterAuth: createBetterAuthAdapter({ auth: betterAuthInstance }),
+  },
+});
+```
+
+## Mongoose-backed example (one-liner)
+
+```typescript
+const ctx = await createTestApp({
+  resources: [jobResource],
+  connectMongoose: true,   // mongoose.connect(dbUri) before app boot
+});
+// Models registered in jobResource are now backed by the in-memory Mongo.
+```
+
+## Registering multiple resources
+
+```typescript
+const ctx = await createTestApp({
+  resources: [userResource, orgResource, jobResource],
+});
+```
+
+Resources are registered as Fastify plugins under their own `prefix`, in order.
+
+## Combining with custom plugins
+
+```typescript
+const ctx = await createTestApp({
+  resources: [jobResource],
+  plugins: async (f) => {
+    // Your custom plugin — runs BEFORE resource registration so its
+    // decorators are visible to the resources.
+    await f.register(myCustomPlugin);
+  },
+});
+```
+
+## Minimal Fastify (no arc)
+
+For plugin unit tests that don't need arc's stack:
+
+```typescript
+import { createMinimalTestApp } from '@classytic/arc/testing';
+
+const app = createMinimalTestApp();
+app.get('/ping', async () => ({ pong: true }));
+
+const res = await app.inject({ url: '/ping' });
+expect(res.statusCode).toBe(200);
+```
+
+## Related
+
+- [Auth Sessions](./auth-session) — what `ctx.auth` provides
+- [Fixtures](./fixtures) — what `ctx.fixtures` provides
+- [HTTP Harness](./http-harness) — auto-generate CRUD/permission tests on top

@@ -63,6 +63,19 @@ interface MinimalRepo<TDoc> {
 
 Arc's `RepositoryLike<T>` alias is `MinimalRepo<T> & Partial<StandardRepo<T>>` — the floor plus any optional surface your kit implements. Arc feature-detects optional methods at call sites; you only declare what you support.
 
+#### Method names at a glance — id-first vs filter-first
+
+The two halves of the contract use different naming conventions on purpose. Arc host authors writing adapters (or extending an existing Repository) trip on this roughly once — usually when reaching for `updateOne` / `deleteOne` that don't exist, because those names belong to filter-first MongoDB-native APIs, not the repo-core contract.
+
+| Shape | Methods | Contract | Use when |
+|-------|---------|----------|----------|
+| **Id-first** (required, `MinimalRepo`) | `getById(id)`, `update(id, data)`, `delete(id)` | 5-method floor — every kit implements these | You already have the primary key (`:id` route params, known doc). |
+| **Filter-first** (optional, `StandardRepo`) | `getOne(filter)`, `findAll(filter)`, `findOneAndUpdate(filter, update)`, `deleteMany(filter)` | Kit-optional, feature-detected | You need compound lookups (`{ slug, organizationId }`), atomic CAS, or batch ops. |
+
+Same `Repository` instance exposes both halves. Arc's security + access-control layer reaches for `getOne` when it can (one compound query with org-scoping applied) and falls back to `getById` otherwise. You don't pick between them at the call site — arc does.
+
+Kits that ship concrete `Repository` classes (mongokit's `Repository`, sqlitekit's `SqliteRepository`) implement both halves by default. Custom adapters only MUST implement the id-first half; the filter-first half is a strict improvement when your backend supports it.
+
 ### Recommended: `getOne()`
 
 If your resource uses `idField` (custom ID like `slug`, `sku`, `code`) or permission filters with org-scoping, implement `getOne` from `StandardRepo`:
@@ -628,6 +641,75 @@ describe("Custom Adapter", () => {
   });
 });
 ```
+
+---
+
+## Field Rules — shaping kit-generated schemas
+
+Arc's `schemaOptions.fieldRules` is the **portable constraint layer** that sits on top of whatever CRUD schemas your adapter generates. It lives in `defineResource({ schemaOptions: { fieldRules } })` and is applied post-kit by `mergeFieldRuleConstraints` — so the same flags work with mongokit, sqlitekit, prismakit, and hand-rolled adapters.
+
+Use it for fields whose constraints don't round-trip from the ORM model, or for framework-level behavior that never belonged in the model (system-managed fields, nullability the Zod→Mongoose converter dropped, etc.).
+
+### `systemManaged` — who stamps this field?
+
+When arc injects the value (tenant, audit fields, generated slugs, document numbers), the field must be marked `systemManaged: true`. Two things follow:
+
+1. **Strip from wire contract `required[]`** — the client isn't expected to send it, so `createBody.required` and `updateBody.required` exclude it. Without this, Fastify's preValidation rejects the request before arc's injection hooks can run.
+2. **Strip from bodies at runtime** — `BodySanitizer` removes the field from inbound payloads so clients can't forge it. Override with `preserveForElevated: true` if platform admins need to stamp it for cross-tenant writes.
+
+#### Where does `systemManaged` get declared?
+
+| Field comes from | Who sets `systemManaged` |
+|---|---|
+| **Preset** (`multiTenantPreset`, `auditedPreset`) | Preset self-configures — you don't touch `fieldRules` |
+| **Engine-internal derivation** (slug from `name`, document number from sequence) | Host resource `fieldRules`, or the engine's factory emits it |
+| **Request-scope injection** (`createdBy`, `updatedBy` from `req.user`) | `auditedPreset` handles it — or host `fieldRules` if custom |
+| **Auto-generated ID with explicit type** (UUID, nanoid, sequential) | Host `fieldRules` on the ID field |
+
+Rule of thumb: if arc is populating the field from something the client can't see, declare it `systemManaged`. If the client sends it, don't.
+
+#### Example: engine-derived slug
+
+```typescript
+import { defineResource } from '@classytic/arc';
+
+export const productResource = defineResource({
+  name: 'product',
+  adapter: productAdapter,
+  schemaOptions: {
+    fieldRules: {
+      // Host derives `slug` from `name` in a pre-create hook — so Mongoose
+      // declares slug as `required: true` (DB-level invariant), but the
+      // wire contract must NOT mark it required.
+      slug: { systemManaged: true },
+    },
+  },
+});
+```
+
+### `nullable` — accept `null` when the kit schema says "string only"
+
+A Zod schema like `z.enum(['a', 'b']).nullable().optional()` expresses "`a`, `b`, or null are all valid." But Zod → Mongoose converters drop `.nullable()` unless `default: null` is also set (Mongoose has no first-class nullable marker), and mongokit's `buildCrudSchemasFromModel` then emits `{ type: 'string', enum: ['a', 'b'] }` — AJV rejects `null` on a GET → PATCH round-trip.
+
+Opt in explicitly via `fieldRules[field].nullable: true`:
+
+```typescript
+defineResource({
+  name: 'variant',
+  adapter: variantAdapter,
+  schemaOptions: {
+    fieldRules: {
+      // null means "inherit from parent product" — legitimate value,
+      // not an absence of value.
+      priceMode: { nullable: true },
+    },
+  },
+});
+```
+
+Arc widens the kit-generated schema to either `type: ['string', 'null']` + `enum: ['a', 'b', null]` (tuple form) or `anyOf: [..., { type: 'null' }]` (when the kit emitted a branched schema). Both are AJV 8 native.
+
+**Shortcut**: declare `default: null` on the Mongoose path and mongokit + arc's built-in mongoose fallback both widen automatically — no `fieldRules` entry needed.
 
 ---
 

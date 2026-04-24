@@ -90,6 +90,12 @@ await createApp({
 - `[contains]` / `[like]` filters honor their documented case-insensitivity (`$options: "i"`).
 - `resourceDir` accepts `import.meta.url` directly.
 - `QueryParserInterface` is now importable from the root barrel.
+- **Action routes share the canonical preHandler chain with CRUD.** `defineResource({ actions })` now runs the per-action permission check at the `permissionMw` slot — `preAuth → arc → auth → permission → pluginMw → routeGuards` — matching CRUD exactly. Practical effects:
+  - `idempotencyMw` no longer records unauthorized action requests.
+  - Route guards see `request.scope` + `_policyFilters` installed by the permission result, just like on CRUD routes.
+  - Pipeline interceptors on actions can return `{ success: false, status: 422, error, details, meta }` and every field reaches the client — previously the action router stringified pipeline failures into a generic `Error` and dropped `meta`/`details`/`code`.
+  - `{ ping: undefined, promote: requireRoles([...]) }` works: public-by-omission actions are honored both at the route-level auth selector and at the per-action permission gate.
+  - No code changes required. Action handlers, permissions, and pipeline configs keep the same shape.
 
 ## If your code doesn't compile after upgrading
 

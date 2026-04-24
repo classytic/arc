@@ -67,7 +67,7 @@ const productResource = defineResource({
 await fastify.register(productResource.toPlugin());
 ```
 
-## Controllers (v2.11 mixin split)
+## Controllers
 
 In 2.11, `BaseController` was split from a 1,589-LOC god class into a composition of `BaseCrudController` + four preset mixins. **Existing `extends BaseController<Product>` code keeps working** (a declaration-merged interface threads `TDoc` through every method), but hosts can now pick smaller surfaces:
 

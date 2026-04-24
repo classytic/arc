@@ -20,7 +20,7 @@ import type {
   PaginationResult,
   UserLike,
 } from "../../types/index.js";
-import { BaseCrudController } from "../BaseCrudController.js";
+import type { BaseCrudController } from "../BaseCrudController.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: standard TS mixin Constructor pattern
 type Constructor<T> = new (...args: any[]) => T;
@@ -84,12 +84,9 @@ export function SoftDeleteMixin<TBase extends Constructor<BaseCrudController>>(
       //
       // `includeDeleted: true` tells the soft-delete plugin to bypass its
       // default `deletedAt: null` filter.
-      const existing = await this.accessControl.fetchWithAccessControl<AnyRecord>(
-        id,
-        req,
-        repo,
-        { includeDeleted: true },
-      );
+      const existing = await this.accessControl.fetchWithAccessControl<AnyRecord>(id, req, repo, {
+        includeDeleted: true,
+      });
 
       if (!existing) {
         return this.notFoundResponse("NOT_FOUND");
@@ -136,17 +133,11 @@ export function SoftDeleteMixin<TBase extends Constructor<BaseCrudController>>(
 
       let item: AnyRecord | null;
       if (hooks && this.resourceName) {
-        item = (await hooks.executeAround(
-          this.resourceName,
-          "restore",
-          existing,
-          repoRestore,
-          {
-            user,
-            context: arcContext,
-            meta: { id },
-          },
-        )) as AnyRecord | null;
+        item = (await hooks.executeAround(this.resourceName, "restore", existing, repoRestore, {
+          user,
+          context: arcContext,
+          meta: { id },
+        })) as AnyRecord | null;
       } else {
         item = await repoRestore();
       }

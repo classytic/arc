@@ -40,7 +40,11 @@ import {
 describe("v2.8.1: buildActionBodySchema", () => {
   it("emits oneOf branches with per-action const discriminator", () => {
     const schema = buildActionBodySchema(["approve", "dispatch"], {
-      dispatch: { carrier: { type: "string" } },
+      dispatch: {
+        type: "object",
+        properties: { carrier: { type: "string" } },
+        required: ["carrier"],
+      },
     });
 
     expect(schema.type).toBe("object");
@@ -64,7 +68,6 @@ describe("v2.8.1: buildActionBodySchema", () => {
         "dispatch",
     );
     expect(dispatchBranch).toBeDefined();
-    // Legacy field map: carrier field required by default
     expect(dispatchBranch?.required).toEqual(["action", "carrier"]);
   });
 
@@ -102,18 +105,6 @@ describe("v2.8.1: buildActionBodySchema", () => {
     expect(branch?.required).toContain("carrier");
     // trackingId is optional → not in required
     expect(branch?.required).not.toContain("trackingId");
-  });
-
-  it("legacy field map with `required: false` sentinel marks field optional", () => {
-    const schema = buildActionBodySchema(["ship"], {
-      ship: {
-        carrier: { type: "string" },
-        trackingId: { type: "string", required: false },
-      },
-    });
-
-    const branch = (schema.oneOf as Array<Record<string, unknown>>)[0];
-    expect(branch?.required).toEqual(["action", "carrier"]);
   });
 
   it("action with no schema gets only `action` required", () => {
@@ -387,7 +378,10 @@ describe("v2.8.1: metadata preservation", () => {
         finalize: {
           handler: async (id) => ({ id, status: "final" }),
           permissions: requireRoles(["accountant"]),
-          schema: { amount: { type: "number" } },
+          schema: {
+            type: "object",
+            properties: { amount: { type: "number" } },
+          },
           description: "Finalize and lock the invoice",
           mcp: false,
         },

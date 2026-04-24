@@ -11,12 +11,12 @@
  * 7. [v2.10.9] strictResources: true throws on duplicate resource names
  */
 
-import { afterAll, describe, expect, it } from "vitest";
-import type { FastifyInstance } from "fastify";
-import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
-import { createApp } from "../../src/factory/createApp.js";
+import { pathToFileURL } from "node:url";
+import type { FastifyInstance } from "fastify";
+import { afterAll, describe, expect, it } from "vitest";
 import { defineResource } from "../../src/core/defineResource.js";
+import { createApp } from "../../src/factory/createApp.js";
 
 // We can't easily create .resource.ts files on disk in a test, but we CAN
 // test that resourceDir is wired correctly by pointing at a dir that exists
@@ -102,7 +102,11 @@ describe("createApp — resourceDir option", () => {
       apps.push(app);
       await app.ready();
 
-      const zeroWarn = warns.find((m) => m.includes("yielded 0 resources"));
+      // v2.11 folded the two separate WARNs (one from discovery, one from
+      // the zero-count summary) into a single WARN — check for both the
+      // raw input and the resolved path in that single line. The phrase
+      // "0 resources registered" is the new anchor.
+      const zeroWarn = warns.find((m) => m.includes("0 resources registered"));
       expect(zeroWarn).toBeDefined();
       expect(zeroWarn).toContain('"tests/utils"');
       expect(zeroWarn).toContain(resolve("tests/utils"));
@@ -177,7 +181,8 @@ describe("createApp — resourceDir option", () => {
       apps.push(app);
       await app.ready();
 
-      const zeroWarn = warns.find((m) => m.includes("yielded 0 resources"));
+      // v2.11 fold — one WARN anchored on "0 resources registered"
+      const zeroWarn = warns.find((m) => m.includes("0 resources registered"));
       expect(zeroWarn).toBeDefined();
       // Raw input (the URL) shows up verbatim — helps debugging
       expect(zeroWarn).toContain(fileUrl);
@@ -242,6 +247,195 @@ describe("createApp — resourceDir option", () => {
           ],
         }),
       ).rejects.toThrow(/Duplicate resource name "dupe-strict-a"/);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // v2.11 — remaining field-report fixes
+  //
+  // Three gaps the 2.10.9 hardening didn't close:
+  //   1. N=0 boot (no resourceDir, resources: [] or undefined) was silent —
+  //      no log line, no WARN, no signal that the app is dead on arrival.
+  //   2. loadResources() called directly (not via resourceDir) returning []
+  //      also silent — the manual path bypasses the registerResources WARN.
+  //   3. `strictResources` / `strictResourceDir` still opt-in by default,
+  //      meaning the "stale dist/ 17 ghost files" case that triggered a
+  //      downstream Mongoose collision only WARNed.
+  // ────────────────────────────────────────────────────────────────────────
+  describe("v2.11 — zero-count announcement + production-preset defaults", () => {
+    const makeLogger = () => {
+      const warns: string[] = [];
+      const logger = {
+        level: "warn",
+        stream: {
+          write: (obj: string) => {
+            const parsed = JSON.parse(obj);
+            if (parsed.level === 40) warns.push(String(parsed.msg));
+          },
+        },
+      } as const;
+      return { warns, logger };
+    };
+
+    it("N=0 via explicit empty resources[] emits a WARN with the count", async () => {
+      // Reporter's exact failure mode: manual loadResources() returns []
+      // → host passes that empty array to createApp → before v2.11 the app
+      // booted with zero resources and nothing in the log announced it.
+      const { warns, logger } = makeLogger();
+      const app = await createApp({
+        preset: "testing",
+        auth: false,
+        // biome-ignore lint/suspicious/noExplicitAny: Fastify logger shape varies
+        logger: logger as any,
+        resources: [],
+      });
+      apps.push(app);
+      await app.ready();
+
+      const zeroWarn = warns.find((m) => m.includes("0 resources registered"));
+      expect(zeroWarn).toBeDefined();
+    });
+
+    it("N=0 via missing resources AND resourceDir (app with nothing) emits a WARN", async () => {
+      const { warns, logger } = makeLogger();
+      const app = await createApp({
+        preset: "testing",
+        auth: false,
+        // biome-ignore lint/suspicious/noExplicitAny: Fastify logger shape varies
+        logger: logger as any,
+      });
+      apps.push(app);
+      await app.ready();
+
+      expect(warns.some((m) => m.includes("0 resources registered"))).toBe(true);
+    });
+
+    it("N=0 via resourceDir includes the scanned absolute path in the WARN", async () => {
+      // When discovery is configured, the zero-count WARN echoes the
+      // resolved path so operators can spot "right option, wrong path"
+      // without reading the source.
+      const { warns, logger } = makeLogger();
+      const app = await createApp({
+        preset: "testing",
+        auth: false,
+        // biome-ignore lint/suspicious/noExplicitAny: Fastify logger shape varies
+        logger: logger as any,
+        resourceDir: "tests/utils",
+      });
+      apps.push(app);
+      await app.ready();
+
+      const zeroWarn = warns.find((m) => m.includes("0 resources registered"));
+      expect(zeroWarn).toBeDefined();
+      // v2.11 fold — the phrase is 'resourceDir "X" resolved to "Y"'
+      expect(zeroWarn).toContain("resourceDir");
+      expect(zeroWarn).toContain("resolved to");
+      expect(zeroWarn).toContain(resolve("tests/utils"));
+    });
+
+    it("N>0 still logs the info line with names (no regression)", async () => {
+      // Locking the happy-path log shape so the N=0 branch doesn't
+      // accidentally shadow or duplicate the N>0 info line.
+      const infos: string[] = [];
+      const logger = {
+        level: "info",
+        stream: {
+          write: (obj: string) => {
+            const parsed = JSON.parse(obj);
+            if (parsed.level === 30 /* info */) infos.push(String(parsed.msg));
+          },
+        },
+      } as const;
+
+      const resource = defineResource({
+        name: "zero-count-happy-path",
+        prefix: "/zcHP",
+        disableDefaultRoutes: true,
+        actions: { ping: async () => ({ pong: true }) },
+        actionPermissions: (() => true) as import("../../src/types/index.js").PermissionCheck,
+      });
+
+      const app = await createApp({
+        preset: "testing",
+        auth: false,
+        // biome-ignore lint/suspicious/noExplicitAny: Fastify logger shape varies
+        logger: logger as any,
+        resources: [resource],
+      });
+      apps.push(app);
+      await app.ready();
+
+      expect(
+        infos.some(
+          (m) => m.includes("1 resource(s) registered") && m.includes("zero-count-happy-path"),
+        ),
+      ).toBe(true);
+    });
+
+    it("production preset → strictResources defaults to true (duplicate names throw)", async () => {
+      // 2.11 flips the strict-dupe default in production. The reporter's
+      // stale-dist 17-ghost-file case now fails loud before the downstream
+      // Mongoose collision fires.
+      const makeResource = (name: string, prefix: string) =>
+        defineResource({
+          name,
+          prefix,
+          disableDefaultRoutes: true,
+          actions: { ping: async () => ({ pong: true }) },
+          actionPermissions: (() => true) as import("../../src/types/index.js").PermissionCheck,
+        });
+
+      await expect(
+        createApp({
+          preset: "production",
+          auth: { type: "jwt", jwt: { secret: "not-a-real-secret-just-for-testing" } },
+          logger: false,
+          resources: [
+            makeResource("dupe-prod-a", "/dupe-prod-a-1"),
+            makeResource("dupe-prod-a", "/dupe-prod-a-2"),
+          ],
+        }),
+      ).rejects.toThrow(/Duplicate resource name "dupe-prod-a"/);
+    });
+
+    it("production preset → strictResourceDir defaults to true (zero-discovery throws)", async () => {
+      await expect(
+        createApp({
+          preset: "production",
+          auth: { type: "jwt", jwt: { secret: "not-a-real-secret-just-for-testing" } },
+          logger: false,
+          resourceDir: "tests/utils", // dir exists but has no .resource.ts files
+        }),
+      ).rejects.toThrow(/yielded 0 resources/);
+    });
+
+    it("production preset → explicit strictResources: false opts out of the strict default", async () => {
+      // Back-compat escape hatch: hosts that intentionally duplicate
+      // resource names (very rare, usually a refactor escape hatch) can
+      // still pass the explicit flag.
+      const makeResource = (name: string, prefix: string) =>
+        defineResource({
+          name,
+          prefix,
+          disableDefaultRoutes: true,
+          actions: { ping: async () => ({ pong: true }) },
+          actionPermissions: (() => true) as import("../../src/types/index.js").PermissionCheck,
+        });
+
+      // Should NOT throw — explicit false overrides the production default.
+      const app = await createApp({
+        preset: "production",
+        auth: { type: "jwt", jwt: { secret: "not-a-real-secret-just-for-testing" } },
+        logger: false,
+        strictResources: false,
+        resources: [
+          makeResource("dupe-prod-optout", "/dpoo-1"),
+          makeResource("dupe-prod-optout", "/dpoo-2"),
+        ],
+      });
+      apps.push(app);
+      await app.ready();
+      expect(app.server).toBeDefined();
     });
   });
 });

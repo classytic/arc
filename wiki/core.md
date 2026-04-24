@@ -2,7 +2,7 @@
 
 **Summary**: `defineResource` is the fundamental unit. Controllers are a mixin stack: `BaseCrudController` (CRUD core) + four preset mixins (SoftDelete / Tree / Slug / Bulk). `BaseController` is the pre-composed "everything" facade. `createCrudRouter` mounts handlers on Fastify.
 **Sources**: src/core/.
-**Last updated**: 2026-04-24 (v2.11.0 mixin split).
+**Last updated**: 2026-04-24 (v2.11.0 mixin split + action-router parity via `routerShared`).
 
 ---
 
@@ -57,9 +57,21 @@ All symbols exported from `@classytic/arc` (root) and `@classytic/arc/core`.
 - Operator suffixes: `field[gt]`, `field[in]`, etc. — documented in `src/utils/queryParser*`. `contains` / `like` emit `$options: "i"` (case-insensitive per docs, v2.10.9 fix).
 - Post-construction swap: `BaseCrudController.setQueryParser(qp)` rebuilds the resolver with a new parser. `defineResource` calls this automatically when both `controller` and `queryParser` are supplied.
 
-## `createCrudRouter`
+## `createCrudRouter` + `createActionRouter`
 
-Mounts CRUD handlers on Fastify using the resource definition. Also handles `actions` (v2.9 replaced `createActionRouter` public API — use `defineResource({ actions })` instead). See [[removed]].
+`createCrudRouter` mounts CRUD handlers on Fastify from the resource definition. `createActionRouter` (internal since v2.9 — declare actions via `defineResource({ actions })`) mounts the unified `POST /:id/action` endpoint. Both delegate every cross-cutting concern — auth, permission, pipeline, preHandler composition, response shaping — to shared primitives in [src/core/routerShared.ts](../src/core/routerShared.ts) so CRUD and actions can't silently drift.
+
+**Canonical preHandler order** (both routers emit it via `buildPreHandlerChain`):
+
+```
+preAuth → arcDecorator → authMw → permissionMw → pluginMw → routeGuards → customMws
+```
+
+- `permissionMw` — CRUD uses the static `buildCrudPermissionMw` (permission known at route-registration time); actions use the dynamic `buildActionPermissionMw` (permission resolved from `body.action` at request time). Both apply `_policyFilters` + `request.scope` via `evaluateAndApplyPermission` **before** `pluginMw` (idempotency) runs — so unauthorized requests never record idempotency keys and route guards see the full permission-installed scope.
+- `buildPipelineHandler` + `buildActionPipelineHandler` — both return `Promise<IControllerResponse<unknown>>` so a pipeline step that returns `{ success: false, status: 422, error, details, meta }` reaches `sendControllerResponse` with every field intact.
+- `buildAuthMiddlewareForPermissions(fastify, perms)` — accepts `ReadonlyArray<PermissionCheck | undefined>`. An explicit `allowPublic()` (`_isPublic: true`) AND an undefined slot ("public by omission") both flip the route-level auth decision to `optionalAuthenticate`. Treating undefined as "not a signal" broke `{ ping: undefined, promote: requireRoles([...]) }` — the public `ping` got 401'd at the auth layer before the per-action check could let it through. See [[gotchas]] #25.
+
+See [[removed]] for the list of public action-router APIs retired in v2.9.
 
 ## Write-side field permissions (v2.9) + systemManaged strip (v2.11)
 

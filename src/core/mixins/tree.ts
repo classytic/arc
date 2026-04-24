@@ -13,12 +13,8 @@
  */
 
 import type { RepositoryLike } from "../../adapters/interface.js";
-import type {
-  AnyRecord,
-  IControllerResponse,
-  IRequestContext,
-} from "../../types/index.js";
-import { BaseCrudController } from "../BaseCrudController.js";
+import type { AnyRecord, IControllerResponse, IRequestContext } from "../../types/index.js";
+import type { BaseCrudController } from "../BaseCrudController.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: standard TS mixin Constructor pattern
 type Constructor<T> = new (...args: any[]) => T;

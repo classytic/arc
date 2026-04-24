@@ -11,9 +11,31 @@
  *   serviceName: 'my-api',
  *   exporterUrl: 'http://localhost:4318/v1/traces', // OTLP endpoint
  * });
+ *
+ * ## Type strategy
+ *
+ * `@opentelemetry/api` is the stable surface — its types are type-only
+ * imported here so hook handlers, `createSpan`, and `traced` don't hand
+ * out `any` for Tracer / Span. Only the runtime-loaded module BODIES
+ * (`trace.getTracer`, `context.with`, etc.) go through the optional-require
+ * path; everything downstream keeps its shape through the plugin.
+ *
+ * The SDK-side factories (`NodeTracerProvider`, `BatchSpanProcessor`,
+ * `OTLPTraceExporter`) aren't in @classytic/arc's devDeps and aren't
+ * type-importable without adding install weight, so those retain
+ * minimal constructor-style `unknown`-valued boxes. If a future refactor
+ * moves SDK types into devDependencies we can tighten further.
  */
 
 import { createRequire } from "node:module";
+import type {
+  ContextAPI,
+  Context as OTContext,
+  Span,
+  SpanStatus,
+  TraceAPI,
+  Tracer,
+} from "@opentelemetry/api";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
 
@@ -21,45 +43,83 @@ declare const __ARC_VERSION__: string;
 
 const require = createRequire(import.meta.url);
 
-// OpenTelemetry imports (peer dependencies)
-let trace: any;
-let context: any;
-let SpanStatusCode: any;
-let NodeTracerProvider: any;
-let BatchSpanProcessor: any;
-let OTLPTraceExporter: any;
-let _HttpInstrumentation: any;
-let _MongoDBInstrumentation: any;
-let getNodeAutoInstrumentations: any;
+// ============================================================================
+// Runtime-loaded bindings
+//
+// `@opentelemetry/api` is a stable peer, so `trace` / `context` / `SpanStatusCode`
+// get real types once loaded. The SDK side (NodeTracerProvider,
+// BatchSpanProcessor, OTLPTraceExporter, instrumentations) is optional and
+// changes shape across minor versions — those stay as minimal constructor
+// boxes, good enough for the narrow usage here.
+// ============================================================================
+
+type SpanStatusCodeValue = 0 | 1 | 2; // UNSET | OK | ERROR — matches @opentelemetry/api
+
+interface TracerCtorBox {
+  new (
+    options: unknown,
+  ): {
+    addSpanProcessor(processor: unknown): void;
+    register(): void;
+  };
+}
+
+interface SpanProcessorCtor {
+  new (exporter: unknown): unknown;
+}
+
+interface OtlpExporterCtor {
+  new (options: { url: string }): unknown;
+}
+
+interface Instrumentation {
+  enable(): void;
+}
+
+type AutoInstrFactory = (config: Record<string, { enabled: boolean }>) => Instrumentation[];
+
+let trace: TraceAPI | undefined;
+let context: ContextAPI | undefined;
+let SpanStatusCode:
+  | { UNSET: SpanStatusCodeValue; OK: SpanStatusCodeValue; ERROR: SpanStatusCodeValue }
+  | undefined;
+let NodeTracerProvider: TracerCtorBox | undefined;
+let BatchSpanProcessor: SpanProcessorCtor | undefined;
+let OTLPTraceExporter: OtlpExporterCtor | undefined;
+let getNodeAutoInstrumentations: AutoInstrFactory | undefined;
 
 // Try to load OpenTelemetry (optional peer dependency)
 let isAvailable = false;
 try {
   const api = require("@opentelemetry/api");
-  trace = api.trace;
-  context = api.context;
+  trace = api.trace as TraceAPI;
+  context = api.context as ContextAPI;
   SpanStatusCode = api.SpanStatusCode;
 
   const sdkNode = require("@opentelemetry/sdk-node");
-  NodeTracerProvider = sdkNode.NodeTracerProvider;
-  BatchSpanProcessor = sdkNode.BatchSpanProcessor;
+  NodeTracerProvider = sdkNode.NodeTracerProvider as TracerCtorBox;
+  BatchSpanProcessor = sdkNode.BatchSpanProcessor as SpanProcessorCtor;
 
   const exporterTraceOtlp = require("@opentelemetry/exporter-trace-otlp-http");
-  OTLPTraceExporter = exporterTraceOtlp.OTLPTraceExporter;
+  OTLPTraceExporter = exporterTraceOtlp.OTLPTraceExporter as OtlpExporterCtor;
 
-  const instrHttp = require("@opentelemetry/instrumentation-http");
-  _HttpInstrumentation = instrHttp.HttpInstrumentation;
-
-  const instrMongo = require("@opentelemetry/instrumentation-mongodb");
-  _MongoDBInstrumentation = instrMongo.MongoDBInstrumentation;
+  // HTTP + MongoDB instrumentation modules are loaded for their side-effect
+  // registration inside `getNodeAutoInstrumentations` (below). No direct
+  // usage here — the variables would be dead symbols.
+  require("@opentelemetry/instrumentation-http");
+  require("@opentelemetry/instrumentation-mongodb");
 
   const autoInstr = require("@opentelemetry/auto-instrumentations-node");
-  getNodeAutoInstrumentations = autoInstr.getNodeAutoInstrumentations;
+  getNodeAutoInstrumentations = autoInstr.getNodeAutoInstrumentations as AutoInstrFactory;
 
   isAvailable = true;
 } catch (_e) {
   // OpenTelemetry not installed - plugin will be no-op
 }
+
+// ============================================================================
+// Public options + types
+// ============================================================================
 
 export interface TracingOptions {
   /**
@@ -93,8 +153,8 @@ export interface TracingOptions {
 }
 
 interface TracerContext {
-  tracer: any;
-  currentSpan: any;
+  tracer: Tracer;
+  currentSpan: Span;
 }
 
 declare module "fastify" {
@@ -107,7 +167,7 @@ declare module "fastify" {
  * Create a tracer provider
  */
 function createTracerProvider(options: TracingOptions) {
-  if (!isAvailable) {
+  if (!isAvailable || !NodeTracerProvider || !BatchSpanProcessor || !OTLPTraceExporter) {
     return null;
   }
 
@@ -124,9 +184,7 @@ function createTracerProvider(options: TracingOptions) {
       ? __ARC_VERSION__
       : "0.0.0");
 
-  const exporter = new OTLPTraceExporter({
-    url: exporterUrl,
-  });
+  const exporter = new OTLPTraceExporter({ url: exporterUrl });
 
   const provider = new NodeTracerProvider({
     resource: {
@@ -150,11 +208,17 @@ async function tracingPlugin(fastify: FastifyInstance, options: TracingOptions =
   const { serviceName = "@classytic/arc", autoInstrumentation = true, sampleRate = 1.0 } = options;
 
   // Skip if OpenTelemetry is not available
-  if (!isAvailable) {
+  if (!isAvailable || !trace || !context || !SpanStatusCode) {
     fastify.log.warn("OpenTelemetry not installed. Tracing disabled.");
     fastify.log.warn("Install: npm install @opentelemetry/api @opentelemetry/sdk-node");
     return;
   }
+
+  // From here, the narrow `isAvailable` flag plus the three defined checks
+  // above let us treat `trace`, `context`, `SpanStatusCode` as required.
+  const otelTrace = trace;
+  const otelContext = context;
+  const otelStatus = SpanStatusCode;
 
   // Initialize tracer provider
   const provider = createTracerProvider(options);
@@ -165,12 +229,8 @@ async function tracingPlugin(fastify: FastifyInstance, options: TracingOptions =
   // Auto-instrumentation — enable HTTP + MongoDB tracing
   if (autoInstrumentation && getNodeAutoInstrumentations) {
     const instrumentations = getNodeAutoInstrumentations({
-      "@opentelemetry/instrumentation-http": {
-        enabled: true,
-      },
-      "@opentelemetry/instrumentation-mongodb": {
-        enabled: true,
-      },
+      "@opentelemetry/instrumentation-http": { enabled: true },
+      "@opentelemetry/instrumentation-mongodb": { enabled: true },
     });
     for (const instrumentation of instrumentations) {
       instrumentation.enable();
@@ -178,7 +238,7 @@ async function tracingPlugin(fastify: FastifyInstance, options: TracingOptions =
     fastify.log.debug("OpenTelemetry auto-instrumentation enabled");
   }
 
-  const tracer = trace.getTracer(serviceName);
+  const tracer: Tracer = otelTrace.getTracer(serviceName);
 
   // Add tracer to request
   fastify.decorateRequest("tracer", undefined);
@@ -190,7 +250,7 @@ async function tracingPlugin(fastify: FastifyInstance, options: TracingOptions =
       return;
     }
 
-    const span = tracer.startSpan(`HTTP ${request.method} ${request.url}`, {
+    const span: Span = tracer.startSpan(`HTTP ${request.method} ${request.url}`, {
       kind: 1, // SpanKind.SERVER
       attributes: {
         "http.method": request.method,
@@ -203,13 +263,10 @@ async function tracingPlugin(fastify: FastifyInstance, options: TracingOptions =
     });
 
     // Store span in request for child spans
-    request.tracer = {
-      tracer,
-      currentSpan: span,
-    };
+    request.tracer = { tracer, currentSpan: span };
 
     // Set active context
-    context.with(trace.setSpan(context.active(), span), () => {
+    otelContext.with(otelTrace.setSpan(otelContext.active(), span), () => {
       // Context is now active for this request
     });
   });
@@ -225,18 +282,18 @@ async function tracingPlugin(fastify: FastifyInstance, options: TracingOptions =
     // Add response attributes
     span.setAttributes({
       "http.status_code": reply.statusCode,
-      "http.response_content_length": reply.getHeader("content-length"),
+      "http.response_content_length": reply.getHeader("content-length") as
+        | string
+        | number
+        | undefined,
     });
 
     // Set span status
-    if (reply.statusCode >= 500) {
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: `HTTP ${reply.statusCode}`,
-      });
-    } else {
-      span.setStatus({ code: SpanStatusCode.OK });
-    }
+    const status: SpanStatus =
+      reply.statusCode >= 500
+        ? { code: otelStatus.ERROR, message: `HTTP ${reply.statusCode}` }
+        : { code: otelStatus.OK };
+    span.setStatus(status);
 
     span.end();
   });
@@ -251,10 +308,7 @@ async function tracingPlugin(fastify: FastifyInstance, options: TracingOptions =
 
       const span = request.tracer.currentSpan;
       span.recordException(error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: error.message,
-      });
+      span.setStatus({ code: otelStatus.ERROR, message: error.message });
     },
   );
 
@@ -277,36 +331,37 @@ async function tracingPlugin(fastify: FastifyInstance, options: TracingOptions =
 export function createSpan<T>(
   request: FastifyRequest,
   name: string,
-  fn: (span: any) => Promise<T>,
-  attributes?: Record<string, any>,
+  fn: (span: Span | null) => Promise<T>,
+  attributes?: Record<string, string | number | boolean>,
 ): Promise<T> {
-  if (!request.tracer) {
+  if (!request.tracer || !trace || !context || !SpanStatusCode) {
     // No tracing context on this request, just execute function
     return fn(null);
   }
 
+  const otelTrace = trace;
+  const otelContext = context;
+  const otelStatus = SpanStatusCode;
+
   const { tracer, currentSpan } = request.tracer;
 
-  const span = tracer.startSpan(
+  const span: Span = tracer.startSpan(
     name,
     {
-      parent: currentSpan,
-      attributes: attributes || {},
+      attributes: attributes ?? {},
     },
-    trace.setSpan(context.active(), currentSpan),
+    otelTrace.setSpan(otelContext.active(), currentSpan),
   );
 
-  return context.with(trace.setSpan(context.active(), span), async () => {
+  return otelContext.with(otelTrace.setSpan(otelContext.active(), span), async () => {
     try {
       const result = await fn(span);
-      span.setStatus({ code: SpanStatusCode.OK });
+      span.setStatus({ code: otelStatus.OK });
       return result;
-    } catch (error: any) {
-      span.recordException(error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: error.message,
-      });
+    } catch (error) {
+      const err = error as Error;
+      span.recordException(err);
+      span.setStatus({ code: otelStatus.ERROR, message: err.message });
       throw error;
     } finally {
       span.end();
@@ -326,19 +381,26 @@ export function createSpan<T>(
  * }
  */
 export function traced(spanName?: string) {
-  return (target: any, propertyKey: string, descriptor: PropertyDescriptor) => {
-    const originalMethod = descriptor.value;
+  return (
+    target: { constructor: { name: string } },
+    propertyKey: string,
+    descriptor: PropertyDescriptor,
+  ): PropertyDescriptor => {
+    const originalMethod = descriptor.value as (...args: unknown[]) => Promise<unknown>;
 
-    descriptor.value = async function (this: any, ...args: any[]) {
+    descriptor.value = async function (this: unknown, ...args: unknown[]) {
       // Extract request from args if available
-      const request = args.find((arg) => arg?.tracer);
+      const request = args.find(
+        (arg): arg is FastifyRequest =>
+          !!(arg && typeof arg === "object" && "tracer" in arg && (arg as FastifyRequest).tracer),
+      );
 
       if (!request?.tracer) {
         // No tracing context, just execute
         return originalMethod.apply(this, args);
       }
 
-      const name = spanName || `${target.constructor.name}.${propertyKey}`;
+      const name = spanName ?? `${target.constructor.name}.${propertyKey}`;
       return createSpan(request, name, async (span) => {
         if (span) {
           span.setAttribute("db.operation", propertyKey);
@@ -358,6 +420,11 @@ export function traced(spanName?: string) {
 export function isTracingAvailable(): boolean {
   return isAvailable;
 }
+
+// Internal — exported only for the lifecycle integration tests. The types
+// here give the test suite enough surface to construct a plugin context,
+// but are NOT part of the public API. Signal via the `_` prefix.
+export type _OTContext = OTContext;
 
 export default fp(tracingPlugin, {
   name: "arc-tracing",

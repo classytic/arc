@@ -158,6 +158,7 @@ export type {
   ActionEntry,
   ActionHandlerFn,
   ActionsMap,
+  ArcFieldRule,
   CrudController,
   CrudRouteKey,
   CrudSchemas,
