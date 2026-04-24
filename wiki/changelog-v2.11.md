@@ -1,6 +1,6 @@
 # Changelog — v2.11
 
-**Summary**: `BaseController` mixin split, testing surface rewrite, resources factory form, WebSocket module split, action-router parity, commerce integration follow-ups (nullable, tenant-pipeline, SchemaBuilderOptions alignment).
+**Summary**: `BaseController` mixin split, testing surface rewrite, resources factory form, WebSocket module split, action-router parity, schema-alignment polish (nullable, tenant-pipeline debug guide, `RouteSchemaOptions extends SchemaBuilderOptions`).
 **Sources**: CHANGELOG.md, wiki/log.md.
 **Last updated**: 2026-04-25.
 
@@ -34,7 +34,7 @@
 
 - **`resourceToTools.ts` split into 4 units.** `crud-tools.ts`, `route-tools.ts`, `action-tools.ts`, `input-schema.ts`. `resourceToTools.ts` is now a 260-LOC orchestrator. See [[gotchas]] #24.
 
-### Commerce integration follow-ups
+### Schema alignment polish
 
 - **`fieldRules[field].nullable: true`.** Rescues Zod `.nullable()` when the flag is lost through Zod → Mongoose (Mongoose has no first-class nullable marker unless `default: null` is also set). `mergeFieldRuleConstraints` widens both `type` and `enum` (AJV's `enum` rejects null unless in the list). Built-in mongoose fallback mirrors mongokit's `default: null` widening convention automatically. See [[gotchas]] #26 and [[adapters]].
 

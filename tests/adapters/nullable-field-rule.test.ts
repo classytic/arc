@@ -1,7 +1,7 @@
 /**
  * fieldRules.nullable — widen JSON Schema type to accept null.
  *
- * Context from commerce integration (2.11.0): a host Zod schema was
+ * Context (2.11.0): a host Zod schema was
  * `z.enum(['inclusive', 'exclusive']).nullable().optional()`. Zod →
  * Mongoose converters drop `.nullable()` when the field doesn't carry
  * `default: null` (Mongoose has no first-class nullable marker), and
@@ -252,10 +252,10 @@ describe("built-in mongoose adapter — default:null widens emitted type", () =>
 });
 
 // ============================================================================
-// 4. fieldRules.nullable over a kit-generated schema (commerce scenario)
+// 4. fieldRules.nullable over a kit-generated schema
 // ============================================================================
 
-describe("commerce scenario — fieldRules.nullable rescues Zod .nullable() loss", () => {
+describe("fieldRules.nullable rescues Zod .nullable() loss through Mongoose", () => {
   it("host opts into nullable via fieldRules when Zod→Mongoose dropped it", () => {
     // Simulates the mongokit output shape for:
     //   priceMode: z.enum(['inclusive', 'exclusive']).nullable().optional()

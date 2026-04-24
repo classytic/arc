@@ -62,11 +62,22 @@ const app = await createApp({
   preset: 'production',
   auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
   cors: { origin: process.env.ALLOWED_ORIGINS?.split(',') },
+  resources: [productResource, orderResource],   // canonical path — factory registers in the right lifecycle slot
 });
 
-await app.register(productResource.toPlugin());
 await app.listen({ port: 8040, host: '0.0.0.0' });
 ```
+
+For async-booted engines (repository wired in `bootstrap[]`), use the factory form:
+
+```typescript
+resources: async (fastify) => {
+  const engine = await ensureCatalogEngine();
+  return [buildProductResource(engine), buildCategoryResource(engine)];
+}
+```
+
+Advanced escape hatch: `await app.register(productResource.toPlugin())` registers a single resource directly. Use only when you need manual control over the scope/prefix — the `resources` factory option is preferred.
 
 ## Security defaults (active in 2.11)
 
@@ -118,8 +129,8 @@ const productResource = defineResource({
 
   // Custom routes (compose with presets — softDelete adds /deleted, /:id/restore)
   routes: [
-    { method: 'GET', path: '/stats', handler: 'getStats', permissions: auth() },
-    { method: 'POST', path: '/webhook', handler: webhookFn, raw: true, permissions: auth() },
+    { method: 'GET', path: '/stats', handler: 'getStats', permissions: requireAuth() },
+    { method: 'POST', path: '/webhook', handler: webhookFn, raw: true, permissions: requireAuth() },
   ],
 
   // Actions — single POST /:id/action endpoint, discriminated on `action` body field
@@ -127,14 +138,15 @@ const productResource = defineResource({
     approve: async (id, data, req) => service.approve(id, req.user._id),
     cancel: {
       handler: async (id, data, req) => service.cancel(id, data.reason, req.user._id),
-      permissions: roles('admin'),
+      permissions: requireRoles('admin'),
       schema: { reason: { type: 'string' } },
     },
   },
-  actionPermissions: auth(),
+  actionPermissions: requireAuth(),
 });
 
-await fastify.register(productResource.toPlugin());
+// Register via createApp — canonical path:
+//   createApp({ resources: [productResource] })
 // Auto-generates: GET /, GET /:id, POST /, PATCH /:id, DELETE /:id
 // + softDelete preset adds: GET /deleted, POST /:id/restore
 ```
@@ -168,7 +180,7 @@ defineResource({
   name: 'procurement',
   routeGuards: [modeGuard, orgGuard.preHandler],  // all routes protected
   routes: [{
-    method: 'GET', path: '/summary', raw: true, permissions: auth(),
+    method: 'GET', path: '/summary', raw: true, permissions: requireAuth(),
     handler: async (req, reply) => {
       const { orgId } = orgGuard.from(req);  // typed, no re-computation
       reply.send({ orgId, count: await Model.countDocuments() });
