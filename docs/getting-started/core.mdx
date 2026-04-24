@@ -67,52 +67,81 @@ const productResource = defineResource({
 await fastify.register(productResource.toPlugin());
 ```
 
-## BaseController
+## Controllers (v2.11 mixin split)
 
-Standard CRUD with built-in features.
+In 2.11, `BaseController` was split from a 1,589-LOC god class into a composition of `BaseCrudController` + four preset mixins. **Existing `extends BaseController<Product>` code keeps working** (a declaration-merged interface threads `TDoc` through every method), but hosts can now pick smaller surfaces:
 
 ```typescript
 import { BaseController } from '@classytic/arc';
 import type { IRequestContext, IControllerResponse } from '@classytic/arc';
 
-class ProductController extends BaseController {
+// Full surface — every preset method available (drop-in for pre-2.11 code)
+class ProductController extends BaseController<Product> {
   constructor(repository) {
     super(repository);
   }
 
   // Override CRUD methods
-  async create(req: IRequestContext): Promise<IControllerResponse> {
-    // Custom validation
+  async create(req: IRequestContext): Promise<IControllerResponse<Product>> {
     if (!req.body.sku) {
       return { success: false, error: 'SKU required', status: 400 };
     }
-
-    // Call parent implementation
-    return super.create(req);
+    return super.create(req);  // Call parent implementation
   }
 
-  // Custom methods
-  async getFeatured(req: IRequestContext): Promise<IControllerResponse> {
-    const { organizationId, user } = req;
-
-    const products = await this.repository.findAll({
-      filter: { isFeatured: true, organizationId },
+  // Custom methods with full TDoc precision
+  async getFeatured(req: IRequestContext): Promise<IControllerResponse<Product[]>> {
+    const products = await this.repository.getAll({
+      filter: { isFeatured: true },
     });
-
     return { success: true, data: products };
   }
 }
 ```
 
-### Built-in CRUD Methods
+### Slim CRUD-only surface
+
+For resources that don't need soft-delete / tree / slug / bulk, extend `BaseCrudController` directly — you get a 869-LOC surface instead of the 1,650-LOC composed one.
+
+```typescript
+import { BaseCrudController } from '@classytic/arc';
+
+class ReportController extends BaseCrudController<Report> {
+  // Only CRUD methods (list/get/create/update/delete + setQueryParser)
+}
+```
+
+### Pick specific mixins
+
+```typescript
+import { BaseCrudController, SoftDeleteMixin, BulkMixin } from '@classytic/arc';
+
+class OrderController extends SoftDeleteMixin(BulkMixin(BaseCrudController)) {
+  // CRUD + getDeleted/restore + bulkCreate/bulkUpdate/bulkDelete.
+  // No getTree/getChildren, no getBySlug.
+}
+```
+
+Available mixins: `SoftDeleteMixin` (`getDeleted`, `restore`), `TreeMixin` (`getTree`, `getChildren`), `SlugMixin` (`getBySlug`), `BulkMixin` (`bulkCreate`, `bulkUpdate`, `bulkDelete`).
+
+### Built-in CRUD Methods (on `BaseCrudController` and `BaseController`)
 
 | Method | Route | Signature |
 |--------|-------|-----------|
-| `list` | GET / | `async list(req: IRequestContext): Promise<IControllerResponse>` |
-| `get` | GET /:id | `async get(req: IRequestContext): Promise<IControllerResponse>` |
-| `create` | POST / | `async create(req: IRequestContext): Promise<IControllerResponse>` |
-| `update` | PATCH /:id (or PUT, configurable via `updateMethod`) | `async update(req: IRequestContext): Promise<IControllerResponse>` |
-| `delete` | DELETE /:id | `async delete(req: IRequestContext): Promise<IControllerResponse>` |
+| `list` | GET / | `async list(req: IRequestContext): Promise<IControllerResponse<ListResult<TDoc>>>` |
+| `get` | GET /:id | `async get(req: IRequestContext): Promise<IControllerResponse<TDoc>>` |
+| `create` | POST / | `async create(req: IRequestContext): Promise<IControllerResponse<TDoc>>` |
+| `update` | PATCH /:id (or PUT, configurable via `updateMethod`) | `async update(req: IRequestContext): Promise<IControllerResponse<TDoc>>` |
+| `delete` | DELETE /:id | `async delete(req: IRequestContext): Promise<IControllerResponse<{ message: string; id?: string; soft?: boolean }>>` |
+
+### Preset methods (on `BaseController`, or opt-in via mixins)
+
+| Method | Mixin | Notes |
+|--------|-------|-------|
+| `getDeleted` / `restore` | `SoftDeleteMixin` | Requires repo to implement `getDeleted(params, options)` + `restore(id)`. |
+| `getTree` / `getChildren` | `TreeMixin` | Requires repo to implement `getTree(options)` + `getChildren(parentId, options)`. |
+| `getBySlug` | `SlugMixin` | Falls back to `getOne({ [slugField]: slug })` when repo lacks `getBySlug`. |
+| `bulkCreate` / `bulkUpdate` / `bulkDelete` | `BulkMixin` | Security-critical: reuses `BodySanitizer` + policy filters + tenant scope. |
 
 ### Request Context API
 

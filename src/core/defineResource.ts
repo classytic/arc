@@ -41,6 +41,7 @@
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import type { DataAdapter } from "../adapters/interface.js";
 import { CRUD_OPERATIONS } from "../constants.js";
+import { arcLog } from "../logger/index.js";
 import { applyPresets } from "../presets/index.js";
 import type { RegisterOptions } from "../registry/ResourceRegistry.js";
 import { buildRequestScopeProjection } from "../scope/projection.js";
@@ -190,9 +191,17 @@ export function defineResource<TDoc extends AnyRecord = AnyRecord>(
     typeof p === "string" ? p : (p as { name: string }).name,
   );
 
-  // 3. Apply presets FIRST before controller instantiation
+  // 3. Apply presets FIRST before controller instantiation.
+  //
+  // v2.11.0: always produce a fresh object so downstream mutations
+  // (`_appliedPresets`, `schemaOptions` auto-inject, `_controllerOptions`,
+  // `_pendingHooks`) never leak onto the caller's config. `applyPresets`
+  // already returns a shallow-cloned result; the no-preset branch needs
+  // its own `{ ...config }` to match. Before 2.11 this path returned the
+  // raw caller reference, which mutated resource-config fragments hosts
+  // were reusing (e.g. shared defaults factored out for `defineResourceVariants`).
   const resolvedConfig = (
-    config.presets?.length ? applyPresets(config, config.presets) : config
+    config.presets?.length ? applyPresets(config, config.presets) : { ...config }
   ) as ExtendedResourceConfig<TDoc>;
 
   resolvedConfig._appliedPresets = originalPresets;
@@ -531,8 +540,18 @@ export function defineResource<TDoc extends AnyRecord = AnyRecord>(
         module: resolvedConfig.module,
         openApiSchemas,
       };
-    } catch {
-      // Schema generation errors are non-fatal — resource still works without OpenAPI metadata
+    } catch (err) {
+      // v2.11.0: schema-generation errors are still non-fatal (the resource
+      // boots + serves traffic), but no longer silent. A thrown adapter
+      // `generateSchemas()` / `convertOpenApiSchemas()` / parser query-schema
+      // merge used to degrade OpenAPI + MCP metadata with ZERO signal —
+      // docs/introspection silently drifted from runtime. Warn so hosts
+      // notice the contract drift in logs. Honors `ARC_SUPPRESS_WARNINGS=1`.
+      arcLog("defineResource").warn(
+        `OpenAPI/MCP schema generation failed for resource "${resolvedConfig.name}": ${
+          err instanceof Error ? err.message : String(err)
+        }. Resource will boot without registry metadata — OpenAPI docs and MCP tool schemas will be missing.`,
+      );
     }
   }
 

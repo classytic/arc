@@ -1,0 +1,105 @@
+# Migration to 2.11.0
+
+2.11.0 is a focused cleanup release: architectural refactor of `BaseController`, `/types` subpath hygiene, root barrel discipline, a universal fix for the `multiTenantPreset` + engine-required tenant conflict, and the queued 2.10.9 bug fixes.
+
+**TL;DR** — most apps need to touch only two import paths. `extends BaseController<Product>` keeps working. Engine-backed resources can drop the `tenant: { required: false }` workaround.
+
+## Required changes
+
+### 1. `validateResourceConfig` moved out of the root barrel
+
+```diff
+- import { validateResourceConfig, assertValidConfig } from '@classytic/arc';
++ import { validateResourceConfig, assertValidConfig } from '@classytic/arc/utils';
+```
+
+Rationale: these are dev tooling (used at boot, CLI, test time), not runtime essentials. The root barrel is now explicit about what's there — "root = essentials only" was a stated policy that had drifted.
+
+### 2. Scope helpers moved out of `/types`
+
+```diff
+- import { isElevated, getOrgId, PUBLIC_SCOPE } from '@classytic/arc/types';
++ import { isElevated, getOrgId, PUBLIC_SCOPE } from '@classytic/arc/scope';
+```
+
+These were always canonically exported from `@classytic/arc/scope`; the duplicate re-exports in `/types` are removed so the subpath can be truly type-only (matching its documented contract). `envelope` and `getUserId(user: UserLike)` moved to `@classytic/arc/utils` (root `@classytic/arc` still re-exports them for DX — no change needed there).
+
+## Things you can now drop
+
+### Engine-level `tenant: { required: false }` workaround
+
+If you were constructing `@classytic/*` engines with `tenant: { required: false }` as a workaround for the `multiTenantPreset` + body-validation conflict, you can remove it:
+
+```diff
+  const engine = createPricelistEngine({
+    connection: mongoose.connection,
+-   tenant: { required: false },  // ← no longer needed in 2.11+
+  });
+```
+
+Arc now strips every `systemManaged: true` field from adapter-generated `createBody` / `updateBody` `required[]` arrays. `multiTenantPreset` declares its tenant dimensions as `systemManaged` automatically, so Fastify preValidation no longer rejects requests before the preset can inject.
+
+## New capabilities (opt-in)
+
+### Slim controllers
+
+If you only need CRUD — no soft-delete, tree, slug, or bulk — extend `BaseCrudController` directly for an 869-LOC surface:
+
+```typescript
+import { BaseCrudController } from '@classytic/arc';
+class ReportController extends BaseCrudController<Report> {}
+```
+
+### Compose specific mixins
+
+```typescript
+import { BaseCrudController, SoftDeleteMixin, BulkMixin } from '@classytic/arc';
+class OrderController extends SoftDeleteMixin(BulkMixin(BaseCrudController)) {}
+```
+
+Available mixins: `SoftDeleteMixin`, `TreeMixin`, `SlugMixin`, `BulkMixin`. Each adds only its documented methods; other preset methods stay off the surface.
+
+### Full generic precision on `BaseController<Product>`
+
+```typescript
+const ctrl = new BaseController<Product>(repo);
+ctrl.get(req)         // → Promise<IControllerResponse<Product>>
+ctrl.bulkCreate(req)  // → Promise<IControllerResponse<Product[]>>
+ctrl.getDeleted(req)  // → Promise<IControllerResponse<PaginationResult<Product>>>
+```
+
+A companion `interface BaseController<TDoc, TRepo>` is declaration-merged with the runtime class, threading `TDoc` through every CRUD and preset method. `TDoc extends AnyRecord` is now enforced on `defineResource`, `defineResourceVariants`, `BaseController`, and `BaseCrudController`.
+
+### Production hardening options
+
+```typescript
+await createApp({
+  resourceDir: import.meta.url,            // NEW: file:// URL supported (dist/-safe)
+  strictResourceDir: true,                 // NEW: throw on zero-discovery
+  strictResources: true,                   // NEW: throw on duplicate resource names
+  resources: await loadResources(import.meta.url),
+});
+```
+
+## Under the hood (no action needed)
+
+- `BaseController` = `SoftDelete ∘ Tree ∘ Slug ∘ Bulk ∘ BaseCrudController` — pre-composed so existing code works unchanged.
+- `resourceToTools.ts` split from 850 → 260 LOC with 4 focused internal units (`crud-tools`, `route-tools`, `action-tools`, `input-schema`). Zero behavior change.
+- `defineResource` no longer mutates the caller's config object (even on the no-preset path).
+- `OpenAPI/MCP` schema-generation errors now emit `arcLog.warn` instead of silently degrading docs.
+- `[contains]` / `[like]` filters honor their documented case-insensitivity (`$options: "i"`).
+- `resourceDir` accepts `import.meta.url` directly.
+- `QueryParserInterface` is now importable from the root barrel.
+
+## If your code doesn't compile after upgrading
+
+Most likely: `TDoc extends AnyRecord`. If you wrote `defineResource<MyType>(...)` or `BaseCrudController<MyType>` where `MyType` isn't structurally a record (e.g. a union with primitives), constrain it.
+
+```diff
+- type Result = string | { ok: true };
+- defineResource<Result>({ ... });
++ type ResultDoc = { value: string } | { ok: true };  // must be record-shaped
++ defineResource<ResultDoc>({ ... });
+```
+
+If your code was importing `envelope` or `getUserId` from `@classytic/arc/types`, change the path to `@classytic/arc/utils` — or just use `@classytic/arc` (root re-exports them).
