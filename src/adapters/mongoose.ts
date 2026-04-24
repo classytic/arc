@@ -5,11 +5,10 @@
  * Proper generics eliminate the need for 'as any' casts.
  */
 
-import type { StandardRepo } from "@classytic/repo-core/repository";
 import type { Model } from "mongoose";
 import { SYSTEM_FIELDS } from "../constants.js";
 import type { AnyRecord, OpenApiSchemas, RouteSchemaOptions } from "../types/index.js";
-import { mergeFieldRuleConstraints } from "./field-rule-helpers.js";
+import { applyNullable, mergeFieldRuleConstraints } from "./field-rule-helpers.js";
 import type {
   AdapterSchemaContext,
   DataAdapter,
@@ -51,25 +50,33 @@ export interface MongooseAdapterOptions<TDoc = unknown> {
   /** Mongoose model instance — preserves document type for type safety */
   model: Model<TDoc>;
   /** Repository implementing CRUD operations - accepts any repository-like object */
-  repository: StandardRepo<TDoc> | RepositoryLike<TDoc>;
+  repository: RepositoryLike<TDoc>;
   /**
    * External schema generator plugin for OpenAPI docs.
    * When provided, replaces the built-in basic type conversion.
    * Receives the Mongoose model and schema options, must return OpenApiSchemas.
    *
-   * @example MongoKit integration
+   * **Model type is intentionally `Model<unknown>`, not `Model<TDoc>`**:
+   * schema generators introspect `.schema.paths` — they read metadata, not
+   * document types. Typing as `Model<TDoc>` forced every mongokit host to
+   * cast `m as unknown as Model<unknown>` when handing the model to
+   * `buildCrudSchemasFromModel` (which is typed `Model<unknown>`), because
+   * `Model<T>` is invariant in T. Widening here at the callback boundary
+   * trades one documented internal cast for zero host-side casts.
+   *
+   * @example MongoKit integration — direct pass-through, no casts
    * ```typescript
    * import { buildCrudSchemasFromModel } from '@classytic/mongokit';
    *
    * createMongooseAdapter({
    *   model: JobModel,
    *   repository: jobRepository,
-   *   schemaGenerator: (model, options) => buildCrudSchemasFromModel(model, options),
+   *   schemaGenerator: buildCrudSchemasFromModel,
    * });
    * ```
    */
   schemaGenerator?: (
-    model: Model<TDoc>,
+    model: Model<unknown>,
     options?: RouteSchemaOptions,
     context?: AdapterSchemaContext,
   ) => OpenApiSchemas | Record<string, unknown>;
@@ -88,9 +95,15 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
   readonly type = "mongoose" as const;
   readonly name: string;
   readonly model: Model<TDoc>;
-  readonly repository: StandardRepo<TDoc> | RepositoryLike<TDoc>;
+  readonly repository: RepositoryLike<TDoc>;
+  // Callback stored with `Model<unknown>` to match the `MongooseAdapterOptions`
+  // interface (widened so mongokit's `buildCrudSchemasFromModel` plugs in
+  // directly — see the options JSDoc). The internal call site in
+  // `generateSchemas` widens `this.model` to `Model<unknown>` once when
+  // invoking the callback; that's the ONE documented cast arc eats so
+  // every mongokit host stops eating one each.
   private readonly schemaGenerator?: (
-    model: Model<TDoc>,
+    model: Model<unknown>,
     options?: RouteSchemaOptions,
     context?: AdapterSchemaContext,
   ) => OpenApiSchemas | Record<string, unknown>;
@@ -178,8 +191,28 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
       // Post-process with `mergeFieldRuleConstraints` so kit-produced
       // schemas honor arc's portable field-rule constraints identically to
       // the built-in fallback below.
+      //
+      // `this.model` is `Model<TDoc>` but the callback expects `Model<unknown>`
+      // (see the JSDoc on `MongooseAdapterOptions.schemaGenerator` for why).
+      // Mongoose's `Model<T>` is invariant in T — neither direction is
+      // assignable without a cast. This is THE ONE documented internal cast
+      // arc eats so every mongokit host stops eating one each. Schema
+      // generators introspect `.schema.paths` and don't touch the document
+      // type, so the widening is behaviorally safe.
       if (this.schemaGenerator) {
-        const generated = this.schemaGenerator(this.model, schemaOptions, context);
+        // `as unknown as Model<unknown>` is the escape hatch Mongoose's
+        // invariant `Model<T>` typing forces here. The document-type
+        // generics that Mongoose auto-fabricates (`Require_id<TDoc>`,
+        // `AddDefaultId<TDoc>`, bulkSave variance) don't share enough
+        // structural surface for a direct `as Model<unknown>` cast, so TS
+        // demands the via-unknown form. This is THE SAME cast every
+        // mongokit host used to write in their own glue — absorbed here
+        // once, not N times per host.
+        const generated = this.schemaGenerator(
+          this.model as unknown as Model<unknown>,
+          schemaOptions,
+          context,
+        );
         mergeFieldRuleConstraints(generated, schemaOptions);
         return generated;
       }
@@ -230,6 +263,7 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
           if (rule.enum != null && prop.enum == null) prop.enum = rule.enum;
           if (rule.description != null && prop.description == null)
             prop.description = rule.description as string;
+          if (rule.nullable === true) applyNullable(prop);
         }
 
         // Mark as required unless overridden
@@ -429,6 +463,21 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
         baseType.additionalProperties = true;
     }
 
+    // Nullable: mirror mongokit's convention — `{ default: null }` is the
+    // Mongoose-native signal that null is a valid value. Widen the JSON
+    // Schema type so AJV accepts null on round-trips.
+    // Hosts whose Zod → Mongoose converter loses `.nullable()` can opt in
+    // explicitly via `fieldRules[field].nullable: true` (applied later in
+    // generateSchemas / mergeFieldRuleConstraints).
+    //
+    // Delegates to `applyNullable` so the enum-widening interaction
+    // (AJV's `enum` rejects null even when `type` allows it) is handled
+    // in one place.
+    if (options.default === null) {
+      applyNullable(baseType);
+      baseType.default = null;
+    }
+
     return baseType;
   }
 }
@@ -440,6 +489,17 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
 /**
  * Create Mongoose adapter with flexible type acceptance.
  * Accepts any repository with CRUD methods — no `as any` needed.
+ *
+ * **Type parameter (v2.11):** `TDoc` is UNCONSTRAINED. An earlier v2.11
+ * revision added `TDoc extends AnyRecord` to surface errors at the
+ * adapter call site, but Mongoose's own document types
+ * (`HydratedDocument<T>`, `T & Document`) don't carry an index signature
+ * — so the constraint fired on the exact Mongoose idioms this factory
+ * is designed to accept. Hosts were casting with
+ * `as RepositoryLike<Record<string, unknown>>` at every call just to
+ * silence it. The constraint now lives exclusively on `BaseController`
+ * where it's load-bearing for mixin composition; `defineResource`
+ * widens once internally so every other layer stays permissive.
  *
  * @example
  * ```typescript
@@ -455,14 +515,14 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
  */
 export function createMongooseAdapter<TDoc = unknown>(
   model: Model<TDoc>,
-  repository: StandardRepo<TDoc> | RepositoryLike<TDoc>,
+  repository: RepositoryLike<TDoc>,
 ): DataAdapter<TDoc>;
 export function createMongooseAdapter<TDoc = unknown>(
   options: MongooseAdapterOptions<TDoc>,
 ): DataAdapter<TDoc>;
 export function createMongooseAdapter<TDoc = unknown>(
   modelOrOptions: Model<TDoc> | MongooseAdapterOptions<TDoc>,
-  repository?: StandardRepo<TDoc> | RepositoryLike<TDoc>,
+  repository?: RepositoryLike<TDoc>,
 ): DataAdapter<TDoc> {
   if (isMongooseModel(modelOrOptions)) {
     if (!repository) {

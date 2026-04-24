@@ -1,6 +1,7 @@
 node_modules/
 .next/
 /.claude
+.codex
 .env
 .env.*
 *.log

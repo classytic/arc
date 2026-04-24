@@ -57,6 +57,72 @@ export function mergeFieldRuleConstraints(
       if (rule.description != null && prop.description == null) {
         prop.description = rule.description as string;
       }
+      if (rule.nullable === true) applyNullable(prop);
     }
   }
+}
+
+/**
+ * Widen a JSON Schema property to also accept `null`.
+ *
+ * Handles the three ways a property can be typed:
+ *   - `type: 'string'`     → `type: ['string', 'null']`
+ *   - `type: [...]`        → append `'null'` if missing
+ *   - `anyOf: [...]`       → append `{ type: 'null' }` branch if missing
+ *
+ * **Enum interaction:** when the widened prop also carries `enum: [...]`,
+ * `null` is appended to the enum list too. AJV's `enum` keyword rejects
+ * values not in the list regardless of the widened `type`, so
+ * `{ type: ['string','null'], enum: ['a','b'] }` alone would still reject
+ * `null`. The fix is `enum: ['a','b', null]`. (The `anyOf` branch dodges
+ * this entirely — each branch scopes its own enum.)
+ *
+ * No-op when the schema already admits null (don't double-wrap) or has
+ * no `type` / `anyOf` anchor to widen (e.g. Mixed — already accepts null).
+ *
+ * Mutates in place — callers already treat the slot schema as owned.
+ * Exported so adapters that walk `fieldRules` inline (mongoose fallback,
+ * drizzle post-process) can reuse the same widening logic.
+ */
+export function applyNullable(prop: AnyObj): void {
+  // anyOf branching: `anyOf: [{...}, {...}]` → add null branch.
+  // Check this first so we don't also touch a sibling `type` that's part
+  // of an outer composite schema (rare but possible).
+  if (Array.isArray(prop.anyOf)) {
+    const hasNull = prop.anyOf.some(
+      (b) =>
+        b &&
+        typeof b === "object" &&
+        ((b as AnyObj).type === "null" || (b as AnyObj).const === null),
+    );
+    if (!hasNull) prop.anyOf.push({ type: "null" });
+    return;
+  }
+
+  // Array tuple form: `type: ['string', 'null']`
+  if (Array.isArray(prop.type)) {
+    if (!prop.type.includes("null")) prop.type.push("null");
+    widenEnumToIncludeNull(prop);
+    return;
+  }
+
+  // Single-string form: `type: 'string'` → widen to tuple
+  if (typeof prop.type === "string") {
+    prop.type = [prop.type, "null"];
+    widenEnumToIncludeNull(prop);
+    return;
+  }
+
+  // No type anchor — leave untouched. Untyped schemas already match null.
+}
+
+/**
+ * Append `null` to `enum` when present. Required because AJV's `enum`
+ * keyword is independent of `type` — a value must appear in the enum
+ * array verbatim even if the widened type says null is allowed.
+ */
+function widenEnumToIncludeNull(prop: AnyObj): void {
+  if (!Array.isArray(prop.enum)) return;
+  if (prop.enum.includes(null)) return;
+  prop.enum = [...prop.enum, null];
 }

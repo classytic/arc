@@ -8,7 +8,7 @@
  * This is a SEPARATE subpath import — only loaded when explicitly used:
  *   import { streamlinePlugin } from '@classytic/arc/integrations/streamline';
  *
- * Requires: @classytic/streamline (peer dependency)
+ * Requires: @classytic/streamline (peer dependency, >= 2.2.0)
  *
  * @example
  * ```typescript
@@ -35,7 +35,7 @@ import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 // Types (defined here so we don't import streamline at module level)
 // ============================================================================
 
-/** Start options — matches @classytic/streamline v2.1 StartOptions */
+/** Start options — matches @classytic/streamline v2.1+ StartOptions */
 export interface WorkflowStartOptions {
   meta?: Record<string, unknown>;
   idempotencyKey?: string;
@@ -96,15 +96,38 @@ export interface StreamlinePluginOptions {
   /** Connect workflow lifecycle events to Arc's event bus (default: true) */
   bridgeEvents?: boolean;
   /**
-   * Bridge step-level events (step:started, step:completed, step:failed) to Arc's event bus.
+   * Bridge the workflow's internal event bus (step + workflow lifecycle +
+   * engine telemetry) to Arc's event bus, topic-scoped as
+   * `workflow.${workflowId}.${eventName}`.
+   *
+   * Covers the full streamline 2.2 event surface:
+   *   - Step events: started, completed, failed, waiting, skipped,
+   *     retry-scheduled, compensated
+   *   - Workflow lifecycle: started, completed, failed, waiting, resumed,
+   *     cancelled, recovered, retry, compensating
+   *   - Engine telemetry: engine:error, scheduler:error,
+   *     scheduler:circuit-open
+   *
+   * Subscriptions use structural `container.eventBus.on(...)` — future
+   * streamline releases can add events without breaking arc; missing
+   * events are simply never handled (no crash). Requires the workflow
+   * to expose `container.eventBus`.
+   *
    * Disabled by default — enable for dashboards or monitoring.
-   * Requires the workflow to expose `container.eventBus` (streamline >=2.1).
    * @default false
+   */
+  bridgeBusEvents?: boolean;
+  /**
+   * @deprecated v2.11.0 — renamed to `bridgeBusEvents` which now covers
+   * step + workflow + engine events (not just step-level). Still accepted
+   * as an alias; will be removed in v3. Prefer `bridgeBusEvents`.
    */
   bridgeStepEvents?: boolean;
   /**
    * Enable SSE streaming endpoint: GET /:workflowId/runs/:runId/stream
-   * Streams step-level events as Server-Sent Events for live UI updates.
+   * Streams step-level + lifecycle events as Server-Sent Events for live
+   * UI updates. Auto-closes the stream on terminal workflow events
+   * (completed / failed / cancelled).
    * @default false
    */
   enableStreaming?: boolean;
@@ -119,6 +142,57 @@ export interface StreamlinePluginOptions {
 }
 
 // ============================================================================
+// Streamline event names — raw names on `container.eventBus`
+// ============================================================================
+
+/**
+ * Full event list published on a streamline workflow's internal `eventBus`
+ * (tracks streamline 2.2's `EventPayloadMap` in
+ * `@classytic/streamline/src/core/events.ts`).
+ *
+ * Hardcoded here by design — arc subscribes via structural
+ * `eventBus.on(name, handler)`, which is a no-op for events the running
+ * streamline version doesn't emit. New events a future streamline release
+ * adds can be bridged by updating this list; arc never breaks just
+ * because streamline extended its bus.
+ */
+export const STREAMLINE_BUS_EVENTS = [
+  // Step lifecycle
+  "step:started",
+  "step:completed",
+  "step:failed",
+  "step:waiting",
+  "step:skipped",
+  "step:retry-scheduled",
+  "step:compensated",
+  // Workflow lifecycle
+  "workflow:started",
+  "workflow:completed",
+  "workflow:failed",
+  "workflow:waiting",
+  "workflow:resumed",
+  "workflow:cancelled",
+  "workflow:recovered",
+  "workflow:retry",
+  "workflow:compensating",
+  // Engine telemetry
+  "engine:error",
+  "scheduler:error",
+  "scheduler:circuit-open",
+] as const;
+
+/**
+ * Workflow events that should auto-close an SSE stream when observed.
+ * Recovered / waiting / resumed / retry / compensating are NOT terminal —
+ * the run is still active after them.
+ */
+export const STREAMLINE_TERMINAL_EVENTS = [
+  "workflow:completed",
+  "workflow:failed",
+  "workflow:cancelled",
+] as const;
+
+// ============================================================================
 // Plugin Implementation
 // ============================================================================
 
@@ -131,10 +205,14 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
     prefix = "/workflows",
     auth = true,
     bridgeEvents = true,
-    bridgeStepEvents = false,
     enableStreaming = false,
     permissions: perms,
   } = options;
+
+  // Canonical name `bridgeBusEvents`; legacy `bridgeStepEvents` kept as
+  // alias for back-compat (deprecated — removed in v3). OR semantics:
+  // either flag enables full bus bridging.
+  const bridgeBus = options.bridgeBusEvents ?? options.bridgeStepEvents ?? false;
 
   // Registry: workflowId → workflow instance
   const registry = new Map<string, WorkflowLike>();
@@ -354,18 +432,22 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
       );
     }
 
-    // ============ Opt-in: Step-level event bridging ============
-    if (bridgeStepEvents && wf.container?.eventBus && fastify.events?.publish) {
-      const stepEvents = [
-        "step:started",
-        "step:completed",
-        "step:failed",
-        "step:skipped",
-        "step:retry-scheduled",
-      ];
-      for (const eventName of stepEvents) {
+    // ============ Opt-in: workflow event-bus bridging ============
+    //
+    // Full coverage of streamline 2.2's internal event bus (step +
+    // workflow lifecycle + engine telemetry), published onto arc's
+    // transport as `workflow.${id}.${eventName}`. Subscriptions are
+    // structural — arc never crashes if streamline drops an event in a
+    // future release, and new events are picked up by updating
+    // `STREAMLINE_BUS_EVENTS` without touching plugin internals.
+    if (bridgeBus && wf.container?.eventBus && fastify.events?.publish) {
+      for (const eventName of STREAMLINE_BUS_EVENTS) {
         wf.container.eventBus.on(eventName, (payload: unknown) => {
-          const p = payload as { runId?: string; stepId?: string; [k: string]: unknown };
+          const p = payload as {
+            runId?: string;
+            stepId?: string;
+            [k: string]: unknown;
+          };
           fastify.events
             .publish(`workflow.${id}.${eventName}`, {
               runId: p?.runId,
@@ -402,16 +484,9 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
             Connection: "keep-alive",
           });
 
-          const events = [
-            "step:started",
-            "step:completed",
-            "step:failed",
-            "step:skipped",
-            "workflow:completed",
-            "workflow:failed",
-            "workflow:cancelled",
-          ];
-
+          // Stream every streamline bus event — run-scoped filter applied
+          // per-event. Terminal events auto-close the stream.
+          const terminalEvents = new Set<string>(STREAMLINE_TERMINAL_EVENTS);
           const listeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
           let closed = false;
 
@@ -439,18 +514,17 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
             }
           };
 
-          for (const eventName of events) {
+          for (const eventName of STREAMLINE_BUS_EVENTS) {
             const fn = (payload: unknown) => {
               const p = payload as { runId?: string; [k: string]: unknown };
-              if (p?.runId !== runId) return;
+              // Engine telemetry events (engine:error, scheduler:*) can
+              // fire without a runId — deliver them on every stream for
+              // the workflow (they're observability, not run-scoped).
+              const isRunEvent = typeof p?.runId === "string";
+              if (isRunEvent && p.runId !== runId) return;
               send(eventName, p);
 
-              // Auto-close on terminal workflow events
-              if (
-                eventName === "workflow:completed" ||
-                eventName === "workflow:failed" ||
-                eventName === "workflow:cancelled"
-              ) {
+              if (terminalEvents.has(eventName) && p?.runId === runId) {
                 cleanup();
               }
             };

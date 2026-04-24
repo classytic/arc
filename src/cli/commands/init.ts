@@ -542,8 +542,14 @@ function packageJsonTemplate(config: ProjectConfig): string {
       main: config.typescript ? "dist/index.js" : "src/index.js",
       imports,
       scripts,
+      // Must match @classytic/arc's own `engines.node` requirement — the
+      // framework drops Node 20 APIs in core paths (e.g. structured clone
+      // via node:util, require.main semantics), so scaffolding apps that
+      // claim `>=20` is a real contract bug, not a style nit. Keep in lock
+      // step with the root package.json and enforce via the regression test
+      // at tests/cli/init-scaffolding.test.ts (look for `engines.node`).
       engines: {
-        node: ">=20",
+        node: ">=22",
       },
     },
     null,
@@ -2152,8 +2158,12 @@ import { buildCrudSchemasFromModel } from '@classytic/mongokit/utils';
 const crudSchemas = buildCrudSchemasFromModel(Example, {
   strictAdditionalProperties: true,
   fieldRules: {
-    // Mark fields as system-managed (excluded from create/update)
+    // Framework-injected fields — strip from body + required[]
     // deletedAt: { systemManaged: true },
+    // Legitimate null values (Zod .nullable() patterns) — widen JSON-Schema type
+    // priceMode: { nullable: true },
+    // Elevated-admin override for systemManaged fields (cross-tenant writes)
+    // organizationId: { systemManaged: true, preserveForElevated: true },
   },
   query: {
     filterableFields: {
@@ -2201,65 +2211,70 @@ function exampleTestTemplate(config: ProjectConfig): string {
  *
  * Run tests: npm test
  * Watch mode: npm run test:watch
+ *
+ * Uses arc's 2.11 testing surface:
+ *   - createTestApp  — turnkey Fastify + in-memory Mongo + auth + fixtures
+ *   - expectArc      — fluent envelope matchers (.ok, .unauthorized, .forbidden, ...)
+ *   - ctx.auth       — unified TestAuthProvider, register a role once then reuse .headers
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-${config.adapter === "mongokit" ? "import mongoose from 'mongoose';\n" : ""}import { createAppInstance } from '../src/app.js';
-${ts ? "import type { FastifyInstance } from 'fastify';\n" : ""}
+import { describe, it, beforeAll, afterAll } from 'vitest';
+import { createTestApp, expectArc } from '@classytic/arc/testing';
+import type { TestAppContext } from '@classytic/arc/testing';
+import { exampleResource } from '../src/resources/example/example.js';
+
 describe('Example Resource', () => {
-  let app${ts ? ": FastifyInstance" : ""};
+  let ctx${ts ? ": TestAppContext" : ""};
 
   beforeAll(async () => {
-${
-  config.adapter === "mongokit"
-    ? `    // Connect to test database
-    const testDbUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/${config.name}-test';
-    await mongoose.connect(testDbUri);
-`
-    : ""
-}
-    // Create app instance
-    app = await createAppInstance();
-    await app.ready();
+    ctx = await createTestApp({
+      resources: [exampleResource],
+      authMode: 'jwt',
+${config.adapter === "mongokit" ? "      connectMongoose: true,\n" : ""}    });
+
+    ctx.auth${ts ? "!" : ""}.register('admin', {
+      user: { id: '1', roles: ['admin'] },
+      orgId: 'org-1',
+    });
   });
 
-  afterAll(async () => {
-    await app.close();
-${config.adapter === "mongokit" ? "    await mongoose.connection.close();" : ""}
-  });
+  afterAll(() => ctx.close());
 
   describe('GET /examples', () => {
-    it('should return a list of examples', async () => {
-      const response = await app.inject({
-        method: 'GET',
-        url: '/examples',
-      });
-
-      expect(response.statusCode).toBe(200);
-      const body = JSON.parse(response.body);
-      expect(body).toHaveProperty('docs');
-      expect(Array.isArray(body.docs)).toBe(true);
+    it('should return a list of examples (public)', async () => {
+      const res = await ctx.app.inject({ method: 'GET', url: '/examples' });
+      expectArc(res).ok().paginated();
     });
   });
 
   describe('POST /examples', () => {
     it('should require authentication', async () => {
-      const response = await app.inject({
+      const res = await ctx.app.inject({
         method: 'POST',
         url: '/examples',
         payload: { name: 'Test Example' },
       });
+      expectArc(res).unauthorized();
+    });
 
-      // Should fail without auth token
-      expect(response.statusCode).toBe(401);
+    it('should create when admin is authenticated', async () => {
+      const res = await ctx.app.inject({
+        method: 'POST',
+        url: '/examples',
+        headers: ctx.auth${ts ? "!" : ""}.as('admin').headers,
+        payload: { name: 'Test Example' },
+      });
+      expectArc(res).ok();
     });
   });
 
   // Add more tests as needed:
-  // - GET /examples/:id
-  // - PATCH /examples/:id
-  // - DELETE /examples/:id
+  // - GET /examples/:id         (expectArc(res).ok().hasData({ name: '...' }))
+  // - PATCH /examples/:id       (expectArc(res).ok())
+  // - DELETE /examples/:id      (expectArc(res).ok())
   // - Custom endpoints
+  // - Permission denials        (expectArc(res).forbidden().hasError(/reason/))
+  // - Field hiding              (expectArc(res).hidesField('password'))
 });
 `;
 }

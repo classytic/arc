@@ -410,101 +410,18 @@ class NatsEventTransport implements EventTransport {
 }
 ```
 
-## Use Cases
-
-### Order Processing
-
-```typescript
-// After creating order
-await fastify.events.publish('order.created', order, {
-  resourceId: order._id,
-});
-
-// Subscribers handle side effects
-fastify.events.subscribe('order.created', async (event) => {
-  await reserveInventory(event.payload.items);
-  await sendOrderConfirmation(event.payload.customer);
-  await notifyWarehouse(event.payload);
-});
-```
-
-### Cross-Service Communication
-
-```typescript
-// Service A: Publish event
-await fastify.events.publish('user.verified', {
-  userId: user._id,
-  verifiedAt: new Date(),
-});
-
-// Service B: Subscribe (via shared transport)
-await fastify.events.subscribe('user.verified', async (event) => {
-  await enablePremiumFeatures(event.payload.userId);
-});
-```
-
 ## Multi-Instance Deployment
 
-| Transport | Use Case | Built-in? |
-|-----------|----------|-----------|
-| Memory | Development, single-instance | Yes |
-| Redis Pub/Sub | Multi-instance, real-time fan-out | Yes |
-| Redis Streams | Ordered, durable, consumer groups | Yes |
-| RabbitMQ | Guaranteed delivery, queuing | Custom transport |
-| Kafka | High-throughput, streaming | Custom transport |
-| AWS SQS/SNS | Serverless, managed queuing | Custom transport |
-| NATS | Lightweight pub/sub | Custom transport |
+Pick a transport by what you need. Anything not in [Transports](#transports) above is a custom transport — arc's `EventTransport` interface has 3 methods (`publish`, `subscribe`, `close`); drop in Kafka / RabbitMQ / SQS / NATS with ~100 LOC per broker. Same [`Custom Transport` pattern](#custom-transport), same wiring — `stores: { events: new YourTransport(...) }`.
 
-### Custom Transport — Kafka / RabbitMQ / SQS
+| Broker | Use case |
+|---|---|
+| RabbitMQ | Guaranteed delivery, queuing |
+| Kafka | High-throughput streaming |
+| AWS SQS/SNS | Serverless, managed |
+| NATS | Lightweight pub/sub |
 
-Arc's `EventTransport` interface has 3 methods. Implement it for any broker:
-
-```typescript
-import type { EventTransport, DomainEvent, EventHandler } from '@classytic/arc/events';
-
-// Example: Kafka transport (~100 lines for a production implementation)
-class KafkaEventTransport implements EventTransport {
-  readonly name = 'kafka';
-
-  constructor(
-    private producer: KafkaProducer,
-    private consumer: KafkaConsumer,
-  ) {}
-
-  async publish(event: DomainEvent): Promise<void> {
-    await this.producer.send({
-      topic: 'arc-events',
-      messages: [{ key: event.type, value: JSON.stringify(event) }],
-    });
-  }
-
-  async subscribe(pattern: string, handler: EventHandler): Promise<() => void> {
-    await this.consumer.subscribe({ topic: pattern.replace('*', '.*'), fromBeginning: false });
-    await this.consumer.run({
-      eachMessage: async ({ message }) => {
-        const event = JSON.parse(message.value!.toString());
-        await handler(event);
-      },
-    });
-    return () => this.consumer.disconnect();
-  }
-
-  async close(): Promise<void> {
-    await this.producer.disconnect();
-    await this.consumer.disconnect();
-  }
-}
-
-// Wire it in — no other code changes needed
-const app = await createApp({
-  runtime: 'distributed',
-  stores: { events: new KafkaEventTransport(producer, consumer) },
-});
-```
-
-The same pattern works for RabbitMQ (`amqplib`), AWS SQS/SNS (`@aws-sdk/client-sqs`),
-NATS (`nats.js`), or any message broker. Arc routes all CRUD events, outbox relay,
-and manual `publish()` calls through your transport — zero framework changes.
+For ordered + durable processing across instances, the built-in `RedisStreamTransport` is the no-new-infra choice; bring Kafka only when you've outgrown it.
 
 ## Event Outbox Pattern
 

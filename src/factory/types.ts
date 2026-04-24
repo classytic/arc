@@ -622,18 +622,76 @@ export interface CreateAppOptions {
   // ============================================
 
   /**
-   * Resources to register automatically.
-   * Each resource's `.toPlugin()` is called and registered for you.
+   * Resources to register automatically. Accepts two shapes:
    *
-   * @example
+   *   1. **Array** — each resource's `.toPlugin()` is called and registered.
+   *      Defined at module-import time, so the resource's adapter must be
+   *      constructible without any async state.
+   *
+   *   2. **Factory function** (sync or async) — called AFTER `bootstrap[]`
+   *      but BEFORE routes are wired. Use this when a resource's adapter
+   *      depends on an engine / singleton that boots asynchronously
+   *      (e.g. `await ensureCatalogEngine()` / `await createFlowEngine()`).
+   *      The factory receives the Fastify instance for symmetry with
+   *      `plugins` and `bootstrap`.
+   *
+   * Arc's lifecycle contract:
+   * ```
+   * 1. Arc core (security, auth, events)
+   * 2. plugins()            ← infra (DB, SSE, docs)
+   * 3. bootstrap[]          ← domain init (engines, singletons)
+   * 4. resources resolution ← (factory form: call it here)
+   * 5. resources registered ← plugins mounted on Fastify
+   * 6. afterResources()     ← post-registration wiring
+   * ```
+   *
+   * The factory form is the canonical answer to "my repository lives in an
+   * engine that boots asynchronously." Before this shape existed, hosts had
+   * to write per-resource lazy-bridge adapters that awaited the engine on
+   * every CRUD call — pure boilerplate. With a factory, `defineResource(...)`
+   * runs with the engine already live, so `createMongooseAdapter(engine.models.X, engine.repositories.X)`
+   * works directly.
+   *
+   * @example Static array (most resources)
    * ```ts
    * const app = await createApp({
    *   resources: [productResource, orderResource, userResource],
    *   auth: { type: 'jwt', jwt: { secret: 'xxx' } },
    * });
    * ```
+   *
+   * @example Factory with async-booted engine
+   * ```ts
+   * const app = await createApp({
+   *   bootstrap: [async () => { await ensureCatalogEngine(); }],
+   *   resources: async () => {
+   *     const cat = await ensureCatalogEngine();
+   *     return [
+   *       defineResource({
+   *         name: 'product',
+   *         adapter: createMongooseAdapter(cat.models.Product, cat.repositories.product),
+   *         // ...
+   *       }),
+   *     ];
+   *   },
+   * });
+   * ```
+   *
+   * @example Factory delegating to auto-discovery
+   * ```ts
+   * const app = await createApp({
+   *   bootstrap: [async () => { await ensureCatalogEngine(); }],
+   *   resources: async () => loadResources(import.meta.url),
+   * });
+   * ```
    */
-  resources?: Array<import("./loadResources.js").ResourceLike>;
+  resources?:
+    | ReadonlyArray<import("./loadResources.js").ResourceLike>
+    | ((
+        fastify: FastifyInstance,
+      ) =>
+        | ReadonlyArray<import("./loadResources.js").ResourceLike>
+        | Promise<ReadonlyArray<import("./loadResources.js").ResourceLike>>);
 
   /**
    * URL prefix for all auto-registered resources.
@@ -659,8 +717,13 @@ export interface CreateAppOptions {
    * `process.cwd()`, which diverges from `dist/` at runtime and was the root
    * cause of a reported "deployed app serves 404 on every route" incident.
    *
-   * When both `resourceDir` and `resources` are provided, `resources` wins
-   * (explicit always beats convention).
+   * When both `resourceDir` and `resources` are provided, `resources` wins —
+   * explicit always beats convention, **including an explicit empty array**.
+   * `resources: []` disables resource registration entirely even with
+   * `resourceDir` set, which is the common case for shared base configs
+   * that turn resource loading off in test / CLI / health-check subprocesses.
+   * Auto-discovery from `resourceDir` fires only when `resources` is
+   * `undefined` (absent).
    *
    * @example
    * ```ts

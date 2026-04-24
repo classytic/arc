@@ -26,9 +26,9 @@
  * ```
  */
 
-import type { FastifyRequest } from "fastify";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import type { RequestScope } from "../scope/types.js";
-import type { PermissionResult } from "./types.js";
+import type { PermissionCheck, PermissionContext, PermissionResult, UserBase } from "./types.js";
 
 // ============================================================================
 // Normalize
@@ -95,4 +95,87 @@ export function applyPermissionResult(result: PermissionResult, request: Request
       request.scope = result.scope;
     }
   }
+}
+
+// ============================================================================
+// Evaluate + apply (end-to-end permission flow)
+// ============================================================================
+
+/**
+ * Max length of a `PermissionResult.reason` string before we fall back to the
+ * generic default message. Upstream checks can return arbitrary strings; we
+ * clamp to prevent accidental leakage of internal diagnostics or oversized
+ * payloads via the 4xx response body.
+ */
+const MAX_DENIAL_REASON_LENGTH = 100;
+
+/**
+ * End-to-end evaluator: runs the permission check, catches throws, normalizes
+ * the result, sends a 401/403 response on denial, and applies side-effects on
+ * grant. Returns `true` if the caller should continue, `false` if a response
+ * has been sent and the caller should return.
+ *
+ * This is the single source of truth for the 5-step sequence shared by the
+ * CRUD router, action router, and MCP tool handlers:
+ *
+ *   1. `try { await check(ctx) } catch { reply 403 }`
+ *   2. `normalizePermissionResult(result)`
+ *   3. If denied → 401 (no user) or 403 (user) with clamped reason
+ *   4. If granted → `applyPermissionResult` (filters + scope)
+ *   5. Return true/false so the caller knows whether to keep going
+ *
+ * Context construction, pre-check auth gating, and success-path handler
+ * invocation stay at the callsite — those are genuinely different per router
+ * and don't belong here.
+ *
+ * @returns `true` if authorized (caller continues), `false` if a response was sent
+ */
+export async function evaluateAndApplyPermission(
+  check: PermissionCheck,
+  context: PermissionContext,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  opts?: {
+    /**
+     * Override the default denial message. Receives the user from the
+     * permission context (null on unauthenticated requests). The returned
+     * string is used only when `result.reason` is absent or exceeds
+     * `MAX_DENIAL_REASON_LENGTH`. Defaults to `"Permission denied"` /
+     * `"Authentication required"`.
+     */
+    defaultDenialMessage?: (user: UserBase | null) => string;
+  },
+): Promise<boolean> {
+  // Step 1: run the check, catch throws
+  let result: boolean | PermissionResult;
+  try {
+    result = await check(context);
+  } catch (err) {
+    request.log?.warn?.(
+      { err, resource: context.resource, action: context.action },
+      "Permission check threw",
+    );
+    reply.code(403).send({ success: false, error: "Permission denied" });
+    return false;
+  }
+
+  // Step 2: normalize
+  const permResult = normalizePermissionResult(result);
+
+  // Step 3: denial → shape response
+  if (!permResult.granted) {
+    const defaultMsg =
+      opts?.defaultDenialMessage?.(context.user) ??
+      (context.user ? "Permission denied" : "Authentication required");
+    const reason =
+      permResult.reason && permResult.reason.length <= MAX_DENIAL_REASON_LENGTH
+        ? permResult.reason
+        : defaultMsg;
+    reply.code(context.user ? 403 : 401).send({ success: false, error: reason });
+    return false;
+  }
+
+  // Step 4: grant → apply side-effects (filters + scope)
+  applyPermissionResult(permResult, request);
+  return true;
 }

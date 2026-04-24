@@ -112,7 +112,15 @@ export {
 // from the root barrel to avoid pulling mongoose/prisma types into consumers
 // who don't use those adapters. Import from '@classytic/arc/adapters' instead.
 
-export type { BaseControllerOptions, ListResult } from "./core/index.js";
+// Mixin extension interfaces — useful when typing custom mixin compositions
+export type {
+  BaseControllerOptions,
+  BulkExt,
+  ListResult,
+  SlugExt,
+  SoftDeleteExt,
+  TreeExt,
+} from "./core/index.js";
 // ============================================================================
 // Core — defineResource, controller split (v2.11.0)
 // ============================================================================
@@ -128,8 +136,6 @@ export {
   SoftDeleteMixin,
   TreeMixin,
 } from "./core/index.js";
-// Mixin extension interfaces — useful when typing custom mixin compositions
-export type { BulkExt, SlugExt, SoftDeleteExt, TreeExt } from "./core/index.js";
 
 /**
  * Note: Arc is database-agnostic
@@ -141,6 +147,12 @@ export type { BulkExt, SlugExt, SoftDeleteExt, TreeExt } from "./core/index.js";
  * with any repository implementing the `StandardRepo` contract from `@classytic/repo-core`.
  */
 
+export type {
+  CrudOperation,
+  HookOperation,
+  HookPhase,
+  MutationOperation,
+} from "./constants.js";
 // ============================================================================
 // Constants — single source of truth for defaults and magic values (zero deps).
 // Explicit named re-exports (v2.11.0) — no `export *` so the barrel surface
@@ -164,12 +176,12 @@ export {
   SYSTEM_FIELDS,
 } from "./constants.js";
 export type {
-  CrudOperation,
-  HookOperation,
-  HookPhase,
-  MutationOperation,
-} from "./constants.js";
-
+  ArcCreateResult,
+  ArcDeleteResult,
+  ArcGetResult,
+  ArcListResult,
+  ArcUpdateResult,
+} from "./core/BaseController.js";
 // ============================================================================
 // Validation — resource config validation. Relocated to `@classytic/arc/utils`
 // in v2.11.0 (dev tooling, not runtime essentials). Removed from root barrel
@@ -298,10 +310,11 @@ export type {
   UserOrganization,
   ValidateOptions,
   ValidationResult,
+  // Controller override utility types (v2.11) — let subclass authors write
+  // `async create(ctx): ArcCreateResult<this> { ... }` without restating
+  // the full `Promise<IControllerResponse<TDoc>>` shape. `this` threads the
+  // actual controller's `TDoc` binding into the return type.
 } from "./types/index.js";
-// DX helpers (v2.11.0: relocated to `/utils` as part of the `/types`
-// type-only cleanup — root re-exports for DX).
-export { envelope, getUserId } from "./utils/index.js";
 // ============================================================================
 // Errors — commonly needed alongside defineResource (zero deps, pure classes)
 // ============================================================================
@@ -313,6 +326,9 @@ export {
   UnauthorizedError,
   ValidationError,
 } from "./utils/errors.js";
+// DX helpers (v2.11.0: relocated to `/utils` as part of the `/types`
+// type-only cleanup — root re-exports for DX).
+export { envelope, getUserId } from "./utils/index.js";
 // handleRaw lives on @classytic/arc/utils only — not re-exported from root to preserve tree-shaking
 
 // ============================================================================

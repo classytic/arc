@@ -81,7 +81,12 @@ describe("v2.8: routes + actions", () => {
             transport: data.transport,
           }),
           permissions: allowPublic(),
-          schema: { transport: { type: "object", description: "Transport details" } },
+          schema: {
+            type: "object",
+            properties: {
+              transport: { type: "object", description: "Transport details" },
+            },
+          },
         },
         cancel: {
           handler: async (id, data) => ({
@@ -90,7 +95,12 @@ describe("v2.8: routes + actions", () => {
             reason: data.reason,
           }),
           permissions: allowPublic(),
-          schema: { reason: { type: "string", description: "Cancellation reason" } },
+          schema: {
+            type: "object",
+            properties: {
+              reason: { type: "string", description: "Cancellation reason" },
+            },
+          },
           description: "Cancel an item",
         },
       },
@@ -467,7 +477,11 @@ describe("v2.8: actions — extended", () => {
             carrier: data.carrier,
           }),
           permissions: allowPublic(),
-          schema: { carrier: { type: "string", description: "Carrier name" } },
+          schema: {
+            type: "object",
+            properties: { carrier: { type: "string", description: "Carrier name" } },
+            required: ["carrier"],
+          },
         },
         reject: {
           handler: async (id, data) => ({
@@ -476,7 +490,10 @@ describe("v2.8: actions — extended", () => {
             reason: data.reason,
           }),
           permissions: allowPublic(),
-          schema: { reason: { type: "string", description: "Rejection reason" } },
+          schema: {
+            type: "object",
+            properties: { reason: { type: "string", description: "Rejection reason" } },
+          },
         },
       },
       actionPermissions: allowPublic(),

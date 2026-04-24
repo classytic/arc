@@ -10,20 +10,12 @@ export type { AccessControlConfig } from "./AccessControl.js";
 
 // Composable classes extracted from BaseController
 export { AccessControl } from "./AccessControl.js";
+export { BaseController } from "./BaseController.js";
 // v2.11.0 mixin split — BaseCrudController is the slim CRUD core; BaseController
 // remains as the full-stack composition that extends it via the four preset
 // mixins. `BaseControllerOptions` + `ListResult` live on the slim core.
 export type { BaseControllerOptions, ListResult } from "./BaseCrudController.js";
 export { BaseCrudController } from "./BaseCrudController.js";
-export { BaseController } from "./BaseController.js";
-export type { SoftDeleteExt } from "./mixins/softDelete.js";
-export { SoftDeleteMixin } from "./mixins/softDelete.js";
-export type { TreeExt } from "./mixins/tree.js";
-export { TreeMixin } from "./mixins/tree.js";
-export type { SlugExt } from "./mixins/slug.js";
-export { SlugMixin } from "./mixins/slug.js";
-export type { BulkExt } from "./mixins/bulk.js";
-export { BulkMixin } from "./mixins/bulk.js";
 export type { BodySanitizerConfig } from "./BodySanitizer.js";
 export { BodySanitizer } from "./BodySanitizer.js";
 // createActionRouter is the internal engine for the public `actions` API on
@@ -44,5 +36,13 @@ export {
   getControllerScope,
   sendControllerResponse,
 } from "./fastifyAdapter.js";
+export type { BulkExt } from "./mixins/bulk.js";
+export { BulkMixin } from "./mixins/bulk.js";
+export type { SlugExt } from "./mixins/slug.js";
+export { SlugMixin } from "./mixins/slug.js";
+export type { SoftDeleteExt } from "./mixins/softDelete.js";
+export { SoftDeleteMixin } from "./mixins/softDelete.js";
+export type { TreeExt } from "./mixins/tree.js";
+export { TreeMixin } from "./mixins/tree.js";
 export type { QueryResolverConfig } from "./QueryResolver.js";
 export { QueryResolver } from "./QueryResolver.js";

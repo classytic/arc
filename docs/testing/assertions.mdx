@@ -1,0 +1,147 @@
+# Assertions
+
+`expectArc` wraps a Fastify `app.inject()` response and exposes fluent matchers for arc's response envelope. It replaces the 5-6 patterns that were repeated hundreds of times across the test suite — one call chain reads as a sentence.
+
+## Basic usage
+
+```typescript
+import { expectArc } from '@classytic/arc/testing';
+
+const res = await ctx.app.inject({ url: '/jobs/123', headers: admin.headers });
+
+expectArc(res)
+  .ok()                        // 200 + success: true
+  .hasData()                   // body.data defined
+  .hidesField('password')      // body.data.password absent
+  .showsField('title');        // body.data.title present
+```
+
+Every helper returns the assertion object, so everything chains. `expect` is called internally — import `expectArc` only from files that run under `vitest`.
+
+## Status & envelope
+
+| Helper | Checks |
+|---|---|
+| `ok(status = 200)` | status is exactly `status` AND `body.success === true` |
+| `hasStatus(status)` | status is exactly `status` (no envelope check) |
+| `failed(status?)` | status >= 400 (or exactly `status`) AND `body.success === false` |
+| `unauthorized()` | `.failed(401)` |
+| `forbidden()` | `.failed(403)` |
+| `notFound()` | `.failed(404)` |
+| `validationError()` | `.failed(400)` |
+| `conflict()` | `.failed(409)` |
+
+```typescript
+expectArc(res).ok();                    // 200 + success
+expectArc(res).ok(201);                 // 201 + success (POST create)
+expectArc(res).unauthorized();          // 401 + failed
+expectArc(res).forbidden();             // 403 + failed
+expectArc(res).notFound();              // 404 + failed
+```
+
+## Data
+
+```typescript
+expectArc(res).hasData();                         // body.data defined
+expectArc(res).showsField('id');                  // body.data.id defined
+expectArc(res).hidesField('password');            // body.data.password absent
+
+// Raw access for ad-hoc assertions
+expect(expectArc(res).data).toMatchObject({ id: '123', title: 'x' });
+```
+
+## Pagination
+
+arc's list envelope flattens `OffsetPaginationResult` to top-level: `docs`, `page`, `limit`, `total`, `pages`, `hasNext`, `hasPrev`.
+
+```typescript
+expectArc(res).paginated({
+  page: 1,
+  limit: 20,
+  total: 42,
+  hasNext: true,
+  hasPrev: false,
+});
+
+// Without expected values — just asserts the envelope shape
+expectArc(res).paginated();
+```
+
+Accepts both shapes: `body.docs = [...]` (flattened, arc default) OR `body.data = [...]` (array under data).
+
+## Errors & meta
+
+```typescript
+expectArc(res).hasError('Permission denied');          // exact match
+expectArc(res).hasError(/^Permission/);                // regex
+
+// `meta` is flattened to top-level by sendControllerResponse, so
+// both shapes are accepted:
+expectArc(res).hasMeta('validActions', ['approve', 'reject']);
+expectArc(res).hasMeta('traceId');                     // key present, any value
+```
+
+## Ad-hoc drill-down
+
+```typescript
+const a = expectArc(res);
+a.ok();
+console.log(a.body);                         // parsed body (cached)
+console.log(a.data);                         // body.data (cached)
+console.log(a.response.statusCode);          // raw Fastify response
+```
+
+`.body` and `.data` memoize — repeated access doesn't re-parse.
+
+## Failure messages
+
+Every matcher includes context on mismatch so failures read as diagnostics, not "expected true to be false":
+
+```
+AssertionError: expected 2xx (200) but got 500. Body: {"success":false,"error":"DB unreachable"...
+AssertionError: expected field 'password' to be hidden from response.data
+AssertionError: response body is not valid JSON (statusCode=200): Unexpected token '<' ...
+```
+
+## When NOT to use
+
+- **Non-arc responses.** Fastify's default 404 handler (for unknown routes) doesn't emit `{ success: false, ... }`. Use `hasStatus(404)` or check `response.body` directly.
+- **Non-JSON bodies.** `expectArc` parses JSON eagerly on first body access. If you're testing a binary download or SSE stream, stick with raw Fastify response assertions.
+
+## API
+
+```typescript
+interface ArcAssertion {
+  readonly response: ArcResponseLike;
+  readonly body: Record<string, unknown>;
+  readonly data: unknown;
+
+  ok(status?: number): ArcAssertion;
+  failed(status?: number): ArcAssertion;
+  unauthorized(): ArcAssertion;
+  forbidden(): ArcAssertion;
+  notFound(): ArcAssertion;
+  validationError(): ArcAssertion;
+  conflict(): ArcAssertion;
+  hasStatus(status: number): ArcAssertion;
+  hasData(): ArcAssertion;
+  hidesField(field: string): ArcAssertion;
+  showsField(field: string): ArcAssertion;
+  paginated(expected?: {
+    page?: number;
+    limit?: number;
+    total?: number;
+    hasNext?: boolean;
+    hasPrev?: boolean;
+  }): ArcAssertion;
+  hasError(matcher: string | RegExp): ArcAssertion;
+  hasMeta(key: string, value?: unknown): ArcAssertion;
+}
+
+function expectArc(response: { statusCode: number; body: string }): ArcAssertion;
+```
+
+## Related
+
+- [Test App](./test-app) — the source of the `response` you pass in
+- [HTTP Harness](./http-harness) — already uses these assertions internally

@@ -5,6 +5,10 @@
  * config, presets, hooks, events. The big domain file.
  */
 
+import type {
+  FieldRule as RepoCoreFieldRule,
+  SchemaBuilderOptions,
+} from "@classytic/repo-core/schema";
 import type { FastifyInstance, FastifyReply, FastifyRequest, RouteHandlerMethod } from "fastify";
 import type { DataAdapter } from "../adapters/interface.js";
 import type { PermissionCheck, UserBase } from "../permissions/types.js";
@@ -58,7 +62,111 @@ export interface RateLimitConfig {
 // Schema types — RouteSchemaOptions, FieldRule, CrudSchemas, OpenApiSchemas
 // ──────────────────────────────────────────────────────────────────────
 
-export interface RouteSchemaOptions {
+/**
+ * Per-field rule — arc's extension of repo-core's 4-field `FieldRule` floor
+ * (`immutable`, `immutableAfterCreate`, `systemManaged`, `optional`) with
+ * the constraint / UI / security bits arc layers on top.
+ *
+ * Kept structurally compatible with `@classytic/repo-core/schema`'s
+ * `FieldRule` so arc's `fieldRules: Record<string, ArcFieldRule>` flows
+ * into mongokit's / sqlitekit's `buildCrudSchemasFromModel(..., options)`
+ * without a cast. See `RouteSchemaOptions` JSDoc for the full rationale.
+ */
+export interface ArcFieldRule extends RepoCoreFieldRule {
+  /**
+   * When `true`, bypass the `systemManaged` / `readonly` / `immutable`
+   * strip in `BodySanitizer` for callers whose request scope is
+   * `elevated`. Lets platform admins stamp the value from the request
+   * body — needed for cross-tenant admin writes where the tenant field
+   * is the only way to pick a target org.
+   *
+   * Auto-set by `defineResource` on the configured `tenantField`. Hosts
+   * can set it manually on other fields (e.g. `createdBy`) if they want
+   * elevation-only override semantics for those too.
+   *
+   * Has no effect when `isElevated(scope)` is false — member and
+   * service callers continue to have the field stripped.
+   */
+  preserveForElevated?: boolean;
+  hidden?: boolean;
+  /** String minimum length — auto-maps to OpenAPI `minLength` and MCP tool schema */
+  minLength?: number;
+  /** String maximum length — auto-maps to OpenAPI `maxLength` and MCP tool schema */
+  maxLength?: number;
+  /** Number minimum — auto-maps to OpenAPI `minimum` and MCP tool schema */
+  min?: number;
+  /** Number maximum — auto-maps to OpenAPI `maximum` and MCP tool schema */
+  max?: number;
+  /** Regex pattern — auto-maps to OpenAPI `pattern` and MCP tool schema */
+  pattern?: string;
+  /** Allowed values — auto-maps to OpenAPI `enum` and MCP tool schema */
+  enum?: ReadonlyArray<string | number>;
+  /**
+   * When `true`, widen the JSON Schema `type` of this field to also
+   * accept `null`. Mirrors Zod's `.nullable()` at the arc config layer
+   * for kit-generated schemas that don't carry the flag end-to-end
+   * (e.g. Zod → Mongoose → mongokit drops `.nullable()` because
+   * Mongoose has no first-class nullable marker unless `default: null`
+   * is also set).
+   *
+   * Applied post-kit by `mergeFieldRuleConstraints`: if the adapter
+   * emitted `{ type: 'string', enum: [...] }` for a field arc should
+   * accept null for, the merge widens it to
+   * `{ type: ['string', 'null'], enum: [...] }` — draft-7 tuple form
+   * AJV 8 validates natively.
+   *
+   * No-op when the property already declares `type: [...,'null']` or
+   * an `anyOf: [..., { type: 'null' }]` branch — arc never fights the
+   * kit's own output.
+   */
+  nullable?: boolean;
+  /** Human-readable description — auto-maps to OpenAPI `description` */
+  description?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Schema-shaping options for a resource.
+ *
+ * Extends `@classytic/repo-core/schema`'s `SchemaBuilderOptions` so every
+ * kit-generator callback typed against the repo-core contract
+ * (mongokit's `buildCrudSchemasFromModel`, sqlitekit's
+ * `buildCrudSchemasFromTable`, prismakit's equivalent) accepts arc's
+ * options bag directly — no `as SchemaBuilderOptions` / `Parameters<...>[1]`
+ * cast at the host wiring site.
+ *
+ * Inherited from `SchemaBuilderOptions`:
+ *   - `strictAdditionalProperties` — emit `additionalProperties: false`
+ *   - `dateAs` — `'date'` vs `'datetime'` ISO rendering
+ *   - `softRequiredFields` — stay in `properties`, drop from `required[]`
+ *   - `create: { omitFields, requiredOverrides, optionalOverrides, schemaOverrides }`
+ *   - `update: { omitFields, requireAtLeastOne }`
+ *   - `query: { filterableFields }` (kit-native filter declaration)
+ *   - `openApiExtensions` — emit `x-*` vendor keywords for docgen
+ *
+ * Arc adds:
+ *   - `fieldRules` with the richer `ArcFieldRule` per-entry shape
+ *     (preserveForElevated, minLength/maxLength/min/max/pattern, enum,
+ *     nullable, description) — arc's extensions are applied post-kit by
+ *     `mergeFieldRuleConstraints`; the kit only sees the repo-core floor.
+ *   - `hiddenFields` / `readonlyFields` / `requiredFields` / `optionalFields`
+ *     / `excludeFields` — arc-only convenience lists that predate fieldRules.
+ *     Keep using them if they're already in place; new code should prefer
+ *     `fieldRules` for per-field control.
+ *   - `filterableFields: string[]` — top-level list arc's MCP layer auto-
+ *     derives from `QueryParser.allowedFilterFields`. Distinct from the
+ *     inherited `query.filterableFields: Record<...>` which feeds the kit's
+ *     list-query schema; nothing stops a resource from using both.
+ *
+ * **Why extend rather than duplicate**: mongokit's
+ * `buildCrudSchemasFromModel(model, options: SchemaBuilderOptions)` is the
+ * canonical callback shape. Before the extension, hosts wrote
+ * `Parameters<typeof buildCrudSchemasFromModel>[1]` or
+ * `as SchemaBuilderOptions` at every wiring site — a defensive cast with
+ * no runtime effect. Extension locks the structural relationship at the
+ * type layer so the cast is compile-verified gone.
+ */
+export interface RouteSchemaOptions extends SchemaBuilderOptions {
   hiddenFields?: string[];
   readonlyFields?: string[];
   requiredFields?: string[];
@@ -67,59 +175,24 @@ export interface RouteSchemaOptions {
   /**
    * Fields allowed for filtering in list operations. MCP auto-derives
    * from `QueryParser.allowedFilterFields` when not set explicitly.
+   *
+   * Distinct from the inherited `query.filterableFields: Record<...>`
+   * from `SchemaBuilderOptions` — that entry feeds the kit's list-query
+   * JSON Schema; this one is arc's MCP-auto-derivation list.
    */
   filterableFields?: string[];
-  fieldRules?: Record<
-    string,
-    {
-      systemManaged?: boolean;
-      /**
-       * When `true`, bypass the `systemManaged` / `readonly` / `immutable`
-       * strip in `BodySanitizer` for callers whose request scope is
-       * `elevated`. Lets platform admins stamp the value from the request
-       * body — needed for cross-tenant admin writes where the tenant field
-       * is the only way to pick a target org.
-       *
-       * Auto-set by `defineResource` on the configured `tenantField`. Hosts
-       * can set it manually on other fields (e.g. `createdBy`) if they want
-       * elevation-only override semantics for those too.
-       *
-       * Has no effect when `isElevated(scope)` is false — member and
-       * service callers continue to have the field stripped.
-       */
-      preserveForElevated?: boolean;
-      hidden?: boolean;
-      immutable?: boolean;
-      immutableAfterCreate?: boolean;
-      optional?: boolean;
-      /** String minimum length — auto-maps to OpenAPI `minLength` and MCP tool schema */
-      minLength?: number;
-      /** String maximum length — auto-maps to OpenAPI `maxLength` and MCP tool schema */
-      maxLength?: number;
-      /** Number minimum — auto-maps to OpenAPI `minimum` and MCP tool schema */
-      min?: number;
-      /** Number maximum — auto-maps to OpenAPI `maximum` and MCP tool schema */
-      max?: number;
-      /** Regex pattern — auto-maps to OpenAPI `pattern` and MCP tool schema */
-      pattern?: string;
-      /** Allowed values — auto-maps to OpenAPI `enum` and MCP tool schema */
-      enum?: ReadonlyArray<string | number>;
-      /** Human-readable description — auto-maps to OpenAPI `description` */
-      description?: string;
-      [key: string]: unknown;
-    }
-  >;
-  /** Query parameter schema for OpenAPI */
-  query?: Record<string, unknown>;
   /**
-   * When `true`, emitted CRUD body schemas set `additionalProperties: false`
-   * so AJV rejects unknown fields on create / update. Honored by kit schema
-   * generators that receive this options bag (sqlitekit's
-   * `buildCrudSchemasFromTable`, pgkit's equivalent). Mongoose-based
-   * generators may ignore it — Mongoose schemas are inherently strict at
-   * the model level.
+   * Per-field rules. Richer than repo-core's `FieldRules` — arc adds
+   * `preserveForElevated`, constraint hints (`minLength`, `enum`,
+   * `nullable`, etc.), and `description` on top of the four-flag floor
+   * (`immutable`, `immutableAfterCreate`, `systemManaged`, `optional`).
+   *
+   * Structurally compatible: `Record<string, ArcFieldRule>` is assignable
+   * to repo-core's `Record<string, FieldRule>` since `ArcFieldRule extends
+   * FieldRule`. Kits see only the floor; arc's extensions are applied
+   * post-kit by `mergeFieldRuleConstraints`.
    */
-  strictAdditionalProperties?: boolean;
+  fieldRules?: Record<string, ArcFieldRule>;
 }
 
 export interface FieldRule {

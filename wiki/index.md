@@ -33,6 +33,7 @@ One-line hooks per page. Load only what you need.
 - [security](security.md) — checklist when touching auth/perms/data
 
 ## History
+- [changelog-v2.11](changelog-v2.11.md) — BaseController mixin split, testing rewrite, action-router parity, commerce follow-ups
 - [changelog-v2.10](changelog-v2.10.md) — permissions split, plugin onSend fix, repo adapters
 - [changelog-v2.9](changelog-v2.9.md) — event contract v2, outbox, multiTenant UPDATE fix
 - [removed](removed.md) — APIs removed per version, with replacements

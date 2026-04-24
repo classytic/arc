@@ -233,15 +233,16 @@
     "test:e2e": "vitest run tests/e2e",
     "test:unit": "vitest run tests/core tests/hooks tests/utils tests/plugins",
     "smoke": "node scripts/smoke-test.mjs",
+    "push": "classytic-push",
     "prepublishOnly": "npm run typecheck && npm run lint && npm run build && npm run test:ci && npm run smoke"
   },
   "engines": {
     "node": ">=22"
   },
   "peerDependencies": {
-    "@classytic/mongokit": ">=3.11.0",
+    "@classytic/mongokit": ">=3.11.1",
     "@classytic/repo-core": ">=0.2.0",
-    "@classytic/streamline": ">=2.1.0",
+    "@classytic/streamline": ">=2.2.0",
     "@fastify/cors": ">=11.0.0",
     "@fastify/helmet": ">=13.0.0",
     "@fastify/jwt": ">=10.0.0",
@@ -363,10 +364,11 @@
     "@better-auth/drizzle-adapter": "^1.6.2",
     "@better-auth/mongo-adapter": "^1.6.2",
     "@biomejs/biome": "^2.4.11",
-    "@classytic/mongokit": "^3.11.0",
+    "@classytic/dev-tools": "^0.2.0",
+    "@classytic/mongokit": "^3.11.1",
     "@classytic/repo-core": "^0.2.0",
     "@classytic/sqlitekit": "^0.2.0",
-    "@classytic/streamline": "^2.1.0",
+    "@classytic/streamline": "^2.2.0",
     "@fastify/cors": "^11.2.0",
     "@fastify/helmet": "^13.0.2",
     "@fastify/jwt": "^10.0.0",

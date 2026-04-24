@@ -20,22 +20,19 @@
 import { z } from "zod";
 import { resolveActionPermission } from "../../core/actionPermissions.js";
 import type { ResourceDefinition } from "../../core/defineResource.js";
+import { normalizeSchemaIR, schemaIRToZodShape } from "../../core/schemaIR.js";
 import type { PermissionCheck } from "../../permissions/types.js";
 import type { ResourcePermissions } from "../../types/index.js";
 import { pluralize } from "../../utils/pluralize.js";
+import { convertActionSchemaToZod, createActionToolHandler } from "./action-tools.js";
 import {
   ALL_CRUD_OPS,
   CRUD_ANNOTATIONS,
   createCrudHandler,
   defaultCrudDescription,
 } from "./crud-tools.js";
-import { createActionToolHandler, convertActionSchemaToZod } from "./action-tools.js";
-import { type FieldRuleEntry } from "./fieldRulesToZod.js";
-import {
-  buildInputSchema,
-  deriveFieldRulesFromAdapter,
-  getAdapterBodies,
-} from "./input-schema.js";
+import type { FieldRuleEntry } from "./fieldRulesToZod.js";
+import { buildInputSchema, deriveFieldRulesFromAdapter, getAdapterBodies } from "./input-schema.js";
 import {
   createCustomRouteHandler,
   createMcpHandlerPassthrough,
@@ -176,12 +173,39 @@ export function resourceToTools(
       ? { ...mcpConfig.annotations }
       : { openWorldHint: true };
 
+    // Build input schema from route.schema (body + querystring) — mirrors
+    // the REST contract so authors declare validation once. Without this,
+    // MCP tools had only `id` in their input, forcing hosts to reason about
+    // two parallel contracts for the same route.
+    //
+    // Priority:
+    //   - schema.body (POST/PUT/PATCH/DELETE) — the primary input surface
+    //   - schema.querystring merged IN ADDITION for routes that care about
+    //     query params from MCP callers
+    // The IR preserves `additionalProperties` — strict routes can be wired
+    // the same way actions are.
     const inputShape: Record<string, z.ZodTypeAny> = {};
     if (hasId) inputShape.id = z.string().describe("Resource ID");
 
-    const toolName = prefix
-      ? `${prefix}_${opName}_${resource.name}`
-      : `${opName}_${resource.name}`;
+    const routeSchema = route.schema as
+      | { body?: Record<string, unknown>; querystring?: Record<string, unknown> }
+      | undefined;
+    if (routeSchema?.body) {
+      const ir = normalizeSchemaIR(routeSchema.body);
+      for (const [key, val] of Object.entries(schemaIRToZodShape(ir))) {
+        inputShape[key] = val;
+      }
+    }
+    if (routeSchema?.querystring) {
+      const ir = normalizeSchemaIR(routeSchema.querystring);
+      for (const [key, val] of Object.entries(schemaIRToZodShape(ir))) {
+        // Don't clobber body fields with querystring fields of the same
+        // name — body wins (it's the primary input channel for mutations).
+        if (!(key in inputShape)) inputShape[key] = val;
+      }
+    }
+
+    const toolName = prefix ? `${prefix}_${opName}_${resource.name}` : `${opName}_${resource.name}`;
 
     tools.push({
       name: toolName,
@@ -190,7 +214,12 @@ export function resourceToTools(
       inputSchema: inputShape,
       handler: mcpHandler
         ? createMcpHandlerPassthrough(mcpHandler)
-        : createCustomRouteHandler(route, controller, hasId),
+        : createCustomRouteHandler(route, controller, hasId, {
+            resourceName: resource.name,
+            operationName: opName,
+            permissions: route.permissions,
+            pipeline: resource.pipe,
+          }),
     });
   }
 
@@ -200,8 +229,7 @@ export function resourceToTools(
       const def = typeof entry === "function" ? { handler: entry } : entry;
       if (typeof def !== "function" && "mcp" in def && def.mcp === false) continue;
 
-      const mcpCfg =
-        typeof def !== "function" && typeof def.mcp === "object" ? def.mcp : undefined;
+      const mcpCfg = typeof def !== "function" && typeof def.mcp === "object" ? def.mcp : undefined;
       const description =
         (mcpCfg as Record<string, unknown> | undefined)?.description ??
         (typeof def !== "function" ? def.description : undefined) ??
@@ -251,6 +279,10 @@ export function resourceToTools(
           actionPerms as PermissionCheck | undefined,
           resource.name,
           resource.permissions,
+          // Thread the raw schema through so the handler can enforce
+          // `additionalProperties: false` at request time — HTTP AJV handles
+          // this natively via the oneOf branches, MCP handles it here.
+          rawSchema as Record<string, unknown> | undefined,
         ),
       });
     }

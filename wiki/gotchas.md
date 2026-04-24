@@ -2,7 +2,7 @@
 
 **Summary**: Things that bite if you don't know about them. Each has a number used across wiki links.
 **Sources**: AGENTS.md §6, CLAUDE.md.
-**Last updated**: 2026-04-24 (v2.11 additions).
+**Last updated**: 2026-04-24 (v2.11 additions + #25 action-router parity).
 
 ---
 
@@ -53,6 +53,8 @@
 23. **Schema-generation errors warn instead of silently passing (v2.11).** If `adapter.generateSchemas()` / `convertOpenApiSchemas()` / the query-schema merge throws, the resource still boots (non-fatal) but `arcLog("defineResource").warn(...)` now fires with the resource name + error. Pre-2.11 `} catch {}` hid contract drift between OpenAPI docs and runtime. Honors `ARC_SUPPRESS_WARNINGS=1`. See [[core]].
 
 24. **`resourceToTools` split into 4 units (v2.11).** When editing MCP tool generation, go to the matching file — `crud-tools.ts`, `route-tools.ts`, `action-tools.ts`, or `input-schema.ts`. `resourceToTools.ts` is now a 260-LOC orchestrator; edits there should be rare. Shared helpers live in `tool-helpers.ts`. See [[mcp]].
+
+25. **Action routes share the canonical preHandler order with CRUD (v2.11).** `createActionRouter` installs `buildActionPermissionMw` into the `permissionMw` slot of `buildPreHandlerChain` — same position CRUD uses. Ordering: `preAuth → arc → auth → permission → pluginMw → routeGuards`. Pre-2.11.0 the per-action permission check ran inside the route handler (after `pluginMw` + `routeGuards`), so `idempotencyMw` recorded unauthorized requests and guards saw unfiltered `request.scope` / `_policyFilters`. Three co-landing fixes: (a) `buildActionPipelineHandler` returns `Promise<IControllerResponse<unknown>>` so pipeline interceptors that fail with `{success:false, status, error, details, meta}` flow straight to the client with every field intact; (b) invalid-action 400s route through `sendControllerResponse` in both the prehandler and the defensive fallback — one wire shape; (c) `buildAuthMiddlewareForPermissions` accepts `ReadonlyArray<PermissionCheck | undefined>` and treats undefined as "public by omission" so `{ ping: undefined, promote: requireRoles([...]) }` doesn't 401 the public action. See [src/core/routerShared.ts](../src/core/routerShared.ts) and [[core]].
 
 ## Related
 - [[rules]]? — see [[identity]] for non-negotiables

@@ -41,7 +41,10 @@ function makeResourceWithActions(overrides: Partial<ResourceDefinition> = {}): R
           carrier: data.carrier,
         }),
         permissions: allowPublic(),
-        schema: { carrier: { type: "string" } },
+        schema: {
+          type: "object",
+          properties: { carrier: { type: "string" } },
+        },
         description: "Dispatch the order",
       },
       hidden: {

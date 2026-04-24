@@ -1,0 +1,135 @@
+---
+description: Trace the tenantField auto-inject pipeline end-to-end. Debug why your tenant rule vanished, which stage stripped it, and how to prove it at each step.
+---
+
+# The tenantField pipeline — debug guide
+
+Arc's multi-tenant layer runs three transforms on your resource between `defineResource()` and the first HTTP request: **auto-inject** a `fieldRules` entry for the tenant field, **forward** it to adapter schema generators, then **strip** it from the wire contract's `required[]`. At request time a fourth transform runs — **BodySanitizer** removes the tenant field from inbound payloads unless the scope is elevated.
+
+When the pipeline works you never notice it — `organizationId` gets stamped from `req.scope.orgId` and clients never need to send it. When it fails, the symptom is usually one of:
+
+- `400 "must have required property 'organizationId'"` — Fastify preValidation rejected before arc's injection ran
+- `403 "tenant mismatch"` — a member client forged the field and sanitize didn't strip it
+- The rule is just… gone from the generated OpenAPI doc, with no error
+
+This page traces the pipeline step by step so you can pinpoint which transform dropped your rule.
+
+## The five stages, in order
+
+```
+1. declare            → tenantField: 'organizationId' on resource or preset
+2. autoInjectTenant   → fieldRules[tenantField] = { systemManaged, preserveForElevated }
+3. adapter schemagen  → generateSchemas(resolvedSchemaOptions) per adapter
+4. stripRequired      → remove systemManaged fields from createBody.required[]
+5. BodySanitizer      → request-time strip from inbound bodies
+```
+
+Each stage reads from `resolvedConfig`, the post-preset, post-auto-inject canonical copy built in [`defineResource.ts`](../../src/core/defineResource.ts). **Never** read `config.schemaOptions` directly — that's the pre-inject raw shape and it's a well-known source of half-wired features.
+
+### Stage 1 — declaration
+
+Two valid paths:
+
+```typescript
+// Direct on the resource
+defineResource({
+  name: 'order',
+  tenantField: 'organizationId',  // ← explicit
+  adapter,
+});
+
+// Via preset (multiTenant bundles auth, middleware, and the tenantField)
+defineResource({
+  name: 'order',
+  presets: ['multiTenant'],        // ← tenantField resolved by preset
+  adapter,
+});
+```
+
+Resolution happens in [`applyPresets`](../../src/core/defineResource.ts) before auto-inject. Multiple presets merge deep — `fieldRules` is accumulated across all of them.
+
+**To disable tenant scoping** on a platform-universal resource, pass `tenantField: false`. `undefined` also disables it (no tenant infrastructure ever wires up).
+
+### Stage 2 — `autoInjectTenantFieldRules`
+
+[`src/core/schemaOptions.ts`](../../src/core/schemaOptions.ts): returns a fresh `RouteSchemaOptions` (input never mutated). Adds to `fieldRules[tenantField]`:
+
+```typescript
+{
+  systemManaged: true,       // strip from inbound bodies + required[]
+  preserveForElevated: true, // platform admins CAN send this field
+}
+```
+
+**No-op branches** — if any of these fire, your rule won't exist:
+
+| Condition | Result |
+|---|---|
+| `tenantField === false` | No injection. Platform-universal resource by design. |
+| `tenantField === undefined` | No injection. You didn't declare tenant scoping. |
+| `fieldRules[tenantField].systemManaged` was already set (true **or** false) | No injection. Explicit opt-out respected — arc assumes you know what you're doing. |
+
+**Debug step**: log `resolvedConfig.schemaOptions.fieldRules` right after `defineResource()` returns. If `[tenantField]` is missing, one of the three conditions above fired. Check if a preset or a host line declared `systemManaged` explicitly and dropped auto-inject.
+
+### Stage 3 — adapter schema generation
+
+Every adapter's `generateSchemas(schemaOptions, context)` receives the post-inject `schemaOptions`:
+
+- `createMongooseAdapter` with mongokit's `buildCrudSchemasFromModel` — [`src/adapters/mongoose.ts`](../../src/adapters/mongoose.ts) forwards `schemaOptions` to the kit, then calls `mergeFieldRuleConstraints` to layer portable constraints (`minLength`, `enum`, `nullable`, etc.) onto the kit's output.
+- `createDrizzleAdapter` — same pattern.
+- Built-in mongoose fallback — walks `fieldRules` inline and applies the same constraints.
+
+`mergeFieldRuleConstraints` in [`src/adapters/field-rule-helpers.ts`](../../src/adapters/field-rule-helpers.ts) is **post-processing only**: it walks `createBody` / `updateBody` / `response` and fills gaps. Existing kit constraints always win. Note what it does **not** do: `systemManaged` metadata itself isn't applied here — it's consulted at stage 4 and at request time.
+
+**Debug step**: if a custom adapter doesn't forward `schemaOptions` to its schema generator, `mergeFieldRuleConstraints` never sees the tenant rule. Symptom: `fieldRules` appears in `resolvedConfig` but not in the generated OpenAPI. Fix by accepting `schemaOptions` as the first parameter of `generateSchemas`, forwarding to the kit, and calling `mergeFieldRuleConstraints(generated, schemaOptions)`.
+
+### Stage 4 — `stripSystemManagedFromBodyRequired`
+
+[`src/core/schemaOptions.ts`](../../src/core/schemaOptions.ts): removes `systemManaged: true` fields from `createBody.required[]` and `updateBody.required[]`. **Does not touch `properties`** — elevated admins can still send the field.
+
+**Why this stage exists**: mongokit (and any `@classytic/primitives`-backed engine) defaults `tenant: { required: true }` at the DB layer, so adapters faithfully emit `required: ['organizationId']`. Fastify v5's preValidation runs **before** arc's preHandler chain — the tenant-injection middleware never gets a chance if the request is rejected at schema validation first. Stripping from `required[]` lets arc's middleware fill in the value post-validation.
+
+**Debug step**: run `GET /openapi.json` and check `components.schemas.OrderCreateBody.required`. If the tenant field is still there, either `systemManaged` didn't reach the generated schema (stage 3 problem) or `stripSystemManagedFromBodyRequired` wasn't called (custom adapter skipped the helper).
+
+### Stage 5 — `BodySanitizer` at request time
+
+[`src/core/BodySanitizer.ts`](../../src/core/BodySanitizer.ts): called from `BaseCrudController.create` / `update` before the body reaches the repository. For each `fieldRules[field]` with `systemManaged: true`:
+
+- Scope is **elevated** AND `preserveForElevated: true` → field **kept** (admin override path).
+- Otherwise → field **deleted**.
+
+Member callers never write the tenant field; the controller then stamps it from `scope.orgId` just before the DB call.
+
+**Debug step**: if an API call succeeds but writes the wrong `organizationId`, either (a) the scope was unexpectedly elevated, or (b) `BodySanitizer` didn't run. The second happens if a custom controller overrode `create`/`update` and bypassed `super.create()`.
+
+## The `onFieldWriteDenied` setting
+
+By default, `BodySanitizer` rejects (`403 Forbidden`) when a member client sends a `systemManaged` field. Some teams prefer silent strip — add to `defineResource`:
+
+```typescript
+defineResource({
+  name: 'order',
+  onFieldWriteDenied: 'strip',  // default: 'reject'
+});
+```
+
+Strip mode keeps the request alive and just deletes the field. Reject mode surfaces the misbehavior to the client. Pick reject when you want clients to fix their bugs; pick strip when you want backwards compatibility during a migration.
+
+## Debugging checklist
+
+When a tenant rule appears to vanish, work down the pipeline in order:
+
+1. **`resolvedConfig.schemaOptions.fieldRules[tenantField]` exists?** — if not, stage 2 no-op fired. Check `tenantField` value and whether a preset / host set `systemManaged` explicitly.
+2. **Generated `createBody.properties[tenantField]` exists?** — if not, the adapter's schemaGenerator dropped it. Check the kit-specific omission list (mongokit has `create.omitFields`).
+3. **`createBody.required[]` excludes the tenant field?** — if not, `stripSystemManagedFromBodyRequired` didn't run. Check that your adapter factory returns through arc's standard helper.
+4. **Inbound body has `tenantField` stripped at the handler?** — if not, `BodySanitizer` didn't run. Check custom controller overrides.
+5. **`scope.orgId` stamped onto the record?** — if not, middleware order is wrong. `multiTenantPreset` must wire scope resolution before the controller runs.
+
+Fifteen lines of `console.log` at each stage will isolate the break in under five minutes. If you still can't find it, the pre-inject `config.schemaOptions` vs post-inject `resolvedConfig.schemaOptions` is almost always the answer — somebody read the wrong one.
+
+## Related
+
+- [Org module](../getting-started/org.mdx) — the user-facing setup guide
+- [Factory and app bootstrap](./factory.mdx) — preset ordering
+- [Custom adapters — Field Rules](../framework-extension/custom-adapters.mdx#field-rules--shaping-kit-generated-schemas) — `systemManaged` decision table
+- [CHANGELOG `systemManaged` fields stripped from body-schema required](../../CHANGELOG.md) — the historical incident that drove stage 4

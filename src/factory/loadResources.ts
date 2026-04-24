@@ -260,6 +260,20 @@ export async function loadResources(
       );
       for (const f of skipped) log.warn(`  - ${f}`);
     }
+    // v2.11 — warn when discovery itself yielded nothing. Covers the
+    // "host called loadResources() manually and got back []" path that
+    // bypasses the resourceDir WARN in registerResources. The reporter's
+    // deploy hit exactly this silent case: `loadResources(import.meta.url)`
+    // from inside `dist/` resolved to a directory with no `.resource.js`
+    // files (wrong build output layout) and returned `[]`; `createApp`
+    // booted with only auth routes.
+    if (resources.length === 0 && files.length === 0) {
+      log.warn(
+        `[arc] loadResources: 0 matching files found at "${absDir}" ` +
+          `(pattern: *${suffix}.{ts,js,mts,mjs}). ` +
+          "Check the path and runtime layout (src/ vs dist/).",
+      );
+    }
   }
 
   return resources;

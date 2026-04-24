@@ -22,7 +22,7 @@
  * `updateBody`. `properties` is left intact so elevated admins (whose
  * scope lacks a pinned org) can still pick a target org via the body.
  *
- * See `src/core/schemaOptions.ts :: stripTenantFieldFromBodyRequired`.
+ * See `src/core/schemaOptions.ts :: stripSystemManagedFromBodyRequired`.
  */
 
 import { describe, expect, it } from "vitest";

@@ -6,6 +6,7 @@ export default {
   workflows: 'Workflows & Compensation',
   idempotency: 'Idempotency',
   audit: 'Audit',
+  'tenant-pipeline': 'Tenant Field Pipeline (Debug Guide)',
   'offline-sync': 'Offline Sync (Recipe)',
   openapi: 'OpenAPI',
   mcp: 'MCP (AI Agent Tools)',

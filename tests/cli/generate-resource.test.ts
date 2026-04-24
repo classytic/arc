@@ -127,7 +127,9 @@ describe("arc generate resource — TypeScript + MongoKit", () => {
     const content = await readText(filePath);
     expect(content).toContain("Product Resource");
     expect(content).toContain("productResource");
-    expect(content).toContain("createMinimalTestApp");
+    // 2.11 testing surface — createTestApp + expectArc
+    expect(content).toContain("createTestApp");
+    expect(content).toContain("expectArc");
     expect(content).toContain("/products");
   });
 });

@@ -377,6 +377,34 @@ describe('ReportController', () => {
 
 ---
 
+## Pattern 3: Mixins vs. `routes` — which one for preset-shaped endpoints?
+
+Arc ships four preset mixins (`SlugMixin`, `TreeMixin`, `SoftDeleteMixin`, `BulkMixin`) that auto-generate routes when the repository implements the corresponding methods (`getBySlug`, `getTree` / `getChildren`, `getDeleted` / `restore`, `bulkCreate` / etc.). You can also write the same endpoints by hand via `routes: [{ path: '/by-slug/:slug', raw: true, handler }]`.
+
+These two paths produce the same URL from a user's perspective but look completely different in the resource file — and there's a **silent hazard** if you mix them. Pick one per endpoint.
+
+### Decision table
+
+| Need | Use |
+|------|------|
+| Slug lookup (`/by-slug/:slug`) on a repo with `getBySlug` | `SlugMixin` + `BaseCrudController` subclass |
+| Slug lookup with custom body (joins, projections, extra auth) | `routes: [{ path: '/slug/:slug', raw: true, handler }]` + **delete `adapter.getBySlug`** |
+| Soft-delete endpoints (`/deleted`, `/:id/restore`) | `SoftDeleteMixin` + repo implements `getDeleted` + `restore` |
+| Tree traversal (`/tree`, `/:parent/children`) | `TreeMixin` + repo implements `getTree` + `getChildren` |
+| Bulk create/update/delete (`/bulk`, `/bulk/delete`) | `BulkMixin` + repo implements the bulk methods |
+| Any of the above with logic that doesn't fit the preset | Hand-rolled `routes: [...]`, mixin NOT composed |
+
+### ⚠️ URL collisions silently disable mixins
+
+If a resource declares `routes: [{ path: '/by-slug/:slug', ... }]` AND composes `SlugMixin`, the `routes` entry wins — Fastify mounts it first, and the mixin's auto-generated route never reaches the router. The `repo.getBySlug` method still exists, but no HTTP path invokes it: it's unreachable code living on the adapter.
+
+This is the most common cause of "dead repository methods" in arc codebases. Before the 2.11.x decision table existed, a production refactor left ~185 LOC of `getBySlug` / `getTree` / `getChildren` boilerplate on a `createMongooseAdapter` wrapper that hadn't been exercised for weeks — the resource file used hand-rolled `routes:` entries that took precedence. After the table was added, the same refactor shrinks to ~40 LOC of genuine domain logic.
+
+### Rule of thumb
+
+- **Repo has the method + endpoint shape matches the mixin** → compose the mixin, delete the hand-rolled route.
+- **Endpoint needs extras the mixin can't provide** (joins, projections, per-request auth) → hand-rolled route, and delete the mixin-named method from the adapter so nobody thinks it's live.
+
 ## Summary
 
 - **Default to Arc Context Pattern** (omit `raw`, i.e. the default) for 90% of your routes
@@ -386,5 +414,6 @@ describe('ReportController', () => {
   - Custom headers
   - Redirects
   - Non-JSON responses
+- **For preset-shaped endpoints (slug / tree / soft-delete / bulk)**, consult the [decision table above](#pattern-3-mixins-vs-routes--which-one-for-preset-shaped-endpoints) and pick ONE path — never mix.
 
 Both patterns work great - just pick the right one for your use case! 🚀

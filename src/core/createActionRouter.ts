@@ -1,66 +1,85 @@
 /**
  * Action Router Factory (Stripe Pattern)
  *
- * Consolidates multiple state-transition endpoints into a single unified action endpoint.
- * Instead of separate endpoints for each action (approve, dispatch, receive, cancel),
- * this creates one endpoint: POST /:id/action
+ * Consolidates multiple state-transition endpoints into a single unified
+ * action endpoint: `POST /:id/action`. Instead of one route per action
+ * (approve, dispatch, receive, cancel), one route discriminates on
+ * `body.action`.
  *
- * Benefits:
- * - 40% fewer endpoints
- * - Consistent permission checking
- * - Self-documenting via action enum
- * - Type-safe action validation
- * - Single audit point for all state transitions
+ * Actions share every cross-cutting concern with the CRUD router
+ * (`createCrudRouter`) via the primitives in `routerShared` — field masking,
+ * auth/permission middleware, pipeline execution, `arcDecorator`, idempotency
+ * middleware, and rate-limit config. This is the single source of truth for
+ * action route assembly; divergence between CRUD and actions is now a build-
+ * time type mismatch, not a silent runtime hole.
+ *
+ * Response shape is standardised through `sendControllerResponse`, so
+ * field-level `fields.hidden() / visibleTo() / writableBy()` permissions
+ * apply to action responses exactly like CRUD responses.
  *
  * @example
+ * ```typescript
  * import { createActionRouter } from '@classytic/arc/core';
  * import { requireRoles } from '@classytic/arc/permissions';
  *
  * createActionRouter(fastify, {
  *   tag: 'Inventory - Transfers',
+ *   resourceName: 'transfer',
  *   actions: {
- *     approve: async (id, data, req) => transferService.approve(id, req.user),
+ *     approve: async (id, _data, req) => transferService.approve(id, req.user),
  *     dispatch: async (id, data, req) => transferService.dispatch(id, data.transport, req.user),
- *     receive: async (id, data, req) => transferService.receive(id, data, req.user),
- *     cancel: async (id, data, req) => transferService.cancel(id, data.reason, req.user),
+ *     receive:  async (id, data, req) => transferService.receive(id, data, req.user),
+ *     cancel:   async (id, data, req) => transferService.cancel(id, data.reason, req.user),
  *   },
  *   actionPermissions: {
- *     approve: requireRoles(['admin', 'warehouse-manager']),
+ *     approve:  requireRoles(['admin', 'warehouse-manager']),
  *     dispatch: requireRoles(['admin', 'warehouse-staff']),
- *     receive: requireRoles(['admin', 'store-manager']),
- *     cancel: requireRoles(['admin']),
+ *     receive:  requireRoles(['admin', 'store-manager']),
+ *     cancel:   requireRoles(['admin']),
  *   },
- *   actionSchemas: {
- *     dispatch: {
- *       transport: { type: 'object', properties: { driver: { type: 'string' } } }
- *     },
- *     cancel: {
- *       reason: { type: 'string', minLength: 10 }
- *     },
- *   }
  * });
+ * ```
  */
 
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import {
-  applyPermissionResult,
-  normalizePermissionResult,
-} from "../permissions/applyPermissionResult.js";
+import type { FastifyReply, FastifyRequest, RouteHandlerMethod } from "fastify";
+
+import type { FieldPermissionMap } from "../permissions/fields.js";
+import type { PermissionCheck } from "../permissions/types.js";
+import type { PipelineConfig } from "../pipeline/types.js";
 import type {
-  PermissionCheck,
-  PermissionContext,
-  PermissionResult,
+  FastifyWithDecorators,
+  IControllerResponse,
+  RateLimitConfig,
   RequestWithExtras,
-  UserBase,
+  RouteSchemaOptions,
 } from "../types/index.js";
-import { toJsonSchema } from "../utils/schemaConverter.js";
+import { sendControllerResponse } from "./fastifyAdapter.js";
+import {
+  buildActionPermissionMw,
+  buildActionPipelineHandler,
+  buildArcDecorator,
+  buildAuthMiddlewareForPermissions,
+  buildPreHandlerChain,
+  buildRateLimitConfig,
+  resolvePipelineSteps,
+  resolveRouterPluginMw,
+  selectPluginMw,
+} from "./routerShared.js";
+import { normalizeSchemaIR, schemaIRToJsonSchemaBranch } from "./schemaIR.js";
+
+// ============================================================================
+// Types
+// ============================================================================
 
 /**
- * Action handler function
- * @param id - Resource ID
- * @param data - Action-specific data from request body
- * @param req - Full Fastify request object
- * @returns Action result (will be wrapped in success response)
+ * Action handler.
+ *
+ * @param id   - Resource ID (route param)
+ * @param data - Request body with the `action` discriminator stripped
+ * @param req  - Full Fastify request (user, scope, headers, policy filters)
+ * @returns    - Raw result, wrapped by the router into an `IControllerResponse`
+ *               and sent through `sendControllerResponse` (so field masking
+ *               applies).
  */
 export type ActionHandler<TData = Record<string, unknown>, TResult = unknown> = (
   id: string,
@@ -69,45 +88,36 @@ export type ActionHandler<TData = Record<string, unknown>, TResult = unknown> = 
 ) => Promise<TResult>;
 
 /**
- * Action router configuration
+ * Action router configuration.
+ *
+ * `resourceName`, `fields`, `permissions`, `routeGuards`, and `pipeline`
+ * are threaded through from `defineResource` so action routes share the
+ * resource's cross-cutting wiring. Direct `createActionRouter` callers
+ * can still omit them — the router falls back to sensible defaults.
  */
 export interface ActionRouterConfig {
-  /**
-   * OpenAPI tag for grouping routes
-   */
+  /** OpenAPI tag for grouping routes */
   readonly tag?: string;
 
-  /**
-   * Action handlers map
-   * @example { approve: (id, data, req) => service.approve(id), ... }
-   */
+  /** Logical resource name for `req.arc` and permission contexts */
+  readonly resourceName?: string;
+
+  /** Action handlers map */
   readonly actions: Record<string, ActionHandler>;
 
-  /**
-   * Per-action permission checks (PermissionCheck functions)
-   * @example { approve: requireRoles(['admin', 'manager']), cancel: requireRoles(['admin']) }
-   */
+  /** Per-action permission checks */
   readonly actionPermissions?: Record<string, PermissionCheck>;
 
   /**
-   * Per-action schema for body validation.
+   * Per-action body schema. Accepted shapes:
    *
-   * Accepted shapes per action:
+   * 1. Full JSON Schema with `type: 'object'`, `properties`, `required`
+   * 2. Zod v4 schema — auto-converted via `z.toJSONSchema()`
    *
-   * 1. **Full JSON Schema object** with `type: 'object'`, `properties`, `required` —
-   *    used verbatim. Required fields ARE enforced by Fastify's AJV.
+   * Compiled into a single `oneOf` discriminator body schema so AJV
+   * validates action-specific required fields at the HTTP layer.
    *
-   * 2. **Zod v4 schema** — auto-converted via `z.toJSONSchema()`. Required fields
-   *    ARE enforced.
-   *
-   * 3. **Legacy field map** `{ fieldName: { type: 'string' } }` — each key becomes
-   *    a property and is treated as REQUIRED unless the property schema has
-   *    `nullable: true` or Arc's sentinel `required: false`. Kept for back-compat.
-   *
-   * All shapes are compiled into a single `oneOf` discriminator body schema
-   * so AJV can validate action-specific required fields at the HTTP layer.
-   *
-   * @example JSON Schema
+   * @example
    * ```ts
    * actionSchemas: {
    *   dispatch: {
@@ -117,69 +127,68 @@ export interface ActionRouterConfig {
    *   },
    * }
    * ```
-   *
-   * @example Zod v4
-   * ```ts
-   * actionSchemas: {
-   *   dispatch: z.object({ carrier: z.string() }),
-   * }
-   * ```
    */
   readonly actionSchemas?: Record<string, Record<string, unknown>>;
 
-  /**
-   * Global permission check applied to all actions (if action-specific not defined)
-   */
+  /** Global permission applied when no per-action check is declared */
   readonly globalAuth?: PermissionCheck;
 
-  /**
-   * Optional idempotency service
-   * If provided, will handle idempotency-key header
-   */
-  readonly idempotencyService?: IdempotencyService;
-
-  /**
-   * Custom error handler for action execution failures
-   * @param error - The error thrown by action handler
-   * @param action - The action that failed
-   * @param id - The resource ID
-   * @returns Status code and error response
-   */
+  /** Custom error shaper for action-handler throws */
   readonly onError?: (
     error: Error,
     action: string,
     id: string,
   ) => { statusCode: number; error: string; code?: string };
+
+  /** Field-level permissions for response masking (threaded from resource.fields) */
+  readonly fields?: FieldPermissionMap;
+
+  /** Schema options for `req.arc` (used by hook system + body sanitizer) */
+  readonly schemaOptions?: RouteSchemaOptions;
+
+  /** Resource-level permissions (for `req.arc.permissions`) */
+  readonly permissions?: Record<string, PermissionCheck>;
+
+  /** Route guards (applied to the action endpoint — after auth, before handler) */
+  readonly routeGuards?: RouteHandlerMethod[];
+
+  /** Pipeline config — steps keyed by action name run around the handler */
+  readonly pipeline?: PipelineConfig;
+
+  /** Rate limit override (per-route Fastify config) */
+  readonly rateLimit?: RateLimitConfig | false;
 }
 
-/**
- * Idempotency service interface
- * Apps can provide their own implementation
- */
-export interface IdempotencyService {
-  check(key: string, payload: unknown): Promise<{ isNew: boolean; existingResult?: unknown }>;
-  complete(key: string | undefined, result: unknown): Promise<void>;
-  fail(key: string | undefined, error: Error): Promise<void>;
-}
+// ============================================================================
+// Main entry point
+// ============================================================================
 
 /**
- * Create action-based state transition endpoint
+ * Register the unified action endpoint: `POST /:id/action`.
  *
- * Registers: POST /:id/action
- * Body: { action: string, ...actionData }
- *
- * @param fastify - Fastify instance
- * @param config - Action router configuration
+ * Shares every lifecycle primitive with the CRUD router — the preHandler
+ * chain, the arc decorator, idempotency, rate-limit, and the response
+ * shaper. The only thing that stays local is the dynamic permission check
+ * (keyed by `body.action` at request time).
  */
-export function createActionRouter(fastify: FastifyInstance, config: ActionRouterConfig): void {
+export function createActionRouter(
+  fastify: FastifyWithDecorators,
+  config: ActionRouterConfig,
+): void {
   const {
     tag,
+    resourceName = tag ?? "action",
     actions,
     actionPermissions = {},
     actionSchemas = {},
     globalAuth,
-    idempotencyService,
     onError,
+    fields: fieldPermissions,
+    schemaOptions,
+    permissions: resourcePermissions,
+    routeGuards = [],
+    pipeline,
+    rateLimit,
   } = config;
 
   const actionEnum = Object.keys(actions);
@@ -189,8 +198,7 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
     return;
   }
 
-  // Build discriminated body schema — AJV enforces required fields per action.
-  // Each action gets its own branch in a `oneOf` array with `action: { const: <name> }`.
+  // Discriminated body schema — AJV enforces required fields per action.
   const bodySchema = buildActionBodySchema(actionEnum, actionSchemas);
 
   const routeSchema = {
@@ -199,178 +207,152 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
     description: buildActionDescription(actions, actionPermissions),
     params: {
       type: "object",
-      properties: {
-        id: { type: "string", description: "Resource ID" },
-      },
+      properties: { id: { type: "string", description: "Resource ID" } },
       required: ["id"],
     },
     body: bodySchema,
-    // No response schema — action handlers return dynamic shapes
-    // (Mongoose documents, composite objects, etc.) that cannot be
-    // described with a static JSON Schema.  Fastify will serialize
-    // them with plain JSON.stringify, which honours toJSON().
+    // No response schema — action handlers return dynamic shapes that cannot
+    // be described with a single static JSON Schema. Fastify serializes them
+    // with plain JSON.stringify, which honours toJSON() on documents.
   };
 
-  // Build preHandlers
-  const preHandler = [];
+  // Arc metadata decorator — same wiring that CRUD uses, so
+  // `sendControllerResponse` can read `req.arc.fields` for field masking.
+  const arcDecorator = buildArcDecorator({
+    resourceName,
+    schemaOptions,
+    permissions: resourcePermissions,
+    hooks: fastify.arc?.hooks,
+    events: fastify.events,
+    fields: fieldPermissions,
+  });
 
-  // Determine which actions require authentication
-  const hasPublicActions =
-    Object.entries(actionPermissions).some(([, p]) => (p as PermissionCheck)?._isPublic) ||
-    (globalAuth && (globalAuth as PermissionCheck)?._isPublic);
-  const hasProtectedActions =
-    Object.entries(actionPermissions).some(([, p]) => !(p as PermissionCheck)?._isPublic) ||
-    (globalAuth && !(globalAuth as PermissionCheck)?._isPublic);
+  // Auth — pick the right decorator for the whole action endpoint given the
+  // mix of per-action permissions. Mixed public/protected uses
+  // `optionalAuthenticate` so public actions don't 401 on missing tokens;
+  // protected actions still fail-closed via the per-action permission check
+  // when `req.user` is null.
+  //
+  // `globalAuth` is only the fallback for actions without a per-action check —
+  // applied via `??` so it fills the gap without masquerading as a separate
+  // action. An action whose per-action permission is `undefined` AND has no
+  // `globalAuth` fallback stays `undefined` in the resolved array — and that
+  // undefined is semantically "public by omission" to
+  // `buildAuthMiddlewareForPermissions`. Filtering undefineds out (as an
+  // earlier version did) silently broke mixed omitted-public + protected
+  // endpoints: `{ ping: undefined, promote: requireRoles([...]) }` collapsed
+  // to "all protected" and 401'd the public `ping` action at the auth layer
+  // before the per-action permission check could let it through.
+  const perActionPermissions: Array<PermissionCheck | undefined> = actionEnum.map(
+    (name) => actionPermissions[name] ?? globalAuth,
+  );
+  const authMw = buildAuthMiddlewareForPermissions(fastify, perActionPermissions);
 
-  // If ALL actions are protected, use global auth preHandler.
-  // If mixed (some public, some protected), defer auth to per-action check
-  // to avoid rejecting unauthenticated requests for public actions.
-  if (hasProtectedActions && !hasPublicActions && fastify.authenticate) {
-    preHandler.push(fastify.authenticate);
+  // Cache/idempotency middlewares — same decorator lookup as CRUD.
+  const pluginMw = resolveRouterPluginMw(fastify, /* resourceHasQueryCache */ false);
+
+  // Per-action pipeline pre-wrapping — actions share the pipeline config with
+  // CRUD ops (keyed by action name). `buildActionPipelineHandler` now always
+  // returns a `Promise<IControllerResponse<unknown>>`, so pipeline failures
+  // preserve `status`/`meta`/`details`/`error` on the way to the client
+  // (same contract the CRUD router holds via `buildPipelineHandler`).
+  type WrappedActionHandler = (
+    id: string,
+    data: Record<string, unknown>,
+    req: RequestWithExtras,
+  ) => Promise<IControllerResponse<unknown>>;
+  const wrappedHandlers = new Map<string, WrappedActionHandler>();
+  for (const [name, handler] of Object.entries(actions)) {
+    const steps = resolvePipelineSteps(pipeline, name);
+    wrappedHandlers.set(
+      name,
+      buildActionPipelineHandler(
+        handler as (
+          id: string,
+          data: Record<string, unknown>,
+          req: RequestWithExtras,
+        ) => Promise<unknown>,
+        steps,
+        name,
+        resourceName,
+      ),
+    );
   }
 
-  // Register the unified action endpoint
-  fastify.post(
-    "/:id/action",
-    {
-      schema: routeSchema,
-      preHandler: preHandler.length ? preHandler : undefined,
-    },
-    async (req: FastifyRequest, reply: FastifyReply) => {
+  // Dynamic permission gate — evaluates from `body.action` in the canonical
+  // `permissionMw` slot, so `_policyFilters` + `request.scope` installed by
+  // the permission result are visible to `pluginMw` (idempotency) and
+  // `routeGuards` that run AFTER it. Previously this check lived inside the
+  // handler, which meant unauthorized requests still recorded idempotency
+  // keys and guards saw unfiltered scope.
+  const permissionMw = buildActionPermissionMw(
+    actionEnum,
+    actionPermissions,
+    globalAuth,
+    resourceName,
+  );
+
+  const preHandler = buildPreHandlerChain({
+    arcDecorator,
+    authMw,
+    permissionMw,
+    pluginMw: selectPluginMw("POST", pluginMw),
+    routeGuards,
+  });
+
+  const rateLimitConfig = buildRateLimitConfig(rateLimit);
+
+  fastify.route({
+    method: "POST",
+    url: "/:id/action",
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    schema: routeSchema as any,
+    preHandler: preHandler.length > 0 ? (preHandler as any) : undefined,
+    ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
+    handler: async (req: FastifyRequest, reply: FastifyReply) => {
       const { action, ...data } = req.body as { action: string; [key: string]: unknown };
       const { id } = req.params as { id: string };
-      const rawIdempotencyKey = req.headers["idempotency-key"];
-      const idempotencyKey = Array.isArray(rawIdempotencyKey)
-        ? rawIdempotencyKey[0]
-        : rawIdempotencyKey;
 
-      // Validate action exists
-      const handler = actions[action];
+      // `buildActionPermissionMw` has already rejected invalid actions (400)
+      // and denied permissions (401/403), so the handler lookup is guaranteed
+      // to hit. The defensive fallback stays for hosts that bypass the
+      // preHandler chain (internal invocation paths).
+      const handler = wrappedHandlers.get(action);
       if (!handler) {
-        return reply.code(400).send({
-          success: false,
-          error: `Invalid action '${action}'. Valid actions: ${actionEnum.join(", ")}`,
-          validActions: actionEnum,
-        });
-      }
-
-      // Check permissions: action-specific first, then fallback to globalAuth
-      const permissionCheck = actionPermissions[action] ?? globalAuth;
-
-      // If mixed public/protected actions, authenticate per-action for protected ones
-      if (hasPublicActions && hasProtectedActions && permissionCheck) {
-        const isPublicAction = (permissionCheck as PermissionCheck)?._isPublic;
-        if (!isPublicAction && fastify.authenticate) {
-          try {
-            await fastify.authenticate(req, reply);
-          } catch {
-            // Avoid double-send: authenticate may have already sent a 401
-            if (!reply.sent) {
-              return reply.code(401).send({
-                success: false,
-                error: "Authentication required",
-              });
-            }
-            return;
-          }
-          // authenticate may send reply without throwing (some implementations)
-          if (reply.sent) return;
-        }
-      }
-
-      if (permissionCheck) {
-        const reqWithExtras = req as RequestWithExtras;
-        const context: PermissionContext = {
-          user: (reqWithExtras.user as UserBase | null) ?? null,
-          request: req,
-          resource: tag ?? "action",
-          action,
-          resourceId: id,
-          params: req.params as Record<string, string> | undefined,
-          data,
-        };
-
-        // Wrap in try/catch so authz bugs don't produce 500s
-        // (consistent with CRUD router's buildPermissionMiddleware)
-        let result: boolean | PermissionResult;
-        try {
-          result = await permissionCheck(context);
-        } catch (err) {
-          req.log?.warn?.({ err, resource: tag ?? "action", action }, "Permission check threw");
-          return reply.code(403).send({
+        return sendControllerResponse(
+          reply,
+          {
             success: false,
-            error: "Permission denied",
-          });
-        }
-
-        // Normalize boolean → PermissionResult via the single-source-of-truth helper
-        const permResult = normalizePermissionResult(result);
-        if (!permResult.granted) {
-          return reply.code(context.user ? 403 : 401).send({
-            success: false,
-            error:
-              permResult.reason ??
-              (context.user ? `Permission denied for '${action}'` : "Authentication required"),
-          });
-        }
-
-        // Apply filters + scope via the shared helper — this is what makes
-        // action routes honor PermissionResult.scope the same way CRUD routes
-        // do. Before this, custom auth on action routes silently dropped
-        // scope + filters and handlers ran with the wrong request.scope.
-        applyPermissionResult(permResult, req);
+            status: 400,
+            error: `Invalid action '${action}'. Valid actions: ${actionEnum.join(", ")}`,
+            meta: { validActions: actionEnum },
+          } as IControllerResponse<null>,
+          req,
+        );
       }
 
       try {
-        // Idempotency check (optional)
-        if (idempotencyKey && idempotencyService) {
-          const user = (req as RequestWithExtras).user as UserBase | undefined;
-          const payloadForHash = {
-            action,
-            id,
-            data,
-            userId: (user?._id as string | undefined)?.toString?.() || user?.id || null,
-          };
-
-          const idempotencyResult = await idempotencyService.check(idempotencyKey, payloadForHash);
-          // Use 'in' to check presence, not truthiness — existingResult may be
-          // a valid falsy value (0, false, '', null) from a previous execution.
-          if (!idempotencyResult.isNew && "existingResult" in idempotencyResult) {
-            return reply.send({
-              success: true,
-              data: idempotencyResult.existingResult,
-              cached: true,
-            });
-          }
-        }
-
-        // Execute the action handler
-        const result = await handler(id, data, req as RequestWithExtras);
-
-        if (idempotencyService) {
-          await idempotencyService.complete(idempotencyKey, result);
-        }
-
-        return reply.send({
-          success: true,
-          data: result,
-        });
+        // The wrapped handler produces a full IControllerResponse — pipeline
+        // interceptors that return `{ success: false, status, error, details,
+        // meta }` flow straight through `sendControllerResponse` with every
+        // field intact. Same path the CRUD router uses.
+        const response = await handler(id, data, req as RequestWithExtras);
+        return sendControllerResponse(reply, response, req);
       } catch (error) {
-        if (idempotencyService) {
-          await idempotencyService.fail(idempotencyKey, error as Error);
-        }
-
-        // Use custom error handler if provided
         if (onError) {
           const { statusCode, error: errorMsg, code } = onError(error as Error, action, id);
-          return reply.code(statusCode).send({
-            success: false,
-            error: errorMsg,
-            code,
-          });
+          return sendControllerResponse(
+            reply,
+            {
+              success: false,
+              status: statusCode,
+              error: errorMsg,
+              ...(code ? { meta: { code } } : {}),
+            } as IControllerResponse<null>,
+            req,
+          );
         }
 
-        // Default error handling
         const err = error as Record<string, unknown>;
         const statusCode = (err.statusCode as number) || (err.status as number) || 500;
         const errorCode = (err.code as string) || "ACTION_FAILED";
@@ -379,20 +361,29 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
           req.log.error({ err: error, action, id }, "Action handler error");
         }
 
-        return reply.code(statusCode).send({
-          success: false,
-          error: err.message || `Failed to execute '${action}' action`,
-          code: errorCode,
-        });
+        return sendControllerResponse(
+          reply,
+          {
+            success: false,
+            status: statusCode,
+            error: (err.message as string) || `Failed to execute '${action}' action`,
+            meta: { code: errorCode },
+          } as IControllerResponse<null>,
+          req,
+        );
       }
     },
-  );
+  });
 
   fastify.log.debug(
-    { actions: actionEnum, tag },
+    { actions: actionEnum, tag, resourceName },
     "[createActionRouter] Registered action endpoint: POST /:id/action",
   );
 }
+
+// ============================================================================
+// Body schema construction
+// ============================================================================
 
 /**
  * Build a discriminated body schema for the unified action endpoint.
@@ -404,7 +395,7 @@ export function createActionRouter(fastify: FastifyInstance, config: ActionRoute
  *   "required": ["action"],
  *   "oneOf": [
  *     { "properties": { "action": { "const": "dispatch" }, "carrier": {...} }, "required": ["action", "carrier"] },
- *     { "properties": { "action": { "const": "approve" } }, "required": ["action"] }
+ *     { "properties": { "action": { "const": "approve"  } }, "required": ["action"] }
  *   ]
  * }
  * ```
@@ -422,84 +413,27 @@ export function buildActionBodySchema(
   const branches: Array<Record<string, unknown>> = [];
 
   for (const actionName of actionEnum) {
-    const raw = actionSchemas[actionName];
-    const { properties, required } = normalizeActionSchema(raw);
-
-    // Always pin the action field to its const name in this branch
-    const branchProperties: Record<string, unknown> = {
-      action: { type: "string", const: actionName },
-      ...properties,
-    };
-    const branchRequired = ["action", ...required.filter((r) => r !== "action")];
-
-    // Deliberately NOT setting `additionalProperties: false` — Arc actions are
-    // permissive by default, allowing extra fields to pass through to handlers.
-    // Users who want strict validation can supply a full JSON Schema with
-    // `additionalProperties: false` in their action's `schema`.
-    branches.push({
-      type: "object",
-      properties: branchProperties,
-      required: branchRequired,
-    });
+    // Normalize each action's schema through the shared IR ([./schemaIR.ts])
+    // so HTTP (this file) and MCP ([../integrations/mcp/action-tools.ts])
+    // read the same representation. `additionalProperties` carries through
+    // verbatim — authors who declare `additionalProperties: false` in their
+    // action `schema` get strict AJV rejection of unknown fields AND strict
+    // MCP rejection in a single declaration.
+    const ir = normalizeSchemaIR(actionSchemas[actionName]);
+    branches.push(
+      schemaIRToJsonSchemaBranch(ir, {
+        properties: { action: { type: "string", const: actionName } },
+        required: ["action"],
+      }),
+    );
   }
 
-  return {
-    type: "object",
-    required: ["action"],
-    oneOf: branches,
-  };
+  return { type: "object", required: ["action"], oneOf: branches };
 }
 
 /**
- * Normalize the accepted schema shapes into `{ properties, required }`.
- *
- * Handles:
- * 1. Full JSON Schema object (has `type: 'object'` + `properties`)
- * 2. Zod v4 schema (has `_zod` marker) — converted via `toJsonSchema`
- * 3. Legacy field map (`{ fieldName: { type: 'string' } }`) — every field required
- *    unless its schema has `nullable: true` or sentinel `required: false`
- */
-function normalizeActionSchema(raw: Record<string, unknown> | undefined): {
-  properties: Record<string, unknown>;
-  required: string[];
-} {
-  if (!raw || typeof raw !== "object") return { properties: {}, required: [] };
-
-  // Zod / JSON Schema detection: toJsonSchema returns a full object schema
-  const converted = toJsonSchema(raw);
-  if (
-    converted &&
-    typeof converted === "object" &&
-    (converted.type === "object" || "properties" in converted)
-  ) {
-    const props = (converted.properties as Record<string, unknown> | undefined) ?? {};
-    const req = Array.isArray(converted.required) ? (converted.required as string[]) : [];
-    return { properties: props, required: req };
-  }
-
-  // Legacy field map: each top-level key is a property. All required by default.
-  const properties: Record<string, unknown> = {};
-  const required: string[] = [];
-  for (const [fieldName, fieldSchema] of Object.entries(raw)) {
-    if (fieldName === "type" || fieldName === "properties" || fieldName === "required") {
-      // Skip meta keys that can't be legacy field names
-      continue;
-    }
-    if (!fieldSchema || typeof fieldSchema !== "object") continue;
-    const fs = fieldSchema as Record<string, unknown>;
-    properties[fieldName] = fs;
-    // Sentinel `required: false` on a field marks it optional in the legacy map.
-    // Everything else is required.
-    if (fs.required !== false) {
-      required.push(fieldName);
-    }
-  }
-  return { properties, required };
-}
-
-/**
- * Build description with action details
- * Uses _roles metadata from PermissionCheck functions for OpenAPI docs
+ * Build OpenAPI description with action list + role hints.
+ * Reads `_roles` metadata from permission checks for docs.
  */
 function buildActionDescription(
   actions: Record<string, ActionHandler>,

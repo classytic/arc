@@ -1,52 +1,68 @@
 /**
- * Testing Module
+ * @classytic/arc/testing — test utilities for arc apps
  *
- * Test utilities for Arc resources.
- * Provides helpers for:
- * - spinning up test Fastify apps
- * - mocking repositories/controllers
- * - managing test databases (optional)
- * - generating baseline resource tests
+ * Three primary entry points, picked by what you're testing:
+ *
+ *   1. HTTP behavior      → `createHttpTestHarness(resource, { app, auth, ... })`
+ *      Auto-generates CRUD + permission + validation tests against a live app.
+ *
+ *   2. Custom scenarios   → `createTestApp({ resources, authMode, db })`
+ *      Turnkey Fastify + in-memory Mongo + auth provider + fixture tracker.
+ *      Use `ctx.app.inject()` and `expectArc(res)` for assertions.
+ *
+ *   3. Adapter contracts  → `runStorageContract(setup)`
+ *      Verify a Storage implementation satisfies arc's adapter contract.
+ *      DB-agnostic; no Mongoose assumption.
+ *
+ * Everything else (mocks, fixture builders, assertion helpers, auth sessions)
+ * composes with one of the three above. See the docs for the decision tree:
+ * [docs/testing/index.mdx](../../docs/testing/index.mdx).
  */
 
+// --- Arc-specific assertions -----------------------------------------------
+export type { ArcAssertion, ArcResponseLike } from "./assertions.js";
+export { expectArc } from "./assertions.js";
+
+// --- Auth sessions ----------------------------------------------------------
+export type { RoleConfig, TestAuthProvider, TestAuthSession } from "./authSession.js";
+export {
+  createBetterAuthProvider,
+  createCustomAuthProvider,
+  createJwtAuthProvider,
+} from "./authSession.js";
+
+// --- Better Auth flow helpers (thin layer over TestAuthProvider) ------------
 export type {
   AuthResponse,
   BetterAuthTestHelpers,
   BetterAuthTestHelpersOptions,
+  BetterAuthTestUser,
+  CreateOrgInput,
   OrgResponse,
-  SetupBetterAuthOrgOptions,
-  SetupUserConfig,
-  TestOrgContext,
-  TestUserContext,
-} from "./authHelpers.js";
-// Better Auth test helpers
+  SetupBetterAuthTestAppInput,
+  SetupBetterAuthTestAppResult,
+  SignInInput,
+  SignUpInput,
+} from "./betterAuth.js";
 export {
   createBetterAuthTestHelpers,
   safeParseBody,
-  setupBetterAuthOrg,
-} from "./authHelpers.js";
-// DB helpers (MongoDB/Mongoose) - optional
-export {
-  DatabaseSnapshot,
-  InMemoryDatabase,
-  TestDatabase,
-  TestFixtures as DbTestFixtures,
-  TestSeeder,
-  TestTransaction,
-  withTestDb,
-} from "./dbHelpers.js";
+  setupBetterAuthTestApp,
+} from "./betterAuth.js";
+
+// --- Fixtures ---------------------------------------------------------------
 export type {
-  AuthProvider,
-  HttpTestHarnessOptions,
-} from "./HttpTestHarness.js";
-// HTTP test harness
-export {
-  createBetterAuthProvider,
-  createHttpTestHarness,
-  createJwtAuthProvider,
-  HttpTestHarness,
-} from "./HttpTestHarness.js";
-// Mock factories
+  FixtureDestroyer,
+  FixtureFactory,
+  FixtureRegistration,
+  TestFixtures,
+} from "./fixtures.js";
+export { createTestFixtures } from "./fixtures.js";
+// --- HTTP harness -----------------------------------------------------------
+export type { HttpTestHarnessOptions } from "./HttpTestHarness.js";
+export { createHttpTestHarness, HttpTestHarness } from "./HttpTestHarness.js";
+// --- Mocks (repositories, users, requests, timers, spies) -------------------
+export type { MockRepository } from "./mocks.js";
 export {
   createDataFactory,
   createMockController,
@@ -58,26 +74,11 @@ export {
   createTestTimer,
   waitFor,
 } from "./mocks.js";
-// Vitest preload helpers (for resources that don't load via dynamic import)
+// --- Vitest preload helper --------------------------------------------------
 export { preloadResources, preloadResourcesAsync } from "./preloadResources.js";
+// --- Storage adapter contract ----------------------------------------------
 export type { StorageContractSetup, StorageContractSetupResult } from "./storageContract.js";
-// Storage contract suite — verify Storage adapters for filesUploadPreset
 export { runStorageContract } from "./storageContract.js";
-export type { GenerateTestFileOptions, TestFixtures, TestHarnessOptions } from "./TestHarness.js";
-export {
-  createConfigTestSuite,
-  createTestHarness,
-  generateTestFile,
-  TestHarness,
-} from "./TestHarness.js";
-export type { CreateTestAppOptions, TestAppResult } from "./testFactory.js";
-// App factory + request helpers
-export {
-  createMinimalTestApp,
-  createSnapshotMatcher,
-  createTestApp,
-  createTestAuth,
-  request,
-  TestDataLoader,
-  TestRequestBuilder,
-} from "./testFactory.js";
+// --- Test app + lifecycle ---------------------------------------------------
+export type { AuthMode, CreateTestAppOptions, DbMode, TestAppContext } from "./testApp.js";
+export { createMinimalTestApp, createTestApp } from "./testApp.js";

@@ -1,0 +1,115 @@
+# Fixtures
+
+`TestFixtures` is arc's DB-agnostic record seeder. You register named factories that know how to persist records in your adapter of choice; the tracker keeps inserted records for automatic cleanup so tests don't leak state.
+
+No Mongoose assumption. A Prisma app registers Prisma factories; a mongokit app registers mongokit ones; a custom adapter wires its own.
+
+## Basic usage
+
+```typescript
+import { beforeAll, afterEach, afterAll } from 'vitest';
+import { createTestApp } from '@classytic/arc/testing';
+import { UserModel, OrgModel, JobModel } from '../src/models.js';
+
+const ctx = await createTestApp({ resources: [jobResource] });
+
+beforeAll(() => {
+  // Register factories ONCE. The tracker records inserted IDs for later cleanup.
+  ctx.fixtures.register('user', async (data) => UserModel.create(data));
+  ctx.fixtures.register('org',  {
+    create:  async (data) => OrgModel.create(data),
+    destroy: async (record) => OrgModel.findByIdAndDelete(record._id),
+  });
+  ctx.fixtures.register('job', async (data) => JobModel.create(data));
+});
+
+afterEach(() => ctx.fixtures.clear());
+afterAll(() => ctx.close());
+
+it('admin lists their org jobs', async () => {
+  const org   = await ctx.fixtures.create('org',  { name: 'Acme' });
+  const user  = await ctx.fixtures.create('user', { orgId: org._id, role: 'admin' });
+  const jobs  = await ctx.fixtures.createMany('job', 3, { orgId: org._id });
+
+  ctx.auth.register('admin', { user: { id: user._id, roles: ['admin'] }, orgId: org._id });
+  const res = await ctx.app.inject({ url: '/jobs', headers: ctx.auth.as('admin').headers });
+  expectArc(res).paginated({ total: 3 });
+});
+```
+
+## Registration shapes
+
+Two shapes accepted:
+
+```typescript
+// 1. Bare factory (no cleanup)
+fixtures.register('user', async (data) => UserModel.create(data));
+
+// 2. Full registration with destroy hook
+fixtures.register('org', {
+  create:  async (data) => OrgModel.create(data),
+  destroy: async (org)  => OrgModel.findByIdAndDelete(org._id),
+});
+```
+
+Factories without `destroy` are safe — the test harness tears the whole DB down anyway. Provide `destroy` only when you need per-test cleanup granularity (rare).
+
+## `create` vs `createMany`
+
+```typescript
+const one  = await fixtures.create('user', { email: 'a@x.com' });
+const five = await fixtures.createMany('user', 5, { role: 'member' });
+```
+
+`createMany` passes the template to each invocation. Combine with a factory that generates per-record uniqueness:
+
+```typescript
+let userCounter = 0;
+fixtures.register('user', async (data) => UserModel.create({
+  email: `user-${++userCounter}@test.com`,
+  ...data,
+}));
+```
+
+## `clear` — cleanup between tests
+
+```typescript
+afterEach(() => ctx.fixtures.clear());
+```
+
+Runs every registered `destroy` hook over tracked records, then forgets them. Idempotent — safe to call multiple times. Errors in destroyers are swallowed so cleanup flakiness doesn't abort teardown.
+
+## Reading back tracked records
+
+```typescript
+const allUsers = fixtures.all('user');   // readonly snapshot
+```
+
+Useful for assertions that need to enumerate what was seeded.
+
+## API
+
+### `TestFixtures`
+
+```typescript
+interface TestFixtures {
+  register<T>(name: string, factoryOrRegistration: FixtureFactory<T> | FixtureRegistration<T>): void;
+  create<T>(name: string, data?: Partial<T>): Promise<T>;
+  createMany<T>(name: string, count: number, template?: Partial<T>): Promise<T[]>;
+  clear(): Promise<void>;
+  all<T>(name: string): readonly T[];
+  readonly names: readonly string[];
+}
+
+type FixtureFactory<T>    = (data: Partial<T>) => Promise<T>;
+type FixtureDestroyer<T>  = (record: T) => Promise<void>;
+interface FixtureRegistration<T> {
+  create: FixtureFactory<T>;
+  destroy?: FixtureDestroyer<T>;
+}
+```
+
+## Related
+
+- [Test App](./test-app) — `ctx.fixtures` comes from here
+- [Auth Sessions](./auth-session) — wire fixture-seeded users to auth roles
