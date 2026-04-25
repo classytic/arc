@@ -24,7 +24,7 @@ export interface ResourceMetadata {
     description?: string;
     permissions?: PermissionCheck;
     raw?: boolean;
-    schema?: Record<string, unknown>;
+    schema?: unknown;
   }>;
   routes: Array<{
     method: string;
@@ -68,7 +68,7 @@ export interface RegistryEntry extends ResourceMetadata {
     readonly name: string;
     readonly description?: string;
     /** Raw per-action schema (JSON Schema, Zod v4, or legacy field map) */
-    readonly schema?: Record<string, unknown>;
+    readonly schema?: unknown;
     /** Per-action permission check (if different from resource-level `actionPermissions`) */
     readonly permissions?: PermissionCheck;
     /** MCP tool generation flag — `false` to skip, object for overrides */

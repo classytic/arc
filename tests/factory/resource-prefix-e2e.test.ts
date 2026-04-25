@@ -261,7 +261,7 @@ export default defineResource({
 
       // Use pathToFileURL to simulate import.meta.url
       const metaUrl = pathToFileURL(join(base, "index.ts")).href;
-      const resources = await loadResources(metaUrl, { silent: true });
+      const resources = await loadResources(metaUrl);
 
       expect(resources).toHaveLength(3);
 
@@ -318,7 +318,7 @@ export default defineResource({
       );
 
       const metaUrl = pathToFileURL(join(base, "loader.ts")).href;
-      const resources = await loadResources(metaUrl, { silent: true });
+      const resources = await loadResources(metaUrl);
 
       const bootOrder: string[] = [];
 

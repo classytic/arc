@@ -32,7 +32,7 @@ Why: async `onSend` hooks race with Fastify's `onSendEnd → safeWriteHead` flus
 - **`preSerialization`** — when payload is needed (caching, response-cache, idempotency).
 - `isReplyCommitted()` in [src/utils/reply-guards.ts](../src/utils/reply-guards.ts) remains for third-party plugin authors; arc's own plugins no longer need it.
 
-Fixed across 5 plugins in v2.9.2, fully swept in v2.10.3. See [[changelog-v2.10]].
+Fixed across 5 plugins in v2.9.2, fully swept in v2.10.3. See [[gotchas]] #15.
 
 ## Plugin registration returns `routes` (v2.9)
 

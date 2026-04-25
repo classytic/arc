@@ -345,7 +345,9 @@ describe("loadResources — tsconfig path aliases (expected failures)", () => {
     expect(loaded).toHaveLength(0);
 
     // Should log a warning about the failed import
-    const failMsg = warnSpy.mock.calls.find((c: unknown[]) => String(c[0]).includes("failed to import"));
+    const failMsg = warnSpy.mock.calls.find((c: unknown[]) =>
+      String(c[0]).includes("failed to import"),
+    );
     expect(failMsg).toBeDefined();
   });
 
@@ -362,7 +364,9 @@ describe("loadResources — tsconfig path aliases (expected failures)", () => {
     const loaded = await loadResources(dir, { logger: { warn: warnSpy } });
     expect(loaded).toHaveLength(0);
 
-    const failMsg = warnSpy.mock.calls.find((c: unknown[]) => String(c[0]).includes("failed to import"));
+    const failMsg = warnSpy.mock.calls.find((c: unknown[]) =>
+      String(c[0]).includes("failed to import"),
+    );
     expect(failMsg).toBeDefined();
   });
 
@@ -391,7 +395,9 @@ describe("loadResources — tsconfig path aliases (expected failures)", () => {
     expect((loaded[0] as { name: string }).name).toBe("good");
 
     // Warning logged for the failed one
-    const failMsg = warnSpy.mock.calls.find((c: unknown[]) => String(c[0]).includes("failed to import"));
+    const failMsg = warnSpy.mock.calls.find((c: unknown[]) =>
+      String(c[0]).includes("failed to import"),
+    );
     expect(failMsg).toBeDefined();
   });
 });

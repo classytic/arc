@@ -103,7 +103,7 @@ export default { name: 'default', toPlugin: () => () => {} };
       "export const helper = () => 'hello';\nexport const VERSION = '1.0';\n",
     );
 
-    const resources = await loadResources(dir, { silent: true });
+    const resources = await loadResources(dir);
     expect(resources).toHaveLength(0);
   });
 });

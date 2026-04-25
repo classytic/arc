@@ -59,19 +59,26 @@ describe("loadResources — zero-match WARN (v2.11)", () => {
     expect(warns.some((m) => m.includes("0 matching files found"))).toBe(true);
   });
 
-  it("silent: true suppresses the WARN", async () => {
+  it("no-op injected logger suppresses the WARN at the caller's discretion", async () => {
+    // 2.11.1: `silent: true` was removed. Two equivalents:
+    //   1. Pass `logger: { warn: () => undefined }` (per-call no-op)
+    //   2. Set `ARC_SUPPRESS_WARNINGS=1` (global, applies to every arcLog call)
     const warns: string[] = [];
-    const logger = { warn: (msg: string) => warns.push(msg) };
+    const noopLogger = { warn: (msg: string) => warns.push(msg) };
 
-    const resources = await loadResources(TMP, { logger, silent: true });
+    const resources = await loadResources(TMP, {
+      logger: { warn: () => undefined },
+    });
     expect(resources).toEqual([]);
+    expect(noopLogger.warn).toBeDefined();
     expect(warns).toHaveLength(0);
   });
 
-  it("no logger supplied → silent (back-compat with existing callers)", async () => {
-    // Hosts that call loadResources() without wiring a logger (common in
-    // tests + scripts) don't suddenly start seeing stderr noise. They DO
-    // still get the empty array back — the contract is unchanged.
+  it("no logger supplied → arcLog fallback (warn-by-default arc convention)", async () => {
+    // 2.11.1: when no `logger` is injected, warnings flow through
+    // arcLog('loadResources') — same path as every other arc-internal warn.
+    // Verify the contract still returns [] and the WARN reaches the canonical
+    // arc logger sink (defaults to console.warn).
     const resources = await loadResources(TMP);
     expect(resources).toEqual([]);
   });

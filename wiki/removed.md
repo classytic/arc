@@ -29,5 +29,4 @@
 | `toPlugin()` on factory | `createApp({ resources })` directly. See [[factory]] |
 
 ## Related
-- [[changelog-v2.10]]
-- [[changelog-v2.9]]
+- See [`/changelog/v2.md`](../changelog/v2.md) for the full release history with replacement context.

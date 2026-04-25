@@ -8,11 +8,11 @@ description: |
   Triggers: arc, fastify resource, defineResource, createApp, BaseController, arc preset,
   arc auth, arc events, arc jobs, arc websocket, arc mcp, arc plugin, arc testing, arc cli,
   arc permissions, arc hooks, arc pipeline, arc factory, arc cache, arc QueryCache.
-version: 2.11.0
+version: 2.11.1
 license: MIT
 metadata:
   author: Classytic
-  version: "2.11.0"
+  version: "2.11.1"
 tags:
   - fastify
   - rest-api
@@ -1079,7 +1079,7 @@ const app = await createApp({
 
 `loadResources()` discovers files matching `*.resource.{ts,js,mts,mjs}`, recursively. Pass `import.meta.url` for dev/prod parity (resolves to `src/` in dev, `dist/` in prod automatically). Discovers `default` export, `export const resource`, OR any named export with `toPlugin()` (e.g., `export const userResource`).
 
-Options: `exclude`, `include`, `suffix`, `recursive`, `silent`.
+Options: `exclude`, `include`, `suffix`, `recursive`, `context`, `logger`. Silent by default — pass `logger: { warn(msg) {...} }` to receive skip / factory-failure diagnostics.
 
 **Per-resource opt-out of `resourcePrefix`** — for webhooks, admin routes:
 ```typescript

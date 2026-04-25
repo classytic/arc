@@ -31,6 +31,7 @@
 import { readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { arcLog } from "../logger/index.js";
 
 /**
  * Resource interface — the contract between `loadResources`/`createApp` and resource definitions.
@@ -67,11 +68,66 @@ export interface ResourceLike {
   _appliedPresets?: string[];
 }
 
-export interface LoadResourcesOptions {
+/**
+ * Resource module — what a `.resource.ts` file's default (or named) export
+ * may resolve to.
+ *
+ * Two shapes accepted:
+ *   1. **Plain `ResourceLike`** — the result of `defineResource({...})`.
+ *      Used as-is; no engine wiring needed.
+ *   2. **Factory `(ctx: TContext) => ResourceLike | Promise<ResourceLike>`**
+ *      — a function arc calls with the `context` from `LoadResourcesOptions`.
+ *      Eliminates the parallel `createXResource(engine)` factory files +
+ *      `exclude: [...]` bookkeeping that engine-bound resources used to need.
+ *
+ * Detection is by `typeof === 'function'`: `ResourceDefinition` instances
+ * (returned by `defineResource()`) are class instances (`typeof === 'object'`),
+ * so the two shapes are unambiguous in practice.
+ */
+export type ResourceModule<TContext = unknown> =
+  | ResourceLike
+  | ((ctx: TContext) => ResourceLike | Promise<ResourceLike>);
+
+export interface LoadResourcesOptions<TContext = unknown> {
   /** File pattern suffix (default: '.resource'). Matches `*.resource.{ts,js,mts,mjs}`. */
   suffix?: string;
   /** Recurse into subdirectories (default: true) */
   recursive?: boolean;
+  /**
+   * Context passed to factory-style default exports. Resources whose default
+   * export is a function `(ctx) => ResourceLike` are called with this value;
+   * plain `ResourceLike` exports are returned unchanged.
+   *
+   * Use this to thread engine handles into engine-bound resources without
+   * creating parallel factory files outside `loadResources`'s sweep:
+   *
+   * ```ts
+   * // category.resource.ts
+   * import type { AppContext } from '#core/app/context.js';
+   * export default (ctx: AppContext) =>
+   *   defineResource({
+   *     name: 'category',
+   *     adapter: createMongooseAdapter(
+   *       ctx.catalog.models.Category,
+   *       ctx.catalog.repositories.category,
+   *     ),
+   *   });
+   *
+   * // create-arc-app-options.ts
+   * resources: async () => {
+   *   const [catalog, flow] = await Promise.all([
+   *     ensureCatalogEngine(),
+   *     ensureFlowEngine(),
+   *   ]);
+   *   return loadResources(import.meta.url, { context: { catalog, flow } });
+   * }
+   * ```
+   *
+   * Backwards compatible — pre-2.11.1 callers omit `context`, plain exports
+   * keep working unchanged. Factories that need a context but receive
+   * `undefined` should narrow defensively.
+   */
+  context?: TContext;
   /**
    * Resource names to exclude. Matched against the resource's `.name` property
    * after import, so you use the resource name (not the filename).
@@ -94,14 +150,26 @@ export interface LoadResourcesOptions {
    */
   include?: string[];
   /**
-   * Suppress warning logs for skipped/failed files.
-   * Useful when your resources directory contains factory files or helpers
-   * that don't export a resource (e.g., `account.resource.ts` exporting a factory).
+   * Optional logger override for diagnostics. When omitted, warnings flow
+   * through arc's standard logger (`arcLog('loadResources')`) — same path
+   * as every other arc-internal warning, controlled by `ARC_SUPPRESS_WARNINGS=1`
+   * and routable via `configureArcLogger({ writer })`.
    *
-   * @default false
+   * Pass any object with `warn(msg)` to override (e.g. `fastify.log` —
+   * which is what `registerResources` passes automatically when arc's
+   * factory triggers auto-discovery via `resourceDir`).
+   *
+   * Pre-2.11.1 had a `silent: boolean` flag and "silent by default" semantics;
+   * both removed. Migration:
+   *
+   * ```ts
+   * // Pre-2.11.1                                // 2.11.1+
+   * loadResources(url, { silent: true });            // ARC_SUPPRESS_WARNINGS=1 (env)
+   *                                                  //   OR configureArcLogger({ writer })
+   * loadResources(url, { silent: !isDev });          // ARC_SUPPRESS_WARNINGS=1 in prod
+   * loadResources(url, { logger: pinoAdapter });     // unchanged — still works
+   * ```
    */
-  silent?: boolean;
-  /** Optional logger for diagnostics. No output when omitted (silent by default). */
   logger?: { warn: (msg: string) => void };
 }
 
@@ -129,11 +197,11 @@ export interface LoadResourcesOptions {
  * await loadResources('./src/resources');
  * ```
  */
-export async function loadResources(
+export async function loadResources<TContext = unknown>(
   dir: string,
-  options: LoadResourcesOptions = {},
+  options: LoadResourcesOptions<TContext> = {},
 ): Promise<ResourceLike[]> {
-  const { suffix = ".resource", recursive = true, exclude, include, silent = false } = options;
+  const { suffix = ".resource", recursive = true, exclude, include } = options;
   // Accept import.meta.url (file:// URL) — resolve to its parent directory
   const resolvedDir = dir.startsWith("file://") ? dirname(fileURLToPath(dir)) : dir;
   const absDir = resolve(resolvedDir);
@@ -206,6 +274,7 @@ export async function loadResources(
 
   // Filter and validate — deterministic order preserved (files were pre-sorted)
   const resources: ResourceLike[] = [];
+  const factoryFailed: string[] = [];
 
   for (const result of results) {
     if (!result) continue;
@@ -214,21 +283,51 @@ export async function loadResources(
     //   1. default export                       (export default defineResource(...))
     //   2. named export 'resource'              (export const resource = ...)
     //   3. ANY named export with toPlugin()     (export const userResource = ...)
+    //   4. default export factory function      (export default (ctx) => defineResource(...))
     //
     // The third path supports the common convention `export const fooResource`.
     // We pick the FIRST matching export, so prefer `default` for unambiguous loading.
-    let resource = (result.mod.default ?? result.mod.resource) as ResourceLike | undefined;
+    //
+    // Factory detection (path 4): the default export is a function. Class
+    // instances from `defineResource()` are `typeof === 'object'`, so a
+    // function-typed default unambiguously means "call me with context".
+    // Async factories are awaited.
+    let resource: ResourceLike | undefined;
 
-    if (!resource || typeof resource.toPlugin !== "function") {
-      // Scan all named exports for one with toPlugin()
-      for (const value of Object.values(result.mod)) {
+    const rawDefault = result.mod.default;
+    if (typeof rawDefault === "function" && !("toPlugin" in (rawDefault as object))) {
+      // Path 4 — factory export
+      try {
+        const built = await (rawDefault as (ctx: TContext | undefined) => unknown)(options.context);
         if (
-          value &&
-          typeof value === "object" &&
-          typeof (value as ResourceLike).toPlugin === "function"
+          built &&
+          typeof built === "object" &&
+          typeof (built as ResourceLike).toPlugin === "function"
         ) {
-          resource = value as ResourceLike;
-          break;
+          resource = built as ResourceLike;
+        } else {
+          factoryFailed.push(`${result.file}: factory returned non-resource value`);
+          continue;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        factoryFailed.push(`${result.file}: factory threw: ${msg}`);
+        continue;
+      }
+    } else {
+      resource = (rawDefault ?? result.mod.resource) as ResourceLike | undefined;
+
+      if (!resource || typeof resource.toPlugin !== "function") {
+        // Scan all named exports for one with toPlugin()
+        for (const value of Object.values(result.mod)) {
+          if (
+            value &&
+            typeof value === "object" &&
+            typeof (value as ResourceLike).toPlugin === "function"
+          ) {
+            resource = value as ResourceLike;
+            break;
+          }
         }
       }
     }
@@ -247,12 +346,21 @@ export async function loadResources(
     resources.push(resource);
   }
 
-  // Log diagnostics via injected logger (no output when omitted)
-  const log = silent ? undefined : options?.logger;
+  // Log diagnostics: prefer caller-injected logger; fall back to arc's
+  // canonical logger so direct callers without a logger get the same
+  // visible-by-default behavior as the rest of arc (suppressible via
+  // ARC_SUPPRESS_WARNINGS=1, routable via configureArcLogger({ writer })).
+  const log = options?.logger ?? arcLog("loadResources");
   if (log) {
     if (failed.length) {
       log.warn(`[arc] loadResources: ${failed.length} file(s) failed to import:`);
       for (const f of failed) log.warn(`  - ${f}`);
+    }
+    if (factoryFailed.length) {
+      log.warn(
+        `[arc] loadResources: ${factoryFailed.length} factory export(s) failed (function default that returned non-resource or threw):`,
+      );
+      for (const f of factoryFailed) log.warn(`  - ${f}`);
     }
     if (skipped.length) {
       log.warn(

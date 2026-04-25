@@ -1125,7 +1125,7 @@ export class ResourceDefinition<TDoc = AnyRecord> {
   getEvents(): Array<{
     name: string;
     module: string;
-    schema?: AnyRecord;
+    schema?: unknown;
     description?: string;
   }> {
     return Object.entries(this.events).map(([action, meta]) => ({

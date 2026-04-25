@@ -656,7 +656,10 @@ function generateResourcePaths(
     const actionEnum = resource.actions.map((a) => a.name);
     const actionSchemas: Record<string, Record<string, unknown>> = {};
     for (const a of resource.actions) {
-      if (a.schema) actionSchemas[a.name] = a.schema;
+      // 2.11.1 widened `a.schema` to `unknown` (Zod assigns without cast).
+      // `buildActionBodySchema` expects per-action JSON-Schema fragments;
+      // narrow back via the same passthrough/conversion the runtime uses.
+      if (a.schema) actionSchemas[a.name] = a.schema as Record<string, unknown>;
     }
     const bodySchema = buildActionBodySchema(actionEnum, actionSchemas);
 

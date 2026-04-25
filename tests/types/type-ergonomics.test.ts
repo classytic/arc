@@ -7,140 +7,136 @@
  * These are compile-time + runtime structural tests — zero behavior changes.
  */
 
-import { describe, it, expect } from 'vitest';
-import type { FastifyRequest, FastifyReply, RouteHandlerMethod } from 'fastify';
+import type { FastifyReply, FastifyRequest, RouteHandlerMethod } from "fastify";
+import { describe, expect, it } from "vitest";
+import type { DataAdapter } from "../../src/adapters/interface.js";
 import type {
-  RouteDefinition,
   EventDefinition,
-  RouteSchemaOptions,
-  OpenApiSchemas,
-  OffsetPaginatedResult,
   KeysetPaginatedResult,
+  OffsetPaginatedResult,
+  OpenApiSchemas,
   PaginationResult,
-} from '../../src/types/index.js';
-import type { DataAdapter } from '../../src/adapters/interface.js';
+  RouteDefinition,
+  RouteSchemaOptions,
+} from "../../src/types/index.js";
 
 // ============================================================================
 // 1. RouteDefinition.handler — accepts typed Fastify request generics
 // ============================================================================
 
-describe('RouteDefinition.handler type ergonomics', () => {
-  it('should accept a plain FastifyRequest handler (no generics)', () => {
+describe("RouteDefinition.handler type ergonomics", () => {
+  it("should accept a plain FastifyRequest handler (no generics)", () => {
     const route: RouteDefinition = {
-      method: 'GET',
-      path: '/test',
-      handler: ((_req: FastifyRequest, _reply: FastifyReply) => ({ ok: true })),
-      permissions: (() => true) as unknown as RouteDefinition['permissions'],
+      method: "GET",
+      path: "/test",
+      handler: (_req: FastifyRequest, _reply: FastifyReply) => ({ ok: true }),
+      permissions: (() => true) as unknown as RouteDefinition["permissions"],
       raw: true,
     };
 
-    expect(route.handler).toBeTypeOf('function');
+    expect(route.handler).toBeTypeOf("function");
   });
 
-  it('should accept a typed FastifyRequest<{ Body }> handler without casting', () => {
+  it("should accept a typed FastifyRequest<{ Body }> handler without casting", () => {
     // This is the key fix: previously required `as any` because
     // FastifyRequest<{ Body: T }> is not assignable to FastifyRequest (invariant generic)
     type CreateBody = { name: string; email: string };
 
-    const handler = (
-      _req: FastifyRequest<{ Body: CreateBody }>,
-      _reply: FastifyReply,
-    ) => ({ created: true });
+    const handler = (_req: FastifyRequest<{ Body: CreateBody }>, _reply: FastifyReply) => ({
+      created: true,
+    });
 
     const route: RouteDefinition = {
-      method: 'POST',
-      path: '/create',
+      method: "POST",
+      path: "/create",
       handler,
-      permissions: (() => true) as unknown as RouteDefinition['permissions'],
+      permissions: (() => true) as unknown as RouteDefinition["permissions"],
       raw: true,
     };
 
     expect(route.handler).toBe(handler);
   });
 
-  it('should accept a typed FastifyRequest<{ Params }> handler without casting', () => {
+  it("should accept a typed FastifyRequest<{ Params }> handler without casting", () => {
     type RouteParams = { id: string };
 
-    const handler = (
-      _req: FastifyRequest<{ Params: RouteParams }>,
-      _reply: FastifyReply,
-    ) => ({ found: true });
+    const handler = (_req: FastifyRequest<{ Params: RouteParams }>, _reply: FastifyReply) => ({
+      found: true,
+    });
 
     const route: RouteDefinition = {
-      method: 'GET',
-      path: '/:id/details',
+      method: "GET",
+      path: "/:id/details",
       handler,
-      permissions: (() => true) as unknown as RouteDefinition['permissions'],
+      permissions: (() => true) as unknown as RouteDefinition["permissions"],
       raw: true,
     };
 
     expect(route.handler).toBe(handler);
   });
 
-  it('should accept a typed FastifyRequest<{ Querystring }> handler without casting', () => {
+  it("should accept a typed FastifyRequest<{ Querystring }> handler without casting", () => {
     type QueryParams = { page: number; limit: number };
 
-    const handler = (
-      _req: FastifyRequest<{ Querystring: QueryParams }>,
-      _reply: FastifyReply,
-    ) => ({ results: [] });
+    const handler = (_req: FastifyRequest<{ Querystring: QueryParams }>, _reply: FastifyReply) => ({
+      results: [],
+    });
 
     const route: RouteDefinition = {
-      method: 'GET',
-      path: '/search',
+      method: "GET",
+      path: "/search",
       handler,
-      permissions: (() => true) as unknown as RouteDefinition['permissions'],
+      permissions: (() => true) as unknown as RouteDefinition["permissions"],
       raw: true,
     };
 
     expect(route.handler).toBe(handler);
   });
 
-  it('should accept a fully typed FastifyRequest<{ Body, Params, Querystring }> handler', () => {
+  it("should accept a fully typed FastifyRequest<{ Body, Params, Querystring }> handler", () => {
     type FullRequest = {
       Body: { data: string };
       Params: { id: string };
       Querystring: { dryRun: boolean };
     };
 
-    const handler = (
-      _req: FastifyRequest<FullRequest>,
-      _reply: FastifyReply,
-    ) => ({ processed: true });
+    const handler = (_req: FastifyRequest<FullRequest>, _reply: FastifyReply) => ({
+      processed: true,
+    });
 
     const route: RouteDefinition = {
-      method: 'PUT',
-      path: '/:id/process',
+      method: "PUT",
+      path: "/:id/process",
       handler,
-      permissions: (() => true) as unknown as RouteDefinition['permissions'],
+      permissions: (() => true) as unknown as RouteDefinition["permissions"],
       raw: true,
     };
 
     expect(route.handler).toBe(handler);
   });
 
-  it('should still accept string handler names', () => {
+  it("should still accept string handler names", () => {
     const route: RouteDefinition = {
-      method: 'GET',
-      path: '/test',
-      handler: 'myControllerMethod',
-      permissions: (() => true) as unknown as RouteDefinition['permissions'],
+      method: "GET",
+      path: "/test",
+      handler: "myControllerMethod",
+      permissions: (() => true) as unknown as RouteDefinition["permissions"],
       raw: false,
     };
 
-    expect(route.handler).toBe('myControllerMethod');
+    expect(route.handler).toBe("myControllerMethod");
   });
 
-  it('should still accept RouteHandlerMethod', () => {
+  it("should still accept RouteHandlerMethod", () => {
     const fastifyHandler: RouteHandlerMethod = async (_req, _reply) => {
       return { ok: true };
     };
 
     const route: RouteDefinition = {
-      method: 'GET',
-      path: '/native',
+      method: "GET",
+      path: "/native",
       handler: fastifyHandler,
-      permissions: (() => true) as unknown as RouteDefinition['permissions'],
+      permissions: (() => true) as unknown as RouteDefinition["permissions"],
       raw: true,
     };
 
@@ -152,54 +148,54 @@ describe('RouteDefinition.handler type ergonomics', () => {
 // 2. EventDefinition.handler — optional (events published via fastify.events.publish)
 // ============================================================================
 
-describe('EventDefinition.handler optionality', () => {
-  it('should accept events without a handler', () => {
+describe("EventDefinition.handler optionality", () => {
+  it("should accept events without a handler", () => {
     const event: EventDefinition = {
-      name: 'order.shipped',
-      schema: { type: 'object', properties: { orderId: { type: 'string' } } },
-      description: 'Fired when an order ships',
+      name: "order.shipped",
+      schema: { type: "object", properties: { orderId: { type: "string" } } },
+      description: "Fired when an order ships",
     };
 
-    expect(event.name).toBe('order.shipped');
+    expect(event.name).toBe("order.shipped");
     expect(event.handler).toBeUndefined();
     expect(event.schema).toBeDefined();
-    expect(event.description).toBe('Fired when an order ships');
+    expect(event.description).toBe("Fired when an order ships");
   });
 
-  it('should still accept events with a handler', () => {
+  it("should still accept events with a handler", () => {
     const handler = async (data: unknown) => {
       // handler logic
     };
 
     const event: EventDefinition = {
-      name: 'order.created',
+      name: "order.created",
       handler,
-      schema: { type: 'object' },
+      schema: { type: "object" },
     };
 
     expect(event.handler).toBe(handler);
   });
 
-  it('should accept events with only a name (minimal definition)', () => {
+  it("should accept events with only a name (minimal definition)", () => {
     const event: EventDefinition = {
-      name: 'user.logged_in',
+      name: "user.logged_in",
     };
 
-    expect(event.name).toBe('user.logged_in');
+    expect(event.name).toBe("user.logged_in");
     expect(event.handler).toBeUndefined();
     expect(event.schema).toBeUndefined();
     expect(event.description).toBeUndefined();
   });
 
-  it('should allow Record<string, EventDefinition> without handler on every entry', () => {
+  it("should allow Record<string, EventDefinition> without handler on every entry", () => {
     // This is how consumers use events in defineResource() — a map of event names
     const events: Record<string, EventDefinition> = {
-      created: { name: 'product.created', description: 'Product was created' },
-      updated: { name: 'product.updated', description: 'Product was updated' },
-      deleted: { name: 'product.deleted', description: 'Product was deleted' },
+      created: { name: "product.created", description: "Product was created" },
+      updated: { name: "product.updated", description: "Product was updated" },
+      deleted: { name: "product.deleted", description: "Product was deleted" },
       outOfStock: {
-        name: 'product.outOfStock',
-        schema: { type: 'object', properties: { productId: { type: 'string' } } },
+        name: "product.outOfStock",
+        schema: { type: "object", properties: { productId: { type: "string" } } },
       },
     };
 
@@ -215,8 +211,8 @@ describe('EventDefinition.handler optionality', () => {
 // 3. RouteSchemaOptions.fieldRules — MongoKit field rule types
 // ============================================================================
 
-describe('RouteSchemaOptions.fieldRules MongoKit alignment', () => {
-  it('should accept systemManaged field rule (existing)', () => {
+describe("RouteSchemaOptions.fieldRules MongoKit alignment", () => {
+  it("should accept systemManaged field rule (existing)", () => {
     const options: RouteSchemaOptions = {
       fieldRules: {
         createdAt: { systemManaged: true },
@@ -227,7 +223,7 @@ describe('RouteSchemaOptions.fieldRules MongoKit alignment', () => {
     expect(options.fieldRules?.createdAt?.systemManaged).toBe(true);
   });
 
-  it('should accept immutable field rule', () => {
+  it("should accept immutable field rule", () => {
     const options: RouteSchemaOptions = {
       fieldRules: {
         createdBy: { immutable: true },
@@ -237,7 +233,7 @@ describe('RouteSchemaOptions.fieldRules MongoKit alignment', () => {
     expect(options.fieldRules?.createdBy?.immutable).toBe(true);
   });
 
-  it('should accept immutableAfterCreate field rule', () => {
+  it("should accept immutableAfterCreate field rule", () => {
     const options: RouteSchemaOptions = {
       fieldRules: {
         organizationId: { immutableAfterCreate: true },
@@ -247,7 +243,7 @@ describe('RouteSchemaOptions.fieldRules MongoKit alignment', () => {
     expect(options.fieldRules?.organizationId?.immutableAfterCreate).toBe(true);
   });
 
-  it('should accept optional field rule', () => {
+  it("should accept optional field rule", () => {
     const options: RouteSchemaOptions = {
       fieldRules: {
         description: { optional: true },
@@ -259,7 +255,7 @@ describe('RouteSchemaOptions.fieldRules MongoKit alignment', () => {
     expect(options.fieldRules?.nickname?.optional).toBe(true);
   });
 
-  it('should accept combined field rules (real-world MongoKit usage)', () => {
+  it("should accept combined field rules (real-world MongoKit usage)", () => {
     const options: RouteSchemaOptions = {
       fieldRules: {
         _id: { systemManaged: true },
@@ -280,33 +276,35 @@ describe('RouteSchemaOptions.fieldRules MongoKit alignment', () => {
     expect(options.fieldRules?.slug?.immutable).toBe(true);
   });
 
-  it('should still accept arbitrary extra field rule properties via index signature', () => {
+  it("should still accept arbitrary extra field rule properties via index signature", () => {
     const options: RouteSchemaOptions = {
       fieldRules: {
-        tags: { customTransform: 'lowercase', optional: true },
+        tags: { customTransform: "lowercase", optional: true },
       },
     };
 
-    expect((options.fieldRules?.tags as Record<string, unknown>)?.customTransform).toBe('lowercase');
+    expect((options.fieldRules?.tags as Record<string, unknown>)?.customTransform).toBe(
+      "lowercase",
+    );
     expect(options.fieldRules?.tags?.optional).toBe(true);
   });
 
-  it('should work alongside other RouteSchemaOptions properties', () => {
+  it("should work alongside other RouteSchemaOptions properties", () => {
     const options: RouteSchemaOptions = {
-      hiddenFields: ['password', 'internalNotes'],
-      readonlyFields: ['createdAt', 'updatedAt'],
-      requiredFields: ['name', 'email'],
-      optionalFields: ['bio'],
-      excludeFields: ['__v'],
+      hiddenFields: ["password", "internalNotes"],
+      readonlyFields: ["createdAt", "updatedAt"],
+      requiredFields: ["name", "email"],
+      optionalFields: ["bio"],
+      excludeFields: ["__v"],
       fieldRules: {
         createdAt: { systemManaged: true },
         password: { systemManaged: true },
         email: { immutableAfterCreate: true },
       },
-      query: { page: { type: 'integer' }, limit: { type: 'integer' } },
+      query: { page: { type: "integer" }, limit: { type: "integer" } },
     };
 
-    expect(options.hiddenFields).toContain('password');
+    expect(options.hiddenFields).toContain("password");
     expect(options.fieldRules?.email?.immutableAfterCreate).toBe(true);
     expect(options.query).toBeDefined();
   });
@@ -316,14 +314,14 @@ describe('RouteSchemaOptions.fieldRules MongoKit alignment', () => {
 // 4. MongooseAdapterOptions.schemaGenerator — widened return type
 // ============================================================================
 
-describe('schemaGenerator widened return type', () => {
-  it('should accept a generator returning OpenApiSchemas', () => {
+describe("schemaGenerator widened return type", () => {
+  it("should accept a generator returning OpenApiSchemas", () => {
     const schemas: OpenApiSchemas = {
-      entity: { type: 'object' },
-      createBody: { type: 'object', properties: { name: { type: 'string' } } },
-      updateBody: { type: 'object', properties: { name: { type: 'string' } } },
-      params: { type: 'object', properties: { id: { type: 'string' } } },
-      listQuery: { type: 'object' },
+      entity: { type: "object" },
+      createBody: { type: "object", properties: { name: { type: "string" } } },
+      updateBody: { type: "object", properties: { name: { type: "string" } } },
+      params: { type: "object", properties: { id: { type: "string" } } },
+      listQuery: { type: "object" },
     };
 
     const generator = (_model: unknown, _options?: RouteSchemaOptions) => schemas;
@@ -333,17 +331,18 @@ describe('schemaGenerator widened return type', () => {
     expect(result.createBody).toBeDefined();
   });
 
-  it('should accept a generator returning Record<string, unknown> (MongoKit CrudSchemas)', () => {
+  it("should accept a generator returning Record<string, unknown> (MongoKit CrudSchemas)", () => {
     // Simulates MongoKit's buildCrudSchemasFromModel return type (CrudSchemas)
     // which is structurally compatible but nominally different from OpenApiSchemas
     const crudSchemas: Record<string, unknown> = {
-      createBody: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
-      updateBody: { type: 'object', properties: { name: { type: 'string' } } },
-      params: { type: 'object', properties: { id: { type: 'string', pattern: '^[a-f0-9]{24}$' } } },
-      listQuery: { type: 'object', properties: { page: { type: 'integer' } } },
+      createBody: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
+      updateBody: { type: "object", properties: { name: { type: "string" } } },
+      params: { type: "object", properties: { id: { type: "string", pattern: "^[a-f0-9]{24}$" } } },
+      listQuery: { type: "object", properties: { page: { type: "integer" } } },
     };
 
-    const generator = (_model: unknown, _options?: RouteSchemaOptions): Record<string, unknown> => crudSchemas;
+    const generator = (_model: unknown, _options?: RouteSchemaOptions): Record<string, unknown> =>
+      crudSchemas;
     const result = generator({});
 
     expect(result).toBe(crudSchemas);
@@ -351,16 +350,16 @@ describe('schemaGenerator widened return type', () => {
     expect(result.updateBody).toBeDefined();
   });
 
-  it('DataAdapter.generateSchemas return type includes Record<string, unknown>', () => {
+  it("DataAdapter.generateSchemas return type includes Record<string, unknown>", () => {
     // Verify the interface signature allows the widened type
-    const mockAdapter: Pick<DataAdapter, 'generateSchemas'> = {
+    const mockAdapter: Pick<DataAdapter, "generateSchemas"> = {
       generateSchemas: (_options?: RouteSchemaOptions) => {
-        return { createBody: { type: 'object' } } as Record<string, unknown>;
+        return { createBody: { type: "object" } } as Record<string, unknown>;
       },
     };
 
     const result = mockAdapter.generateSchemas!();
-    expect(result).toHaveProperty('createBody');
+    expect(result).toHaveProperty("createBody");
   });
 });
 
@@ -368,16 +367,16 @@ describe('schemaGenerator widened return type', () => {
 // 4. Pagination result types accept kit-specific extras via TExtra generic
 // ============================================================================
 
-describe('Pagination result types — TExtra generic', () => {
+describe("Pagination result types — TExtra generic", () => {
   interface Product {
     _id: string;
     name: string;
   }
 
-  it('default TExtra = {} keeps the standard offset shape', () => {
+  it("default TExtra = {} keeps the standard offset shape", () => {
     const page: OffsetPaginatedResult<Product> = {
-      method: 'offset',
-      docs: [{ _id: 'a', name: 'alpha' }],
+      method: "offset",
+      docs: [{ _id: "a", name: "alpha" }],
       page: 1,
       limit: 20,
       total: 1,
@@ -388,11 +387,11 @@ describe('Pagination result types — TExtra generic', () => {
     expect(page.docs).toHaveLength(1);
   });
 
-  it('TExtra fields appear flat alongside the standard ones', () => {
+  it("TExtra fields appear flat alongside the standard ones", () => {
     // A kit that returns query timing + region alongside the pagination shape:
     type KitExtras = { tookMs: number; region: string };
     const page: OffsetPaginatedResult<Product, KitExtras> = {
-      method: 'offset',
+      method: "offset",
       docs: [],
       page: 1,
       limit: 20,
@@ -402,16 +401,16 @@ describe('Pagination result types — TExtra generic', () => {
       hasPrev: false,
       // ↓ Must typecheck as top-level fields, not inside a `meta` object.
       tookMs: 12,
-      region: 'us-east-1',
+      region: "us-east-1",
     };
     expect(page.tookMs).toBe(12);
-    expect(page.region).toBe('us-east-1');
+    expect(page.region).toBe("us-east-1");
   });
 
-  it('KeysetPaginatedResult also accepts TExtra', () => {
+  it("KeysetPaginatedResult also accepts TExtra", () => {
     type KeysetExtras = { cursorVersion: number };
     const page: KeysetPaginatedResult<Product, KeysetExtras> = {
-      method: 'keyset',
+      method: "keyset",
       docs: [],
       limit: 20,
       hasMore: false,
@@ -421,10 +420,10 @@ describe('Pagination result types — TExtra generic', () => {
     expect(page.cursorVersion).toBe(1);
   });
 
-  it('PaginationResult discriminated union threads TExtra through both branches', () => {
+  it("PaginationResult discriminated union threads TExtra through both branches", () => {
     type Extras = { tookMs: number };
     const offset: PaginationResult<Product, Extras> = {
-      method: 'offset',
+      method: "offset",
       docs: [],
       page: 1,
       limit: 20,
@@ -435,7 +434,7 @@ describe('Pagination result types — TExtra generic', () => {
       tookMs: 7,
     };
     const keyset: PaginationResult<Product, Extras> = {
-      method: 'keyset',
+      method: "keyset",
       docs: [],
       limit: 20,
       hasMore: false,
@@ -446,14 +445,14 @@ describe('Pagination result types — TExtra generic', () => {
     // Narrow on the discriminator; the TExtra field is visible in both
     // branches thanks to the distributed intersection.
     const narrow = (r: PaginationResult<Product, Extras>) =>
-      r.method === 'keyset' ? r.next : r.page;
+      r.method === "keyset" ? r.next : r.page;
     expect(narrow(offset)).toBe(1);
     expect(narrow(keyset)).toBeNull();
   });
 
-  it('warning field (offset-only) is typed as optional string', () => {
+  it("warning field (offset-only) is typed as optional string", () => {
     const page: OffsetPaginatedResult<Product> = {
-      method: 'offset',
+      method: "offset",
       docs: [],
       page: 101,
       limit: 50,
@@ -461,8 +460,8 @@ describe('Pagination result types — TExtra generic', () => {
       pages: 1000,
       hasNext: true,
       hasPrev: true,
-      warning: 'Deep offset — consider keyset pagination for page > 100',
+      warning: "Deep offset — consider keyset pagination for page > 100",
     };
-    expect(typeof page.warning).toBe('string');
+    expect(typeof page.warning).toBe("string");
   });
 });

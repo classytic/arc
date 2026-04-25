@@ -382,10 +382,13 @@ export interface ActionDefinition {
   readonly permissions?: PermissionCheck;
   /**
    * JSON Schema or Zod v4 schema for action-specific body fields.
-   * Per-field values are typed `unknown` so Zod class instances assign
-   * without casts.
+   *
+   * Typed `unknown` (not `Record<string, unknown>`) so Zod class instances
+   * — `ZodObject<...>` carries no string index signature — assign without
+   * a cast. Same convention as `RouteDefinition.schema.body` / `customSchemas`.
+   * Runtime feature-detects via `convertRouteSchema` / `toJsonSchema`.
    */
-  readonly schema?: Record<string, unknown>;
+  readonly schema?: unknown;
   /** Description for OpenAPI docs and MCP tool */
   readonly description?: string;
   /**
@@ -512,8 +515,12 @@ export interface EventDefinition {
   name: string;
   /** Optional handler — events are published via `fastify.events.publish()`. */
   handler?: (data: unknown) => Promise<void> | void;
-  /** JSON schema for event payload */
-  schema?: Record<string, unknown>;
+  /**
+   * JSON Schema or Zod v4 schema for event payload. Typed `unknown` so Zod
+   * class instances assign without a cast (same convention as
+   * `ActionDefinition.schema` and `RouteDefinition.schema`).
+   */
+  schema?: unknown;
   description?: string;
 }
 

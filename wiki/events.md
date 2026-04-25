@@ -54,7 +54,7 @@ new EventOutbox({ repository, transport });  // repository is any RepositoryLike
 - `store.getDeadLettered?(limit)` returns `DeadLetteredEvent[]`.
 - `RelayResult.deadLettered` counts per batch.
 
-v2.10.3 fixed a plugin onSend race + idempotency lock-leak (closures captured stale reply state). See [[changelog-v2.10]].
+v2.10.3 fixed a plugin onSend race + idempotency lock-leak (closures captured stale reply state). See [[plugins]] and [[gotchas]] #15.
 
 ## WAL skips `arc.*` internal events
 
