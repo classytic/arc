@@ -29,49 +29,7 @@ npm run push -- main                              # Push as classytic-bot[bot] (
 
 ## Release workflow
 
-Commits in this repo **must** be authored as `classytic-bot[bot]`. Pushes go out through `@classytic/dev-tools`'s `classytic-push` binary so both author and pusher show the bot identity in GitHub.
-
-**One-time machine setup** — a single `.env` file at `D:/credentials/.env` (colocated with the `.pem` so the credentials are backed up together):
-
-```env
-CLASSYTIC_BOT_APP_ID=3487539
-CLASSYTIC_BOT_PEM_PATH=D:/credentials/classytic-bot.<date>.private-key.pem
-```
-
-And one persistent user env var so `classytic-push` finds it from any cwd:
-
-```powershell
-[Environment]::SetEnvironmentVariable("CLASSYTIC_BOT_ENV_FILE", "D:/credentials/.env", "User")
-```
-
-**Commit as bot** — use env-var identity override (no local/global git config mutation):
-
-```bash
-GIT_AUTHOR_NAME="classytic-bot[bot]" \
-GIT_AUTHOR_EMAIL="278929599+classytic-bot[bot]@users.noreply.github.com" \
-GIT_COMMITTER_NAME="classytic-bot[bot]" \
-GIT_COMMITTER_EMAIL="278929599+classytic-bot[bot]@users.noreply.github.com" \
-git commit -m "…"
-```
-
-**Push** — mints a short-lived installation token from the `.pem`, pushes with it, never persists the token:
-
-```bash
-npm run push              # pushes current branch
-npm run push -- main      # pushes a specific branch
-npm run push -- main --tags
-```
-
-**CI** (if/when we wire GitHub Actions): wire the org secrets directly, no `.env` file:
-
-```yaml
-env:
-  CLASSYTIC_BOT_APP_ID: ${{ vars.CLASSYTIC_BOT_APP_ID }}
-  CLASSYTIC_BOT_PEM:    ${{ secrets.CLASSYTIC_BOT_PRIVATE_KEY }}
-run: npx classytic-push main
-```
-
-Full publish gate: `npm publish` runs `prepublishOnly` → `typecheck + lint + build + test:ci + smoke`. Do not `--no-verify`. Never set `CLASSYTIC_BOT_PEM_PATH` to anywhere under the repo — the `.pem` must stay in `D:/credentials/` (gitignored by default there anyway).
+See [RELEASING.md](RELEASING.md) — canonical commit/push/publish steps for every `@classytic/*` package.
 
 ## Non-negotiable rules
 
