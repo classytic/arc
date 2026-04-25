@@ -186,32 +186,7 @@ Every subpath must have matching `.mjs` + `.d.mts` in `dist/`. Type-only subpath
 
 ### Release push + publish flow
 
-Commits + pushes + tags go out as `classytic-bot[bot]` via `@classytic/dev-tools`. See the workspace-level [../CLAUDE.md](../CLAUDE.md) for one-time machine setup (the `D:/credentials/.env` + `CLASSYTIC_BOT_ENV_FILE` pointer).
-
-```bash
-# 1. Commit as bot (env-var identity override — no git config mutation)
-GIT_AUTHOR_NAME="classytic-bot[bot]" \
-GIT_AUTHOR_EMAIL="278929599+classytic-bot[bot]@users.noreply.github.com" \
-GIT_COMMITTER_NAME="classytic-bot[bot]" \
-GIT_COMMITTER_EMAIL="278929599+classytic-bot[bot]@users.noreply.github.com" \
-git commit -m "<version>"
-
-# 2. Tag the release commit (annotated)
-GIT_COMMITTER_NAME="classytic-bot[bot]" \
-GIT_COMMITTER_EMAIL="278929599+classytic-bot[bot]@users.noreply.github.com" \
-git tag -a v<version> -m "v<version>"
-
-# 3. Push the branch, then the tag
-npm run push -- main
-npm run push -- v<version>
-
-# 4. Publish to npm (runs prepublishOnly gate automatically)
-npm publish
-```
-
-**Never** set global `git config user.*` — pollutes non-classytic commits. **Never** add `Co-Authored-By` trailers. **Never** `npm publish --no-verify`.
-
-Tags follow `v<semver>` — match what hosts see on npm. Push the tag AFTER the branch, so the ref it points at exists on `origin`.
+See [RELEASING.md](RELEASING.md) — canonical for every `@classytic/*` package.
 
 ---
 
