@@ -193,6 +193,40 @@ export interface RouteSchemaOptions extends SchemaBuilderOptions {
    * post-kit by `mergeFieldRuleConstraints`.
    */
   fieldRules?: Record<string, ArcFieldRule>;
+  /**
+   * Query-time security whitelists + the kit's `filterableFields`.
+   *
+   * Extends repo-core's `SchemaBuilderOptions['query']` with arc-specific
+   * runtime features that `QueryResolver` reads at request time:
+   *
+   * - **`allowedPopulate`** — populate-path whitelist consumed by
+   *   `QueryResolver.sanitizePopulate` / `sanitizeAdvancedPopulate`.
+   *   When set, only paths in the list pass through; everything else is
+   *   stripped silently. Shrinks the auto-wired `?populate=` attack surface.
+   *
+   * - **`allowedLookups`** — lookup-collection whitelist consumed by
+   *   `QueryResolver.sanitizeLookups`. When set, only the listed
+   *   collections may be `$lookup`'d into the pipeline.
+   *
+   * Both are pre-2.11.2 runtime features — the type was missing them, so
+   * hosts wrote `as Record<string, unknown>` at every call site. Arc's own
+   * `QueryResolver` had to cast its own input via `as AnyRecord` for the
+   * same reason. Adding the type dropped both casts.
+   */
+  query?: SchemaBuilderOptions["query"] & {
+    /**
+     * Populate-path whitelist. When set, `QueryResolver.sanitizePopulate`
+     * strips any `?populate=<path>` not in this list. Omit to allow all
+     * paths the kit recognizes.
+     */
+    allowedPopulate?: string[];
+    /**
+     * Lookup-collection whitelist for `QueryResolver.sanitizeLookups`.
+     * When set, only the listed collections may be `$lookup`'d. Omit to
+     * disable the whitelist (kit-level rules still apply).
+     */
+    allowedLookups?: string[];
+  };
 }
 
 export interface FieldRule {

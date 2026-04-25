@@ -194,9 +194,8 @@ export class QueryResolver {
   ): string[] | undefined {
     if (!populate) return undefined;
 
-    const allowedPopulate = (schemaOptions.query as AnyRecord | undefined)?.allowedPopulate as
-      | string[]
-      | undefined;
+    // 2.11.2: typed via `RouteSchemaOptions['query']` extension — no cast.
+    const allowedPopulate = schemaOptions.query?.allowedPopulate;
     const requested =
       typeof populate === "string"
         ? populate.split(",").map((p) => p.trim())
@@ -220,9 +219,7 @@ export class QueryResolver {
   ): import("../types/index.js").PopulateOption[] | undefined {
     if (!options || options.length === 0) return undefined;
 
-    const allowedPopulate = (schemaOptions.query as AnyRecord | undefined)?.allowedPopulate as
-      | string[]
-      | undefined;
+    const allowedPopulate = schemaOptions.query?.allowedPopulate;
 
     // If no allowlist, allow all
     if (!allowedPopulate) return options;
@@ -242,9 +239,7 @@ export class QueryResolver {
   ): LookupOption[] | undefined {
     if (!lookups || lookups.length === 0) return undefined;
 
-    const allowedLookups = (schemaOptions.query as AnyRecord | undefined)?.allowedLookups as
-      | string[]
-      | undefined;
+    const allowedLookups = schemaOptions.query?.allowedLookups;
 
     const validFieldName = /^[a-zA-Z_][a-zA-Z0-9_.]*$/;
 
