@@ -234,6 +234,8 @@
     "test:unit": "vitest run tests/core tests/hooks tests/utils tests/plugins",
     "smoke": "node scripts/smoke-test.mjs",
     "push": "classytic-push",
+    "release:tag": "node -e \"require('child_process').execSync('npm run push -- v'+require('./package.json').version,{stdio:'inherit'})\"",
+    "release": "npm run push -- main && npm run release:tag && npm publish",
     "prepublishOnly": "npm run typecheck && npm run lint && npm run build && npm run test:ci && npm run smoke"
   },
   "engines": {
