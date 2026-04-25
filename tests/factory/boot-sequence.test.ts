@@ -8,7 +8,7 @@
  *   4. resources[]    ← auto-discovered routes
  *   5. afterResources ← post-registration wiring
  *
- * Also tests: resourcePrefix, loadResources({ silent })
+ * Also tests: resourcePrefix, loadResources({ logger })
  */
 
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -343,17 +343,17 @@ describe("createApp — boot sequence", () => {
 });
 
 // ============================================================================
-// loadResources({ silent })
+// loadResources — logger injection (silent default; 2.11.1+)
 // ============================================================================
 
-describe("loadResources — silent option", () => {
+describe("loadResources — logger fallback to arcLog", () => {
   const TMP = join(import.meta.dirname, "__tmp_boot_silent__");
 
   afterAll(() => {
     if (existsSync(TMP)) rmSync(TMP, { recursive: true, force: true });
   });
 
-  it("silent: true suppresses skip warnings", async () => {
+  it("omitted logger — falls back to arcLog (warnings reach console.warn by default)", async () => {
     mkdirSync(TMP, { recursive: true });
 
     // File that matches pattern but has no toPlugin
@@ -369,19 +369,23 @@ describe("loadResources — silent option", () => {
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    const loaded = await loadResources(TMP, { silent: true });
+    // No logger injected → arcLog handles it (canonical arc behavior:
+    // warnings visible by default, suppressible via ARC_SUPPRESS_WARNINGS=1
+    // or routable via configureArcLogger({ writer })).
+    const loaded = await loadResources(TMP);
 
     expect(loaded).toHaveLength(1);
     expect((loaded[0] as { name: string }).name).toBe("valid");
 
-    // No warnings logged
-    const skipMsg = warnSpy.mock.calls.find((c) => String(c[0]).includes("skipped"));
-    expect(skipMsg).toBeUndefined();
+    // arcLog defaults to console.warn — the factory-failure messages
+    // should have surfaced (with `[arc:loadResources]` prefix).
+    const arcWarn = warnSpy.mock.calls.find((c) => String(c[0]).includes("[arc:loadResources]"));
+    expect(arcWarn).toBeDefined();
 
     warnSpy.mockRestore();
   });
 
-  it("silent: false (default) still logs warnings when logger provided", async () => {
+  it("injected logger — overrides arcLog fallback, warnings flow through `warn(msg)`", async () => {
     const dir = join(TMP, "noisy");
     mkdirSync(dir, { recursive: true });
 
@@ -394,8 +398,8 @@ describe("loadResources — silent option", () => {
     expect(skipMsg).toBeDefined();
   });
 
-  it("silent: true also suppresses import failure warnings", async () => {
-    const dir = join(TMP, "failures");
+  it("no-op logger — callable shape, output discarded, nothing leaks to console", async () => {
+    const dir = join(TMP, "noop");
     mkdirSync(dir, { recursive: true });
 
     writeFileSync(
@@ -404,13 +408,15 @@ describe("loadResources — silent option", () => {
     );
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const noopWarn = vi.fn();
 
-    const loaded = await loadResources(dir, { silent: true });
+    // Pass `{ warn: () => {} }` to fully suppress per-call (overrides
+    // arcLog fallback). For global suppression use ARC_SUPPRESS_WARNINGS=1.
+    const loaded = await loadResources(dir, { logger: { warn: noopWarn } });
 
     expect(loaded).toHaveLength(0);
-
-    const failMsg = warnSpy.mock.calls.find((c) => String(c[0]).includes("failed"));
-    expect(failMsg).toBeUndefined();
+    expect(noopWarn).toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
 
     warnSpy.mockRestore();
   });

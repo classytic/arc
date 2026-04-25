@@ -32,8 +32,7 @@ One-line hooks per page. Load only what you need.
 - [gotchas](gotchas.md) — numbered trap list (fail-closed, at-least-once, etc.)
 - [security](security.md) — checklist when touching auth/perms/data
 
-## History
-- [changelog-v2.11](changelog-v2.11.md) — BaseController mixin split, testing rewrite, action-router parity, schema alignment polish
-- [changelog-v2.10](changelog-v2.10.md) — permissions split, plugin onSend fix, repo adapters
-- [changelog-v2.9](changelog-v2.9.md) — event contract v2, outbox, multiTenant UPDATE fix
-- [removed](removed.md) — APIs removed per version, with replacements
+## API lifecycle
+- [removed](removed.md) — APIs removed per version, with replacements (so agents don't reach for ghosts)
+
+> **Release notes live elsewhere.** Wiki pages document how arc works *now*; for historical changes see [`/changelog/v2.md`](../changelog/v2.md) at the repo root, or the curated [`/CHANGELOG.md`](../CHANGELOG.md) entry pointer.

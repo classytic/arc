@@ -102,7 +102,7 @@ export default defineResource({
     try {
       // ── Load resources ──
       const metaUrl = pathToFileURL(join(TMP, "index.ts")).href;
-      const resources = await loadResources(metaUrl, { silent: true });
+      const resources = await loadResources(metaUrl);
       expect(resources).toHaveLength(3);
 
       // ── Boot app ──
@@ -276,7 +276,7 @@ export default defineResource({
     );
 
     try {
-      const autoResources = await loadResources(TMP, { silent: true });
+      const autoResources = await loadResources(TMP);
       const manual = makeResource("manual");
 
       app = await createApp({

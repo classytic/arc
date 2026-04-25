@@ -60,7 +60,102 @@ const app = await createApp({
 });
 ```
 
-`loadResources` options: `exclude`, `include`, `suffix` (default: `.resource`), `recursive` (default: true), `silent` (suppress warnings).
+### Engine-bound resources via `loadResources({ context })` (2.11.1)
+
+When you have engine-owned resources (catalog, flow, loyalty, …), the
+combination of `loadResources({ context })` + factory-style default exports
+lets auto-discovery thread the engine into resources without parallel
+factory files or `exclude: [...]` bookkeeping:
+
+```typescript
+// resources/catalog/category.resource.ts — factory default export
+import type { AppContext } from '#core/app/context.js';
+export default (ctx: AppContext) =>
+  defineResource({
+    name: 'category',
+    adapter: createMongooseAdapter(
+      ctx.catalog.models.Category,
+      ctx.catalog.repositories.category,
+    ),
+    permissions: { /* ... */ },
+  });
+
+// app.ts — single sweep, no excludes, no parallel factories
+const app = await createApp({
+  resources: async () => {
+    const [catalog, flow] = await Promise.all([
+      ensureCatalogEngine(),
+      ensureFlowEngine(),
+    ]);
+    return loadResources<AppContext>(import.meta.url, {
+      context: { catalog, flow },
+    });
+  },
+});
+```
+
+**Detection**: `loadResources` checks `typeof default === 'function'`.
+`defineResource()` returns a class instance (`typeof === 'object'`), so a
+function-typed default unambiguously means "factory — call me with
+`options.context`." Plain `ResourceLike` exports keep working unchanged.
+Async factories are awaited.
+
+A factory that returns a non-resource value (or throws) is reported via
+the injected `logger.warn` channel — distinct from the regular "skipped
+file" path so misconfigurations surface clearly.
+
+### Strict resource flags
+
+Two independent flags catch separate failure modes:
+
+| Flag | What it catches | Production preset default |
+|------|-----------------|---------------------------|
+| `strictResourceDir` | `resourceDir` resolved to zero matching files (typo'd path / stale `dist/`) | **`true`** |
+| `strictResources` | Two resources share the same `name` (stale `dist/` collisions, duplicate registration) | **`true`** |
+
+**You don't need to set them manually when using `preset: 'production'`** —
+both default to `true` automatically. Setting `strictResourceDir: config.isProduction` /
+`strictResources: config.isProduction` in your factory is redundant once the production preset is on.
+
+Override either explicitly only when you're opting *out* — e.g. for a hot-path migration where you genuinely expect duplicate names temporarily.
+
+### Logging — arcLog fallback + injection override
+
+`loadResources` follows arc's standard logger convention: warnings flow
+through `arcLog('loadResources')` by default (same channel as every other
+arc-internal warn), and an injected `logger` overrides the fallback for
+that call. Three control points:
+
+```typescript
+// 1. Global suppression (silences ALL arc warnings, not just loadResources)
+process.env.ARC_SUPPRESS_WARNINGS = '1';
+
+// 2. Per-call override — route to your own logger
+import pino from 'pino';
+const logger = pino();
+const resources = await loadResources(import.meta.url, {
+  context: { catalog },
+  logger: { warn: (msg) => logger.warn(msg) },
+});
+
+// 3. Per-call no-op — discard warnings without setting env
+await loadResources(import.meta.url, { logger: { warn: () => undefined } });
+
+// 4. Custom arcLog sink — routes EVERY arc warning (loadResources + others)
+import { configureArcLogger } from '@classytic/arc';
+configureArcLogger({ writer: pinoAdapter });
+```
+
+> **Migration from pre-2.11.1**: the `silent: boolean` option was removed.
+> The default also changed: pre-2.11.1 was silent-when-no-logger; 2.11.1
+> routes through arcLog (warn-by-default). Migration:
+>
+> - `silent: true` → `ARC_SUPPRESS_WARNINGS=1` env var, or pass `logger: { warn: () => undefined }` per-call.
+> - `silent: !isDev` → set `ARC_SUPPRESS_WARNINGS=1` in production env.
+> - Callers that already injected a `logger` → no change (injection still wins over the fallback).
+> - Callers that relied on the silent default → warnings will now show. This is intentional — skip / factory-failure events used to disappear silently, which masked misconfiguration. Use one of the three suppression knobs above if you genuinely want silence.
+
+`loadResources` options: `exclude`, `include`, `suffix` (default: `.resource`), `recursive` (default: true), `context`, `logger`.
 
 **When to use the factory form** — resource definitions are evaluated at module-import time, so any resource whose adapter depends on an async-booted engine (e.g. `@classytic/catalog`, `@classytic/flow` patterns using `await createX(...)`) can't be defined statically. Before 2.11.x, hosts wrote per-resource lazy-bridge adapters that awaited `ensureEngine()` on every CRUD call — pure boilerplate. The factory slot runs between `bootstrap[]` and route wiring, so `defineResource(...)` calls inside it see the engine already live.
 

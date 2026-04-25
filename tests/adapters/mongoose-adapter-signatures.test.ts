@@ -49,10 +49,7 @@ describe("createMongooseAdapter — signature surface", () => {
     const Model = createMockModel("AdSigSchemaGen");
     const repo = createMockRepository(Model);
 
-    const schemaGen = (
-      _model: Model<unknown>,
-      _options?: RouteSchemaOptions,
-    ): OpenApiSchemas => {
+    const schemaGen = (_model: Model<unknown>, _options?: RouteSchemaOptions): OpenApiSchemas => {
       return {
         entity: { type: "object", properties: {} },
         createBody: { type: "object", properties: {} },
