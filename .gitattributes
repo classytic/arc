@@ -1,0 +1,16 @@
+# Force LF in both the index and the working tree across platforms.
+# Prevents CRLF drift on Windows checkouts when `core.autocrlf` differs
+# per developer. Binary detection still applies via the `text=auto` heuristic.
+* text=auto eol=lf
+
+# Common binary types — explicit so heuristics never get them wrong.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.woff binary
+*.woff2 binary

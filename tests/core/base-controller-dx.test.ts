@@ -363,6 +363,186 @@ describe("defineResource — setQueryParser forwarding warn", () => {
 });
 
 // ============================================================================
+// 4b. defineResource warns when user controller is passed alongside
+//     auto-build-only options (tenantField, schemaOptions, idField, etc.)
+// ============================================================================
+//
+// The auto-build path threads several `defineResource` options into
+// `new BaseController(repo, { ... })`. The user-controller path returns
+// early — silently dropping every one of those options. Same DX pattern as
+// the queryParser warn above, but covers the whole option set so hosts
+// don't repeat the 90-minute "why is tenantField ignored" debug for
+// schemaOptions, idField, defaultSort, cache, onFieldWriteDenied, or
+// preset-injected controller fields.
+
+describe("defineResource — user-controller dropped-options warn", () => {
+  async function setup(): Promise<{
+    warns: string[];
+    teardown: () => Promise<void>;
+  }> {
+    const warns: string[] = [];
+    const { configureArcLogger } = await import("../../src/logger/index.js");
+    configureArcLogger({
+      writer: {
+        warn: (...args: unknown[]) => warns.push(args.map(String).join(" ")),
+        info: () => {},
+        error: () => {},
+        debug: () => {},
+      },
+    });
+    return {
+      warns,
+      teardown: async () => {
+        configureArcLogger({});
+      },
+    };
+  }
+
+  function userController() {
+    return {
+      list: async () => ({ success: true, data: [] }),
+      get: async () => ({ success: true, data: null }),
+      create: async () => ({ success: true, data: {} }),
+      update: async () => ({ success: true, data: {} }),
+      delete: async () => ({ success: true, data: { message: "ok" } }),
+    };
+  }
+
+  it("warns when tenantField is set on the resource but a user controller is supplied", async () => {
+    const { warns, teardown } = await setup();
+    const { defineResource } = await import("../../src/core/defineResource.js");
+    const { allowPublic } = await import("../../src/permissions/index.js");
+
+    defineResource({
+      name: "branch-doc-is-org",
+      prefix: "/branch-doc-is-org",
+      // biome-ignore lint/suspicious/noExplicitAny: test shim
+      controller: userController() as any,
+      tenantField: "_id",
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
+      },
+      skipValidation: true,
+      skipRegistry: true,
+    });
+
+    const droppedWarn = warns.find(
+      (w) => w.includes("branch-doc-is-org") && w.includes("tenantField"),
+    );
+    expect(droppedWarn).toBeDefined();
+    expect(droppedWarn).toContain("super(");
+    await teardown();
+  });
+
+  it("lists EVERY dropped option in a single warn (one boot-time line, not six)", async () => {
+    const { warns, teardown } = await setup();
+    const { defineResource } = await import("../../src/core/defineResource.js");
+    const { allowPublic } = await import("../../src/permissions/index.js");
+
+    defineResource({
+      name: "many-dropped",
+      prefix: "/many-dropped",
+      // biome-ignore lint/suspicious/noExplicitAny: test shim
+      controller: userController() as any,
+      tenantField: false,
+      idField: "uuid",
+      defaultSort: "-name",
+      cache: { staleTime: 30 },
+      onFieldWriteDenied: "strip",
+      schemaOptions: { fieldRules: { secret: { systemManaged: true } } },
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
+      },
+      skipValidation: true,
+      skipRegistry: true,
+    });
+
+    const droppedWarn = warns.find((w) => w.includes("many-dropped"));
+    expect(droppedWarn).toBeDefined();
+    // All six user-facing options must show up — the warn's value is in
+    // naming the full set so the host fixes them in one pass.
+    expect(droppedWarn).toContain("tenantField");
+    expect(droppedWarn).toContain("schemaOptions");
+    expect(droppedWarn).toContain("idField");
+    expect(droppedWarn).toContain("defaultSort");
+    expect(droppedWarn).toContain("cache");
+    expect(droppedWarn).toContain("onFieldWriteDenied");
+    await teardown();
+  });
+
+  it("does NOT warn when no auto-build-only options are declared", async () => {
+    const { warns, teardown } = await setup();
+    const { defineResource } = await import("../../src/core/defineResource.js");
+    const { allowPublic } = await import("../../src/permissions/index.js");
+
+    defineResource({
+      name: "clean-user-ctrl",
+      prefix: "/clean-user-ctrl",
+      // biome-ignore lint/suspicious/noExplicitAny: test shim
+      controller: userController() as any,
+      // No tenantField / idField / schemaOptions / etc. — silent.
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
+      },
+      skipValidation: true,
+      skipRegistry: true,
+    });
+
+    const droppedWarn = warns.find(
+      (w) => w.includes("clean-user-ctrl") && w.includes("dropped silently"),
+    );
+    expect(droppedWarn).toBeUndefined();
+    await teardown();
+  });
+
+  it("does NOT warn when arc auto-builds the controller (no drop possible)", async () => {
+    const { warns, teardown } = await setup();
+    const { defineResource } = await import("../../src/core/defineResource.js");
+    const { allowPublic } = await import("../../src/permissions/index.js");
+    const { createMockModel, createMockRepository } = await import("../setup.js");
+    const { createMongooseAdapter } = await import("../../src/adapters/mongoose.js");
+
+    const Model = createMockModel("AutoBuildCtrl");
+    const repo = createMockRepository(Model);
+
+    defineResource({
+      name: "auto-build",
+      prefix: "/auto-build",
+      adapter: createMongooseAdapter(Model, repo),
+      tenantField: "_id",
+      idField: "uuid",
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
+      },
+      skipValidation: true,
+      skipRegistry: true,
+    });
+
+    const droppedWarn = warns.find(
+      (w) => w.includes("auto-build") && w.includes("dropped silently"),
+    );
+    expect(droppedWarn).toBeUndefined();
+    await teardown();
+  });
+});
+
+// ============================================================================
 // 5. Root barrel — utility types importable from '@classytic/arc'
 // ============================================================================
 

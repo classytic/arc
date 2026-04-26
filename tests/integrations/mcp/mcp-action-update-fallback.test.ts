@@ -88,4 +88,21 @@ describe("MCP: action permission fallback chain parity with HTTP", () => {
     const result = (await invoke(tool)) as { isError?: boolean };
     expect(result.isError).not.toBe(true);
   });
+
+  it("throws when no gate exists at any level (parity with HTTP boot-time throw)", () => {
+    // HTTP fails closed in normalizeActionsToRouterConfig at boot. That
+    // throw lives inside the resource's register() plugin lifecycle, so a
+    // host calling resourceToTools() directly (or registering mcpPlugin
+    // with resources whose HTTP plugin never runs) would otherwise expose
+    // an unauthenticated mutating tool. MCP must mirror the HTTP error.
+    const resource = build(
+      { approve: async (id: string) => ({ id }) },
+      {}, // no permissions.update
+      undefined, // no resource.actionPermissions
+    );
+
+    expect(() => resourceToTools(resource)).toThrow(
+      /action 'approve' has no permission gate.*allowPublic\(\).*genuinely want the action unauthenticated/s,
+    );
+  });
 });

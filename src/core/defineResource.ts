@@ -379,7 +379,50 @@ function resolveOrAutoCreateController<TDoc extends AnyRecord>(
     }
   }
 
-  if (controller || !hasCrudRoutes || !repository) {
+  if (controller) {
+    // The auto-build path below threads several `defineResource` options
+    // (tenantField, schemaOptions, idField, defaultSort, cache,
+    // onFieldWriteDenied) into the controller's constructor. When the user
+    // supplies their own controller we cannot reach into it without
+    // coupling arc to subclass shape — so the canonical wiring is for the
+    // user to forward those options through their `super(repo, { ... })`
+    // call. Surface the silent drop so it's not a 90-minute debug.
+    //
+    // Same pattern as the `setQueryParser` warn above: arc names the
+    // resource + the dropped options + the canonical fix. Honors
+    // `ARC_SUPPRESS_WARNINGS=1`.
+    const droppedOptions: string[] = [];
+    if (resolvedConfig.tenantField !== undefined) droppedOptions.push("tenantField");
+    if (
+      resolvedConfig.schemaOptions !== undefined &&
+      Object.keys(resolvedConfig.schemaOptions).length > 0
+    ) {
+      droppedOptions.push("schemaOptions");
+    }
+    if (resolvedConfig.idField !== undefined) droppedOptions.push("idField");
+    if (resolvedConfig.defaultSort !== undefined) droppedOptions.push("defaultSort");
+    if (resolvedConfig.cache !== undefined) droppedOptions.push("cache");
+    if (resolvedConfig.onFieldWriteDenied !== undefined) {
+      droppedOptions.push("onFieldWriteDenied");
+    }
+    if (resolvedConfig._controllerOptions !== undefined) {
+      droppedOptions.push("preset-injected fields (slug/softDelete/parent)");
+    }
+
+    if (droppedOptions.length > 0) {
+      arcLog("defineResource").warn(
+        `Resource "${resolvedConfig.name}" declares a custom controller AND resource-level ` +
+          `option(s) [${droppedOptions.join(", ")}]. Arc only threads these when it auto-builds ` +
+          `the controller — when you pass your own, they are dropped silently and the ` +
+          `controller falls back to its own defaults (e.g. tenantField → 'organizationId'). ` +
+          `Forward them to your controller's \`super(repo, { ... })\` call. ` +
+          `Same root cause as the \`queryParser\` warn above.`,
+      );
+    }
+
+    return controller as unknown as IController<TDoc> | undefined;
+  }
+  if (!hasCrudRoutes || !repository) {
     return controller as unknown as IController<TDoc> | undefined;
   }
 

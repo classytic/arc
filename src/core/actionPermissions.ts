@@ -43,8 +43,10 @@ export interface ResolveActionPermissionInput {
  *
  * Callers decide what "no gate" means:
  *   - HTTP: boot-time throw in `normalizeActionsToRouterConfig`.
- *   - MCP: treated as allow (legacy) — but the HTTP fallback now fills the
- *     gap when `permissions.update` is set, so the MCP hole closes too.
+ *   - MCP: tool-generation throw in `resourceToTools` (mirrors HTTP — the
+ *     two surfaces fail closed identically so MCP can't expose an
+ *     unauthenticated mutating tool when the HTTP plugin lifecycle hasn't
+ *     run).
  *   - OpenAPI: docs advertise the endpoint as unauthenticated.
  */
 export function resolveActionPermission(

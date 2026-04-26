@@ -334,7 +334,7 @@ GLOBAL OPTIONS
 
 INIT OPTIONS
   --mongokit               Use MongoKit adapter (default, recommended)
-  --custom                 Use custom adapter (empty template)
+  --custom                 Use custom / Drizzle-ready adapter template
   --better-auth            Use Better Auth (default, recommended)
   --jwt                    Use Arc built-in JWT auth
   --multi-tenant, --multi  Multi-tenant mode (adds org scoping)
@@ -346,7 +346,7 @@ INIT OPTIONS
   --skip-install           Skip npm install after scaffolding
 
 GENERATE SUBCOMMANDS
-  resource, r       Generate full resource (model, repo, controller, schemas, resource)
+  resource, r       Generate resource-first scaffold (model, repo, resource, test)
   controller, c     Generate controller only
   model, m          Generate model only
   repository, repo  Generate repository only

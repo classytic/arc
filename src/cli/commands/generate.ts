@@ -5,8 +5,6 @@
  * - src/resources/product/product.model.ts
  * - src/resources/product/product.repository.ts
  * - src/resources/product/product.resource.ts
- * - src/resources/product/product.controller.ts
- * - src/resources/product/product.schemas.ts
  *
  * Handles kebab-case names: `arc g r org-profile` generates:
  * - Class names: OrgProfile, OrgProfileRepository
@@ -87,7 +85,7 @@ ${
 export interface I${name} {
   name: string;
   description?: string;
-  isActive: boolean;
+  ${isMultiTenant ? "organizationId: string;\n  " : ""}isActive: boolean;
 }
 
 export type ${name}Document = HydratedDocument<I${name}>;
@@ -98,14 +96,14 @@ const ${camel}Schema = new Schema${ts ? `<I${name}>` : ""}(
   {
     name: { type: String, required: true, trim: true },
     description: { type: String, trim: true },
-    isActive: { type: Boolean, default: true },
+    ${isMultiTenant ? "organizationId: { type: String, required: true, index: true },\n    " : ""}isActive: { type: Boolean, default: true },
   },
   { timestamps: true }
 );
 
 // Indexes
 ${camel}Schema.index({ name: 1 });
-${camel}Schema.index({ isActive: 1 });
+${isMultiTenant ? `${camel}Schema.index({ organizationId: 1, isActive: 1 });\n` : ""}${camel}Schema.index({ isActive: 1 });
 
 const ${name} = mongoose.models.${name} || mongoose.model('${name}', ${camel}Schema);
 export default ${name};
@@ -233,20 +231,21 @@ export default crudSchemas;
  */
 
 import { defineResource, createMongooseAdapter } from '@classytic/arc';
-import { requireAuth, requireRoles } from '@classytic/arc/permissions';
+import { allOf, requireOrgMembership, requireRoles } from '@classytic/arc/permissions';
+import { multiTenantPreset } from '@classytic/arc/presets';
 import ${name}${ts ? `, { type I${name} }` : ""} from './${fileName}.model.js';
 import ${camel}Repository from './${fileName}.repository.js';${queryParserImport}
 
 const ${camel}Resource = defineResource${ts ? `<I${name}>` : ""}({
   name: '${fileName}',
   adapter: createMongooseAdapter({ model: ${name}, repository: ${camel}Repository }),${queryParserConfig}
-  presets: ['softDelete'],
+  presets: ['softDelete', multiTenantPreset({ tenantField: 'organizationId' })],
   permissions: {
-    list: requireAuth(),
-    get: requireAuth(),
-    create: requireRoles(['admin']),
-    update: requireRoles(['admin']),
-    delete: requireRoles(['admin']),
+    list: requireOrgMembership(),
+    get: requireOrgMembership(),
+    create: allOf(requireOrgMembership(), requireRoles(['admin'])),
+    update: allOf(requireOrgMembership(), requireRoles(['admin'])),
+    delete: allOf(requireOrgMembership(), requireRoles(['admin'])),
   },
 });
 
@@ -461,7 +460,7 @@ export async function generate(type: string | undefined, args: string[]): Promis
 }
 
 /**
- * Generate a full resource
+ * Generate a resource-first scaffold
  */
 async function generateResource(
   name: string,
@@ -536,8 +535,9 @@ Next steps:
 3. Adjust permissions in ${lowerName}.resource.${ext}:
 ${
   isMultiTenant
-    ? `   - requireAuth()          → any authenticated user
-   - requireRoles(['admin']) → specific platform roles`
+    ? `   - requireOrgMembership() → member of the current organization
+   - multiTenantPreset()    → injects and filters organizationId
+   - requireRoles(['admin']) → admin writes inside the org scope`
     : `   - requireAuth()          → any authenticated user
    - requireRoles(['admin']) → specific platform roles`
 }

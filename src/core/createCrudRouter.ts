@@ -42,6 +42,7 @@ import {
   type RouteRateLimitConfig,
   type RouterPluginMw,
   resolvePipelineSteps,
+  resolveRoutePreHandlers,
   resolveRouterPluginMw,
   selectPluginMw,
 } from "./routerShared.js";
@@ -143,11 +144,19 @@ function createCustomRoutes<TDoc = unknown>(
       ...(convertedSchema ?? {}),
     } as Record<string, unknown>;
 
-    // Resolve preHandler — can be array or function that receives fastify
-    const customPreHandlers =
-      typeof route.preHandler === "function"
-        ? (route.preHandler as (fastify: FastifyWithDecorators) => RouteHandlerMethod[])(fastify)
-        : ((route.preHandler ?? []) as PreHandlerHook[]);
+    // Resolve preHandler — accepts an array OR a `(fastify) => array` factory.
+    // The shared resolver (a) discriminates the two valid shapes by `typeof`,
+    // (b) validates a factory's RETURN is actually an array, and (c) throws an
+    // actionable error pointing at the route + the canonical fix when a single
+    // `RouteHandlerMethod` (e.g. `multipartBody({...})`) was passed where an
+    // array was expected. Pre-2.11.3 the bare-handler mistake produced a
+    // cryptic `Cannot read properties of undefined (reading 'content-type')`
+    // because the handler ran with `fastify` in the request slot.
+    const customPreHandlers = resolveRoutePreHandlers(
+      route.preHandler,
+      fastify,
+      `${route.method} ${route.path}`,
+    );
 
     // preAuth runs BEFORE auth — for token promotion (e.g., EventSource ?token= → Authorization)
     const preAuthHandlers = (route as { preAuth?: PreHandlerHook[] }).preAuth ?? [];

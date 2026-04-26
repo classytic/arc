@@ -255,7 +255,7 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
         : { message: error.message };
       const firstFailedAt = current.firstFailedAt ?? now;
 
-      await r.findOneAndUpdate(
+      const updated = await r.findOneAndUpdate(
         filter,
         update({
           set: {
@@ -270,6 +270,22 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
         }),
         { returnDocument: "after" },
       );
+      if (updated) return;
+
+      // findOneAndUpdate returned null. The pre-write `safeGetOne` already
+      // confirmed the row exists and (when consumerId was supplied) was
+      // owned by this consumer, so a null result here means the lease was
+      // stolen between the read and the write. Surface the same
+      // OutboxOwnershipError that acknowledge() raises so the caller sees
+      // a precise diagnostic instead of a silent no-op. Without consumerId
+      // the filter is id-only and a null is only possible if the row was
+      // purged mid-flight — fall through to the contract no-op.
+      if (options?.consumerId) {
+        const after = (await safeGetOne(baseFilter)) as OutboxDoc | null;
+        if (after && after.leaseOwner !== options.consumerId) {
+          throw new OutboxOwnershipError(eventId, options.consumerId, after.leaseOwner);
+        }
+      }
     },
 
     async getDeadLettered(limit: number): Promise<DeadLetteredEvent[]> {

@@ -398,8 +398,17 @@ describe("arc generate resource — multi-tenant config", () => {
     const content = await readText(
       path.join(projectDir, "src/resources/project/project.resource.ts"),
     );
-    expect(content).toContain("requireAuth");
+    expect(content).toContain("requireOrgMembership");
     expect(content).toContain("requireRoles");
+    expect(content).toContain("multiTenantPreset({ tenantField: 'organizationId' })");
+    expect(content).toContain("allOf(requireOrgMembership(), requireRoles(['admin']))");
     expect(content).toContain("defineResource");
+  });
+
+  it("should generate model with tenant field and index", async () => {
+    const content = await readText(path.join(projectDir, "src/resources/project/project.model.ts"));
+    expect(content).toContain("organizationId: string");
+    expect(content).toContain("organizationId: { type: String, required: true, index: true }");
+    expect(content).toContain("projectSchema.index({ organizationId: 1, isActive: 1 })");
   });
 });
