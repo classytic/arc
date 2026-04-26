@@ -5,7 +5,14 @@ Database-agnostic resource framework for Fastify. One `defineResource()` call �
 **v2.11** · Fastify 5+ · Node.js 22+ · ESM only
 
 ```bash
+# Core
 npm install @classytic/arc fastify
+
+# Security defaults that createApp() enables out of the box
+npm install @fastify/cors @fastify/helmet @fastify/rate-limit @fastify/under-pressure @fastify/sensible
+# (each is opt-out via `cors: false` / `helmet: false` / etc.)
+
+# Pick a storage adapter
 npm install @classytic/mongokit mongoose          # MongoDB (most common)
 # OR @classytic/sqlitekit drizzle-orm better-sqlite3 (sqlite)
 # OR bring your own: implement RepositoryLike from @classytic/repo-core
@@ -18,7 +25,7 @@ npm install @classytic/mongokit mongoose          # MongoDB (most common)
 | | |
 |---|---|
 | **One call, full REST** | `defineResource({ name, adapter, presets, permissions })` → `GET /`, `GET /:id`, `POST /`, `PATCH /:id`, `DELETE /:id` + custom routes + actions |
-| **DB-agnostic** | Mongoose, Prisma, Drizzle, or any `RepositoryLike` impl. Swap backends without rewriting routes. |
+| **DB-agnostic** | Mongoose, Drizzle/sqlitekit, or any `RepositoryLike` impl — swap backends without rewriting routes. (Prisma adapter is experimental: implemented, no integration tests yet.) |
 | **Multi-tenant by default** | Tenant-field auto-injected, scope-aware queries, per-org cache keys, elevation events. |
 | **Tree-shakable subpaths** | `@classytic/arc/auth`, `/events`, `/cache`, `/mcp`, `/integrations/jobs` — pay only for what you import. |
 | **MCP tools, free** | Resources auto-generate Model Context Protocol tools for AI agents. Same permissions, same field rules. |
@@ -226,19 +233,6 @@ arc docs ./openapi.json --entry ./dist/index.js  # emit OpenAPI
 arc introspect --entry ./dist/index.js           # introspect resources
 arc doctor                                       # diagnose env
 ```
-
----
-
-## Highlights from recent releases
-
-| Version | Headline |
-|---|---|
-| **2.11.2** | `RouteSchemaOptions['query']` types `allowedPopulate` + `allowedLookups` |
-| **2.11.1** | `loadResources({ context })` + factory exports; `ActionDefinition.schema` widened to `unknown`; `silent` removed in favor of `arcLog` fallback |
-| **2.11.0** | `BaseController` mixin split, testing surface rewrite (`createTestApp`, `TestAuthProvider`, `expectArc`), action-router parity, async resources factory |
-| **2.10** | Permissions split, `RepositoryLike` plugs into outbox/audit/idempotency, plugin onSend race fix |
-
-Full history: [`/changelog/v2.md`](changelog/v2.md).
 
 ---
 

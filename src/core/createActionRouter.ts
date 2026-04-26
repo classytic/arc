@@ -393,15 +393,55 @@ export function createActionRouter(
  * {
  *   "type": "object",
  *   "required": ["action"],
+ *   "properties": {
+ *     "action": { "type": "string", "enum": ["dispatch", "approve"] },
+ *     "carrier": { "type": "string" }
+ *   },
  *   "oneOf": [
- *     { "properties": { "action": { "const": "dispatch" }, "carrier": {...} }, "required": ["action", "carrier"] },
- *     { "properties": { "action": { "const": "approve"  } }, "required": ["action"] }
+ *     {
+ *       "properties": {
+ *         "action": { "const": "dispatch" },
+ *         "carrier": { "type": "string" }       // ← every branch lists the union
+ *       },
+ *       "required": ["action", "carrier"]
+ *     },
+ *     {
+ *       "properties": {
+ *         "action": { "const": "approve" },
+ *         "carrier": { "type": "string" }       // ← even though approve doesn't use it
+ *       },
+ *       "required": ["action"]
+ *     }
  *   ]
  * }
  * ```
  *
- * AJV validates this natively, so an action call missing required fields is
- * rejected with HTTP 400 before the handler ever runs.
+ * **Why every branch carries the full property union.** AJV's
+ * `removeAdditional: 'all'` (Fastify's framework default) interacts badly
+ * with `oneOf`: when a branch's `properties` lacks a field, AJV strips it
+ * from the body during that branch's evaluation — *even if a different
+ * branch would have allowed it*. The strip mutates the body before
+ * `oneOf` finishes discriminating, so by the time the matching branch
+ * wins, the body has already lost fields. Concretely: `actions: { verify:
+ * {}, hold: { schema: z.object({ amount, reason }.optional()) } }` +
+ * `POST { action: 'hold', amount: 1, reason }` lands at the handler as
+ * `{ action: 'hold' }`. Empirically reproduced and locked at
+ * [tests/core/action-discriminator-strip.test.ts](../../tests/core/action-discriminator-strip.test.ts).
+ *
+ * Listing every action's properties on every branch makes per-branch
+ * removeAdditional walks see every caller field as "in this branch's
+ * properties," so nothing gets stripped during oneOf evaluation. The
+ * `required` array stays per-action, so the handler still gets called
+ * only when the matching branch's required-field contract is satisfied.
+ * Per-branch `additionalProperties: false` (Zod v4 default) carries
+ * through but, under host removeAdditional: 'all', it can no longer
+ * reject sibling-action fields — those become silently stripped at top
+ * level instead. That's the host's opt-in to stripping; arc's job is to
+ * stop accidentally losing the action's *own* declared fields.
+ *
+ * Under arc's own `createApp` (`removeAdditional: false`), strict-mode
+ * rejection still functions normally — see
+ * [tests/core/action-strict-schema-parity.test.ts](../../tests/core/action-strict-schema-parity.test.ts).
  *
  * Exported so OpenAPI generation and MCP tool generation can reuse the same
  * schema shape (single source of truth).
@@ -410,7 +450,12 @@ export function buildActionBodySchema(
   actionEnum: readonly string[],
   actionSchemas: Record<string, Record<string, unknown>> = {},
 ): Record<string, unknown> {
-  const branches: Array<Record<string, unknown>> = [];
+  // First pass: normalize every action's IR and accumulate the property
+  // union. Last branch wins on collision — actions that share a field name
+  // should agree on its type (the schema otherwise contradicts itself
+  // across branches).
+  const unionProperties: Record<string, Record<string, unknown>> = {};
+  const irs: Array<{ name: string; ir: ReturnType<typeof normalizeSchemaIR> }> = [];
 
   for (const actionName of actionEnum) {
     // Normalize each action's schema through the shared IR ([./schemaIR.ts])
@@ -420,15 +465,39 @@ export function buildActionBodySchema(
     // action `schema` get strict AJV rejection of unknown fields AND strict
     // MCP rejection in a single declaration.
     const ir = normalizeSchemaIR(actionSchemas[actionName]);
+    irs.push({ name: actionName, ir });
+    for (const [key, val] of Object.entries(ir.properties)) {
+      unionProperties[key] = val;
+    }
+  }
+
+  // Second pass: emit each branch with the full union baked into its
+  // `properties` (action discriminator is overridden per-branch). This is
+  // the load-bearing part — see the JSDoc above.
+  const branches: Array<Record<string, unknown>> = [];
+  for (const { name, ir } of irs) {
     branches.push(
-      schemaIRToJsonSchemaBranch(ir, {
-        properties: { action: { type: "string", const: actionName } },
-        required: ["action"],
-      }),
+      schemaIRToJsonSchemaBranch(
+        // Synthetic IR: branch keeps its own `required` + `additionalProperties`
+        // but its `properties` is the full union.
+        { ...ir, properties: { ...unionProperties, ...ir.properties } },
+        {
+          properties: { action: { type: "string", const: name } },
+          required: ["action"],
+        },
+      ),
     );
   }
 
-  return { type: "object", required: ["action"], oneOf: branches };
+  return {
+    type: "object",
+    required: ["action"],
+    properties: {
+      action: { type: "string", enum: [...actionEnum] },
+      ...unionProperties,
+    },
+    oneOf: branches,
+  };
 }
 
 /**

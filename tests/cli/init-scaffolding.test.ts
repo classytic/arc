@@ -408,6 +408,10 @@ describe("arc init — Custom Adapter", () => {
     const content = await readText(path.join(projectPath, "src/shared/adapter.ts"));
     // Custom adapter should NOT contain mongokit references
     expect(content).not.toContain("@classytic/mongokit");
+    expect(content).not.toContain("createMongooseAdapter");
+    expect(content).toContain("RepositoryLike");
+    expect(content).toContain("sqlitekit/Drizzle");
+    expect(content).toContain("Prisma can be wired with createPrismaAdapter");
   });
 
   it("should save custom adapter in .arcrc", async () => {

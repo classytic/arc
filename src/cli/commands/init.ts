@@ -60,7 +60,9 @@ export async function init(options: InitOptions = {}): Promise<void> {
   const config = await gatherConfig(options);
 
   console.log(`\nCreating project: ${config.name}`);
-  console.log(`   Adapter: ${config.adapter === "mongokit" ? "MongoKit (MongoDB)" : "Custom"}`);
+  console.log(
+    `   Adapter: ${config.adapter === "mongokit" ? "MongoKit (MongoDB)" : "Custom / Drizzle-ready"}`,
+  );
   console.log(
     `   Auth: ${config.auth === "better-auth" ? "Better Auth (recommended)" : "Arc JWT"}`,
   );
@@ -279,7 +281,7 @@ async function gatherConfig(options: InitOptions): Promise<ProjectConfig> {
     let adapter: "mongokit" | "custom" = options.adapter || "mongokit";
     if (!options.adapter && !nonInteractive) {
       const adapterChoice = await question(
-        "Database adapter [1=MongoKit (recommended), 2=Custom]: ",
+        "Database adapter [1=MongoKit (recommended), 2=Custom / Drizzle-ready]: ",
       );
       adapter = adapterChoice === "2" ? "custom" : "mongokit";
     }
@@ -324,7 +326,7 @@ async function gatherConfig(options: InitOptions): Promise<ProjectConfig> {
       console.log("    but MongoKit depends on Mongoose. Options:");
       console.log("    1. Use AWS Lambda / Vercel Serverless (Node.js) — Mongoose works normally");
       console.log(
-        "    2. Use Cloudflare Hyperdrive + PostgreSQL (switch to Prisma/Drizzle adapter)",
+        "    2. Use Cloudflare Hyperdrive + PostgreSQL (wire sqlitekit/Drizzle via custom adapter)",
       );
       console.log(
         "    3. Continue with MongoKit — works on Lambda/Vercel, NOT on Cloudflare Workers",
@@ -334,7 +336,7 @@ async function gatherConfig(options: InitOptions): Promise<ProjectConfig> {
       if (proceed.toLowerCase() !== "y") {
         adapter = "custom";
         console.log(
-          "  Switched to custom adapter. You can wire Drizzle, Prisma, or the raw MongoDB driver.",
+          "  Switched to custom adapter. Wire sqlitekit/Drizzle here; Prisma remains experimental.",
         );
       }
     }
@@ -732,7 +734,7 @@ src/
 │   ├── env.${ext}              # Env loader (import first!)
 │   └── index.${ext}            # App config
 ├── shared/                  # Shared utilities
-│   ├── adapter.${ext}          # ${config.adapter === "mongokit" ? "MongoKit adapter factory" : "Custom adapter"}
+│   ├── adapter.${ext}          # ${config.adapter === "mongokit" ? "MongoKit adapter factory" : "Custom / Drizzle-ready adapter"}
 │   ├── permissions.${ext}      # Permission helpers
 │   └── presets/             # ${config.tenant === "multi" ? "Multi-tenant presets" : "Standard presets"}
 ├── plugins/                 # App-specific plugins
@@ -1325,29 +1327,31 @@ function customAdapterTemplate(config: ProjectConfig): string {
   return `/**
  * Custom Adapter Factory
  *
- * Implement your own database adapter here.
+ * Use this for sqlitekit/Drizzle, Prisma experiments, or any repository
+ * that satisfies Arc's RepositoryLike contract.
  */
 
-import { createMongooseAdapter } from '@classytic/arc';
-${ts ? "import type { Model } from 'mongoose';" : ""}
+${ts ? "import type { DataAdapter, RepositoryLike } from '@classytic/arc/adapters';" : ""}
 
 /**
- * Create a custom adapter for a resource
+ * Create a custom adapter for a resource.
  *
- * Implement this based on your database choice:
- * - Prisma: Use @classytic/prismakit (coming soon)
- * - Drizzle: Create custom adapter
- * - Raw SQL: Create custom adapter
+ * Recommended SQL path:
+ * - sqlitekit repository + Arc's createDrizzleAdapter for Drizzle tables
+ *
+ * Experimental path:
+ * - Prisma can be wired with createPrismaAdapter, but keep it opt-in until
+ *   your app has integration coverage.
  */
-export function createAdapter${ts ? "<TDoc>" : ""}(
-  model${ts ? ": Model<TDoc>" : ""},
-  repository${ts ? ": any" : ""}
-)${ts ? ": ReturnType<typeof createMongooseAdapter>" : ""} {
-  // SCAFFOLD: Replace with your custom adapter implementation
-  return createMongooseAdapter({
-    model,
+export function createAdapter${ts ? "<TDoc = unknown>" : ""}(
+  _source${ts ? ": unknown" : ""},
+  repository${ts ? ": RepositoryLike<TDoc>" : ""}
+)${ts ? ": DataAdapter<TDoc>" : ""} {
+  return {
+    type: 'custom',
+    name: 'custom-repository',
     repository,
-  });
+  };
 }
 `;
 }

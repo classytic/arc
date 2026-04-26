@@ -268,6 +268,25 @@ export function resourceToTools(
         resourceActionPermissions: resource.actionPermissions as PermissionCheck | undefined,
       });
 
+      // Fail-closed: HTTP throws at boot in normalizeActionsToRouterConfig
+      // when no gate resolves. That throw lives inside the resource's
+      // `register()` plugin lifecycle, so a host calling `resourceToTools()`
+      // directly (Level 2 MCP use) or registering `mcpPlugin` with resources
+      // whose HTTP plugin is never registered would otherwise get an
+      // unauthenticated mutating tool. Mirror the HTTP error shape so the
+      // remediation is identical across surfaces.
+      if (!actionPerms) {
+        throw new Error(
+          `[Arc/MCP] Resource '${resource.name}': action '${actionName}' has no permission gate ` +
+            `and the resource defines no \`permissions.update\` fallback. ` +
+            `Declare one of:\n` +
+            `  - \`actions.${actionName}.permissions: <PermissionCheck>\` (per-action)\n` +
+            `  - \`actionPermissions: <PermissionCheck>\` (resource-wide)\n` +
+            `  - \`permissions.update: <PermissionCheck>\` (inherited by actions)\n` +
+            `Use \`allowPublic()\` if you genuinely want the action unauthenticated.`,
+        );
+      }
+
       tools.push({
         name: toolName,
         description: String(description),

@@ -22,6 +22,7 @@ import {
   buildRateLimitConfig,
   requiresAuthentication,
   resolvePipelineSteps,
+  resolveRoutePreHandlers,
   resolveRouterPluginMw,
   selectPluginMw,
 } from "../../src/core/routerShared.js";
@@ -465,5 +466,107 @@ describe("PermissionCheck contract (_isPublic marker)", () => {
   it("requireAuth() / requireRoles() do NOT set _isPublic", () => {
     expect(requireAuth()._isPublic).toBeUndefined();
     expect(requireRoles(["admin"])._isPublic).toBeUndefined();
+  });
+});
+
+// ============================================================================
+// resolveRoutePreHandlers — turn `route.preHandler` into a flat array (2.11.3)
+// ============================================================================
+//
+// Pre-2.11.3, custom routes silently failed when a host wrote
+// `preHandler: multipartBody({...})` instead of `preHandler: [multipartBody({...})]`.
+// arc invoked the bare handler as a factory (`fn(fastify)`), passing the
+// Fastify instance where the handler expected a request — failing later
+// with `Cannot read properties of undefined (reading 'content-type')`. The
+// resolver discriminates the two valid shapes and rejects the mistake at
+// route-registration time with an actionable error message.
+
+describe("resolveRoutePreHandlers", () => {
+  const fastify = makeFastify();
+  const routeId = "POST /todos/:id/attach";
+
+  it("undefined / null → empty array", () => {
+    expect(resolveRoutePreHandlers(undefined, fastify, routeId)).toEqual([]);
+    expect(resolveRoutePreHandlers(null, fastify, routeId)).toEqual([]);
+  });
+
+  it("array form — returns the array unchanged (filtered to functions)", () => {
+    const a = vi.fn();
+    const b = vi.fn();
+    const result = resolveRoutePreHandlers([a, b], fastify, routeId);
+    expect(result).toEqual([a, b]);
+  });
+
+  it("array form — drops null/undefined slots without throwing", () => {
+    const a = vi.fn();
+    const result = resolveRoutePreHandlers([a, null, undefined], fastify, routeId);
+    expect(result).toEqual([a]);
+  });
+
+  it("factory form — calls with fastify, returns the produced array", () => {
+    const handler = vi.fn();
+    const factory = vi.fn().mockReturnValue([handler]);
+    const result = resolveRoutePreHandlers(factory, fastify, routeId);
+    expect(factory).toHaveBeenCalledWith(fastify);
+    expect(result).toEqual([handler]);
+  });
+
+  it("factory form — return must be an array; single function throws actionable TypeError", () => {
+    // The exact mistake hosts make: passing `multipartBody({...})` (a
+    // RouteHandlerMethod) where an array was expected. Pre-2.11.3 this
+    // surfaced as a Fastify "undefined.content-type" later; now it
+    // throws at route registration with the canonical fix in the message.
+    const bareHandler = vi.fn();
+    expect(() => resolveRoutePreHandlers(bareHandler, fastify, routeId)).toThrow(
+      /preHandler: \[yourHandler\]/,
+    );
+    expect(() => resolveRoutePreHandlers(bareHandler, fastify, routeId)).toThrow(
+      new RegExp(`Route ${routeId.replace(/[/]/g, "/")}`),
+    );
+  });
+
+  it("factory form — throws when factory returns a non-array (object, string, etc.)", () => {
+    const factory = (() => ({ not: "an array" })) as unknown as (...args: unknown[]) => unknown;
+    expect(() => resolveRoutePreHandlers(factory, fastify, routeId)).toThrow(
+      /must return an array/,
+    );
+  });
+
+  it("factory form — surfaces the original error via `cause` when factory throws", () => {
+    const original = new Error("DB not initialized");
+    const factory = vi.fn().mockImplementation(() => {
+      throw original;
+    });
+    try {
+      resolveRoutePreHandlers(factory, fastify, routeId);
+    } catch (err) {
+      expect(err).toBeInstanceOf(TypeError);
+      expect((err as Error).message).toContain("threw during route registration");
+      // `cause` preserved so the original stack is reachable
+      expect((err as Error & { cause?: unknown }).cause).toBe(original);
+    }
+  });
+
+  it("non-array, non-function → TypeError with the bad value described", () => {
+    expect(() => resolveRoutePreHandlers("hello" as unknown, fastify, routeId)).toThrow(
+      /preHandler must be an array/,
+    );
+    expect(() => resolveRoutePreHandlers(42 as unknown, fastify, routeId)).toThrow(
+      /preHandler must be an array/,
+    );
+  });
+
+  it("error message names the offending route + the canonical fix", () => {
+    const bareHandler = vi.fn();
+    let caught: Error | null = null;
+    try {
+      resolveRoutePreHandlers(bareHandler, fastify, "POST /uploads/photos");
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).not.toBeNull();
+    expect(caught!.message).toContain("POST /uploads/photos");
+    expect(caught!.message).toContain("preHandler: [yourHandler]");
+    expect(caught!.message).toContain("multipartBody"); // points at the common offender
   });
 });
