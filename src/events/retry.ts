@@ -99,8 +99,16 @@ export interface RetryOptions {
  *
  * On failure, retries with exponential backoff (with jitter).
  * After all retries exhausted, calls `onDead` callback if provided.
+ *
+ * Generic in the payload type `T` so composing with `wrapWithSchema<T>` /
+ * `subscribeWithSchema<T>` doesn't force a cast at the boundary — the inner
+ * `handler: EventHandler<T>` flows through to the returned wrapper. Defaults
+ * to `unknown` for raw `subscribe(pattern, withRetry(...))` call sites.
  */
-export function withRetry(handler: EventHandler, options: RetryOptions = {}): EventHandler {
+export function withRetry<T = unknown>(
+  handler: EventHandler<T>,
+  options: RetryOptions = {},
+): EventHandler<T> {
   const {
     maxRetries = 3,
     backoffMs = 1000,
@@ -114,7 +122,7 @@ export function withRetry(handler: EventHandler, options: RetryOptions = {}): Ev
 
   const label = name ?? handler.name ?? "anonymous";
 
-  return async (event: DomainEvent): Promise<void> => {
+  return async (event: DomainEvent<T>): Promise<void> => {
     const errors: Error[] = [];
     let firstFailedAt: Date | undefined;
     let lastFailedAt: Date | undefined;

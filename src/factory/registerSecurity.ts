@@ -163,10 +163,25 @@ export async function registerSecurityPlugins(
     const cors = (await loadPlugin("cors"))!;
     const corsOptions = { ...(config.cors ?? {}) } as Record<string, unknown>;
 
-    if (config.preset === "production" && corsOptions && !("origin" in corsOptions)) {
+    // Production CORS warning — also catches the env-derived `undefined`
+    // hazard. The canonical README pattern was
+    //   `cors: { origin: process.env.ALLOWED_ORIGINS?.split(',') }`
+    // which evaluates to `{ origin: undefined }` when the env var is unset
+    // — `'origin' in corsOptions` would be `true`, so the pre-2.11.3 check
+    // skipped the warning and `@fastify/cors` quietly fell back to its
+    // default (no Access-Control-Allow-Origin header set), which behaves
+    // differently across browsers and looks like silent CORS misconfig.
+    // Treat `origin: undefined` the same as missing.
+    const originDeclared = "origin" in corsOptions && corsOptions.origin !== undefined;
+    if (config.preset === "production" && !originDeclared) {
       fastify.log.warn(
         "CORS origin is not explicitly configured in production. " +
-          "Set cors.origin to allowed domains, cors: { origin: '*' }, or cors: false to disable.",
+          "Browser apps: set cors.origin to allowed domains (e.g. ['https://app.example.com']) " +
+          "with credentials: true. Server-to-server / API-key services: " +
+          "cors: { origin: '*', credentials: false } OR cors: false to disable. " +
+          "Tip: when wiring cors.origin from an env var, fail fast on missing " +
+          "(`if (!process.env.ALLOWED_ORIGINS) throw ...`) instead of letting " +
+          "`undefined` slip through.",
       );
     }
 

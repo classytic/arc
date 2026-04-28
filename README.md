@@ -1,21 +1,19 @@
 # @classytic/arc
 
-Database-agnostic resource framework for Fastify. One `defineResource()` call → REST + auth + permissions + events + caching + OpenAPI + MCP tools — without boilerplate.
+Database-agnostic resource framework for Fastify. One `defineResource()` call → REST + auth + permissions + events + caching + OpenAPI + MCP tools.
 
-**v2.11** · Fastify 5+ · Node.js 22+ · ESM only
+Fastify 5+ · Node.js 22+ · ESM only
 
 ```bash
-# Core
 npm install @classytic/arc fastify
 
-# Security defaults that createApp() enables out of the box
+# Security defaults createApp() loads (each opt-out via `cors: false` etc.)
 npm install @fastify/cors @fastify/helmet @fastify/rate-limit @fastify/under-pressure @fastify/sensible
-# (each is opt-out via `cors: false` / `helmet: false` / etc.)
 
-# Pick a storage adapter
-npm install @classytic/mongokit mongoose          # MongoDB (most common)
+# Storage adapter — pick one
+npm install @classytic/mongokit mongoose          # MongoDB
 # OR @classytic/sqlitekit drizzle-orm better-sqlite3 (sqlite)
-# OR bring your own: implement RepositoryLike from @classytic/repo-core
+# OR implement RepositoryLike from @classytic/repo-core
 ```
 
 ---
@@ -40,12 +38,19 @@ import { createApp, loadResources } from '@classytic/arc/factory';
 
 await mongoose.connect(process.env.DB_URI);
 
+// Fail fast on missing CORS env — silent `undefined` here drops to surprising
+// browser defaults. Browser apps: declare an explicit allowlist (below).
+// Server-to-server / API-key services: `cors: { origin: '*', credentials: false }`
+// or `cors: false` to disable entirely (CORS is a browser-only concern).
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS;
+if (!ALLOWED_ORIGINS) throw new Error('ALLOWED_ORIGINS env is required');
+
 const app = await createApp({
   preset: 'production',
   resourcePrefix: '/api/v1',
   resources: await loadResources(import.meta.url),  // auto-discover *.resource.ts
   auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
-  cors: { origin: process.env.ALLOWED_ORIGINS?.split(',') },
+  cors: { origin: ALLOWED_ORIGINS.split(','), credentials: true },
 });
 
 await app.listen({ port: 8040, host: '0.0.0.0' });
@@ -67,7 +72,7 @@ resources: async () => {
 },
 ```
 
-`loadResources({ context })` (2.11.1+) threads engine handles into resources whose default export is `(ctx) => defineResource(...)`. No parallel factory files, no `exclude: [...]` bookkeeping.
+`loadResources({ context })` threads engine handles into resources whose default export is `(ctx) => defineResource(...)`. No parallel factory files, no `exclude: [...]` bookkeeping.
 
 ---
 
@@ -206,7 +211,7 @@ const ctx = await createTestApp({
   authMode: 'jwt',
   connectMongoose: true,           // in-memory Mongo + Mongoose connect
 });
-ctx.auth.register('admin', { user: { id: '1', roles: ['admin'] }, orgId: 'org-1' });
+ctx.auth.register('admin', { user: { id: '1', role: 'admin' }, orgId: 'org-1' });
 
 const res = await ctx.app.inject({
   method: 'POST',

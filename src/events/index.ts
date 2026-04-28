@@ -86,6 +86,18 @@ export { repositoryAsOutboxStore } from "./repository-outbox-adapter.js";
 export type { RetryOptions } from "./retry.js";
 // Retry & Dead Letter Queue (transport-agnostic)
 export { createDeadLetterPublisher, withRetry } from "./retry.js";
+export type {
+  PayloadOf,
+  WrapWithBoundaryOptions,
+  WrapWithSchemaOptions,
+} from "./subscribe-helpers.js";
+// Subscribe-side helpers — schema validation symmetry + error boundary
+export {
+  subscribeWithBoundary,
+  subscribeWithSchema,
+  wrapWithBoundary,
+  wrapWithSchema,
+} from "./subscribe-helpers.js";
 
 // Redis transports — use dedicated subpaths to avoid pulling ioredis:
 //   import { RedisEventTransport } from '@classytic/arc/events/redis';

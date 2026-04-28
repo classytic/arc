@@ -157,75 +157,138 @@ function existsSync(filePath: string): boolean {
 }
 
 /**
- * Install dependencies using the detected package manager
+ * Single source of truth for scaffolded project dependencies.
+ *
+ * Versions are pinned to the floor each subsystem requires — peer-dep
+ * minimums on Arc, kit minimums (mongokit ≥ 3.11, repo-core ≥ 0.2,
+ * mongoose ≥ 9.4.1), and major-version stable for the rest. The carets
+ * allow minor + patch upgrades without breaking arc's contract, while
+ * preventing the silent breakage of `@latest` on a kit floor bump.
+ *
+ * Used by both `packageJsonTemplate` (declares the deps in the generated
+ * `package.json` so `npm install` works without a pre-pass) and
+ * `installDependencies` (runs the package manager's `install` against
+ * the declared ranges). One source — no drift.
  */
-async function installDependencies(
-  projectPath: string,
-  config: ProjectConfig,
-  pm: PackageManager,
-): Promise<void> {
-  // Build dependency lists
-  const deps = [
-    "@classytic/arc@latest",
-    "fastify@latest",
-    "@fastify/cors@latest",
-    "@fastify/helmet@latest",
-    "@fastify/rate-limit@latest",
-    "@fastify/sensible@latest",
-    "@fastify/under-pressure@latest",
-    "dotenv@latest",
-  ];
+const SCAFFOLD_DEP_VERSIONS = {
+  // Core runtime — required for every preset
+  core: {
+    "@classytic/arc": "^2.11.3",
+    "@fastify/cors": "^11.0.0",
+    "@fastify/helmet": "^13.0.0",
+    "@fastify/rate-limit": "^10.0.0",
+    "@fastify/sensible": "^6.0.0",
+    "@fastify/under-pressure": "^9.0.0",
+    dotenv: "^17.0.0",
+    fastify: "^5.8.0",
+  },
+  // Auth presets — picked by `config.auth`
+  authJwt: {
+    "@fastify/jwt": "^10.0.0",
+    bcryptjs: "^3.0.0",
+  },
+  authBetterAuth: {
+    "better-auth": "^1.6.0",
+    mongodb: "^6.10.0",
+  },
+  // Adapter presets — picked by `config.adapter`
+  adapterMongokit: {
+    "@classytic/mongokit": "^3.11.0",
+    "@classytic/repo-core": "^0.2.0",
+    mongoose: "^9.4.1",
+  },
+  // Dev tooling — common to every project
+  devCommon: {
+    "pino-pretty": "^13.0.0",
+    vitest: "^4.0.0",
+  },
+  devTypescript: {
+    "@types/node": "^22.0.0",
+    tsx: "^4.21.0",
+    typescript: "^5.6.0",
+  },
+  // Type definitions — paired with their runtime dep
+  typesJwt: {
+    "@types/bcryptjs": "^3.0.0",
+  },
+} as const;
 
-  // Pin optional peer deps to versions that match Arc's peerDependencies range.
-  // Using `@latest` here is unsafe because users could install a version below
-  // Arc's minimum (e.g. mongoose < 9.4.1, mongokit < 3.10.2) and hit silent
-  // runtime breakage. The semver caret floors at the minimum Arc supports while
-  // still allowing minor + patch upgrades.
+interface DependencyManifest {
+  dependencies: Record<string, string>;
+  devDependencies: Record<string, string>;
+}
+
+/**
+ * Resolve the dependency manifest for a scaffold configuration.
+ *
+ * Returns sorted records (alphabetical by package name) so the generated
+ * `package.json` is deterministic — diffs across re-runs stay clean.
+ */
+function resolveScaffoldDependencies(config: ProjectConfig): DependencyManifest {
+  const dependencies: Record<string, string> = { ...SCAFFOLD_DEP_VERSIONS.core };
+  const devDependencies: Record<string, string> = { ...SCAFFOLD_DEP_VERSIONS.devCommon };
+
   if (config.auth === "better-auth") {
-    deps.push("better-auth@^1.6.0", "mongodb@latest");
+    Object.assign(dependencies, SCAFFOLD_DEP_VERSIONS.authBetterAuth);
   } else {
-    deps.push("@fastify/jwt@latest", "bcryptjs@latest");
+    Object.assign(dependencies, SCAFFOLD_DEP_VERSIONS.authJwt);
+    if (config.typescript) {
+      Object.assign(devDependencies, SCAFFOLD_DEP_VERSIONS.typesJwt);
+    }
   }
 
   if (config.adapter === "mongokit") {
-    deps.push("@classytic/mongokit@^3.11.0", "@classytic/repo-core@^0.2.0", "mongoose@^9.4.1");
+    Object.assign(dependencies, SCAFFOLD_DEP_VERSIONS.adapterMongokit);
   }
-
-  const devDeps = ["vitest@latest", "pino-pretty@latest"];
 
   if (config.typescript) {
-    devDeps.push("typescript@latest", "@types/node@latest", "tsx@latest");
+    Object.assign(devDependencies, SCAFFOLD_DEP_VERSIONS.devTypescript);
   }
 
-  // Build install commands based on package manager
-  const installCmd = getInstallCommand(pm, deps, false);
-  const installDevCmd = getInstallCommand(pm, devDeps, true);
+  return {
+    dependencies: sortByKey(dependencies),
+    devDependencies: sortByKey(devDependencies),
+  };
+}
 
-  // Run installation
+/**
+ * Sort a record alphabetically by key — package.json convention.
+ */
+function sortByKey<T>(record: Record<string, T>): Record<string, T> {
+  return Object.fromEntries(Object.entries(record).sort(([a], [b]) => a.localeCompare(b)));
+}
+
+/**
+ * Install dependencies using the detected package manager.
+ *
+ * Dependencies are already declared in the generated `package.json` (see
+ * `packageJsonTemplate`), so a single plain `install` resolves the full
+ * tree. No two-pass `npm add` flow — the manifest is the source of truth.
+ */
+async function installDependencies(
+  projectPath: string,
+  _config: ProjectConfig,
+  pm: PackageManager,
+): Promise<void> {
   console.log(`  Installing dependencies...`);
-  await runCommand(installCmd, projectPath);
-
-  console.log(`  Installing dev dependencies...`);
-  await runCommand(installDevCmd, projectPath);
-
+  await runCommand(getInstallCommand(pm), projectPath);
   console.log(`\nDependencies installed successfully.`);
 }
 
 /**
- * Get the install command for a package manager
+ * Get the plain `install` command for a package manager. Reads the declared
+ * dependencies from the project's `package.json`.
  */
-function getInstallCommand(pm: PackageManager, packages: string[], isDev: boolean): string {
-  const pkgList = packages.join(" ");
-
+function getInstallCommand(pm: PackageManager): string {
   switch (pm) {
     case "pnpm":
-      return `pnpm add ${isDev ? "-D" : ""} ${pkgList}`;
+      return "pnpm install";
     case "yarn":
-      return `yarn add ${isDev ? "-D" : ""} ${pkgList}`;
+      return "yarn install";
     case "bun":
-      return `bun add ${isDev ? "-d" : ""} ${pkgList}`;
+      return "bun install";
     default:
-      return `npm install ${isDev ? "--save-dev" : ""} ${pkgList}`;
+      return "npm install";
   }
 }
 
@@ -489,7 +552,12 @@ async function createProjectStructure(projectPath: string, config: ProjectConfig
 // ============================================================================
 
 function packageJsonTemplate(config: ProjectConfig): string {
-  // Minimal package.json - dependencies are installed via package manager
+  // Dependencies declared up-front so `npm install` works without the
+  // CLI's `installDependencies` pre-pass — fixes the blocker where a
+  // user could `--skip-install` (or run `npm install` manually) and
+  // get a package.json with zero deps. See `resolveScaffoldDependencies`.
+  const { dependencies, devDependencies } = resolveScaffoldDependencies(config);
+
   const scripts: Record<string, string> = config.typescript
     ? config.edge
       ? {
@@ -544,6 +612,8 @@ function packageJsonTemplate(config: ProjectConfig): string {
       main: config.typescript ? "dist/index.js" : "src/index.js",
       imports,
       scripts,
+      dependencies,
+      devDependencies,
       // Must match @classytic/arc's own `engines.node` requirement — the
       // framework drops Node 20 APIs in core paths (e.g. structured clone
       // via node:util, require.main semantics), so scaffolding apps that
@@ -2236,8 +2306,10 @@ describe('Example Resource', () => {
       authMode: 'jwt',
 ${config.adapter === "mongokit" ? "      connectMongoose: true,\n" : ""}    });
 
+    // Arc's permission engine reads singular user.role — string,
+    // comma-separated string, or array all normalise via getUserRoles().
     ctx.auth${ts ? "!" : ""}.register('admin', {
-      user: { id: '1', roles: ['admin'] },
+      user: { id: '1', role: 'admin' },
       orgId: 'org-1',
     });
   });
@@ -2364,13 +2436,19 @@ userSchema.index({ 'organizations.organizationId': 1 });
 
   const userType = ts
     ? `
-type PlatformRole = 'user' | 'admin' | 'superadmin';
+const PLATFORM_ROLES = ['user', 'admin', 'superadmin'] as const;
+type PlatformRole = typeof PLATFORM_ROLES[number];
 
+/**
+ * Comma-separated list of platform roles (Better Auth admin-plugin convention).
+ * Single role: 'admin'. Multiple: 'admin,trainer'. Arc's permission engine
+ * normalises both forms via getUserRoles() — see @classytic/arc/scope.
+ */
 type User = {
   name: string;
   email: string;
   password: string;
-  roles: PlatformRole[];${
+  role: string;${
     config.tenant === "multi"
       ? `
   organizations: UserOrganization[];`
@@ -2419,11 +2497,21 @@ const userSchema = new Schema${ts ? "<User, UserModel, UserMethods>" : ""}(
     },
     password: { type: String, required: true },
 
-    // Platform roles
-    roles: {
-      type: [String],
-      enum: ['user', 'admin', 'superadmin'],
-      default: ['user'],
+    // Platform role — singular field, matches Arc's permission engine
+    // (req.user.role) and Better Auth's admin-plugin convention.
+    // Comma-separated for multi-role users (e.g. 'admin,trainer');
+    // getUserRoles() in @classytic/arc/scope normalises both forms.
+    role: {
+      type: String,
+      required: true,
+      default: 'user',
+      index: true,
+      validate: {
+        validator: (v${ts ? ": string" : ""}) =>
+          /^(user|admin|superadmin)(,(user|admin|superadmin))*$/.test(v),
+        message: (props${ts ? ": { value: string }" : ""}) =>
+          \`Invalid role "\${props.value}" — expected one or more of user|admin|superadmin\`,
+      },
     },
 ${orgSchema}
     // Password reset
@@ -2890,7 +2978,7 @@ export async function register(request${ts ? ": FastifyRequest" : ""}, reply${ts
     }
 
     // Create user
-    await userRepository.create({ name, email, password, roles: ['user'] });
+    await userRepository.create({ name, email, password, role: 'user' });
 
     return reply.code(201).send({ success: true, message: 'User registered successfully' });
   } catch (error) {
@@ -3015,10 +3103,10 @@ export async function updateUserProfile(request${ts ? ": FastifyRequest" : ""}, 
     const userId = (request${ts ? " as any" : ""}).user?._id || (request${ts ? " as any" : ""}).user?.id;
     const updates = { ...request.body${ts ? " as any" : ""} };
 
-    // Prevent updating protected fields
-    if ('password' in updates) delete updates.password;
-    if ('roles' in updates) delete updates.roles;
-    if ('organizations' in updates) delete updates.organizations;
+    // Prevent updating protected fields — auth-managed only
+    delete updates.password;
+    delete updates.role;
+    delete updates.organizations;
 
     const user = await userRepository.Model.findByIdAndUpdate(userId, updates, { new: true });
     return reply.send({ success: true, data: user });
@@ -3108,7 +3196,7 @@ export const loginResponse = {
         id: { type: 'string' },
         name: { type: 'string' },
         email: { type: 'string' },
-        roles: { type: 'array', items: { type: 'string' } },
+        role: { type: 'string' },
       },
     },
     accessToken: { type: 'string' },

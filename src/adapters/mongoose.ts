@@ -9,11 +9,13 @@ import type { Model } from "mongoose";
 import { SYSTEM_FIELDS } from "../constants.js";
 import type { AnyRecord, OpenApiSchemas, RouteSchemaOptions } from "../types/index.js";
 import { applyNullable, mergeFieldRuleConstraints } from "./field-rule-helpers.js";
-import type {
-  AdapterSchemaContext,
-  DataAdapter,
-  RepositoryLike,
-  SchemaMetadata,
+import {
+  type AdapterRepositoryInput,
+  type AdapterSchemaContext,
+  asRepositoryLike,
+  type DataAdapter,
+  type RepositoryLike,
+  type SchemaMetadata,
 } from "./interface.js";
 import { isMongooseModel, isRepository } from "./types.js";
 
@@ -49,8 +51,16 @@ interface MongooseSchemaType {
 export interface MongooseAdapterOptions<TDoc = unknown> {
   /** Mongoose model instance — preserves document type for type safety */
   model: Model<TDoc>;
-  /** Repository implementing CRUD operations - accepts any repository-like object */
-  repository: RepositoryLike<TDoc>;
+  /**
+   * Repository implementing CRUD operations.
+   *
+   * Typed as `AdapterRepositoryInput<TDoc>` (permissive structural shape)
+   * so kit-native repositories like mongokit's `Repository<TDoc>` plug in
+   * directly. See `AdapterRepositoryInput` JSDoc for why the wider input
+   * exists at the boundary while arc internals keep the strict
+   * `RepositoryLike` view.
+   */
+  repository: AdapterRepositoryInput<TDoc>;
   /**
    * External schema generator plugin for OpenAPI docs.
    * When provided, replaces the built-in basic type conversion.
@@ -125,7 +135,9 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
     }
 
     this.model = options.model;
-    this.repository = options.repository;
+    // Single documented widening from the permissive boundary input to
+    // the strict internal view — see `AdapterRepositoryInput` JSDoc.
+    this.repository = asRepositoryLike<TDoc>(options.repository);
     this.schemaGenerator = options.schemaGenerator;
     this.name = `MongooseAdapter<${options.model.modelName}>`;
   }
@@ -515,14 +527,14 @@ export class MongooseAdapter<TDoc = unknown> implements DataAdapter<TDoc> {
  */
 export function createMongooseAdapter<TDoc = unknown>(
   model: Model<TDoc>,
-  repository: RepositoryLike<TDoc>,
+  repository: AdapterRepositoryInput<TDoc>,
 ): DataAdapter<TDoc>;
 export function createMongooseAdapter<TDoc = unknown>(
   options: MongooseAdapterOptions<TDoc>,
 ): DataAdapter<TDoc>;
 export function createMongooseAdapter<TDoc = unknown>(
   modelOrOptions: Model<TDoc> | MongooseAdapterOptions<TDoc>,
-  repository?: RepositoryLike<TDoc>,
+  repository?: AdapterRepositoryInput<TDoc>,
 ): DataAdapter<TDoc> {
   if (isMongooseModel(modelOrOptions)) {
     if (!repository) {
