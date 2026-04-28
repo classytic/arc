@@ -391,32 +391,55 @@ function resolveOrAutoCreateController<TDoc extends AnyRecord>(
     // Same pattern as the `setQueryParser` warn above: arc names the
     // resource + the dropped options + the canonical fix. Honors
     // `ARC_SUPPRESS_WARNINGS=1`.
-    const droppedOptions: string[] = [];
-    if (resolvedConfig.tenantField !== undefined) droppedOptions.push("tenantField");
+    //
+    // Two warns, two audiences:
+    //   1. AUTHOR-declared options (tenantField, schemaOptions, idField,
+    //      defaultSort, cache, onFieldWriteDenied) — the user *can* fix
+    //      these by forwarding through `super()`.
+    //   2. PRESET-injected options (`_controllerOptions` populated by
+    //      slugLookup / softDelete / parent presets) — the user did NOT
+    //      declare these, so "forward them" is bad advice. The fix is
+    //      either (a) drop the preset on this resource, or (b) extend
+    //      BaseController / BaseCrudController so the auto-build path
+    //      runs. Splitting the warn keeps each one actionable.
+    const authorOptions: string[] = [];
+    if (resolvedConfig.tenantField !== undefined) authorOptions.push("tenantField");
     if (
       resolvedConfig.schemaOptions !== undefined &&
       Object.keys(resolvedConfig.schemaOptions).length > 0
     ) {
-      droppedOptions.push("schemaOptions");
+      authorOptions.push("schemaOptions");
     }
-    if (resolvedConfig.idField !== undefined) droppedOptions.push("idField");
-    if (resolvedConfig.defaultSort !== undefined) droppedOptions.push("defaultSort");
-    if (resolvedConfig.cache !== undefined) droppedOptions.push("cache");
+    if (resolvedConfig.idField !== undefined) authorOptions.push("idField");
+    if (resolvedConfig.defaultSort !== undefined) authorOptions.push("defaultSort");
+    if (resolvedConfig.cache !== undefined) authorOptions.push("cache");
     if (resolvedConfig.onFieldWriteDenied !== undefined) {
-      droppedOptions.push("onFieldWriteDenied");
-    }
-    if (resolvedConfig._controllerOptions !== undefined) {
-      droppedOptions.push("preset-injected fields (slug/softDelete/parent)");
+      authorOptions.push("onFieldWriteDenied");
     }
 
-    if (droppedOptions.length > 0) {
+    if (authorOptions.length > 0) {
       arcLog("defineResource").warn(
         `Resource "${resolvedConfig.name}" declares a custom controller AND resource-level ` +
-          `option(s) [${droppedOptions.join(", ")}]. Arc only threads these when it auto-builds ` +
+          `option(s) [${authorOptions.join(", ")}]. Arc only threads these when it auto-builds ` +
           `the controller — when you pass your own, they are dropped silently and the ` +
           `controller falls back to its own defaults (e.g. tenantField → 'organizationId'). ` +
           `Forward them to your controller's \`super(repo, { ... })\` call. ` +
           `Same root cause as the \`queryParser\` warn above.`,
+      );
+    }
+
+    if (resolvedConfig._controllerOptions !== undefined) {
+      const presetFields: string[] = [];
+      if (resolvedConfig._controllerOptions.slugField) presetFields.push("slugField");
+      if (resolvedConfig._controllerOptions.parentField) presetFields.push("parentField");
+      arcLog("defineResource").warn(
+        `Resource "${resolvedConfig.name}" applies a preset that injects controller field(s) ` +
+          `[${presetFields.join(", ") || "preset metadata"}] (e.g. slugLookup / softDelete / parent), ` +
+          `but the resource also declares a custom controller. Preset metadata only reaches ` +
+          `arc's auto-built BaseController — your custom controller will not see ` +
+          `\`slugField\`/\`parentField\`/etc. Either (a) drop the preset on this resource ` +
+          `(\`presets: [...]\` without it), or (b) extend \`BaseController\` / \`BaseCrudController\` ` +
+          `so arc auto-builds the controller and threads the preset fields automatically.`,
       );
     }
 

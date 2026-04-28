@@ -47,9 +47,24 @@ export interface EventPluginOptions {
    */
   failOpen?: boolean;
   /**
-   * Write-Ahead Log (WAL) configuration for at-least-once delivery guarantees.
-   * If provided, events will be saved to the WAL *before* passing to the transport.
-   * After a successful publish, they are acknowledged.
+   * Low-level write-ahead hook called BEFORE the transport publish, with an
+   * optional acknowledge() called AFTER a successful publish.
+   *
+   * **Important**: this is NOT at-least-once delivery on its own. If
+   * `transport.publish()` throws after `wal.save()`, the saved row stays
+   * but arc does NOT relay it on next boot — there is no replay loop here.
+   * For at-least-once you must EITHER:
+   *
+   *   1. Run a relay loop yourself (read unacknowledged WAL rows on boot,
+   *      republish, ack on success), or
+   *   2. Use `EventOutbox` ([./outbox.ts]) — `outbox.relay()` is the
+   *      production-grade at-least-once primitive with claim/lease,
+   *      retry/DLQ, multi-worker safety, and `repository`-backed durable
+   *      storage. New code should prefer `EventOutbox` over `wal`.
+   *
+   * The `wal` slot is kept for hosts that want to integrate with custom
+   * write-ahead infrastructure (Kafka producer transactions, S3 batch
+   * archives, debug audit logs) without arc's outbox claim/lease semantics.
    */
   wal?: {
     save: (event: DomainEvent) => Promise<void>;
@@ -169,7 +184,12 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
 
       // Schema validation (when registry is provided and mode is not 'off')
       if (registry && validateMode !== "off") {
-        const result = registry.validate(type, payload);
+        // Validate against the schema version the producer declared on the
+        // event itself. `defineEvent.create()` stamps `meta.schemaVersion`
+        // automatically; raw `publish()` calls without an explicit version
+        // fall through to the registry's "latest" lookup, preserving the
+        // 2.11.3 behaviour for unversioned producers.
+        const result = registry.validate(type, payload, event.meta.schemaVersion);
         if (!result.valid) {
           const msg = `[Arc Events] Event '${type}' payload validation failed: ${result.errors?.join("; ")}`;
           if (validateMode === "reject") {

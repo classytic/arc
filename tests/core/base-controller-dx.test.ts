@@ -540,6 +540,53 @@ describe("defineResource — user-controller dropped-options warn", () => {
     expect(droppedWarn).toBeUndefined();
     await teardown();
   });
+
+  // Regression: preset-injected `_controllerOptions` (slugLookup, soft-delete,
+  // parent) used to surface in the SAME warn that told the user to "forward
+  // them to your super() call." But the user never declared those — the
+  // preset injected them. The warn must be split and reworded so the
+  // remediation is actionable: drop the preset, OR extend BaseController.
+  it("preset-injected slugField fires a SEPARATE warn — does NOT tell user to forward via super()", async () => {
+    const { warns, teardown } = await setup();
+    const { defineResource } = await import("../../src/core/defineResource.js");
+    const { allowPublic } = await import("../../src/permissions/index.js");
+
+    defineResource({
+      name: "preset-injected",
+      prefix: "/preset-injected",
+      // biome-ignore lint/suspicious/noExplicitAny: test shim
+      controller: userController() as any,
+      presets: ["slugLookup"], // populates `_controllerOptions.slugField`
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
+      },
+      skipValidation: true,
+      skipRegistry: true,
+    });
+
+    const presetWarn = warns.find(
+      (w) => w.includes("preset-injected") && w.includes("preset that injects controller field"),
+    );
+    expect(presetWarn).toBeDefined();
+    // Names the specific field the preset injected.
+    expect(presetWarn).toContain("slugField");
+    // Actionable remediation — neither asks the user to forward unknown metadata
+    // nor tells them to do something they can't.
+    expect(presetWarn).toContain("drop the preset");
+    expect(presetWarn).toContain("extend");
+
+    // Crucially: it must NOT use the author-options "forward via super()" copy
+    // for this case — that's the false-positive Commerce reported.
+    const sayForward =
+      presetWarn?.includes("super(repo") || presetWarn?.includes("Forward them to your");
+    expect(sayForward).toBe(false);
+
+    await teardown();
+  });
 });
 
 // ============================================================================

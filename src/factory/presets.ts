@@ -147,11 +147,13 @@ export const developmentPreset: Partial<CreateAppOptions> = {
 
   // Note: Compression not included (use proxy/CDN instead)
 
-  // Under pressure - relaxed
-  underPressure: {
-    exposeStatusRoute: true,
-    maxEventLoopDelay: 5000,
-  },
+  // Under pressure - disabled in dev (matches testing + edge presets).
+  // Local workloads spike the event loop unpredictably (debuggers, bcrypt,
+  // HMR, file-watcher rebuilds) and trip 503s that don't reflect real
+  // production-readiness signals. Production must opt in to a concrete
+  // shed-load configuration. To re-enable in dev, pass an explicit
+  // `underPressure: { exposeStatusRoute: true, ... }` to `createApp`.
+  underPressure: false,
 };
 
 /**

@@ -33,4 +33,12 @@ describe("developmentPreset — pino-pretty fallback", () => {
     // Production presets still must opt in to a concrete value.
     expect(developmentPreset.rateLimit).toBe(false);
   });
+
+  it("underPressure is disabled by default (matches testing/edge)", () => {
+    // Local workloads spike the event loop unpredictably (debuggers,
+    // bcrypt, HMR rebuilds) and produce false 503s right after a register
+    // request — the kind of thing that makes a fresh scaffold look broken.
+    // Production presets still must opt in to a concrete shed-load config.
+    expect(developmentPreset.underPressure).toBe(false);
+  });
 });

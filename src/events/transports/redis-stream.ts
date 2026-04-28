@@ -31,7 +31,13 @@
  * ```
  */
 
-import type { DomainEvent, EventHandler, EventLogger, EventTransport } from "../EventTransport.js";
+import type {
+  DeadLetteredEvent,
+  DomainEvent,
+  EventHandler,
+  EventLogger,
+  EventTransport,
+} from "../EventTransport.js";
 
 // ---------------------------------------------------------------------------
 // Minimal Redis-like interface for Streams support
@@ -60,7 +66,29 @@ export interface RedisStreamLike {
     ...ids: string[]
   ): Promise<Array<[string, string[]]>>;
   xlen(key: string): Promise<number>;
+  /**
+   * Read a range of entries by id. When present, the DLQ writer uses this
+   * to fetch the original message payload so dead-lettered events are
+   * **fully replayable** (a re-publish of `envelope.event` is sufficient).
+   *
+   * Optional to preserve back-compat with custom Redis wrappers that
+   * satisfied the pre-2.11.3 shape. When missing, the DLQ envelope still
+   * carries the **error reason + attempt accounting** (operator-grade
+   * triage info survives), but `envelope.event.payload` is `null` and
+   * `envelope.event.type` is `<unknown>` — replay is NOT possible without
+   * upgrading the client. A one-shot warning fires per process so this
+   * isn't silent.
+   */
+  xrange?(key: string, start: string, end: string): Promise<Array<[string, string[]]>>;
+  /** Graceful close — flushes queued commands then closes. ioredis-style. */
   quit(): Promise<unknown>;
+  /**
+   * Force-disconnect — closes the socket immediately, abandoning any
+   * pending command (including a live `XREADGROUP BLOCK`). Optional because
+   * non-ioredis clients may not expose a force path; `close()` falls back
+   * to `quit()` when this is missing, accepting a longer shutdown wait.
+   */
+  disconnect?(): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +163,38 @@ export interface RedisStreamTransportOptions {
   maxPayloadBytes?: number;
 
   /**
+   * If `true`, `close()` does NOT call `redis.quit()` — useful when the host
+   * manages the Redis connection lifecycle externally (shared client across
+   * multiple transports / cache stores). Without this, every transport
+   * `close()` would tear down a shared client and break siblings.
+   *
+   * Mirror of `RedisEventTransportOptions.externalLifecycle`.
+   * @default false
+   */
+  externalLifecycle?: boolean;
+
+  /**
+   * Hard cap on how long `close()` waits for the in-flight `XREADGROUP BLOCK`
+   * iteration to drain. Tests and serverless shutdowns would otherwise hang
+   * up to `blockTimeMs` (default 5s) per close.
+   *
+   * Behaviour after timeout:
+   *   - `externalLifecycle: false` (default) — `redis.disconnect()` (or
+   *     `quit()` if the client lacks `disconnect`) breaks the BLOCK
+   *     immediately. Strict bounded close.
+   *   - `externalLifecycle: true` — arc CANNOT touch the host's connection,
+   *     so the poll loop is left to drain in the background when its
+   *     XREADGROUP returns. `close()` returns within `closeTimeoutMs` but
+   *     the loop's eventual completion is silently absorbed (no log spam,
+   *     no unhandled rejection). The contract here is "bounded return,
+   *     background drain" — set `blockTimeMs` low (e.g. 500ms) under
+   *     externalLifecycle to keep the drain window short.
+   *
+   * @default 1000
+   */
+  closeTimeoutMs?: number;
+
+  /**
    * Logger for error messages (default: console).
    * Pass `fastify.log` to integrate with your application logger.
    */
@@ -162,10 +222,46 @@ export class RedisStreamTransport implements EventTransport {
 
   private logger: EventLogger;
 
+  /** Tracks the lifecycle policy — set in constructor, read in close(). */
+  private externalLifecycle: boolean;
+  private closeTimeoutMs: number;
+
   private handlers = new Map<string, Set<EventHandler>>();
   private running = false;
   private pollPromise: Promise<void> | null = null;
+  /**
+   * Monotonic counter bumped every time the poll loop should stop —
+   * `unsubscribe` (last handler removed) and `close()` increment it. Each
+   * `pollLoop` instance captures its generation at start and exits when
+   * `this.generation` no longer matches. Prevents the
+   * subscribe → unsubscribe → fast-resubscribe race where the old loop
+   * would still be in `XREADGROUP BLOCK` while a new loop started, leading
+   * to two concurrent poll loops on the same consumer name.
+   */
+  private generation = 0;
   private groupCreated = false;
+
+  /**
+   * Last-seen failure context per message id, populated when an in-process
+   * handler throws in {@link processEntry}. Consumed (and cleared) by
+   * {@link moveToDlq} so the dead-letter envelope carries the actual error
+   * message instead of opaque "reclaimed without context". Bounded by
+   * `maxRetries × consumer-throughput` — entries are deleted on ack and
+   * on DLQ write, so the map naturally drains.
+   */
+  private failureContext = new Map<
+    string,
+    {
+      error: { message: string; code?: string; stack?: string };
+      firstFailedAt: Date;
+      lastFailedAt: Date;
+      attempts: number;
+      handlerName?: string;
+    }
+  >();
+
+  /** One-shot guard so the "client lacks xrange" warning fires once per process. */
+  private xrangeWarningEmitted = false;
 
   constructor(redis: RedisStreamLike, options: RedisStreamTransportOptions = {}) {
     this.redis = redis;
@@ -179,6 +275,8 @@ export class RedisStreamTransport implements EventTransport {
     this.deadLetterStream = options.deadLetterStream ?? "arc:events:dlq";
     this.maxLen = options.maxLen ?? 10_000;
     this.maxPayloadBytes = options.maxPayloadBytes ?? 1_000_000;
+    this.externalLifecycle = options.externalLifecycle ?? false;
+    this.closeTimeoutMs = options.closeTimeoutMs ?? 1000;
     this.logger = options.logger ?? console;
   }
 
@@ -221,13 +319,21 @@ export class RedisStreamTransport implements EventTransport {
     }
     this.handlers.get(pattern)?.add(handler);
 
-    // Start the consumer loop if not already running
+    // Start the consumer loop if not already running. A prior loop from
+    // a previous subscribe → unsubscribe cycle may still be draining its
+    // last `XREADGROUP BLOCK`; we don't wait (subscribe must be fast) but
+    // bumping the generation guarantees the old loop exits on its next
+    // iteration instead of running alongside the new one.
     if (!this.running) {
       await this.ensureGroup();
       this.running = true;
-      this.pollPromise = this.pollLoop().catch((err) => {
+      const myGen = ++this.generation;
+      this.pollPromise = this.pollLoop(myGen).catch((err) => {
         this.logger.error("[RedisStreamTransport] Poll loop crashed:", err);
-        this.running = false;
+        // Only flip running off if we're still the active generation —
+        // a newer loop may have started after a crash and we shouldn't
+        // trample its state.
+        if (this.generation === myGen) this.running = false;
       });
     }
 
@@ -237,9 +343,11 @@ export class RedisStreamTransport implements EventTransport {
         set.delete(handler);
         if (set.size === 0) this.handlers.delete(pattern);
       }
-      // Stop polling when no handlers remain — prevents CPU/network waste
+      // Stop polling when no handlers remain — prevents CPU/network waste.
+      // Bump generation so the in-flight loop exits on its next iteration.
       if (this.handlers.size === 0 && this.running) {
         this.running = false;
+        this.generation++;
       }
     };
   }
@@ -248,14 +356,97 @@ export class RedisStreamTransport implements EventTransport {
   // EventTransport.close
   // -----------------------------------------------------------------------
 
+  /**
+   * Stop polling and release transport state.
+   *
+   * **Two close contracts** — pick the one that matches your deployment:
+   *
+   * 1. **Default (`externalLifecycle: false`) — strict bounded close.**
+   *    `close()` waits up to `closeTimeoutMs` for the in-flight
+   *    `XREADGROUP BLOCK` to drain. On timeout it calls `redis.disconnect()`
+   *    (or `quit()` if the client lacks `disconnect`) to break the BLOCK
+   *    immediately, then awaits the loop's exit. After `close()` returns
+   *    the transport is fully closed and the connection is released.
+   *
+   * 2. **`externalLifecycle: true` — bounded RETURN, background drain.**
+   *    Arc must NOT touch a connection it doesn't own. `close()` returns
+   *    within `closeTimeoutMs`, but the poll loop is left to drain on its
+   *    own when its outstanding `XREADGROUP BLOCK` returns (up to
+   *    `blockTimeMs`). Arc silently absorbs the loop's eventual completion
+   *    so the host doesn't see unhandled rejections / log spam against a
+   *    transport it considers closed. The host's own `redis.quit()` /
+   *    process exit is what ultimately tears the connection down.
+   *
+   *    Practical implication: under `externalLifecycle: true`, set
+   *    `blockTimeMs` low (e.g. 500ms) so the background drain window is
+   *    short. The transport is "closed enough" to stop dispatching to
+   *    handlers (handlers map is cleared and generation is bumped) but is
+   *    not "fully closed" in the connection-lifecycle sense until the host
+   *    closes the underlying client.
+   *
+   * In both modes the generation counter is bumped, so a follow-up
+   * `subscribe()` spawns a fresh poll loop with a new generation — the
+   * stale loop exits on its next iteration and never overlaps the new one.
+   */
   async close(): Promise<void> {
     this.running = false;
+    // Bump generation so any future subscribe() spawns a fresh loop with a
+    // new identity, AND the in-flight loop exits on its next iteration even
+    // if `running` is racing with a new subscribe().
+    this.generation++;
     this.handlers.clear();
 
-    // Wait for the poll loop to finish its current iteration
+    // Two-phase shutdown:
+    //   1. Race the in-flight `XREADGROUP BLOCK` against `closeTimeoutMs`.
+    //      If the loop drains within the budget, great — clean exit.
+    //   2. Otherwise, call `redis.quit()` to break the BLOCK with a
+    //      connection error, which the poll loop catches as a normal exit
+    //      condition (logged + sets running=false). Bounded shutdown so
+    //      tests/serverless don't hang for `blockTimeMs`.
+    //
+    // `externalLifecycle: true` skips `quit()` — host owns the client and
+    // expects to keep it alive across transport teardown.
     if (this.pollPromise) {
-      await this.pollPromise;
+      const drained = await Promise.race([
+        this.pollPromise.then(() => "drained" as const),
+        this.sleep(this.closeTimeoutMs).then(() => "timeout" as const),
+      ]);
+
+      if (drained === "timeout") {
+        if (!this.externalLifecycle) {
+          // Force-break the BLOCK. `quit()` is graceful — it waits for the
+          // server to process queued commands, but our queued command IS the
+          // BLOCK, so quit() would wait the full blockTimeMs. `disconnect()`
+          // tears the socket down immediately, which the BLOCK observes as a
+          // network error and the poll loop catches as a normal exit.
+          if (typeof this.redis.disconnect === "function") {
+            this.redis.disconnect();
+          } else {
+            // No force path on this client — best-effort graceful quit. Tests
+            // / serverless apps pinned to this branch may still hang up to
+            // blockTimeMs; document RedisStreamLike.disconnect on your client.
+            await this.redis.quit().catch((err) => {
+              this.logger.error("[RedisStreamTransport] quit() during close raced:", err);
+            });
+          }
+          await this.pollPromise.catch(() => undefined);
+        } else {
+          // externalLifecycle: host owns the connection — we MUST NOT close
+          // it. The poll loop will drain on its own when XREADGROUP BLOCK
+          // returns (up to `blockTimeMs`). Silence its eventual outcome so
+          // the host doesn't see an unhandled rejection / log spam against
+          // a transport it considers closed. The contract here is "bounded
+          // return, background drain" — documented on `closeTimeoutMs`.
+          this.pollPromise.catch(() => undefined);
+        }
+      }
       this.pollPromise = null;
+    }
+
+    // Already-drained path: still need to release the connection unless
+    // the host owns its lifecycle.
+    if (!this.externalLifecycle) {
+      await this.redis.quit().catch(() => undefined);
     }
   }
 
@@ -284,8 +475,13 @@ export class RedisStreamTransport implements EventTransport {
   // Poll loop — reads new messages + claims pending (crash recovery)
   // -----------------------------------------------------------------------
 
-  private async pollLoop(): Promise<void> {
-    while (this.running) {
+  private async pollLoop(myGen: number): Promise<void> {
+    // Two-condition exit: standard `running` flag AND a generation match.
+    // Generation guards against the close → fast-resubscribe race where a
+    // new loop spawns while we're still in `XREADGROUP BLOCK`. After that
+    // BLOCK returns we'll see the bumped generation and exit cleanly even
+    // though `running` is back to true under the NEW loop.
+    while (this.running && this.generation === myGen) {
       try {
         // Phase 1: Claim pending entries from dead consumers (crash recovery)
         await this.claimPending();
@@ -293,7 +489,7 @@ export class RedisStreamTransport implements EventTransport {
         // Phase 2: Read new messages
         await this.readNewMessages();
       } catch (err) {
-        if (this.running) {
+        if (this.running && this.generation === myGen) {
           this.logger.error("[RedisStreamTransport] Poll error:", err);
           // Brief pause before retrying on error
           await this.sleep(1000);
@@ -385,42 +581,11 @@ export class RedisStreamTransport implements EventTransport {
   // -----------------------------------------------------------------------
 
   private async processEntry(messageId: string, fields: string[]): Promise<void> {
-    // Parse fields array into key-value pairs
-    const fieldMap = new Map<string, string>();
-    for (let i = 0; i < fields.length; i += 2) {
-      fieldMap.set(fields[i]!, fields[i + 1]!);
-    }
-
-    const eventType = fieldMap.get("type");
-    const rawData = fieldMap.get("data");
-    if (!eventType || !rawData) {
-      // Malformed entry — ack and skip
-      await this.redis.xack(this.stream, this.group, messageId);
-      return;
-    }
-
-    let event: DomainEvent;
-    try {
-      const parsed = JSON.parse(rawData, (key, value) => {
-        if (key === "timestamp" && typeof value === "string") return new Date(value);
-        return value;
-      });
-      // Validate required structure — reject malformed events
-      if (
-        !parsed ||
-        typeof parsed !== "object" ||
-        typeof parsed.type !== "string" ||
-        !parsed.meta?.id
-      ) {
-        this.logger.warn(
-          "[RedisStreamTransport] Malformed event — missing type or meta.id, acking and skipping",
-        );
-        await this.redis.xack(this.stream, this.group, messageId);
-        return;
-      }
-      event = parsed as DomainEvent;
-    } catch {
-      // Unparseable — ack and skip
+    const event = parseStreamFields(fields);
+    if (!event) {
+      this.logger.warn(
+        `[RedisStreamTransport] Malformed entry ${messageId} — missing type/data or invalid JSON, acking and skipping`,
+      );
       await this.redis.xack(this.stream, this.group, messageId);
       return;
     }
@@ -428,20 +593,43 @@ export class RedisStreamTransport implements EventTransport {
     // Dispatch to matching handlers
     const matchingHandlers = this.getMatchingHandlers(event.type);
     let allSucceeded = true;
+    let lastError: Error | undefined;
+    let lastHandlerName: string | undefined;
 
     for (const handler of matchingHandlers) {
       try {
         await handler(event);
       } catch (err) {
         allSucceeded = false;
+        lastError = err instanceof Error ? err : new Error(String(err));
+        lastHandlerName = (handler as { name?: string }).name || lastHandlerName;
         this.logger.error(`[RedisStreamTransport] Handler error for ${event.type}:`, err);
       }
     }
 
     if (allSucceeded) {
       await this.redis.xack(this.stream, this.group, messageId);
+      // Clear any stale failure context — the message was eventually delivered
+      // (likely after a retry on a different consumer) and will not reach DLQ.
+      this.failureContext.delete(messageId);
+      return;
     }
-    // If not all succeeded, leave unacked — will be retried via pending claim
+
+    // Record the failure so the eventual DLQ write carries the actual error.
+    // The pending-claim path in claimPending() keys off message id alone; this
+    // map closes the "reclaimed without error context" hole noted in 2.11.3.
+    const now = new Date();
+    const prior = this.failureContext.get(messageId);
+    this.failureContext.set(messageId, {
+      error: lastError
+        ? toErrorRecord(lastError)
+        : { message: "handler returned without acking — no error captured" },
+      firstFailedAt: prior?.firstFailedAt ?? now,
+      lastFailedAt: now,
+      attempts: (prior?.attempts ?? 0) + 1,
+      handlerName: lastHandlerName ?? prior?.handlerName,
+    });
+    // Leave unacked — pending claim picks it up after claimTimeoutMs.
   }
 
   private getMatchingHandlers(eventType: string): EventHandler[] {
@@ -477,30 +665,115 @@ export class RedisStreamTransport implements EventTransport {
       // DLQ disabled — just ack and drop
       for (const id of ids) {
         await this.redis.xack(this.stream, this.group, id);
+        this.failureContext.delete(id);
       }
       return;
     }
 
-    // Read the entries, write to DLQ stream, then ack
+    // Build a full DeadLetteredEvent envelope per message and persist it
+    // to the DLQ stream as `data: <json>`. Critical for replay: pre-2.11.3
+    // we wrote only `{ originalStream, originalId, group, failedAt }`,
+    // which became unreplayable the moment the source stream's MAXLEN trim
+    // dropped the original entry. The envelope now contains the full event
+    // payload + the actual handler error (when this consumer saw the
+    // failure) + accurate timestamps.
     for (const id of ids) {
       try {
-        await (this.redis as any).xadd(
+        const envelope = await this.buildDlqEnvelope(id);
+        // ⚠️ envelope is null when both `xrange` returned empty AND there
+        // was no in-process failure context — the message is gone, log it
+        // and ack so we don't keep claiming a ghost.
+        if (!envelope) {
+          this.logger.error(
+            `[RedisStreamTransport] DLQ for ${id}: source entry missing AND no failure context — acking to drop`,
+          );
+          await this.redis.xack(this.stream, this.group, id);
+          this.failureContext.delete(id);
+          continue;
+        }
+
+        await (this.redis as unknown as RedisStreamLike).xadd(
           this.deadLetterStream,
           "*",
+          "type",
+          envelope.event.type,
           "originalStream",
           this.stream,
           "originalId",
           id,
           "group",
           this.group,
-          "failedAt",
-          new Date().toISOString(),
+          "data",
+          JSON.stringify(envelope),
         );
         await this.redis.xack(this.stream, this.group, id);
+        this.failureContext.delete(id);
       } catch (err) {
         this.logger.error(`[RedisStreamTransport] DLQ write failed for ${id}:`, err);
       }
     }
+  }
+
+  /**
+   * Reconstruct a `DeadLetteredEvent` for a message id. Reads the original
+   * entry via `xrange` (when the client supports it) and merges in any
+   * in-process failure context. Returns `null` only when BOTH sources are
+   * missing — callers ack-and-drop rather than re-queuing a ghost.
+   *
+   * Graceful degradation paths:
+   *   - Client lacks `xrange` (older custom wrappers) → log once, build the
+   *     envelope from `failureContext` alone. Payload is absent but the
+   *     error reason + attempt accounting still survive.
+   *   - `xrange` throws (network blip, ACL) → same fallback.
+   *   - Source entry trimmed before DLQ write → same fallback.
+   */
+  private async buildDlqEnvelope(id: string): Promise<DeadLetteredEvent | null> {
+    const ctx = this.failureContext.get(id);
+    let event: DomainEvent | null = null;
+
+    if (typeof this.redis.xrange === "function") {
+      try {
+        const entries = await this.redis.xrange(this.stream, id, id);
+        const fields = entries[0]?.[1];
+        if (fields) {
+          const parsed = parseStreamFields(fields);
+          if (parsed) event = parsed;
+        }
+      } catch (err) {
+        this.logger.error(`[RedisStreamTransport] xrange for DLQ source ${id} failed:`, err);
+      }
+    } else if (!this.xrangeWarningEmitted) {
+      // One-shot warn — repeating on every DLQ entry is noise.
+      this.xrangeWarningEmitted = true;
+      this.logger.warn(
+        "[RedisStreamTransport] Redis client lacks xrange() — DLQ envelopes will not include the original event payload. " +
+          "Upgrade your client (ioredis ≥4 supports it) or use a wrapper that proxies xrange to enable replay.",
+      );
+    }
+
+    // Both gone — message has been trimmed (or xrange unavailable) AND we
+    // never observed a failure for it locally (e.g. it failed on a different
+    // consumer that crashed). Caller decides what to do; we ack-and-drop.
+    if (!event && !ctx) return null;
+
+    const fallbackTime = new Date();
+    return {
+      event:
+        event ??
+        ({
+          type: "<unknown>",
+          payload: null,
+          meta: { id, timestamp: fallbackTime },
+        } as DomainEvent),
+      error: ctx?.error ?? {
+        message:
+          "exhausted retries — failure occurred on a different consumer; error context not preserved across consumer-group failover",
+      },
+      attempts: ctx?.attempts ?? this.maxRetries,
+      firstFailedAt: ctx?.firstFailedAt ?? fallbackTime,
+      lastFailedAt: ctx?.lastFailedAt ?? fallbackTime,
+      ...(ctx?.handlerName ? { handlerName: ctx.handlerName } : {}),
+    };
   }
 
   // -----------------------------------------------------------------------
@@ -509,5 +782,66 @@ export class RedisStreamTransport implements EventTransport {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Module-level helpers — pure, no transport state
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert a thrown value into the `DeadLetteredEvent.error` shape — message
+ * always present, optional `code` (string only) and `stack`. Centralised so
+ * the failure-context tracker and the DLQ envelope writer agree.
+ */
+function toErrorRecord(err: unknown): { message: string; code?: string; stack?: string } {
+  const e = err instanceof Error ? err : new Error(String(err));
+  const code = (e as { code?: unknown }).code;
+  return {
+    message: e.message,
+    ...(typeof code === "string" ? { code } : {}),
+    ...(e.stack ? { stack: e.stack } : {}),
+  };
+}
+
+/**
+ * Parse a Redis Stream entry's flat `[key, value, key, value, ...]` field
+ * array into a typed `DomainEvent`, or `null` when the entry is malformed
+ * (missing `type` / `data`, unparseable JSON, or missing required event
+ * structure).
+ *
+ * Pure on purpose — used by both `processEntry` (the live consumer path)
+ * and `buildDlqEnvelope` (the dead-letter writer). Keeping the parse logic
+ * in one place avoids the silent drift class that produced the original
+ * "DLQ has no payload" bug.
+ */
+function parseStreamFields(fields: string[]): DomainEvent | null {
+  let eventType: string | undefined;
+  let rawData: string | undefined;
+  for (let i = 0; i < fields.length; i += 2) {
+    const key = fields[i];
+    const value = fields[i + 1];
+    if (key === "type") eventType = value;
+    else if (key === "data") rawData = value;
+  }
+  if (!eventType || !rawData) return null;
+
+  try {
+    const parsed = JSON.parse(rawData, (key, value) => {
+      // Revive the timestamp written via JSON.stringify in publish().
+      if (key === "timestamp" && typeof value === "string") return new Date(value);
+      return value;
+    });
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      typeof parsed.type !== "string" ||
+      !parsed.meta?.id
+    ) {
+      return null;
+    }
+    return parsed as DomainEvent;
+  } catch {
+    return null;
   }
 }

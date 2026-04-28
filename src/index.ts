@@ -91,6 +91,7 @@
  */
 
 export type {
+  AdapterRepositoryInput,
   DataAdapter,
   FieldMetadata,
   RelationMetadata,

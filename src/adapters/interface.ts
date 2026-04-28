@@ -84,6 +84,61 @@ import type { OpenApiSchemas, RouteSchemaOptions } from "../types/index.js";
  */
 export type RepositoryLike<TDoc = unknown> = MinimalRepo<TDoc> & Partial<StandardRepo<TDoc>>;
 
+/**
+ * Permissive structural input accepted at every adapter factory boundary.
+ *
+ * Wider than `RepositoryLike<TDoc>` on `getAll`'s `params`/`options` —
+ * uses method-shorthand syntax with `unknown` so kit-native repositories
+ * (mongokit's `Repository<TDoc>`, sqlitekit, prismakit) plug in directly,
+ * without `as RepositoryLike<TDoc>` casts on the host.
+ *
+ * **Why this exists.** repo-core 0.2 widened `MinimalRepo['getAll']`'s
+ * `params.filters` to a `Filter | Record<string, unknown>` IR union, but
+ * concrete kit `Repository` classes still type `filters` as the narrower
+ * `Record<string, unknown>`. Under `strictFunctionTypes` the kit's narrower
+ * function-property `getAll` is no longer assignable to the IR-aware one,
+ * which forced every host adapter glue file to write
+ * `repository as unknown as RepositoryLike<TDoc>`.
+ *
+ * Adapter factories accept this permissive shape, then call
+ * `asRepositoryLike()` once to widen for arc internals (audit, outbox,
+ * idempotency stores still see the strict `RepositoryLike` view). The
+ * documented escape hatch lives in arc, not at every host call site.
+ */
+export interface AdapterRepositoryInput<TDoc = unknown> {
+  readonly idField?: string;
+  getAll(params?: unknown, options?: unknown): Promise<unknown>;
+  getById(id: string, options?: unknown): Promise<TDoc | null>;
+  create(data: Partial<TDoc>, options?: unknown): Promise<TDoc>;
+  update(id: string, data: Partial<TDoc>, options?: unknown): Promise<TDoc | null>;
+  delete(
+    id: string,
+    options?: unknown,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    id?: string;
+    soft?: boolean;
+    count?: number;
+  }>;
+}
+
+/**
+ * Widen a permissive `AdapterRepositoryInput<TDoc>` to arc's strict
+ * `RepositoryLike<TDoc>` view. Single-source escape hatch for the
+ * filter-IR drift documented on `AdapterRepositoryInput`.
+ *
+ * Arc internals (audit / outbox / idempotency, BaseController) still see
+ * the IR-aware `RepositoryLike`; only the call paths arc exercises are
+ * shared between the two views, and those use the narrower
+ * `Record<string, unknown>` filter shape both sides agree on.
+ */
+export function asRepositoryLike<TDoc = unknown>(
+  input: AdapterRepositoryInput<TDoc>,
+): RepositoryLike<TDoc> {
+  return input as unknown as RepositoryLike<TDoc>;
+}
+
 export interface DataAdapter<TDoc = unknown> {
   /**
    * Repository implementing CRUD operations. Any value that satisfies

@@ -345,6 +345,47 @@ describe("CORS production safety", () => {
     await app.close();
   });
 
+  it("production preset with origin: undefined should warn (env-derived origin missing — 2.11.3)", async () => {
+    // Regression: pre-2.11.3, the production warning used
+    //   `!('origin' in corsOptions)` which was `false` for `{ origin: undefined }`.
+    // The canonical env-derived pattern
+    //   `cors: { origin: process.env.ALLOWED_ORIGINS?.split(',') }`
+    // therefore skipped the warning when the env var was unset, leaving CORS
+    // silently mis-wired. Post-fix: `corsOptions.origin === undefined` is
+    // treated as missing, so the production warning fires.
+    const warns: string[] = [];
+    const app = await createApp({
+      preset: "production",
+      auth: false,
+      // Custom logger that captures warns — the default logger flushes
+      // warnings to stdout which Vitest doesn't surface in this test.
+      logger: {
+        level: "warn",
+        // biome-ignore lint/suspicious/noExplicitAny: pino-style logger shim
+        stream: {
+          write(chunk: string) {
+            try {
+              const parsed = JSON.parse(chunk) as { level?: number; msg?: string };
+              if (parsed.level === 40 && parsed.msg) warns.push(parsed.msg);
+            } catch {
+              warns.push(chunk);
+            }
+          },
+        } as any,
+      },
+      helmet: false,
+      rateLimit: false,
+      underPressure: false,
+      cors: { origin: undefined, credentials: true }, // env-derived undefined
+    });
+
+    expect(app).toBeDefined();
+    const corsWarn = warns.find((w) => /CORS origin is not explicitly configured/.test(w));
+    expect(corsWarn).toBeDefined();
+    expect(corsWarn).toMatch(/fail fast on missing/);
+    await app.close();
+  });
+
   it("production preset with origin: false should succeed (CORS disabled)", async () => {
     const app = await createApp({
       preset: "production",
@@ -358,6 +399,54 @@ describe("CORS production safety", () => {
 
     const res = await getWithOrigin(app, "https://myapp.com");
     expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+
+    await app.close();
+  });
+
+  it("production microservice pattern: { origin: '*', credentials: false } — explicit, no warning, reflects '*'", async () => {
+    // Policy decision documented as a test so the contract can't drift:
+    // for server-to-server / API-key services, allowing all origins with
+    // credentials disabled IS a valid production CORS posture (CORS is a
+    // browser-only concern; non-browser clients ignore it). The production
+    // safety check should NOT warn here — the host has made an explicit,
+    // intentional choice. Distinct from the env-derived `origin: undefined`
+    // case (which DOES warn — see "origin: undefined should warn" above).
+    const warns: string[] = [];
+    const app = await createApp({
+      preset: "production",
+      auth: false,
+      logger: {
+        level: "warn",
+        // biome-ignore lint/suspicious/noExplicitAny: pino-style logger shim
+        stream: {
+          write(chunk: string) {
+            try {
+              const parsed = JSON.parse(chunk) as { level?: number; msg?: string };
+              if (parsed.level === 40 && parsed.msg) warns.push(parsed.msg);
+            } catch {
+              warns.push(chunk);
+            }
+          },
+        } as any,
+      },
+      helmet: false,
+      rateLimit: false,
+      underPressure: false,
+      cors: { origin: "*", credentials: false },
+    });
+
+    // No "CORS origin is not explicitly configured" warning — the host
+    // declared their CORS posture intentionally.
+    const corsWarn = warns.find((w) => /CORS origin is not explicitly configured/.test(w));
+    expect(corsWarn).toBeUndefined();
+
+    // Wildcard origin → reflects '*' for any caller. Browsers treat the
+    // response as CORS-allowed but won't attach credentials (per the
+    // explicit `credentials: false`), which is exactly what an API-key
+    // microservice wants.
+    const res = await getWithOrigin(app, "https://anything.example.com");
+    expect(res.headers["access-control-allow-origin"]).toBe("*");
+    expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
 
     await app.close();
   });

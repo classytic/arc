@@ -136,8 +136,15 @@ export interface EventRegistry {
     description?: string;
     schema?: EventSchema;
   }>;
-  /** Validate a payload against a registered event's schema */
-  validate(name: string, payload: unknown): ValidationResult;
+  /**
+   * Validate a payload against a registered event's schema.
+   *
+   * @param version - Optional schema version. When set, validation runs
+   *   against that exact version (use during migrations: producer A still
+   *   on v1 must validate against v1's schema even if v2 is registered).
+   *   When omitted, validates against the latest registered version.
+   */
+  validate(name: string, payload: unknown, version?: number): ValidationResult;
 }
 
 // ============================================================================
@@ -164,7 +171,14 @@ export function defineEvent<T = unknown>(input: EventDefinitionInput): EventDefi
     version,
     description,
     create(payload: T, meta?: Partial<DomainEvent["meta"]>): DomainEvent<T> {
-      return createEvent(name, payload, meta);
+      // Auto-stamp `schemaVersion` so consumers can route by version during
+      // migrations without hosts having to remember to pass it on every
+      // `.create()` call. Caller-supplied `meta.schemaVersion` still wins —
+      // useful for tests that emit historical events to verify migration
+      // behaviour. Pre-2.11.3 this was unset, which made
+      // `registry.validate(type, payload, version)` impossible to wire
+      // because the wire payload carried no version hint.
+      return createEvent(name, payload, { schemaVersion: version, ...meta });
     },
   };
 }
@@ -234,28 +248,36 @@ export function createEventRegistry(options?: EventRegistryOptions): EventRegist
       }));
     },
 
-    validate(name: string, payload: unknown): ValidationResult {
-      // Find latest version of this event
-      let latest: EventDefinitionOutput | undefined;
-      let latestVersion = -1;
-      for (const def of definitions.values()) {
-        if (def.name === name && def.version > latestVersion) {
-          latest = def;
-          latestVersion = def.version;
+    validate(name: string, payload: unknown, version?: number): ValidationResult {
+      // Versioned lookup — validate against the EXACT schema the producer
+      // declared, not whatever's latest. Critical during rolling migrations:
+      // producer A on v1 must keep validating against v1 even after v2 is
+      // registered, otherwise the v2 `required` list rejects v1 payloads
+      // (or worse, accepts them silently against the wrong shape).
+      //
+      // Resolution: explicit version > latest. Unknown (name, version) pair
+      // passes — same opt-in semantics as unknown name.
+      const def = version !== undefined ? definitions.get(registryKey(name, version)) : undefined;
+      let target = def;
+      if (!target && version === undefined) {
+        let latestVersion = -1;
+        for (const candidate of definitions.values()) {
+          if (candidate.name === name && candidate.version > latestVersion) {
+            target = candidate;
+            latestVersion = candidate.version;
+          }
         }
       }
 
-      // Unknown events pass (registry is opt-in)
-      if (!latest) return { valid: true };
+      // Unknown event (or unknown version) — registry is opt-in. Pass.
+      if (!target) return { valid: true };
+      // Events without a schema declaration — pass (schema is optional).
+      if (!target.schema) return { valid: true };
 
-      // Events without schema pass (schema is optional)
-      if (!latest.schema) return { valid: true };
-
-      // Use custom validator if provided, otherwise fall back to built-in minimal validator
-      if (customValidator) {
-        return customValidator(latest.schema, payload);
-      }
-      return validatePayload(payload, latest.schema);
+      // Custom validator wins; otherwise the built-in minimal one.
+      return customValidator
+        ? customValidator(target.schema, payload)
+        : validatePayload(payload, target.schema);
     },
   };
 }

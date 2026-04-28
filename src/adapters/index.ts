@@ -8,6 +8,7 @@ export type { DrizzleAdapterOptions } from "./drizzle.js";
 export { createDrizzleAdapter, DrizzleAdapter } from "./drizzle.js";
 export type {
   AdapterFactory,
+  AdapterRepositoryInput,
   DataAdapter,
   FieldMetadata,
   RelationMetadata,
@@ -15,6 +16,7 @@ export type {
   SchemaMetadata,
   ValidationResult,
 } from "./interface.js";
+export { asRepositoryLike } from "./interface.js";
 export type { MongooseAdapterOptions } from "./mongoose.js";
 export { createMongooseAdapter, MongooseAdapter } from "./mongoose.js";
 export type {
