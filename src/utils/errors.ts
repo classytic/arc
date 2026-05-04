@@ -181,14 +181,27 @@ export function statusToArcCode(status: number): string {
   return STATUS_CODE_MAP[status] ?? "arc.error";
 }
 
-/** Quick `ArcError` constructor when the bundled subclasses don't fit. */
+/**
+ * Quick `ArcError` constructor when the bundled subclasses don't fit.
+ *
+ * If `details.code` is a string, it's lifted to the top-level `error.code`
+ * (the canonical wire slot for business signals — `'ORG_CONTEXT_REQUIRED'`,
+ * `'ALL_FIELDS_STRIPPED'`, etc). The same code stays in `details` so
+ * in-process consumers reading `error.details.code` still work. Without
+ * this lift, business codes get buried in `details` and the wire envelope
+ * carries only the status-derived `arc.forbidden` / `arc.bad_request`
+ * fallback — `repo-core`'s `toErrorContract` doesn't surface free-form
+ * `details` objects (its `details[]` array is reserved for validation /
+ * duplicate-key items).
+ */
 export function createError(
   statusCode: number,
   message: string,
   details?: Record<string, unknown>,
 ): ArcError {
+  const businessCode = typeof details?.code === "string" ? details.code : undefined;
   return new ArcError(message, {
-    code: statusToArcCode(statusCode),
+    code: businessCode ?? statusToArcCode(statusCode),
     statusCode,
     ...(details ? { details } : {}),
   });
