@@ -503,12 +503,17 @@ fastify.get('/products', {
 
 | Helper | Description |
 |--------|-------------|
-| `ArcListResponse(schema)` | Paginated list: `{ success, docs, page, limit, total }` |
-| `ArcItemResponse(schema)` | Single item: `{ success, data }` |
-| `ArcMutationResponse(schema)` | Create/update: `{ success, data, message? }` |
-| `ArcDeleteResponse()` | Delete: `{ success, message? }` |
-| `ArcErrorResponse()` | Error: `{ success: false, error }` |
-| `ArcPaginationQuery()` | Query params: `{ page?, limit?, sort?, select? }` |
+| `ArcListResponse(schema)` | Paginated list — `oneOf` of `{ method, data, ... }` (offset / keyset / aggregate) or bare `{ data }` |
+| `ArcOffsetListResponse(schema)` | Pin one variant — `{ method: 'offset', data, page, limit, total, pages, hasNext, hasPrev }` |
+| `ArcKeysetListResponse(schema)` | Pin one variant — `{ method: 'keyset', data, limit, hasMore, next }` |
+| `ArcAggregateListResponse(schema)` | Pin one variant — `{ method: 'aggregate', ...same as offset }` |
+| `ArcBareListResponse(schema)` | Pin one variant — `{ data }` |
+| `ArcDeleteResponse()` | Delete — `{ message, id?, soft? }` |
+| `ArcErrorResponse()` | Error — canonical `ErrorContract` from `@classytic/repo-core/errors` |
+| `ArcErrorDetail()` | Single field-scoped error detail — embed in custom 422 / 409 schemas |
+| `ArcPaginationQuery()` | Query params — `{ page?, limit?, sort?, select?: string \| string[] \| Record<string, 0\|1> }` |
+
+Single-doc responses (`get` / `create` / `update`) intentionally have no helper — the doc IS the response. Pass your TypeBox schema directly to `response: { 200: schema }`.
 
 ## See Also
 

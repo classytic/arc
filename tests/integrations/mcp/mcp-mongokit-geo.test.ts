@@ -22,9 +22,9 @@
  */
 
 import { QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createMongooseAdapter } from "../../../src/adapters/mongoose.js";
 import { BaseController } from "../../../src/core/BaseController.js";
 import { defineResource } from "../../../src/core/defineResource.js";
 import { resourceToTools } from "../../../src/integrations/mcp/resourceToTools.js";
@@ -124,9 +124,9 @@ describe("MCP geo operator passthrough — Arc → MongoKit", () => {
 
     expect(result.isError).toBeFalsy();
     const text = result.content[0]?.text ?? "";
-    const body = JSON.parse(text) as { docs: Place[]; total: number };
+    const body = JSON.parse(text) as { data: Place[]; total: number };
     expect(body.total).toBe(2);
-    const names = body.docs.map((d) => d.name).sort();
+    const names = body.data.map((d) => d.name).sort();
     expect(names).toEqual(["Near 1", "Near 2"]);
   });
 
@@ -137,8 +137,8 @@ describe("MCP geo operator passthrough — Arc → MongoKit", () => {
     );
 
     expect(result.isError).toBeFalsy();
-    const body = JSON.parse(result.content[0]?.text ?? "{}") as { docs: Place[] };
-    const names = body.docs.map((d) => d.name).sort();
+    const body = JSON.parse(result.content[0]?.text ?? "{}") as { data: Place[] };
+    const names = body.data.map((d) => d.name).sort();
     expect(names).toContain("Near 1");
     expect(names).toContain("Near 2");
     expect(names).not.toContain("Far 1");

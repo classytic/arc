@@ -16,10 +16,10 @@
  */
 
 import { QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -265,9 +265,13 @@ describe("Hooks integration with custom idField", () => {
       });
       expect(res.statusCode).toBe(400);
       const body = JSON.parse(res.body);
-      expect(body.error).toBe("Hook execution failed");
+      expect(body.message).toBe("Hook execution failed");
+      // ErrorContract carries non-validation diagnostics through `meta`
+      // (the `details` array is reserved for field-scoped failures —
+      // validation errors, duplicate-key fields). The hook-error code +
+      // underlying message ride along on `meta`.
       // biome-ignore lint: dynamic
-      expect((body.details as any)?.code).toBe("BEFORE_UPDATE_HOOK_ERROR");
+      expect((body.meta as any)?.code).toBe("BEFORE_UPDATE_HOOK_ERROR");
 
       // DB unchanged
       const dbDoc = await PostModel.findOne({ slug: "no-touch" }).lean();

@@ -27,8 +27,8 @@
  * file stops compiling and `tsc --noEmit` fails in CI.
  */
 
+import type { DataAdapter, RepositoryLike } from "@classytic/repo-core/adapter";
 import { describe, expect, it } from "vitest";
-import type { DataAdapter, RepositoryLike } from "../../src/adapters/interface.js";
 import type { ResourceDefinition } from "../../src/core/defineResource.js";
 import type { ResourceConfig } from "../../src/types/index.js";
 
@@ -108,7 +108,7 @@ describe("createMongooseAdapter<TDoc> — unconstrained TDoc", () => {
     // Load the module to read its type. The signature's generic bound
     // is checked at compile time; runtime just asserts the function
     // exists.
-    const { createMongooseAdapter } = await import("../../src/adapters/mongoose.js");
+    const { createMongooseAdapter } = await import("@classytic/mongokit/adapter");
     expect(typeof createMongooseAdapter).toBe("function");
 
     // Type-level check: the factory must accept a narrow domain type.

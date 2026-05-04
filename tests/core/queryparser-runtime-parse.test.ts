@@ -18,9 +18,9 @@
  * `parserCalls` stays empty and this test fails loudly.
  */
 
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -36,9 +36,6 @@ import {
 describe("queryParser — runtime parse", () => {
   beforeAll(async () => {
     await setupTestDatabase();
-  });
-  afterAll(async () => {
-    await teardownTestDatabase();
   });
 
   /**
@@ -109,6 +106,7 @@ describe("queryParser — runtime parse", () => {
       const a = apps.pop();
       if (a) await a.close();
     }
+    await teardownTestDatabase();
   });
 
   // ── 1. Single call — GET /list invokes parser.parse() exactly once ─────────

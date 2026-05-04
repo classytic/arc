@@ -408,8 +408,7 @@ describe("registerErrorHandler", () => {
 
     const res = await app.inject({ method: "GET", url: "/error" });
     const body = res.json();
-    expect(body.success).toBe(false);
-    expect(body.error).toBeDefined();
+    expect(body.message).toBeDefined();
   });
 
   it("skips when errorHandler: false", async () => {
@@ -434,7 +433,6 @@ describe("registerErrorHandler", () => {
 
     const res = await app.inject({ method: "GET", url: "/error" });
     const body = res.json();
-    expect(body.success).toBe(false);
     // Stack should not be in production response
     expect(body.stack).toBeUndefined();
   });

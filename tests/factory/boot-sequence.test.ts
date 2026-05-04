@@ -3,7 +3,7 @@
  *
  * Tests the enhanced boot order:
  *   1. Arc core (security, auth, events)
- *   2. plugins()      ← infra (DB, SSE, docs)
+ *   2. plugins()      ← infra (DB, SSE, data)
  *   3. bootstrap[]    ← domain init (singletons, event handlers)
  *   4. resources[]    ← auto-discovered routes
  *   5. afterResources ← post-registration wiring
@@ -13,8 +13,8 @@
 
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -104,12 +104,12 @@ describe("createApp — boot sequence", () => {
         payload: { name: "Widget", isActive: true },
       });
       expect(create.statusCode).toBe(201);
-      const id = create.json().data._id;
+      const id = create.json()._id;
 
       // Get
       const get = await app.inject({ method: "GET", url: `/api/items/${id}` });
       expect(get.statusCode).toBe(200);
-      expect(get.json().data.name).toBe("Widget");
+      expect(get.json().name).toBe("Widget");
 
       // Update
       const update = await app.inject({
@@ -122,7 +122,7 @@ describe("createApp — boot sequence", () => {
       // List
       const list = await app.inject({ method: "GET", url: "/api/items" });
       expect(list.statusCode).toBe(200);
-      expect(list.json().docs.length).toBeGreaterThanOrEqual(1);
+      expect(list.json().data.length).toBeGreaterThanOrEqual(1);
 
       // Delete
       const del = await app.inject({ method: "DELETE", url: `/api/items/${id}` });

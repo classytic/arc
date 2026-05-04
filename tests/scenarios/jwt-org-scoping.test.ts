@@ -7,10 +7,10 @@
  * Run with: npx vitest run tests/scenarios/jwt-org-scoping.test.ts
  */
 
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -125,7 +125,7 @@ describe("JWT-Only Org Scoping (no Better Auth)", () => {
 
       expect(res.statusCode).toBe(201);
       const body = JSON.parse(res.body);
-      expect(body.data.organizationId).toBe(ORG_A);
+      expect(body.organizationId).toBe(ORG_A);
     });
 
     it("should auto-inject organizationId on create via multiTenantPreset", async () => {
@@ -140,7 +140,7 @@ describe("JWT-Only Org Scoping (no Better Auth)", () => {
       expect(res.statusCode).toBe(201);
       const body = JSON.parse(res.body);
       // organizationId auto-injected from token even though not in body
-      expect(body.data.organizationId).toBe(ORG_A);
+      expect(body.organizationId).toBe(ORG_A);
     });
 
     it("should prevent client from overriding organizationId in body", async () => {
@@ -155,7 +155,7 @@ describe("JWT-Only Org Scoping (no Better Auth)", () => {
       expect(res.statusCode).toBe(201);
       const body = JSON.parse(res.body);
       // multiTenantPreset overwrites body.organizationId with token claim
-      expect(body.data.organizationId).toBe(ORG_A);
+      expect(body.organizationId).toBe(ORG_A);
     });
   });
 
@@ -176,7 +176,7 @@ describe("JWT-Only Org Scoping (no Better Auth)", () => {
         headers: headers(tokenA),
         payload: { title: "Org A Task" },
       });
-      orgATaskId = JSON.parse(resA.body).data._id;
+      orgATaskId = JSON.parse(resA.body)._id;
 
       const tokenB = issueToken({ id: USER_B, role: ["user"], organizationId: ORG_B });
       const resB = await app.inject({
@@ -185,7 +185,7 @@ describe("JWT-Only Org Scoping (no Better Auth)", () => {
         headers: headers(tokenB),
         payload: { title: "Org B Task" },
       });
-      orgBTaskId = JSON.parse(resB.body).data._id;
+      orgBTaskId = JSON.parse(resB.body)._id;
     });
 
     it("Org-A user only sees Org-A records", async () => {
@@ -198,7 +198,7 @@ describe("JWT-Only Org Scoping (no Better Auth)", () => {
 
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      const ids = body.docs.map((d: any) => d._id);
+      const ids = body.data.map((d: any) => d._id);
       expect(ids).toContain(orgATaskId);
       expect(ids).not.toContain(orgBTaskId);
     });
@@ -213,7 +213,7 @@ describe("JWT-Only Org Scoping (no Better Auth)", () => {
 
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      const ids = body.docs.map((d: any) => d._id);
+      const ids = body.data.map((d: any) => d._id);
       expect(ids).toContain(orgBTaskId);
       expect(ids).not.toContain(orgATaskId);
     });
@@ -258,7 +258,7 @@ describe("JWT-Only Org Scoping (no Better Auth)", () => {
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
       // Superadmin should see tasks from multiple orgs
-      const orgs = new Set(body.docs.map((d: any) => d.organizationId));
+      const orgs = new Set(body.data.map((d: any) => d.organizationId));
       expect(orgs.size).toBeGreaterThanOrEqual(2);
     });
   });

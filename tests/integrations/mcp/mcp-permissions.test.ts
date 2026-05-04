@@ -11,10 +11,10 @@
  */
 
 import { QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../../src/adapters/mongoose.js";
 import { BaseController } from "../../../src/core/BaseController.js";
 import { defineResource } from "../../../src/core/defineResource.js";
 import {
@@ -143,7 +143,7 @@ describe("Mixed per-operation permissions", () => {
     // List — allowed (public)
     const listResult = await client.callTool({ name: "list_posts", arguments: {} });
     const listed = JSON.parse((listResult.content[0] as { text: string }).text);
-    expect(listed.docs.length).toBe(1);
+    expect(listed.data.length).toBe(1);
 
     // Create — denied (no user)
     const createResult = await client.callTool({
@@ -404,7 +404,7 @@ describe("Composite permission patterns", () => {
     const adminClient = await connectInMemory(adminServer);
     const adminResult = await adminClient.callTool({ name: "list_posts", arguments: {} });
     const adminData = JSON.parse((adminResult.content[0] as { text: string }).text);
-    expect(adminData.docs.length).toBe(2); // both org-x posts
+    expect(adminData.data.length).toBe(2); // both org-x posts
 
     // Regular member — sees only published in org-x
     const memberAuth: AuthRef = {
@@ -414,8 +414,8 @@ describe("Composite permission patterns", () => {
     const memberClient = await connectInMemory(memberServer);
     const memberResult = await memberClient.callTool({ name: "list_posts", arguments: {} });
     const memberData = JSON.parse((memberResult.content[0] as { text: string }).text);
-    expect(memberData.docs.length).toBe(1);
-    expect(memberData.docs[0].status).toBe("published");
+    expect(memberData.data.length).toBe(1);
+    expect(memberData.data[0].status).toBe("published");
 
     // No auth — denied
     const anonServer = await createMcpServer({ name: "anon", tools });

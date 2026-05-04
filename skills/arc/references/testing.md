@@ -114,7 +114,7 @@ describe('Product resource — full coverage', () => {
 ## `expectArc(response)` — fluent envelope matchers
 
 ```typescript
-expectArc(res).ok();                         // 200/201, success: true
+expectArc(res).ok();                         // 200/201 with data envelope
 expectArc(res).forbidden();                  // 403, arc error envelope
 expectArc(res).notFound().hasError(/not exist/);
 expectArc(res).validationError().hasData({ fields: ['email'] });

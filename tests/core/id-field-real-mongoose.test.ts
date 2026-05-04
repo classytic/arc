@@ -16,12 +16,12 @@
  */
 
 import { QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import Fastify, { type FastifyInstance } from "fastify";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Model, Schema } from "mongoose";
 import qs from "qs";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { arcCorePlugin } from "../../src/core/arcCorePlugin.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { allowPublic } from "../../src/permissions/index.js";
@@ -144,9 +144,8 @@ describe("idField: 'slug' — real Mongoose, single-tenant", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.success).toBe(true);
-    expect(body.data.slug).toBe("hello-world");
-    expect(body.data.title).toBe("Hello World");
+    expect(body.slug).toBe("hello-world");
+    expect(body.title).toBe("Hello World");
   });
 
   it("PATCH /articles/:slug updates by slug", async () => {
@@ -209,7 +208,7 @@ describe("idField: 'slug' — real Mongoose, single-tenant", () => {
       url: "/articles/post-2026-03-31-launch",
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().data.slug).toBe("post-2026-03-31-launch");
+    expect(res.json().slug).toBe("post-2026-03-31-launch");
   });
 });
 
@@ -262,8 +261,8 @@ describe("idField: 'jobId' — real Mongoose, multi-tenant", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.data.jobId).toBe("job-acme-001");
-    expect(body.data.state).toBe("running");
+    expect(body.jobId).toBe("job-acme-001");
+    expect(body.state).toBe("running");
   });
 
   it("GET /jobs/:jobId with UUID-style jobId works", async () => {
@@ -279,7 +278,7 @@ describe("idField: 'jobId' — real Mongoose, multi-tenant", () => {
       url: "/jobs/550e8400-e29b-41d4-a716-446655440000",
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().data.jobId).toBe("550e8400-e29b-41d4-a716-446655440000");
+    expect(res.json().jobId).toBe("550e8400-e29b-41d4-a716-446655440000");
   });
 });
 

@@ -34,10 +34,6 @@ import {
   softDeletePlugin,
   withTransaction,
 } from "@classytic/mongokit";
-import { type MongoMemoryReplSet, MongoMemoryServer } from "mongodb-memory-server";
-import mongoose, { type Connection, Schema, type Types } from "mongoose";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-
 import type {
   KeysetPaginationResult,
   OffsetPaginationResult,
@@ -49,6 +45,9 @@ import type {
   StandardRepo,
   UpdateManyResult,
 } from "@classytic/repo-core/repository";
+import { type MongoMemoryReplSet, MongoMemoryServer } from "mongodb-memory-server";
+import mongoose, { type Connection, Schema, type Types } from "mongoose";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { PaginationResult } from "../../src/types/index.js";
 
 // ============================================================================
@@ -206,7 +205,7 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
     it("getAll: returns offset PaginationResult when `page` is given", async () => {
       const result = await repo.getAll({ page: 1, limit: 3 });
       const offset = result as OffsetPaginationResult<IProduct>;
-      expect(offset.docs.length).toBe(3);
+      expect(offset.data.length).toBe(3);
       expect(offset.page).toBe(1);
       expect(offset.total).toBe(6);
       expect(offset.pages).toBe(2);
@@ -221,25 +220,25 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
       });
       // keyset mode is detected by mongokit — `method: "keyset"` or equivalent
       // shape. Accept either: our discriminated union covers both.
-      expect(result).toHaveProperty("docs");
+      expect(result).toHaveProperty("data");
       const anyResult = result as Record<string, unknown>;
       if ("method" in anyResult && anyResult.method === "keyset") {
         const keyset = result as KeysetPaginationResult<IProduct>;
-        expect(keyset.docs.length).toBe(2);
+        expect(keyset.data.length).toBe(2);
         expect(typeof keyset.hasMore).toBe("boolean");
         expect(keyset.next === null || typeof keyset.next === "string").toBe(true);
       } else {
         // Legacy offset shape fallback — still valid under the contract.
         const offset = result as OffsetPaginationResult<IProduct>;
-        expect(offset.docs.length).toBe(2);
+        expect(offset.data.length).toBe(2);
       }
     });
 
     it("getById: returns a single doc (and throws-OR-null on miss)", async () => {
       const first = await ProductModel.findOne().lean();
-      const found = await repo.getById(String(first!._id));
+      const found = await repo.getById(String(first?._id));
       expect(found).toBeTruthy();
-      expect(found?.sku).toBe(first!.sku);
+      expect(found?.sku).toBe(first?.sku);
 
       // CONTRACT NOTE — arc types `getById` as `Promise<TDoc | null>`, but
       // mongokit 3.6 THROWS a 404 error on miss by default. Pass
@@ -276,15 +275,14 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
 
     it("update: updates by id and returns the new doc", async () => {
       const first = await ProductModel.findOne({ sku: "ESM-001" }).lean();
-      const updated = await repo.update(String(first!._id), { price: 549 });
+      const updated = await repo.update(String(first?._id), { price: 549 });
       expect(updated).toBeTruthy();
       expect((updated as IProduct).price).toBe(549);
     });
 
     it("delete: returns DeleteResult with success=true", async () => {
       const first = await ProductModel.findOne({ sku: "FRP-002" }).lean();
-      const result = (await repo.delete(String(first!._id))) as DeleteResult;
-      expect(result.success).toBe(true);
+      const result = (await repo.delete(String(first?._id))) as DeleteResult;
       // soft-delete plugin is wired → should return soft: true
       expect(result.soft).toBe(true);
       // the doc is still there, but flagged
@@ -300,7 +298,7 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
   describe("Recommended — getOne compound filter", () => {
     it("getOne: finds by compound filter (sku + category)", async () => {
       expect(typeof repo.getOne).toBe("function");
-      const found = await repo.getOne!({ sku: "DLP-003", category: "office" });
+      const found = await repo.getOne?.({ sku: "DLP-003", category: "office" });
       expect(found).toBeTruthy();
       expect((found as IProduct).name).toBe("Desk Lamp");
     });
@@ -310,7 +308,7 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
       let missing: IProduct | null = null;
       let threw = false;
       try {
-        missing = (await repo.getOne!({ sku: "DLP-003", category: "kitchen" }, {
+        missing = (await repo.getOne?.({ sku: "DLP-003", category: "kitchen" }, {
           throwOnNotFound: false,
         } as unknown as undefined)) as IProduct | null;
       } catch (err) {
@@ -328,27 +326,27 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
   describe("Optional — projections & existence", () => {
     it("count: returns total matching filter", async () => {
       expect(typeof repo.count).toBe("function");
-      expect(await repo.count!({})).toBe(6);
-      expect(await repo.count!({ category: "kitchen" })).toBe(2);
+      expect(await repo.count?.({})).toBe(6);
+      expect(await repo.count?.({ category: "kitchen" })).toBe(2);
     });
 
     it("exists: truthy when at least one matches", async () => {
       expect(typeof repo.exists).toBe("function");
-      const found = await repo.exists!({ sku: "ESM-001" });
+      const found = await repo.exists?.({ sku: "ESM-001" });
       expect(found).toBeTruthy();
-      const missing = await repo.exists!({ sku: "NOPE" });
+      const missing = await repo.exists?.({ sku: "NOPE" });
       expect(missing).toBeFalsy();
     });
 
     it("distinct: returns unique values", async () => {
       expect(typeof repo.distinct).toBe("function");
-      const cats = await repo.distinct!<string>("category");
+      const cats = await repo.distinct?.<string>("category");
       expect(cats.sort()).toEqual(["fitness", "kitchen", "office"]);
     });
 
     it("findAll: returns raw array matching filter", async () => {
       expect(typeof repo.findAll).toBe("function");
-      const kitchen = await repo.findAll!({ category: "kitchen" });
+      const kitchen = await repo.findAll?.({ category: "kitchen" });
       expect(Array.isArray(kitchen)).toBe(true);
       expect(kitchen.length).toBe(2);
     });
@@ -369,7 +367,7 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
       expect(result.modifiedCount).toBe(2);
 
       const lamp = await ProductModel.findOne({ sku: "DLP-003" }).lean();
-      expect(lamp!.price).toBe(99);
+      expect(lamp?.price).toBe(99);
     });
 
     it("deleteMany: soft-deletes matching docs when softDeletePlugin wired", async () => {
@@ -434,7 +432,7 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
         },
         {
           updateOne: {
-            filter: { _id: first!._id },
+            filter: { _id: first?._id },
             update: { $set: { stock: 99 } },
           },
         },
@@ -448,9 +446,9 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
       const result = await repo.bulkWrite(ops as unknown as BulkWriteOperation<IProduct>[]);
       expect(result).toBeTruthy();
 
-      expect(await repo.count!({ sku: "KTL-777" })).toBe(1);
+      expect(await repo.count?.({ sku: "KTL-777" })).toBe(1);
       const bumped = await ProductModel.findOne({ sku: "ESM-001" }).lean();
-      expect(bumped!.stock).toBe(99);
+      expect(bumped?.stock).toBe(99);
       // soft-delete plugin intercepts deleteOne inside bulkWrite too — the
       // yoga mat gets soft-deleted, not physically removed. That's a
       // mongokit implementation detail; the contract only requires the
@@ -459,13 +457,13 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
 
     it("createMany: inserts multiple docs", async () => {
       expect(typeof repo.createMany).toBe("function");
-      const before = await repo.count!({});
-      const created = await repo.createMany!([
+      const before = await repo.count?.({});
+      const created = await repo.createMany?.([
         { name: "A", sku: "A-1", price: 1, category: "misc", tags: [], stock: 0 },
         { name: "B", sku: "B-1", price: 2, category: "misc", tags: [], stock: 0 },
       ] as Array<Partial<IProduct>>);
       expect(created.length).toBe(2);
-      expect(await repo.count!({})).toBe(before + 2);
+      expect(await repo.count?.({})).toBe(before + 2);
     });
   });
 
@@ -477,13 +475,13 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
     it("restore: un-soft-deletes a previously deleted doc", async () => {
       expect(typeof repo.restore).toBe("function");
       const doc = await ProductModel.findOne({ sku: "FRP-002" }).lean();
-      await repo.delete(String(doc!._id));
+      await repo.delete(String(doc?._id));
 
       // Confirm it's hidden from normal reads — mongokit 3.6 throws on
       // soft-deleted docs by default; accept either behavior.
       let hidden: IProduct | null = null;
       try {
-        hidden = (await repo.getById(String(doc!._id), {
+        hidden = (await repo.getById(String(doc?._id), {
           throwOnNotFound: false,
         } as unknown as undefined)) as IProduct | null;
       } catch {
@@ -494,10 +492,10 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
       // Restore — mongokit wires this via softDeletePlugin. Pass ObjectId
       // directly so findOneAndUpdate's cast works reliably across schema
       // variants.
-      const restored = await repo.restore(String(doc!._id));
+      const restored = await repo.restore(String(doc?._id));
       expect(restored).toBeTruthy();
 
-      const visible = await repo.getById(String(doc!._id));
+      const visible = await repo.getById(String(doc?._id));
       expect(visible).toBeTruthy();
       expect((visible as IProduct).deletedAt).toBeNull();
     });
@@ -513,9 +511,9 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
       const result = await repo.getDeleted();
       // mongokit returns a PaginationResult; a simpler adapter might return
       // a bare array. Both satisfy the contract — accept either.
-      const docs = Array.isArray(result) ? result : (result as PaginationResult<IProduct>).docs;
-      expect(docs.length).toBe(2);
-      expect(docs.every((d: IProduct) => d.category === "kitchen")).toBe(true);
+      const data = Array.isArray(result) ? result : (result as PaginationResult<IProduct>).data;
+      expect(data.length).toBe(2);
+      expect(data.every((d: IProduct) => d.category === "kitchen")).toBe(true);
     });
   });
 
@@ -526,10 +524,9 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
   describe("Optional — hard delete on single doc", () => {
     it("delete({ mode: 'hard' }): physically removes despite softDelete", async () => {
       const doc = await ProductModel.findOne({ sku: "OCH-004" }).lean();
-      const result = (await repo.delete(String(doc!._id), {
+      const result = (await repo.delete(String(doc?._id), {
         mode: "hard",
       })) as DeleteResult;
-      expect(result.success).toBe(true);
       // `soft` should NOT be set when we forced hard
       expect(result.soft).toBeFalsy();
 
@@ -549,7 +546,7 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
       // shared with sqlitekit / pgkit. This test exercises the pipeline path.
       expect(typeof repo.aggregatePipeline).toBe("function");
       type GroupRow = { _id: string; totalStock: number; count: number };
-      const rows = await repo.aggregatePipeline!<GroupRow>([
+      const rows = await repo.aggregatePipeline?.<GroupRow>([
         {
           $group: {
             _id: "$category",
@@ -580,7 +577,7 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
       // mongokit's Repository handles $near + pagination internally —
       // forward the filter through findAll so the test doesn't depend on
       // pagination count-rewriting.
-      const nearby = await repo.findAll!(parsed.filters as Record<string, unknown>);
+      const nearby = await repo.findAll?.(parsed.filters as Record<string, unknown>);
       const skus = nearby.map((p: IProduct) => p.sku).sort();
       // Both NYC products should be present; SF/Chicago far outside 100km.
       expect(skus).toContain("ESM-001");
@@ -595,7 +592,7 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
         location: { withinRadius: "-122.4194,37.7749,50000" }, // 50km around SF
       });
 
-      const count = await repo.count!(parsed.filters as Record<string, unknown>);
+      const count = await repo.count?.(parsed.filters as Record<string, unknown>);
       expect(count).toBe(2); // Desk Lamp + Office Chair
     });
 
@@ -605,7 +602,7 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
       const parsed = parser.parse({
         location: { geoWithin: "-88,41,-87,42" },
       });
-      const found = await repo.findAll!(parsed.filters as Record<string, unknown>);
+      const found = await repo.findAll?.(parsed.filters as Record<string, unknown>);
       const skus = found.map((p: IProduct) => p.sku);
       expect(skus).toContain("YMT-005");
       expect(skus).toContain("DMB-006");
@@ -633,10 +630,10 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
         limit: parsed.limit,
       });
       const offset = result as OffsetPaginationResult<IProduct>;
-      expect(offset.docs.length).toBe(2);
+      expect(offset.data.length).toBe(2);
       // Sorted by -price → Dumbbell (149) before Yoga Mat (45)
-      expect(offset.docs[0]!.sku).toBe("DMB-006");
-      expect(offset.docs[1]!.sku).toBe("YMT-005");
+      expect(offset.data[0]?.sku).toBe("DMB-006");
+      expect(offset.data[1]?.sku).toBe("YMT-005");
     });
   });
 
@@ -654,7 +651,7 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
       repo.on("after:delete", afterDelete);
 
       const doc = await ProductModel.findOne({ sku: "ESM-001" }).lean();
-      await repo.delete(String(doc!._id));
+      await repo.delete(String(doc?._id));
 
       expect(calls).toContain("before:delete");
       expect(calls).toContain("after:delete");
@@ -682,15 +679,15 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
       const doc = await ProductModel.findOne({ sku: "OCH-004" }).lean();
       expect(doc).toBeTruthy();
 
-      await repo.delete(String(doc!._id));
+      await repo.delete(String(doc?._id));
 
       // Confirm the doc IS soft-deleted in the raw collection before we try
       // restore — eliminates "was it physically deleted?" as a hypothesis.
-      const raw = await ProductModel.collection.findOne({ _id: doc!._id });
+      const raw = await ProductModel.collection.findOne({ _id: doc?._id });
       expect(raw).toBeTruthy();
       expect(raw?.deletedAt).toBeTruthy();
 
-      await repo.restore(String(doc!._id));
+      await repo.restore(String(doc?._id));
 
       expect(calls).toContain("before:restore");
       expect(calls).toContain("after:restore");

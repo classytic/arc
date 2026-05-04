@@ -68,7 +68,7 @@ preAuth → arcDecorator → authMw → permissionMw → pluginMw → routeGuard
 ```
 
 - `permissionMw` — CRUD uses the static `buildCrudPermissionMw` (permission known at route-registration time); actions use the dynamic `buildActionPermissionMw` (permission resolved from `body.action` at request time). Both apply `_policyFilters` + `request.scope` via `evaluateAndApplyPermission` **before** `pluginMw` (idempotency) runs — so unauthorized requests never record idempotency keys and route guards see the full permission-installed scope.
-- `buildPipelineHandler` + `buildActionPipelineHandler` — both return `Promise<IControllerResponse<unknown>>` so a pipeline step that returns `{ success: false, status: 422, error, details, meta }` reaches `sendControllerResponse` with every field intact.
+- `buildPipelineHandler` + `buildActionPipelineHandler` — both return `Promise<IControllerResponse<unknown>>`. Pipeline steps that need to fail throw an `ArcError` (or any `HttpError`-shaped class); the global error handler catches and serializes to the canonical `ErrorContract` wire shape.
 - `buildAuthMiddlewareForPermissions(fastify, perms)` — accepts `ReadonlyArray<PermissionCheck | undefined>`. An explicit `allowPublic()` (`_isPublic: true`) AND an undefined slot ("public by omission") both flip the route-level auth decision to `optionalAuthenticate`. Treating undefined as "not a signal" broke `{ ping: undefined, promote: requireRoles([...]) }` — the public `ping` got 401'd at the auth layer before the per-action check could let it through. See [[gotchas]] #25.
 
 See [[removed]] for the list of public action-router APIs retired in v2.9.

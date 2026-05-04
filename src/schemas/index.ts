@@ -37,6 +37,12 @@ export type { Static, TObject, TSchema } from "@sinclair/typebox";
 // Re-export TypeBox core — users import Type from here instead of @sinclair/typebox directly
 export { Type } from "@sinclair/typebox";
 
+import {
+  type ErrorContract,
+  type ErrorDetail,
+  errorContractSchema,
+  errorDetailSchema,
+} from "@classytic/repo-core/errors";
 import type { TSchema } from "@sinclair/typebox";
 import { Type } from "@sinclair/typebox";
 
@@ -45,13 +51,33 @@ import { Type } from "@sinclair/typebox";
 // ============================================================================
 
 /**
- * Paginated list response — matches Arc's runtime format:
- * `{ success, docs: [...], page, limit, total, pages, hasNext, hasPrev }`
+ * Paginated list response — full union of every wire shape `toCanonicalList`
+ * emits. Mirrors `PaginatedResult<T>` from `@classytic/repo-core/pagination`:
+ *
+ *   - `{ method: 'offset', data, page, limit, total, pages, hasNext, hasPrev }`
+ *   - `{ method: 'keyset', data, limit, hasMore, next: string | null }`
+ *   - `{ method: 'aggregate', ...same as offset }`
+ *   - `{ data }` (bare list, no `method`)
+ *
+ * Use `ArcOffsetListResponse` / `ArcKeysetListResponse` /
+ * `ArcAggregateListResponse` / `ArcBareListResponse` to pin a single
+ * variant when your endpoint never emits the others. HTTP status
+ * discriminates success vs error — no `success` field.
  */
 export function ArcListResponse<T extends TSchema>(itemSchema: T) {
+  return Type.Union([
+    ArcOffsetListResponse(itemSchema),
+    ArcKeysetListResponse(itemSchema),
+    ArcAggregateListResponse(itemSchema),
+    ArcBareListResponse(itemSchema),
+  ]);
+}
+
+/** Offset variant — `{ method: 'offset', data, page, limit, total, pages, hasNext, hasPrev }`. */
+export function ArcOffsetListResponse<T extends TSchema>(itemSchema: T) {
   return Type.Object({
-    success: Type.Boolean(),
-    docs: Type.Array(itemSchema),
+    method: Type.Literal("offset"),
+    data: Type.Array(itemSchema),
     page: Type.Integer(),
     limit: Type.Integer(),
     total: Type.Integer(),
@@ -61,47 +87,79 @@ export function ArcListResponse<T extends TSchema>(itemSchema: T) {
   });
 }
 
-/**
- * Single item response — `{ success, data: {...} }`
- */
-export function ArcItemResponse<T extends TSchema>(itemSchema: T) {
+/** Keyset variant — `{ method: 'keyset', data, limit, hasMore, next: string | null }`. */
+export function ArcKeysetListResponse<T extends TSchema>(itemSchema: T) {
   return Type.Object({
-    success: Type.Boolean(),
-    data: itemSchema,
+    method: Type.Literal("keyset"),
+    data: Type.Array(itemSchema),
+    limit: Type.Integer(),
+    hasMore: Type.Boolean(),
+    next: Type.Union([Type.String(), Type.Null()]),
   });
 }
 
-/**
- * Mutation (create/update) response — `{ success, data: {...}, message? }`
- */
-export function ArcMutationResponse<T extends TSchema>(itemSchema: T) {
+/** Aggregate variant — `{ method: 'aggregate', ...same as offset }`. */
+export function ArcAggregateListResponse<T extends TSchema>(itemSchema: T) {
   return Type.Object({
-    success: Type.Boolean(),
-    data: itemSchema,
-    message: Type.Optional(Type.String()),
+    method: Type.Literal("aggregate"),
+    data: Type.Array(itemSchema),
+    page: Type.Integer(),
+    limit: Type.Integer(),
+    total: Type.Integer(),
+    pages: Type.Integer(),
+    hasNext: Type.Boolean(),
+    hasPrev: Type.Boolean(),
   });
 }
 
+/** Bare variant — `{ data }`, no `method` discriminant. */
+export function ArcBareListResponse<T extends TSchema>(itemSchema: T) {
+  return Type.Object({
+    data: Type.Array(itemSchema),
+  });
+}
+
+// Single-doc responses (`get` / `create` / `update`) DON'T have helpers —
+// the doc IS the response (no envelope; HTTP status discriminates). Pass
+// your TypeBox schema directly to the route's `response: { 200: schema }`
+// slot. Pre-2.13 `ArcItemResponse` / `ArcMutationResponse` were identity
+// functions (`(x) => x`); deleted in the post-2.13 cleanup.
+
 /**
- * Delete response — `{ success, message }`
+ * Delete response — `{ message, id?, soft? }` raw at the top level.
  */
 export function ArcDeleteResponse() {
   return Type.Object({
-    success: Type.Boolean(),
-    message: Type.Optional(Type.String()),
+    message: Type.String(),
+    id: Type.Optional(Type.String()),
+    soft: Type.Optional(Type.Boolean()),
   });
 }
 
 /**
- * Error response schema
+ * Single field-scoped error detail — `Type.Unsafe<ErrorDetail>` over the
+ * canonical JSON Schema `errorDetailSchema` from
+ * `@classytic/repo-core/errors`. One schema constant, two adapters
+ * (JSON-Schema + TypeBox), zero drift surface — the schema and the TS
+ * type both come from repo-core.
+ *
+ * Exported standalone so hosts can embed it in custom 422 / 409 response
+ * schemas.
+ */
+export function ArcErrorDetail() {
+  return Type.Unsafe<ErrorDetail>(errorDetailSchema);
+}
+
+/**
+ * Error response schema — `Type.Unsafe<ErrorContract>` over the canonical
+ * JSON Schema `errorContractSchema` from `@classytic/repo-core/errors`.
+ * Same trick as `ArcErrorDetail`: the schema bytes and the TS type both
+ * come from repo-core, so the JSON-Schema sibling
+ * (`errorContractSchema`) and this TypeBox helper cannot drift —
+ * literally one source.
  */
 export function ArcErrorResponse() {
-  return Type.Object({
-    success: Type.Literal(false),
-    error: Type.String(),
-    code: Type.Optional(Type.String()),
-    message: Type.Optional(Type.String()),
-  });
+  return Type.Unsafe<ErrorContract>(errorContractSchema);
 }
 
 // ============================================================================
@@ -111,6 +169,17 @@ export function ArcErrorResponse() {
 /**
  * Standard pagination + sorting + filtering query parameters.
  * Matches Arc's list endpoint conventions.
+ *
+ * `select` accepts every shape `QueryResolver` preserves DB-agnostically
+ * (gotcha #5):
+ *
+ *   - `string`  — `"name email -password"` (Mongoose space-separated)
+ *   - `string[]` — `["name", "email", "-password"]` (Arc parser)
+ *   - `Record<string, 0 | 1>` — `{ name: 1, email: 1, password: 0 }` (Mongo projection)
+ *
+ * Narrowing `select` to `string` would have rejected the array and
+ * projection forms at the request-validation gate even though arc passes
+ * them through unchanged.
  */
 export function ArcPaginationQuery() {
   return Type.Object(
@@ -118,7 +187,13 @@ export function ArcPaginationQuery() {
       page: Type.Optional(Type.Integer({ minimum: 1, default: 1 })),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, default: 20 })),
       sort: Type.Optional(Type.String()),
-      select: Type.Optional(Type.String()),
+      select: Type.Optional(
+        Type.Union([
+          Type.String(),
+          Type.Array(Type.String()),
+          Type.Record(Type.String(), Type.Union([Type.Literal(0), Type.Literal(1)])),
+        ]),
+      ),
       populate: Type.Optional(Type.Any()),
     },
     { additionalProperties: true },

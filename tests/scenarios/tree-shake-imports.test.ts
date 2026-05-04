@@ -65,7 +65,7 @@ describe("Tree-Shakable Imports", () => {
     });
 
     it("@classytic/arc/adapters exports mongoose adapter", async () => {
-      const adapters = await import("../../src/adapters/mongoose.js");
+      const adapters = await import("@classytic/mongokit/adapter");
       expect(adapters.createMongooseAdapter).toBeTypeOf("function");
     });
   });

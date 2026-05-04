@@ -100,7 +100,8 @@ describe("ioredisAsCacheClient", () => {
   it("scan() passes through cursor and varargs", async () => {
     const client = makeFakeIoredis();
     const adapter = ioredisAsCacheClient(client);
-    const [next, keys] = await adapter.scan!("0", "MATCH", "arc:cache:*", "COUNT", 100);
+    if (!adapter.scan) throw new Error("ioredis adapter must implement scan()");
+    const [next, keys] = await adapter.scan("0", "MATCH", "arc:cache:*", "COUNT", 100);
 
     const scanCall = client.calls.find((c) => c[0] === "scan");
     expect(scanCall).toEqual(["scan", "0", "MATCH", "arc:cache:*", "COUNT", 100]);
@@ -236,7 +237,8 @@ describe("upstashAsCacheClient", () => {
   it("scan() translates varargs MATCH/COUNT into upstash's options object", async () => {
     const client = makeFakeUpstash();
     const adapter = upstashAsCacheClient(client);
-    const [next, keys] = await adapter.scan!("0", "MATCH", "arc:cache:*", "COUNT", 100);
+    if (!adapter.scan) throw new Error("upstash adapter must implement scan()");
+    const [next, keys] = await adapter.scan("0", "MATCH", "arc:cache:*", "COUNT", 100);
 
     const scanCall = client.calls.find((c) => c[0] === "scan")!;
     expect(scanCall[2]).toEqual({ match: "arc:cache:*", count: 100 });

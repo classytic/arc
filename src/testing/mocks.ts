@@ -41,7 +41,7 @@ export function createMockRepository<T extends AnyRecord = AnyRecord>(
     // MongoKit-compatible CRUD methods
     getAll: vi.fn().mockResolvedValue({
       method: "offset",
-      docs: [],
+      data: [],
       total: 0,
       page: 1,
       limit: 20,
@@ -75,6 +75,14 @@ export function createMockRepository<T extends AnyRecord = AnyRecord>(
       .mockResolvedValue({ acknowledged: true, matchedCount: 0, modifiedCount: 0 }),
 
     deleteMany: vi.fn().mockResolvedValue({ acknowledged: true, deletedCount: 0 }),
+
+    // Required on `StandardRepo` as of repo-core 0.4 — both mongokit
+    // 3.13+ and sqlitekit 0.3+ ship `claim` / `claimVersion` as class
+    // primitives. The contract is non-optional (no `?`) so MockRepository
+    // must provide a default that resolves to null (the canonical
+    // race-loss / no-match signal).
+    claim: vi.fn().mockResolvedValue(null),
+    claimVersion: vi.fn().mockResolvedValue(null),
 
     // Optional preset methods
     getBySlug: vi.fn().mockResolvedValue(null),

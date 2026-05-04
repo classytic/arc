@@ -83,9 +83,9 @@ describeRedis("Upstash Redis — RedisIdempotencyStore end-to-end", () => {
 
     const result = await store.get(key);
     expect(result).toBeDefined();
-    expect(result!.statusCode).toBe(201);
-    expect(result!.body).toEqual({ orderId: "o-1" });
-    expect(result!.headers["content-type"]).toBe("application/json");
+    expect(result?.statusCode).toBe(201);
+    expect(result?.body).toEqual({ orderId: "o-1" });
+    expect(result?.headers["content-type"]).toBe("application/json");
 
     await store.unlock(key, "req-1");
     expect(await store.isLocked(key)).toBe(false);
@@ -208,7 +208,7 @@ describeRedis("Upstash Redis — RedisIdempotencyStore end-to-end", () => {
 
     const found = await store.findByPrefix("POST:/find:");
     expect(found).toBeDefined();
-    expect((found!.body as { which: string }).which).toBe("a");
+    expect((found?.body as { which: string }).which).toBe("a");
 
     await store.deleteByPrefix("POST:/find:");
   }, 15_000);

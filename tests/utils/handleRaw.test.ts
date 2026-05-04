@@ -14,13 +14,8 @@
 
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ForbiddenError, NotFoundError, ValidationError } from "../../src/utils/errors.js";
 import { handleRaw } from "../../src/utils/handleRaw.js";
-import {
-  ArcError,
-  ForbiddenError,
-  NotFoundError,
-  ValidationError,
-} from "../../src/utils/errors.js";
 
 // ============================================================================
 // Unit tests — mock reply
@@ -56,31 +51,30 @@ function mockReply() {
 const mockReq = {} as import("fastify").FastifyRequest;
 
 describe("handleRaw — unit", () => {
-  it("wraps return value in { success: true, data }", async () => {
+  it("sends return value raw — no envelope (HTTP status is the discriminator)", async () => {
     const handler = handleRaw(async () => ({ orderId: "abc", total: 42 }));
     const reply = mockReply();
     await handler(mockReq, reply as unknown as import("fastify").FastifyReply);
 
     expect(reply._code).toBe(200);
-    expect(reply._body).toEqual({ success: true, data: { orderId: "abc", total: 42 } });
+    expect(reply._body).toEqual({ orderId: "abc", total: 42 });
   });
 
-  it("null return → { success: true } with no data field", async () => {
+  it("null return → empty body (HTTP status only)", async () => {
     const handler = handleRaw(async () => null);
     const reply = mockReply();
     await handler(mockReq, reply as unknown as import("fastify").FastifyReply);
 
     expect(reply._code).toBe(200);
-    expect(reply._body).toEqual({ success: true });
-    expect(reply._body).not.toHaveProperty("data");
+    expect(reply._body).toBeUndefined();
   });
 
-  it("undefined return → { success: true }", async () => {
+  it("undefined return → empty body", async () => {
     const handler = handleRaw(async () => undefined);
     const reply = mockReply();
     await handler(mockReq, reply as unknown as import("fastify").FastifyReply);
 
-    expect(reply._body).toEqual({ success: true });
+    expect(reply._body).toBeUndefined();
   });
 
   it("custom status code", async () => {
@@ -89,10 +83,10 @@ describe("handleRaw — unit", () => {
     await handler(mockReq, reply as unknown as import("fastify").FastifyReply);
 
     expect(reply._code).toBe(201);
-    expect(reply._body).toEqual({ success: true, data: { id: "new" } });
+    expect(reply._body).toEqual({ id: "new" });
   });
 
-  it("ArcError → statusCode + toJSON()", async () => {
+  it("ArcError → statusCode + canonical error envelope { error, code, details? }", async () => {
     const handler = handleRaw(async () => {
       throw new ForbiddenError("Admin only");
     });
@@ -101,9 +95,8 @@ describe("handleRaw — unit", () => {
 
     expect(reply._code).toBe(403);
     const body = reply._body as Record<string, unknown>;
-    expect(body.success).toBe(false);
     expect(body.error).toBe("Admin only");
-    expect(body.code).toBe("FORBIDDEN");
+    expect(body.code).toBe("arc.forbidden");
   });
 
   it("NotFoundError → 404", async () => {
@@ -115,21 +108,19 @@ describe("handleRaw — unit", () => {
 
     expect(reply._code).toBe(404);
     const body = reply._body as Record<string, unknown>;
-    expect(body.code).toBe("NOT_FOUND");
+    expect(body.code).toBe("arc.not_found");
   });
 
   it("ValidationError → 400 with errors array in details", async () => {
     const handler = handleRaw(async () => {
-      throw new ValidationError("Invalid input", [
-        { field: "name", message: "required" },
-      ]);
+      throw new ValidationError("Invalid input", [{ field: "name", message: "required" }]);
     });
     const reply = mockReply();
     await handler(mockReq, reply as unknown as import("fastify").FastifyReply);
 
     expect(reply._code).toBe(400);
     const body = reply._body as Record<string, unknown>;
-    expect(body.code).toBe("VALIDATION_ERROR");
+    expect(body.code).toBe("arc.validation_error");
   });
 
   it("Error with .statusCode → uses that code", async () => {
@@ -203,7 +194,8 @@ describe("handleRaw — e2e with Fastify", () => {
       "/create",
       handleRaw(async (req) => {
         const body = req.body as Record<string, unknown>;
-        if (!body?.name) throw new ValidationError("Missing name", [{ field: "name", message: "required" }]);
+        if (!body?.name)
+          throw new ValidationError("Missing name", [{ field: "name", message: "required" }]);
         return { id: "new-1", name: body.name };
       }, 201),
     );
@@ -233,8 +225,7 @@ describe("handleRaw — e2e with Fastify", () => {
     const res = await app.inject({ method: "GET", url: "/report" });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.success).toBe(true);
-    expect(body.data.totalOrders).toBe(150);
+    expect(body.totalOrders).toBe(150);
   });
 
   it("POST /create → 201 with envelope", async () => {
@@ -244,7 +235,7 @@ describe("handleRaw — e2e with Fastify", () => {
       payload: { name: "Widget" },
     });
     expect(res.statusCode).toBe(201);
-    expect(JSON.parse(res.body).data.name).toBe("Widget");
+    expect(JSON.parse(res.body).name).toBe("Widget");
   });
 
   it("POST /create without name → 400 ValidationError", async () => {
@@ -254,18 +245,20 @@ describe("handleRaw — e2e with Fastify", () => {
       payload: {},
     });
     expect(res.statusCode).toBe(400);
-    expect(JSON.parse(res.body).code).toBe("VALIDATION_ERROR");
+    expect(JSON.parse(res.body).code).toBe("arc.validation_error");
   });
 
   it("GET /forbidden → 403 ForbiddenError", async () => {
     const res = await app.inject({ method: "GET", url: "/forbidden" });
     expect(res.statusCode).toBe(403);
-    expect(JSON.parse(res.body).code).toBe("FORBIDDEN");
+    expect(JSON.parse(res.body).code).toBe("arc.forbidden");
   });
 
   it("GET /crash → 500 generic error", async () => {
     const res = await app.inject({ method: "GET", url: "/crash" });
     expect(res.statusCode).toBe(500);
-    expect(JSON.parse(res.body).success).toBe(false);
+    // Error envelope: `{ error, code? }` — generic Errors carry `error`,
+    // ArcErrors also include `code`. No `success` wrapper.
+    expect(JSON.parse(res.body).error).toBeDefined();
   });
 });

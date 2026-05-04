@@ -96,6 +96,40 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
   const httpMetrics = createHttpMetrics();
 
   // ========================================
+  // Bare Prefix — convenience alias for `${prefix}/live`
+  // ========================================
+  // Many uptime checkers + load balancers default to `GET /<prefix>`
+  // (no sub-path) and treat 200 as "alive". Without this alias the
+  // plugin "registered at /_health" but a bare GET 404'd — surfacing
+  // as a confusing log/route mismatch.
+
+  fastify.get(
+    prefix,
+    {
+      schema: {
+        tags: ["Health"],
+        summary: "Liveness probe (alias for /live)",
+        description: "Returns 200 if the process is alive",
+        response: {
+          200: {
+            type: "object",
+            properties: {
+              status: { type: "string", enum: ["ok"] },
+              timestamp: { type: "string" },
+              version: { type: "string" },
+            },
+          },
+        },
+      },
+    },
+    async () => ({
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      ...(version ? { version } : {}),
+    }),
+  );
+
+  // ========================================
   // Liveness Probe
   // ========================================
 
@@ -293,7 +327,11 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
     });
   }
 
-  fastify.log?.debug?.(`Health plugin registered at ${prefix}`);
+  fastify.log?.debug?.(
+    `Health plugin registered at ${prefix} (alias), ${prefix}/live, ${prefix}/ready${
+      metrics ? `, ${prefix}/metrics` : ""
+    }`,
+  );
 };
 
 /**

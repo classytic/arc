@@ -26,10 +26,9 @@ describe("Public API Contract", () => {
 
     const expectedKeys = [
       ".",
-      "./adapters",
       "./audit",
       "./auth",
-      "./auth/mongoose",
+      "./auth/audit",
       "./auth/redis",
       "./cache",
       "./cli",
@@ -69,6 +68,7 @@ describe("Public API Contract", () => {
       "./presets/tenant",
       "./registry",
       "./schemas",
+      "./scim",
       "./scope",
       "./testing",
       "./testing/storage",

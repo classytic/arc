@@ -5,11 +5,11 @@
  * custom `routes`, and preset routes (softDelete, bulk).
  */
 
+import { methodRegistryPlugin, mongoOperationsPlugin, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { Repository, methodRegistryPlugin, mongoOperationsPlugin } from "@classytic/mongokit";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -46,7 +46,10 @@ afterEach(async () => {
 
 describe("routeGuards on defineResource", () => {
   it("guard blocks all CRUD routes when condition fails", async () => {
-    const repo = new Repository<IItem>(ItemModel, [methodRegistryPlugin(), mongoOperationsPlugin()]);
+    const repo = new Repository<IItem>(ItemModel, [
+      methodRegistryPlugin(),
+      mongoOperationsPlugin(),
+    ]);
 
     // Guard that rejects unless x-bypass header is present
     const modeGuard: RouteHandlerMethod = async (req, reply) => {
@@ -120,7 +123,10 @@ describe("routeGuards on defineResource", () => {
   });
 
   it("guard applies to custom routes too", async () => {
-    const repo = new Repository<IItem>(ItemModel, [methodRegistryPlugin(), mongoOperationsPlugin()]);
+    const repo = new Repository<IItem>(ItemModel, [
+      methodRegistryPlugin(),
+      mongoOperationsPlugin(),
+    ]);
 
     const modeGuard: RouteHandlerMethod = async (req, reply) => {
       if (!req.headers["x-bypass"]) {
@@ -186,7 +192,10 @@ describe("routeGuards on defineResource", () => {
   });
 
   it("no routeGuards = no change to existing behavior", async () => {
-    const repo = new Repository<IItem>(ItemModel, [methodRegistryPlugin(), mongoOperationsPlugin()]);
+    const repo = new Repository<IItem>(ItemModel, [
+      methodRegistryPlugin(),
+      mongoOperationsPlugin(),
+    ]);
 
     const resource = defineResource<IItem>({
       name: "item",

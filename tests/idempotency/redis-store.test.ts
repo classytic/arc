@@ -13,8 +13,8 @@
  * 9. TOCTOU race: concurrent unlock cannot steal another worker's lock
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { RedisIdempotencyStore, type RedisClient } from "../../src/idempotency/stores/redis.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import { type RedisClient, RedisIdempotencyStore } from "../../src/idempotency/stores/redis.js";
 
 // ============================================================================
 // Mock Redis Client — simulates ioredis SET NX EX, GET, DEL, EVAL
@@ -86,11 +86,7 @@ function createMockRedis(): RedisClient & {
       return [0, keys]; // cursor 0 = done
     },
 
-    async eval(
-      script: string,
-      _numkeys: number,
-      ...args: (string | number)[]
-    ): Promise<unknown> {
+    async eval(script: string, _numkeys: number, ...args: (string | number)[]): Promise<unknown> {
       // Minimal Lua interpreter for the unlock script:
       // if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0
       const key = String(args[0]);

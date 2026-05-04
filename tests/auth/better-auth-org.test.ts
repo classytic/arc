@@ -13,107 +13,55 @@ import { type BetterAuthHandler, createBetterAuthAdapter } from "../../src/auth/
 // Mock auth handlers
 // ============================================================================
 
-/** Auth handler with org membership support */
+/** Auth handler with org membership support — exposes both `handler` (catch-all) and `api` (direct in-process). */
 function createOrgAuthHandler(
   opts: {
     activeOrgId?: string;
     memberRole?: string;
     memberNotFound?: boolean;
     userRoles?: string[];
-    listFallbackRole?: string;
     activeTeamId?: string;
-    /** Teams returned by /organization/list-teams (response shape: array, used as fallback when activeTeamId is set) */
+    /** Teams returned by api.organization.listTeams */
     teams?: Array<Record<string, unknown>>;
-    /** When true, list-teams returns `{ teams: [...] }` envelope instead of bare array */
+    /** When true, listTeams returns `{ teams: [...] }` envelope instead of bare array */
     teamsEnvelope?: boolean;
   } = {},
 ): BetterAuthHandler {
+  const session = {
+    id: "session-1",
+    activeOrganizationId: opts.activeOrgId ?? null,
+    activeTeamId: opts.activeTeamId ?? null,
+  };
+  const user = {
+    id: "user-1",
+    name: "Test User",
+    email: "test@example.com",
+    roles: opts.userRoles ?? [],
+  };
+
   return {
-    handler: async (request: Request) => {
-      const url = new URL(request.url);
-
-      // GET /api/auth/get-session
-      if (url.pathname.endsWith("/get-session")) {
-        return new Response(
-          JSON.stringify({
-            user: {
-              id: "user-1",
-              name: "Test User",
-              email: "test@example.com",
-              roles: opts.userRoles ?? [],
-            },
-            session: {
-              id: "session-1",
-              activeOrganizationId: opts.activeOrgId ?? null,
-              activeTeamId: opts.activeTeamId ?? null,
-            },
-          }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          },
-        );
-      }
-
-      // GET /api/auth/organization/list-teams
-      if (url.pathname.endsWith("/organization/list-teams")) {
-        const teams = opts.teams ?? [];
-        const body = opts.teamsEnvelope ? { teams } : teams;
-        return new Response(JSON.stringify(body), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      }
-
-      // GET /api/auth/organization/get-active-member
-      if (url.pathname.endsWith("/organization/get-active-member")) {
-        if (opts.memberNotFound) {
-          return new Response(JSON.stringify(null), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          });
-        }
-
-        return new Response(
-          JSON.stringify({
+    // Catch-all handler is still needed for routes that go through /api/auth/*
+    // (sign-up, sign-in, etc.). Tests that only exercise authenticate hit the
+    // `api` map below directly.
+    handler: async () =>
+      new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+    api: {
+      getSession: async () => ({ user, session }),
+      organization: {
+        getActiveMember: async () => {
+          if (opts.memberNotFound) return null;
+          return {
             id: "member-1",
             userId: "user-1",
             organizationId: opts.activeOrgId,
             role: opts.memberRole ?? "member",
-          }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          },
-        );
-      }
-
-      // GET /api/auth/organization/list (fallback resolution)
-      if (url.pathname.endsWith("/organization/list")) {
-        if (!opts.listFallbackRole) {
-          return new Response(JSON.stringify({ organizations: [] }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          });
-        }
-        const role = opts.listFallbackRole;
-        return new Response(
-          JSON.stringify({
-            organizations: [
-              {
-                organizationId: opts.activeOrgId,
-                role,
-              },
-            ],
-          }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          },
-        );
-      }
-
-      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+          };
+        },
+        listTeams: async () => {
+          const teams = opts.teams ?? [];
+          return opts.teamsEnvelope ? { teams } : teams;
+        },
+      },
     },
   };
 }
@@ -237,34 +185,6 @@ describe("Better Auth Org Context Bridge", () => {
     const res = await app.inject({ method: "GET", url: "/test" });
     expect(res.statusCode).toBe(200);
     expect(capturedScope).toMatchObject({ kind: "authenticated" });
-  });
-
-  it("falls back to organization/list when get-active-member returns null", async () => {
-    app = Fastify({ logger: false });
-    const { plugin } = createBetterAuthAdapter({
-      auth: createOrgAuthHandler({
-        activeOrgId: "org-123",
-        memberNotFound: true,
-        listFallbackRole: "admin,recruiter",
-      }),
-      orgContext: true,
-    });
-    await app.register(plugin);
-
-    let capturedScope: unknown;
-    app.get("/test", { preHandler: [app.authenticate] }, async (request) => {
-      capturedScope = (request as any).scope;
-      return { ok: true };
-    });
-    await app.ready();
-
-    const res = await app.inject({ method: "GET", url: "/test" });
-    expect(res.statusCode).toBe(200);
-    expect(capturedScope).toMatchObject({
-      kind: "member",
-      organizationId: "org-123",
-      orgRoles: ["admin", "recruiter"],
-    });
   });
 
   it("does not set org scope when orgContext is disabled", async () => {

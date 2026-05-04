@@ -3,8 +3,8 @@
  * compile-time-only (zero runtime cost).
  */
 
+import type { DataAdapter } from "@classytic/repo-core/adapter";
 import type { StandardRepo } from "@classytic/repo-core/repository";
-import type { DataAdapter } from "../adapters/interface.js";
 import type { IController } from "./handlers.js";
 import type { ResourceConfig } from "./resource.js";
 

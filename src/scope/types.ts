@@ -19,6 +19,102 @@
  * ```
  */
 
+// Pulled in for the `require*` throwing accessors below. Errors module
+// has no dependency on scope, so no cycle.
+import { OrgRequiredError, UnauthorizedError } from "../utils/errors.js";
+
+// ============================================================================
+// Capability Mandate (agent-led flows: AP2, Stripe x402, MCP authorization)
+// ============================================================================
+
+/**
+ * A capability mandate — declarative, time-boxed, optionally cap-bounded
+ * authorization for a single high-value action by an AI agent or service.
+ *
+ * Models the **2025 agent-payments / agent-authorization conventions**:
+ * - Google + Anthropic + Stripe **AP2** (Agent Payments Protocol)
+ * - Stripe **x402 / Agentic Commerce**
+ * - **MCP authorization** (RFC 9728 + RFC 9700 + RFC 9449)
+ *
+ * Where OAuth `scopes` answer "what can this client EVER do?", a mandate
+ * answers "what is THIS REQUEST authorized to do RIGHT NOW?" — narrower in
+ * capability, time, and value.
+ *
+ * Arc does **not** parse mandate JWTs / Verifiable Credentials — your
+ * authenticate callback does (one `jose.jwtVerify()` or `did-jwt-vc.verify()`
+ * call) and populates this object. Arc's `requireMandate(capability, opts)`
+ * permission helper reads it and validates the action against the mandate's
+ * declared bounds.
+ *
+ * @example
+ * ```typescript
+ * // Inbound: Authorization: Mandate eyJhbGc...
+ * authenticate: async (request) => {
+ *   const proof = request.headers['authorization']?.replace(/^Mandate /, '');
+ *   const claims = await verifyMandate(proof);            // host's verifier
+ *   request.scope = {
+ *     kind: 'service',
+ *     clientId: claims.iss,
+ *     organizationId: claims.org,
+ *     scopes: claims.scope?.split(' '),
+ *     mandate: {
+ *       id: claims.jti,
+ *       capability: claims.cap,           // 'payment.charge' / 'inbox.send' / ...
+ *       cap: claims.amount,               // numeric ceiling
+ *       expiresAt: claims.exp * 1000,
+ *       parent: claims.parent,            // delegated mandate chain
+ *       audience: claims.aud,             // resource id mandate is bound to
+ *     },
+ *     dpopJkt: claims.cnf?.jkt,           // RFC 7638 — sender-constrained
+ *   };
+ *   return { id: claims.iss };
+ * };
+ * ```
+ */
+export interface Mandate {
+  /** Mandate identifier — typically the JWT `jti` claim. */
+  id: string;
+  /**
+   * Capability string the mandate authorizes. Hierarchical-dotted convention:
+   * `payment.charge`, `payment.refund`, `inbox.send`, `data.export`, etc.
+   * Match in `requireMandate(capability)`; treated as opaque otherwise.
+   */
+  capability: string;
+  /**
+   * Optional numeric ceiling for the action — interpretation is per-capability:
+   * for `payment.*` the upper bound on amount (in the mandate's currency),
+   * for `data.export` the row count, for `inbox.send` the message count.
+   * Validated by the host via `validateAmount` in `requireMandate`'s opts.
+   */
+  cap?: number;
+  /**
+   * Currency code (ISO 4217) when `cap` represents a monetary amount.
+   * Required for AP2 / x402 payment mandates; ignored for non-monetary caps.
+   */
+  currency?: string;
+  /** Expiry as epoch ms. `requireMandate` enforces with optional grace window. */
+  expiresAt?: number;
+  /**
+   * Parent mandate id when this mandate was delegated from another. Lets the
+   * audit chain reconstruct the full delegation graph (root user authorization
+   * → agent platform mandate → per-action sub-mandate).
+   */
+  parent?: string;
+  /**
+   * Resource the mandate is bound to (e.g., `invoice:INV-7`, `order:ORD-42`).
+   * When set, `requireMandate` can verify the inbound request targets the
+   * same resource — prevents a payment-mandate for one invoice being replayed
+   * against another.
+   */
+  audience?: string;
+  /**
+   * Free-form claims the host's mandate verifier extracted (intent text,
+   * user-presented confirmation, risk score, etc.). Surfaced in audit rows;
+   * arc takes no position on the shape.
+   */
+  meta?: Readonly<Record<string, unknown>>;
+}
+
 // ============================================================================
 // Core Type
 // ============================================================================
@@ -88,6 +184,38 @@ export type RequestScope =
       context?: Readonly<Record<string, string>>;
       /** Parent organizations — see `member.ancestorOrgIds` for details. */
       ancestorOrgIds?: readonly string[];
+      /**
+       * Capability mandate — narrows what the caller may do beyond OAuth `scopes`.
+       *
+       * Where `scopes` says "this client can write orders", a mandate says
+       * "this specific request can charge up to $50 on behalf of user U for
+       * invoice INV-7, expires at T". Models the AP2 / Stripe x402 / Google
+       * Agent Payments Protocol pattern for AI-agent-led actions on protected
+       * resources.
+       *
+       * Arc does **not** parse or verify mandate JWTs / VCs — your authenticate
+       * function does (using `jose` / `did-jwt-vc` / your provider's SDK) and
+       * populates this field. Arc's `requireMandate(capability, opts)`
+       * permission helper reads it.
+       *
+       * Optional — omit when the request isn't mandate-bound (most M2M auth
+       * still works fine via OAuth `scopes`).
+       */
+      mandate?: Readonly<Mandate>;
+      /**
+       * DPoP key thumbprint (RFC 7638 JWK SHA-256 thumbprint) bound to this
+       * service identity. When present, the inbound token is sender-constrained
+       * — replaying it from a different client (different key) MUST fail.
+       *
+       * Arc does **not** verify the DPoP proof header — your authenticate
+       * function does (one `jose.dpop.verify()` call) and populates this
+       * field on success. Arc's `requireDPoP()` permission helper checks
+       * presence + binding.
+       *
+       * Pairs with RFC 9449 (OAuth DPoP) and is mandatory for high-value
+       * agent flows in MCP authorization (RFC 9728 + RFC 9700) and AP2.
+       */
+      dpopJkt?: string;
     }
   | {
       kind: "elevated";
@@ -172,6 +300,45 @@ export function getClientId(scope: RequestScope): string | undefined {
 export function getServiceScopes(scope: RequestScope): readonly string[] {
   if (scope.kind === "service") return scope.scopes ?? [];
   return [];
+}
+
+/**
+ * Get the capability mandate from a service scope (when present).
+ *
+ * Returns the `Mandate` populated by your authenticate function on
+ * mandate-bound requests (AP2 / x402 / MCP authorization), or `undefined`
+ * for any non-service scope or non-mandate-bound service request.
+ *
+ * Use directly when you need the full mandate for custom logic; use
+ * `requireMandate(capability)` for the canonical permission-check path.
+ *
+ * @example
+ * ```typescript
+ * import { getMandate } from '@classytic/arc/scope';
+ *
+ * const mandate = getMandate(request.scope);
+ * if (mandate?.audience !== `invoice:${request.params.id}`) {
+ *   throw new ForbiddenError('Mandate is bound to a different resource');
+ * }
+ * ```
+ */
+export function getMandate(scope: RequestScope): Readonly<Mandate> | undefined {
+  if (scope.kind === "service") return scope.mandate;
+  return undefined;
+}
+
+/**
+ * Get the DPoP key thumbprint (RFC 7638) from a service scope.
+ *
+ * When non-empty, the inbound credential is sender-constrained — replaying
+ * it from a different keypair must fail. Set by your authenticate function
+ * after a successful `jose.dpop.verify()` (or equivalent) call. Read via
+ * `requireDPoP()` permission helper or directly when implementing custom
+ * binding checks.
+ */
+export function getDPoPJkt(scope: RequestScope): string | undefined {
+  if (scope.kind === "service") return scope.dpopJkt;
+  return undefined;
 }
 
 /** Get org roles from scope (empty array if not a member) */
@@ -295,6 +462,100 @@ export function isOrgInScope(scope: RequestScope, targetOrgId: string): boolean 
 export function getUserId(scope: RequestScope): string | undefined {
   if (scope.kind === "public") return undefined;
   return (scope as { userId?: string }).userId;
+}
+
+// ============================================================================
+// Throwing accessors — symmetric `require*` variants of the `get*` accessors
+// ============================================================================
+//
+// `getOrgId(scope)` returns `string | undefined`, which is correct when
+// missing scope is a valid state (lookup tables, public reads). For paths
+// that REQUIRE the value, hosts otherwise hand-roll
+// `if (!orgId) throw new ForbiddenError(...)` — and those throws drift in
+// shape across handlers. `requireOrgId` / `requireUserId` etc. centralise
+// the pattern with arc's canonical error classes (`OrgRequiredError` /
+// `UnauthorizedError`), giving every handler the same wire shape and
+// status code. They throw lazily — same import cost as the `get*` family.
+//
+// Pattern parallels permission combinators (`allowPublic` / `requireRoles`
+// / `requireAuth`) but at the accessor layer instead of the policy layer.
+
+/**
+ * Throwing variant of `getOrgId`. Returns the organization id when the
+ * scope carries one (`member` / `service` / `elevated`); throws
+ * `OrgRequiredError` (HTTP 403, code `ORG_SELECTION_REQUIRED`) otherwise.
+ *
+ * Use whenever a handler/service path REQUIRES an org id — `requireOrgId`
+ * eliminates the `if (!orgId) throw …` boilerplate that drifts across
+ * handlers, and ensures every "missing org" produces the same error shape.
+ *
+ * @param hint Optional context for the error message (e.g. route name) —
+ *   surfaces in the response body and in logs, so the failing path is
+ *   visible without grepping for the throw site.
+ * @example
+ * ```typescript
+ * import { requireOrgId } from '@classytic/arc/scope';
+ *
+ * const orgId = requireOrgId(req.scope, 'POST /orders');
+ * await orderRepo.create({ ...req.body, organizationId: orgId });
+ * ```
+ */
+export function requireOrgId(scope: RequestScope, hint?: string): string {
+  const id = getOrgId(scope);
+  if (!id) {
+    throw new OrgRequiredError(
+      hint ? `Organization context required: ${hint}` : "Organization context required",
+    );
+  }
+  return id;
+}
+
+/**
+ * Throwing variant of `getUserId`. Returns the user id when the scope is
+ * `authenticated` / `member` / `elevated` and carries one; throws
+ * `UnauthorizedError` (HTTP 401) otherwise.
+ *
+ * @param hint Optional route/context tag for the error message.
+ */
+export function requireUserId(scope: RequestScope, hint?: string): string {
+  const id = getUserId(scope);
+  if (!id) {
+    throw new UnauthorizedError(
+      hint ? `User authentication required: ${hint}` : "User authentication required",
+    );
+  }
+  return id;
+}
+
+/**
+ * Throwing variant of `getClientId`. Returns the service-account `clientId`
+ * when the scope kind is `service`; throws `UnauthorizedError` (HTTP 401)
+ * otherwise. Use for routes that are service-account-only.
+ */
+export function requireClientId(scope: RequestScope, hint?: string): string {
+  const id = getClientId(scope);
+  if (!id) {
+    throw new UnauthorizedError(
+      hint ? `Service client required: ${hint}` : "Service client required",
+    );
+  }
+  return id;
+}
+
+/**
+ * Throwing variant of `getTeamId`. Returns the team id when the scope is
+ * `member` and carries one; throws `OrgRequiredError` (HTTP 403) otherwise.
+ *
+ * Uses the org-context error class (not a separate `TeamRequiredError`)
+ * because the failure mode is the same shape as missing-org: the request
+ * lacks a tenancy dimension the route requires.
+ */
+export function requireTeamId(scope: RequestScope, hint?: string): string {
+  const id = getTeamId(scope);
+  if (!id) {
+    throw new OrgRequiredError(hint ? `Team context required: ${hint}` : "Team context required");
+  }
+  return id;
 }
 
 /**

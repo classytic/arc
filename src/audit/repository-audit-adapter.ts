@@ -16,9 +16,9 @@
  * `repository.idField` — mongokit defaults to `_id`, sqlitekit to `id`.
  */
 
+import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import type { Filter } from "@classytic/repo-core/filter";
 import { and, anyOf, eq, gte, lt, lte } from "@classytic/repo-core/filter";
-import type { RepositoryLike } from "../adapters/interface.js";
 import type { AuditEntry, AuditStore } from "./stores/interface.js";
 
 /**
@@ -125,9 +125,9 @@ export function repositoryAsAuditStore(repository: RepositoryLike): AuditStore {
         sort: { timestamp: -1 },
         page,
         limit,
-      })) as { docs?: StoredAuditDoc[] } | StoredAuditDoc[];
-      const docs: StoredAuditDoc[] = Array.isArray(result) ? result : (result.docs ?? []);
-      return docs.map((d) => ({
+      })) as { data?: StoredAuditDoc[] } | StoredAuditDoc[];
+      const data: StoredAuditDoc[] = Array.isArray(result) ? result : (result.data ?? []);
+      return data.map((d) => ({
         // Extract the matched doc's id via the kit's idField — returning
         // `d._id` only would break on SQL kits where the column is `id`.
         id: String(d[idField] ?? ""),

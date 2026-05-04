@@ -1,8 +1,8 @@
 # Peer Dependencies
 
-**Summary**: Every integration is an optional peer dep and never bundled. Only `fastify` is required.
-**Sources**: package.json, tsdown.config.ts, AGENTS.md §9.
-**Last updated**: 2026-04-21.
+**Summary**: Every integration is an optional peer dep and never bundled. Only `fastify` and `@classytic/primitives` are required. **Arc 2.12 is fully DB-agnostic** — every kit-specific adapter (Mongoose, Drizzle, Prisma) lives in its own kit, not arc. Arc consumes the adapter contract from `@classytic/repo-core/adapter`. Custom kits implementing `DataAdapter<TDoc>` plug in identically.
+**Sources**: package.json, tsdown.config.ts, AGENTS.md §7.
+**Last updated**: 2026-05-02.
 
 ---
 
@@ -11,16 +11,15 @@
 | Peer | Min | Required? | Used by |
 |---|---|---|---|
 | fastify | >=5.0.0 | **Yes** | Everything |
-| @classytic/mongokit | >=3.10.2 | No | Recommended MongoDB adapter |
-| @classytic/repo-core | >=0.1.0 | No | `RepositoryLike` base (v2.9.1) |
-| @classytic/sqlitekit | >=0.1.0 | No | SQLite adapter |
+| @classytic/primitives | >=0.3.0 | **Yes** | Canonical event types (`EventMeta`, `DomainEvent`, `EventTransport`, ...) |
+| @classytic/repo-core | >=0.3.1 | No | `RepositoryLike`, adapter contract (`/adapter`), canonical pagination / tenant / errors / schema-generator contracts |
 | @classytic/streamline | >=2.0.0 | No | Streamline integration |
-| mongoose | >=9.0.0 | No | Mongoose adapter |
-| @prisma/client | >=5.0.0 | No | Prisma adapter |
 | better-auth | >=1.6.2 | No | Better Auth integration |
 | ioredis | >=5.0.0 | No | Redis events, cache, sessions |
 | bullmq | >=5.0.0 | No | Job queue |
 | @opentelemetry/* | various | No | Tracing plugin |
+
+**Removed in arc 2.12:** `@classytic/mongokit`, `@classytic/sqlitekit`, `mongoose`, `@prisma/client`. Every kit-specific adapter lives on the kit side. Hosts depend on whichever kit they use (`@classytic/mongokit@>=3.13.0` for the Mongoose adapter, `@classytic/sqlitekit@>=0.3.0` for the Drizzle adapter, `@classytic/prismakit@>=0.1.0` for the Prisma adapter) and import from the kit's `/adapter` subpath. The kit owns the driver peer dep, not arc. Arc 2.12 has zero kit- or driver-bound peers.
 
 ## Rules
 

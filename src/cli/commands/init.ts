@@ -26,6 +26,19 @@ export interface InitOptions {
   adapter?: "mongokit" | "custom";
   auth?: "jwt" | "better-auth";
   tenant?: "multi" | "single";
+  /**
+   * Enable Better Auth's `apiKey` plugin (`@better-auth/api-key`) for
+   * machine-to-machine authentication alongside cookie/session auth.
+   * Only used when `auth === 'better-auth'`. Default: false.
+   */
+  apiKey?: boolean;
+  /**
+   * Session strategy when using Better Auth.
+   * - `cookie` (default): browser cookie + DB-backed session (BA's default)
+   * - `bearer`: Authorization: Bearer header (mobile apps, SPA, M2M)
+   * Both can coexist — `bearer: true` adds bearer alongside cookies.
+   */
+  session?: "cookie" | "bearer" | "both";
   typescript?: boolean;
   edge?: boolean;
   skipInstall?: boolean;
@@ -37,6 +50,8 @@ interface ProjectConfig {
   adapter: "mongokit" | "custom";
   auth: "jwt" | "better-auth";
   tenant: "multi" | "single";
+  apiKey: boolean;
+  session: "cookie" | "bearer" | "both";
   typescript: boolean;
   edge: boolean;
 }
@@ -66,6 +81,12 @@ export async function init(options: InitOptions = {}): Promise<void> {
   console.log(
     `   Auth: ${config.auth === "better-auth" ? "Better Auth (recommended)" : "Arc JWT"}`,
   );
+  if (config.auth === "better-auth") {
+    console.log(
+      `   Session: ${config.session === "cookie" ? "Cookie" : config.session === "bearer" ? "Bearer token" : "Cookie + Bearer"}`,
+    );
+    if (config.apiKey) console.log(`   API keys: enabled (@better-auth/api-key)`);
+  }
   console.log(`   Tenant: ${config.tenant === "multi" ? "Multi-tenant" : "Single-tenant"}`);
   console.log(`   Language: ${config.typescript ? "TypeScript" : "JavaScript"}`);
   console.log(`   Target: ${config.edge ? "Edge/Serverless" : "Node.js Server"}\n`);
@@ -171,16 +192,21 @@ function existsSync(filePath: string): boolean {
  * the declared ranges). One source — no drift.
  */
 const SCAFFOLD_DEP_VERSIONS = {
-  // Core runtime — required for every preset
+  // Core runtime — required for every preset.
+  // `@classytic/repo-core` is a REQUIRED arc peer (arc 2.12+ ships
+  // pagination, adapter contract, and filter helpers from there).
+  // `@classytic/primitives` is REQUIRED for events.
   core: {
-    "@classytic/arc": "^2.11.3",
-    "@fastify/cors": "^11.0.0",
-    "@fastify/helmet": "^13.0.0",
-    "@fastify/rate-limit": "^10.0.0",
-    "@fastify/sensible": "^6.0.0",
-    "@fastify/under-pressure": "^9.0.0",
-    dotenv: "^17.0.0",
-    fastify: "^5.8.0",
+    "@classytic/arc": "^2.13.0",
+    "@classytic/primitives": "^0.3.0",
+    "@classytic/repo-core": "^0.4.0",
+    "@fastify/cors": "^11.2.0",
+    "@fastify/helmet": "^13.0.2",
+    "@fastify/rate-limit": "^10.3.0",
+    "@fastify/sensible": "^6.0.4",
+    "@fastify/under-pressure": "^9.0.3",
+    dotenv: "^17.4.2",
+    fastify: "^5.8.5",
   },
   // Auth presets — picked by `config.auth`
   authJwt: {
@@ -188,24 +214,33 @@ const SCAFFOLD_DEP_VERSIONS = {
     bcryptjs: "^3.0.0",
   },
   authBetterAuth: {
-    "better-auth": "^1.6.0",
-    mongodb: "^6.10.0",
+    "better-auth": "^1.6.9",
+    // mongodb 7 — mongoose 9 ships bson@7, so the top-level mongodb peer
+    // must also use bson@7 or BA's mongo-adapter throws
+    // `BSONVersionError: bson types must be from bson 7.x.x` on every
+    // user/org write.
+    mongodb: "^7.1.0",
   },
-  // Adapter presets — picked by `config.adapter`
+  authBetterAuthApiKey: {
+    "@better-auth/api-key": "^1.6.9",
+  },
+  // Adapter presets — picked by `config.adapter`. The kit ships its own
+  // arc-compatible adapter at `<kit>/adapter` (arc 2.12+); the kit owns
+  // the driver peer (mongoose for mongokit, etc.).
   adapterMongokit: {
-    "@classytic/mongokit": "^3.11.0",
-    "@classytic/repo-core": "^0.2.0",
-    mongoose: "^9.4.1",
+    "@classytic/mongokit": "^3.13.0",
+    mongoose: "^9.6.1",
   },
   // Dev tooling — common to every project
   devCommon: {
+    "mongodb-memory-server": "^11.1.0",
     "pino-pretty": "^13.0.0",
-    vitest: "^4.0.0",
+    vitest: "^4.1.5",
   },
   devTypescript: {
-    "@types/node": "^22.0.0",
+    "@types/node": "^22.10.0",
     tsx: "^4.21.0",
-    typescript: "^5.6.0",
+    typescript: "^5.7.2",
   },
   // Type definitions — paired with their runtime dep
   typesJwt: {
@@ -230,6 +265,9 @@ function resolveScaffoldDependencies(config: ProjectConfig): DependencyManifest 
 
   if (config.auth === "better-auth") {
     Object.assign(dependencies, SCAFFOLD_DEP_VERSIONS.authBetterAuth);
+    if (config.apiKey) {
+      Object.assign(dependencies, SCAFFOLD_DEP_VERSIONS.authBetterAuthApiKey);
+    }
   } else {
     Object.assign(dependencies, SCAFFOLD_DEP_VERSIONS.authJwt);
     if (config.typescript) {
@@ -356,6 +394,24 @@ async function gatherConfig(options: InitOptions): Promise<ProjectConfig> {
       auth = authChoice === "2" ? "jwt" : "better-auth";
     }
 
+    // Better Auth–specific: session strategy + api-key plugin
+    let session: "cookie" | "bearer" | "both" = options.session ?? "cookie";
+    let apiKey = options.apiKey ?? false;
+    if (auth === "better-auth" && !nonInteractive) {
+      if (options.session === undefined) {
+        const sessionChoice = await question(
+          "Session strategy [1=Cookie (web app, default), 2=Bearer token (mobile/SPA), 3=Both]: ",
+        );
+        session = sessionChoice === "2" ? "bearer" : sessionChoice === "3" ? "both" : "cookie";
+      }
+      if (options.apiKey === undefined) {
+        const apiKeyChoice = await question(
+          "Enable API key plugin (machine-to-machine auth via @better-auth/api-key)? [y/N]: ",
+        );
+        apiKey = apiKeyChoice.toLowerCase() === "y";
+      }
+    }
+
     // Tenant mode
     let tenant: "multi" | "single" = options.tenant || "single";
     if (!options.tenant && !nonInteractive) {
@@ -399,12 +455,12 @@ async function gatherConfig(options: InitOptions): Promise<ProjectConfig> {
       if (proceed.toLowerCase() !== "y") {
         adapter = "custom";
         console.log(
-          "  Switched to custom adapter. Wire sqlitekit/Drizzle here; Prisma remains experimental.",
+          "  Switched to custom adapter. Wire sqlitekit/Drizzle, prismakit, or any RepositoryLike-conforming repo.",
         );
       }
     }
 
-    return { name, adapter, auth, tenant, typescript, edge };
+    return { name, adapter, auth, tenant, apiKey, session, typescript, edge };
   } finally {
     rl.close();
   }
@@ -896,7 +952,7 @@ Short forms also supported: \`.env.prod\`, \`.env.dev\`, \`.env.test\`
 
 API documentation is available via Scalar UI:
 
-- **Interactive UI**: [http://localhost:8040/docs](http://localhost:8040/docs)
+- **Interactive UI**: [http://localhost:8040/docs](http://localhost:8040/data)
 - **OpenAPI Spec**: [http://localhost:8040/_docs/openapi.json](http://localhost:8040/_docs/openapi.json)
 
 ## API Endpoints
@@ -1038,11 +1094,18 @@ import { getAuth } from './auth.js';
 `
       : "";
 
+  // `orgContext: true` even on single-tenant: BA's `organization` plugin
+  // is harmless to enable and lets `requireRoles(...)` read org roles the
+  // moment a host adds the plugin. Without it, every authenticated
+  // request lands as `kind: 'authenticated'` (no orgRoles) and admin-only
+  // endpoints 403 — a silent footgun when a single-tenant scaffold opts
+  // into the org plugin later. The lookup is a no-op if no plugin exists.
   const authConfig =
     config.auth === "better-auth"
-      ? config.tenant === "multi"
-        ? `auth: { type: 'betterAuth', betterAuth: createBetterAuthAdapter({ auth: getAuth(), orgContext: true }) },`
-        : `auth: { type: 'betterAuth', betterAuth: createBetterAuthAdapter({ auth: getAuth() }) },`
+      ? `auth: {
+      type: 'betterAuth',
+      betterAuth: createBetterAuthAdapter({ auth: getAuth(), orgContext: true }),
+    },`
       : `auth: {
       type: 'jwt',
       jwt: { secret: config.jwt.secret },
@@ -1074,10 +1137,13 @@ import { resources, registerResources } from '#resources/index.js';
  * @returns Configured Fastify instance ready to use
  */
 export async function createAppInstance()${ts ? ": Promise<FastifyInstance>" : ""} {
-  // Create Arc app with resources and base configuration
+  // Create Arc app with resources and base configuration. \`resourcePrefix\`
+  // mounts every resource under \`/api\`, matching the \`apiPrefix\` the
+  // OpenAPI plugin advertises — keeps docs and routes in agreement.
   const app = await createApp({
     preset: config.env === 'production' ? (${config.edge ? "'edge'" : "'production'"}) : 'development',
     resources,
+    resourcePrefix: '/api',
     ${authConfig}
     cors: {
       origin: config.cors.origins,
@@ -1350,7 +1416,8 @@ function sharedIndexTemplate(_config: ProjectConfig): string {
 export { createAdapter } from './adapter.js';
 
 // Core Arc exports
-export { createMongooseAdapter, defineResource } from '@classytic/arc';
+export { defineResource } from '@classytic/arc';
+export { createMongooseAdapter } from '@classytic/mongokit/adapter';
 
 // Permission helpers (core + application-level)
 export * from './permissions.js';
@@ -1370,14 +1437,17 @@ function createAdapterTemplate(config: ProjectConfig): string {
  * The repository handles query parsing via MongoKit's built-in QueryParser.
  */
 
-import { createMongooseAdapter } from '@classytic/arc';
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
+import { buildCrudSchemasFromModel } from '@classytic/mongokit';
 ${ts ? "import type { Model } from 'mongoose';\nimport type { Repository } from '@classytic/mongokit';" : ""}
 
 /**
- * Create a MongoKit-powered adapter for a resource
+ * Create a MongoKit-powered adapter for a resource.
  *
  * Note: Query parsing is handled by MongoKit's Repository class.
- * Just pass the model and repository - Arc handles the rest.
+ * \`buildCrudSchemasFromModel\` is the canonical OpenAPI schema generator
+ * for arc + Mongoose (arc 2.12+ no longer ships a built-in fallback —
+ * passing it explicitly is required for OpenAPI auto-generation).
  */
 export function createAdapter${ts ? "<TDoc = any>" : ""}(
   model${ts ? ": Model<TDoc>" : ""},
@@ -1386,6 +1456,7 @@ export function createAdapter${ts ? "<TDoc = any>" : ""}(
   return createMongooseAdapter({
     model,
     repository,
+    schemaGenerator: buildCrudSchemasFromModel,
   });
 }
 `;
@@ -1397,21 +1468,21 @@ function customAdapterTemplate(config: ProjectConfig): string {
   return `/**
  * Custom Adapter Factory
  *
- * Use this for sqlitekit/Drizzle, Prisma experiments, or any repository
- * that satisfies Arc's RepositoryLike contract.
+ * Use this for the bring-your-own-repository path — any object that
+ * satisfies the \`RepositoryLike\` contract from
+ * \`@classytic/repo-core/adapter\` plugs in here. Each classytic kit
+ * also ships its own \`/adapter\` subpath; if one of those fits, import
+ * its factory directly instead.
  */
 
-${ts ? "import type { DataAdapter, RepositoryLike } from '@classytic/arc/adapters';" : ""}
+${ts ? "import type { DataAdapter, RepositoryLike } from '@classytic/repo-core/adapter';" : ""}
 
 /**
  * Create a custom adapter for a resource.
  *
- * Recommended SQL path:
- * - sqlitekit repository + Arc's createDrizzleAdapter for Drizzle tables
- *
- * Experimental path:
- * - Prisma can be wired with createPrismaAdapter, but keep it opt-in until
- *   your app has integration coverage.
+ * Pass any object satisfying \`RepositoryLike<TDoc>\` (a 5-method floor:
+ * \`getAll\` / \`getById\` / \`create\` / \`update\` / \`delete\`, plus any
+ * optional \`StandardRepo\` methods you implement).
  */
 export function createAdapter${ts ? "<TDoc = unknown>" : ""}(
   _source${ts ? ": unknown" : ""},
@@ -1635,9 +1706,8 @@ function createTenantInjection(tenantField${ts ? ": string" : ""}) {
     // Fail-closed: Require orgId for create operations
     if (!orgId) {
       return reply.code(403).send({
-        success: false,
-        error: 'Forbidden',
-        message: 'Organization context required to create resources',
+        error: 'Organization context required to create resources',
+        code: 'arc.org_required',
       });
     }
 
@@ -2801,41 +2871,66 @@ export default authResource;
 
 function betterAuthSetupTemplate(config: ProjectConfig): string {
   const ts = config.typescript;
-  const mongoImport =
-    config.adapter === "mongokit"
-      ? `import mongoose from 'mongoose';
-import { mongodbAdapter } from 'better-auth/adapters/mongodb';`
-      : "";
+  const useMongo = config.adapter === "mongokit";
+  const useStubs = useMongo;
+  const useOrg = config.tenant === "multi";
+  const useBearer = config.session === "bearer" || config.session === "both";
+  const useApiKey = config.apiKey;
 
-  const dbAdapter =
-    config.adapter === "mongokit"
-      ? config.typescript
-        ? `database: mongodbAdapter(mongoose.connection.getClient().db() as any),`
-        : `database: mongodbAdapter(mongoose.connection.getClient().db()),`
-      : `// Configure your database adapter here
+  // Imports — assembled per-feature so unused symbols don't appear.
+  const mongoImport = useMongo
+    ? `import mongoose from 'mongoose';
+import { mongodbAdapter } from '@better-auth/mongo-adapter';`
+    : "";
+
+  const stubsImport = useStubs
+    ? `import { registerBetterAuthStubs } from '@classytic/mongokit/better-auth';`
+    : "";
+
+  const pluginImports = [
+    useOrg ? `import { organization } from 'better-auth/plugins';` : "",
+    useBearer ? `import { bearer } from 'better-auth/plugins';` : "",
+    useApiKey ? `import { apiKey } from '@better-auth/api-key';` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const dbAdapter = useMongo
+    ? config.typescript
+      ? `database: mongodbAdapter(mongoose.connection.getClient().db() as any),`
+      : `database: mongodbAdapter(mongoose.connection.getClient().db()),`
+    : `// Configure your database adapter here
     // See: https://www.better-auth.com/docs/concepts/database`;
 
-  const orgPlugin =
-    config.tenant === "multi"
-      ? `
-import { organization } from 'better-auth/plugins/organization';
-import { bearer } from 'better-auth/plugins/bearer';`
-      : "";
-
-  const orgPluginUsage =
-    config.tenant === "multi"
-      ? `
-      plugins: [
-        bearer(),
-        organization({
+  // Plugin usage — same conditional layering as imports.
+  const pluginEntries = [
+    useBearer ? `        bearer(),` : "",
+    useApiKey
+      ? `        apiKey({
+          enableMetadata: true,
+          rateLimit: { enabled: true, timeWindow: 1000 * 60 * 60 * 24, maxRequests: 10 },
+        }),`
+      : "",
+    useOrg
+      ? `        organization({
           allowUserToCreateOrganization: true,
           creatorRole: 'owner',
-          teams: {
-            enabled: true,
-          },
-        }),
+          teams: { enabled: true },
+        }),`
+      : "",
+  ].filter(Boolean);
+
+  const orgPluginUsage =
+    pluginEntries.length > 0
+      ? `
+      plugins: [
+${pluginEntries.join("\n")}
       ],`
       : "";
+
+  // Stub-registration plugin keys — only registers what's enabled.
+  const stubPluginsList = [useOrg ? `'organization'` : ""].filter(Boolean).join(", ");
+  const stubExtras = useApiKey ? `, extraCollections: ['apikey']` : "";
 
   const googleProvider = `
       // Google OAuth (enabled when env vars are set)
@@ -2854,17 +2949,17 @@ import { bearer } from 'better-auth/plugins/bearer';`
  * Better Auth Configuration
  * Generated by Arc CLI
  *
- * Authentication is handled entirely by Better Auth.
- * Routes are registered automatically at /api/auth/*
+ * Better Auth owns auth flows + writes its own tables. Arc reads them as
+ * resources via \`@classytic/mongokit/better-auth\`'s overlay (full pagination,
+ * queryparser, OpenAPI, audit) without re-implementing CRUD.
  *
- * Better Auth manages these collections:
- * - user, session, account${config.tenant === "multi" ? ", organization, member, invitation, team, teamMember" : ""}
+ * BA-managed tables: user, session, account, verification${useOrg ? ", organization, member, invitation, team, teamMember" : ""}${useApiKey ? ", apikey" : ""}
  *
  * @see https://www.better-auth.com/docs
  */
 
 import { betterAuth } from 'better-auth';
-${mongoImport}${orgPlugin}
+${[mongoImport, pluginImports, stubsImport].filter(Boolean).join("\n")}
 import config from '#config/index.js';
 
 let _auth${ts ? ": ReturnType<typeof betterAuth> | null" : ""} = null;
@@ -2922,17 +3017,12 @@ ${orgPluginUsage}
       },
     });
 ${
-  config.adapter === "mongokit"
+  useStubs
     ? `
-    // Register stub Mongoose models for Better Auth collections.
-    // BA uses the raw MongoDB driver, so no Mongoose models exist by default.
-    // These stubs (strict: false) enable populate() on refs like 'user', 'organization', etc.
-    const baCollections = ['user', 'organization', 'member', 'invitation', 'session', 'account'];
-    for (const name of baCollections) {
-      if (!mongoose.models[name]) {
-        mongoose.model(name, new mongoose.Schema({}, { strict: false, collection: name }));
-      }
-    }
+    // Register stub Mongoose models for Better Auth's collections so
+    // \`.populate('user')\` / \`ref: 'organization'\` resolve against BA-owned
+    // documents app-wide. Idempotent, strict:false, plugin-aware.
+    registerBetterAuthStubs(mongoose, {${stubPluginsList ? ` plugins: [${stubPluginsList}]` : ""}${stubExtras} });
 `
     : ""
 }  }
@@ -2974,16 +3064,16 @@ export async function register(request${ts ? ": FastifyRequest" : ""}, reply${ts
 
     // Check if email exists
     if (await userRepository.emailExists(email)) {
-      return reply.code(400).send({ success: false, message: 'Email already registered' });
+      return reply.code(400).send({ error: 'Email already registered', code: 'arc.email_exists' });
     }
 
     // Create user
     await userRepository.create({ name, email, password, role: 'user' });
 
-    return reply.code(201).send({ success: true, message: 'User registered successfully' });
+    return reply.code(201).send({ message: 'User registered successfully' });
   } catch (error) {
     request.log.error({ err: error }, 'Register error');
-    return reply.code(500).send({ success: false, message: 'Registration failed' });
+    return reply.code(500).send({ error: 'Registration failed', code: 'arc.internal' });
   }
 }
 
@@ -2996,19 +3086,18 @@ export async function login(request${ts ? ": FastifyRequest" : ""}, reply${ts ? 
 
     const user = await userRepository.findByEmail(email);
     if (!user || !(await user.matchPassword(password))) {
-      return reply.code(401).send({ success: false, message: 'Invalid credentials' });
+      return reply.code(401).send({ error: 'Invalid credentials', code: 'arc.unauthorized' });
     }
 
     const tokens = request.server.auth.issueTokens({ id: user._id.toString(), role: user.role });
 
     return reply.send({
-      success: true,
       user: { id: user._id, name: user.name, email: user.email, role: user.role },
       ...tokens,
     });
   } catch (error) {
     request.log.error({ err: error }, 'Login error');
-    return reply.code(500).send({ success: false, message: 'Login failed' });
+    return reply.code(500).send({ error: 'Login failed', code: 'arc.internal' });
   }
 }
 
@@ -3019,15 +3108,15 @@ export async function refreshToken(request${ts ? ": FastifyRequest" : ""}, reply
   try {
     const { token } = request.body${ts ? " as any" : ""};
     if (!token) {
-      return reply.code(401).send({ success: false, message: 'Refresh token required' });
+      return reply.code(401).send({ error: 'Refresh token required', code: 'arc.unauthorized' });
     }
 
     const decoded = request.server.auth.verifyRefreshToken(token)${ts ? " as { id: string }" : ""};
     const tokens = request.server.auth.issueTokens({ id: decoded.id });
 
-    return reply.send({ success: true, ...tokens });
+    return reply.send(tokens);
   } catch {
-    return reply.code(401).send({ success: false, message: 'Invalid refresh token' });
+    return reply.code(401).send({ error: 'Invalid refresh token', code: 'arc.unauthorized' });
   }
 }
 
@@ -3048,11 +3137,11 @@ export async function forgotPassword(request${ts ? ": FastifyRequest" : ""}, rep
       request.log.info(\`Password reset requested for \${email}\`);
     }
 
-    // Always return success to prevent email enumeration
-    return reply.send({ success: true, message: 'If email exists, reset link sent' });
+    // Always 200 to prevent email enumeration
+    return reply.send({ message: 'If email exists, reset link sent' });
   } catch (error) {
     request.log.error({ err: error }, 'Forgot password error');
-    return reply.code(500).send({ success: false, message: 'Failed to process request' });
+    return reply.code(500).send({ error: 'Failed to process request', code: 'arc.internal' });
   }
 }
 
@@ -3065,14 +3154,14 @@ export async function resetPassword(request${ts ? ": FastifyRequest" : ""}, repl
     const user = await userRepository.findByResetToken(token);
 
     if (!user) {
-      return reply.code(400).send({ success: false, message: 'Invalid or expired token' });
+      return reply.code(400).send({ error: 'Invalid or expired token', code: 'arc.bad_request' });
     }
 
     await userRepository.updatePassword(user._id, newPassword);
-    return reply.send({ success: true, message: 'Password has been reset' });
+    return reply.send({ message: 'Password has been reset' });
   } catch (error) {
     request.log.error({ err: error }, 'Reset password error');
-    return reply.code(500).send({ success: false, message: 'Failed to reset password' });
+    return reply.code(500).send({ error: 'Failed to reset password', code: 'arc.internal' });
   }
 }
 
@@ -3085,13 +3174,13 @@ export async function getUserProfile(request${ts ? ": FastifyRequest" : ""}, rep
     const user = await userRepository.getById(userId);
 
     if (!user) {
-      return reply.code(404).send({ success: false, message: 'User not found' });
+      return reply.code(404).send({ error: 'User not found', code: 'arc.not_found' });
     }
 
-    return reply.send({ success: true, data: user });
+    return reply.send(user);
   } catch (error) {
     request.log.error({ err: error }, 'Get profile error');
-    return reply.code(500).send({ success: false, message: 'Failed to get profile' });
+    return reply.code(500).send({ error: 'Failed to get profile', code: 'arc.internal' });
   }
 }
 
@@ -3109,10 +3198,10 @@ export async function updateUserProfile(request${ts ? ": FastifyRequest" : ""}, 
     delete updates.organizations;
 
     const user = await userRepository.Model.findByIdAndUpdate(userId, updates, { new: true });
-    return reply.send({ success: true, data: user });
+    return reply.send(user);
   } catch (error) {
     request.log.error({ err: error }, 'Update profile error');
-    return reply.code(500).send({ success: false, message: 'Failed to update profile' });
+    return reply.code(500).send({ error: 'Failed to update profile', code: 'arc.internal' });
   }
 }
 `;

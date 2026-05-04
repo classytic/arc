@@ -16,11 +16,10 @@
  * doesn't silently drift again.
  */
 
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
-
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -124,7 +123,7 @@ describe("Action strict schema (additionalProperties: false) — HTTP / AJV", ()
       payload: { action: "charge", amount: 100 },
     });
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).data.amount).toBe(100);
+    expect(JSON.parse(res.body).amount).toBe(100);
   });
 
   it("rejects a payload with an unknown field (the core regression fix)", async () => {

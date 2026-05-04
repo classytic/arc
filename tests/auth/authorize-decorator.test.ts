@@ -103,7 +103,6 @@ describe("Authorize Decorator", () => {
 
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.success).toBe(true);
     });
 
     it("should reject non-admin from admin-only route with 403", async () => {
@@ -118,8 +117,7 @@ describe("Authorize Decorator", () => {
 
       expect(res.statusCode).toBe(403);
       const body = JSON.parse(res.body);
-      expect(body.success).toBe(false);
-      expect(body.error).toBe("Forbidden");
+      expect(body.code).toBe("arc.forbidden");
       expect(body.message).toContain("admin");
     });
 
@@ -214,7 +212,6 @@ describe("Authorize Decorator", () => {
 
       expect(res.statusCode).toBe(401);
       const body = JSON.parse(res.body);
-      expect(body.success).toBe(false);
     });
 
     it("should return 401 with invalid token", async () => {

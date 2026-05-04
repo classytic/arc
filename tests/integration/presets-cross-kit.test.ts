@@ -18,21 +18,17 @@
  *     still flows through a sqlitekit repo.
  */
 
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-import Fastify, { type FastifyInstance } from "fastify";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SqliteRepository } from "@classytic/sqlitekit/repository";
+import { createDrizzleAdapter } from "@classytic/sqlitekit/adapter";
 import { softDeletePlugin } from "@classytic/sqlitekit/plugins/soft-delete";
 import { timestampPlugin } from "@classytic/sqlitekit/plugins/timestamp";
-import { createDrizzleAdapter } from "../../src/adapters/drizzle.js";
+import { SqliteRepository } from "@classytic/sqlitekit/repository";
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import { sqliteTable, text } from "drizzle-orm/sqlite-core";
+import Fastify, { type FastifyInstance } from "fastify";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { allowPublic, defineResource, requireAuth } from "../../src/index.js";
-import {
-  ownedByUserPreset,
-  slugLookupPreset,
-  softDeletePreset,
-} from "../../src/presets/index.js";
+import { ownedByUserPreset, slugLookupPreset, softDeletePreset } from "../../src/presets/index.js";
 
 // ──────────────────────────────────────────────────────────────────────
 // softDelete preset — over sqlitekit's softDeletePlugin
@@ -131,8 +127,11 @@ describe("softDeletePreset + sqlitekit", () => {
 
     const res = await app.inject({ method: "GET", url: "/articles" });
     expect(res.statusCode).toBe(200);
-    const docs = (res.json().data?.docs ?? res.json().docs ?? res.json()) as Article[];
-    const ids = (Array.isArray(docs) ? docs : []).map((d) => d.id);
+    const body = res.json();
+    // No-envelope: paginated wire shape is { method, data: T[], ... }; bare list is { data: T[] };
+    // raw array is the direct payload.
+    const list = (Array.isArray(body) ? body : (body.data ?? [])) as Article[];
+    const ids = list.map((d) => d.id);
     expect(ids).toContain("a-2");
     expect(ids).not.toContain("a-3");
   });
@@ -147,10 +146,8 @@ describe("softDeletePreset + sqlitekit", () => {
 
     const res = await app.inject({ method: "GET", url: "/articles/deleted" });
     expect(res.statusCode).toBe(200);
-    const docs = (res.json().data?.docs ?? res.json().docs ?? res.json().data ?? res.json()) as
-      | Article[]
-      | { docs: Article[] };
-    const list = Array.isArray(docs) ? docs : (docs.docs ?? []);
+    const body = res.json() as Article[] | { data: Article[] };
+    const list = Array.isArray(body) ? body : (body.data ?? []);
     expect(list.some((d) => d.id === "a-4")).toBe(true);
   });
 
@@ -170,8 +167,8 @@ describe("softDeletePreset + sqlitekit", () => {
 
     // After restore the row should be visible in the default listing again
     const listRes = await app.inject({ method: "GET", url: "/articles" });
-    const docs = (listRes.json().data?.docs ?? listRes.json().docs ?? []) as Article[];
-    expect(docs.some((d) => d.id === "a-5")).toBe(true);
+    const data = (listRes.json().data?.data ?? listRes.json().data ?? []) as Article[];
+    expect(data.some((d) => d.id === "a-5")).toBe(true);
   });
 });
 

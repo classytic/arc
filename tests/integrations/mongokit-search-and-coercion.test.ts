@@ -18,10 +18,10 @@
  */
 
 import { QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -159,9 +159,9 @@ describe("MongoKit Repository searchMode integration via Arc", () => {
     // With auto → regex fallback against searchFields=['name','description'],
     // it returns the two Apple products.
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { docs: Product[]; total: number };
+    const body = res.json() as { data: Product[]; total: number };
     expect(body.total).toBe(2);
-    const names = body.docs.map((d) => d.name).sort();
+    const names = body.data.map((d) => d.name).sort();
     expect(names).toEqual(["MacBook Pro", "iPad Air"]);
   });
 
@@ -172,10 +172,10 @@ describe("MongoKit Repository searchMode integration via Arc", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { docs: Product[]; total: number };
+    const body = res.json() as { data: Product[]; total: number };
     // "Apple laptop with M3 chip" + "Windows laptop with OLED screen"
     expect(body.total).toBe(2);
-    expect(body.docs.map((d) => d.name).sort()).toEqual(["Dell XPS", "MacBook Pro"]);
+    expect(body.data.map((d) => d.name).sort()).toEqual(["Dell XPS", "MacBook Pro"]);
   });
 
   it("?search=apple&stock[gte]=10 composes regex search with numeric filter", async () => {
@@ -185,10 +185,10 @@ describe("MongoKit Repository searchMode integration via Arc", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { docs: Product[]; total: number };
+    const body = res.json() as { data: Product[]; total: number };
     // Apple products with stock >= 10: only iPad Air (stock 12)
     expect(body.total).toBe(1);
-    expect(body.docs[0]?.name).toBe("iPad Air");
+    expect(body.data[0]?.name).toBe("iPad Air");
   });
 });
 
@@ -291,11 +291,11 @@ describe("MongoKit schema-aware value coercion via Arc", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { docs: Array<{ sku: string; stock: number }>; total: number };
+    const body = res.json() as { data: Array<{ sku: string; stock: number }>; total: number };
     expect(body.total).toBe(1);
-    expect(body.docs[0]?.sku).toBe("ABC-002");
+    expect(body.data[0]?.sku).toBe("ABC-002");
     // Critical: the value coerced to a real JS number, not a string.
-    expect(typeof body.docs[0]?.stock).toBe("number");
+    expect(typeof body.data[0]?.stock).toBe("number");
   });
 
   it("?stock[gte]=50 numeric range works (coercion in operator path)", async () => {
@@ -305,10 +305,10 @@ describe("MongoKit schema-aware value coercion via Arc", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { docs: Array<{ sku: string }>; total: number };
+    const body = res.json() as { data: Array<{ sku: string }>; total: number };
     // stock >= 50: ABC-002 (50), ABC-003 (100), ABC-004 (200)
     expect(body.total).toBe(3);
-    expect(body.docs.map((d) => d.sku).sort()).toEqual(["ABC-002", "ABC-003", "ABC-004"]);
+    expect(body.data.map((d) => d.sku).sort()).toEqual(["ABC-002", "ABC-003", "ABC-004"]);
   });
 
   it("?active=true coerces string to boolean against Boolean field", async () => {
@@ -318,9 +318,9 @@ describe("MongoKit schema-aware value coercion via Arc", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { docs: Array<{ sku: string; active: boolean }>; total: number };
+    const body = res.json() as { data: Array<{ sku: string; active: boolean }>; total: number };
     expect(body.total).toBe(3);
-    expect(body.docs.every((d) => d.active === true)).toBe(true);
+    expect(body.data.every((d) => d.active === true)).toBe(true);
   });
 
   it("?price[lt]=100 numeric coercion in lt operator", async () => {
@@ -330,10 +330,10 @@ describe("MongoKit schema-aware value coercion via Arc", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { docs: Array<{ sku: string; price: number }>; total: number };
+    const body = res.json() as { data: Array<{ sku: string; price: number }>; total: number };
     // price < 100: ABC-001 (19.99), ABC-002 (49.99), ABC-003 (99.99)
     expect(body.total).toBe(3);
-    expect(body.docs.every((d) => d.price < 100)).toBe(true);
+    expect(body.data.every((d) => d.price < 100)).toBe(true);
   });
 
   it("?sku=ABC-001 stays a string against String field (no false numeric coercion)", async () => {
@@ -343,8 +343,8 @@ describe("MongoKit schema-aware value coercion via Arc", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { docs: Array<{ sku: string }>; total: number };
+    const body = res.json() as { data: Array<{ sku: string }>; total: number };
     expect(body.total).toBe(1);
-    expect(body.docs[0]?.sku).toBe("ABC-001");
+    expect(body.data[0]?.sku).toBe("ABC-001");
   });
 });

@@ -6,10 +6,10 @@
  * them for PUT routes (full replacement).
  */
 
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import Fastify from "fastify";
 import mongoose from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { allowPublic } from "../../src/permissions/index.js";

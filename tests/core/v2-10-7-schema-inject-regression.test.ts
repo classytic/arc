@@ -39,7 +39,7 @@ describe("2.10.7 regression — adapter.generateSchemas sees auto-injected tenan
     const captured = { schemaOptions: undefined as RouteSchemaOptions | undefined, calls: 0 };
     const repo = {
       async getAll() {
-        return { docs: [], total: 0 };
+        return { data: [], total: 0 };
       },
       async getById() {
         return null;
@@ -140,7 +140,7 @@ describe("2.10.7 regression — adapter.generateSchemas sees auto-injected tenan
     const adapter: DataAdapter<Widget> = {
       repository: {
         async getAll() {
-          return { docs: [], total: 0 };
+          return { data: [], total: 0 };
         },
         async getById() {
           return null;

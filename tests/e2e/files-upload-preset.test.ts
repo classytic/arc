@@ -156,8 +156,7 @@ describe("filesUploadPreset — e2e", () => {
     expect(res.statusCode).toBe(201);
 
     const body = JSON.parse(res.body);
-    expect(body.success).toBe(true);
-    expect(body.data).toMatchObject({
+    expect(body).toMatchObject({
       id: expect.any(String),
       url: expect.stringMatching(/^memory:\/\//),
       pathname: expect.any(String),
@@ -181,7 +180,7 @@ describe("filesUploadPreset — e2e", () => {
       payload,
       headers,
     });
-    const { data } = JSON.parse(uploadRes.body);
+    const data = JSON.parse(uploadRes.body);
 
     const readRes = await app.inject({ method: "GET", url: `/files/${data.id}` });
     expect(readRes.statusCode).toBe(200);
@@ -204,7 +203,7 @@ describe("filesUploadPreset — e2e", () => {
       payload,
       headers,
     });
-    const { data } = JSON.parse(uploadRes.body);
+    const data = JSON.parse(uploadRes.body);
 
     // Request bytes 5-14 (10 bytes).
     const rangeRes = await app.inject({
@@ -232,7 +231,7 @@ describe("filesUploadPreset — e2e", () => {
       payload,
       headers,
     });
-    const { data } = JSON.parse(uploadRes.body);
+    const data = JSON.parse(uploadRes.body);
 
     // The adapter returns the full buffer when `range` is undefined, so for suffix
     // ranges the preset slices server-side using totalBytes.
@@ -260,7 +259,7 @@ describe("filesUploadPreset — e2e", () => {
       payload,
       headers,
     });
-    const { data } = JSON.parse(uploadRes.body);
+    const data = JSON.parse(uploadRes.body);
 
     const first = await app.inject({ method: "DELETE", url: `/files/${data.id}` });
     expect(first.statusCode).toBe(204);
@@ -337,7 +336,8 @@ describe("filesUploadPreset — user route coexistence", () => {
           permissions: allowPublic(),
           raw: true,
           handler: async (_req: unknown, reply: { send: (body: unknown) => unknown }) =>
-            reply.send({ success: true, data: { rows: backing.rows.size } }),
+            // No-envelope: emit raw stats payload.
+            reply.send({ rows: backing.rows.size }),
         },
       ],
     });
@@ -360,7 +360,7 @@ describe("filesUploadPreset — user route coexistence", () => {
   it("user-added GET /files/stats works alongside preset routes", async () => {
     const statsRes = await app.inject({ method: "GET", url: "/files/stats" });
     expect(statsRes.statusCode).toBe(200);
-    expect(JSON.parse(statsRes.body)).toEqual({ success: true, data: { rows: 0 } });
+    expect(JSON.parse(statsRes.body)).toEqual({ rows: 0 });
   });
 
   it("preset routes still register when user routes are present", async () => {
@@ -381,6 +381,6 @@ describe("filesUploadPreset — user route coexistence", () => {
 
     // User route reflects the new row count.
     const statsRes = await app.inject({ method: "GET", url: "/files/stats" });
-    expect(JSON.parse(statsRes.body).data.rows).toBe(1);
+    expect(JSON.parse(statsRes.body).rows).toBe(1);
   });
 });

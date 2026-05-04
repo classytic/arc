@@ -14,14 +14,14 @@
  *   6. MCP tool generation against the custom adapter (REST + MCP both work)
  */
 
-import Fastify, { type FastifyInstance } from "fastify";
-import qs from "qs";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
   AdapterSchemaContext,
   DataAdapter,
   RepositoryLike,
-} from "../../src/adapters/interface.js";
+} from "@classytic/repo-core/adapter";
+import Fastify, { type FastifyInstance } from "fastify";
+import qs from "qs";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { arcCorePlugin } from "../../src/core/arcCorePlugin.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createTestMcpClient } from "../../src/integrations/mcp/testing.js";
@@ -299,8 +299,8 @@ describe("Custom (non-Mongoose) adapter — context-aware", () => {
     const getRes = await app.inject({ method: "GET", url: "/widgets/WGT-ALPHA" });
     expect(getRes.statusCode).toBe(200);
     const got = getRes.json();
-    expect(got.data.code).toBe("WGT-ALPHA");
-    expect(got.data.name).toBe("Alpha");
+    expect(got.code).toBe("WGT-ALPHA");
+    expect(got.name).toBe("Alpha");
 
     // PATCH by custom code
     const patchRes = await app.inject({
@@ -309,7 +309,7 @@ describe("Custom (non-Mongoose) adapter — context-aware", () => {
       payload: { price: 149, stock: 3 },
     });
     expect(patchRes.statusCode).toBe(200);
-    expect(patchRes.json().data.price).toBe(149);
+    expect(patchRes.json().price).toBe(149);
 
     // DELETE by custom code
     const delRes = await app.inject({ method: "DELETE", url: "/widgets/WGT-ALPHA" });
@@ -350,14 +350,14 @@ describe("Custom (non-Mongoose) adapter — context-aware", () => {
       url: "/widgets/post-2026-03-31-launch",
     });
     expect(r1.statusCode).toBe(200);
-    expect(r1.json().data.code).toBe("post-2026-03-31-launch");
+    expect(r1.json().code).toBe("post-2026-03-31-launch");
 
     const r2 = await app.inject({
       method: "GET",
       url: "/widgets/550e8400-e29b-41d4-a716-446655440000",
     });
     expect(r2.statusCode).toBe(200);
-    expect(r2.json().data.code).toBe("550e8400-e29b-41d4-a716-446655440000");
+    expect(r2.json().code).toBe("550e8400-e29b-41d4-a716-446655440000");
   });
 
   it("safety net: legacy adapter with ObjectId pattern still works", async () => {
@@ -386,7 +386,7 @@ describe("Custom (non-Mongoose) adapter — context-aware", () => {
     // so this non-ObjectId code is accepted by params validation.
     const res = await app.inject({ method: "GET", url: "/widgets/WGT-LEGACY" });
     expect(res.statusCode).toBe(200);
-    expect(res.json().data.code).toBe("WGT-LEGACY");
+    expect(res.json().code).toBe("WGT-LEGACY");
 
     // The OpenAPI metadata's params.id should have no pattern after the safety net
     const params = resource._registryMeta?.openApiSchemas?.params as {
@@ -429,7 +429,7 @@ describe("Custom (non-Mongoose) adapter — context-aware", () => {
 
     const res = await app.inject({ method: "GET", url: "/widgets/wgt-1" });
     expect(res.statusCode).toBe(200);
-    expect(res.json().data._id).toBe("wgt-1");
+    expect(res.json()._id).toBe("wgt-1");
   });
 
   it("MCP tools work with custom adapter + custom idField", async () => {

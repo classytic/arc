@@ -28,7 +28,7 @@ interface MockRepoOverrides {
 function createMockRepo(overrides: MockRepoOverrides = {}) {
   return {
     getAll: vi.fn().mockResolvedValue({
-      docs: [],
+      data: [],
       total: 0,
       page: 1,
       pages: 0,
@@ -139,7 +139,7 @@ describe("BaseController hardening — bulk ops propagate actor identity", () =>
 describe("BaseController hardening — structured 404 everywhere", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("update() 404 from null hook result includes details.code", async () => {
+  it("update() throws NotFoundError when repo returns null mid-flight", async () => {
     const { BaseController } = await import("../../src/core/BaseController.js");
     // Existing doc fetched OK, but repo.update returns null (race: doc deleted mid-flight)
     const repo = createMockRepo({
@@ -148,29 +148,35 @@ describe("BaseController hardening — structured 404 everywhere", () => {
     });
     const ctl = new BaseController(repo, { resourceName: "product" });
 
-    const result = await ctl.update(await req({ name: "y" }, { params: { id: "x1" } }));
-
-    expect(result.success).toBe(false);
-    expect(result.status).toBe(404);
-    expect((result as { details?: { code?: string } }).details?.code).toBe("NOT_FOUND");
+    await expect(
+      ctl.update(await req({ name: "y" }, { params: { id: "x1" } })),
+    ).rejects.toMatchObject({ status: 404, code: "arc.not_found" });
   });
 
-  it("delete() 404 from falsy repo result includes details.code", async () => {
+  it("delete() throws NotFoundError when repo returns null", async () => {
+    // Adapter contract (post-migration): adapters signal "nothing was
+    // removed" by returning `null` / `undefined` / `false` (falsy). Any
+    // truthy result counts as success — the older `success: false`
+    // sentinel was retired in favour of the simpler null-vs-truthy
+    // discriminator (see BaseCrudController.delete at ~line 1052).
     const { BaseController } = await import("../../src/core/BaseController.js");
     const repo = createMockRepo({
       getById: vi.fn().mockResolvedValue({ _id: "x1" }),
-      delete: vi.fn().mockResolvedValue({ success: false }),
+      delete: vi.fn().mockResolvedValue(null),
     });
     const ctl = new BaseController(repo, { resourceName: "product" });
 
-    const result = await ctl.delete(await req({}, { params: { id: "x1" } }));
-
-    expect(result.success).toBe(false);
-    expect(result.status).toBe(404);
-    expect((result as { details?: { code?: string } }).details?.code).toBe("NOT_FOUND");
+    await expect(ctl.delete(await req({}, { params: { id: "x1" } }))).rejects.toMatchObject({
+      status: 404,
+      code: "arc.not_found",
+    });
   });
 
-  it("delete() 404 from deletedCount=0 includes details.code", async () => {
+  it("delete() returns success when adapter returns any truthy result", async () => {
+    // Migration-team decision: `{ deletedCount: 0 }` is still truthy and
+    // therefore success — adapters that want to surface "nothing matched"
+    // as 404 must return `null`. The deletedCount sniffing was removed
+    // because mongokit/sqlitekit/prismakit all signal misses with `null`.
     const { BaseController } = await import("../../src/core/BaseController.js");
     const repo = createMockRepo({
       getById: vi.fn().mockResolvedValue({ _id: "x1" }),
@@ -179,12 +185,10 @@ describe("BaseController hardening — structured 404 everywhere", () => {
     const ctl = new BaseController(repo, { resourceName: "product" });
 
     const result = await ctl.delete(await req({}, { params: { id: "x1" } }));
-
-    expect(result.status).toBe(404);
-    expect((result as { details?: { code?: string } }).details?.code).toBe("NOT_FOUND");
+    expect(result.status).toBe(200);
   });
 
-  it("restore() missing doc returns NOT_FOUND details.code", async () => {
+  it("restore() throws NotFoundError when doc is missing", async () => {
     const { BaseController } = await import("../../src/core/BaseController.js");
     const ctl = new BaseController(
       createMockRepo({
@@ -194,13 +198,13 @@ describe("BaseController hardening — structured 404 everywhere", () => {
       { resourceName: "product" },
     );
 
-    const result = await ctl.restore(await req({}, { params: { id: "x1" } }));
-
-    expect(result.status).toBe(404);
-    expect((result as { details?: { code?: string } }).details?.code).toBe("NOT_FOUND");
+    await expect(ctl.restore(await req({}, { params: { id: "x1" } }))).rejects.toMatchObject({
+      status: 404,
+      code: "arc.not_found",
+    });
   });
 
-  it("restore() null repo result returns NOT_FOUND details.code", async () => {
+  it("restore() throws NotFoundError when repo returns null", async () => {
     const { BaseController } = await import("../../src/core/BaseController.js");
     const ctl = new BaseController(
       createMockRepo({
@@ -210,10 +214,10 @@ describe("BaseController hardening — structured 404 everywhere", () => {
       { resourceName: "product" },
     );
 
-    const result = await ctl.restore(await req({}, { params: { id: "x1" } }));
-
-    expect(result.status).toBe(404);
-    expect((result as { details?: { code?: string } }).details?.code).toBe("NOT_FOUND");
+    await expect(ctl.restore(await req({}, { params: { id: "x1" } }))).rejects.toMatchObject({
+      status: 404,
+      code: "arc.not_found",
+    });
   });
 });
 
@@ -243,17 +247,16 @@ describe("BaseController hardening — get() error discipline", () => {
     const { BaseController } = await import("../../src/core/BaseController.js");
     // Mongokit's Repository throws `Error('Document not found')` with
     // `error.status = 404`. Arc honors this STRUCTURAL contract (not the
-    // message) and translates to a proper 404 response.
+    // message) and translates to a proper 404 NotFoundError throw.
     const err = new Error("Document not found") as Error & { status: number };
     err.status = 404;
     const repo = createMockRepo({ getById: vi.fn().mockRejectedValue(err) });
     const ctl = new BaseController(repo, { resourceName: "product" });
 
-    const result = await ctl.get(await req({}, { params: { id: "anything" } }));
-
-    expect(result.success).toBe(false);
-    expect(result.status).toBe(404);
-    expect((result as { details?: { code?: string } }).details?.code).toBe("NOT_FOUND");
+    await expect(ctl.get(await req({}, { params: { id: "anything" } }))).rejects.toMatchObject({
+      status: 404,
+      code: "arc.not_found",
+    });
   });
 
   it("does NOT translate status:500 errors (only 404 is a signal)", async () => {
@@ -266,17 +269,17 @@ describe("BaseController hardening — get() error discipline", () => {
     await expect(ctl.get(await req({}, { params: { id: "x" } }))).rejects.toThrow(/Internal/);
   });
 
-  it("returns 404 with details.code when repo returns null", async () => {
+  it("throws NotFoundError when repo returns null", async () => {
     const { BaseController } = await import("../../src/core/BaseController.js");
     const repo = createMockRepo({
       getById: vi.fn().mockResolvedValue(null),
     });
     const ctl = new BaseController(repo, { resourceName: "product" });
 
-    const result = await ctl.get(await req({}, { params: { id: "missing" } }));
-
-    expect(result.status).toBe(404);
-    expect((result as { details?: { code?: string } }).details?.code).toBeTruthy();
+    await expect(ctl.get(await req({}, { params: { id: "missing" } }))).rejects.toMatchObject({
+      status: 404,
+      code: "arc.not_found",
+    });
   });
 
   it("propagates connection errors as 500-class (not mapped to 404)", async () => {
@@ -300,7 +303,7 @@ describe("BaseController hardening — SWR uses portable scheduler", () => {
   it("stale cache entry triggers background revalidation", async () => {
     const { BaseController } = await import("../../src/core/BaseController.js");
     const freshPage = {
-      docs: [{ _id: "fresh" }],
+      data: [{ _id: "fresh" }],
       total: 1,
       page: 1,
       pages: 1,
@@ -317,7 +320,7 @@ describe("BaseController hardening — SWR uses portable scheduler", () => {
     // Return "stale" for every key — simulates TTL expiry. We don't need to
     // match the exact key shape; we just want to exercise the stale branch.
     const stalePage = {
-      docs: [{ _id: "stale" }],
+      data: [{ _id: "stale" }],
       total: 1,
       page: 1,
       pages: 1,
@@ -341,7 +344,7 @@ describe("BaseController hardening — SWR uses portable scheduler", () => {
     // Returns stale data immediately
     expect(result.status).toBe(200);
     expect(result.headers?.["x-cache"]).toBe("STALE");
-    expect((result as { data: typeof stalePage }).data.docs[0]._id).toBe("stale");
+    expect((result as { data: typeof stalePage }).data.data[0]._id).toBe("stale");
 
     // Revalidation happens async via scheduleBackground (setImmediate on Node,
     // microtask elsewhere). Wait long enough to catch either scheduler.
@@ -372,16 +375,14 @@ describe("BaseController hardening — bulkUpdate shape discipline", () => {
     const updateMany = vi.fn();
     const ctl = new BaseController(createMockRepo({ updateMany }), { resourceName: "product" });
 
-    const result = await ctl.bulkUpdate(
-      await req({
-        filter: { status: "draft" },
-        data: { $set: { status: "published" }, name: "leaked-flat-key" },
-      }),
-    );
-
-    expect(result.success).toBe(false);
-    expect(result.status).toBe(400);
-    expect((result as { details?: { code?: string } }).details?.code).toBe("MIXED_UPDATE_SHAPE");
+    await expect(
+      ctl.bulkUpdate(
+        await req({
+          filter: { status: "draft" },
+          data: { $set: { status: "published" }, name: "leaked-flat-key" },
+        }),
+      ),
+    ).rejects.toMatchObject({ status: 400, details: { code: "MIXED_UPDATE_SHAPE" } });
     expect(updateMany).not.toHaveBeenCalled();
   });
 
@@ -397,7 +398,6 @@ describe("BaseController hardening — bulkUpdate shape discipline", () => {
       }),
     );
 
-    expect(result.success).toBe(true);
     expect(updateMany).toHaveBeenCalledTimes(1);
   });
 
@@ -410,7 +410,6 @@ describe("BaseController hardening — bulkUpdate shape discipline", () => {
       await req({ filter: { id: "x" }, data: { name: "y", price: 10 } }),
     );
 
-    expect(result.success).toBe(true);
     expect(updateMany).toHaveBeenCalledTimes(1);
   });
 
@@ -424,15 +423,14 @@ describe("BaseController hardening — bulkUpdate shape discipline", () => {
       schemaOptions: { systemFields: ["_id", "createdAt"] },
     });
 
-    const result = await ctl.bulkUpdate(
-      await req({
-        filter: { id: "x" },
-        // _id is a system field → would be stripped; still mixed shape though
-        data: { $set: { ok: true }, _id: "nope" },
-      }),
-    );
-
-    expect(result.status).toBe(400);
-    expect((result as { details?: { code?: string } }).details?.code).toBe("MIXED_UPDATE_SHAPE");
+    await expect(
+      ctl.bulkUpdate(
+        await req({
+          filter: { id: "x" },
+          // _id is a system field → would be stripped; still mixed shape though
+          data: { $set: { ok: true }, _id: "nope" },
+        }),
+      ),
+    ).rejects.toMatchObject({ status: 400, details: { code: "MIXED_UPDATE_SHAPE" } });
   });
 });

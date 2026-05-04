@@ -14,20 +14,16 @@
  * and `$setOnInsert`), the plugins break silently. This test catches that.
  */
 
-import {
-  Repository,
-  batchOperationsPlugin,
-  methodRegistryPlugin,
-} from "@classytic/mongokit";
+import { batchOperationsPlugin, methodRegistryPlugin, Repository } from "@classytic/mongokit";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { Schema } from "mongoose";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { EventOutbox } from "../../src/events/outbox.js";
-import { MemoryEventTransport } from "../../src/events/EventTransport.js";
-import { repositoryAsOutboxStore } from "../../src/events/repository-outbox-adapter.js";
 import { repositoryAsAuditStore } from "../../src/audit/repository-audit-adapter.js";
-import { repositoryAsIdempotencyStore } from "../../src/idempotency/repository-idempotency-adapter.js";
 import type { AuditEntry } from "../../src/audit/stores/interface.js";
+import { MemoryEventTransport } from "../../src/events/EventTransport.js";
+import { EventOutbox } from "../../src/events/outbox.js";
+import { repositoryAsOutboxStore } from "../../src/events/repository-outbox-adapter.js";
+import { repositoryAsIdempotencyStore } from "../../src/idempotency/repository-idempotency-adapter.js";
 
 /**
  * Arc's repository adapters for outbox / idempotency need `deleteMany`
@@ -36,16 +32,14 @@ import type { AuditEntry } from "../../src/audit/stores/interface.js";
  * is registered. This helper is the canonical setup for arc-backing
  * collections — documented in `docs/production-ops/*.mdx`.
  */
-const makeArcBackingRepo = <T extends Record<string, unknown>>(
-  model: mongoose.Model<T>,
-) => new Repository(model, [methodRegistryPlugin(), batchOperationsPlugin()]);
+const makeArcBackingRepo = <T extends Record<string, unknown>>(model: mongoose.Model<T>) =>
+  new Repository(model, [methodRegistryPlugin(), batchOperationsPlugin()]);
 
 // ============================================================================
 // Setup
 // ============================================================================
 
-const passthroughSchema = () =>
-  new Schema({}, { strict: false, timestamps: false, _id: false });
+const passthroughSchema = () => new Schema({}, { strict: false, timestamps: false, _id: false });
 
 let mongoServer: MongoMemoryServer;
 let AuditModel: mongoose.Model<Record<string, unknown>>;
@@ -56,21 +50,9 @@ beforeAll(async () => {
   mongoServer = await MongoMemoryServer.create();
   await mongoose.connect(mongoServer.getUri());
 
-  AuditModel = mongoose.model(
-    "StrictFalseAuditEntry",
-    passthroughSchema(),
-    "sf_audit_logs",
-  );
-  OutboxModel = mongoose.model(
-    "StrictFalseOutbox",
-    passthroughSchema(),
-    "sf_event_outbox",
-  );
-  IdemModel = mongoose.model(
-    "StrictFalseIdempotency",
-    passthroughSchema(),
-    "sf_idempotency",
-  );
+  AuditModel = mongoose.model("StrictFalseAuditEntry", passthroughSchema(), "sf_audit_logs");
+  OutboxModel = mongoose.model("StrictFalseOutbox", passthroughSchema(), "sf_event_outbox");
+  IdemModel = mongoose.model("StrictFalseIdempotency", passthroughSchema(), "sf_idempotency");
 }, 60_000);
 
 afterAll(async () => {
@@ -118,7 +100,7 @@ describe("Audit plugin + mongokit Repository + strict:false", () => {
     });
 
     // query: resource filter round-trips nested before/after
-    const productEntries = await store.query!({ resource: "product" });
+    const productEntries = await store.query?.({ resource: "product" });
     expect(productEntries).toHaveLength(2);
     const first = productEntries.find((e) => e.id === "aud_1")!;
     expect(first.before).toEqual({ name: "Old", price: 10 });
@@ -128,13 +110,13 @@ describe("Audit plugin + mongokit Repository + strict:false", () => {
     expect(first.metadata).toEqual({ source: "api" });
 
     // sort: -1 on timestamp
-    const sorted = await store.query!({});
-    expect(sorted[0]!.id).toBe("aud_3");
+    const sorted = await store.query?.({});
+    expect(sorted[0]?.id).toBe("aud_3");
 
     // purge: deleteMany with { timestamp: { $lt } }
-    const purged = await store.purgeOlderThan!(new Date("2026-04-15T00:00:00Z"));
+    const purged = await store.purgeOlderThan?.(new Date("2026-04-15T00:00:00Z"));
     expect(purged).toBe(1);
-    const remaining = await store.query!({});
+    const remaining = await store.query?.({});
     expect(remaining).toHaveLength(2);
     expect(remaining.map((e) => e.id).sort()).toEqual(["aud_2", "aud_3"]);
   });
@@ -158,10 +140,10 @@ describe("Audit plugin + mongokit Repository + strict:false", () => {
       });
     }
 
-    const firstPage = await store.query!({ limit: 10 });
+    const firstPage = await store.query?.({ limit: 10 });
     expect(firstPage).toHaveLength(10); // must NOT return all 25
 
-    const secondPage = await store.query!({ limit: 10, offset: 10 });
+    const secondPage = await store.query?.({ limit: 10, offset: 10 });
     expect(secondPage).toHaveLength(10);
 
     // Pages must not overlap
@@ -169,7 +151,7 @@ describe("Audit plugin + mongokit Repository + strict:false", () => {
     const secondIds = new Set(secondPage.map((e) => e.id));
     for (const id of secondIds) expect(firstIds.has(id)).toBe(false);
 
-    const tail = await store.query!({ limit: 10, offset: 20 });
+    const tail = await store.query?.({ limit: 10, offset: 20 });
     expect(tail).toHaveLength(5); // 25 total, 20 already consumed
   });
 });
@@ -196,17 +178,17 @@ describe("EventOutbox + mongokit Repository + strict:false", () => {
       },
     });
 
-    const claimed = await store.claimPending!({ consumerId: "w1", limit: 10 });
+    const claimed = await store.claimPending?.({ consumerId: "w1", limit: 10 });
     expect(claimed).toHaveLength(1);
-    expect(claimed[0]!.type).toBe("order.created");
-    expect(claimed[0]!.payload).toEqual({ item: "widget", qty: 3, nested: { flag: true } });
-    expect(claimed[0]!.meta.id).toBe("evt-1");
-    expect(claimed[0]!.meta.timestamp).toBeInstanceOf(Date);
+    expect(claimed[0]?.type).toBe("order.created");
+    expect(claimed[0]?.payload).toEqual({ item: "widget", qty: 3, nested: { flag: true } });
+    expect(claimed[0]?.meta.id).toBe("evt-1");
+    expect(claimed[0]?.meta.timestamp).toBeInstanceOf(Date);
 
     await store.acknowledge("evt-1", { consumerId: "w1" });
 
     // second claim returns nothing (already delivered)
-    const second = await store.claimPending!({ consumerId: "w1" });
+    const second = await store.claimPending?.({ consumerId: "w1" });
     expect(second).toHaveLength(0);
   });
 
@@ -219,24 +201,24 @@ describe("EventOutbox + mongokit Repository + strict:false", () => {
       meta: { id: "evt-fail", timestamp: new Date() },
     });
 
-    await store.claimPending!({ consumerId: "w1" });
-    await store.fail!("evt-fail", { message: "first error" }, { consumerId: "w1" });
+    await store.claimPending?.({ consumerId: "w1" });
+    await store.fail?.("evt-fail", { message: "first error" }, { consumerId: "w1" });
 
-    const reclaimed = await store.claimPending!({ consumerId: "w1" });
+    const reclaimed = await store.claimPending?.({ consumerId: "w1" });
     expect(reclaimed).toHaveLength(1);
 
-    await store.fail!("evt-fail", { message: "second error" }, { consumerId: "w1" });
+    await store.fail?.("evt-fail", { message: "second error" }, { consumerId: "w1" });
 
     // Inspect raw doc — firstFailedAt should be from first failure
     const raw = await OutboxModel.collection.findOne({ _id: "evt-fail" });
     expect(raw).toBeTruthy();
-    expect(raw!.firstFailedAt).toBeInstanceOf(Date);
-    expect(raw!.lastFailedAt).toBeInstanceOf(Date);
-    expect((raw!.lastFailedAt as Date).getTime()).toBeGreaterThanOrEqual(
-      (raw!.firstFailedAt as Date).getTime(),
+    expect(raw?.firstFailedAt).toBeInstanceOf(Date);
+    expect(raw?.lastFailedAt).toBeInstanceOf(Date);
+    expect((raw?.lastFailedAt as Date).getTime()).toBeGreaterThanOrEqual(
+      (raw?.firstFailedAt as Date).getTime(),
     );
-    expect((raw!.lastError as { message: string }).message).toBe("second error");
-    expect(raw!.attempts).toBe(2);
+    expect((raw?.lastError as { message: string }).message).toBe("second error");
+    expect(raw?.attempts).toBe(2);
   });
 
   it("low-level store: dead-letter transition + getDeadLettered() query", async () => {
@@ -247,18 +229,18 @@ describe("EventOutbox + mongokit Repository + strict:false", () => {
       payload: {},
       meta: { id: "evt-dlq", timestamp: new Date() },
     });
-    await store.claimPending!({ consumerId: "w1" });
-    await store.fail!(
+    await store.claimPending?.({ consumerId: "w1" });
+    await store.fail?.(
       "evt-dlq",
       { message: "terminal", code: "E_FATAL" },
       { consumerId: "w1", deadLetter: true },
     );
 
-    const dlq = await store.getDeadLettered!(10);
+    const dlq = await store.getDeadLettered?.(10);
     expect(dlq).toHaveLength(1);
-    expect(dlq[0]!.event.meta.id).toBe("evt-dlq");
-    expect(dlq[0]!.error.message).toBe("terminal");
-    expect(dlq[0]!.error.code).toBe("E_FATAL");
+    expect(dlq[0]?.event.meta.id).toBe("evt-dlq");
+    expect(dlq[0]?.error.message).toBe("terminal");
+    expect(dlq[0]?.error.code).toBe("E_FATAL");
   });
 
   // Regression: getPending + getDeadLettered were calling findAll with
@@ -293,14 +275,14 @@ describe("EventOutbox + mongokit Repository + strict:false", () => {
         payload: {},
         meta: { id: `dlq-${i}`, timestamp: new Date() },
       });
-      await store.claimPending!({ consumerId: "w", limit: 1 });
-      await store.fail!(`dlq-${i}`, { message: "boom" }, { consumerId: "w", deadLetter: true });
+      await store.claimPending?.({ consumerId: "w", limit: 1 });
+      await store.fail?.(`dlq-${i}`, { message: "boom" }, { consumerId: "w", deadLetter: true });
     }
 
-    const bounded = await store.getDeadLettered!(3);
+    const bounded = await store.getDeadLettered?.(3);
     expect(bounded).toHaveLength(3); // must NOT return all 8
 
-    const all = await store.getDeadLettered!(50);
+    const all = await store.getDeadLettered?.(50);
     expect(all).toHaveLength(8);
   });
 
@@ -407,11 +389,11 @@ describe("Idempotency plugin + mongokit Repository + strict:false", () => {
     // get() returns full result, parses Dates
     const result = await store.get("key-1");
     expect(result).toBeDefined();
-    expect(result!.statusCode).toBe(201);
-    expect(result!.headers).toEqual({ "x-request-id": "req-1" });
-    expect(result!.body).toEqual({ id: "o-1", ok: true });
-    expect(result!.createdAt).toBeInstanceOf(Date);
-    expect(result!.expiresAt).toBeInstanceOf(Date);
+    expect(result?.statusCode).toBe(201);
+    expect(result?.headers).toEqual({ "x-request-id": "req-1" });
+    expect(result?.body).toEqual({ id: "o-1", ok: true });
+    expect(result?.createdAt).toBeInstanceOf(Date);
+    expect(result?.expiresAt).toBeInstanceOf(Date);
   });
 
   it("expired lock is preemptable (compound filter works on nested field)", async () => {

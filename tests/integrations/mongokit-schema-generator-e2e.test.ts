@@ -17,11 +17,11 @@ import {
   Repository,
   softDeletePlugin,
 } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { Schema, type Types } from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
 import { allowPublic } from "../../src/permissions/index.js";
@@ -105,8 +105,8 @@ describe("MongoKit buildCrudSchemasFromModel integration", () => {
     });
     expect(good.statusCode).toBe(201);
     const body = good.json() as { data: { name: string; price: number } };
-    expect(body.data.name).toBe("Gizmo");
-    expect(body.data.price).toBe(19);
+    expect(body.name).toBe("Gizmo");
+    expect(body.price).toBe(19);
   });
 
   it("PATCH /widgets/:id accepts partial body via updateBody schema", async () => {
@@ -116,7 +116,8 @@ describe("MongoKit buildCrudSchemasFromModel integration", () => {
       headers: { "content-type": "application/json" },
       payload: { name: "Starter", price: 5 },
     });
-    const { data } = created.json() as { data: { _id: string } };
+    // No-envelope: created body IS the doc.
+    const data = created.json() as { _id: string };
 
     const patched = await app.inject({
       method: "PATCH",
@@ -125,7 +126,7 @@ describe("MongoKit buildCrudSchemasFromModel integration", () => {
       payload: { price: 7 }, // partial — updateBody schema must allow this
     });
     expect(patched.statusCode).toBe(200);
-    expect((patched.json() as { data: { price: number } }).data.price).toBe(7);
+    expect((patched.json() as { price: number }).price).toBe(7);
   });
 
   it("GET /widgets/:id rejects malformed ObjectId via params schema", async () => {

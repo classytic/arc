@@ -40,8 +40,8 @@ describe("createTestApp — defaults", () => {
   it("JWT provider can sign a token via app.jwt", async () => {
     const ctx = await createTestApp({ db: false, authMode: "jwt" });
     try {
-      ctx.auth!.register("admin", { user: { id: "u1", roles: ["admin"] } });
-      const session = ctx.auth!.as("admin");
+      ctx.auth?.register("admin", { user: { id: "u1", roles: ["admin"] } });
+      const session = ctx.auth?.as("admin");
       expect(session.token.length).toBeGreaterThan(10);
       expect(session.headers.authorization).toMatch(/^Bearer /);
     } finally {

@@ -35,13 +35,17 @@ Default exports may be a `ResourceLike` OR a factory `(ctx) => ResourceLike | Pr
 
 ```ts
 // resources/catalog/category.resource.ts
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
+import { buildCrudSchemasFromModel } from '@classytic/mongokit';
+
 export default (ctx: AppContext) =>
   defineResource({
     name: 'category',
-    adapter: createMongooseAdapter(
-      ctx.catalog.models.Category,
-      ctx.catalog.repositories.category,
-    ),
+    adapter: createMongooseAdapter({
+      model: ctx.catalog.models.Category,
+      repository: ctx.catalog.repositories.category,
+      schemaGenerator: buildCrudSchemasFromModel,
+    }),
   });
 
 // app.ts

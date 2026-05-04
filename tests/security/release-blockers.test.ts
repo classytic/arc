@@ -234,14 +234,8 @@ describe("Security: Release Blockers", () => {
     });
   });
 
-  describe("Issue 3: Prisma Adapter — Experimental (Needs Integration Tests)", () => {
-    // The Prisma adapter is implemented (query parser, schema gen, soft delete, health checks)
-    // but has no integration tests. Marked @experimental in source.
-    // These TODOs track the missing test coverage.
-
-    it.todo("integration: CRUD operations with Prisma + Arc presets");
-    it.todo("integration: softDelete preset adds WHERE deletedAt IS NULL");
-    it.todo("integration: PrismaQueryParser translates URL params to Prisma where/orderBy");
-    it.todo("integration: policy filters merge correctly into Prisma queries");
-  });
+  // Prisma adapter moved to `@classytic/prismakit/adapter` in arc 3.0 — its
+  // integration coverage now lives in prismakit's own test suite. Arc no
+  // longer ships any kit-bound adapter; the framework is fully DB-agnostic
+  // through the `DataAdapter<TDoc>` contract in `@classytic/repo-core/adapter`.
 });

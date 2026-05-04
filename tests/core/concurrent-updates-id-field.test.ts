@@ -13,10 +13,10 @@
  */
 
 import { Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -158,11 +158,11 @@ describe("Concurrent updates with custom idField", () => {
       expect(successCount).toBe(100);
 
       // Every doc should still exist with the right SKU
-      const docs = await InventoryModel.find({}).lean();
-      expect(docs.length).toBe(10);
+      const data = await InventoryModel.find({}).lean();
+      expect(data.length).toBe(10);
       for (let i = 0; i < 10; i++) {
         const sku = `ITEM-${i.toString().padStart(3, "0")}`;
-        const doc = docs.find((d) => d.sku === sku);
+        const doc = data.find((d) => d.sku === sku);
         expect(doc).toBeTruthy();
         // The name should be one of the patches for THIS sku, not another sku
         expect(doc?.name).toMatch(new RegExp(`^${sku}-update-\\d+$`));

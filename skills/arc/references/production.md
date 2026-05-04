@@ -299,16 +299,14 @@ const app = await createApp({
 
 Mappers are checked via `instanceof` before all other error classification. Multiple mappers supported — first match wins.
 
-## Reply Helpers (v2.7.3)
+## Reply Helpers
 
-Opt-in response envelope decorators: `createApp({ replyHelpers: true })`
+Opt-in `sendList` + `stream` decorators: `createApp({ replyHelpers: true })`. Arc emits raw data on success — no `{ success, data }` envelope; HTTP status discriminates — so single-doc handlers just `return doc` (or `reply.send(doc)`) and errors throw `ArcError` (the global handler serialises to `ErrorContract`). The two decorators below cover the cases that DO need framework support:
 
 ```typescript
-return reply.ok({ name: 'MacBook' });              // → 200 { success: true, data: {...} }
-return reply.ok(product, 201);                      // → 201 { success: true, data: {...} }
-return reply.fail('Not found', 404);                // → 404 { success: false, error: '...' }
-return reply.fail(['err1', 'err2'], 422);           // → 422 { success: false, errors: [...] }
-return reply.paginated({ docs, total, page, limit });
+// List response — any kit-shaped paginated result OR a bare array → canonical wire shape
+return reply.sendList({ method: 'offset', data, total, page, limit, pages, hasNext, hasPrev });
+return reply.sendList(rows);                                  // bare array endpoints
 ```
 
 ### Streaming Responses
@@ -545,9 +543,12 @@ const relayed = await outbox.relay();  // publishes pending → transport
 Adds bulk CRUD routes — repository must provide `createMany`, `updateMany`, `deleteMany`:
 
 ```typescript
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
+import { buildCrudSchemasFromModel } from '@classytic/mongokit';
+
 defineResource({
   name: 'product',
-  adapter: createMongooseAdapter({ model, repository }),
+  adapter: createMongooseAdapter({ model, repository, schemaGenerator: buildCrudSchemasFromModel }),
   presets: ['bulk'],  // adds POST/PATCH/DELETE /{resource}/bulk
 });
 
@@ -642,7 +643,7 @@ defineResource({
     handler: async (request, reply) => {
       const result = await withCompensation('checkout', steps, { orderId: request.params.id });
       if (!result.success) return reply.code(422).send({ error: result.error });
-      return reply.send({ success: true, data: result.results });
+      return reply.send({ data: result.results });
     },
   }],
 });

@@ -21,18 +21,10 @@ import {
   Repository,
   softDeletePlugin,
 } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Model, Schema, type Types } from "mongoose";
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  describe,
-  expect,
-  it,
-} from "vitest";
-
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -95,9 +87,7 @@ beforeAll(async () => {
   mongoServer = await MongoMemoryServer.create();
   await mongoose.connect(mongoServer.getUri());
 
-  OrderModel =
-    mongoose.models.CascadeOrder ||
-    mongoose.model<IOrder>("CascadeOrder", OrderSchema);
+  OrderModel = mongoose.models.CascadeOrder || mongoose.model<IOrder>("CascadeOrder", OrderSchema);
   OrderItemModel =
     mongoose.models.CascadeOrderItem ||
     mongoose.model<IOrderItem>("CascadeOrderItem", OrderItemSchema);
@@ -122,10 +112,7 @@ function buildPlugins() {
   ];
 }
 
-function buildApp(
-  orderRepo: Repository<IOrder>,
-  orderItemRepo: Repository<IOrderItem>,
-) {
+function buildApp(orderRepo: Repository<IOrder>, orderItemRepo: Repository<IOrderItem>) {
   const orderResource = defineResource<IOrder>({
     name: "order",
     adapter: createMongooseAdapter({
@@ -220,14 +207,11 @@ describe("Soft-delete lifecycle — real-world E2E", () => {
       });
       expect(delRes.statusCode).toBe(200);
       const delBody = JSON.parse(delRes.body);
-      expect(delBody.success).toBe(true);
 
       // Verify hidden from normal list
       const listRes = await app.inject({ method: "GET", url: "/orders" });
       const listBody = JSON.parse(listRes.body);
-      const ids = (listBody.docs ?? listBody.data?.docs ?? []).map(
-        (d: { _id: string }) => d._id,
-      );
+      const ids = (listBody.data ?? listBody.data?.data ?? []).map((d: { _id: string }) => d._id);
       expect(ids).not.toContain(targetId);
 
       // Verify visible in /deleted
@@ -237,15 +221,14 @@ describe("Soft-delete lifecycle — real-world E2E", () => {
       });
       expect(deletedRes.statusCode).toBe(200);
       const deletedBody = JSON.parse(deletedRes.body);
-      const deletedDocs =
-        deletedBody.docs ?? deletedBody.data?.docs ?? deletedBody.data ?? [];
+      const deletedDocs = deletedBody.data ?? deletedBody.data?.data ?? deletedBody.data ?? [];
       const deletedIds = deletedDocs.map((d: { _id: string }) => d._id);
       expect(deletedIds).toContain(targetId);
 
       // Verify raw DB state: deletedAt is set, doc still exists
       const rawDoc = await OrderModel.findById(targetId).lean();
       expect(rawDoc).toBeTruthy();
-      expect(rawDoc!.deletedAt).toBeTruthy();
+      expect(rawDoc?.deletedAt).toBeTruthy();
     } finally {
       await app.close();
     }
@@ -270,7 +253,7 @@ describe("Soft-delete lifecycle — real-world E2E", () => {
 
       // Confirm hidden
       const rawBefore = await OrderModel.findById(targetId).lean();
-      expect(rawBefore!.deletedAt).toBeTruthy();
+      expect(rawBefore?.deletedAt).toBeTruthy();
 
       // Restore
       const restoreRes = await app.inject({
@@ -279,18 +262,15 @@ describe("Soft-delete lifecycle — real-world E2E", () => {
       });
       expect(restoreRes.statusCode).toBe(200);
       const restoreBody = JSON.parse(restoreRes.body);
-      expect(restoreBody.success).toBe(true);
 
       // Verify deletedAt cleared in DB
       const rawAfter = await OrderModel.findById(targetId).lean();
-      expect(rawAfter!.deletedAt).toBeNull();
+      expect(rawAfter?.deletedAt).toBeNull();
 
       // Verify back in normal list
       const listRes = await app.inject({ method: "GET", url: "/orders" });
       const listBody = JSON.parse(listRes.body);
-      const ids = (listBody.docs ?? listBody.data?.docs ?? []).map(
-        (d: { _id: string }) => d._id,
-      );
+      const ids = (listBody.data ?? listBody.data?.data ?? []).map((d: { _id: string }) => d._id);
       expect(ids).toContain(targetId);
 
       // Verify gone from /deleted
@@ -299,8 +279,7 @@ describe("Soft-delete lifecycle — real-world E2E", () => {
         url: "/orders/deleted",
       });
       const deletedBody = JSON.parse(deletedRes.body);
-      const deletedDocs =
-        deletedBody.docs ?? deletedBody.data?.docs ?? deletedBody.data ?? [];
+      const deletedDocs = deletedBody.data ?? deletedBody.data?.data ?? deletedBody.data ?? [];
       const deletedIds = deletedDocs.map((d: { _id: string }) => d._id);
       expect(deletedIds).not.toContain(targetId);
     } finally {
@@ -353,14 +332,14 @@ describe("Soft-delete lifecycle — real-world E2E", () => {
 
       // Verify shipped order untouched
       const shipped = await OrderModel.findOne({ status: "shipped" }).lean();
-      expect(shipped!.deletedAt).toBeNull();
+      expect(shipped?.deletedAt).toBeNull();
 
       // Normal list should only show the shipped order
       const listRes = await app.inject({ method: "GET", url: "/orders" });
       const listBody = JSON.parse(listRes.body);
-      const docs = listBody.docs ?? listBody.data?.docs ?? [];
-      expect(docs.length).toBe(1);
-      expect(docs[0].orderNumber).toBe("ORD-003");
+      const data = listBody.data ?? listBody.data?.data ?? [];
+      expect(data.length).toBe(1);
+      expect(data[0].orderNumber).toBe("ORD-003");
 
       // /deleted should show both pending orders
       const deletedRes = await app.inject({
@@ -368,12 +347,9 @@ describe("Soft-delete lifecycle — real-world E2E", () => {
         url: "/orders/deleted",
       });
       const deletedBody = JSON.parse(deletedRes.body);
-      const deletedDocs =
-        deletedBody.docs ?? deletedBody.data?.docs ?? deletedBody.data ?? [];
+      const deletedDocs = deletedBody.data ?? deletedBody.data?.data ?? deletedBody.data ?? [];
       expect(deletedDocs.length).toBe(2);
-      const deletedNumbers = deletedDocs.map(
-        (d: { orderNumber: string }) => d.orderNumber,
-      );
+      const deletedNumbers = deletedDocs.map((d: { orderNumber: string }) => d.orderNumber);
       expect(deletedNumbers.sort()).toEqual(["ORD-001", "ORD-002"]);
     } finally {
       await app.close();
@@ -401,14 +377,14 @@ describe("Soft-delete lifecycle — real-world E2E", () => {
       // ORD-001 and ORD-003 soft-deleted
       const doc0 = await OrderModel.findById(id0).lean();
       const doc2 = await OrderModel.findById(id2).lean();
-      expect(doc0!.deletedAt).toBeTruthy();
-      expect(doc2!.deletedAt).toBeTruthy();
+      expect(doc0?.deletedAt).toBeTruthy();
+      expect(doc2?.deletedAt).toBeTruthy();
 
       // ORD-002 untouched
       const doc1 = await OrderModel.findOne({
         orderNumber: "ORD-002",
       }).lean();
-      expect(doc1!.deletedAt).toBeNull();
+      expect(doc1?.deletedAt).toBeNull();
     } finally {
       await app.close();
     }
@@ -444,8 +420,7 @@ describe("Soft-delete lifecycle — real-world E2E", () => {
         url: "/orders/deleted",
       });
       const deletedBody = JSON.parse(deletedRes.body);
-      const deletedDocs =
-        deletedBody.docs ?? deletedBody.data?.docs ?? deletedBody.data ?? [];
+      const deletedDocs = deletedBody.data ?? deletedBody.data?.data ?? deletedBody.data ?? [];
       const deletedIds = deletedDocs.map((d: { _id: string }) => d._id);
       expect(deletedIds).not.toContain(targetId);
     } finally {
@@ -473,7 +448,6 @@ describe("Soft-delete lifecycle — real-world E2E", () => {
       });
       expect(bulkRes.statusCode).toBe(200);
       const body = JSON.parse(bulkRes.body);
-      expect(body.success).toBe(true);
 
       // Physically gone
       const pending = await OrderModel.find({ status: "pending" }).lean();
@@ -509,7 +483,7 @@ describe("Soft-delete lifecycle — real-world E2E", () => {
 
     // Wire cascade: after:delete on "order" → soft-delete matching order-items
     // Note: after hooks receive the doc in `ctx.result`, not `ctx.data`.
-    appHooks!.after("order", "delete", async (ctx) => {
+    appHooks?.after("order", "delete", async (ctx) => {
       const deleted = ctx.result as IOrder;
       const orderId = String(deleted._id);
       // biome-ignore lint: dynamic repo access for cascade
@@ -517,7 +491,7 @@ describe("Soft-delete lifecycle — real-world E2E", () => {
     });
 
     // Wire cascade: after:restore on "order" → restore matching order-items
-    appHooks!.after("order", "restore", async (ctx) => {
+    appHooks?.after("order", "restore", async (ctx) => {
       const restored = ctx.result as IOrder;
       const orderId = String(restored._id);
       const softDeletedItems = await OrderItemModel.find({
@@ -533,9 +507,7 @@ describe("Soft-delete lifecycle — real-world E2E", () => {
     try {
       const { orders, items } = await seedOrders();
       const orderId = String(orders[0]._id);
-      const childIds = items
-        .filter((i) => i.orderId === orderId)
-        .map((i) => String(i._id));
+      const childIds = items.filter((i) => i.orderId === orderId).map((i) => String(i._id));
       expect(childIds.length).toBe(2);
 
       // --- Step 1: Delete the parent order ---
@@ -547,12 +519,12 @@ describe("Soft-delete lifecycle — real-world E2E", () => {
 
       // Parent soft-deleted
       const parentAfterDel = await OrderModel.findById(orderId).lean();
-      expect(parentAfterDel!.deletedAt).toBeTruthy();
+      expect(parentAfterDel?.deletedAt).toBeTruthy();
 
       // Children cascade-soft-deleted
       for (const childId of childIds) {
         const child = await OrderItemModel.findById(childId).lean();
-        expect(child!.deletedAt).toBeTruthy();
+        expect(child?.deletedAt).toBeTruthy();
       }
 
       // Other order's items untouched
@@ -571,12 +543,12 @@ describe("Soft-delete lifecycle — real-world E2E", () => {
 
       // Parent restored
       const parentAfterRestore = await OrderModel.findById(orderId).lean();
-      expect(parentAfterRestore!.deletedAt).toBeNull();
+      expect(parentAfterRestore?.deletedAt).toBeNull();
 
       // Children cascade-restored
       for (const childId of childIds) {
         const child = await OrderItemModel.findById(childId).lean();
-        expect(child!.deletedAt).toBeNull();
+        expect(child?.deletedAt).toBeNull();
       }
     } finally {
       await app.close();
@@ -612,7 +584,7 @@ describe("Soft-delete lifecycle — real-world E2E", () => {
     // Soft-delete via repo
     await orderRepo.delete(targetId);
     const deleted = await OrderModel.findById(targetId).lean();
-    expect(deleted!.deletedAt).toBeTruthy();
+    expect(deleted?.deletedAt).toBeTruthy();
 
     // Restore via BaseController (directly, to verify hooks fire)
     const result = await controller.restore({
@@ -626,7 +598,6 @@ describe("Soft-delete lifecycle — real-world E2E", () => {
       user: undefined as any,
     });
 
-    expect(result.success).toBe(true);
     expect(result.status).toBe(200);
 
     // Verify both hooks fired in order
@@ -637,7 +608,7 @@ describe("Soft-delete lifecycle — real-world E2E", () => {
 
     // Verify actually restored in DB
     const restored = await OrderModel.findById(targetId).lean();
-    expect(restored!.deletedAt).toBeNull();
+    expect(restored?.deletedAt).toBeNull();
   });
 
   it("before:restore hook can abort the restore", async () => {
@@ -657,25 +628,26 @@ describe("Soft-delete lifecycle — real-world E2E", () => {
     const targetId = String(orders[0]._id);
     await orderRepo.delete(targetId);
 
-    const result = await controller.restore({
-      params: { id: targetId },
-      query: {},
-      body: {},
-      headers: {},
-      // biome-ignore lint: minimal
-      metadata: { arc: { hooks } } as any,
-      // biome-ignore lint: minimal
-      user: undefined as any,
+    // No-envelope contract: hook errors throw an HttpError mapped to 400.
+    await expect(
+      controller.restore({
+        params: { id: targetId },
+        query: {},
+        body: {},
+        headers: {},
+        // biome-ignore lint: minimal
+        metadata: { arc: { hooks } } as any,
+        // biome-ignore lint: minimal
+        user: undefined as any,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringMatching(/Hook execution failed|Restore blocked/),
     });
-
-    expect(result.success).toBe(false);
-    expect(result.status).toBe(400);
-    expect(result.details?.code).toBe("BEFORE_RESTORE_HOOK_ERROR");
-    expect(result.details?.message).toBe("Restore blocked by policy");
 
     // Doc should still be soft-deleted
     const stillDeleted = await OrderModel.findById(targetId).lean();
-    expect(stillDeleted!.deletedAt).toBeTruthy();
+    expect(stillDeleted?.deletedAt).toBeTruthy();
   });
 
   // ==========================================================================
@@ -708,7 +680,7 @@ describe("Soft-delete lifecycle — real-world E2E", () => {
       // Soft-delete
       const del1 = await app.inject({ method: "DELETE", url: `/orders/${id}` });
       expect(del1.statusCode).toBe(200);
-      expect((await OrderModel.findById(id).lean())!.deletedAt).toBeTruthy();
+      expect((await OrderModel.findById(id).lean())?.deletedAt).toBeTruthy();
 
       // Restore
       const restore1 = await app.inject({
@@ -716,7 +688,7 @@ describe("Soft-delete lifecycle — real-world E2E", () => {
         url: `/orders/${id}/restore`,
       });
       expect(restore1.statusCode).toBe(200);
-      expect((await OrderModel.findById(id).lean())!.deletedAt).toBeNull();
+      expect((await OrderModel.findById(id).lean())?.deletedAt).toBeNull();
 
       // Hard-delete — permanently gone. The DELETE route's
       // fetchWithAccessControl does NOT pass includeDeleted, so the doc

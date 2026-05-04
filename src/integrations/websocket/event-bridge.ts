@@ -95,7 +95,8 @@ export function registerStatsRoute(
   expose: WebSocketPluginOptions["exposeStats"],
 ): void {
   if (expose === true) {
-    fastify.get(`${path}/stats`, async () => ({ success: true, data: rooms.getStats() }));
+    // No-envelope contract: emit stats raw at the top level.
+    fastify.get(`${path}/stats`, async () => rooms.getStats());
     return;
   }
   if (expose === "authenticated") {
@@ -111,7 +112,7 @@ export function registerStatsRoute(
       fastify.get(
         `${path}/stats`,
         { preHandler: authenticate } as import("fastify").RouteShorthandOptions,
-        async () => ({ success: true, data: rooms.getStats() }),
+        async () => rooms.getStats(),
       );
     } else {
       fastify.log.warn(

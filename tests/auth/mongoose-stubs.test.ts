@@ -1,5 +1,10 @@
 /**
- * Tests for the Better Auth × Mongoose stub-model bridge.
+ * Integration smoke for the Better Auth × Mongoose stub-model bridge.
+ *
+ * The helper itself lives in `@classytic/mongokit/better-auth` (kit owns the
+ * kit-specific bridge). This file exercises the same surface from arc's
+ * test environment so consumers of arc see a passing reference for
+ * `populate()` against BA-owned collections.
  *
  * Validates that:
  *   1. Stub models register for the correct collection sets per plugin choice
@@ -10,10 +15,10 @@
  *      (the actual point of the helper)
  */
 
+import { registerBetterAuthStubs } from "@classytic/mongokit/better-auth";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { registerBetterAuthMongooseModels } from "../../src/auth/mongoose.js";
 
 // ============================================================================
 // Infrastructure
@@ -45,11 +50,11 @@ afterEach(async () => {
 // Unit-level: registration behavior
 // ============================================================================
 
-describe("registerBetterAuthMongooseModels — registration behavior", () => {
+describe("registerBetterAuthStubs (mongokit/better-auth) — registration behavior", () => {
   it("registers ONLY core models by default — does not silently include plugin sets", () => {
     // Default must be opt-in for plugins. Users who haven't enabled the
     // organization plugin should not get organization stubs registered.
-    const registered = registerBetterAuthMongooseModels(mongoose);
+    const registered = registerBetterAuthStubs(mongoose);
     expect(registered).toEqual(
       expect.arrayContaining(["user", "session", "account", "verification"]),
     );
@@ -62,7 +67,7 @@ describe("registerBetterAuthMongooseModels — registration behavior", () => {
   });
 
   it("registers organization collections only when explicitly opted in", () => {
-    const registered = registerBetterAuthMongooseModels(mongoose, {
+    const registered = registerBetterAuthStubs(mongoose, {
       plugins: ["organization"],
     });
     expect(registered).toEqual(expect.arrayContaining(["organization", "member", "invitation"]));
@@ -72,7 +77,7 @@ describe("registerBetterAuthMongooseModels — registration behavior", () => {
   });
 
   it("registers team models when organization-teams plugin is included", () => {
-    const registered = registerBetterAuthMongooseModels(mongoose, {
+    const registered = registerBetterAuthStubs(mongoose, {
       plugins: ["organization", "organization-teams"],
     });
     expect(registered).toContain("team");
@@ -80,7 +85,7 @@ describe("registerBetterAuthMongooseModels — registration behavior", () => {
   });
 
   it("can register only the core set when no plugins requested", () => {
-    const registered = registerBetterAuthMongooseModels(mongoose, { plugins: [] });
+    const registered = registerBetterAuthStubs(mongoose, { plugins: [] });
     expect(registered).toEqual(
       expect.arrayContaining(["user", "session", "account", "verification"]),
     );
@@ -88,15 +93,15 @@ describe("registerBetterAuthMongooseModels — registration behavior", () => {
   });
 
   it("is idempotent — second call registers nothing new", () => {
-    const first = registerBetterAuthMongooseModels(mongoose);
+    const first = registerBetterAuthStubs(mongoose);
     expect(first.length).toBeGreaterThan(0);
 
-    const second = registerBetterAuthMongooseModels(mongoose);
+    const second = registerBetterAuthStubs(mongoose);
     expect(second).toEqual([]);
   });
 
   it("honors usePlural by appending 's' to model + collection names", () => {
-    const registered = registerBetterAuthMongooseModels(mongoose, {
+    const registered = registerBetterAuthStubs(mongoose, {
       plugins: ["organization"],
       usePlural: true,
     });
@@ -112,7 +117,7 @@ describe("registerBetterAuthMongooseModels — registration behavior", () => {
   });
 
   it("respects modelOverrides for custom BA modelName mappings", () => {
-    const registered = registerBetterAuthMongooseModels(mongoose, {
+    const registered = registerBetterAuthStubs(mongoose, {
       plugins: ["organization"],
       modelOverrides: { user: "profile", member: "orgMember" },
     });
@@ -126,7 +131,7 @@ describe("registerBetterAuthMongooseModels — registration behavior", () => {
   });
 
   it("registers extraCollections for custom Better Auth plugins", () => {
-    const registered = registerBetterAuthMongooseModels(mongoose, {
+    const registered = registerBetterAuthStubs(mongoose, {
       plugins: [],
       extraCollections: ["customPlugin", "anotherCollection"],
     });
@@ -135,33 +140,33 @@ describe("registerBetterAuthMongooseModels — registration behavior", () => {
   });
 
   it("registers jwt plugin collection (jwks)", () => {
-    const registered = registerBetterAuthMongooseModels(mongoose, { plugins: ["jwt"] });
+    const registered = registerBetterAuthStubs(mongoose, { plugins: ["jwt"] });
     expect(registered).toContain("jwks");
   });
 
   it("registers twoFactor plugin collection", () => {
-    const registered = registerBetterAuthMongooseModels(mongoose, { plugins: ["twoFactor"] });
+    const registered = registerBetterAuthStubs(mongoose, { plugins: ["twoFactor"] });
     expect(registered).toContain("twoFactor");
   });
 
   it("registers oidcProvider OAuth collections", () => {
-    const registered = registerBetterAuthMongooseModels(mongoose, { plugins: ["oidcProvider"] });
+    const registered = registerBetterAuthStubs(mongoose, { plugins: ["oidcProvider"] });
     expect(registered).toEqual(
       expect.arrayContaining(["oauthApplication", "oauthAccessToken", "oauthConsent"]),
     );
   });
 
   it("oauthProvider key is an alias for oidcProvider (same schema)", () => {
-    const registered = registerBetterAuthMongooseModels(mongoose, { plugins: ["oauthProvider"] });
+    const registered = registerBetterAuthStubs(mongoose, { plugins: ["oauthProvider"] });
     expect(registered).toEqual(
       expect.arrayContaining(["oauthApplication", "oauthAccessToken", "oauthConsent"]),
     );
   });
 
-  it("mcp plugin reuses oidcProvider schema (docs explicit)", () => {
-    // Per Better Auth docs: "The MCP plugin uses the same schema as the OIDC
+  it("mcp plugin reuses oidcProvider schema (data explicit)", () => {
+    // Per Better Auth data: "The MCP plugin uses the same schema as the OIDC
     // Provider plugin." Selecting mcp must register the oauth* collections.
-    const registered = registerBetterAuthMongooseModels(mongoose, { plugins: ["mcp"] });
+    const registered = registerBetterAuthStubs(mongoose, { plugins: ["mcp"] });
     expect(registered).toEqual(
       expect.arrayContaining(["oauthApplication", "oauthAccessToken", "oauthConsent"]),
     );
@@ -170,7 +175,7 @@ describe("registerBetterAuthMongooseModels — registration behavior", () => {
   it("deduplicates collections when mcp + oidcProvider are selected together", () => {
     // Both share the exact same oauth* collection set — the helper must not
     // attempt to double-register (Mongoose would throw OverwriteModelError).
-    const registered = registerBetterAuthMongooseModels(mongoose, {
+    const registered = registerBetterAuthStubs(mongoose, {
       plugins: ["mcp", "oidcProvider"],
     });
     // Each oauth collection should appear exactly once in the returned list
@@ -181,18 +186,18 @@ describe("registerBetterAuthMongooseModels — registration behavior", () => {
   });
 
   it("registers deviceAuthorization plugin collection (deviceCode)", () => {
-    const registered = registerBetterAuthMongooseModels(mongoose, {
+    const registered = registerBetterAuthStubs(mongoose, {
       plugins: ["deviceAuthorization"],
     });
     expect(registered).toContain("deviceCode");
   });
 
   it("handles separate @better-auth/* package plugins via extraCollections", () => {
-    // @better-auth/passkey → 'passkey' (confirmed from BA docs)
-    // @better-auth/sso → 'ssoProvider' (confirmed from BA docs)
+    // @better-auth/passkey → 'passkey' (confirmed from BA data)
+    // @better-auth/sso → 'ssoProvider' (confirmed from BA data)
     // These are NOT in the core BetterAuthPluginKey union on purpose —
     // they're separate packages that evolve independently.
-    const registered = registerBetterAuthMongooseModels(mongoose, {
+    const registered = registerBetterAuthStubs(mongoose, {
       plugins: ["organization"],
       extraCollections: ["passkey", "ssoProvider"],
     });
@@ -204,7 +209,7 @@ describe("registerBetterAuthMongooseModels — registration behavior", () => {
   });
 
   it("registers stub schemas with strict: false so they accept any BA document shape", async () => {
-    registerBetterAuthMongooseModels(mongoose);
+    registerBetterAuthStubs(mongoose);
     const UserModel = mongoose.models.user as mongoose.Model<Record<string, unknown>>;
 
     // Insert a doc shaped like a real BA user — fields not in the schema
@@ -230,15 +235,15 @@ describe("registerBetterAuthMongooseModels — registration behavior", () => {
 // Integration: the actual point of the helper — `.populate()` works
 // ============================================================================
 
-describe("registerBetterAuthMongooseModels — populate() integration", () => {
+describe("registerBetterAuthStubs — populate() integration", () => {
   it("lets an arc resource populate a ref to a BA-owned user document", async () => {
     // 1. Register stub models (this is the helper under test)
-    registerBetterAuthMongooseModels(mongoose);
+    registerBetterAuthStubs(mongoose);
 
     // 2. Simulate Better Auth writing a user via its native mongo driver.
     //    BA would do this via @better-auth/mongo-adapter — we shortcut by
     //    inserting directly into the same collection ('user') the stub points at.
-    const userCollection = mongoose.connection.db!.collection("user");
+    const userCollection = mongoose.connection.db?.collection("user");
     await userCollection.insertOne({
       _id: "usr_alice" as unknown as never,
       name: "Alice",
@@ -262,7 +267,7 @@ describe("registerBetterAuthMongooseModels — populate() integration", () => {
     });
 
     // 4. The whole point: populate() should resolve against the BA collection.
-    //    Without registerBetterAuthMongooseModels, this throws MissingSchemaError.
+    //    Without registerBetterAuthStubs, this throws MissingSchemaError.
     const populated = await Post.findById("post_1").populate("authorId").lean();
 
     expect(populated).toBeTruthy();
@@ -274,10 +279,10 @@ describe("registerBetterAuthMongooseModels — populate() integration", () => {
   });
 
   it("populate works with usePlural collections too", async () => {
-    registerBetterAuthMongooseModels(mongoose, { usePlural: true });
+    registerBetterAuthStubs(mongoose, { usePlural: true });
 
     // Insert into the pluralized 'users' collection (matching usePlural: true)
-    await mongoose.connection.db!.collection("users").insertOne({
+    await mongoose.connection.db?.collection("users").insertOne({
       _id: "usr_bob" as unknown as never,
       name: "Bob",
       email: "bob@example.com",

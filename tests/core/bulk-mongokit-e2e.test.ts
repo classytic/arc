@@ -93,7 +93,6 @@ describe("Bulk Preset + MongoKit E2E", () => {
         }),
       );
 
-      expect(result.success).toBe(true);
       expect(result.status).toBe(201);
       expect(result.data).toHaveLength(3);
       expect(result.meta).toEqual(
@@ -111,7 +110,6 @@ describe("Bulk Preset + MongoKit E2E", () => {
       // Arc reports this as 422 partial-success with reason='all_invalid' so
       // callers can distinguish "nothing inserted, your fault" from server errors.
       const result = await controller.bulkCreate(makeCtx({ items: [{ price: 10 }] }));
-      expect(result.success).toBe(true);
       expect(result.status).toBe(422);
       expect(result.data).toHaveLength(0);
       expect(result.meta).toEqual(
@@ -142,7 +140,6 @@ describe("Bulk Preset + MongoKit E2E", () => {
         }),
       );
 
-      expect(result.success).toBe(true);
       expect(result.status).toBe(207);
       expect(result.data).toHaveLength(2);
       expect(result.meta).toEqual(
@@ -194,7 +191,6 @@ describe("Bulk Preset + MongoKit E2E", () => {
         }),
       );
 
-      expect(result.success).toBe(true);
       const inserted = await ProductModel.findOne({ name: "Sneaky" }).lean();
       expect(inserted).toBeTruthy();
       // status should fall back to schema default (`active`), NOT `vip`
@@ -225,7 +221,6 @@ describe("Bulk Preset + MongoKit E2E", () => {
         }),
       );
 
-      expect(result.success).toBe(true);
       expect(result.data).toEqual(
         expect.objectContaining({
           matchedCount: 2,
@@ -252,9 +247,9 @@ describe("Bulk Preset + MongoKit E2E", () => {
         }),
       );
 
-      const docs = await ProductModel.find({}).sort("name").lean();
-      expect(docs[0].price).toBe(15);
-      expect(docs[1].price).toBe(25);
+      const data = await ProductModel.find({}).sort("name").lean();
+      expect(data[0].price).toBe(15);
+      expect(data[1].price).toBe(25);
     });
 
     it("strips protected fields from flat update payload (security)", async () => {
@@ -294,7 +289,6 @@ describe("Bulk Preset + MongoKit E2E", () => {
         }),
       );
 
-      expect(result.success).toBe(true);
       // `status` should have been stripped — meta.stripped reports it
       expect((result.meta as Record<string, unknown>)?.stripped).toEqual(["status"]);
 
@@ -344,13 +338,12 @@ describe("Bulk Preset + MongoKit E2E", () => {
         }),
       );
 
-      expect(result.success).toBe(true);
       expect((result.meta as Record<string, unknown>)?.stripped).toContain("status");
 
-      const docs = await ProductModel.find({}).sort("name").lean();
+      const data = await ProductModel.find({}).sort("name").lean();
       // $set name applied, status untouched
-      expect(docs.every((d) => d.status === "draft")).toBe(true);
-      expect(docs.every((d) => d.name === "Renamed")).toBe(true);
+      expect(data.every((d) => d.status === "draft")).toBe(true);
+      expect(data.every((d) => d.name === "Renamed")).toBe(true);
     });
 
     it("rejects bulkUpdate when ALL fields are protected (400 ALL_FIELDS_STRIPPED)", async () => {
@@ -379,19 +372,18 @@ describe("Bulk Preset + MongoKit E2E", () => {
         metadata: { arc: { hooks } },
       });
 
-      const result = await controller.bulkUpdate(
-        makeCtx({
-          filter: { name: "anything" },
-          // biome-ignore lint: test
-          data: { status: "published" } as any,
-        }),
-      );
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(400);
-      expect(result.details).toEqual(
-        expect.objectContaining({ code: "ALL_FIELDS_STRIPPED", stripped: ["status"] }),
-      );
+      await expect(
+        controller.bulkUpdate(
+          makeCtx({
+            filter: { name: "anything" },
+            // biome-ignore lint: test
+            data: { status: "published" } as any,
+          }),
+        ),
+      ).rejects.toMatchObject({
+        status: 400,
+        details: { code: "ALL_FIELDS_STRIPPED", stripped: ["status"] },
+      });
     });
   });
 
@@ -411,7 +403,6 @@ describe("Bulk Preset + MongoKit E2E", () => {
 
       const result = await controller.bulkDelete(makeCtx({ filter: { status: "archived" } }));
 
-      expect(result.success).toBe(true);
       expect(result.data).toEqual(expect.objectContaining({ deletedCount: 2 }));
 
       const remaining = await ProductModel.find({}).lean();
@@ -428,20 +419,19 @@ describe("Bulk Preset + MongoKit E2E", () => {
     // ========================================================================
 
     it("ids[] form: deletes specific documents by _id (real MongoKit deleteMany)", async () => {
-      const docs = await ProductModel.create([
+      const data = await ProductModel.create([
         { name: "A", price: 10, status: "active" },
         { name: "B", price: 20, status: "active" },
         { name: "C", price: 30, status: "active" },
         { name: "D", price: 40, status: "active" },
       ]);
       // Pick 2 of 4 to delete — typical "delete selected rows" UI pattern
-      const idsToDelete = [String(docs[0]._id), String(docs[2]._id)];
+      const idsToDelete = [String(data[0]._id), String(data[2]._id)];
 
       const { controller, makeCtx } = await createBulkController();
 
       const result = await controller.bulkDelete(makeCtx({ ids: idsToDelete }));
 
-      expect(result.success).toBe(true);
       expect(result.data).toEqual(expect.objectContaining({ deletedCount: 2 }));
 
       const remaining = await ProductModel.find({}).sort("name").lean();
@@ -460,13 +450,12 @@ describe("Bulk Preset + MongoKit E2E", () => {
         }),
       );
 
-      expect(result.success).toBe(true);
       expect(result.data).toEqual(expect.objectContaining({ deletedCount: 0 }));
       expect(await ProductModel.countDocuments()).toBe(1);
     });
 
     it("ids[] form: partial match — deletes only the ids that exist", async () => {
-      const docs = await ProductModel.create([
+      const data = await ProductModel.create([
         { name: "Real1", price: 10, status: "active" },
         { name: "Real2", price: 20, status: "active" },
       ]);
@@ -477,11 +466,10 @@ describe("Bulk Preset + MongoKit E2E", () => {
       // another request between selection and submit). Should silently skip.
       const result = await controller.bulkDelete(
         makeCtx({
-          ids: [String(docs[0]._id), "507f1f77bcf86cd799439099", String(docs[1]._id)],
+          ids: [String(data[0]._id), "507f1f77bcf86cd799439099", String(data[1]._id)],
         }),
       );
 
-      expect(result.success).toBe(true);
       expect(result.data).toEqual(expect.objectContaining({ deletedCount: 2 }));
       expect(await ProductModel.countDocuments()).toBe(0);
     });
@@ -491,10 +479,9 @@ describe("Bulk Preset + MongoKit E2E", () => {
 
       const { controller, makeCtx } = await createBulkController();
 
-      const result = await controller.bulkDelete(makeCtx({ ids: [] }));
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(400);
+      await expect(controller.bulkDelete(makeCtx({ ids: [] }))).rejects.toMatchObject({
+        status: 400,
+      });
       // Crucial: nothing deleted
       expect(await ProductModel.countDocuments()).toBe(1);
     });
@@ -504,23 +491,24 @@ describe("Bulk Preset + MongoKit E2E", () => {
 
       const { controller, makeCtx } = await createBulkController();
 
-      const result = await controller.bulkDelete(
-        makeCtx({
-          ids: ["507f1f77bcf86cd799439011"],
-          filter: { status: "active" },
-        }),
-      );
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(400);
-      expect(result.error).toContain("either");
+      await expect(
+        controller.bulkDelete(
+          makeCtx({
+            ids: ["507f1f77bcf86cd799439011"],
+            filter: { status: "active" },
+          }),
+        ),
+      ).rejects.toMatchObject({
+        status: 400,
+        message: expect.stringContaining("either"),
+      });
       // Crucial: nothing deleted (filter would have matched)
       expect(await ProductModel.countDocuments()).toBe(1);
     });
 
     it("ids[] form: large batch (500 ids) — single deleteMany call", async () => {
       // Industry-standard scenario: "purge old logs" — bulk delete a large set
-      const docs = await ProductModel.insertMany(
+      const data = await ProductModel.insertMany(
         Array.from({ length: 500 }, (_, i) => ({
           name: `Log${i}`,
           price: i,
@@ -538,10 +526,9 @@ describe("Bulk Preset + MongoKit E2E", () => {
 
       const { controller, makeCtx } = await createBulkController();
 
-      const ids = docs.map((d) => String(d._id));
+      const ids = data.map((d) => String(d._id));
       const result = await controller.bulkDelete(makeCtx({ ids }));
 
-      expect(result.success).toBe(true);
       expect(result.data).toEqual(expect.objectContaining({ deletedCount: 500 }));
       expect(await ProductModel.countDocuments()).toBe(10);
     });
@@ -627,7 +614,6 @@ describe("Bulk Preset + MongoKit E2E", () => {
 
       const result = await controller.bulkDelete(makeCtxAsOrg("org-a", { ids: allIds }));
 
-      expect(result.success).toBe(true);
       // Only org A's docs deleted (2), org B's untouched
       expect(result.data).toEqual(expect.objectContaining({ deletedCount: 2 }));
 
@@ -652,11 +638,10 @@ describe("Bulk Preset + MongoKit E2E", () => {
         },
       };
 
-      const result = await controller.bulkDelete(ctx);
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(403);
-      expect(result.details).toEqual({ code: "ORG_CONTEXT_REQUIRED" });
+      await expect(controller.bulkDelete(ctx)).rejects.toMatchObject({
+        status: 403,
+        details: { code: "ORG_CONTEXT_REQUIRED" },
+      });
     });
   });
 

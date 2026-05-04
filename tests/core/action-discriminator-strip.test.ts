@@ -21,10 +21,10 @@
  * unless told otherwise. The schema arc emits has to hold up there too.
  */
 
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import Fastify from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { allowPublic } from "../../src/permissions/index.js";
 import {
@@ -48,7 +48,9 @@ describe("action body schema robust to host removeAdditional: 'all'", () => {
     statusCode: number;
     seen: Record<string, unknown>;
   }> {
-    const Model = createMockModel(`ActionStripRepro_${String(mode).replace(/[^a-z]/gi, "") || "x"}`);
+    const Model = createMockModel(
+      `ActionStripRepro_${String(mode).replace(/[^a-z]/gi, "") || "x"}`,
+    );
     const repo = createMockRepository(Model);
     const [item] = await Model.create([{ name: "n", isActive: true }]);
     const itemId = String(item._id);

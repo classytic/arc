@@ -12,7 +12,7 @@
  * ```
  */
 
-import type { RepositoryLike } from "../../adapters/interface.js";
+import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import type {
   AnyRecord,
   IControllerResponse,
@@ -20,6 +20,7 @@ import type {
   PaginationResult,
   UserLike,
 } from "../../types/index.js";
+import { createError, ForbiddenError, NotFoundError } from "../../utils/errors.js";
 import type { BaseCrudController } from "../BaseCrudController.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: standard TS mixin Constructor pattern
@@ -45,11 +46,7 @@ export function SoftDeleteMixin<TBase extends Constructor<BaseCrudController>>(
         ) => Promise<AnyRecord[] | PaginationResult<AnyRecord>>;
       };
       if (!repo.getDeleted) {
-        return {
-          success: false,
-          error: "Soft delete not implemented",
-          status: 501,
-        };
+        throw createError(501, "Soft delete not implemented");
       }
 
       // Pass parsed query as the first arg (params) and scope meta as the
@@ -59,7 +56,6 @@ export function SoftDeleteMixin<TBase extends Constructor<BaseCrudController>>(
       const result = await repo.getDeleted(parsed, parsed);
 
       return {
-        success: true,
         data: result as PaginationResult<AnyRecord>,
         status: 200,
       };
@@ -71,12 +67,12 @@ export function SoftDeleteMixin<TBase extends Constructor<BaseCrudController>>(
         getById: (id: string, options?: unknown) => Promise<AnyRecord | null>;
       };
       if (!repo.restore) {
-        return { success: false, error: "Restore not implemented", status: 501 };
+        throw createError(501, "Restore not implemented");
       }
 
       const id = req.params.id;
       if (!id) {
-        return { success: false, error: "ID parameter is required", status: 400 };
+        throw createError(400, "ID parameter is required");
       }
 
       // Pre-restore access control: fetch the (soft-deleted) item and validate
@@ -89,16 +85,11 @@ export function SoftDeleteMixin<TBase extends Constructor<BaseCrudController>>(
       });
 
       if (!existing) {
-        return this.notFoundResponse("NOT_FOUND");
+        throw new NotFoundError(this.resourceName ?? "Resource");
       }
 
       if (!this.accessControl.checkOwnership(existing as AnyRecord, req)) {
-        return {
-          success: false,
-          error: "You do not have permission to restore this resource",
-          details: { code: "OWNERSHIP_DENIED" },
-          status: 403,
-        };
+        throw new ForbiddenError("You do not have permission to restore this resource");
       }
 
       const arcContext = this.meta(req);
@@ -115,15 +106,10 @@ export function SoftDeleteMixin<TBase extends Constructor<BaseCrudController>>(
             meta: { id },
           });
         } catch (err) {
-          return {
-            success: false,
-            error: "Hook execution failed",
-            details: {
-              code: "BEFORE_RESTORE_HOOK_ERROR",
-              message: (err as Error).message,
-            },
-            status: 400,
-          };
+          throw createError(400, "Hook execution failed", {
+            code: "BEFORE_RESTORE_HOOK_ERROR",
+            message: (err as Error).message,
+          });
         }
       }
 
@@ -143,7 +129,7 @@ export function SoftDeleteMixin<TBase extends Constructor<BaseCrudController>>(
       }
 
       if (!item) {
-        return this.notFoundResponse("NOT_FOUND");
+        throw new NotFoundError(this.resourceName ?? "Resource");
       }
 
       if (hooks && this.resourceName) {
@@ -155,7 +141,6 @@ export function SoftDeleteMixin<TBase extends Constructor<BaseCrudController>>(
       }
 
       return {
-        success: true,
         data: item as AnyRecord,
         status: 200,
         meta: { message: "Restored successfully" },

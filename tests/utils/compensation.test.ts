@@ -43,7 +43,6 @@ describe("withCompensation", () => {
         },
       ]);
 
-      expect(result.success).toBe(true);
       expect(result.completedSteps).toEqual(["step-1", "step-2", "step-3"]);
       expect(result.results).toEqual({
         "step-1": { reserved: true },
@@ -89,7 +88,6 @@ describe("withCompensation", () => {
       const { withCompensation } = await import("../../src/utils/compensation.js");
 
       const result = await withCompensation("empty", []);
-      expect(result.success).toBe(true);
       expect(result.completedSteps).toEqual([]);
     });
   });
@@ -126,7 +124,6 @@ describe("withCompensation", () => {
         },
       ]);
 
-      expect(result.success).toBe(false);
       expect(result.failedStep).toBe("ship");
       expect(result.error).toBe("Warehouse offline");
       expect(compensated).toEqual(["refund", "unreserve"]);
@@ -147,7 +144,6 @@ describe("withCompensation", () => {
         { name: "never", execute: async () => ({}) },
       ]);
 
-      expect(result.success).toBe(false);
       expect(result.completedSteps).toEqual([]);
       expect(spy).not.toHaveBeenCalled();
     });
@@ -243,7 +239,6 @@ describe("withCompensation", () => {
         },
       ]);
 
-      expect(result.success).toBe(false);
       expect(result.error).toBe("string error");
     });
   });
@@ -264,10 +259,8 @@ describe("withCompensation", () => {
       expect(checkout.name).toBe("checkout");
 
       const r1 = await checkout.execute({ items: ["a"] });
-      expect(r1.success).toBe(true);
 
       const r2 = await checkout.execute({ items: ["b"] });
-      expect(r2.success).toBe(true);
     });
   });
 
@@ -319,15 +312,13 @@ describe("withCompensation", () => {
 
         if (!result.success) {
           return reply.code(500).send({
-            success: false,
-            error: `Checkout failed at ${result.failedStep}: ${result.error}`,
+            code: "arc.internal_error",
+            message: `Checkout failed at ${result.failedStep}: ${result.error}`,
+            status: 500,
           });
         }
 
-        return reply.code(201).send({
-          success: true,
-          data: result.results,
-        });
+        return reply.code(201).send(result.results);
       });
 
       await app.ready();
@@ -340,10 +331,9 @@ describe("withCompensation", () => {
 
       expect(res.statusCode).toBe(201);
       const body = JSON.parse(res.body);
-      expect(body.success).toBe(true);
-      expect(body.data.reserve).toEqual({ reservationId: "res-001" });
-      expect(body.data.charge).toEqual({ chargeId: "ch-001", amount: 99 });
-      expect(body.data.confirm).toEqual({ orderId: "ord-res-001" });
+      expect(body.reserve).toEqual({ reservationId: "res-001" });
+      expect(body.charge).toEqual({ chargeId: "ch-001", amount: 99 });
+      expect(body.confirm).toEqual({ orderId: "ord-res-001" });
     });
 
     it("returns 500 with compensation details when step fails", async () => {
@@ -374,13 +364,14 @@ describe("withCompensation", () => {
 
         if (!result.success) {
           return reply.code(500).send({
-            success: false,
-            error: `${result.failedStep}: ${result.error}`,
+            code: "arc.internal_error",
+            message: `${result.failedStep}: ${result.error}`,
+            status: 500,
             compensated: result.completedSteps,
           });
         }
 
-        return { success: true, data: result.results };
+        return result.results;
       });
 
       await app.ready();
@@ -393,8 +384,7 @@ describe("withCompensation", () => {
 
       expect(res.statusCode).toBe(500);
       const body = JSON.parse(res.body);
-      expect(body.success).toBe(false);
-      expect(body.error).toBe("charge: Card declined");
+      expect(body.message).toBe("charge: Card declined");
       expect(body.compensated).toEqual(["reserve"]);
 
       // Compensation actually ran
@@ -456,7 +446,6 @@ describe("withCompensation", () => {
       });
 
       const body = JSON.parse(res.body);
-      expect(body.success).toBe(true);
       expect(inventoryService.reserve).toHaveBeenCalledWith(["a"]);
       expect(paymentService.charge).toHaveBeenCalledWith(50);
       expect(inventoryService.release).not.toHaveBeenCalled();

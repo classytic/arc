@@ -9,12 +9,12 @@
  * `MinimalRepo<TDoc>` + `StandardRepo<TDoc>` contract from repo-core.
  */
 
+import { Repository } from "@classytic/mongokit";
+import type { DataAdapter } from "@classytic/repo-core/adapter";
 import Fastify from "fastify";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { Schema } from "mongoose";
-import { Repository } from "@classytic/mongokit";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { DataAdapter } from "../../src/adapters/index.js";
 import { allowPublic, defineResource } from "../../src/index.js";
 
 interface ProductDoc {
@@ -121,9 +121,9 @@ describe("Arc + mongokit — end-to-end integration", () => {
 
     const body = res.json();
     const payload = body.data ?? body;
-    const docs = Array.isArray(payload) ? payload : (payload.docs ?? []);
-    expect(docs.length).toBe(2);
-    const names = docs.map((d: ProductDoc) => d.name).sort();
+    const data = Array.isArray(payload) ? payload : (payload.data ?? []);
+    expect(data.length).toBe(2);
+    const names = data.map((d: ProductDoc) => d.name).sort();
     expect(names).toEqual(["Laptop", "Mouse"]);
   });
 

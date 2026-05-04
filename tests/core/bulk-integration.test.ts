@@ -18,7 +18,7 @@ function createMockRepo(overrides: Record<string, unknown> = {}) {
   return {
     getAll: vi
       .fn()
-      .mockResolvedValue({ docs: [], total: 0, page: 1, pages: 0, hasNext: false, hasPrev: false }),
+      .mockResolvedValue({ data: [], total: 0, page: 1, pages: 0, hasNext: false, hasPrev: false }),
     getById: vi.fn().mockResolvedValue(null),
     create: vi.fn().mockResolvedValue({ _id: "new" }),
     update: vi.fn().mockResolvedValue({ _id: "updated" }),
@@ -158,7 +158,6 @@ describe("Bulk Preset", () => {
         }),
       );
 
-      expect(result.success).toBe(true);
       expect(result.status).toBe(201);
       expect(result.data).toHaveLength(2);
       expect(result.meta).toEqual(
@@ -173,38 +172,35 @@ describe("Bulk Preset", () => {
       );
     });
 
-    it("returns 400 when items is empty", async () => {
+    it("throws 400 when items is empty", async () => {
       const { BaseController } = await import("../../src/core/BaseController.js");
       const repo = createMockRepo({ createMany: vi.fn() });
       const controller = new BaseController(repo, { resourceName: "product" });
 
-      const result = await controller.bulkCreate(await createReqCtx({ items: [] }));
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(400);
+      await expect(controller.bulkCreate(await createReqCtx({ items: [] }))).rejects.toMatchObject({
+        status: 400,
+      });
       expect(repo.createMany).not.toHaveBeenCalled();
     });
 
-    it("returns 400 when items is missing", async () => {
+    it("throws 400 when items is missing", async () => {
       const { BaseController } = await import("../../src/core/BaseController.js");
       const repo = createMockRepo({ createMany: vi.fn() });
       const controller = new BaseController(repo, { resourceName: "product" });
 
-      const result = await controller.bulkCreate(await createReqCtx({}));
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(400);
+      await expect(controller.bulkCreate(await createReqCtx({}))).rejects.toMatchObject({
+        status: 400,
+      });
     });
 
-    it("returns 501 when repo lacks createMany", async () => {
+    it("throws 501 when repo lacks createMany", async () => {
       const { BaseController } = await import("../../src/core/BaseController.js");
       const repo = createMockRepo(); // no createMany
       const controller = new BaseController(repo, { resourceName: "product" });
 
-      const result = await controller.bulkCreate(await createReqCtx({ items: [{ name: "A" }] }));
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(501);
+      await expect(
+        controller.bulkCreate(await createReqCtx({ items: [{ name: "A" }] })),
+      ).rejects.toMatchObject({ status: 501 });
     });
   });
 
@@ -228,7 +224,6 @@ describe("Bulk Preset", () => {
         }),
       );
 
-      expect(result.success).toBe(true);
       expect(result.status).toBe(200);
       expect(result.data).toEqual({ matchedCount: 5, modifiedCount: 5 });
       expect(repo.updateMany).toHaveBeenCalledWith(
@@ -238,44 +233,35 @@ describe("Bulk Preset", () => {
       );
     });
 
-    it("returns 400 when filter is empty", async () => {
+    it("throws 400 when filter is empty", async () => {
       const { BaseController } = await import("../../src/core/BaseController.js");
       const repo = createMockRepo({ updateMany: vi.fn() });
       const controller = new BaseController(repo, { resourceName: "product" });
 
-      const result = await controller.bulkUpdate(
-        await createReqCtx({ filter: {}, data: { name: "x" } }),
-      );
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(400);
+      await expect(
+        controller.bulkUpdate(await createReqCtx({ filter: {}, data: { name: "x" } })),
+      ).rejects.toMatchObject({ status: 400 });
       expect(repo.updateMany).not.toHaveBeenCalled();
     });
 
-    it("returns 400 when data is empty", async () => {
+    it("throws 400 when data is empty", async () => {
       const { BaseController } = await import("../../src/core/BaseController.js");
       const repo = createMockRepo({ updateMany: vi.fn() });
       const controller = new BaseController(repo, { resourceName: "product" });
 
-      const result = await controller.bulkUpdate(
-        await createReqCtx({ filter: { active: true }, data: {} }),
-      );
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(400);
+      await expect(
+        controller.bulkUpdate(await createReqCtx({ filter: { active: true }, data: {} })),
+      ).rejects.toMatchObject({ status: 400 });
     });
 
-    it("returns 501 when repo lacks updateMany", async () => {
+    it("throws 501 when repo lacks updateMany", async () => {
       const { BaseController } = await import("../../src/core/BaseController.js");
       const repo = createMockRepo();
       const controller = new BaseController(repo, { resourceName: "product" });
 
-      const result = await controller.bulkUpdate(
-        await createReqCtx({ filter: { a: 1 }, data: { b: 2 } }),
-      );
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(501);
+      await expect(
+        controller.bulkUpdate(await createReqCtx({ filter: { a: 1 }, data: { b: 2 } })),
+      ).rejects.toMatchObject({ status: 501 });
     });
   });
 
@@ -296,7 +282,6 @@ describe("Bulk Preset", () => {
         await createReqCtx({ filter: { archived: true } }),
       );
 
-      expect(result.success).toBe(true);
       expect(result.status).toBe(200);
       expect(result.data).toEqual({ deletedCount: 3 });
       expect(repo.deleteMany).toHaveBeenCalledWith(
@@ -305,38 +290,35 @@ describe("Bulk Preset", () => {
       );
     });
 
-    it("returns 400 when filter is empty", async () => {
+    it("throws 400 when filter is empty", async () => {
       const { BaseController } = await import("../../src/core/BaseController.js");
       const repo = createMockRepo({ deleteMany: vi.fn() });
       const controller = new BaseController(repo, { resourceName: "product" });
 
-      const result = await controller.bulkDelete(await createReqCtx({ filter: {} }));
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(400);
+      await expect(controller.bulkDelete(await createReqCtx({ filter: {} }))).rejects.toMatchObject(
+        { status: 400 },
+      );
       expect(repo.deleteMany).not.toHaveBeenCalled();
     });
 
-    it("returns 400 when filter is missing", async () => {
+    it("throws 400 when filter is missing", async () => {
       const { BaseController } = await import("../../src/core/BaseController.js");
       const repo = createMockRepo({ deleteMany: vi.fn() });
       const controller = new BaseController(repo, { resourceName: "product" });
 
-      const result = await controller.bulkDelete(await createReqCtx({}));
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(400);
+      await expect(controller.bulkDelete(await createReqCtx({}))).rejects.toMatchObject({
+        status: 400,
+      });
     });
 
-    it("returns 501 when repo lacks deleteMany", async () => {
+    it("throws 501 when repo lacks deleteMany", async () => {
       const { BaseController } = await import("../../src/core/BaseController.js");
       const repo = createMockRepo();
       const controller = new BaseController(repo, { resourceName: "product" });
 
-      const result = await controller.bulkDelete(await createReqCtx({ filter: { old: true } }));
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(501);
+      await expect(
+        controller.bulkDelete(await createReqCtx({ filter: { old: true } })),
+      ).rejects.toMatchObject({ status: 501 });
     });
 
     it("supports `ids` form — translates to { _id: { $in } }", async () => {
@@ -349,7 +331,6 @@ describe("Bulk Preset", () => {
 
       const result = await controller.bulkDelete(await createReqCtx({ ids: ["a", "b", "c"] }));
 
-      expect(result.success).toBe(true);
       expect(result.data).toEqual({ deletedCount: 3 });
       expect(deleteMany).toHaveBeenCalledWith(
         { _id: { $in: ["a", "b", "c"] } },
@@ -368,40 +349,37 @@ describe("Bulk Preset", () => {
 
       const result = await controller.bulkDelete(await createReqCtx({ ids: ["uuid-1", "uuid-2"] }));
 
-      expect(result.success).toBe(true);
       expect(deleteMany).toHaveBeenCalledWith(
         { id: { $in: ["uuid-1", "uuid-2"] } },
         expect.objectContaining({ context: expect.anything() }),
       );
     });
 
-    it("returns 400 when both `ids` and `filter` are provided", async () => {
+    it("throws 400 when both `ids` and `filter` are provided", async () => {
       const { BaseController } = await import("../../src/core/BaseController.js");
       const deleteMany = vi.fn();
       const controller = new BaseController(createMockRepo({ deleteMany }), {
         resourceName: "product",
       });
 
-      const result = await controller.bulkDelete(
-        await createReqCtx({ ids: ["a"], filter: { archived: true } }),
-      );
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(400);
-      expect(result.error).toContain("either");
+      await expect(
+        controller.bulkDelete(await createReqCtx({ ids: ["a"], filter: { archived: true } })),
+      ).rejects.toMatchObject({
+        status: 400,
+        message: expect.stringContaining("either"),
+      });
       expect(deleteMany).not.toHaveBeenCalled();
     });
 
-    it("returns 400 when `ids` is empty array (falls through to missing filter)", async () => {
+    it("throws 400 when `ids` is empty array (falls through to missing filter)", async () => {
       const { BaseController } = await import("../../src/core/BaseController.js");
       const controller = new BaseController(createMockRepo({ deleteMany: vi.fn() }), {
         resourceName: "product",
       });
 
-      const result = await controller.bulkDelete(await createReqCtx({ ids: [] }));
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(400);
+      await expect(controller.bulkDelete(await createReqCtx({ ids: [] }))).rejects.toMatchObject({
+        status: 400,
+      });
     });
   });
 
@@ -415,7 +393,7 @@ describe("Bulk Preset", () => {
 
       // Simulate a Prisma-style or Drizzle-style repo — just plain functions
       const plainRepo = {
-        getAll: async () => ({ docs: [], total: 0 }),
+        getAll: async () => ({ data: [], total: 0 }),
         getById: async () => null,
         create: async (d: unknown) => ({ id: "sql-1", ...(d as object) }),
         update: async (_id: string, d: unknown) => ({ id: "sql-1", ...(d as object) }),
@@ -431,18 +409,15 @@ describe("Bulk Preset", () => {
       const createResult = await controller.bulkCreate(
         await createReqCtx({ items: [{ email: "a@b.com" }] }),
       );
-      expect(createResult.success).toBe(true);
       expect(createResult.data).toHaveLength(1);
 
       const updateResult = await controller.bulkUpdate(
         await createReqCtx({ filter: { role: "guest" }, data: { role: "user" } }),
       );
-      expect(updateResult.success).toBe(true);
 
       const deleteResult = await controller.bulkDelete(
         await createReqCtx({ filter: { deactivated: true } }),
       );
-      expect(deleteResult.success).toBe(true);
     });
   });
 });

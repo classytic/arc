@@ -8,10 +8,10 @@
  * Run with: npx vitest run tests/scenarios/custom-authenticator.test.ts
  */
 
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -190,7 +190,7 @@ describe("Custom Authenticator (Clerk/Auth0 Simulation)", () => {
       });
 
       expect(res.statusCode).toBe(201);
-      adminNoteId = JSON.parse(res.body).data._id;
+      adminNoteId = JSON.parse(res.body)._id;
     });
 
     it("requireAuth works — unauthenticated cannot create", async () => {
@@ -211,7 +211,7 @@ describe("Custom Authenticator (Clerk/Auth0 Simulation)", () => {
         headers: { "x-api-key": "admin-session" },
         payload: { title: "Delete Me" },
       });
-      const deleteId = JSON.parse(createRes.body).data._id;
+      const deleteId = JSON.parse(createRes.body)._id;
 
       const res = await app.inject({
         method: "DELETE",
@@ -230,7 +230,7 @@ describe("Custom Authenticator (Clerk/Auth0 Simulation)", () => {
         headers: { "x-api-key": "user-session" },
         payload: { title: "User Note" },
       });
-      userNoteId = JSON.parse(createRes.body).data._id;
+      userNoteId = JSON.parse(createRes.body)._id;
 
       const res = await app.inject({
         method: "DELETE",
@@ -269,7 +269,7 @@ describe("Custom Authenticator (Clerk/Auth0 Simulation)", () => {
         headers: { "x-api-key": "admin-session" },
         payload: { title: "Org 1 Note" },
       });
-      org1NoteId = JSON.parse(res1.body).data._id;
+      org1NoteId = JSON.parse(res1.body)._id;
 
       // Create note in org2
       const res2 = await app.inject({
@@ -278,7 +278,7 @@ describe("Custom Authenticator (Clerk/Auth0 Simulation)", () => {
         headers: { "x-api-key": "other-session" },
         payload: { title: "Org 2 Note" },
       });
-      org2NoteId = JSON.parse(res2.body).data._id;
+      org2NoteId = JSON.parse(res2.body)._id;
     });
 
     it("org scoping works from custom user.organizationId", async () => {
@@ -290,7 +290,7 @@ describe("Custom Authenticator (Clerk/Auth0 Simulation)", () => {
 
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      const ids = body.docs.map((d: any) => d._id);
+      const ids = body.data.map((d: any) => d._id);
       expect(ids).toContain(org1NoteId);
       expect(ids).not.toContain(org2NoteId);
     });
@@ -304,7 +304,7 @@ describe("Custom Authenticator (Clerk/Auth0 Simulation)", () => {
 
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      const ids = body.docs.map((d: any) => d._id);
+      const ids = body.data.map((d: any) => d._id);
       expect(ids).toContain(org2NoteId);
       expect(ids).not.toContain(org1NoteId);
     });

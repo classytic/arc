@@ -143,7 +143,7 @@ describe("upstashAsIdempotencyClient", () => {
   it("scan() translates MATCH/COUNT varargs into upstash options", async () => {
     const client = makeFake();
     const adapter = upstashAsIdempotencyClient(client);
-    await adapter.scan!("0", "MATCH", "idem:*", "COUNT", 50);
+    await adapter.scan?.("0", "MATCH", "idem:*", "COUNT", 50);
 
     const scanCall = client.calls.find((c) => c[0] === "scan")!;
     expect(scanCall[2]).toEqual({ match: "idem:*", count: 50 });
@@ -170,7 +170,7 @@ describe("upstashAsIdempotencyClient", () => {
   it("disconnect() is a no-op for HTTP clients", async () => {
     const client = makeFake();
     const adapter = upstashAsIdempotencyClient(client);
-    await expect(adapter.disconnect!()).resolves.toBeUndefined();
+    await expect(adapter.disconnect?.()).resolves.toBeUndefined();
   });
 });
 
@@ -228,7 +228,7 @@ describe("RedisIdempotencyStore.findByPrefix batching", () => {
 
     const result = await store.findByPrefix("POST:/find:");
     expect(result).toBeDefined();
-    expect((result!.body as { found: boolean }).found).toBe(true);
+    expect((result?.body as { found: boolean }).found).toBe(true);
 
     // Batch size is 10 — key index 2 is in the first batch, so we expect
     // exactly 10 GETs (the first batch), not all 30.

@@ -581,7 +581,20 @@ export interface CreateAppOptions {
   };
 
   /**
-   * Enable `reply.ok()`, `reply.fail()`, `reply.paginated()` response helpers.
+   * Enable `reply.sendList()` + `reply.stream()` response decorators.
+   *
+   * Arc emits raw data on success — HTTP status discriminates, no
+   * `{ success, data }` envelope — so single-doc handlers just
+   * `return doc` or `reply.send(doc)` and errors throw `ArcError`
+   * (the global handler serializes to `ErrorContract`). The two
+   * decorators below cover the cases that DO need framework support:
+   *
+   *   - `sendList(input)` normalises any kit-shaped paginated/array
+   *     result to the canonical wire shape via repo-core's
+   *     `toCanonicalList` so the server and `@classytic/arc-next`
+   *     typed client share one declaration.
+   *   - `stream(source, options)` sets `Content-Type` /
+   *     `Content-Disposition` headers for file downloads in one call.
    *
    * Default: `false` (opt-in).
    *
@@ -589,33 +602,65 @@ export interface CreateAppOptions {
    * ```typescript
    * const app = await createApp({ replyHelpers: true });
    *
-   * // Then in any handler:
-   * return reply.ok({ name: 'MacBook' });          // → 200 { success: true, data: { ... } }
-   * return reply.ok(product, 201);                  // → 201 { success: true, data: { ... } }
-   * return reply.fail('Not found', 404);            // → 404 { success: false, error: '...' }
-   * return reply.fail(['err1', 'err2'], 422);       // → 422 { success: false, errors: [...] }
-   * return reply.paginated({ docs, total, page, limit });
+   * // List endpoint — kit-shaped pagination → canonical wire shape
+   * app.get('/orders', async (req, reply) => {
+   *   const result = await orderRepo.getAll(req.query);
+   *   return reply.sendList(result);
+   * });
+   *
+   * // File download
+   * app.get('/orders/export.csv', async (req, reply) => {
+   *   return reply.stream(csvReadable, {
+   *     contentType: 'text/csv',
+   *     filename: 'orders.csv',
+   *   });
+   * });
    * ```
    */
   replyHelpers?: boolean;
 
   /**
-   * Auto-convert BigInt values to Number in all JSON responses.
+   * Serialize `bigint` values in JSON responses.
    *
-   * When `true`, Arc adds a `preSerialization` hook that converts BigInt values
-   * to Number before JSON serialization. Without this, `JSON.stringify` throws
-   * on BigInt values (e.g., from financial libraries like fin-io).
+   * `JSON.stringify` throws on `bigint` by default. This option installs a
+   * `preSerialization` hook that converts them on the way out:
    *
-   * Default: `false` (opt-in — most apps don't use BigInt).
+   * - `false` (default) — no conversion. JSON serialization throws if a
+   *   `bigint` reaches the wire. Safest when no codepath produces bigints.
+   * - `'string'` — **recommended for IDs / money / counters / ledgers.**
+   *   Converts every `bigint` to a decimal string. Lossless: every digit
+   *   survives the wire. Clients parse with `BigInt(value)` to reconstitute.
+   * - `'number'` — converts every `bigint` to `Number(value)`.
+   *   **Lossy above 2^53 - 1 (`Number.MAX_SAFE_INTEGER` = 9007199254740991).**
+   *   Use ONLY when you've audited the value range — e.g. small enums,
+   *   bounded counters that physically can't exceed the safe range. For
+   *   anything that could be an ID, monetary amount, or unbounded counter,
+   *   `Number()` corruption silently rounds digits and there is no
+   *   recovery. arc emits a one-shot startup warning when you opt into
+   *   this mode.
+   * - `true` — back-compat alias for `'number'`. Will be removed in a
+   *   future major. Migrate to `'string'` (lossless) or explicit
+   *   `'number'` (acknowledges the precision risk).
+   *
+   * Default: `false` (opt-in — most apps don't use bigint).
    *
    * @example
    * ```typescript
+   * // Lossless — recommended path
    * const app = await createApp({
-   *   serializeBigInt: true,
+   *   serializeBigInt: 'string',
+   * });
+   * // { totalSatoshis: "9007199254740999" }
+   *
+   * // Lossy — only when value range is bounded
+   * const app = await createApp({
+   *   serializeBigInt: 'number',
+   * });
+   * // { totalSatoshis: 9007199254740999 }  // precision lost above MAX_SAFE_INTEGER
    * });
    * ```
    */
-  serializeBigInt?: boolean;
+  serializeBigInt?: boolean | "number" | "string";
 
   // ============================================
   // Resources & Lifecycle
@@ -638,7 +683,7 @@ export interface CreateAppOptions {
    * Arc's lifecycle contract:
    * ```
    * 1. Arc core (security, auth, events)
-   * 2. plugins()            ← infra (DB, SSE, docs)
+   * 2. plugins()            ← infra (DB, SSE, data)
    * 3. bootstrap[]          ← domain init (engines, singletons)
    * 4. resources resolution ← (factory form: call it here)
    * 5. resources registered ← plugins mounted on Fastify
@@ -662,6 +707,9 @@ export interface CreateAppOptions {
    *
    * @example Factory with async-booted engine
    * ```ts
+   * import { createApp, defineResource } from '@classytic/arc';
+   * import { createMongooseAdapter } from '@classytic/mongokit/adapter';
+   *
    * const app = await createApp({
    *   bootstrap: [async () => { await ensureCatalogEngine(); }],
    *   resources: async () => {
@@ -783,7 +831,7 @@ export interface CreateAppOptions {
    * Custom plugin registration — runs after Arc core (security, auth, events)
    * but before `bootstrap` and `resources`.
    *
-   * Use this for infrastructure setup: database connections, OpenAPI docs,
+   * Use this for infrastructure setup: database connections, OpenAPI data,
    * webhook plugins, SSE wiring, etc.
    */
   plugins?: (fastify: FastifyInstance) => Promise<void>;
@@ -799,7 +847,7 @@ export interface CreateAppOptions {
    * Boot order:
    * ```
    * 1. Arc core (security, auth, events)
-   * 2. plugins()      ← infra (DB, SSE, docs)
+   * 2. plugins()      ← infra (DB, SSE, data)
    * 3. bootstrap[]    ← domain init (singletons, event handlers)
    * 4. resources[]    ← auto-discovered routes
    * ```

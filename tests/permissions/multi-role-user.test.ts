@@ -18,9 +18,9 @@
  *   - Cross-org access — org admin in Org A is NOT admin in Org B
  */
 
+import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { RepositoryLike } from "../../src/adapters/interface.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
 import { allowPublic, requireRoles, roles } from "../../src/permissions/index.js";
@@ -34,7 +34,7 @@ const ORG_B = "org-b-id";
 class MemRepo implements RepositoryLike {
   store = new Map<string, Record<string, unknown>>();
   async getAll() {
-    return { docs: Array.from(this.store.values()), total: this.store.size, page: 1, limit: 20 };
+    return { data: Array.from(this.store.values()), total: this.store.size, page: 1, limit: 20 };
   }
   async getById(id: string) {
     return this.store.get(id) ?? null;

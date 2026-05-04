@@ -20,22 +20,22 @@
 
 import {
   batchOperationsPlugin,
+  buildCrudSchemasFromModel,
   methodRegistryPlugin,
   mongoOperationsPlugin,
   Repository,
   softDeletePlugin,
 } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Model, Schema, type Types } from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
 import { allowPublic } from "../../src/permissions/index.js";
-import { defineGuard } from "../../src/utils/defineGuard.js";
 import type { RouteHandlerMethod } from "../../src/types/index.js";
+import { defineGuard } from "../../src/utils/defineGuard.js";
 
 // ============================================================================
 // Domain model: Procurement Order
@@ -111,8 +111,7 @@ beforeAll(async () => {
   mongoServer = await MongoMemoryServer.create();
   await mongoose.connect(mongoServer.getUri());
   ProcurementModel =
-    mongoose.models.SmokeProc ||
-    mongoose.model<IProcurement>("SmokeProc", ProcurementSchema);
+    mongoose.models.SmokeProc || mongoose.model<IProcurement>("SmokeProc", ProcurementSchema);
 });
 
 afterAll(async () => {
@@ -134,7 +133,11 @@ function buildApp() {
 
   const resource = defineResource<IProcurement>({
     name: "procurement",
-    adapter: createMongooseAdapter({ model: ProcurementModel, repository: repo }),
+    adapter: createMongooseAdapter({
+      model: ProcurementModel,
+      repository: repo,
+      schemaGenerator: buildCrudSchemasFromModel,
+    }),
     tenantField: false,
     presets: ["softDelete"],
 
@@ -292,7 +295,7 @@ describe("v2.8.1 smoke — warehouse procurement", () => {
         },
       });
       expect(createRes.statusCode).toBe(201);
-      const id = JSON.parse(createRes.body).data?._id;
+      const id = JSON.parse(createRes.body)._id;
 
       // List
       const list = await app.inject({ method: "GET", url: "/procurements", headers: HEADERS });
@@ -318,7 +321,7 @@ describe("v2.8.1 smoke — warehouse procurement", () => {
         headers: HEADERS,
       });
       expect(del.statusCode).toBe(200);
-      expect((await ProcurementModel.findById(id).lean())!.deletedAt).toBeTruthy();
+      expect((await ProcurementModel.findById(id).lean())?.deletedAt).toBeTruthy();
     } finally {
       await app.close();
     }
@@ -416,7 +419,13 @@ describe("v2.8.1 smoke — warehouse procurement", () => {
         method: "POST",
         url: "/procurements",
         headers: HEADERS,
-        payload: { poNumber: "PO-SD", supplier: "Test Co", itemCount: 1, totalCost: 50, status: "draft" },
+        payload: {
+          poNumber: "PO-SD",
+          supplier: "Test Co",
+          itemCount: 1,
+          totalCost: 50,
+          status: "draft",
+        },
       });
       expect(cr.statusCode).toBe(201);
       const crBody = JSON.parse(cr.body);
@@ -424,21 +433,29 @@ describe("v2.8.1 smoke — warehouse procurement", () => {
       expect(id).toBeTruthy();
 
       // Soft-delete
-      const delResp = await app.inject({ method: "DELETE", url: `/procurements/${id}`, headers: HEADERS });
+      const delResp = await app.inject({
+        method: "DELETE",
+        url: `/procurements/${id}`,
+        headers: HEADERS,
+      });
       expect(delResp.statusCode).toBe(200);
 
       // Hidden from list
       const list = await app.inject({ method: "GET", url: "/procurements", headers: HEADERS });
-      const docs = JSON.parse(list.body).docs ?? [];
-      expect(docs.find((d: { _id: string }) => d._id === id)).toBeUndefined();
+      const data = JSON.parse(list.body).data ?? [];
+      expect(data.find((d: { _id: string }) => d._id === id)).toBeUndefined();
 
       // In /deleted — softDelete preset registers GET /deleted on this resource
-      const del = await app.inject({ method: "GET", url: "/procurements/deleted", headers: HEADERS });
+      const del = await app.inject({
+        method: "GET",
+        url: "/procurements/deleted",
+        headers: HEADERS,
+      });
       expect(del.statusCode).toBe(200);
       const delBody = JSON.parse(del.body);
-      // Response may be wrapped: { success, data: { docs } } or { docs } or { data: [...] }
+      // Response may be wrapped: { success, data: { data } } or { data } or { data: [...] }
       const delDocs: unknown[] =
-        delBody.docs ?? delBody.data?.docs ?? (Array.isArray(delBody.data) ? delBody.data : []);
+        delBody.data ?? delBody.data?.data ?? (Array.isArray(delBody.data) ? delBody.data : []);
       const delIds = delDocs.map((d: any) => String(d._id));
       expect(delIds).toContain(String(id));
 
@@ -452,7 +469,7 @@ describe("v2.8.1 smoke — warehouse procurement", () => {
 
       // Back in list
       const listAfter = await app.inject({ method: "GET", url: "/procurements", headers: HEADERS });
-      const docsAfter = JSON.parse(listAfter.body).docs ?? [];
+      const docsAfter = JSON.parse(listAfter.body).data ?? [];
       expect(docsAfter.find((d: { _id: string }) => d._id === id)).toBeTruthy();
     } finally {
       await app.close();

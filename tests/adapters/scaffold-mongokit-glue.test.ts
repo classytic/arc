@@ -19,9 +19,9 @@
  */
 
 import { Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { Model } from "mongoose";
 import { describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { createMockModel } from "../setup.js";
 
 interface IProduct {

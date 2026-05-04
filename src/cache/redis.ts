@@ -221,7 +221,7 @@ export function ioredisAsCacheClient(client: IoredisLike): RedisCacheClient {
       const [next, keys] = await client.scan(cursor, ...args);
       return [next, keys];
     },
-    pipeline: client.pipeline ? () => client.pipeline!() : undefined,
+    pipeline: client.pipeline ? () => (client.pipeline as () => RedisPipeline)() : undefined,
   };
 }
 

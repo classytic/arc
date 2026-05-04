@@ -19,10 +19,10 @@ import {
   Repository,
   softDeletePlugin,
 } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { resourceToTools } from "../../src/integrations/mcp/resourceToTools.js";
@@ -178,8 +178,8 @@ describe("Runtime: MongoKit Repository + QueryParser → CRUD", () => {
     });
 
     // May include soft-deleted doc — at least one should be the book
-    expect(result.docs.length).toBeGreaterThanOrEqual(1);
-    expect(result.docs.some((d: any) => d.name === "TypeScript Handbook")).toBe(true);
+    expect(result.data.length).toBeGreaterThanOrEqual(1);
+    expect(result.data.some((d: any) => d.name === "TypeScript Handbook")).toBe(true);
   });
 
   it("QueryParser rejects disallowed filter fields", () => {
@@ -337,23 +337,23 @@ describe("Runtime: MCP end-to-end via createTestMcpClient", () => {
     const result = await client.callTool("list_products", {});
     expect(result.isError).toBeFalsy();
     const data = JSON.parse(result.content[0]?.text);
-    expect(data.docs).toHaveLength(3);
+    expect(data.data).toHaveLength(3);
   });
 
   it("list_products filters by category via MCP", async () => {
     const result = await client.callTool("list_products", { category: "books" });
     expect(result.isError).toBeFalsy();
     const data = JSON.parse(result.content[0]?.text);
-    expect(data.docs).toHaveLength(1);
-    expect(data.docs[0].name).toBe("Novel");
+    expect(data.data).toHaveLength(1);
+    expect(data.data[0].name).toBe("Novel");
   });
 
   it("list_products filters by isActive via MCP", async () => {
     const result = await client.callTool("list_products", { isActive: false });
     expect(result.isError).toBeFalsy();
     const data = JSON.parse(result.content[0]?.text);
-    expect(data.docs).toHaveLength(1);
-    expect(data.docs[0].name).toBe("T-Shirt");
+    expect(data.data).toHaveLength(1);
+    expect(data.data[0].name).toBe("T-Shirt");
   });
 
   it("create_product creates via MCP", async () => {
@@ -369,8 +369,8 @@ describe("Runtime: MCP end-to-end via createTestMcpClient", () => {
 
   it("get_product retrieves by ID via MCP", async () => {
     const listResult = await client.callTool("list_products", { category: "electronics" });
-    const docs = JSON.parse(listResult.content[0]?.text).docs;
-    const id = docs[0]._id;
+    const list = JSON.parse(listResult.content[0]?.text);
+    const id = (list.data ?? list)[0]._id;
 
     const result = await client.callTool("get_product", { id });
     expect(result.isError).toBeFalsy();
@@ -380,7 +380,7 @@ describe("Runtime: MCP end-to-end via createTestMcpClient", () => {
 
   it("update_product updates via MCP", async () => {
     const listResult = await client.callTool("list_products", { category: "books" });
-    const id = JSON.parse(listResult.content[0]?.text).docs[0]._id;
+    const id = JSON.parse(listResult.content[0]?.text).data[0]._id;
 
     const result = await client.callTool("update_product", { id, price: 19.99 });
     expect(result.isError).toBeFalsy();
@@ -388,7 +388,7 @@ describe("Runtime: MCP end-to-end via createTestMcpClient", () => {
 
   it("delete_product deletes via MCP", async () => {
     const listResult = await client.callTool("list_products", { category: "clothing" });
-    const id = JSON.parse(listResult.content[0]?.text).docs[0]._id;
+    const id = JSON.parse(listResult.content[0]?.text).data[0]._id;
 
     const result = await client.callTool("delete_product", { id });
     expect(result.isError).toBeFalsy();

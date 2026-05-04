@@ -94,7 +94,7 @@ function scopeFromJwtPreHandler(
           success: false,
           error: "Forbidden",
           message: "Not a member of this organization",
-          code: "ORG_ACCESS_DENIED",
+          code: "arc.org.access_denied",
         });
         return;
       }
@@ -114,7 +114,7 @@ function scopeFromJwtPreHandler(
           success: false,
           error: "Forbidden",
           message: "Not a member of this organization",
-          code: "ORG_ACCESS_DENIED",
+          code: "arc.org.access_denied",
         });
         return;
       }
@@ -405,7 +405,7 @@ describe("Request Scope System", () => {
       });
 
       expect(res.statusCode).toBe(403);
-      expect(JSON.parse(res.body).code).toBe("ORG_ACCESS_DENIED");
+      expect(JSON.parse(res.body).code).toBe("arc.org.access_denied");
     });
 
     it("should allow multi-org user to access any of their orgs", async () => {
@@ -479,7 +479,7 @@ describe("Request Scope System", () => {
       });
 
       expect(res.statusCode).toBe(403);
-      expect(JSON.parse(res.body).code).toBe("ORG_ACCESS_DENIED");
+      expect(JSON.parse(res.body).code).toBe("arc.org.access_denied");
     });
 
     it("unauthenticated request should get 401", async () => {

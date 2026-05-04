@@ -8,8 +8,8 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -189,7 +189,7 @@ describe("resourcePrefix + skipGlobalPrefix", () => {
         payload: { name: "Widget", isActive: true },
       });
       expect(createProduct.statusCode).toBe(201);
-      const productId = createProduct.json().data._id;
+      const productId = createProduct.json()._id;
 
       const getProduct = await app.inject({ method: "GET", url: `/api/products/${productId}` });
       expect(getProduct.statusCode).toBe(200);
@@ -201,7 +201,7 @@ describe("resourcePrefix + skipGlobalPrefix", () => {
         payload: { name: "order.created", isActive: true },
       });
       expect(createHook.statusCode).toBe(201);
-      const hookId = createHook.json().data._id;
+      const hookId = createHook.json()._id;
 
       const getHook = await app.inject({ method: "GET", url: `/hooks/${hookId}` });
       expect(getHook.statusCode).toBe(200);
@@ -235,7 +235,7 @@ describe("resourcePrefix + skipGlobalPrefix", () => {
 import mongoose from 'mongoose';
 import { Repository } from '@classytic/mongokit';
 import { defineResource } from '${ARC_ROOT.replace(/\\/g, "/")}/src/core/defineResource.js';
-import { createMongooseAdapter } from '${ARC_ROOT.replace(/\\/g, "/")}/src/adapters/mongoose.js';
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
 import { BaseController } from '${ARC_ROOT.replace(/\\/g, "/")}/src/core/BaseController.js';
 import { allowPublic } from '${ARC_ROOT.replace(/\\/g, "/")}/src/permissions/index.js';
 
@@ -292,10 +292,10 @@ export default defineResource({
       });
       expect(created.statusCode).toBe(201);
 
-      const id = created.json().data._id;
+      const id = created.json()._id;
       const fetched = await app.inject({ method: "GET", url: `/api/v1/products/${id}` });
       expect(fetched.statusCode).toBe(200);
-      expect(fetched.json().data.name).toBe("Prod Widget");
+      expect(fetched.json().name).toBe("Prod Widget");
 
       // Full CRUD on root resource
       const hookCreated = await app.inject({

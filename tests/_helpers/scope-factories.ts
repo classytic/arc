@@ -16,7 +16,7 @@
  */
 
 import type { PermissionContext, UserBase } from "../../src/permissions/types.js";
-import type { RequestScope } from "../../src/scope/types.js";
+import type { Mandate, RequestScope } from "../../src/scope/types.js";
 
 // ============================================================================
 // Common request-side options (params, body, user, resource, action)
@@ -166,9 +166,22 @@ export function makeServiceCtx<TDoc = Record<string, unknown>>(
     scopes?: readonly string[];
     context?: Record<string, string>;
     ancestorOrgIds?: readonly string[];
+    /** Capability mandate for AI-agent flows (AP2 / x402 / MCP authorization). */
+    mandate?: Mandate;
+    /** DPoP key thumbprint for sender-constrained credentials (RFC 9449). */
+    dpopJkt?: string;
   } = {},
 ): PermissionContext<TDoc> {
-  const { clientId, organizationId, scopes, context, ancestorOrgIds, ...request } = opts;
+  const {
+    clientId,
+    organizationId,
+    scopes,
+    context,
+    ancestorOrgIds,
+    mandate,
+    dpopJkt,
+    ...request
+  } = opts;
   return makeCtx(
     {
       kind: "service",
@@ -177,6 +190,8 @@ export function makeServiceCtx<TDoc = Record<string, unknown>>(
       scopes,
       context: context ? Object.freeze({ ...context }) : undefined,
       ancestorOrgIds,
+      mandate: mandate ? (Object.freeze({ ...mandate }) as Mandate) : undefined,
+      dpopJkt,
     },
     request,
   );

@@ -17,6 +17,8 @@
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
 import { requestContext } from "../context/requestContext.js";
+import { arcLog } from "../logger/index.js";
+import { createDomainError } from "../utils/errors.js";
 import type { EventRegistry } from "./defineEvent.js";
 import {
   createEvent,
@@ -108,6 +110,29 @@ export interface EventPluginOptions {
    * - `'off'`: skip validation entirely (registry is only for introspection)
    */
   validateMode?: "warn" | "reject" | "off";
+  /**
+   * Dev-mode duplicate-publish detector (v2.12).
+   *
+   * When enabled, arc keeps a 5-second LRU on `(eventType, correlationId)`
+   * and emits an `arcLog("events").warn(...)` the second time a request
+   * publishes the same event with the same correlation id within the
+   * window. Catches the dual-publish trap where a domain service holds
+   * BOTH a publisher AND a notification helper that internally publishes
+   * to the same bus — every subscriber fires twice for one logical event.
+   *
+   * Defaults:
+   *   - `undefined` → enabled when `process.env.NODE_ENV !== 'production'`.
+   *   - `true` → always enabled (catches duplicates in prod too — overhead
+   *     is one Map lookup per publish).
+   *   - `false` → always disabled.
+   *
+   * When a duplicate is detected, arc logs once and **still publishes** —
+   * the detector is observability, not enforcement. Pair with the outbox
+   * for at-most-once delivery.
+   *
+   * Documented in `wiki/gotchas.md` (#20).
+   */
+  warnOnDuplicate?: boolean;
 }
 
 declare module "fastify" {
@@ -140,10 +165,30 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
     onPublishError,
     registry,
     validateMode: rawValidateMode,
+    warnOnDuplicate: rawWarnOnDuplicate,
   } = opts;
 
   // Default validateMode: 'warn' when registry is provided, 'off' otherwise
   const validateMode = rawValidateMode ?? (registry ? "warn" : "off");
+
+  // Default duplicate-publish detector: on in non-production, off in prod
+  // unless explicitly enabled. See `EventPluginOptions.warnOnDuplicate` JSDoc.
+  const warnOnDuplicate = rawWarnOnDuplicate ?? process.env.NODE_ENV !== "production";
+
+  // 5-second LRU window — long enough to span retry backoffs, short enough
+  // to catch the same logical request firing twice (dual-publish trap).
+  // Keyed on `${eventType}::${correlationId}`; entries timestamped at insert.
+  // Map ordering preserves insertion → cheap eviction by walking from the
+  // front when the head entry is older than the window.
+  const DUP_WINDOW_MS = 5_000;
+  const recentPublishes: Map<string, number> = warnOnDuplicate ? new Map() : new Map();
+  const evictExpiredPublishes = (now: number): void => {
+    if (recentPublishes.size === 0) return;
+    for (const [key, timestamp] of recentPublishes) {
+      if (now - timestamp <= DUP_WINDOW_MS) break;
+      recentPublishes.delete(key);
+    }
+  };
 
   // Decorate fastify with event utilities
   fastify.decorate("events", {
@@ -171,6 +216,33 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
       };
       const event = createEvent(type, payload, enrichedMeta);
 
+      // Dev-mode duplicate-publish detector. Keyed on (type, correlationId)
+      // with a 5-second window. Catches the dual-publish trap where a
+      // service holds both a publisher and a notification helper that
+      // also publishes — every subscriber would otherwise fire twice.
+      // See wiki/gotchas.md #20.
+      if (warnOnDuplicate && event.meta.correlationId) {
+        const now = Date.now();
+        evictExpiredPublishes(now);
+        const dupKey = `${type}::${event.meta.correlationId}`;
+        const previous = recentPublishes.get(dupKey);
+        if (previous !== undefined && now - previous <= DUP_WINDOW_MS) {
+          arcLog("events").warn(
+            `Duplicate publish detected: event type "${type}" published twice within ` +
+              `${DUP_WINDOW_MS}ms with correlationId "${event.meta.correlationId}". ` +
+              `Subscribers will fire twice for the same logical event. ` +
+              `Common cause: a domain service holds both a publisher and a notification ` +
+              `helper that also publishes to the same bus — pick one. ` +
+              `Set \`arcPlugins: { events: { warnOnDuplicate: false } }\` to silence.`,
+          );
+        }
+        // Update timestamp for this key (re-publishes refresh the window).
+        // Map order: delete-then-set keeps the entry at the tail so
+        // eviction walks from oldest to newest naturally.
+        recentPublishes.delete(dupKey);
+        recentPublishes.set(dupKey, now);
+      }
+
       if (logEvents) {
         fastify.log?.info?.(
           {
@@ -193,7 +265,14 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
         if (!result.valid) {
           const msg = `[Arc Events] Event '${type}' payload validation failed: ${result.errors?.join("; ")}`;
           if (validateMode === "reject") {
-            throw new Error(msg);
+            // 400 with a hierarchical event-domain code so consumers can
+            // discriminate event-validation errors from CRUD-validation
+            // errors at observability + retry-policy time. `details.event`
+            // pins the offending event type for log-aggregation.
+            throw createDomainError("arc.event.validation_error", msg, 400, {
+              event: type,
+              errors: result.errors,
+            });
           }
           // warn mode — log and continue
           fastify.log?.warn?.(msg);

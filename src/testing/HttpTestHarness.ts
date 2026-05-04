@@ -88,14 +88,8 @@ type OptionsOrGetter<T> = HttpTestHarnessOptions<T> | (() => HttpTestHarnessOpti
 export class HttpTestHarness<T = unknown> {
   private resource: ResourceDefinition<unknown>;
   private optionsOrGetter: OptionsOrGetter<T>;
-  private enabledRoutes: Set<string>;
-  /**
-   * Update verbs exercised by this harness instance. One entry for single-method
-   * resources (`"PATCH"` or `"PUT"`), two for `updateMethod: "both"` so both
-   * verbs are covered — the framework mounts both, and the harness should
-   * probe both.
-   */
-  private updateMethods: readonly UpdateVerb[];
+  private enabledRoutes: Set<(typeof CRUD_OPERATIONS)[number]>;
+  private updateMethods: readonly ("PATCH" | "PUT")[];
 
   constructor(resource: ResourceDefinition<unknown>, optionsOrGetter: OptionsOrGetter<T>) {
     this.resource = resource;
@@ -182,7 +176,7 @@ export class HttpTestHarness<T = unknown> {
           expect(res.statusCode).toBe(200);
           const body = JSON.parse(res.body);
           expect(body.success).toBe(true);
-          const list = body.data ?? body.docs;
+          const list = body.data ?? body.data;
           expect(Array.isArray(list)).toBe(true);
         });
       }

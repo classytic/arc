@@ -83,7 +83,7 @@ describe("slugLookup preset", () => {
       const result = applyPresets(baseConfig, ["slugLookup"]);
 
       expect(result.routes).toBeDefined();
-      const routePaths = result.routes!.map((r) => r.path);
+      const routePaths = result.routes?.map((r) => r.path);
       expect(routePaths.some((p) => p.includes("/slug/"))).toBe(true);
     });
 

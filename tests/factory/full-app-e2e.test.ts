@@ -14,9 +14,9 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -75,7 +75,7 @@ describe("Full App E2E — production simulation", () => {
 import mongoose from 'mongoose';
 import { Repository } from '@classytic/mongokit';
 import { defineResource } from '${ARC_ROOT.replace(/\\/g, "/")}/src/core/defineResource.js';
-import { createMongooseAdapter } from '${ARC_ROOT.replace(/\\/g, "/")}/src/adapters/mongoose.js';
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
 import { BaseController } from '${ARC_ROOT.replace(/\\/g, "/")}/src/core/BaseController.js';
 import { allowPublic } from '${ARC_ROOT.replace(/\\/g, "/")}/src/permissions/index.js';
 
@@ -173,20 +173,20 @@ export default defineResource({
         payload: { name: "E2E Widget", isActive: true },
       });
       expect(created.statusCode).toBe(201);
-      const id = created.json().data._id;
+      const id = created.json()._id;
 
       const fetched = await app.inject({ method: "GET", url: `/api/v1/products/${id}` });
-      expect(fetched.json().data.name).toBe("E2E Widget");
+      expect(fetched.json().name).toBe("E2E Widget");
 
       const updated = await app.inject({
         method: "PATCH",
         url: `/api/v1/products/${id}`,
         payload: { name: "Updated Widget" },
       });
-      expect(updated.json().data.name).toBe("Updated Widget");
+      expect(updated.json().name).toBe("Updated Widget");
 
       const deleted = await app.inject({ method: "DELETE", url: `/api/v1/products/${id}` });
-      expect(deleted.json().success).toBe(true);
+      expect(deleted.statusCode).toBe(200);
     } finally {
       if (existsSync(TMP)) rmSync(TMP, { recursive: true, force: true });
     }

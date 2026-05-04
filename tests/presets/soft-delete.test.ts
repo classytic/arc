@@ -22,9 +22,7 @@ function getPresetRoutes(
     return typeof result.routes === "function" ? result.routes(permissions) : result.routes;
   }
   if (result.routes) {
-    return typeof result.routes === "function"
-      ? result.routes(permissions)
-      : result.routes;
+    return typeof result.routes === "function" ? result.routes(permissions) : result.routes;
   }
   return [];
 }
@@ -95,9 +93,9 @@ describe("softDelete preset", () => {
 
       // Preset routes merged into config.routes
       expect(result.routes).toBeDefined();
-      expect(result.routes!.length).toBeGreaterThanOrEqual(2);
+      expect(result.routes?.length).toBeGreaterThanOrEqual(2);
 
-      const routePaths = result.routes!.map((r) => r.path);
+      const routePaths = result.routes?.map((r) => r.path);
       expect(routePaths).toContain("/deleted");
       expect(routePaths).toContain("/:id/restore");
     });
@@ -119,7 +117,7 @@ describe("softDelete preset", () => {
 
       const result = applyPresets(baseConfig, ["softDelete"]);
 
-      const routePaths = result.routes!.map((r) => r.path);
+      const routePaths = result.routes?.map((r) => r.path);
       expect(routePaths).toContain("/custom");
       expect(routePaths).toContain("/deleted");
     });

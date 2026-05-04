@@ -34,14 +34,12 @@ describe("Security: Idempotency Body Hash", () => {
       },
       async (request) => {
         const body = request.body as { amount: number; customer: string };
+        // No-envelope: return raw payload directly.
         return {
-          success: true,
-          data: {
-            id: `order-${Math.random()}`, // Use random to avoid timing issues
-            amount: body.amount,
-            customer: body.customer,
-            timestamp: new Date().toISOString(),
-          },
+          id: `order-${Math.random()}`, // Use random to avoid timing issues
+          amount: body.amount,
+          customer: body.customer,
+          timestamp: new Date().toISOString(),
         };
       },
     );
@@ -53,7 +51,8 @@ describe("Security: Idempotency Body Hash", () => {
         preHandler: [app.idempotency.middleware],
       },
       async (request) => {
-        return { success: true, data: request.body };
+        // No-envelope: return raw payload directly.
+        return request.body;
       },
     );
 
@@ -77,7 +76,7 @@ describe("Security: Idempotency Body Hash", () => {
     });
 
     expect(res1.statusCode).toBe(200);
-    const data1 = JSON.parse(res1.body).data;
+    const data1 = JSON.parse(res1.body);
     expect(data1.amount).toBe(100);
     expect(res1.headers["x-idempotency-replayed"]).toBeUndefined();
 
@@ -90,7 +89,7 @@ describe("Security: Idempotency Body Hash", () => {
     });
 
     expect(res2.statusCode).toBe(200);
-    const data2 = JSON.parse(res2.body).data;
+    const data2 = JSON.parse(res2.body);
     expect(data2.amount).toBe(100);
     expect(data2.id).toBe(data1.id); // Same response
     expect(res2.headers["x-idempotency-replayed"]).toBe("true");
@@ -108,7 +107,7 @@ describe("Security: Idempotency Body Hash", () => {
     });
 
     expect(res1.statusCode).toBe(200);
-    const data1 = JSON.parse(res1.body).data;
+    const data1 = JSON.parse(res1.body);
     expect(data1.amount).toBe(100);
     expect(data1.customer).toBe("bob");
     expect(res1.headers["x-idempotency-replayed"]).toBeUndefined();
@@ -122,7 +121,7 @@ describe("Security: Idempotency Body Hash", () => {
     });
 
     expect(res2.statusCode).toBe(200);
-    const data2 = JSON.parse(res2.body).data;
+    const data2 = JSON.parse(res2.body);
     expect(data2.amount).toBe(1000); // NEW response with $1000
     expect(data2.customer).toBe("charlie");
     expect(data2.id).not.toBe(data1.id); // Different order ID
@@ -151,7 +150,7 @@ describe("Security: Idempotency Body Hash", () => {
     });
 
     expect(res2.statusCode).toBe(200);
-    const data2 = JSON.parse(res2.body).data;
+    const data2 = JSON.parse(res2.body);
     expect(data2.amount).toBe(50); // Should NOT replay empty body response
     expect(res2.headers["x-idempotency-replayed"]).toBeUndefined();
   });
@@ -168,7 +167,7 @@ describe("Security: Idempotency Body Hash", () => {
     });
 
     expect(res1.statusCode).toBe(200);
-    const data1 = JSON.parse(res1.body).data;
+    const data1 = JSON.parse(res1.body);
 
     // Second request: { customer, amount } (different order, same content)
     const res2 = await app.inject({
@@ -179,7 +178,7 @@ describe("Security: Idempotency Body Hash", () => {
     });
 
     expect(res2.statusCode).toBe(200);
-    const data2 = JSON.parse(res2.body).data;
+    const data2 = JSON.parse(res2.body);
     expect(data2.id).toBe(data1.id); // Should replay (same content)
     expect(res2.headers["x-idempotency-replayed"]).toBe("true");
   });
@@ -212,7 +211,7 @@ describe("Security: Idempotency Body Hash", () => {
     });
 
     expect(res2.statusCode).toBe(200);
-    const data2 = JSON.parse(res2.body).data;
+    const data2 = JSON.parse(res2.body);
     expect(data2.user.id).toBe(2); // Should NOT replay
     expect(data2.items[0].qty).toBe(5);
     expect(res2.headers["x-idempotency-replayed"]).toBeUndefined();

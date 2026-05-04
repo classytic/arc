@@ -39,12 +39,12 @@
  * real. The fixes follow.
  */
 
+import { multiTenantPlugin, Repository } from "@classytic/mongokit";
+import type { DataAdapter } from "@classytic/repo-core/adapter";
 import Fastify from "fastify";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { Schema } from "mongoose";
-import { multiTenantPlugin, Repository } from "@classytic/mongokit";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { DataAdapter } from "../../src/adapters/index.js";
 import { allowPublic, defineResource } from "../../src/index.js";
 
 interface InvoiceDoc {
@@ -285,6 +285,6 @@ describe("2.10.6 · regression claim #2 — cross-tenant read diagnostic with pl
     // the AccessControl API directly in their controller override.
     const body = res.json();
     const code = body.details?.code ?? body.code;
-    expect(code).toBe("NOT_FOUND");
+    expect(code).toBe("arc.not_found");
   });
 });

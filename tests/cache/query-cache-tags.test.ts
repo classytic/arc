@@ -33,8 +33,8 @@ describe("QueryCache Tag Invalidation", () => {
       const key1 = buildQueryKey("product", "list", v0, { page: 1 });
       const key2 = buildQueryKey("product", "list", v0, { page: 2 });
 
-      await cache.set(key1, { docs: [{ id: 1 }] }, { staleTime: 300, gcTime: 300 });
-      await cache.set(key2, { docs: [{ id: 2 }] }, { staleTime: 300, gcTime: 300 });
+      await cache.set(key1, { data: [{ id: 1 }] }, { staleTime: 300, gcTime: 300 });
+      await cache.set(key2, { data: [{ id: 2 }] }, { staleTime: 300, gcTime: 300 });
 
       // Both should be fresh
       expect((await cache.get(key1)).status).toBe("fresh");
@@ -60,8 +60,8 @@ describe("QueryCache Tag Invalidation", () => {
       const productKey = buildQueryKey("product", "list", productV, {});
       const orderKey = buildQueryKey("order", "list", orderV, {});
 
-      await cache.set(productKey, { docs: [] }, { staleTime: 300, gcTime: 300 });
-      await cache.set(orderKey, { docs: [] }, { staleTime: 300, gcTime: 300 });
+      await cache.set(productKey, { data: [] }, { staleTime: 300, gcTime: 300 });
+      await cache.set(orderKey, { data: [] }, { staleTime: 300, gcTime: 300 });
 
       // Bump only product
       await cache.bumpResourceVersion("product");
@@ -117,7 +117,7 @@ describe("QueryCache Tag Invalidation", () => {
 
       expect(keyA).not.toBe(keyB);
 
-      await cache.set(keyA, { docs: [{ id: "a" }] }, { staleTime: 300, gcTime: 300 });
+      await cache.set(keyA, { data: [{ id: "a" }] }, { staleTime: 300, gcTime: 300 });
 
       // userB should miss
       expect((await cache.get(keyB)).status).toBe("miss");

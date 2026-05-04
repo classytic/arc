@@ -38,6 +38,7 @@ import type {
   IRequestContext,
   RequestContext,
 } from "../types/index.js";
+import { createDomainError } from "../utils/errors.js";
 import { simpleEqualityMatcher } from "../utils/simpleEqualityMatcher.js";
 
 const log = arcLog("access-control");
@@ -378,9 +379,12 @@ export class AccessControl {
       // Fallback: default _id lookups
       if (this.idField !== DEFAULT_ID_FIELD) {
         if (typeof repository.getOne !== "function") {
-          throw new Error(
+          throw createDomainError(
+            "arc.adapter.capability_required",
             `Resource with idField="${this.idField}" requires repository.getOne() to look up by custom field. ` +
               `Arc's BaseController cannot fall back to getById() because it would query by _id.`,
+            501,
+            { capability: "getOne", idField: this.idField },
           );
         }
       }

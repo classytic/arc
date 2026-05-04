@@ -43,12 +43,12 @@ export interface RegistryEntry extends ResourceMetadata {
   disableDefaultRoutes?: boolean;
   openApiSchemas?: OpenApiSchemas;
   registeredAt?: string;
-  /** Field-level permissions metadata (for OpenAPI docs) */
+  /** Field-level permissions metadata (for OpenAPI data) */
   fieldPermissions?: Record<
     string,
     { type: string; roles?: readonly string[]; redactValue?: unknown }
   >;
-  /** Pipeline step names (for OpenAPI docs) */
+  /** Pipeline step names (for OpenAPI data) */
   pipelineSteps?: Array<{ type: string; name: string; operations?: string[] }>;
   /** Update HTTP method(s) used for this resource */
   updateMethod?: "PUT" | "PATCH" | "both";
@@ -85,6 +85,38 @@ export interface RegistryEntry extends ResourceMetadata {
    * MCP as the fallback in `createActionToolHandler`. Added in 2.8.1.
    */
   actionPermissions?: PermissionCheck;
+  /**
+   * Aggregation route metadata (v2.13). Mirrors the runtime config in
+   * a doc-friendly shape so OpenAPI emission and MCP tool generation
+   * read from one source.
+   *
+   * Each entry corresponds to a `GET /:resource/aggregations/:name`
+   * route. Response shape (rows array of objects keyed by groupBy +
+   * measure aliases) is derived at OpenAPI emission time from
+   * `groupBy` + `measures` + `lookups`.
+   */
+  aggregations?: Array<{
+    readonly name: string;
+    readonly summary?: string;
+    readonly description?: string;
+    readonly permissions: PermissionCheck;
+    readonly groupBy?: string | readonly string[];
+    /** Measure aliases keyed to their op-tag (e.g. `'count'`, `'sum:price'`). */
+    readonly measures: Readonly<Record<string, string>>;
+    /** Lookup alias names (`as` or `from`) — used by OpenAPI to know which dotted-path output keys nest. */
+    readonly lookupAliases: readonly string[];
+    /** Whether the aggregation requires a date range — surfaced in docs. */
+    readonly requireDateRange?: { field: string; maxRangeDays?: number };
+    /** Whether the aggregation requires named filters — surfaced in docs. */
+    readonly requireFilters?: readonly string[];
+    /** MCP tool generation flag — `false` to skip, object for overrides. */
+    readonly mcp?:
+      | boolean
+      | {
+          readonly description?: string;
+          readonly annotations?: Record<string, unknown>;
+        };
+  }>;
 }
 
 export interface RegistryStats {

@@ -222,7 +222,7 @@ describe("Additional Route — Streaming & Flexibility", () => {
       app.get("/products", async () => {
         return {
           success: true,
-          data: { docs: [{ _id: "1", name: "Widget" }], total: 1 },
+          data: { data: [{ _id: "1", name: "Widget" }], total: 1 },
         };
       });
 
@@ -246,7 +246,7 @@ describe("Additional Route — Streaming & Flexibility", () => {
       // JSON API works
       const jsonRes = await app.inject({ method: "GET", url: "/products" });
       expect(jsonRes.statusCode).toBe(200);
-      expect(JSON.parse(jsonRes.body).success).toBe(true);
+      expect(JSON.parse(jsonRes.body).data).toBeDefined();
 
       // NDJSON streaming works
       const ndjsonRes = await app.inject({ method: "GET", url: "/products/export" });

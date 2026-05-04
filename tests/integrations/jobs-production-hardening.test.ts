@@ -166,7 +166,7 @@ describe("jobsPlugin — production hardening", () => {
       // The first add() is the repeat upsert.
       const upsert = queueAddCalls.find((c) => c.opts?.repeat);
       expect(upsert).toBeDefined();
-      expect(upsert!.opts.repeat).toMatchObject({
+      expect(upsert?.opts.repeat).toMatchObject({
         pattern: "0 9 * * *",
         tz: "America/New_York",
       });
@@ -191,8 +191,8 @@ describe("jobsPlugin — production hardening", () => {
 
       const upsert = queueAddCalls.find((c) => c.opts?.repeat);
       expect(upsert).toBeDefined();
-      expect(upsert!.opts.repeat).toMatchObject({ every: 30_000 });
-      expect((upsert!.opts.repeat as { pattern?: string }).pattern).toBeUndefined();
+      expect(upsert?.opts.repeat).toMatchObject({ every: 30_000 });
+      expect((upsert?.opts.repeat as { pattern?: string }).pattern).toBeUndefined();
 
       await fastify.close();
     });

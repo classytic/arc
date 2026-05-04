@@ -53,6 +53,7 @@ import type {
   RequestWithExtras,
   UserLike,
 } from "../types/index.js";
+import { createError } from "../utils/errors.js";
 import { createRequestContext, sendControllerResponse } from "./fastifyAdapter.js";
 
 // ============================================================================
@@ -280,23 +281,13 @@ export function buildActionPermissionMw(
     const action = body.action;
 
     if (!action || !enumSet.has(action)) {
-      // Route through `sendControllerResponse` so the wire shape matches the
-      // defensive fallback inside `createActionRouter`'s main handler. Both
-      // paths produce `{ success, error, validActions }` with `meta` flattened
-      // to top-level keys. Before this, the prehandler emitted a nested
-      // `meta.validActions` while the fallback emitted top-level — same
-      // 400 code, inconsistent payload.
-      sendControllerResponse(
-        reply,
-        {
-          success: false,
-          status: 400,
-          error: `Invalid action '${action ?? ""}'. Valid actions: ${validActions.join(", ")}`,
-          meta: { validActions },
-        } as IControllerResponse<null>,
-        req,
+      // Throw a canonical 400 ArcError — the global error handler emits the
+      // ErrorContract shape with `details.validActions` for consumers.
+      throw createError(
+        400,
+        `Invalid action '${action ?? ""}'. Valid actions: ${validActions.join(", ")}`,
+        { validActions },
       );
-      return;
     }
 
     const permissionCheck = actionPermissions[action] ?? globalAuth;
@@ -386,7 +377,6 @@ export function buildActionPipelineHandler(
 ) => Promise<IControllerResponse<unknown>> {
   if (steps.length === 0) {
     return async (id, data, req) => ({
-      success: true,
       status: 200,
       data: await handler(id, data, req),
     });
@@ -398,7 +388,6 @@ export function buildActionPipelineHandler(
       steps,
       pipeCtx,
       async (_ctx) => ({
-        success: true,
         status: 200,
         data: await handler(id, data, req),
       }),

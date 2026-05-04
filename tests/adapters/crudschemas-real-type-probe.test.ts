@@ -15,8 +15,8 @@
  */
 
 import { buildCrudSchemasFromModel } from "@classytic/mongokit";
+import type { MongooseAdapterOptions } from "@classytic/mongokit/adapter";
 import { describe, expect, it } from "vitest";
-import type { MongooseAdapterOptions } from "../../src/adapters/mongoose.js";
 
 describe("mongokit 3.11.1 — buildCrudSchemasFromModel plugs into arc without cast", () => {
   it("direct assignment to arc's schemaGenerator callback type (no cast)", () => {

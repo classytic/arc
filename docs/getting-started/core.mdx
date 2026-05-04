@@ -353,18 +353,21 @@ CRUD routes automatically include response schemas, enabling Fastify's `fast-jso
 
 **Default schemas per route:**
 
+Arc emits raw data on success — no `{ success, data }` envelope; HTTP status discriminates. Single-doc responses ARE the doc shape.
+
 | Route | Status | Response Schema |
 |-------|--------|----------------|
-| `GET /` | 200 | `listResponse` — `{ success, docs: [...], page, limit, total, pages, hasNext, hasPrev }` |
-| `GET /:id` | 200 | `itemResponse` — `{ success, data: {...} }` |
-| `POST /` | 201 | `mutationResponse` — `{ success, data: {...}, message? }` |
-| `PATCH /:id` | 200 | `itemResponse` — `{ success, data: {...} }` |
-| `DELETE /:id` | 200 | `deleteResponse` — `{ success, message? }` |
+| `GET /` | 200 | `listResponse(item)` — `oneOf` of `{ method: 'offset' \| 'keyset' \| 'aggregate', data, ... }` or bare `{ data }` |
+| `GET /:id` | 200 | the doc schema directly (no helper) |
+| `POST /` | 201 | the doc schema directly (no helper) |
+| `PATCH /:id` | 200 | the doc schema directly (no helper) |
+| `DELETE /:id` | 200 | `deleteResponse()` — `{ message, id?, soft? }` |
+| Any 4xx/5xx | — | `errorContractSchema` — canonical `ErrorContract` from `@classytic/repo-core/errors` |
 
-Default schemas use `additionalProperties: true` so all fields pass through. Override with specific schemas for maximum performance:
+Default CRUD schemas use `additionalProperties: true` so all fields pass through. Override with specific schemas for maximum performance:
 
 ```typescript
-import { listResponse, itemResponse, mutationResponse, deleteResponse } from '@classytic/arc/utils';
+import { listResponse, deleteResponse, errorContractSchema } from '@classytic/arc/utils';
 
 const productSchema = {
   type: 'object',
@@ -374,26 +377,29 @@ const productSchema = {
     price: { type: 'number' },
     createdAt: { type: 'string' },
   },
+  additionalProperties: true,
 };
 
 const productResource = defineResource({
   name: 'product',
   schemas: {
-    list: { response: { 200: listResponse(productSchema) } },
-    get: { response: { 200: itemResponse(productSchema) } },
-    create: { response: { 201: mutationResponse(productSchema) } },
+    list:   { response: { 200: listResponse(productSchema) } },
+    get:    { response: { 200: productSchema } },           // doc IS the response
+    create: { response: { 201: productSchema, 400: errorContractSchema } },
     delete: { response: { 200: deleteResponse() } },
   },
   // ...
 });
 ```
 
+Pre-2.13 `wrapResponse` / `itemResponse` / `mutationResponse` were three names for the same trivial spread; `ArcItemResponse` / `ArcMutationResponse` were identity functions. All deleted in the cleanup — pass the doc schema directly.
+
 ### TypeBox Schemas
 
 For type-safe schemas with TypeScript inference, use the `@classytic/arc/schemas` subpath:
 
 ```typescript
-import { Type, ArcListResponse, ArcItemResponse, ArcPaginationQuery } from '@classytic/arc/schemas';
+import { Type, ArcListResponse, ArcPaginationQuery } from '@classytic/arc/schemas';
 
 const ProductSchema = Type.Object({
   _id: Type.String(),

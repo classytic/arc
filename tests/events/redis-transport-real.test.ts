@@ -99,8 +99,7 @@ function matchGlob(pattern: string, channel: string): boolean {
   if (pattern === "*") return true;
   if (pattern.endsWith(":*")) return channel.startsWith(pattern.slice(0, -1));
   if (pattern.endsWith(".*")) return channel.startsWith(pattern.slice(0, -1));
-  if (pattern.endsWith("*"))
-    return channel.startsWith(pattern.slice(0, -1));
+  if (pattern.endsWith("*")) return channel.startsWith(pattern.slice(0, -1));
   return false;
 }
 
@@ -145,14 +144,11 @@ describe("RedisEventTransport — real class against a fake RedisLike", () => {
 
     // Reach into the duplicate (sub) — subscribe(literal) → SUBSCRIBE,
     // subscribe(glob) → PSUBSCRIBE. The transport made the call for us.
-    const sub = (pub.duplicate as ReturnType<typeof vi.fn>).mock.results[0]
-      ?.value as RedisLike;
-    expect((sub.subscribe as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+    const sub = (pub.duplicate as ReturnType<typeof vi.fn>).mock.results[0]?.value as RedisLike;
+    expect(sub.subscribe as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
       "arc-events:order.created",
     );
-    expect((sub.psubscribe as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
-      "arc-events:user.*",
-    );
+    expect(sub.psubscribe as ReturnType<typeof vi.fn>).toHaveBeenCalledWith("arc-events:user.*");
   });
 
   it("delivers events to handlers, with Date revival on meta.timestamp", async () => {
@@ -185,8 +181,7 @@ describe("RedisEventTransport — real class against a fake RedisLike", () => {
     await transport.subscribe("b.*", vi.fn());
     await transport.subscribe("c.*", vi.fn());
 
-    const sub = (pub.duplicate as ReturnType<typeof vi.fn>).mock.results[0]
-      ?.value as RedisLike;
+    const sub = (pub.duplicate as ReturnType<typeof vi.fn>).mock.results[0]?.value as RedisLike;
     // pmessage attached ONCE — subsequent subscribes only call psubscribe().
     const onCalls = (sub.on as ReturnType<typeof vi.fn>).mock.calls.filter(
       (c) => c[0] === "pmessage",
@@ -214,14 +209,13 @@ describe("RedisEventTransport — real class against a fake RedisLike", () => {
     const pub = fakeRedisLike(hub, "pub");
     transport = new RedisEventTransport(pub);
 
-    const sub = (pub.duplicate as ReturnType<typeof vi.fn>).mock.results[0]
-      ?.value as RedisLike;
+    const sub = (pub.duplicate as ReturnType<typeof vi.fn>).mock.results[0]?.value as RedisLike;
 
     await transport.close();
     transport = undefined; // already closed
 
-    expect((pub.quit as ReturnType<typeof vi.fn>)).toHaveBeenCalledTimes(1);
-    expect((sub.quit as ReturnType<typeof vi.fn>)).toHaveBeenCalledTimes(1);
+    expect(pub.quit as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
+    expect(sub.quit as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
   });
 
   it("close() with externalLifecycle:true skips pub.quit() (host owns the publisher)", async () => {
@@ -229,15 +223,14 @@ describe("RedisEventTransport — real class against a fake RedisLike", () => {
     const pub = fakeRedisLike(hub, "pub");
     transport = new RedisEventTransport(pub, { externalLifecycle: true });
 
-    const sub = (pub.duplicate as ReturnType<typeof vi.fn>).mock.results[0]
-      ?.value as RedisLike;
+    const sub = (pub.duplicate as ReturnType<typeof vi.fn>).mock.results[0]?.value as RedisLike;
 
     await transport.close();
     transport = undefined;
 
     // The sub duplicate is always quit (we created it). The pub is left alone.
-    expect((sub.quit as ReturnType<typeof vi.fn>)).toHaveBeenCalledTimes(1);
-    expect((pub.quit as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+    expect(sub.quit as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
+    expect(pub.quit as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
   });
 
   it("handler errors are logged and do NOT prevent siblings from firing", async () => {

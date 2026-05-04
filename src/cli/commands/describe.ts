@@ -16,11 +16,14 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { CRUD_OPERATIONS } from "../../constants.js";
+import type { AggregationConfig } from "../../core/aggregation/types.js";
 import type { ResourceDefinition } from "../../core/defineResource.js";
 import type { FieldPermissionMap } from "../../permissions/fields.js";
 import type { PermissionCheck } from "../../permissions/types.js";
 import type { PipelineConfig, PipelineStep } from "../../pipeline/types.js";
+import { stringifyMeasureMap } from "../../registry/ResourceRegistry.js";
 import type {
+  ActionsMap,
   AnyRecord,
   EventDefinition,
   MiddlewareConfig,
@@ -67,9 +70,40 @@ interface DescribedResource {
   routes: RouteDescription[];
   events: EventDescription[];
 
+  /**
+   * Declarative `POST /:id/action` entries surfaced for tooling parity
+   * with OpenAPI/MCP. Empty when the resource declares no actions.
+   */
+  actions: ActionDescription[];
+  /** Per-resource fallback for actions without their own permission. */
+  actionPermissions?: PermissionDescription;
+  /**
+   * Declarative `GET /aggregations/:name` entries (v2.13). Empty when
+   * the resource declares no aggregations.
+   */
+  aggregations: AggregationDescription[];
+
   schemaOptions?: RouteSchemaOptions;
   rateLimit?: RateLimitConfig | false;
   middlewares: string[];
+}
+
+interface ActionDescription {
+  name: string;
+  description?: string;
+  hasSchema: boolean;
+  permission: PermissionDescription;
+}
+
+interface AggregationDescription {
+  name: string;
+  summary?: string;
+  description?: string;
+  groupBy: unknown;
+  measures: string[];
+  permission: PermissionDescription;
+  requiresDateRange: boolean;
+  hasRequiredFilters: boolean;
 }
 
 interface PermissionDescription {
@@ -116,6 +150,8 @@ interface DescribeStats {
   totalEvents: number;
   totalCatalogedEvents: number;
   totalFields: number;
+  totalActions: number;
+  totalAggregations: number;
   presetUsage: Record<string, number>;
   pipelineSteps: number;
 }
@@ -303,6 +339,64 @@ function describeEvents(
 }
 
 // ---------------------------------------------------------------------------
+// Action Introspection
+// ---------------------------------------------------------------------------
+
+/**
+ * Surface declarative `actions:` so the CLI matches what OpenAPI / MCP /
+ * the registry already emit for the same definition. Resolves each
+ * action's permission via the same fallback chain runtime uses:
+ * per-action `permissions` → resource-level `actionPermissions` → custom.
+ */
+function describeActions(
+  actions: ActionsMap | undefined,
+  fallback?: PermissionCheck,
+): ActionDescription[] {
+  if (!actions) return [];
+  return Object.entries(actions).map(([name, entry]) => {
+    if (typeof entry === "function") {
+      return {
+        name,
+        hasSchema: false,
+        permission: describePermission(fallback),
+      };
+    }
+    return {
+      name,
+      description: entry.description,
+      hasSchema: !!entry.schema,
+      permission: describePermission(entry.permissions ?? fallback),
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Aggregation Introspection
+// ---------------------------------------------------------------------------
+
+/**
+ * Surface declarative `aggregations:` (v2.13). Reuses
+ * `stringifyMeasureMap` from the registry so the measure render matches
+ * OpenAPI/MCP byte-for-byte — single source of truth for `'sum:price'`
+ * vs `'count'` vs `'percentile:latency:0.95'`.
+ */
+function describeAggregations(
+  aggregations: Record<string, AggregationConfig> | undefined,
+): AggregationDescription[] {
+  if (!aggregations) return [];
+  return Object.entries(aggregations).map(([name, entry]) => ({
+    name,
+    summary: entry.summary,
+    description: entry.description,
+    groupBy: entry.groupBy,
+    measures: Object.values(stringifyMeasureMap(entry.measures)),
+    permission: describePermission(entry.permissions),
+    requiresDateRange: !!entry.requireDateRange,
+    hasRequiredFilters: !!entry.requireFilters && entry.requireFilters.length > 0,
+  }));
+}
+
+// ---------------------------------------------------------------------------
 // Middleware Introspection
 // ---------------------------------------------------------------------------
 
@@ -322,7 +416,14 @@ function describeMiddlewares(middlewares?: MiddlewareConfig): string[] {
 // Main Describe Function
 // ---------------------------------------------------------------------------
 
-function describeResource(
+/**
+ * Programmatic entry for the same surface the `arc describe` CLI emits per
+ * resource. Exported so cross-surface contract tests can verify that the
+ * CLI describe output stays in lockstep with registry / OpenAPI / MCP.
+ * Hosts that want a JSON dump of one resource without spawning the CLI
+ * can call this directly.
+ */
+export function describeResource(
   resource: ResourceDefinition<unknown>,
   module?: string,
 ): DescribedResource {
@@ -343,6 +444,12 @@ function describeResource(
 
     routes: describeRoutes(resource),
     events: describeEvents(resource.name, resource.events),
+
+    actions: describeActions(resource.actions, resource.actionPermissions),
+    actionPermissions: resource.actionPermissions
+      ? describePermission(resource.actionPermissions)
+      : undefined,
+    aggregations: describeAggregations(resource.aggregations),
 
     schemaOptions:
       Object.keys(resource.schemaOptions ?? {}).length > 0 ? resource.schemaOptions : undefined,
@@ -499,6 +606,8 @@ export async function describe(args: string[]): Promise<void> {
         totalEvents: described.reduce((sum, r) => sum + r.events.length, 0),
         totalCatalogedEvents: eventCatalog?.length ?? 0,
         totalFields,
+        totalActions: described.reduce((sum, r) => sum + r.actions.length, 0),
+        totalAggregations: described.reduce((sum, r) => sum + r.aggregations.length, 0),
         presetUsage: presetCounts,
         pipelineSteps: totalPipelineSteps,
       },

@@ -51,7 +51,7 @@ describe("CLI docs command", () => {
       expect(getOp).toBeDefined();
 
       expect(listOp.responses["200"].content["application/json"].schema.properties).toHaveProperty(
-        "docs",
+        "data",
       );
       expect(
         createOp.responses["201"].content["application/json"].schema.properties,

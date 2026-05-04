@@ -10,7 +10,6 @@ export default defineConfig({
     "src/core/index.ts",
     "src/types/index.ts",
     "src/types/storage.ts",
-    "src/adapters/index.ts",
     "src/permissions/index.ts",
     "src/cache/index.ts",
     "src/presets/index.ts",
@@ -42,9 +41,6 @@ export default defineConfig({
 
     // Auth — dedicated Redis session store subpath
     "src/auth/redis-session.ts",
-
-    // Auth — dedicated Mongoose stub-models subpath (for populate() against BA collections)
-    "src/auth/mongoose.ts",
 
     // Plugins — barrel + dedicated heavy-dep subpaths
     "src/plugins/index.ts",
@@ -97,6 +93,12 @@ export default defineConfig({
     // MCP — Model Context Protocol integration
     "src/integrations/mcp/index.ts",
     "src/integrations/mcp/testing.ts",
+
+    // SCIM 2.0 — IdP provisioning (Okta / Azure AD / Google Workspace / etc.)
+    "src/scim/index.ts",
+
+    // Auth — Better Auth → arc audit bridge (auth-event lifecycle)
+    "src/auth/audit.ts",
 
     // Discovery — auto-discovery plugin
     "src/discovery/index.ts",

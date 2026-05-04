@@ -189,7 +189,6 @@ describe("C5: BaseController null body handling", () => {
     const response = await controller.create(req);
 
     // Should create with empty data (no crash)
-    expect(response.success).toBe(true);
     expect(response.status).toBe(201);
   });
 
@@ -198,7 +197,6 @@ describe("C5: BaseController null body handling", () => {
 
     const response = await controller.create(req);
 
-    expect(response.success).toBe(true);
     expect(response.status).toBe(201);
   });
 
@@ -209,7 +207,6 @@ describe("C5: BaseController null body handling", () => {
 
     const response = await controller.create(req);
 
-    expect(response.success).toBe(true);
     expect(response.data).toMatchObject({ name: "Widget", price: 42 });
   });
 
@@ -230,7 +227,6 @@ describe("C5: BaseController null body handling", () => {
     const response = await controller.update(updateReq);
 
     // Should succeed (empty update, keeps existing data)
-    expect(response.success).toBe(true);
   });
 });
 

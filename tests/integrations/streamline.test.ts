@@ -13,16 +13,16 @@
  * The integration is tested at the HTTP/plugin boundary, not the engine internals.
  */
 
-import Fastify, { type FastifyInstance } from "fastify";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import http from "node:http";
-import { streamlinePlugin } from "../../src/integrations/streamline.js";
+import Fastify, { type FastifyInstance } from "fastify";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   WorkflowLike,
   WorkflowRunLike,
   WorkflowStartOptions,
 } from "../../src/integrations/streamline.js";
+import { streamlinePlugin } from "../../src/integrations/streamline.js";
 
 // ============================================================================
 // Mock Factory
@@ -40,10 +40,7 @@ function createMockRun(overrides?: Partial<WorkflowRunLike>): WorkflowRunLike {
   };
 }
 
-function createMockWorkflow(
-  id = "test-workflow",
-  overrides?: Partial<WorkflowLike>,
-): WorkflowLike {
+function createMockWorkflow(id = "test-workflow", overrides?: Partial<WorkflowLike>): WorkflowLike {
   const eventBus = new EventEmitter();
   const runs = new Map<string, WorkflowRunLike>();
 
@@ -92,7 +89,7 @@ function createMockWorkflow(
       runs.set(run._id, run);
       return run;
     }),
-    resume: vi.fn(async (runId: string, payload?: unknown) => {
+    resume: vi.fn(async (runId: string, _payload?: unknown) => {
       const run = runs.get(runId);
       if (run) run.status = "running";
       return run!;
@@ -115,10 +112,7 @@ function createMockWorkflow(
 // SSE Helper
 // ============================================================================
 
-function fetchSSE(
-  url: string,
-  timeoutMs = 300,
-): Promise<{ statusCode: number; body: string }> {
+function fetchSSE(url: string, timeoutMs = 300): Promise<{ statusCode: number; body: string }> {
   return new Promise((resolve, reject) => {
     const req = http.get(url, (res) => {
       let body = "";
@@ -170,7 +164,7 @@ describe("Streamline Integration Plugin", () => {
         payload: { input: { orderId: "123" } },
       });
       expect(startRes.statusCode).toBe(201);
-      const { data: run } = startRes.json();
+      const run = startRes.json();
       expect(run._id).toBeDefined();
       expect(run.workflowId).toBe("orders");
 
@@ -180,7 +174,7 @@ describe("Streamline Integration Plugin", () => {
         url: `/workflows/orders/runs/${run._id}`,
       });
       expect(getRes.statusCode).toBe(200);
-      expect(getRes.json().data._id).toBe(run._id);
+      expect(getRes.json()._id).toBe(run._id);
 
       // Resume
       const resumeRes = await app.inject({
@@ -196,7 +190,7 @@ describe("Streamline Integration Plugin", () => {
         url: `/workflows/orders/runs/${run._id}/cancel`,
       });
       expect(cancelRes.statusCode).toBe(200);
-      expect(cancelRes.json().data.status).toBe("cancelled");
+      expect(cancelRes.json().status).toBe("cancelled");
 
       // List
       const listRes = await app.inject({
@@ -204,8 +198,8 @@ describe("Streamline Integration Plugin", () => {
         url: "/workflows",
       });
       expect(listRes.statusCode).toBe(200);
-      expect(listRes.json().data).toHaveLength(1);
-      expect(listRes.json().data[0].id).toBe("orders");
+      expect(listRes.json()).toHaveLength(1);
+      expect(listRes.json()[0].id).toBe("orders");
     });
 
     it("should return 404 for unknown run", async () => {
@@ -261,7 +255,7 @@ describe("Streamline Integration Plugin", () => {
       });
 
       expect(res.statusCode).toBe(201);
-      const { data } = res.json();
+      const data = res.json();
       expect(data.idempotencyKey).toBe("pay:order-1");
       expect(data.priority).toBe(5);
 
@@ -291,10 +285,7 @@ describe("Streamline Integration Plugin", () => {
       });
 
       expect(res.statusCode).toBe(201);
-      expect(wf.start).toHaveBeenCalledWith(
-        { data: "test" },
-        expect.objectContaining({}),
-      );
+      expect(wf.start).toHaveBeenCalledWith({ data: "test" }, expect.objectContaining({}));
     });
   });
 
@@ -357,7 +348,7 @@ describe("Streamline Integration Plugin", () => {
 
   // ---------- Step Event Bridging (opt-in) ----------
 
-  describe("Step event bridging (bridgeStepEvents)", () => {
+  describe("Step event bridging (bridgeBusEvents)", () => {
     it("should bridge step events to Arc bus when enabled", async () => {
       const wf = createMockWorkflow("step-bridge");
       const published: Array<{ type: string; payload: unknown }> = [];
@@ -372,12 +363,12 @@ describe("Streamline Integration Plugin", () => {
       await app.register(streamlinePlugin, {
         workflows: [wf],
         auth: false,
-        bridgeStepEvents: true,
+        bridgeBusEvents: true,
       });
       await app.ready();
 
       // Simulate streamline emitting a step event
-      wf.container!.eventBus.emit("step:completed", {
+      wf.container?.eventBus.emit("step:completed", {
         runId: "r1",
         stepId: "step1",
       });
@@ -385,9 +376,7 @@ describe("Streamline Integration Plugin", () => {
       // Allow async event propagation
       await new Promise((r) => setTimeout(r, 50));
 
-      expect(
-        published.some((e) => e.type === "workflow.step-bridge.step:completed"),
-      ).toBe(true);
+      expect(published.some((e) => e.type === "workflow.step-bridge.step:completed")).toBe(true);
     });
 
     it("should NOT bridge step events when disabled (default)", async () => {
@@ -402,11 +391,11 @@ describe("Streamline Integration Plugin", () => {
       await app.register(streamlinePlugin, {
         workflows: [wf],
         auth: false,
-        bridgeStepEvents: false,
+        bridgeBusEvents: false,
       });
       await app.ready();
 
-      wf.container!.eventBus.emit("step:completed", { runId: "r1", stepId: "s1" });
+      wf.container?.eventBus.emit("step:completed", { runId: "r1", stepId: "s1" });
       await new Promise((r) => setTimeout(r, 50));
 
       expect(published).toHaveLength(0);
@@ -440,7 +429,7 @@ describe("Streamline Integration Plugin", () => {
       await new Promise((r) => setTimeout(r, 50));
 
       // Emit step events
-      wf.container!.eventBus.emit("step:completed", {
+      wf.container?.eventBus.emit("step:completed", {
         runId: run._id,
         stepId: "step1",
         data: { result: "ok" },
@@ -492,12 +481,12 @@ describe("Streamline Integration Plugin", () => {
       await new Promise((r) => setTimeout(r, 50));
 
       // Emit event for run2 (should be filtered out)
-      wf.container!.eventBus.emit("step:completed", {
+      wf.container?.eventBus.emit("step:completed", {
         runId: run2._id,
         stepId: "s1",
       });
       // Emit event for run1 (should be included)
-      wf.container!.eventBus.emit("step:completed", {
+      wf.container?.eventBus.emit("step:completed", {
         runId: run1._id,
         stepId: "s1",
       });
@@ -578,7 +567,7 @@ describe("Streamline Integration Plugin", () => {
       await app.ready();
 
       const listRes = await app.inject({ method: "GET", url: "/workflows" });
-      expect(listRes.json().data).toHaveLength(2);
+      expect(listRes.json()).toHaveLength(2);
 
       const r1 = await app.inject({
         method: "POST",
@@ -586,7 +575,7 @@ describe("Streamline Integration Plugin", () => {
         payload: { input: {} },
       });
       expect(r1.statusCode).toBe(201);
-      expect(r1.json().data.workflowId).toBe("orders");
+      expect(r1.json().workflowId).toBe("orders");
 
       const r2 = await app.inject({
         method: "POST",
@@ -594,7 +583,7 @@ describe("Streamline Integration Plugin", () => {
         payload: { input: {} },
       });
       expect(r2.statusCode).toBe(201);
-      expect(r2.json().data.workflowId).toBe("payments");
+      expect(r2.json().workflowId).toBe("payments");
     });
   });
 });

@@ -1,10 +1,11 @@
 /**
  * @classytic/arc
  *
- * Resource-oriented backend framework for Fastify.
- * Production-ready MongoDB support is provided via MongoKit.
- * Prisma/PostgreSQL/MySQL/SQLite adapter support is available as experimental
- * bring-your-own-repository integration via Arc's DataAdapter interface.
+ * Resource-oriented backend framework for Fastify. Fully database-agnostic:
+ * adapters live in their kits (`@classytic/mongokit/adapter`,
+ * `@classytic/sqlitekit/adapter`, `@classytic/prismakit/adapter`) and any
+ * custom kit shipping the `DataAdapter<TDoc>` contract from
+ * `@classytic/repo-core/adapter` plugs in identically.
  *
  * ## Import Strategy (Tree-Shaking)
  *
@@ -14,7 +15,9 @@
  *
  * ```typescript
  * // Main entry — resource definition + permissions + errors
- * import { defineResource, createMongooseAdapter, allowPublic } from '@classytic/arc';
+ * import { defineResource, allowPublic } from '@classytic/arc';
+ * // Kit-specific adapters live in their kits (arc 2.12+):
+ * import { createMongooseAdapter } from '@classytic/mongokit/adapter';
  *
  * // Everything else from dedicated subpaths:
  * import { createApp } from '@classytic/arc/factory';
@@ -32,10 +35,9 @@
  *
  * | Subpath | Purpose |
  * |---------|---------|
- * | `@classytic/arc` | Core: defineResource, adapters, permissions, errors |
+ * | `@classytic/arc` | Core: defineResource, permissions, errors |
  * | `@classytic/arc/factory` | App creation (createApp, ArcFactory) |
  * | `@classytic/arc/permissions` | Permission functions (also in main) |
- * | `@classytic/arc/adapters` | Database adapters + PrismaQueryParser |
  * | `@classytic/arc/presets` | Preset functions (softDelete, tree, etc.) |
  * | `@classytic/arc/hooks` | Hook helpers (beforeCreate, afterUpdate) |
  * | `@classytic/arc/middleware` | Middleware helpers (multipartBody, named/priority middleware) |
@@ -63,7 +65,8 @@
  *
  * @example Basic Resource
  * ```typescript
- * import { defineResource, createMongooseAdapter, allowPublic, requireRoles } from '@classytic/arc';
+ * import { defineResource, allowPublic, requireRoles } from '@classytic/arc';
+ * import { createMongooseAdapter } from '@classytic/mongokit/adapter';
  *
  * const productResource = defineResource({
  *   name: 'product',
@@ -90,31 +93,38 @@
  * ```
  */
 
-export type {
-  AdapterRepositoryInput,
-  DataAdapter,
-  FieldMetadata,
-  RelationMetadata,
-  RepositoryLike,
-  SchemaMetadata,
-  ValidationResult as AdapterValidationResult,
-} from "./adapters/index.js";
 // ============================================================================
-// Adapters (database abstraction — zero external deps at this level)
+// Adapters — arc is fully DB-agnostic in 2.12 (no kit-specific adapters here)
 // ============================================================================
-export {
-  createMongooseAdapter,
-  createPrismaAdapter,
-  MongooseAdapter,
-  PrismaAdapter,
-} from "./adapters/index.js";
-
-// Note: MongooseAdapterOptions and PrismaAdapterOptions are NOT re-exported
-// from the root barrel to avoid pulling mongoose/prisma types into consumers
-// who don't use those adapters. Import from '@classytic/arc/adapters' instead.
+//
+// All kit-specific adapters live in their kits:
+//   import { createMongooseAdapter } from '@classytic/mongokit/adapter';
+//   import { createDrizzleAdapter }  from '@classytic/sqlitekit/adapter';
+//   import { createPrismaAdapter }   from '@classytic/prismakit/adapter';
+//
+// Custom kits ship the same `DataAdapter<TDoc>` contract from
+// `@classytic/repo-core/adapter` and plug in identically — arc never
+// imports from any specific kit.
+//
+// Adapter contract types live in `@classytic/repo-core/adapter`:
+//   import type { DataAdapter, RepositoryLike, AdapterRepositoryInput } from '@classytic/repo-core/adapter';
+//
+// arc deliberately does NOT re-export the contract from repo-core — that
+// would create a second source of truth and force every kit + arc to
+// publish in lockstep.
 
 // Mixin extension interfaces — useful when typing custom mixin compositions
 export type {
+  AggMeasureInput,
+  AggMeasureShorthand,
+  AggregationCacheConfig,
+  AggregationConfig,
+  AggregationDateRangeRequirement,
+  AggregationIndexHint,
+  AggregationMaterializedContext,
+  AggregationMaterializedResult,
+  AggregationRateLimit,
+  AggregationsMap,
   BaseControllerOptions,
   BulkExt,
   ListResult,
@@ -129,6 +139,7 @@ export {
   BaseController,
   BaseCrudController,
   BulkMixin,
+  defineAggregation,
   defineResource,
   defineResourceVariants,
   getControllerScope,
@@ -139,13 +150,21 @@ export {
 } from "./core/index.js";
 
 /**
- * Note: Arc is database-agnostic
+ * Note: Arc is fully database-agnostic.
  *
  * Import Repository directly from your database kit:
- * - MongoDB: `import { Repository } from '@classytic/mongokit'`
+ * - MongoDB: `import { Repository }       from '@classytic/mongokit'`
+ * - SQLite:  `import { SqliteRepository } from '@classytic/sqlitekit/repository'`
+ * - Prisma:  `import { PrismaRepository } from '@classytic/prismakit'`
  *
- * Arc provides adapters (createMongooseAdapter, createPrismaAdapter) that work
- * with any repository implementing the `StandardRepo` contract from `@classytic/repo-core`.
+ * Each kit ships its own arc-compatible adapter at `<kit>/adapter`:
+ * - `import { createMongooseAdapter } from '@classytic/mongokit/adapter'`
+ * - `import { createDrizzleAdapter }  from '@classytic/sqlitekit/adapter'`
+ * - `import { createPrismaAdapter }   from '@classytic/prismakit/adapter'`
+ *
+ * Custom kits implement the same `DataAdapter<TDoc>` contract from
+ * `@classytic/repo-core/adapter` and plug in identically. Arc never
+ * imports from any specific kit.
  */
 
 export type {
@@ -329,7 +348,7 @@ export {
 } from "./utils/errors.js";
 // DX helpers (v2.11.0: relocated to `/utils` as part of the `/types`
 // type-only cleanup — root re-exports for DX).
-export { envelope, getUserId } from "./utils/index.js";
+export { getUserId } from "./utils/index.js";
 // handleRaw lives on @classytic/arc/utils only — not re-exported from root to preserve tree-shaking
 
 // ============================================================================

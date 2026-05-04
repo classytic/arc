@@ -214,6 +214,47 @@ function createMockBetterAuth(
       // Catch-all
       return jsonResponse({ path, method }, 200);
     },
+    // Direct in-process API used by arc's authenticate. Mirrors the HTTP routes
+    // above against the same `state`. Real betterAuth() instances expose this
+    // map natively — the mock just simulates it.
+    api: {
+      getSession: async ({ headers }: { headers: Headers }) => {
+        const cookies = headers.get("cookie") ?? "";
+        const sessionCookie = cookies.match(/better-auth\.session_token=([^;]+)/)?.[1];
+        if (sessionCookie && state.sessions.has(sessionCookie)) {
+          return state.sessions.get(sessionCookie)!;
+        }
+        const authHeader = headers.get("authorization") ?? "";
+        const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+        if (bearerToken && state.bearerTokens.has(bearerToken)) {
+          const user = state.bearerTokens.get(bearerToken)!;
+          return {
+            user,
+            session: {
+              id: `bearer-session-${user.id}`,
+              userId: user.id,
+              activeOrganizationId: null,
+              expiresAt: new Date(Date.now() + 86400000).toISOString(),
+            },
+          };
+        }
+        return null;
+      },
+      organization: {
+        getActiveMember: async ({ headers }: { headers: Headers }) => {
+          const cookies = headers.get("cookie") ?? "";
+          const sessionCookie = cookies.match(/better-auth\.session_token=([^;]+)/)?.[1];
+          const sessionEntry = sessionCookie ? state.sessions.get(sessionCookie) : null;
+          if (!sessionEntry) return null;
+          const orgId = sessionEntry.session.activeOrganizationId;
+          if (!orgId) return null;
+          const member = state.members.find(
+            (m) => m.userId === sessionEntry.user.id && m.organizationId === orgId,
+          );
+          return member ? { role: member.role } : null;
+        },
+      },
+    },
   };
 
   return { handler, state };

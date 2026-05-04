@@ -542,9 +542,9 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
 
     if (!session) {
       reply.code(401).send({
-        success: false,
-        error: "Unauthorized",
+        code: "arc.unauthorized",
         message: "Authentication required",
+        status: 401,
       });
       return;
     }
@@ -552,10 +552,9 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     const elapsed = Date.now() - session.updatedAt;
     if (elapsed > freshAgeMs) {
       reply.code(403).send({
-        success: false,
-        error: "SessionNotFresh",
+        code: "arc.forbidden",
         message: "Session is not fresh. Please re-authenticate to perform this action.",
-        code: "SESSION_NOT_FRESH",
+        status: 403,
       });
       return;
     }
@@ -576,9 +575,9 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       const signedValue = cookies.get(cookieName);
       if (!signedValue) {
         reply.code(401).send({
-          success: false,
-          error: "Unauthorized",
+          code: "arc.unauthorized",
           message: "No session cookie",
+          status: 401,
         });
         return;
       }
@@ -589,9 +588,9 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
         // Tampered or invalid cookie — clear it
         reply.header("Set-Cookie", buildClearCookieHeader(cookieName, cookieOptions));
         reply.code(401).send({
-          success: false,
-          error: "Unauthorized",
+          code: "arc.unauthorized",
           message: "Invalid session",
+          status: 401,
         });
         return;
       }
@@ -602,9 +601,9 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
         // Session deleted or expired — clear cookie
         reply.header("Set-Cookie", buildClearCookieHeader(cookieName, cookieOptions));
         reply.code(401).send({
-          success: false,
-          error: "Unauthorized",
+          code: "arc.unauthorized",
           message: "Session expired or revoked",
+          status: 401,
         });
         return;
       }
@@ -614,9 +613,9 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
         await store.delete(sessionId);
         reply.header("Set-Cookie", buildClearCookieHeader(cookieName, cookieOptions));
         reply.code(401).send({
-          success: false,
-          error: "Unauthorized",
+          code: "arc.unauthorized",
           message: "Session expired",
+          status: 401,
         });
         return;
       }

@@ -8,10 +8,10 @@
  * Run with: npx vitest run tests/scenarios/dynamic-matrix-e2e.test.ts
  */
 
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -165,7 +165,7 @@ describe("Dynamic Permission Matrix E2E", () => {
       });
 
       expect(res.statusCode).toBe(201);
-      projectId = JSON.parse(res.body).data._id;
+      projectId = JSON.parse(res.body)._id;
     });
 
     it("user without project:create permission gets 403", async () => {
@@ -235,7 +235,7 @@ describe("Dynamic Permission Matrix E2E", () => {
         headers: headers(adminToken),
         payload: { name: "Delete Me" },
       });
-      const deleteId = JSON.parse(createRes.body).data._id;
+      const deleteId = JSON.parse(createRes.body)._id;
 
       const res = await app.inject({
         method: "DELETE",

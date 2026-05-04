@@ -6,10 +6,10 @@
  */
 
 import { Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -105,10 +105,10 @@ describe("Route Prefix Handling", () => {
       url: "/api/v2/items",
       payload: { name: "Fetch Me" },
     });
-    const id = create.json().data._id;
+    const id = create.json()._id;
     const res = await app.inject({ method: "GET", url: `/api/v2/items/${id}` });
     expect(res.statusCode).toBe(200);
-    expect(res.json().data.name).toBe("Fetch Me");
+    expect(res.json().name).toBe("Fetch Me");
   });
 
   // ── Hyphenated names ──
@@ -126,7 +126,7 @@ describe("Route Prefix Handling", () => {
     });
     expect(create.statusCode).toBe(201);
 
-    const id = create.json().data._id;
+    const id = create.json()._id;
     const get = await app.inject({ method: "GET", url: `/account-types/${id}` });
     expect(get.statusCode).toBe(200);
 
@@ -136,7 +136,7 @@ describe("Route Prefix Handling", () => {
       payload: { name: "Updated Revenue" },
     });
     expect(update.statusCode).toBe(200);
-    expect(update.json().data.name).toBe("Updated Revenue");
+    expect(update.json().name).toBe("Updated Revenue");
 
     const del = await app.inject({ method: "DELETE", url: `/account-types/${id}` });
     expect(del.statusCode).toBe(200);

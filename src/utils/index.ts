@@ -40,9 +40,7 @@ export { defineErrorMapper } from "./defineErrorMapper.js";
 // Typed route guard helper
 export type { Guard, GuardConfig } from "./defineGuard.js";
 export { defineGuard } from "./defineGuard.js";
-// Response envelope helper (moved from `/types` in v2.11.0)
-export { envelope } from "./envelope.js";
-export type { ErrorDetails } from "./errors.js";
+export type { ErrorOptions } from "./errors.js";
 // Errors
 export {
   ArcError,
@@ -70,19 +68,22 @@ export {
 export type { JsonSchema } from "./responseSchemas.js";
 // Response Schemas
 export {
+  aggregateListResponse,
+  bareListResponse,
   deleteResponse,
-  errorResponseSchema,
+  errorContractSchema,
+  errorDetailSchema,
   getDefaultCrudSchemas,
   getListQueryParams,
-  itemResponse,
+  keysetListResponse,
   listResponse,
-  mutationResponse,
+  offsetListResponse,
   paginationSchema,
   queryParams,
   responses,
-  successResponseSchema,
-  wrapResponse,
 } from "./responseSchemas.js";
+// Cross-runtime scheduling helper
+export { scheduleBackground } from "./runtime.js";
 export type { JsonSchemaTarget } from "./schemaConverter.js";
 // Schema Converter
 export {

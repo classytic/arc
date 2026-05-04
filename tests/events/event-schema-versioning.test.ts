@@ -20,11 +20,7 @@
 
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createEventRegistry,
-  defineEvent,
-  type EventDefinitionOutput,
-} from "../../src/events/defineEvent.js";
+import { createEventRegistry, defineEvent } from "../../src/events/defineEvent.js";
 import { createEvent, type DomainEvent } from "../../src/events/EventTransport.js";
 import eventPlugin from "../../src/events/eventPlugin.js";
 import { wrapWithSchema } from "../../src/events/subscribe-helpers.js";
@@ -139,11 +135,7 @@ describe("eventPlugin.publish — validates against event.meta.schemaVersion", (
 
     // v1 payload missing required `total` — must fail against v1's schema.
     await expect(
-      app.events.publish(
-        "order.paid",
-        { orderId: "ord-1" },
-        { schemaVersion: 1 },
-      ),
+      app.events.publish("order.paid", { orderId: "ord-1" }, { schemaVersion: 1 }),
     ).rejects.toThrow(/total/);
   });
 });

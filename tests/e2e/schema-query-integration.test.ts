@@ -14,11 +14,11 @@
  * - additionalProperties: true allowing flexible queries
  */
 
-import { QueryParser, Repository } from "@classytic/mongokit";
+import { buildCrudSchemasFromModel, QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -81,7 +81,11 @@ describe("Schema + Query Integration E2E", () => {
     const productResource = defineResource({
       name: "product",
       displayName: "Product",
-      adapter: createMongooseAdapter({ model: ProductModel, repository: productRepo }),
+      adapter: createMongooseAdapter({
+        model: ProductModel,
+        repository: productRepo,
+        schemaGenerator: buildCrudSchemasFromModel,
+      }),
       controller: new BaseController(productRepo, {
         resourceName: "product",
         queryParser: qp,
@@ -134,8 +138,8 @@ describe("Schema + Query Integration E2E", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.docs.length).toBe(2);
-      expect(body.docs.every((d: { name: string }) => d.name.includes("Handbook"))).toBe(true);
+      expect(body.data.length).toBe(2);
+      expect(body.data.every((d: { name: string }) => d.name.includes("Handbook"))).toBe(true);
     });
 
     it("price[gte] and price[lte] range filter works", async () => {
@@ -146,8 +150,8 @@ describe("Schema + Query Integration E2E", () => {
       expect(res.statusCode).toBe(200);
       const body = res.json();
       // Should include: TS Handbook (39), Go Handbook (45), Headphones (199)
-      expect(body.docs.length).toBe(3);
-      expect(body.docs.every((d: { price: number }) => d.price >= 30 && d.price <= 200)).toBe(true);
+      expect(body.data.length).toBe(3);
+      expect(body.data.every((d: { price: number }) => d.price >= 30 && d.price <= 200)).toBe(true);
     });
 
     it("category exact filter works", async () => {
@@ -157,8 +161,8 @@ describe("Schema + Query Integration E2E", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.docs.length).toBe(2);
-      expect(body.docs.every((d: { category: string }) => d.category === "books")).toBe(true);
+      expect(body.data.length).toBe(2);
+      expect(body.data.every((d: { category: string }) => d.category === "books")).toBe(true);
     });
 
     it("combined bracket + exact filters work", async () => {
@@ -169,8 +173,8 @@ describe("Schema + Query Integration E2E", () => {
       expect(res.statusCode).toBe(200);
       const body = res.json();
       // Only MacBook Pro (2499) — Headphones (199) doesn't meet price[gte]=200
-      expect(body.docs.length).toBe(1);
-      expect(body.docs[0].name).toBe("MacBook Pro");
+      expect(body.data.length).toBe(1);
+      expect(body.data[0].name).toBe("MacBook Pro");
     });
 
     it("inStock boolean filter works", async () => {
@@ -180,8 +184,8 @@ describe("Schema + Query Integration E2E", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.docs.length).toBe(1);
-      expect(body.docs[0].name).toBe("Protein Bar");
+      expect(body.data.length).toBe(1);
+      expect(body.data[0].name).toBe("Protein Bar");
     });
 
     it("sort with bracket filters works", async () => {
@@ -191,9 +195,9 @@ describe("Schema + Query Integration E2E", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.docs.length).toBe(2);
+      expect(body.data.length).toBe(2);
       // Ascending: TS Handbook (39) before Go Handbook (45)
-      expect(body.docs[0].price).toBeLessThanOrEqual(body.docs[1].price);
+      expect(body.data[0].price).toBeLessThanOrEqual(body.data[1].price);
     });
 
     it("pagination with filters works", async () => {
@@ -203,7 +207,7 @@ describe("Schema + Query Integration E2E", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.docs.length).toBe(2);
+      expect(body.data.length).toBe(2);
       expect(body.total).toBeGreaterThan(2);
       expect(body.page).toBe(1);
     });
@@ -222,9 +226,9 @@ describe("Schema + Query Integration E2E", () => {
         payload: { name: "Test Widget", sku: "TW-001", price: 9.99, category: "electronics" },
       });
       expect(res.statusCode).toBe(201);
-      expect(res.json().data.name).toBe("Test Widget");
+      expect(res.json().name).toBe("Test Widget");
       // Clean up
-      await app.inject({ method: "DELETE", url: `/products/${res.json().data._id}` });
+      await app.inject({ method: "DELETE", url: `/products/${res.json()._id}` });
     });
 
     it("immutable field (sku) excluded from update body", async () => {
@@ -234,7 +238,7 @@ describe("Schema + Query Integration E2E", () => {
         url: "/products",
         payload: { name: "Immutable Test", sku: "IMM-001", price: 10 },
       });
-      const id = create.json().data._id;
+      const id = create.json()._id;
 
       // Update — sku should be stripped by BodySanitizer even if sent
       const update = await app.inject({
@@ -243,9 +247,9 @@ describe("Schema + Query Integration E2E", () => {
         payload: { name: "Updated Name", sku: "CHANGED-SKU" },
       });
       expect(update.statusCode).toBe(200);
-      expect(update.json().data.name).toBe("Updated Name");
+      expect(update.json().name).toBe("Updated Name");
       // SKU should NOT change (stripped by BodySanitizer)
-      expect(update.json().data.sku).toBe("IMM-001");
+      expect(update.json().sku).toBe("IMM-001");
 
       // Clean up
       await app.inject({ method: "DELETE", url: `/products/${id}` });
@@ -257,7 +261,7 @@ describe("Schema + Query Integration E2E", () => {
       const res = await app.inject({ method: "GET", url: "/products" });
       expect(res.statusCode).toBe(200);
       // systemManaged fields are in response, just not in create/update body schemas
-      const doc = res.json().docs[0];
+      const doc = res.json().data[0];
       expect(doc).toHaveProperty("name");
       expect(doc).toHaveProperty("price");
     });
@@ -277,14 +281,14 @@ describe("Schema + Query Integration E2E", () => {
         payload: { name: "CRUD Test", sku: "CRUD-001", price: 25, category: "books" },
       });
       expect(res.statusCode).toBe(201);
-      productId = res.json().data._id;
+      productId = res.json()._id;
     });
 
     it("reads back created product", async () => {
       const res = await app.inject({ method: "GET", url: `/products/${productId}` });
       expect(res.statusCode).toBe(200);
-      expect(res.json().data.name).toBe("CRUD Test");
-      expect(res.json().data.sku).toBe("CRUD-001");
+      expect(res.json().name).toBe("CRUD Test");
+      expect(res.json().sku).toBe("CRUD-001");
     });
 
     it("updates non-immutable fields", async () => {
@@ -294,7 +298,7 @@ describe("Schema + Query Integration E2E", () => {
         payload: { price: 30 },
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json().data.price).toBe(30);
+      expect(res.json().price).toBe(30);
     });
 
     it("deletes product", async () => {
@@ -332,9 +336,13 @@ describe("Schema + Query Integration E2E", () => {
       const JM =
         mongoose.models.SchemaTestJournal || mongoose.model("SchemaTestJournal", JournalSchema);
 
-      const { Repository } = await import("@classytic/mongokit");
-      const { MongooseAdapter } = await import("../../src/adapters/mongoose.js");
-      const adapter = new MongooseAdapter({ model: JM, repository: new Repository(JM) });
+      const { Repository, buildCrudSchemasFromModel } = await import("@classytic/mongokit");
+      const { MongooseAdapter } = await import("@classytic/mongokit/adapter");
+      const adapter = new MongooseAdapter({
+        model: JM,
+        repository: new Repository(JM),
+        schemaGenerator: buildCrudSchemasFromModel,
+      });
       const schemas = adapter.generateSchemas({}) as any;
 
       // entries should be array of objects with properties, not array of strings
@@ -365,9 +373,13 @@ describe("Schema + Query Integration E2E", () => {
       const PM =
         mongoose.models.SchemaPartialRules || mongoose.model("SchemaPartialRules", PartialSchema);
 
-      const { Repository } = await import("@classytic/mongokit");
-      const { MongooseAdapter } = await import("../../src/adapters/mongoose.js");
-      const adapter = new MongooseAdapter({ model: PM, repository: new Repository(PM) });
+      const { Repository, buildCrudSchemasFromModel } = await import("@classytic/mongokit");
+      const { MongooseAdapter } = await import("@classytic/mongokit/adapter");
+      const adapter = new MongooseAdapter({
+        model: PM,
+        repository: new Repository(PM),
+        schemaGenerator: buildCrudSchemasFromModel,
+      });
 
       // Only mark internalStatus as systemManaged — title and amount are NOT in fieldRules
       const schemas = adapter.generateSchemas({
@@ -391,9 +403,13 @@ describe("Schema + Query Integration E2E", () => {
       const TM =
         mongoose.models.SchemaTestExclude || mongoose.model("SchemaTestExclude", TestSchema);
 
-      const { Repository } = await import("@classytic/mongokit");
-      const { MongooseAdapter } = await import("../../src/adapters/mongoose.js");
-      const adapter = new MongooseAdapter({ model: TM, repository: new Repository(TM) });
+      const { Repository, buildCrudSchemasFromModel } = await import("@classytic/mongokit");
+      const { MongooseAdapter } = await import("@classytic/mongokit/adapter");
+      const adapter = new MongooseAdapter({
+        model: TM,
+        repository: new Repository(TM),
+        schemaGenerator: buildCrudSchemasFromModel,
+      });
       const schemas = adapter.generateSchemas({
         excludeFields: ["orgId"],
         fieldRules: { status: { systemManaged: true } },

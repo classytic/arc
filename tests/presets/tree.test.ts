@@ -98,7 +98,7 @@ describe("tree preset", () => {
       const result = applyPresets(baseConfig, ["tree"]);
 
       expect(result.routes).toBeDefined();
-      const routePaths = result.routes!.map((r) => r.path);
+      const routePaths = result.routes?.map((r) => r.path);
       expect(routePaths).toContain("/tree");
       expect(routePaths.some((p) => p.includes("/children"))).toBe(true);
     });

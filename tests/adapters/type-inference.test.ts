@@ -8,12 +8,12 @@
  * the runtime assertions hold, the DX is correct.
  */
 
-import { Repository } from "@classytic/mongokit";
+import { buildCrudSchemasFromModel, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter, MongooseAdapter } from "@classytic/mongokit/adapter";
+import type { DataAdapter, RepositoryLike } from "@classytic/repo-core/adapter";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Model, Schema } from "mongoose";
 import { describe, expect, it } from "vitest";
-import type { DataAdapter, RepositoryLike } from "../../src/adapters/interface.js";
-import { createMongooseAdapter, MongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 
 // ============================================================================
@@ -80,7 +80,7 @@ describe("Type Inference & DX", () => {
     it("accepts RepositoryLike without breaking type inference", () => {
       // User provides a custom repo that satisfies RepositoryLike
       const customRepo: RepositoryLike = {
-        getAll: async () => ({ docs: [], total: 0 }),
+        getAll: async () => ({ data: [], total: 0 }),
         getById: async (id: string) => ({ _id: id, name: "test" }),
         create: async (data: unknown) => data,
         update: async (_id: string, data: unknown) => data,
@@ -225,14 +225,30 @@ describe("Type Inference & DX", () => {
       expect(meta.fields.price.type).toBe("number");
     });
 
-    it("generateSchemas produces OpenAPI schemas", () => {
+    it("generateSchemas produces OpenAPI schemas (via mongokit's buildCrudSchemasFromModel)", () => {
       const repo = new Repository<IProduct>(ProductModel);
-      const adapter = new MongooseAdapter({ model: ProductModel, repository: repo });
+      const adapter = new MongooseAdapter({
+        model: ProductModel,
+        repository: repo,
+        // arc 2.12 cut its built-in fallback. mongokit's generator is the
+        // canonical wiring; production hosts pass it the same way.
+        schemaGenerator: buildCrudSchemasFromModel,
+      });
 
       const schemas = adapter.generateSchemas();
       expect(schemas).toBeDefined();
       expect(schemas).toHaveProperty("createBody");
-      expect(schemas).toHaveProperty("response");
+      // mongokit emits `params` and `listQuery` too; arc's old fallback only
+      // produced `createBody`/`updateBody`/`response`. We assert the field
+      // present in both shapes (createBody) so the test stays meaningful.
+    });
+
+    it("generateSchemas returns null when no schemaGenerator is wired", () => {
+      const repo = new Repository<IProduct>(ProductModel);
+      const adapter = new MongooseAdapter({ model: ProductModel, repository: repo });
+      // No fallback in 2.12 — null is the documented return when the host
+      // hasn't wired a generator. CLI scaffolds wire mongokit automatically.
+      expect(adapter.generateSchemas()).toBeNull();
     });
   });
 });

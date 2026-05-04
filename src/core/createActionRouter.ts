@@ -53,6 +53,7 @@ import type {
   RequestWithExtras,
   RouteSchemaOptions,
 } from "../types/index.js";
+import { createError } from "../utils/errors.js";
 import { sendControllerResponse } from "./fastifyAdapter.js";
 import {
   buildActionPermissionMw,
@@ -319,38 +320,23 @@ export function createActionRouter(
       // preHandler chain (internal invocation paths).
       const handler = wrappedHandlers.get(action);
       if (!handler) {
-        return sendControllerResponse(
-          reply,
-          {
-            success: false,
-            status: 400,
-            error: `Invalid action '${action}'. Valid actions: ${actionEnum.join(", ")}`,
-            meta: { validActions: actionEnum },
-          } as IControllerResponse<null>,
-          req,
+        throw createError(
+          400,
+          `Invalid action '${action}'. Valid actions: ${actionEnum.join(", ")}`,
+          { validActions: actionEnum },
         );
       }
 
       try {
         // The wrapped handler produces a full IControllerResponse — pipeline
-        // interceptors that return `{ success: false, status, error, details,
-        // meta }` flow straight through `sendControllerResponse` with every
-        // field intact. Same path the CRUD router uses.
+        // interceptors flow straight through `sendControllerResponse`. Errors
+        // throw ArcError; the global handler emits the canonical contract.
         const response = await handler(id, data, req as RequestWithExtras);
         return sendControllerResponse(reply, response, req);
       } catch (error) {
         if (onError) {
           const { statusCode, error: errorMsg, code } = onError(error as Error, action, id);
-          return sendControllerResponse(
-            reply,
-            {
-              success: false,
-              status: statusCode,
-              error: errorMsg,
-              ...(code ? { meta: { code } } : {}),
-            } as IControllerResponse<null>,
-            req,
-          );
+          throw createError(statusCode, errorMsg, code ? { code } : undefined);
         }
 
         const err = error as Record<string, unknown>;
@@ -361,15 +347,16 @@ export function createActionRouter(
           req.log.error({ err: error, action, id }, "Action handler error");
         }
 
-        return sendControllerResponse(
-          reply,
-          {
-            success: false,
-            status: statusCode,
-            error: (err.message as string) || `Failed to execute '${action}' action`,
-            meta: { code: errorCode },
-          } as IControllerResponse<null>,
-          req,
+        // Re-throw ArcError instances unchanged so the global error handler
+        // preserves their `code`/`details`. Non-Arc errors (raw throws from
+        // user handlers) get wrapped into the canonical ArcError shape.
+        if ((error as { name?: string })?.name === "ArcError" || error instanceof Error === false) {
+          throw error;
+        }
+        throw createError(
+          statusCode,
+          (err.message as string) || `Failed to execute '${action}' action`,
+          { code: errorCode },
         );
       }
     },

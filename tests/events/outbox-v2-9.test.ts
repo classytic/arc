@@ -60,7 +60,7 @@ describe("outbox v2.9 — auto-map idempotencyKey → dedupeKey", () => {
 
     const pending = await store.getPending(10);
     expect(pending).toHaveLength(1);
-    expect(pending[0]!.meta.id).toBe(e1.meta.id);
+    expect(pending[0]?.meta.id).toBe(e1.meta.id);
   });
 
   it("caller-supplied dedupeKey wins over meta.idempotencyKey", async () => {
@@ -118,8 +118,8 @@ describe("outbox v2.9 — failurePolicy drives retry + DLQ", () => {
 
     // Policy called twice with matching attempt counts
     expect(policy).toHaveBeenCalledTimes(2);
-    expect(policy.mock.calls[0]![0].attempts).toBe(1);
-    expect(policy.mock.calls[1]![0].attempts).toBe(2);
+    expect(policy.mock.calls[0]?.[0].attempts).toBe(1);
+    expect(policy.mock.calls[1]?.[0].attempts).toBe(2);
   });
 
   it("retryAt schedules the event for later (not immediately re-claimable)", async () => {
@@ -159,7 +159,7 @@ describe("outbox v2.9 — failurePolicy drives retry + DLQ", () => {
     }
     const dl = await outbox.getDeadLettered();
     expect(dl).toHaveLength(1);
-    expect(dl[0]!.attempts).toBeGreaterThanOrEqual(3);
+    expect(dl[0]?.attempts).toBeGreaterThanOrEqual(3);
   });
 
   it("policy throwing does NOT break the relay — falls back to default fail()", async () => {

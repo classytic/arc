@@ -141,7 +141,7 @@ describe("Scaffolded App — Better Auth + Multi-Tenant", () => {
   it("shared adapter uses createMongooseAdapter", async () => {
     const content = await readText(path.join(dir, "src/shared/adapter.ts"));
     expect(content).toContain("createMongooseAdapter");
-    expect(content).toContain("@classytic/arc");
+    expect(content).toContain("@classytic/mongokit/adapter");
   });
 
   // ── Permissions ─────────────────────────────────────────────

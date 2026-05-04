@@ -89,8 +89,6 @@ describe("withCompensation — hooks & fire-and-forget", () => {
       const result = await withCompensation("no-hooks", [
         { name: "a", execute: async () => ({ ok: true }) },
       ]);
-
-      expect(result.success).toBe(true);
     });
   });
 
@@ -135,7 +133,6 @@ describe("withCompensation — hooks & fire-and-forget", () => {
       ]);
 
       // 'next' ran before 'slow' because slow is fire-and-forget
-      expect(result.success).toBe(true);
       expect(result.completedSteps).toContain("fast");
       expect(result.completedSteps).toContain("slow-bg");
       expect(result.completedSteps).toContain("next");
@@ -169,7 +166,6 @@ describe("withCompensation — hooks & fire-and-forget", () => {
       ]);
 
       // Saga still succeeds — email failure is swallowed
-      expect(result.success).toBe(true);
       expect(compensated).toHaveLength(0);
     });
 

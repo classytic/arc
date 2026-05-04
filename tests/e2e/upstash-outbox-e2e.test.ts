@@ -95,8 +95,8 @@ describeRedis("Upstash Redis — EventOutbox end-to-end", () => {
     unsub();
 
     expect(received).toHaveLength(1);
-    expect(received[0]!.type).toBe("billing.invoice_sent");
-    expect(received[0]!.payload).toMatchObject({ invoiceId: "inv-42", amount: 199.99 });
+    expect(received[0]?.type).toBe("billing.invoice_sent");
+    expect(received[0]?.payload).toMatchObject({ invoiceId: "inv-42", amount: 199.99 });
   }, 20_000);
 
   it("acknowledges delivered events so they are not relayed twice", async () => {

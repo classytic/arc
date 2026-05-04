@@ -34,7 +34,7 @@ describe("ArcError cause chain", () => {
 
     expect(err.cause).toBeUndefined();
     expect(err.message).toBe("standalone");
-    expect(err.code).toBe("ARC_ERROR");
+    expect(err.code).toBe("arc.error");
     expect(err.statusCode).toBe(500);
   });
 
@@ -51,7 +51,10 @@ describe("ArcError cause chain", () => {
 // toJSON() – cause serialization
 // ============================================================================
 
-describe("ArcError toJSON()", () => {
+// ArcError no longer ships a toJSON() method nor a `requestId` getter — the
+// new ErrorContract (correlationId, flat ErrorDetail[]) lives on the wire,
+// not the throwable. These tests cover removed APIs.
+describe.skip("ArcError toJSON()", () => {
   it("should serialize a plain Error cause as { message, name }", () => {
     const root = new Error("root cause");
     const err = new ArcError("top", { cause: root });
@@ -141,16 +144,16 @@ describe("NotFoundError cause chain", () => {
 
     expect(err).toBeInstanceOf(ArcError);
     expect(err.name).toBe("NotFoundError");
-    expect(err.code).toBe("NOT_FOUND");
+    expect(err.code).toBe("arc.not_found");
     expect(err.statusCode).toBe(404);
   });
 
-  it("should serialize correctly via toJSON()", () => {
+  it.skip("should serialize correctly via toJSON()", () => {
     const err = new NotFoundError("product", "abc");
     const json = err.toJSON();
 
     expect(json.error).toBe("product with identifier 'abc' not found");
-    expect(json.code).toBe("NOT_FOUND");
+    expect(json.code).toBe("arc.not_found");
     expect(json.details).toEqual({ resource: "product", identifier: "abc" });
   });
 });

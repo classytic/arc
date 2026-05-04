@@ -13,13 +13,13 @@
  * convention columns.
  */
 
+import type { DataAdapter } from "@classytic/repo-core/adapter";
 import { SqliteRepository } from "@classytic/sqlitekit/repository";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text } from "drizzle-orm/sqlite-core";
 import Fastify from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { DataAdapter } from "../../src/adapters/index.js";
 import { allowPublic, defineResource } from "../../src/index.js";
 
 // A deliberately minimal schema — no timestamps, no Mongo-shaped columns.
@@ -99,9 +99,9 @@ describe("Arc + sqlitekit — schema without `createdAt`", () => {
 
     const res = await app.inject({ method: "GET", url: "/tags" });
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { docs: TagDoc[]; total: number };
+    const body = res.json() as { data: TagDoc[]; total: number };
     expect(body.total).toBe(2);
-    expect(body.docs.map((d) => d.id).sort()).toEqual(["t1", "t2"]);
+    expect(body.data.map((d) => d.id).sort()).toEqual(["t1", "t2"]);
   });
 
   it("still honors an explicit sort when the request passes one", async () => {
@@ -110,7 +110,7 @@ describe("Arc + sqlitekit — schema without `createdAt`", () => {
 
     const res = await app.inject({ method: "GET", url: "/tags?sort=label" });
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { docs: TagDoc[] };
-    expect(body.docs.map((d) => d.label)).toEqual(["apple", "zebra"]);
+    const body = res.json() as { data: TagDoc[] };
+    expect(body.data.map((d) => d.label)).toEqual(["apple", "zebra"]);
   });
 });

@@ -21,11 +21,11 @@ import {
   Repository,
   softDeletePlugin,
 } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyRequest } from "fastify";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -189,12 +189,14 @@ describe("Bulk preset + custom idField + multi-tenancy", () => {
       });
       expect(res.statusCode).toBe(201);
       const body = JSON.parse(res.body);
-      expect(body.data.length).toBe(3);
+      // bulkCreate emits the inserted docs as a bare array at the top level
+      // (single-doc path through fastifyAdapter — response.data is the array).
+      expect(Array.isArray(body) ? body.length : body.data?.length).toBe(3);
 
       // All items should have org A's organizationId
-      const docs = await ItemModel.find({}).lean();
-      expect(docs.length).toBe(3);
-      for (const doc of docs) {
+      const data = await ItemModel.find({}).lean();
+      expect(data.length).toBe(3);
+      for (const doc of data) {
         expect(String(doc.organizationId)).toBe(ORG_A);
       }
     } finally {

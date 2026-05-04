@@ -10,15 +10,15 @@
  * schema-generation contract is kit-agnostic at runtime.
  */
 
+import { createDrizzleAdapter } from "@classytic/sqlitekit/adapter";
+import { timestampPlugin } from "@classytic/sqlitekit/plugins/timestamp";
+import { SqliteRepository } from "@classytic/sqlitekit/repository";
+import { buildCrudSchemasFromTable } from "@classytic/sqlitekit/schema/crud";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SqliteRepository } from "@classytic/sqlitekit/repository";
-import { buildCrudSchemasFromTable } from "@classytic/sqlitekit/schema/crud";
-import { timestampPlugin } from "@classytic/sqlitekit/plugins/timestamp";
-import { createDrizzleAdapter } from "../../src/adapters/drizzle.js";
 import { allowPublic, defineResource } from "../../src/index.js";
 
 // ──────────────────────────────────────────────────────────────────────
@@ -249,10 +249,17 @@ describe("Arc DrizzleAdapter + sqlitekit schema generator — end-to-end", () =>
   });
 
   // ────────────────────────────────────────────────────────────────────
-  // Built-in fallback — no schemaGenerator supplied
+  // No schemaGenerator wired — adapter returns null (arc 2.12)
   // ────────────────────────────────────────────────────────────────────
+  //
+  // Arc 2.12 cut the built-in mongoose AND drizzle fallbacks: schema
+  // generation belongs in the kit, not in arc core. Without a
+  // `schemaGenerator` the adapter returns `null` so resource boot
+  // doesn't crash, but no auto-OpenAPI is produced for that resource.
+  // CLI scaffolds wire the kit generator automatically; hand-rolled
+  // hosts must pass it explicitly.
 
-  it("built-in fallback generator still produces a usable schema when no kit generator is wired", async () => {
+  it("returns null when no schemaGenerator is wired (no built-in fallback in 2.12)", async () => {
     const repo = new SqliteRepository<ProductDoc>({
       db: drizzle(db),
       table: products,
@@ -261,16 +268,23 @@ describe("Arc DrizzleAdapter + sqlitekit schema generator — end-to-end", () =>
       table: products,
       repository: repo,
     });
-    const schemas = adapter.generateSchemas();
-    expect(schemas).toBeTruthy();
-    expect(schemas).toHaveProperty("createBody");
-    expect(schemas).toHaveProperty("updateBody");
-    expect(schemas).toHaveProperty("response");
-    // Without kit wiring we still surface the enum values that were on the column
-    const createBody = (schemas as { createBody: { properties: Record<string, unknown> } })
-      .createBody;
-    expect(createBody.properties.status).toMatchObject({
-      enum: ["active", "archived"],
+    expect(adapter.generateSchemas()).toBeNull();
+  });
+
+  it("getSchemaMetadata still works without a schemaGenerator (arc-internal introspection)", async () => {
+    // arc's own SchemaMetadata format (used by the introspection plugin /
+    // registry) is distinct from OpenAPI and stays in arc — only the
+    // OpenAPI fallback was cut. This test pins that boundary.
+    const repo = new SqliteRepository<ProductDoc>({
+      db: drizzle(db),
+      table: products,
     });
+    const adapter = createDrizzleAdapter<ProductDoc>({
+      table: products,
+      repository: repo,
+    });
+    const meta = adapter.getSchemaMetadata?.();
+    expect(meta).toBeDefined();
+    expect(meta?.fields).toBeDefined();
   });
 });

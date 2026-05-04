@@ -4,7 +4,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    setupFiles: [],
+    setupFiles: ["./tests/_helpers/load-env.ts"],
     include: ["tests/perf/**/*.test.ts"],
     fileParallelism: false,
     isolate: true,

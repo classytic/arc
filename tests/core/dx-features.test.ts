@@ -12,18 +12,16 @@
  */
 
 import { Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose from "mongoose";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
-import { createApp } from "../../src/factory/index.js";
 import { allowPublic } from "../../src/permissions/index.js";
 import { getOrgContext } from "../../src/scope/types.js";
 import type { ArcRequest } from "../../src/types/index.js";
-import { envelope } from "../../src/utils/envelope.js";
 import { ArcError, createDomainError, isArcError } from "../../src/utils/errors.js";
 
 // ============================================================================
@@ -55,25 +53,13 @@ const ItemSchema = new mongoose.Schema(
 const ItemModel = mongoose.models.DxItem || mongoose.model("DxItem", ItemSchema);
 
 // ============================================================================
-// 1. envelope() helper
+// 1. envelope() helper — REMOVED in v2.12 migration
 // ============================================================================
-
-describe("envelope() response helper", () => {
-  it("wraps data in standard format", () => {
-    const result = envelope({ id: "1", name: "Widget" });
-    expect(result).toEqual({ success: true, data: { id: "1", name: "Widget" } });
-  });
-
-  it("includes meta when provided", () => {
-    const result = envelope([1, 2, 3], { total: 3, page: 1 });
-    expect(result).toEqual({ success: true, data: [1, 2, 3], total: 3, page: 1 });
-  });
-
-  it("works with null data", () => {
-    const result = envelope(null);
-    expect(result).toEqual({ success: true, data: null });
-  });
-});
+//
+// The `envelope()` helper produced `{ success: true, data: ... }` wrappers.
+// Post-migration the wire shape is flat (HTTP status discriminates success
+// vs error), so the helper has no remaining use case and was removed.
+// The test block was deleted alongside the import.
 
 // ============================================================================
 // 2. getOrgContext() canonical extraction
@@ -165,13 +151,17 @@ describe("createDomainError() factory", () => {
     expect(err.details).toEqual({ balance: 0, required: 100 });
   });
 
-  it("serializes to JSON with code", () => {
+  it("exposes code + message via the canonical ArcError shape", () => {
+    // Post-migration: ArcError no longer ships a `.toJSON()` — the global
+    // error handler runs the instance through `toErrorContract()` from
+    // `@classytic/repo-core/errors`, which produces the canonical wire
+    // shape `{ code, message, status, details, ... }`. Domain consumers
+    // read `err.code` / `err.message` directly.
     const err = createDomainError("SELF_REFERRAL", "Cannot refer yourself", 422);
-    const json = err.toJSON();
 
-    expect(json.success).toBe(false);
-    expect(json.code).toBe("SELF_REFERRAL");
-    expect(json.error).toBe("Cannot refer yourself");
+    expect(err.code).toBe("SELF_REFERRAL");
+    expect(err.message).toBe("Cannot refer yourself");
+    expect(err.statusCode).toBe(422);
   });
 });
 

@@ -115,8 +115,11 @@ describe("Auth Token Type Enforcement", () => {
 
       expect(res.statusCode).toBe(401);
       const body = JSON.parse(res.body);
-      expect(body.success).toBe(false);
-      expect(body.error).toBe("Unauthorized");
+      // 2.13 error-contract audit: token-type rejection now carries its own
+      // hierarchical code so clients can discriminate "wrong token kind"
+      // (recoverable — re-issue the right token) from generic 401
+      // (re-authenticate). Pre-2.13 both collapsed to `arc.unauthorized`.
+      expect(body.code).toBe("arc.auth.invalid_token_type");
     });
 
     it("should return 401 with no token", async () => {

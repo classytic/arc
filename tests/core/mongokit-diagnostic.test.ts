@@ -228,7 +228,7 @@ describe("2. Repository.getAll — basic operations", () => {
   it("should list all with default pagination", async () => {
     await seed();
     const result = await empRepo.getAll({});
-    expect(result.docs.length).toBe(4);
+    expect(result.data.length).toBe(4);
     expect(result.total).toBe(4);
   });
 
@@ -236,58 +236,58 @@ describe("2. Repository.getAll — basic operations", () => {
     await seed();
     const parsed = parseQuery("status=active");
     const result = await empRepo.getAll(parsed);
-    expect(result.docs.length).toBe(2);
-    expect(result.docs.every((d: any) => d.status === "active")).toBe(true);
+    expect(result.data.length).toBe(2);
+    expect(result.data.every((d: any) => d.status === "active")).toBe(true);
   });
 
   it("should filter with operators", async () => {
     await seed();
     const parsed = parseQuery("salary[gte]=90000");
     const result = await empRepo.getAll(parsed);
-    expect(result.docs.length).toBe(2); // Alice 120k, Bob 95k
+    expect(result.data.length).toBe(2); // Alice 120k, Bob 95k
   });
 
   it("should sort ascending", async () => {
     await seed();
     const parsed = parseQuery("sort=salary");
     const result = await empRepo.getAll(parsed);
-    expect(result.docs[0].name).toBe("Dave"); // 75k lowest
-    expect(result.docs[3].name).toBe("Alice"); // 120k highest
+    expect(result.data[0].name).toBe("Dave"); // 75k lowest
+    expect(result.data[3].name).toBe("Alice"); // 120k highest
   });
 
   it("should sort descending", async () => {
     await seed();
     const parsed = parseQuery("sort=-salary");
     const result = await empRepo.getAll(parsed);
-    expect(result.docs[0].name).toBe("Alice"); // 120k highest
+    expect(result.data[0].name).toBe("Alice"); // 120k highest
   });
 
   it("should paginate with offset", async () => {
     await seed();
     const parsed = parseQuery("limit=2&page=1&sort=name");
     const result = await empRepo.getAll(parsed);
-    expect(result.docs.length).toBe(2);
+    expect(result.data.length).toBe(2);
     expect(result.total).toBe(4);
     expect(result.hasNext).toBe(true);
-    expect(result.docs[0].name).toBe("Alice");
-    expect(result.docs[1].name).toBe("Bob");
+    expect(result.data[0].name).toBe("Alice");
+    expect(result.data[1].name).toBe("Bob");
   });
 
   it("should paginate page 2", async () => {
     await seed();
     const parsed = parseQuery("limit=2&page=2&sort=name");
     const result = await empRepo.getAll(parsed);
-    expect(result.docs.length).toBe(2);
+    expect(result.data.length).toBe(2);
     expect(result.hasPrev).toBe(true);
-    expect(result.docs[0].name).toBe("Carol");
-    expect(result.docs[1].name).toBe("Dave");
+    expect(result.data[0].name).toBe("Carol");
+    expect(result.data[1].name).toBe("Dave");
   });
 
   it("should select specific fields", async () => {
     await seed();
     const parsed = parseQuery("select=name,email");
     const result = await empRepo.getAll(parsed);
-    const doc = result.docs[0];
+    const doc = result.data[0];
     expect(doc.name).toBeDefined();
     expect(doc.email).toBeDefined();
     // salary should not be in the result
@@ -304,7 +304,7 @@ describe("3. Populate (ref-based)", () => {
     await seed();
     const parsed = parseQuery("populate=department");
     const result = await empRepo.getAll(parsed);
-    const alice = result.docs.find((d: any) => d.name === "Alice");
+    const alice = result.data.find((d: any) => d.name === "Alice");
     expect(alice.department).toBeDefined();
     expect(alice.department.name).toBe("Engineering");
   });
@@ -313,7 +313,7 @@ describe("3. Populate (ref-based)", () => {
     await seed();
     const parsed = parseQuery("populate[department][select]=name");
     const result = await empRepo.getAll(parsed);
-    const alice = result.docs.find((d: any) => d.name === "Alice");
+    const alice = result.data.find((d: any) => d.name === "Alice");
     expect(alice.department.name).toBe("Engineering");
     expect(alice.department.slug).toBeUndefined();
     expect(alice.department.budget).toBeUndefined();
@@ -323,7 +323,7 @@ describe("3. Populate (ref-based)", () => {
     await seed();
     const parsed = parseQuery("populate[department][select]=-budget,-__v");
     const result = await empRepo.getAll(parsed);
-    const alice = result.docs.find((d: any) => d.name === "Alice");
+    const alice = result.data.find((d: any) => d.name === "Alice");
     expect(alice.department.name).toBe("Engineering");
     expect(alice.department.slug).toBe("engineering");
     expect(alice.department.budget).toBeUndefined();
@@ -336,10 +336,10 @@ describe("3. Populate (ref-based)", () => {
     );
     const result = await empRepo.getAll(parsed);
     // Dave's HR dept is inactive — should be null after match
-    const dave = result.docs.find((d: any) => d.name === "Dave");
+    const dave = result.data.find((d: any) => d.name === "Dave");
     expect(dave.department).toBeNull();
     // Alice's Engineering dept is active — should populate
-    const alice = result.docs.find((d: any) => d.name === "Alice");
+    const alice = result.data.find((d: any) => d.name === "Alice");
     expect(alice.department).toBeDefined();
     expect(alice.department.name).toBe("Engineering");
   });
@@ -356,8 +356,8 @@ describe("4. Lookup ($lookup join — no refs)", () => {
       "lookup[dept][from]=diagdepartments&lookup[dept][localField]=departmentSlug&lookup[dept][foreignField]=slug&lookup[dept][single]=true",
     );
     const result = await empRepo.getAll(parsed);
-    expect(result.docs.length).toBe(4);
-    const alice = result.docs.find((d: any) => d.name === "Alice");
+    expect(result.data.length).toBe(4);
+    const alice = result.data.find((d: any) => d.name === "Alice");
     expect(alice.dept).toBeDefined();
     expect(alice.dept.name).toBe("Engineering");
     expect(alice.dept.slug).toBe("engineering");
@@ -369,7 +369,7 @@ describe("4. Lookup ($lookup join — no refs)", () => {
       "lookup[dept][from]=diagdepartments&lookup[dept][localField]=departmentSlug&lookup[dept][foreignField]=slug&lookup[dept][single]=true&lookup[dept][select]=name",
     );
     const result = await empRepo.getAll(parsed);
-    const alice = result.docs.find((d: any) => d.name === "Alice");
+    const alice = result.data.find((d: any) => d.name === "Alice");
     expect(alice.dept).toBeDefined();
     expect(alice.dept.name).toBe("Engineering");
     // slug should be excluded by lookup select
@@ -382,7 +382,7 @@ describe("4. Lookup ($lookup join — no refs)", () => {
       "lookup[dept][from]=diagdepartments&lookup[dept][localField]=departmentSlug&lookup[dept][foreignField]=slug",
     );
     const result = await empRepo.getAll(parsed);
-    const alice = result.docs.find((d: any) => d.name === "Alice");
+    const alice = result.data.find((d: any) => d.name === "Alice");
     // Without single=true, dept should be an array
     expect(Array.isArray(alice.dept)).toBe(true);
     expect(alice.dept.length).toBe(1);
@@ -402,7 +402,7 @@ describe("4. Lookup ($lookup join — no refs)", () => {
       "lookup[dept][from]=diagdepartments&lookup[dept][localField]=departmentSlug&lookup[dept][foreignField]=slug&lookup[dept][single]=true",
     );
     const result = await empRepo.getAll(parsed);
-    const eve = result.docs.find((d: any) => d.name === "Eve");
+    const eve = result.data.find((d: any) => d.name === "Eve");
     // Fixed in MongoKit 3.4.1: returns null for no-match with single=true
     expect(eve.dept).toBeNull();
   });
@@ -413,8 +413,8 @@ describe("4. Lookup ($lookup join — no refs)", () => {
       "status=active&lookup[dept][from]=diagdepartments&lookup[dept][localField]=departmentSlug&lookup[dept][foreignField]=slug&lookup[dept][single]=true",
     );
     const result = await empRepo.getAll(parsed);
-    expect(result.docs.length).toBe(2); // Alice and Bob
-    expect(result.docs.every((d: any) => d.dept && d.dept.name === "Engineering")).toBe(true);
+    expect(result.data.length).toBe(2); // Alice and Bob
+    expect(result.data.every((d: any) => d.dept && d.dept.name === "Engineering")).toBe(true);
   });
 
   it("should work with sort + lookup", async () => {
@@ -423,8 +423,8 @@ describe("4. Lookup ($lookup join — no refs)", () => {
       "sort=-salary&lookup[dept][from]=diagdepartments&lookup[dept][localField]=departmentSlug&lookup[dept][foreignField]=slug&lookup[dept][single]=true",
     );
     const result = await empRepo.getAll(parsed);
-    expect(result.docs[0].name).toBe("Alice"); // highest salary
-    expect(result.docs[0].dept.name).toBe("Engineering");
+    expect(result.data[0].name).toBe("Alice"); // highest salary
+    expect(result.data[0].dept.name).toBe("Engineering");
   });
 
   it("should work with pagination + lookup", async () => {
@@ -433,10 +433,10 @@ describe("4. Lookup ($lookup join — no refs)", () => {
       "limit=2&page=1&sort=name&lookup[dept][from]=diagdepartments&lookup[dept][localField]=departmentSlug&lookup[dept][foreignField]=slug&lookup[dept][single]=true",
     );
     const result = await empRepo.getAll(parsed);
-    expect(result.docs.length).toBe(2);
+    expect(result.data.length).toBe(2);
     expect(result.total).toBe(4);
     expect(result.hasNext).toBe(true);
-    expect(result.docs[0].dept).toBeDefined();
+    expect(result.data[0].dept).toBeDefined();
   });
 });
 
@@ -454,7 +454,7 @@ describe("5. POTENTIAL BUG: select + lookup combined", () => {
       "select=name,salary,departmentSlug&lookup[dept][from]=diagdepartments&lookup[dept][localField]=departmentSlug&lookup[dept][foreignField]=slug&lookup[dept][single]=true",
     );
     const result = await empRepo.getAll(parsed);
-    const alice = result.docs.find((d: any) => d.name === "Alice");
+    const alice = result.data.find((d: any) => d.name === "Alice");
     expect(alice).toBeDefined();
     expect(alice.name).toBe("Alice");
     expect(alice.salary).toBe(120000);
@@ -470,7 +470,7 @@ describe("5. POTENTIAL BUG: select + lookup combined", () => {
       "lookup[dept][from]=diagdepartments&lookup[dept][localField]=departmentSlug&lookup[dept][foreignField]=slug&lookup[dept][single]=true",
     );
     const result = await empRepo.getAll(parsed);
-    const alice = result.docs.find((d: any) => d.name === "Alice");
+    const alice = result.data.find((d: any) => d.name === "Alice");
     expect(alice.dept).toBeDefined(); // Works when no select
     expect(alice.dept.name).toBe("Engineering");
   });
@@ -485,17 +485,17 @@ describe("6. Keyset (cursor) pagination", () => {
     await seed();
 
     const page1 = await empRepo.getAll({ limit: 2, sort: { name: 1 } });
-    expect(page1.docs.length).toBe(2);
-    expect(page1.docs[0].name).toBe("Alice");
-    expect(page1.docs[1].name).toBe("Bob");
+    expect(page1.data.length).toBe(2);
+    expect(page1.data[0].name).toBe("Alice");
+    expect(page1.data[1].name).toBe("Bob");
 
     // Fixed in MongoKit 3.4.1: accepts plain ObjectId as cursor
-    const lastId = page1.docs[page1.docs.length - 1]._id.toString();
+    const lastId = page1.data[page1.data.length - 1]._id.toString();
     const page2Parsed = parseQuery(`after=${lastId}&limit=2&sort=name`);
     const page2 = await empRepo.getAll(page2Parsed);
-    expect(page2.docs.length).toBeGreaterThanOrEqual(1);
+    expect(page2.data.length).toBeGreaterThanOrEqual(1);
     // Should get Carol and/or Dave (alphabetically after Bob)
-    expect(page2.docs[0].name).toBe("Carol");
+    expect(page2.data[0].name).toBe("Carol");
   });
 });
 
@@ -529,8 +529,8 @@ describe("7. Multiple lookups in one query", () => {
     // or run the $count before the lookup stages.
     //
     // For now, docs are correct but total is wrong:
-    expect(result.docs.length).toBeLessThanOrEqual(20); // default limit
-    const alice = result.docs.find((d: any) => d.name === "Alice");
+    expect(result.data.length).toBeLessThanOrEqual(20); // default limit
+    const alice = result.data.find((d: any) => d.name === "Alice");
     expect(alice).toBeDefined();
     expect(alice.dept).toBeDefined();
     expect(alice.dept.name).toBe("Engineering");
@@ -558,7 +558,7 @@ describe("8. Populate and Lookup in same query", () => {
     try {
       const result = await empRepo.getAll(parsed);
       // If it succeeds, check what we get
-      const alice = result.docs.find((d: any) => d.name === "Alice");
+      const alice = result.data.find((d: any) => d.name === "Alice");
       // dept (lookup) should work
       expect(alice.dept).toBeDefined();
       expect(alice.dept.name).toBe("Engineering");
@@ -590,9 +590,9 @@ describe("9. Edge cases", () => {
       "lookup[dept][from]=diagdepartments&lookup[dept][localField]=departmentSlug&lookup[dept][foreignField]=slug&lookup[dept][single]=true",
     );
     const result = await empRepo.getAll(parsed);
-    expect(result.docs).toEqual([]);
+    expect(result.data).toEqual([]);
     // $facet metadata is empty array when no docs → total is undefined
-    // Not a functional issue: docs.length === 0 is the reliable empty check
+    // Not a functional issue: data.length === 0 is the reliable empty check
     expect(result.total).toBeUndefined();
   });
 
@@ -602,8 +602,8 @@ describe("9. Edge cases", () => {
       "lookup[x][from]=nonexistent_collection&lookup[x][localField]=departmentSlug&lookup[x][foreignField]=slug&lookup[x][single]=true",
     );
     const result = await empRepo.getAll(parsed);
-    expect(result.docs.length).toBe(4);
-    const alice = result.docs.find((d: any) => d.name === "Alice");
+    expect(result.data.length).toBe(4);
+    const alice = result.data.find((d: any) => d.name === "Alice");
     // Fixed in MongoKit 3.4.1: returns null for no-match
     expect(alice.x).toBeNull();
   });
@@ -614,15 +614,15 @@ describe("9. Edge cases", () => {
       "limit=1&lookup[dept][from]=diagdepartments&lookup[dept][localField]=departmentSlug&lookup[dept][foreignField]=slug&lookup[dept][single]=true",
     );
     const result = await empRepo.getAll(parsed);
-    expect(result.docs.length).toBe(1);
-    expect(result.docs[0].dept).toBeDefined();
+    expect(result.data.length).toBe(1);
+    expect(result.data[0].dept).toBeDefined();
   });
 
   it("should handle select with exclude syntax", async () => {
     await seed();
     const parsed = parseQuery("select=-email,-role");
     const result = await empRepo.getAll(parsed);
-    const alice = result.docs.find((d: any) => d.name === "Alice");
+    const alice = result.data.find((d: any) => d.name === "Alice");
     expect(alice.name).toBe("Alice");
     expect(alice.salary).toBeDefined();
     expect(alice.email).toBeUndefined();
@@ -634,7 +634,7 @@ describe("9. Edge cases", () => {
     const parsed = parseQuery("salary[gte]=80000&salary[lte]=100000");
     const result = await empRepo.getAll(parsed);
     // Bob 95k, Carol 85k
-    expect(result.docs.length).toBe(2);
+    expect(result.data.length).toBe(2);
   });
 });
 

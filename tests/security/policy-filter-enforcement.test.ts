@@ -10,12 +10,12 @@
  * (NOT req.query._policyFilters which can be user-supplied and is stripped out)
  */
 
+import type { StandardRepo } from "@classytic/repo-core/repository";
 import { ObjectId } from "mongodb";
 import { beforeEach, describe, expect, it } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
-import { simpleEqualityMatcher } from "../../src/utils/simpleEqualityMatcher.js";
-import type { StandardRepo } from "@classytic/repo-core/repository";
 import type { AnyRecord, IRequestContext } from "../../src/types/index.js";
+import { simpleEqualityMatcher } from "../../src/utils/simpleEqualityMatcher.js";
 
 /**
  * Helper to create context with policy filters in the correct location
@@ -109,11 +109,7 @@ describe("Security: Policy Filter Enforcement", () => {
         { tenantId: "tenant-a" }, // tenant-a policy
       );
 
-      const result = await controller.get(context);
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(404); // Should not leak existence
-      expect(result.error).toBe("Resource not found");
+      await expect(controller.get(context)).rejects.toMatchObject({ statusCode: 404 });
     });
 
     it("should allow get when policy filters match", async () => {
@@ -130,7 +126,6 @@ describe("Security: Policy Filter Enforcement", () => {
 
       const result = await controller.get(context);
 
-      expect(result.success).toBe(true);
       expect(result.status).toBe(200);
       expect((result.data as AnyRecord).name).toBe("Item 1");
     });
@@ -146,7 +141,6 @@ describe("Security: Policy Filter Enforcement", () => {
 
       const result = await controller.get(context);
 
-      expect(result.success).toBe(true);
       expect(result.status).toBe(200);
     });
 
@@ -166,7 +160,6 @@ describe("Security: Policy Filter Enforcement", () => {
       const result = await controller.get(context);
 
       // Should succeed because query._policyFilters is not trusted
-      expect(result.success).toBe(true);
       expect(result.status).toBe(200);
     });
 
@@ -203,7 +196,6 @@ describe("Security: Policy Filter Enforcement", () => {
       );
 
       const result = await ctrl.get(context);
-      expect(result.success).toBe(true);
       expect(result.status).toBe(200);
       expect((result.data as AnyRecord).name).toBe("Interview 1");
     });
@@ -222,11 +214,7 @@ describe("Security: Policy Filter Enforcement", () => {
         { tenantId: "tenant-a" }, // tenant-a policy
       );
 
-      const result = await controller.update(context);
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(404); // Should not leak existence
-      expect(result.error).toBe("Resource not found");
+      await expect(controller.update(context)).rejects.toMatchObject({ statusCode: 404 });
 
       // Verify item was NOT updated
       const item = await repo.getById("3");
@@ -247,7 +235,6 @@ describe("Security: Policy Filter Enforcement", () => {
 
       const result = await controller.update(context);
 
-      expect(result.success).toBe(true);
       expect(result.status).toBe(200);
       expect((result.data as AnyRecord).name).toBe("Updated Item 1");
     });
@@ -267,10 +254,7 @@ describe("Security: Policy Filter Enforcement", () => {
         },
       );
 
-      const result = await controller.update(context);
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(404); // Policy mismatch
+      await expect(controller.update(context)).rejects.toMatchObject({ statusCode: 404 });
     });
   });
 
@@ -287,11 +271,7 @@ describe("Security: Policy Filter Enforcement", () => {
         { tenantId: "tenant-a" }, // tenant-a policy
       );
 
-      const result = await controller.delete(context);
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(404); // Should not leak existence
-
+      await expect(controller.delete(context)).rejects.toMatchObject({ statusCode: 404 });
       // Verify item was NOT deleted
       const item = await repo.getById("3");
       expect(item).not.toBeNull();
@@ -311,10 +291,7 @@ describe("Security: Policy Filter Enforcement", () => {
 
       const result = await controller.delete(context);
 
-      expect(result.success).toBe(true);
       expect(result.status).toBe(200);
-
-      // Verify item was deleted
       const item = await repo.getById("1");
       expect(item).toBeNull();
     });
@@ -331,12 +308,7 @@ describe("Security: Policy Filter Enforcement", () => {
         { tenantId: "tenant-a" }, // tenant-a user trying to delete
       );
 
-      const result = await controller.delete(context);
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(404);
-
-      // Verify ALL tenant-b items still exist
+      await expect(controller.delete(context)).rejects.toMatchObject({ statusCode: 404 });
       const item = await repo.getById("3");
       expect(item).not.toBeNull();
       expect(item?.tenantId).toBe("tenant-b");
@@ -357,11 +329,8 @@ describe("Security: Policy Filter Enforcement", () => {
         { organizationId: "org-xyz" }, // Org scope in context
       );
 
-      const result = await controller.get(context);
-
-      // Should fail because item doesn't have organizationId matching org-xyz
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(404);
+      // Should fail because item doesn't have organizationId matching org-xyz.
+      await expect(controller.get(context)).rejects.toMatchObject({ statusCode: 404 });
     });
   });
 
@@ -379,8 +348,6 @@ describe("Security: Policy Filter Enforcement", () => {
       );
 
       const result = await controller.get(context);
-
-      expect(result.success).toBe(true);
     });
 
     it("should handle undefined policy filters", async () => {
@@ -393,8 +360,6 @@ describe("Security: Policy Filter Enforcement", () => {
       };
 
       const result = await controller.get(context);
-
-      expect(result.success).toBe(true);
     });
 
     it("should handle empty object policy filters", async () => {
@@ -410,8 +375,6 @@ describe("Security: Policy Filter Enforcement", () => {
       );
 
       const result = await controller.get(context);
-
-      expect(result.success).toBe(true);
     });
   });
 });

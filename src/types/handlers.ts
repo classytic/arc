@@ -201,7 +201,7 @@ export interface IRequestContext<
    * async reschedule(req: IRequestContext) {
    *   const result = await repo.reschedule(req.params.id, req.body);
    *   await req.server?.events?.publish('interview.rescheduled', { data: result });
-   *   return { success: true, data: result };
+   *   return { data: result };
    * }
    * ```
    */
@@ -209,23 +209,22 @@ export interface IRequestContext<
 }
 
 /**
- * Standard response from controller handlers
+ * Controller response shape — the success-path return from any handler.
+ *
+ * Errors throw `ArcError` (or any `HttpError`-shaped class); the global
+ * error handler catches them and emits an `ErrorContract`. There is no
+ * `success` discriminator on the response — HTTP status is the wire
+ * discriminator (2xx = data, 4xx/5xx = ErrorContract).
  */
 export interface IControllerResponse<T = unknown> {
-  /** Operation success status */
-  success: boolean;
-  /** Response data */
-  data?: T;
-  /** Error message (when success is false) */
-  error?: string;
-  /** HTTP status code (default: 200 for success, 400 for error) */
+  /** Response payload — emitted directly to the wire (no envelope wrap). */
+  data: T;
+  /** HTTP status code. Defaults to 200. */
   status?: number;
-  /** Additional metadata */
-  meta?: Record<string, unknown>;
-  /** Error details (for debugging) */
-  details?: Record<string, unknown>;
-  /** Custom response headers (e.g., X-Total-Count, Link, ETag) */
+  /** Custom response headers (e.g. X-Total-Count, Link, ETag). */
   headers?: Record<string, string>;
+  /** Top-level metadata merged into list-shaped responses (e.g. `{ took }`). */
+  meta?: Record<string, unknown>;
 }
 
 /**
@@ -249,7 +248,7 @@ export interface IControllerResponse<T = unknown> {
  * // Untyped req — body is unknown, must be narrowed
  * const createProduct: ControllerHandler<Product> = async (req) => {
  *   const product = await productRepo.create(req.body as Partial<Product>);
- *   return { success: true, data: product, status: 201 };
+ *   return { data: product, status: 201 };
  * };
  *
  * // Fully typed — body, params, query, and response all inferred
@@ -261,7 +260,7 @@ export interface IControllerResponse<T = unknown> {
  * > = async (req) => {
  *   const upsert = req.query.upsert === "true";
  *   const product = await productRepo.update(req.params.id, req.body, { upsert });
- *   return { success: true, data: product };
+ *   return { data: product };
  * };
  *
  * routes: [{

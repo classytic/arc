@@ -9,8 +9,8 @@
  * Not exported from the adapters barrel — internal to arc's store adapters.
  */
 
+import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import type { FilterInput } from "@classytic/repo-core/repository";
-import type { RepositoryLike } from "./interface.js";
 
 /**
  * Classify an error thrown by `getOne` / `getById` / `update` as a

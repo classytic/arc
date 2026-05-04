@@ -25,8 +25,8 @@ Discriminated union on `kind`: `public | authenticated | member | service | elev
 ## Generics & `unknown` defaults
 
 - `BaseController<TDoc = AnyRecord>` — `TDoc` inferred from Mongoose `Model<T>`.
-- `MongooseAdapter<TDoc = unknown>` — forces narrowing.
-- `RepositoryLike` returns `Promise<unknown>` — minimum contract.
+- `MongooseAdapter<TDoc = unknown>` — forces narrowing (lives in `@classytic/mongokit/adapter` since arc 2.12).
+- `RepositoryLike` returns `Promise<unknown>` — minimum contract; re-exported by arc, sourced from `@classytic/repo-core/adapter`.
 - **Never replace `unknown` with `any`.** Defaults exist to enforce type safety at boundaries.
 
 ## Type-only subpaths produce `export {}` at runtime

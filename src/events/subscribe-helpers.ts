@@ -66,7 +66,7 @@ export type PayloadOf<D> = D extends EventDefinitionOutput<infer T> ? T : never;
 // Schema-validating subscribe helpers
 // ============================================================================
 
-export interface WrapWithSchemaOptions<T> {
+export interface WrapWithSchemaOptions<_T> {
   /**
    * Custom validator. Overrides the built-in lookup. Use this to plug AJV /
    * Zod / TypeBox in. Same shape as `EventRegistryOptions.validate`.

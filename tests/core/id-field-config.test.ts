@@ -12,10 +12,10 @@
  * - Policy filters combine correctly with custom idField
  */
 
+import type { StandardRepo } from "@classytic/repo-core/repository";
 import { describe, expect, it } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
 import type { RequestScope } from "../../src/scope/types.js";
-import type { StandardRepo } from "@classytic/repo-core/repository";
 import type { AnyRecord, IRequestContext } from "../../src/types/index.js";
 
 // --------------------------------------------------------------------------
@@ -39,7 +39,7 @@ class FilterTrackingRepository implements StandardRepo {
   async getAll(options?: any) {
     const filter = options?.filter ?? {};
     return {
-      docs: Array.from(this.items.values()).filter((item) => {
+      data: Array.from(this.items.values()).filter((item) => {
         return Object.entries(filter).every(([k, v]) => item[k] === v);
       }),
       total: this.items.size,

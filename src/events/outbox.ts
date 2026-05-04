@@ -41,7 +41,7 @@
  * ```
  */
 
-import type { RepositoryLike } from "../adapters/interface.js";
+import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import type { DeadLetteredEvent, DomainEvent, EventTransport } from "./EventTransport.js";
 import { MemoryOutboxStore } from "./memory-outbox.js";
 import { repositoryAsOutboxStore } from "./repository-outbox-adapter.js";
@@ -643,7 +643,7 @@ export class EventOutbox {
     const valid: DomainEvent[] = [];
     let malformed = 0;
     for (const event of pending) {
-      if (!event || !event.type || !event.meta?.id) {
+      if (!event?.type || !event.meta?.id) {
         this._reportError(
           "malformed_event",
           new InvalidOutboxEventError(
@@ -676,7 +676,7 @@ export class EventOutbox {
 
     if (canPublishMany && valid.length > 0) {
       try {
-        const result = await this._transport.publishMany!(valid);
+        const result = await this._transport.publishMany?.(valid);
         publishOutcomes = new Map(result);
       } catch (batchErr) {
         // Whole-batch failure — synthesize a uniform failure outcome so the
@@ -742,7 +742,7 @@ export class EventOutbox {
         }
 
         try {
-          await this._store.fail!(event.meta.id, normalizeError(publishErr), failOpts);
+          await this._store.fail?.(event.meta.id, normalizeError(publishErr), failOpts);
           if (failOpts.deadLetter) {
             counts.deadLettered++;
             this._attempts.delete(event.meta.id);

@@ -119,8 +119,8 @@ describeRedis("Upstash Redis — retry + DLQ auto-routing (v2.9)", () => {
         throw new Error(`downstream-timeout #${handlerInvocations}`);
       },
       {
-        maxRetries: 2,       // 3 total attempts
-        backoffMs: 10,        // keep the test fast
+        maxRetries: 2, // 3 total attempts
+        backoffMs: 10, // keep the test fast
         jitter: 0,
         transport: dlqSink,
         name: "refundProcessor",

@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { Repository } from '@classytic/mongokit';
-import { defineResource, BaseController, createMongooseAdapter, allowPublic } from '@classytic/arc';
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
+import { defineResource, BaseController, allowPublic } from '@classytic/arc';
 
 const ProductSchema = new mongoose.Schema(
   { name: String, price: Number },

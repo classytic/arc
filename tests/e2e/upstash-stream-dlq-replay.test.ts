@@ -124,7 +124,9 @@ describeRedis("Upstash Redis Streams — DLQ replay envelope (2.11.3)", () => {
 
     // Original event preserved → replay is a single re-publish away.
     expect(envelope.event.type).toBe("billing.charge");
-    expect((envelope.event as DomainEvent<{ customerId: string; amountCents: number }>).payload).toEqual({
+    expect(
+      (envelope.event as DomainEvent<{ customerId: string; amountCents: number }>).payload,
+    ).toEqual({
       customerId: "cus-replay",
       amountCents: 4999,
       currency: "USD",

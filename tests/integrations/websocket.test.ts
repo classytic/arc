@@ -550,10 +550,8 @@ describe("Stats endpoint", () => {
     const res = await app.inject({ method: "GET", url: "/ws/stats" });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body).toEqual({
-      success: true,
-      data: { clients: 0, rooms: 0, subscriptions: {} },
-    });
+    // No-envelope: stats payload emitted raw at the top level.
+    expect(body).toEqual({ clients: 0, rooms: 0, subscriptions: {} });
   });
 
   it("exposeStats: 'authenticated' adds preHandler when fastify.authenticate exists", async () => {
@@ -614,9 +612,9 @@ describe("Stats endpoint", () => {
 
     const res = await app.inject({ method: "GET", url: "/ws/stats" });
     const body = JSON.parse(res.body);
-    expect(body.data.clients).toBe(1);
-    expect(body.data.rooms).toBe(1);
-    expect(body.data.subscriptions.products).toBe(1);
+    expect(body.clients).toBe(1);
+    expect(body.rooms).toBe(1);
+    expect(body.subscriptions.products).toBe(1);
 
     ws.close();
   });
@@ -652,8 +650,8 @@ describe("Client cleanup", () => {
 
     const res = await app.inject({ method: "GET", url: "/ws/stats" });
     const body = JSON.parse(res.body);
-    expect(body.data.clients).toBe(0);
-    expect(body.data.rooms).toBe(0);
+    expect(body.clients).toBe(0);
+    expect(body.rooms).toBe(0);
   });
 
   it("onConnect and onDisconnect callbacks are invoked", async () => {

@@ -10,15 +10,20 @@
  * - Action name cannot collide with CRUD operations
  */
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import mongoose from "mongoose";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
-import { setupTestDatabase, teardownTestDatabase, createMockModel, createMockRepository } from "../setup.js";
-import { defineResource } from "../../src/core/defineResource.js";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
+import type mongoose from "mongoose";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
+import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
-import { allowPublic, requireAuth, requireRoles } from "../../src/permissions/index.js";
+import { allowPublic, requireRoles } from "../../src/permissions/index.js";
+import {
+  createMockModel,
+  createMockRepository,
+  setupTestDatabase,
+  teardownTestDatabase,
+} from "../setup.js";
 
 describe("v2.8: routes + actions", () => {
   let app: FastifyInstance;
@@ -56,7 +61,7 @@ describe("v2.8: routes + actions", () => {
           path: "/stats",
           summary: "Item statistics",
           permissions: allowPublic(),
-          handler: async (_req, reply) => reply.send({ success: true, data: { total: 99 } }),
+          handler: async (_req, reply) => reply.send({ total: 99 }),
           raw: true,
         },
         {
@@ -64,7 +69,7 @@ describe("v2.8: routes + actions", () => {
           path: "/bulk-activate",
           summary: "Activate all items",
           permissions: allowPublic(),
-          handler: async (_req, reply) => reply.send({ success: true, activated: 5 }),
+          handler: async (_req, reply) => reply.send({ activated: 5 }),
           raw: true,
         },
       ],
@@ -120,7 +125,7 @@ describe("v2.8: routes + actions", () => {
 
     // Get an ID for action tests
     const list = await app.inject({ method: "GET", url: "/items" });
-    productId = JSON.parse(list.body).docs[0]._id;
+    productId = JSON.parse(list.body).data[0]._id;
   });
 
   afterAll(async () => {
@@ -133,13 +138,13 @@ describe("v2.8: routes + actions", () => {
   it("CRUD list works", async () => {
     const res = await app.inject({ method: "GET", url: "/items" });
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).docs.length).toBe(2);
+    expect(JSON.parse(res.body).data.length).toBe(2);
   });
 
   it("CRUD get works", async () => {
     const res = await app.inject({ method: "GET", url: `/items/${productId}` });
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).data._id).toBe(productId);
+    expect(JSON.parse(res.body)._id).toBe(productId);
   });
 
   it("CRUD create works", async () => {
@@ -156,7 +161,7 @@ describe("v2.8: routes + actions", () => {
   it("custom route GET /stats works", async () => {
     const res = await app.inject({ method: "GET", url: "/items/stats" });
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).data.total).toBe(99);
+    expect(JSON.parse(res.body).total).toBe(99);
   });
 
   it("custom route POST /bulk-activate works", async () => {
@@ -175,8 +180,7 @@ describe("v2.8: routes + actions", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.success).toBe(true);
-    expect(body.data).toMatchObject({ id: productId, status: "approved" });
+    expect(body).toMatchObject({ id: productId, status: "approved" });
   });
 
   it("action: dispatch (full config with data)", async () => {
@@ -187,7 +191,7 @@ describe("v2.8: routes + actions", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.data.transport).toEqual({ driver: "John" });
+    expect(body.transport).toEqual({ driver: "John" });
   });
 
   it("action: cancel (full config with schema)", async () => {
@@ -197,7 +201,7 @@ describe("v2.8: routes + actions", () => {
       payload: { action: "cancel", reason: "No longer needed" },
     });
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).data.reason).toBe("No longer needed");
+    expect(JSON.parse(res.body).reason).toBe("No longer needed");
   });
 
   it("action: invalid action returns 400", async () => {
@@ -348,7 +352,7 @@ describe("v2.8: routes — extended", () => {
     await app.ready();
 
     const list = await app.inject({ method: "GET", url: "/route-ext" });
-    itemId = JSON.parse(list.body).docs[0]._id;
+    itemId = JSON.parse(list.body).data[0]._id;
   });
 
   afterAll(async () => {
@@ -361,7 +365,7 @@ describe("v2.8: routes — extended", () => {
     const res = await app.inject({ method: "GET", url: "/route-ext/stats" });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.data.total).toBe(42);
+    expect(body.total).toBe(42);
   });
 
   // 2. Route with raw: true bypasses pipeline
@@ -379,7 +383,7 @@ describe("v2.8: routes — extended", () => {
     const res = await app.inject({ method: "GET", url: "/route-ext/pipeline-info" });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.data.pipelined).toBe(true);
+    expect(body.pipelined).toBe(true);
   });
 
   // 4. Route permissions are enforced
@@ -428,8 +432,8 @@ describe("v2.8: routes — extended", () => {
     });
     // Verify the resource retained routes with mcp: false preserved
     expect(resource.routes).toBeDefined();
-    expect(resource.routes!.length).toBe(1);
-    expect(resource.routes![0].mcp).toBe(false);
+    expect(resource.routes?.length).toBe(1);
+    expect(resource.routes?.[0].mcp).toBe(false);
   });
 });
 
@@ -464,7 +468,7 @@ describe("v2.8: actions — extended", () => {
           path: "/summary",
           summary: "Order summary",
           permissions: allowPublic(),
-          handler: async (_req, reply) => reply.send({ success: true, data: { total: 10 } }),
+          handler: async (_req, reply) => reply.send({ total: 10 }),
           raw: true,
         },
       ],
@@ -511,7 +515,7 @@ describe("v2.8: actions — extended", () => {
     await app.ready();
 
     const list = await app.inject({ method: "GET", url: "/orders" });
-    itemId = JSON.parse(list.body).docs[0]._id;
+    itemId = JSON.parse(list.body).data[0]._id;
   });
 
   afterAll(async () => {
@@ -527,7 +531,7 @@ describe("v2.8: actions — extended", () => {
       payload: { action: "approve" },
     });
     expect(approveRes.statusCode).toBe(200);
-    expect(JSON.parse(approveRes.body).data.status).toBe("approved");
+    expect(JSON.parse(approveRes.body).status).toBe("approved");
 
     const dispatchRes = await app.inject({
       method: "POST",
@@ -535,7 +539,7 @@ describe("v2.8: actions — extended", () => {
       payload: { action: "dispatch", carrier: "FedEx" },
     });
     expect(dispatchRes.statusCode).toBe(200);
-    expect(JSON.parse(dispatchRes.body).data.status).toBe("dispatched");
+    expect(JSON.parse(dispatchRes.body).status).toBe("dispatched");
   });
 
   // 8. Per-action discriminated body schema enforcement (v2.8.1)
@@ -561,8 +565,7 @@ describe("v2.8: actions — extended", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.success).toBe(true);
-    expect(body.data.carrier).toBe("FedEx");
+    expect(body.carrier).toBe("FedEx");
   });
 
   it("action with no schema (bare handler) accepts empty body", async () => {
@@ -574,7 +577,6 @@ describe("v2.8: actions — extended", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.success).toBe(true);
   });
 
   it("wrong action name is rejected by discriminator (not just by enum)", async () => {
@@ -595,7 +597,12 @@ describe("v2.8: actions — extended", () => {
       payload: { action: "approve" },
     });
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).success).toBe(true);
+    // Post-migration: success is implicit from HTTP 200 — assert on the
+    // handler's return shape directly. The bare `approve` handler returns
+    // `{ id, status: 'approved' }`, no envelope.
+    const body = JSON.parse(res.body);
+    expect(body.id).toBe(itemId);
+    expect(body.status).toBe("approved");
   });
 
   // 10. Action handler receives correct id from URL params
@@ -607,7 +614,7 @@ describe("v2.8: actions — extended", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.data.id).toBe(itemId);
+    expect(body.id).toBe(itemId);
   });
 
   // 11. Action handler receives correct data from body (without the action field)
@@ -619,9 +626,9 @@ describe("v2.8: actions — extended", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.data.reason).toBe("Quality issues");
+    expect(body.reason).toBe("Quality issues");
     // The `action` field should NOT be passed to handler as data
-    expect(body.data.action).toBeUndefined();
+    expect(body.action).toBeUndefined();
   });
 
   // 12. Actions work alongside CRUD and routes on same resource
@@ -633,7 +640,7 @@ describe("v2.8: actions — extended", () => {
     // Custom route
     const summaryRes = await app.inject({ method: "GET", url: "/orders/summary" });
     expect(summaryRes.statusCode).toBe(200);
-    expect(JSON.parse(summaryRes.body).data.total).toBe(10);
+    expect(JSON.parse(summaryRes.body).total).toBe(10);
 
     // Action
     const actionRes = await app.inject({
@@ -642,7 +649,7 @@ describe("v2.8: actions — extended", () => {
       payload: { action: "approve" },
     });
     expect(actionRes.statusCode).toBe(200);
-    expect(JSON.parse(actionRes.body).data.status).toBe("approved");
+    expect(JSON.parse(actionRes.body).status).toBe("approved");
   });
 });
 
@@ -682,7 +689,7 @@ describe("v2.8: edge cases", () => {
       payload: { action: "start" },
     });
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).data.started).toBe(true);
+    expect(JSON.parse(res.body).started).toBe(true);
 
     await app.close();
     await teardownTestDatabase();
@@ -793,7 +800,10 @@ describe("v2.10.5: action permission fallback chain (security)", () => {
       name: "invoicePermFallback",
       displayName: "Invoice (perm fallback)",
       prefix: "/invoice-pf",
-      adapter: createMongooseAdapter({ model: Model as unknown as mongoose.Model<unknown>, repository: repo }),
+      adapter: createMongooseAdapter({
+        model: Model as unknown as mongoose.Model<unknown>,
+        repository: repo,
+      }),
       permissions: {
         list: allowPublic(),
         get: allowPublic(),
@@ -866,7 +876,10 @@ describe("v2.10.5: action permission fallback chain (security)", () => {
       name: "noGateAction",
       displayName: "No-gate action",
       prefix: "/no-gate",
-      adapter: createMongooseAdapter({ model: Model as unknown as mongoose.Model<unknown>, repository: repo }),
+      adapter: createMongooseAdapter({
+        model: Model as unknown as mongoose.Model<unknown>,
+        repository: repo,
+      }),
       permissions: {
         list: allowPublic(),
         get: allowPublic(),
@@ -905,7 +918,10 @@ describe("v2.10.5: action permission fallback chain (security)", () => {
       name: "explicitGate",
       displayName: "Explicit gate",
       prefix: "/explicit",
-      adapter: createMongooseAdapter({ model: Model as unknown as mongoose.Model<unknown>, repository: repo }),
+      adapter: createMongooseAdapter({
+        model: Model as unknown as mongoose.Model<unknown>,
+        repository: repo,
+      }),
       permissions: {
         list: allowPublic(),
         get: allowPublic(),
@@ -1009,4 +1025,3 @@ describe("v2.8: type safety", () => {
     expect(typeof stringRoute.handler).toBe("string");
   });
 });
-

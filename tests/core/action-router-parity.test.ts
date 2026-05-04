@@ -28,11 +28,10 @@
  *      decorator replays action responses for the same key + body.
  */
 
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import Fastify, { type FastifyInstance } from "fastify";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -40,6 +39,7 @@ import { idempotencyPlugin } from "../../src/idempotency/idempotencyPlugin.js";
 import { fields } from "../../src/permissions/fields.js";
 import { allowPublic, requireRoles } from "../../src/permissions/index.js";
 import type { Guard, Interceptor, Transform } from "../../src/pipeline/types.js";
+import { ArcError } from "../../src/utils/errors.js";
 import {
   createMockModel,
   createMockRepository,
@@ -123,9 +123,9 @@ describe("Action router — field-masking parity with CRUD", () => {
     const res = await app.inject({ method: "GET", url: `/maskusers/${userId}` });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.data).toBeDefined();
-    expect(body.data.name).toBe("Alice");
-    expect(body.data).not.toHaveProperty("description");
+    expect(body).toBeDefined();
+    expect(body.name).toBe("Alice");
+    expect(body).not.toHaveProperty("description");
   });
 
   it("Action POST /:id/action → `description` is stripped (same masking as CRUD)", async () => {
@@ -139,11 +139,10 @@ describe("Action router — field-masking parity with CRUD", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.success).toBe(true);
-    expect(body.data).toBeDefined();
-    expect(body.data.name).toBe("Alice");
+    expect(body).toBeDefined();
+    expect(body.name).toBe("Alice");
     // The critical assertion: field masking applied on the action path too.
-    expect(body.data).not.toHaveProperty("description");
+    expect(body).not.toHaveProperty("description");
   });
 });
 
@@ -192,7 +191,10 @@ describe("Action router — pipeline integration", () => {
       handler: async (_ctx, next) => {
         interceptorCalls.push("interceptor:before");
         const result = await next();
-        interceptorCalls.push(`interceptor:after:${result.success}`);
+        // Post-migration: interceptors see the raw handler return value
+        // directly (no `success`/`data` envelope). Tag the after-hook
+        // with whether the result is non-null — the canonical signal.
+        interceptorCalls.push(`interceptor:after:${result != null}`);
         return result;
       },
     };
@@ -247,7 +249,7 @@ describe("Action router — pipeline integration", () => {
       payload: { action: "approve" },
     });
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).data.status).toBe("approved");
+    expect(JSON.parse(res.body).status).toBe("approved");
 
     // All three pipeline steps fired once for this request
     expect(guardCalls).toEqual(["guard:ran"]);
@@ -286,8 +288,7 @@ describe("disableDefaultRoutes — custom-routes-only resource", () => {
           path: "/stats",
           summary: "Custom stats endpoint",
           permissions: allowPublic(),
-          handler: async (_req, reply) =>
-            reply.send({ success: true, data: { count: await Model.countDocuments() } }),
+          handler: async (_req, reply) => reply.send({ count: await Model.countDocuments() }),
           raw: true,
         },
         {
@@ -320,7 +321,7 @@ describe("disableDefaultRoutes — custom-routes-only resource", () => {
   it("custom GET /stats route works", async () => {
     const res = await app.inject({ method: "GET", url: "/customonly/stats" });
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).data.count).toBe(2);
+    expect(JSON.parse(res.body).count).toBe(2);
   });
 
   it("CRUD GET / returns 404 (default route not mounted)", async () => {
@@ -425,7 +426,7 @@ describe("Action router — mixed public/protected preHandler auth chain", () =>
       payload: { action: "ping" },
     });
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).data.pong).toBe(true);
+    expect(JSON.parse(res.body).pong).toBe(true);
   });
 
   it("protected action `promote` rejects without a token (permission check fails-closed)", async () => {
@@ -576,21 +577,26 @@ describe("Action router — pipeline failure fidelity", () => {
     const [u] = await Model.create([{ name: "fail-test", isActive: true }]);
     itemId = String(u._id);
 
-    // Interceptor that rejects with a fully-populated error response —
-    // mimics how domain validators/quota checks return structured failures.
+    // Interceptor that rejects by THROWING an `ArcError` (post-2.12
+    // contract). The action router rethrows ArcError instances; the
+    // global error handler runs them through `toErrorContract()` from
+    // `@classytic/repo-core/errors` to emit the canonical wire shape:
+    //   `{ code, message, status, details?, meta? }`
+    //
+    // Domain-specific diagnostics (quota limits, retryability) ride
+    // through the `meta` slot — `details` is reserved for field-scoped
+    // failures (validation errors, duplicate-key fields).
     const rejectingInterceptor: Interceptor = {
       _type: "interceptor",
       name: "quotaCheck",
       handler: async (_ctx, _next) => {
-        // Short-circuit — don't call next(). Return a structured rejection
-        // that a CRUD pipeline would also return (parity by construction).
-        return {
-          success: false,
-          status: 422,
-          error: "Quota exceeded",
+        // Short-circuit — don't call next(). Throwing surfaces a
+        // structured rejection identical to the CRUD pipeline path.
+        throw new ArcError("Quota exceeded", {
+          statusCode: 422,
+          code: "QUOTA_EXCEEDED",
           details: { limit: 100, used: 150 },
-          meta: { code: "QUOTA_EXCEEDED", retryable: false },
-        };
+        });
       },
     };
 
@@ -632,23 +638,27 @@ describe("Action router — pipeline failure fidelity", () => {
     await teardownTestDatabase();
   });
 
-  it("pipeline rejection propagates status, error, details, and meta to the client", async () => {
+  it("pipeline rejection propagates status, code, message, and details to the client", async () => {
     const res = await app.inject({
       method: "POST",
       url: `/pipelinefail/${itemId}/action`,
       payload: { action: "charge" },
     });
-    // Status code honored — NOT collapsed to 500
+    // Status code honored — NOT collapsed to 500.
     expect(res.statusCode).toBe(422);
     const body = JSON.parse(res.body);
-    expect(body.success).toBe(false);
-    // Error message preserved verbatim
-    expect(body.error).toBe("Quota exceeded");
-    // Details reach the client — domain info for API consumers
-    expect(body.details).toEqual({ limit: 100, used: 150 });
-    // Meta reaches the client — machine-readable code + retryability hint
+    // Canonical ErrorContract wire shape:
+    //   `code` is the machine-readable identifier consumers branch on
+    //   `message` is the human-readable string preserved verbatim
+    //   `status` mirrors the HTTP status for clients that read body-only
+    //   `details` carries the structured domain payload the throw set
     expect(body.code).toBe("QUOTA_EXCEEDED");
-    expect(body.retryable).toBe(false);
+    expect(body.message).toBe("Quota exceeded");
+    expect(body.status).toBe(422);
+    // Use `toMatchObject` because the global error handler's
+    // development-mode shaper attaches a `stack` field to `meta` for
+    // 4xx errors. The domain payload is what matters here.
+    expect(body.meta).toMatchObject({ limit: 100, used: 150 });
   });
 });
 

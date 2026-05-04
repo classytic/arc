@@ -39,7 +39,7 @@ function makeMockAdapterWithObjectIdPattern() {
   return {
     type: "mock" as const,
     repository: {
-      getAll: vi.fn().mockResolvedValue({ docs: [], total: 0, page: 1, limit: 20 }),
+      getAll: vi.fn().mockResolvedValue({ data: [], total: 0, page: 1, limit: 20 }),
       getById: vi.fn(async (id: string) => ({ _id: id, name: "Test" })),
       getOne: vi.fn(async (filter: Record<string, unknown>) => ({
         _id: "abc",
@@ -80,7 +80,7 @@ function makeAdapterRespectingContext() {
   return {
     type: "mock" as const,
     repository: {
-      getAll: vi.fn().mockResolvedValue({ docs: [], total: 0, page: 1, limit: 20 }),
+      getAll: vi.fn().mockResolvedValue({ data: [], total: 0, page: 1, limit: 20 }),
       getById: vi.fn(async (id: string) => ({ _id: "abc", jobId: id, name: "Test" })),
       getOne: vi.fn(async (filter: Record<string, unknown>) => ({
         _id: "abc",

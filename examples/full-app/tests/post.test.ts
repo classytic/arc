@@ -39,7 +39,7 @@ describe("Post Resource", () => {
       await PostModel.create({ title: "Hello", body: "World", status: "published" });
       const res = await app.inject({ method: "GET", url: "/posts" });
       expect(res.statusCode).toBe(200);
-      expect(res.json().docs).toHaveLength(1);
+      expect(res.json().data).toHaveLength(1);
     });
 
     it("supports status filter", async () => {
@@ -49,8 +49,8 @@ describe("Post Resource", () => {
       ]);
       const res = await app.inject({ method: "GET", url: "/posts?status=published" });
       expect(res.statusCode).toBe(200);
-      expect(res.json().docs).toHaveLength(1);
-      expect(res.json().docs[0].title).toBe("Published");
+      expect(res.json().data).toHaveLength(1);
+      expect(res.json().data[0].title).toBe("Published");
     });
 
     it("supports sort by title", async () => {
@@ -60,8 +60,8 @@ describe("Post Resource", () => {
       ]);
       const res = await app.inject({ method: "GET", url: "/posts?sort=title" });
       expect(res.statusCode).toBe(200);
-      expect(res.json().docs[0].title).toBe("Apple");
-      expect(res.json().docs[1].title).toBe("Banana");
+      expect(res.json().data[0].title).toBe("Apple");
+      expect(res.json().data[1].title).toBe("Banana");
     });
   });
 
@@ -76,7 +76,7 @@ describe("Post Resource", () => {
         payload: { title: "My Post", body: "Content here", tags: ["tech"] },
       });
       expect(res.statusCode).toBe(201);
-      const data = res.json().data;
+      const data = res.json();
       expect(data.title).toBe("My Post");
       expect(data.createdBy).toBe(editorId);
     });
@@ -105,7 +105,7 @@ describe("Post Resource", () => {
         payload: { title: "Updated Title" },
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json().data.title).toBe("Updated Title");
+      expect(res.json().title).toBe("Updated Title");
     });
 
     it("allows admin to update any post", async () => {
@@ -163,14 +163,14 @@ describe("Post Resource", () => {
       const page1 = await app.inject({ method: "GET", url: "/posts?page=1&limit=10" });
       expect(page1.statusCode).toBe(200);
       const body1 = page1.json();
-      expect(body1.docs).toHaveLength(10);
+      expect(body1.data).toHaveLength(10);
       expect(body1.total).toBe(25);
       expect(body1.pages).toBe(3);
       expect(body1.hasNext).toBe(true);
 
       const page3 = await app.inject({ method: "GET", url: "/posts?page=3&limit=10" });
       const body3 = page3.json();
-      expect(body3.docs).toHaveLength(5);
+      expect(body3.data).toHaveLength(5);
       expect(body3.hasNext).toBe(false);
     });
   });

@@ -8,10 +8,11 @@
  * and pass the result as customSchemas — the adapter already has access to the model.
  */
 
+import { buildCrudSchemasFromModel } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import Fastify from "fastify";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { allowPublic } from "../../src/permissions/index.js";
@@ -55,13 +56,16 @@ async function buildTestApp(
   const Model = createMockModel(`AutoSchema${Date.now()}`);
   const repo = createMockRepository(Model);
 
+  // arc 2.12 cut its built-in mongoose-schema fallback. The canonical
+  // schema generator for arc + Mongoose is mongokit's
+  // `buildCrudSchemasFromModel`. Tests default to it so they exercise the
+  // intended production wiring; explicit override stays available for
+  // tests that need a custom generator (lines 156-237 below).
   const adapterOpts: Record<string, unknown> = {
     model: Model,
     repository: repo,
+    schemaGenerator: resourceOptions.schemaGenerator ?? buildCrudSchemasFromModel,
   };
-  if (resourceOptions.schemaGenerator) {
-    adapterOpts.schemaGenerator = resourceOptions.schemaGenerator;
-  }
 
   const resource = defineResource({
     name: "item",

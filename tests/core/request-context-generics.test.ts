@@ -155,7 +155,6 @@ describe("IRequestContext generics — type-level flexibility", () => {
     };
 
     const result = await handler(req);
-    expect(result.success).toBe(true);
     expect(result.data?.name).toBe("Widget");
   });
 
@@ -197,7 +196,6 @@ describe("IRequestContext generics — type-level flexibility", () => {
       headers: {},
     });
 
-    expect(result.success).toBe(true);
     expect(result.data).toEqual({ _id: "p-1", name: "New Name", price: 99 });
     expect(result.meta?.upsert).toBe(true);
   });

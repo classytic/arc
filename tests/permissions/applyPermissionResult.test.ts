@@ -261,8 +261,9 @@ describe("evaluateAndApplyPermission — denial path", () => {
     expect(authorized).toBe(false);
     expect(reply.code).toHaveBeenCalledWith(401);
     expect(reply.send).toHaveBeenCalledWith({
-      success: false,
-      error: "Authentication required",
+      code: "arc.unauthorized",
+      message: "Authentication required",
+      status: 401,
     });
   });
 
@@ -281,8 +282,9 @@ describe("evaluateAndApplyPermission — denial path", () => {
     expect(authorized).toBe(false);
     expect(reply.code).toHaveBeenCalledWith(403);
     expect(reply.send).toHaveBeenCalledWith({
-      success: false,
-      error: "Permission denied",
+      code: "arc.forbidden",
+      message: "Permission denied",
+      status: 403,
     });
   });
 
@@ -297,8 +299,9 @@ describe("evaluateAndApplyPermission — denial path", () => {
     await evaluateAndApplyPermission(check, makeContext({ user: { id: "u1" } }), req, reply);
 
     expect(reply.send).toHaveBeenCalledWith({
-      success: false,
-      error: "user lacks role admin",
+      code: "arc.forbidden",
+      message: "user lacks role admin",
+      status: 403,
     });
   });
 
@@ -311,8 +314,9 @@ describe("evaluateAndApplyPermission — denial path", () => {
     await evaluateAndApplyPermission(check, makeContext({ user: { id: "u1" } }), req, reply);
 
     expect(reply.send).toHaveBeenCalledWith({
-      success: false,
-      error: "Permission denied",
+      code: "arc.forbidden",
+      message: "Permission denied",
+      status: 403,
     });
   });
 
@@ -333,8 +337,9 @@ describe("evaluateAndApplyPermission — denial path", () => {
     );
 
     expect(reply.send).toHaveBeenCalledWith({
-      success: false,
-      error: "Permission denied for 'approve'",
+      code: "arc.forbidden",
+      message: "Permission denied for 'approve'",
+      status: 403,
     });
   });
 
@@ -343,19 +348,14 @@ describe("evaluateAndApplyPermission — denial path", () => {
     const reply = makeReply();
     const check: PermissionCheck = async () => ({ granted: false, reason: "rate limited" });
 
-    await evaluateAndApplyPermission(
-      check,
-      makeContext({ user: { id: "u1" } }),
-      req,
-      reply,
-      {
-        defaultDenialMessage: () => "ignored default",
-      },
-    );
+    await evaluateAndApplyPermission(check, makeContext({ user: { id: "u1" } }), req, reply, {
+      defaultDenialMessage: () => "ignored default",
+    });
 
     expect(reply.send).toHaveBeenCalledWith({
-      success: false,
-      error: "rate limited",
+      code: "arc.forbidden",
+      message: "rate limited",
+      status: 403,
     });
   });
 
@@ -388,8 +388,9 @@ describe("evaluateAndApplyPermission — thrown check", () => {
     expect(authorized).toBe(false);
     expect(reply.code).toHaveBeenCalledWith(403);
     expect(reply.send).toHaveBeenCalledWith({
-      success: false,
-      error: "Permission denied",
+      code: "arc.forbidden",
+      message: "Permission denied",
+      status: 403,
     });
     expect(req.log?.warn).toHaveBeenCalledWith(
       expect.objectContaining({

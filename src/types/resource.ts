@@ -5,12 +5,12 @@
  * config, presets, hooks, events. The big domain file.
  */
 
+import type { DataAdapter } from "@classytic/repo-core/adapter";
 import type {
   FieldRule as RepoCoreFieldRule,
   SchemaBuilderOptions,
 } from "@classytic/repo-core/schema";
 import type { FastifyInstance, FastifyReply, FastifyRequest, RouteHandlerMethod } from "fastify";
-import type { DataAdapter } from "../adapters/interface.js";
 import type { PermissionCheck, UserBase } from "../permissions/types.js";
 import type { AnyRecord } from "./base.js";
 import type { MiddlewareHandler, RequestWithExtras } from "./fastify.js";
@@ -518,9 +518,13 @@ export interface ResourceHookContext {
  * ```
  */
 export interface ResourceHooks {
-  beforeCreate?: (ctx: ResourceHookContext) => Promise<AnyRecord | void> | AnyRecord | void;
+  beforeCreate?: (
+    ctx: ResourceHookContext,
+  ) => Promise<AnyRecord | undefined> | AnyRecord | undefined;
   afterCreate?: (ctx: ResourceHookContext) => Promise<void> | void;
-  beforeUpdate?: (ctx: ResourceHookContext) => Promise<AnyRecord | void> | AnyRecord | void;
+  beforeUpdate?: (
+    ctx: ResourceHookContext,
+  ) => Promise<AnyRecord | undefined> | AnyRecord | undefined;
   afterUpdate?: (ctx: ResourceHookContext) => Promise<void> | void;
   beforeDelete?: (ctx: ResourceHookContext) => Promise<void> | void;
   afterDelete?: (ctx: ResourceHookContext) => Promise<void> | void;
@@ -679,6 +683,31 @@ export interface ResourceConfig<TDoc = AnyRecord> {
    * Only applies when `actions` is defined.
    */
   actionPermissions?: PermissionCheck;
+  /**
+   * Declarative aggregations (v2.13) — generate `GET /:resource/aggregations/:name`
+   * routes from the portable `AggRequest` IR. Each entry pins permissions,
+   * filters, lookups, measures, sort, limit, plus big-data safety knobs
+   * (timeout, maxGroups, requireDateRange, indexHint, materialized).
+   *
+   * @example
+   * ```ts
+   * defineResource({
+   *   name: 'order',
+   *   aggregations: {
+   *     revenueByStatus: defineAggregation({
+   *       groupBy: 'status',
+   *       measures: { count: 'count', revenue: 'sum:totalPrice' },
+   *       permissions: requireRoles(['admin']),
+   *       requireDateRange: { field: 'createdAt', maxRangeDays: 90 },
+   *       timeout: 5000,
+   *       maxGroups: 1000,
+   *       cache: { staleTime: 60 },
+   *     }),
+   *   },
+   * });
+   * ```
+   */
+  aggregations?: import("../core/aggregation/types.js").AggregationsMap;
   disableCrud?: boolean;
   disableDefaultRoutes?: boolean;
   /** Specific routes to disable */

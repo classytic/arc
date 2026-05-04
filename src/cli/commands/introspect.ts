@@ -94,6 +94,17 @@ export async function introspect(args: string[]): Promise<void> {
         console.log(`   Additional Routes: ${resource.customRoutes.length}`);
       }
 
+      if (resource.actions && resource.actions.length > 0) {
+        const fallback = resource.actionPermissions
+          ? ` (fallback: ${describePermission(resource.actionPermissions)})`
+          : "";
+        console.log(`   Actions: ${resource.actions.map((a) => a.name).join(", ")}${fallback}`);
+      }
+
+      if (resource.aggregations && resource.aggregations.length > 0) {
+        console.log(`   Aggregations: ${resource.aggregations.map((a) => a.name).join(", ")}`);
+      }
+
       console.log("");
     });
 
@@ -104,6 +115,12 @@ export async function introspect(args: string[]): Promise<void> {
     console.log(`  With Presets: ${resources.filter((r) => r.presets?.length > 0).length}`);
     console.log(
       `  With Custom Routes: ${resources.filter((r) => r.customRoutes && r.customRoutes.length > 0).length}`,
+    );
+    console.log(
+      `  With Actions: ${resources.filter((r) => r.actions && r.actions.length > 0).length}`,
+    );
+    console.log(
+      `  With Aggregations: ${resources.filter((r) => r.aggregations && r.aggregations.length > 0).length}`,
     );
   } catch (error: unknown) {
     if (error instanceof Error) throw error;

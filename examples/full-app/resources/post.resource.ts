@@ -7,9 +7,10 @@
 
 import mongoose from "mongoose";
 import { defineResource } from "../../../src/core/index.js";
-import { createMongooseAdapter } from "../../../src/adapters/index.js";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { allowPublic, requireAuth, requireRoles } from "../../../src/permissions/index.js";
 import { Repository } from "@classytic/mongokit";
+import { NotFoundError } from "../../../src/utils/errors.js";
 
 // Schema
 const postSchema = new mongoose.Schema(
@@ -74,8 +75,8 @@ export default defineResource({
           { status: "published" },
           { new: true },
         ).lean();
-        if (!post) return reply.code(404).send({ success: false, error: "Post not found" });
-        return reply.send({ success: true, data: post });
+        if (!post) throw new NotFoundError("Post", id);
+        return reply.send(post);
       },
     },
   ],

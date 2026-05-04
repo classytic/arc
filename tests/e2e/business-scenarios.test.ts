@@ -6,10 +6,10 @@
  */
 
 import { QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -120,7 +120,7 @@ describe("Scenario: Accounting App", () => {
       },
     });
     expect(res.statusCode).toBe(201);
-    const data = res.json().data;
+    const data = res.json();
     expect(data.entries).toHaveLength(2);
     expect(data.entries[0].debit).toBe(500);
     expect(data.entries[1].credit).toBe(500);
@@ -151,7 +151,7 @@ describe("Scenario: Accounting App", () => {
     // Mongoose may reject at DB level (required:true) — that's expected, middleware injects it.
     if (res.statusCode === 400) {
       const body = res.json();
-      expect(body.code).not.toBe("VALIDATION_ERROR");
+      expect(body.code).not.toBe("arc.validation_error");
     }
   });
 
@@ -161,7 +161,7 @@ describe("Scenario: Accounting App", () => {
       url: "/journal-entries?status=draft",
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().docs.length).toBeGreaterThanOrEqual(1);
+    expect(res.json().data.length).toBeGreaterThanOrEqual(1);
   });
 
   it("short date strings (2026-01-15) pass Fastify validation", async () => {
@@ -185,7 +185,7 @@ describe("Scenario: Accounting App", () => {
     expect(res.statusCode).toBeGreaterThanOrEqual(400);
     if (res.statusCode === 400) {
       const body = res.json();
-      expect(body.code).not.toBe("VALIDATION_ERROR");
+      expect(body.code).not.toBe("arc.validation_error");
     }
   });
 
@@ -313,12 +313,12 @@ describe("Scenario: Multi-Branch App (mixed tenantField)", () => {
   it("company-wide resource (tenantField: false) returns all records", async () => {
     const res = await app.inject({ method: "GET", url: "/account-types" });
     expect(res.statusCode).toBe(200);
-    expect(res.json().docs.length).toBe(3);
+    expect(res.json().data.length).toBe(3);
   });
 
   it("company-wide resource: immutable field (code) cannot be updated", async () => {
     const list = await app.inject({ method: "GET", url: "/account-types" });
-    const cash = list.json().docs.find((d: any) => d.code === "1000");
+    const cash = list.json().data.find((d: any) => d.code === "1000");
     expect(cash).toBeDefined();
 
     const res = await app.inject({
@@ -327,8 +327,8 @@ describe("Scenario: Multi-Branch App (mixed tenantField)", () => {
       payload: { code: "9999", name: "Updated Cash" },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().data.name).toBe("Updated Cash");
-    expect(res.json().data.code).toBe("1000"); // immutable — not changed
+    expect(res.json().name).toBe("Updated Cash");
+    expect(res.json().code).toBe("1000"); // immutable — not changed
   });
 
   it("per-branch resource CRUD works (branchId provided)", async () => {
@@ -343,7 +343,7 @@ describe("Scenario: Multi-Branch App (mixed tenantField)", () => {
 
     const list = await app.inject({ method: "GET", url: "/orders" });
     expect(list.statusCode).toBe(200);
-    expect(list.json().docs.length).toBeGreaterThanOrEqual(1);
+    expect(list.json().data.length).toBeGreaterThanOrEqual(1);
   });
 
   it("branchId not required in Fastify body SCHEMA (systemManaged)", async () => {
@@ -360,7 +360,7 @@ describe("Scenario: Multi-Branch App (mixed tenantField)", () => {
     // May be a Mongoose validation error (code: BAD_REQUEST) — that's the DB layer, not Arc
     if (res.statusCode === 400) {
       const body = res.json();
-      expect(body.code).not.toBe("VALIDATION_ERROR");
+      expect(body.code).not.toBe("arc.validation_error");
     }
   });
 });
@@ -447,7 +447,7 @@ describe("Scenario: Plugin-Added Fields (extraFields)", () => {
     // Should NOT be a Fastify VALIDATION_ERROR — that would mean the schema requires organizationId
     if (res.statusCode === 400) {
       const body = res.json();
-      expect(body.code).not.toBe("VALIDATION_ERROR");
+      expect(body.code).not.toBe("arc.validation_error");
     } else {
       expect(res.statusCode).toBe(201);
     }
@@ -463,7 +463,7 @@ describe("Scenario: Plugin-Added Fields (extraFields)", () => {
 
     const res = await app.inject({ method: "GET", url: "/products" });
     expect(res.statusCode).toBe(200);
-    const doc = res.json().docs.find((d: any) => d.name === "Gadget");
+    const doc = res.json().data.find((d: any) => d.name === "Gadget");
     expect(doc).toBeDefined();
     expect(doc.organizationId).toBe("org-test");
   });

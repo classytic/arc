@@ -28,19 +28,20 @@ export type {
 } from "./defineEvent.js";
 // Typed event definitions & registry
 export { createEventRegistry, defineEvent } from "./defineEvent.js";
-export {
-  createChildEvent,
-  createEvent,
-  type DeadLetteredEvent,
-  type DomainEvent,
-  type EventHandler,
-  type EventLogger,
-  type EventMeta,
-  type EventTransport,
-  MemoryEventTransport,
-  type MemoryEventTransportOptions,
-  type PublishManyResult,
-} from "./EventTransport.js";
+
+// Cross-package event contract (`EventMeta`, `DomainEvent`, `EventHandler`,
+// `EventLogger`, `EventTransport`, `DeadLetteredEvent`, `PublishManyResult`)
+// + helpers (`createEvent`, `createChildEvent`, `matchEventPattern`) live in
+// `@classytic/primitives/events`. Hosts import them from primitives DIRECTLY
+// — arc's barrel does not re-export, so the canonical import path is the
+// only path:
+//
+//   import type { EventMeta, DomainEvent } from '@classytic/primitives/events';
+//   import { createEvent, createChildEvent } from '@classytic/primitives/events';
+//
+// arc still ships the in-memory transport implementation (the only piece
+// with process-local state) — that stays in arc.
+export { MemoryEventTransport, type MemoryEventTransportOptions } from "./EventTransport.js";
 export { type EventPluginOptions, eventPlugin } from "./eventPlugin.js";
 // Event type constants and helpers
 export {
