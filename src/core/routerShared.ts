@@ -559,6 +559,15 @@ export function resolveRoutePreHandlers(
         { cause: err instanceof Error ? err : undefined },
       );
     }
+    // Async preHandlers (`async function (req, reply) {...}`) return a Promise
+    // when invoked here — the body would crash on `request.headers` since we
+    // passed `fastify` as the first arg. Swallow that rejection BEFORE we
+    // throw the actionable TypeError below; otherwise it surfaces as an
+    // unhandled rejection in a separate microtask and pollutes test logs /
+    // process.unhandledRejection listeners.
+    if (result && typeof (result as { then?: unknown }).then === "function") {
+      (result as Promise<unknown>).catch(() => undefined);
+    }
     if (!Array.isArray(result)) {
       throw new TypeError(
         `Route ${routeId}: preHandler factory must return an array of handlers, got ${describeValue(
