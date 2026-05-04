@@ -116,7 +116,9 @@ const unsub = await fastify.events.subscribe('order.created', handler);
 unsub();
 ```
 
-## Event Structure (v2.9)
+## Event Structure
+
+Event types live in `@classytic/primitives/events` (canonical source). Arc re-exports the runtime `MemoryEventTransport` only — every type below is imported from primitives.
 
 ```typescript
 interface EventMeta {
@@ -142,7 +144,7 @@ interface DomainEvent<T> {
 }
 ```
 
-**Arc is source of truth** — `@classytic/primitives/events` mirrors these shapes. Downstream packages import from primitives; arc owns evolution.
+**`@classytic/primitives/events` is source of truth** — `EventMeta`, `DomainEvent`, `EventHandler`, `EventLogger`, `EventTransport`, `DeadLetteredEvent`, `PublishManyResult`, `createEvent`, `createChildEvent`, `matchEventPattern` all live there. Arc consumes them and re-exports the runtime `MemoryEventTransport`.
 
 ### DDD aggregate narrowing
 
@@ -162,7 +164,7 @@ Unlike `correlationId` / `causationId`, `aggregate` is **not inherited** by `cre
 ### Causation chains
 
 ```typescript
-import { createEvent, createChildEvent } from '@classytic/arc/events';
+import { createEvent, createChildEvent } from '@classytic/primitives/events';
 
 const placed = createEvent('order.placed', { orderId: 'o1' }, {
   correlationId: req.id, userId: user.id,
@@ -177,7 +179,7 @@ const reserved = createChildEvent(placed, 'inventory.reserved', { sku: 'a' });
 ### Dead-letter contract
 
 ```typescript
-import type { DeadLetteredEvent, EventTransport } from '@classytic/arc/events';
+import type { DeadLetteredEvent, EventTransport } from '@classytic/primitives/events';
 
 class KafkaTransport implements EventTransport {
   async deadLetter(dlq: DeadLetteredEvent) {
@@ -191,7 +193,7 @@ class KafkaTransport implements EventTransport {
 Implement `EventTransport` for RabbitMQ, Kafka, etc.:
 
 ```typescript
-import type { EventTransport, DomainEvent } from '@classytic/arc/events';
+import type { EventTransport, DomainEvent } from '@classytic/primitives/events';
 
 class KafkaTransport implements EventTransport {
   readonly name = 'kafka';
@@ -253,7 +255,7 @@ For a pure cache DB (no queues, no idempotency), `allkeys-lru` is correct and wh
 All transports and retry accept a `logger` option — defaults to `console`, compatible with pino/fastify.log:
 
 ```typescript
-import type { EventLogger } from '@classytic/arc/events';
+import type { EventLogger } from '@classytic/primitives/events';
 
 // Interface: { warn(msg, ...args): void; error(msg, ...args): void }
 

@@ -38,12 +38,11 @@ import {
   mongoOperationsPlugin,
   Repository,
 } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -156,9 +155,8 @@ describe("mongokit → arc — zero-friction wiring", () => {
     expect(res.statusCode).toBeGreaterThanOrEqual(200);
     expect(res.statusCode).toBeLessThan(300);
     const body = JSON.parse(res.body);
-    expect(body.success).toBe(true);
-    expect(body.data.sku).toBe("LP-001");
-    expect(body.data.price).toBe(1299);
+    expect(body.sku).toBe("LP-001");
+    expect(body.price).toBe(1299);
   });
 
   it("GET /products lists via mongokit with pagination envelope", async () => {
@@ -171,8 +169,7 @@ describe("mongokit → arc — zero-friction wiring", () => {
     const res = await app.inject({ method: "GET", url: "/products" });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.success).toBe(true);
-    expect(Array.isArray(body.docs)).toBe(true);
+    expect(Array.isArray(body.data)).toBe(true);
     // mongokit's paginator emits OffsetPaginationResult → arc flattens to envelope.
     expect(typeof body.total).toBe("number");
     expect(typeof body.page).toBe("number");
@@ -183,7 +180,7 @@ describe("mongokit → arc — zero-friction wiring", () => {
     const res = await app.inject({ method: "GET", url: "/products?category=books" });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    const categories = (body.docs as Array<{ category: string }>).map((d) => d.category);
+    const categories = (body.data as Array<{ category: string }>).map((d) => d.category);
     // Every returned doc must match the filter — filter wiring proves end-to-end.
     expect(categories.every((c) => c === "books")).toBe(true);
   });
@@ -194,7 +191,7 @@ describe("mongokit → arc — zero-friction wiring", () => {
     const res = await app.inject({ method: "GET", url: "/products?price[gte]=1000" });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    const prices = (body.docs as Array<{ price: number }>).map((d) => d.price);
+    const prices = (body.data as Array<{ price: number }>).map((d) => d.price);
     expect(prices.every((p) => p >= 1000)).toBe(true);
   });
 
@@ -204,13 +201,13 @@ describe("mongokit → arc — zero-friction wiring", () => {
       url: "/products",
       payload: { name: "Food", sku: "FD-001", price: 10, category: "food" },
     });
-    const id = JSON.parse(createRes.body).data._id;
+    const id = JSON.parse(createRes.body)._id;
 
     const res = await app.inject({ method: "GET", url: `/products/${id}` });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.data._id).toBe(id);
-    expect(body.data.sku).toBe("FD-001");
+    expect(body._id).toBe(id);
+    expect(body.sku).toBe("FD-001");
   });
 
   it("PATCH /products/:id updates via mongokit", async () => {
@@ -224,7 +221,7 @@ describe("mongokit → arc — zero-friction wiring", () => {
         category: "electronics",
       },
     });
-    const id = JSON.parse(createRes.body).data._id;
+    const id = JSON.parse(createRes.body)._id;
 
     const res = await app.inject({
       method: "PATCH",
@@ -233,9 +230,9 @@ describe("mongokit → arc — zero-friction wiring", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.data.price).toBe(75);
+    expect(body.price).toBe(75);
     // SKU unchanged — partial update semantics.
-    expect(body.data.sku).toBe("PT-001");
+    expect(body.sku).toBe("PT-001");
   });
 
   it("DELETE /products/:id removes the document", async () => {
@@ -244,7 +241,7 @@ describe("mongokit → arc — zero-friction wiring", () => {
       url: "/products",
       payload: { name: "Gone", sku: "GN-001", price: 5, category: "food" },
     });
-    const id = JSON.parse(createRes.body).data._id;
+    const id = JSON.parse(createRes.body)._id;
 
     const delRes = await app.inject({ method: "DELETE", url: `/products/${id}` });
     expect(delRes.statusCode).toBe(200);
@@ -408,13 +405,12 @@ describe("mongokit × arc — Mongoose strict:true schema threads through", () =
       expect(res.statusCode).toBeGreaterThanOrEqual(200);
       expect(res.statusCode).toBeLessThan(300);
       const body = JSON.parse(res.body);
-      expect(body.success).toBe(true);
       // Mongoose strict:true dropped the unknown field — it's not in the
       // response. Arc forwarded the request without interfering; the DB
       // layer enforced schema cleanliness.
-      expect(body.data).not.toHaveProperty("unknownField");
+      expect(body).not.toHaveProperty("unknownField");
       // The known fields round-tripped cleanly.
-      expect(body.data.sku).toBe("ST-001");
+      expect(body.sku).toBe("ST-001");
     } finally {
       await strictApp.close();
     }

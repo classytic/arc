@@ -36,7 +36,7 @@
  * ```
  */
 
-import type { RepositoryLike } from "../adapters/interface.js";
+import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import type {
   AnyRecord,
   IControllerResponse,
@@ -149,7 +149,7 @@ export { TreeMixin } from "./mixins/tree.js";
 // `ListResult<TDoc>` be assignable to `ListResult<AnyRecord>`.
 export interface BaseController<
   TDoc extends AnyRecord = AnyRecord,
-  TRepository extends RepositoryLike = RepositoryLike<TDoc>,
+  _TRepository extends RepositoryLike = RepositoryLike<TDoc>,
 > {
   // Composable surface (readonly refs, typed for consumer use)
   readonly accessControl: AccessControl;
@@ -206,10 +206,10 @@ void _ParsedQueryProbe;
 // biome-ignore lint/suspicious/noUnsafeDeclarationMerging: deliberate class+interface merge threads TDoc generics across mixin-composed methods (see interface above). The class has no runtime members of its own, so there's no overload-resolution risk.
 export class BaseController<
   TDoc extends AnyRecord = AnyRecord,
-  TRepository extends RepositoryLike = RepositoryLike<TDoc>,
+  _TRepository extends RepositoryLike = RepositoryLike<TDoc>,
 > extends SoftDeleteMixin(TreeMixin(SlugMixin(BulkMixin(BaseCrudController)))) {
   // The type parameters are consumed by the companion interface via
   // declaration merging. This phantom field silences TS 'declared but unused'
   // without leaking runtime state.
-  declare readonly _phantom?: [TDoc, TRepository];
+  declare readonly _phantom?: [TDoc, _TRepository];
 }

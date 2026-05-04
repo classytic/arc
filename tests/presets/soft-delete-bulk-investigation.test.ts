@@ -80,7 +80,7 @@ describe("Soft-delete + bulkDelete root cause investigation", () => {
     const allDocs = await ItemModel.find({}).lean();
     const softDeleted = allDocs.filter((d) => d.deletedAt !== null);
     console.log(
-      "After deleteMany — total docs:",
+      "After deleteMany — total data:",
       allDocs.length,
       "soft-deleted:",
       softDeleted.length,
@@ -124,7 +124,7 @@ describe("Soft-delete + bulkDelete root cause investigation", () => {
     const allDocs = await ItemModel.find({}).lean();
     const softDeleted = allDocs.filter((d) => d.deletedAt !== null);
     console.log(
-      "After bulkDelete — total docs:",
+      "After bulkDelete — total data:",
       allDocs.length,
       "soft-deleted:",
       softDeleted.length,
@@ -192,11 +192,11 @@ describe("Soft-delete + bulkDelete root cause investigation", () => {
     const orgBSoftDeleted = orgB.filter((d) => d.deletedAt !== null);
 
     console.log(
-      "Org A docs:",
+      "Org A data:",
       orgA.length,
       "soft-deleted:",
       orgASoftDeleted.length,
-      "| Org B docs:",
+      "| Org B data:",
       orgB.length,
       "soft-deleted:",
       orgBSoftDeleted.length,

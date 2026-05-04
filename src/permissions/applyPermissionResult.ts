@@ -155,7 +155,11 @@ export async function evaluateAndApplyPermission(
       { err, resource: context.resource, action: context.action },
       "Permission check threw",
     );
-    reply.code(403).send({ success: false, error: "Permission denied" });
+    reply.code(403).send({
+      code: "arc.forbidden",
+      message: "Permission denied",
+      status: 403,
+    });
     return false;
   }
 
@@ -171,7 +175,12 @@ export async function evaluateAndApplyPermission(
       permResult.reason && permResult.reason.length <= MAX_DENIAL_REASON_LENGTH
         ? permResult.reason
         : defaultMsg;
-    reply.code(context.user ? 403 : 401).send({ success: false, error: reason });
+    const status = context.user ? 403 : 401;
+    reply.code(status).send({
+      code: context.user ? "arc.forbidden" : "arc.unauthorized",
+      message: reason,
+      status,
+    });
     return false;
   }
 

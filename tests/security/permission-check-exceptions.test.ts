@@ -12,9 +12,9 @@
  * - Normal permission allow → 200 (unchanged)
  */
 
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import Fastify from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { allowPublic } from "../../src/permissions/index.js";
@@ -116,8 +116,7 @@ describe("Permission Check Exception Handling", () => {
 
         expect(res.statusCode).toBe(403);
         const body = JSON.parse(res.body);
-        expect(body.success).toBe(false);
-        expect(body.error).toBe("Permission denied");
+        expect(body.message).toBe("Permission denied");
       } finally {
         await app.close();
       }
@@ -131,8 +130,7 @@ describe("Permission Check Exception Handling", () => {
 
         expect(res.statusCode).toBe(403);
         const body = JSON.parse(res.body);
-        expect(body.success).toBe(false);
-        expect(body.error).toBe("Permission denied");
+        expect(body.message).toBe("Permission denied");
       } finally {
         await app.close();
       }
@@ -146,8 +144,7 @@ describe("Permission Check Exception Handling", () => {
 
         expect(res.statusCode).toBe(403);
         const body = JSON.parse(res.body);
-        expect(body.success).toBe(false);
-        expect(body.error).toBe("Permission denied");
+        expect(body.message).toBe("Permission denied");
       } finally {
         await app.close();
       }
@@ -182,7 +179,7 @@ describe("Permission Check Exception Handling", () => {
 
         expect(res.statusCode).toBe(401);
         const body = JSON.parse(res.body);
-        expect(body.error).toBe("Not allowed");
+        expect(body.message).toBe("Not allowed");
       } finally {
         await app.close();
       }
@@ -196,7 +193,6 @@ describe("Permission Check Exception Handling", () => {
 
         expect(res.statusCode).toBe(200);
         const body = JSON.parse(res.body);
-        expect(body.success).toBe(true);
       } finally {
         await app.close();
       }
@@ -230,14 +226,14 @@ describe("Permission Check Exception Handling", () => {
           url: "/items",
           payload: { name: "Test" },
         });
-        const id = JSON.parse(createRes.body).data._id;
+        const id = JSON.parse(createRes.body)._id;
 
         // GET with throwing permission
         const res = await app.inject({ method: "GET", url: `/items/${id}` });
 
         expect(res.statusCode).toBe(403);
         const body = JSON.parse(res.body);
-        expect(body.error).toBe("Permission denied");
+        expect(body.message).toBe("Permission denied");
       } finally {
         await app.close();
       }
@@ -255,7 +251,7 @@ describe("Permission Check Exception Handling", () => {
 
         expect(res.statusCode).toBe(403);
         const body = JSON.parse(res.body);
-        expect(body.error).toBe("Permission denied");
+        expect(body.message).toBe("Permission denied");
       } finally {
         await app.close();
       }

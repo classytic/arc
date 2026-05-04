@@ -7,8 +7,7 @@
  * engine/scheduler). This file locks in arc's 2.11 expansion:
  *
  *   - `bridgeBusEvents` (canonical) bridges all 19 events to arc's bus
- *   - `bridgeStepEvents` (deprecated alias) still works, covers the same
- *     expanded set
+ *     (the deprecated `bridgeStepEvents` alias was removed in 2.13)
  *   - SSE streams all 19 events, auto-closes only on the 3 terminal ones
  *   - Engine-level events (no runId) flow through per-stream unfiltered
  *   - Loose coupling: subscribing to unknown events is safe (no-op on
@@ -19,13 +18,13 @@
  * See `src/integrations/streamline.ts`.
  */
 
-import Fastify, { type FastifyInstance } from "fastify";
 import { EventEmitter } from "node:events";
+import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  streamlinePlugin,
   STREAMLINE_BUS_EVENTS,
   STREAMLINE_TERMINAL_EVENTS,
+  streamlinePlugin,
   type WorkflowLike,
   type WorkflowRunLike,
 } from "../../src/integrations/streamline.js";
@@ -195,7 +194,12 @@ describe("v2.11.0 — `bridgeBusEvents` bridges all streamline 2.2 events to arc
 
     const match = published.find((p) => p.type === "workflow.payload-test.step:completed");
     expect(match).toBeDefined();
-    const payload = match!.payload as { runId: string; stepId: string; workflowId: string; data: unknown };
+    const payload = match?.payload as {
+      runId: string;
+      stepId: string;
+      workflowId: string;
+      data: unknown;
+    };
     expect(payload.runId).toBe("r-x");
     expect(payload.stepId).toBe("s-y");
     expect(payload.workflowId).toBe("payload-test");
@@ -251,72 +255,6 @@ describe("v2.11.0 — `bridgeBusEvents` bridges all streamline 2.2 events to arc
   });
 });
 
-// ============================================================================
-// bridgeStepEvents deprecated alias
-// ============================================================================
-
-describe("v2.11.0 — `bridgeStepEvents` is a back-compat alias for `bridgeBusEvents`", () => {
-  let app: FastifyInstance | undefined;
-
-  afterEach(async () => {
-    if (app) {
-      await app.close();
-      app = undefined;
-    }
-  });
-
-  it("using the legacy `bridgeStepEvents: true` bridges the FULL 2.2 event set (not just step events)", async () => {
-    // Pre-fix: `bridgeStepEvents` only subscribed to 5 step events.
-    // With 2.11 it's the canonical-alias and subscribes to all 19.
-    const wf = createMockWorkflow("legacy-alias");
-    const innerBus = (wf as WorkflowLike & { _innerBus: EventEmitter })._innerBus;
-
-    const published: Array<{ type: string }> = [];
-    app = Fastify({ logger: false });
-    app.decorate("events", {
-      publish: vi.fn(async (type: string) => {
-        published.push({ type });
-      }),
-    });
-    await app.register(streamlinePlugin, {
-      workflows: [wf],
-      auth: false,
-      bridgeStepEvents: true, // legacy name
-    });
-    await app.ready();
-
-    // Emit events that pre-2.11 arc would have missed (only had 5 step events)
-    innerBus.emit("workflow:recovered", { runId: "r1" });
-    innerBus.emit("step:compensated", { runId: "r1", stepId: "s1" });
-    innerBus.emit("scheduler:error", { error: new Error("x"), context: "tick" });
-    await new Promise((r) => setTimeout(r, 50));
-
-    expect(published.some((p) => p.type === "workflow.legacy-alias.workflow:recovered")).toBe(true);
-    expect(published.some((p) => p.type === "workflow.legacy-alias.step:compensated")).toBe(true);
-    expect(published.some((p) => p.type === "workflow.legacy-alias.scheduler:error")).toBe(true);
-  });
-
-  it("bridgeBusEvents wins over bridgeStepEvents when both set (OR semantics documented)", async () => {
-    // Sanity: explicit precedence — either flag enables bridging.
-    const wf = createMockWorkflow("both-flags");
-    const innerBus = (wf as WorkflowLike & { _innerBus: EventEmitter })._innerBus;
-
-    const published: unknown[] = [];
-    app = Fastify({ logger: false });
-    app.decorate("events", {
-      publish: vi.fn(async (_t: string, p: unknown) => published.push(p)),
-    });
-    await app.register(streamlinePlugin, {
-      workflows: [wf],
-      auth: false,
-      bridgeBusEvents: true,
-      bridgeStepEvents: false, // legacy says "off", canonical says "on"
-    });
-    await app.ready();
-
-    innerBus.emit("step:completed", { runId: "r1", stepId: "s1" });
-    await new Promise((r) => setTimeout(r, 50));
-
-    expect(published).toHaveLength(1);
-  });
-});
+// 2.13 — `bridgeStepEvents` deprecated alias REMOVED. Hosts must use the
+// canonical `bridgeBusEvents`. The two test blocks that pinned the alias
+// behaviour were deleted alongside.

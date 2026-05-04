@@ -7,10 +7,10 @@
  * Run with: npx vitest run tests/scenarios/single-tenant-mode.test.ts
  */
 
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -104,7 +104,7 @@ describe("Single-Tenant Mode", () => {
         payload: { title: "Article by User 1" },
       });
       expect(res1.statusCode).toBe(201);
-      article1Id = JSON.parse(res1.body).data._id;
+      article1Id = JSON.parse(res1.body)._id;
 
       const token2 = issueToken({ id: USER_2, role: ["user"] });
       const res2 = await app.inject({
@@ -114,7 +114,7 @@ describe("Single-Tenant Mode", () => {
         payload: { title: "Article by User 2" },
       });
       expect(res2.statusCode).toBe(201);
-      article2Id = JSON.parse(res2.body).data._id;
+      article2Id = JSON.parse(res2.body)._id;
     });
 
     it("all authenticated users see all records (no org scope without multiTenantPreset)", async () => {
@@ -127,7 +127,7 @@ describe("Single-Tenant Mode", () => {
 
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      const ids = body.docs.map((d: any) => d._id);
+      const ids = body.data.map((d: any) => d._id);
       // Without multiTenantPreset and no org in token, both users see all records
       expect(ids).toContain(article1Id);
       expect(ids).toContain(article2Id);
@@ -144,7 +144,7 @@ describe("Single-Tenant Mode", () => {
 
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      const ids = body.docs.map((d: any) => d._id);
+      const ids = body.data.map((d: any) => d._id);
       expect(ids).toContain(article1Id);
       expect(ids).toContain(article2Id);
     });
@@ -161,7 +161,7 @@ describe("Single-Tenant Mode", () => {
       expect(res.statusCode).toBe(201);
       const body = JSON.parse(res.body);
       // Without multiTenantPreset, organizationId should NOT be set
-      expect(body.data.organizationId).toBeUndefined();
+      expect(body.organizationId).toBeUndefined();
     });
   });
 
@@ -188,7 +188,7 @@ describe("Single-Tenant Mode", () => {
         headers: headers(token),
         payload: { title: "Role Test" },
       });
-      const articleId = JSON.parse(createRes.body).data._id;
+      const articleId = JSON.parse(createRes.body)._id;
 
       // Regular user cannot delete (requireRoles(['admin']))
       const res = await app.inject({
@@ -209,7 +209,7 @@ describe("Single-Tenant Mode", () => {
         headers: headers(token1),
         payload: { title: "Owned by User 1" },
       });
-      const articleId = JSON.parse(createRes.body).data._id;
+      const articleId = JSON.parse(createRes.body)._id;
 
       // User 1 can update (owner)
       const updateRes = await app.inject({

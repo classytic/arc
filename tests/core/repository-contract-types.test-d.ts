@@ -21,10 +21,9 @@
  */
 
 import { Repository } from "@classytic/mongokit";
-import mongoose, { type Types } from "mongoose";
-import { describe, it, expect } from "vitest";
-
 import type { StandardRepo } from "@classytic/repo-core/repository";
+import mongoose, { type Types } from "mongoose";
+import { describe, expect, it } from "vitest";
 import type { DataAdapter, RepositoryLike } from "../../src/index.js";
 
 // ============================================================================
@@ -98,7 +97,7 @@ function _assertMinimalKitSatisfiesContract(): StandardRepo<IOrder> {
   return {
     getAll: async () => ({
       method: "offset",
-      docs: [],
+      data: [],
       page: 1,
       limit: 0,
       total: 0,
@@ -122,7 +121,7 @@ function _assertOptionalSurfaceTypes(): StandardRepo<IOrder> {
   return {
     getAll: async () => ({
       method: "offset",
-      docs: [],
+      data: [],
       page: 1,
       limit: 0,
       total: 0,

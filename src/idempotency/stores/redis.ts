@@ -269,7 +269,12 @@ export function ioredisAsIdempotencyClient(client: IoredisLike): RedisClient & {
       return [next, keys];
     },
     eval: client.eval
-      ? (script, numKeys, ...args) => client.eval!(script, numKeys, ...args)
+      ? (script, numKeys, ...args) =>
+          (client.eval as (s: string, n: number, ...a: (string | number)[]) => Promise<unknown>)(
+            script,
+            numKeys,
+            ...args,
+          )
       : undefined,
     async quit() {
       if (client.quit) return client.quit();
@@ -356,7 +361,7 @@ export function upstashAsIdempotencyClient(client: UpstashRedisLike): RedisClien
           const keyCount = _numKeys;
           const keys = args.slice(0, keyCount).map(String);
           const rest = args.slice(keyCount);
-          return client.eval!(script, keys, rest);
+          return client.eval?.(script, keys, rest);
         }
       : undefined,
     async quit() {

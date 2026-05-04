@@ -117,11 +117,35 @@ const defaultLogger: MigrationLogger = {
  * The `db` parameter accepts any object with a `.collection()` method
  * (Mongoose db, native MongoDB Db, etc.)
  */
+/**
+ * Structural subset of a Mongo collection arc consumes. Held as a
+ * driver-free interface so this file never imports `mongodb` /
+ * `mongoose` — both Mongoose's `Connection.db.collection(...)` and the
+ * native `MongoClient.db().collection(...)` satisfy this shape.
+ *
+ * The fluent `find().sort().toArray()` chain is typed loosely with
+ * `unknown[]`; we cast to `MigrationRecord[]` once at the boundary
+ * inside `getApplied()`.
+ */
+interface MongoCollectionLike {
+  find(query: Record<string, unknown>): {
+    sort(spec: Record<string, 1 | -1>): {
+      toArray(): Promise<unknown[]>;
+    };
+  };
+  insertOne(doc: Record<string, unknown>): Promise<unknown>;
+  deleteOne(filter: Record<string, unknown>): Promise<unknown>;
+}
+
+interface MongoDbLike {
+  collection(name: string): MongoCollectionLike;
+}
+
 export class MongoMigrationStore implements MigrationStore {
   private readonly collectionName: string;
-  private readonly db: { collection(name: string): any };
+  private readonly db: MongoDbLike;
 
-  constructor(db: { collection(name: string): any }, opts?: { collectionName?: string }) {
+  constructor(db: MongoDbLike, opts?: { collectionName?: string }) {
     this.db = db;
     this.collectionName = opts?.collectionName ?? "_migrations";
   }

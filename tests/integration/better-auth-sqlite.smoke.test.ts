@@ -12,12 +12,12 @@
  * is already proven by the mongo smoke.
  */
 
+import { drizzleAdapter } from "@better-auth/drizzle-adapter";
+import { betterAuth } from "better-auth";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import Fastify, { type FastifyInstance } from "fastify";
-import { drizzleAdapter } from "@better-auth/drizzle-adapter";
-import { betterAuth } from "better-auth";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createBetterAuthAdapter } from "../../src/auth/betterAuth.js";
 import type { RequestScope } from "../../src/scope/types.js";
@@ -274,14 +274,16 @@ describe("real better-auth + sqlite (drizzle-adapter) smoke — arc adapter alig
         name: "Dave",
       },
     });
-    const row = db.prepare("SELECT email, name FROM user WHERE email = ?").get("dave@example.com") as
-      | { email: string; name: string }
-      | undefined;
+    const row = db
+      .prepare("SELECT email, name FROM user WHERE email = ?")
+      .get("dave@example.com") as { email: string; name: string } | undefined;
     expect(row?.email).toBe("dave@example.com");
     expect(row?.name).toBe("Dave");
     // Session row should exist too — proves auto-sign-in wrote to both tables atomically
     const sessionRow = db
-      .prepare("SELECT COUNT(*) as c FROM session WHERE userId IN (SELECT id FROM user WHERE email = ?)")
+      .prepare(
+        "SELECT COUNT(*) as c FROM session WHERE userId IN (SELECT id FROM user WHERE email = ?)",
+      )
       .get("dave@example.com") as { c: number };
     expect(sessionRow.c).toBeGreaterThanOrEqual(1);
   }, 30_000);

@@ -2,11 +2,11 @@
  * defineGuard — typed preHandler + context extraction
  */
 
+import { methodRegistryPlugin, mongoOperationsPlugin, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Model, Schema } from "mongoose";
-import { Repository, methodRegistryPlugin, mongoOperationsPlugin } from "@classytic/mongokit";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -17,7 +17,10 @@ interface IItem {
   name: string;
 }
 
-const ItemSchema = new Schema<IItem>({ name: { type: String, required: true } }, { timestamps: true });
+const ItemSchema = new Schema<IItem>(
+  { name: { type: String, required: true } },
+  { timestamps: true },
+);
 
 let mongoServer: MongoMemoryServer;
 let ItemModel: Model<IItem>;
@@ -59,7 +62,10 @@ const actorGuard = defineGuard({
 
 describe("defineGuard", () => {
   it("guard.from() returns typed context after preHandler runs", async () => {
-    const repo = new Repository<IItem>(ItemModel, [methodRegistryPlugin(), mongoOperationsPlugin()]);
+    const repo = new Repository<IItem>(ItemModel, [
+      methodRegistryPlugin(),
+      mongoOperationsPlugin(),
+    ]);
 
     const resource = defineResource<IItem>({
       name: "item",
@@ -120,7 +126,10 @@ describe("defineGuard", () => {
   });
 
   it("guard throws → request aborted with error", async () => {
-    const repo = new Repository<IItem>(ItemModel, [methodRegistryPlugin(), mongoOperationsPlugin()]);
+    const repo = new Repository<IItem>(ItemModel, [
+      methodRegistryPlugin(),
+      mongoOperationsPlugin(),
+    ]);
 
     const resource = defineResource<IItem>({
       name: "item",
@@ -171,7 +180,10 @@ describe("defineGuard", () => {
   });
 
   it("multiple guards compose — each independently accessible", async () => {
-    const repo = new Repository<IItem>(ItemModel, [methodRegistryPlugin(), mongoOperationsPlugin()]);
+    const repo = new Repository<IItem>(ItemModel, [
+      methodRegistryPlugin(),
+      mongoOperationsPlugin(),
+    ]);
 
     const resource = defineResource<IItem>({
       name: "item",

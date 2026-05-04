@@ -26,11 +26,13 @@ export type { ResolveOrgFromHeaderOptions } from "./resolveOrgFromHeader.js";
 // Org-from-header utility
 export { resolveOrgFromHeader } from "./resolveOrgFromHeader.js";
 // Core types and guards
-export type { RequestScope } from "./types.js";
+export type { Mandate, RequestScope } from "./types.js";
 export {
   AUTHENTICATED_SCOPE,
   getAncestorOrgIds,
   getClientId,
+  getDPoPJkt,
+  getMandate,
   getOrgContext,
   getOrgId,
   getOrgRoles,
@@ -48,4 +50,10 @@ export {
   isOrgInScope,
   isService,
   PUBLIC_SCOPE,
+  // Throwing accessors — symmetric `require*` family. Throw `OrgRequiredError`
+  // / `UnauthorizedError` so handlers don't hand-roll inconsistent throws.
+  requireClientId,
+  requireOrgId,
+  requireTeamId,
+  requireUserId,
 } from "./types.js";

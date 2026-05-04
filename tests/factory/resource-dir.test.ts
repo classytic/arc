@@ -72,7 +72,7 @@ describe("createApp — resourceDir option", () => {
       payload: { action: "ping" },
     });
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).data.pong).toBe(true);
+    expect(JSON.parse(res.body).pong).toBe(true);
   });
 
   // v2.10.9 — silent zero-discovery was the exact shape of a reported

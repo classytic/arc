@@ -10,6 +10,20 @@ export type { AccessControlConfig } from "./AccessControl.js";
 
 // Composable classes extracted from BaseController
 export { AccessControl } from "./AccessControl.js";
+export type {
+  AggMeasureInput,
+  AggMeasureShorthand,
+  AggregationCacheConfig,
+  AggregationConfig,
+  AggregationDateRangeRequirement,
+  AggregationIndexHint,
+  AggregationMaterializedContext,
+  AggregationMaterializedResult,
+  AggregationRateLimit,
+  AggregationsMap,
+} from "./aggregation/index.js";
+// Aggregations (v2.13) — declarative GET /:resource/aggregations/:name
+export { defineAggregation } from "./aggregation/index.js";
 export { BaseController } from "./BaseController.js";
 // v2.11.0 mixin split — BaseCrudController is the slim CRUD core; BaseController
 // remains as the full-stack composition that extends it via the four preset
@@ -27,7 +41,7 @@ export {
 } from "./createCrudRouter.js";
 export { defineResource, ResourceDefinition } from "./defineResource.js";
 export { defineResourceVariants } from "./defineResourceVariants.js";
-// Fastify adapter for framework-agnostic controllers
+// Fastify ↔ arc-controller seam (also consumed by MCP integration)
 export {
   createCrudHandlers,
   createFastifyHandler,

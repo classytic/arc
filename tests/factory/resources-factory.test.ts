@@ -21,9 +21,9 @@
  */
 
 import * as path from "node:path";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";

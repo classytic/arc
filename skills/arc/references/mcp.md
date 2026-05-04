@@ -557,9 +557,9 @@ import { envelope } from '@classytic/arc';
 handler: async (req, reply) => {
   const data = await service.getResults();
   return reply.send(envelope(data));
-  // → { success: true, data }
+  // → { data }
   return reply.send(envelope(data, { total: 100, page: 1 }));
-  // → { success: true, data, total: 100, page: 1 }
+  // → { data, total: 100, page: 1 }
 }
 ```
 

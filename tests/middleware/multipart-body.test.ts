@@ -232,7 +232,7 @@ describe("multipartBody middleware", () => {
 
     expect(response.statusCode).toBe(415);
     const result = response.json();
-    expect(result.error).toContain("not allowed");
+    expect(result.message).toContain("not allowed");
   });
 
   it("should accept allowed MIME types", async () => {
@@ -273,7 +273,7 @@ describe("multipartBody middleware", () => {
 
     expect(response.statusCode).toBe(413);
     const result = response.json();
-    expect(result.error).toContain("exceeds maximum size");
+    expect(result.message).toContain("exceeds maximum size");
   });
 
   // ── Custom files key ──
@@ -342,9 +342,8 @@ describe("multipartBody middleware", () => {
 
     expect(response.statusCode).toBe(400);
     const body = response.json();
-    expect(body.success).toBe(false);
     expect(body.code).toBe("MISSING_FILE_FIELDS");
-    expect(body.error).toMatch(/Missing required file field/);
+    expect(body.message).toMatch(/Missing required file field/);
     expect(body.details.missing).toEqual(["file"]);
   });
 
@@ -372,7 +371,7 @@ describe("multipartBody middleware", () => {
     expect(body.code).toBe("MISSING_FILE_FIELDS");
     expect(body.details.missing).toEqual(["cover"]);
     // Single missing field → singular wording.
-    expect(body.error).toBe("Missing required file field: cover");
+    expect(body.message).toBe("Missing required file field: cover");
   });
 
   it("requiredFields: lists multiple missing fields with plural wording", async () => {
@@ -389,7 +388,7 @@ describe("multipartBody middleware", () => {
     expect(response.statusCode).toBe(400);
     const body = response.json();
     expect(body.details.missing).toEqual(["avatar", "cover"]);
-    expect(body.error).toBe("Missing required file fields: avatar, cover");
+    expect(body.message).toBe("Missing required file fields: avatar, cover");
   });
 
   it("requiredFields: stays a no-op for JSON requests (safe on shared routes)", async () => {
@@ -505,7 +504,7 @@ type FormPart =
   | { type: "file"; name: string; filename: string; mimetype: string; content: Buffer };
 
 function buildMultipart(parts: FormPart[]): { headers: Record<string, string>; payload: Buffer } {
-  const boundary = "----ArcTestBoundary" + Date.now();
+  const boundary = `----ArcTestBoundary${Date.now()}`;
   const chunks: Buffer[] = [];
 
   for (const part of parts) {

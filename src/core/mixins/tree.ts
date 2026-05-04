@@ -12,8 +12,9 @@
  * ```
  */
 
-import type { RepositoryLike } from "../../adapters/interface.js";
+import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import type { AnyRecord, IControllerResponse, IRequestContext } from "../../types/index.js";
+import { createError } from "../../utils/errors.js";
 import type { BaseCrudController } from "../BaseCrudController.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: standard TS mixin Constructor pattern
@@ -34,17 +35,13 @@ export function TreeMixin<TBase extends Constructor<BaseCrudController>>(
         getTree?: (options?: unknown) => Promise<AnyRecord[]>;
       };
       if (!repo.getTree) {
-        return {
-          success: false,
-          error: "Tree structure not implemented",
-          status: 501,
-        };
+        throw createError(501, "Tree structure not implemented");
       }
 
       const options = this.queryResolver.resolve(req, this.meta(req));
       const tree = await repo.getTree(options);
 
-      return { success: true, data: tree, status: 200 };
+      return { data: tree, status: 200 };
     }
 
     async getChildren(req: IRequestContext): Promise<IControllerResponse<AnyRecord[]>> {
@@ -52,11 +49,7 @@ export function TreeMixin<TBase extends Constructor<BaseCrudController>>(
         getChildren?: (parentId: string, options?: unknown) => Promise<AnyRecord[]>;
       };
       if (!repo.getChildren) {
-        return {
-          success: false,
-          error: "Tree structure not implemented",
-          status: 501,
-        };
+        throw createError(501, "Tree structure not implemented");
       }
 
       // `_presetFields` is protected state populated by the tree preset. Fall
@@ -67,7 +60,7 @@ export function TreeMixin<TBase extends Constructor<BaseCrudController>>(
       const options = this.queryResolver.resolve(req, this.meta(req));
       const children = await repo.getChildren(parentId, options);
 
-      return { success: true, data: children, status: 200 };
+      return { data: children, status: 200 };
     }
   };
 }

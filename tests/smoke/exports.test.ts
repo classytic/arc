@@ -31,7 +31,6 @@ describe("Subpath resolution", () => {
     "@classytic/arc/auth",
     "@classytic/arc/idempotency",
     "@classytic/arc/scope",
-    "@classytic/arc/adapters",
     "@classytic/arc/registry",
     "@classytic/arc/presets",
     "@classytic/arc/schemas",

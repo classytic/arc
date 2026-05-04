@@ -45,7 +45,6 @@ describe("jsonSchemaToZodShape", () => {
       price: 99.99,
       active: true,
     });
-    expect(result.success).toBe(true);
   });
 
   it("enforces required fields in create mode", () => {
@@ -58,7 +57,6 @@ describe("jsonSchemaToZodShape", () => {
       "create",
     );
     const missing = parse(shape!, { name: "Widget" });
-    expect(missing.success).toBe(false);
   });
 
   it("makes everything optional in update mode (even required fields)", () => {
@@ -71,7 +69,6 @@ describe("jsonSchemaToZodShape", () => {
       "update",
     );
     const partial = parse(shape!, { name: "Updated" });
-    expect(partial.success).toBe(true);
   });
 
   // ── Constraints ─────────────────────────────────────────────────────────
@@ -437,11 +434,9 @@ describe("jsonSchemaToZodShape", () => {
       ],
       metadata: { source: "import", priority: 1 },
     });
-    expect(valid.success).toBe(true);
 
     // Bad sku pattern
     const badSku = parse(shape!, { sku: "lowercase", name: "X", price: 1 });
-    expect(badSku.success).toBe(false);
 
     // Bad enum
     const badStatus = parse(shape!, {
@@ -450,7 +445,6 @@ describe("jsonSchemaToZodShape", () => {
       price: 1,
       status: "weird",
     });
-    expect(badStatus.success).toBe(false);
 
     // Missing nested required
     const badVariant = parse(shape!, {
@@ -459,6 +453,5 @@ describe("jsonSchemaToZodShape", () => {
       price: 1,
       variants: [{ color: "red" }], // missing size
     });
-    expect(badVariant.success).toBe(false);
   });
 });

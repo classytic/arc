@@ -26,14 +26,14 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { defineResource } from "../../src/core/defineResource.js";
 import {
   autoInjectTenantFieldRules,
   stripSystemManagedFromBodyRequired,
 } from "../../src/core/schemaOptions.js";
-import type { DataAdapter } from "../../src/types/index.js";
-import { defineResource } from "../../src/core/defineResource.js";
 import { allowPublic } from "../../src/permissions/index.js";
 import { multiTenantPreset } from "../../src/presets/multiTenant.js";
+import type { DataAdapter } from "../../src/types/index.js";
 
 describe("v2.11.0 — stripSystemManagedFromBodyRequired (unit, fieldRule-driven)", () => {
   it("removes any systemManaged field from createBody.required", () => {
@@ -243,7 +243,7 @@ describe("v2.11.0 — defineResource integration (end-to-end)", () => {
       name: "mock-with-required-tenant",
       repository: {
         async getAll() {
-          return { docs: [], total: 0 };
+          return { data: [], total: 0 };
         },
         async getById() {
           return null;
@@ -316,7 +316,7 @@ describe("v2.11.0 — defineResource integration (end-to-end)", () => {
       name: "mock-workspace",
       repository: {
         async getAll() {
-          return { docs: [], total: 0 };
+          return { data: [], total: 0 };
         },
         async getById() {
           return null;
@@ -374,7 +374,7 @@ describe("v2.11.0 — defineResource integration (end-to-end)", () => {
       name: "mock-platform",
       repository: {
         async getAll() {
-          return { docs: [], total: 0 };
+          return { data: [], total: 0 };
         },
         async getById() {
           return null;
@@ -497,7 +497,7 @@ describe("v2.11.0 — multiTenantPreset declares fieldRules (pricelist bug repro
       name: "mock-pricelist-engine",
       repository: {
         async getAll() {
-          return { docs: [], total: 0 };
+          return { data: [], total: 0 };
         },
         async getById() {
           return null;
@@ -564,7 +564,7 @@ describe("v2.11.0 — multiTenantPreset declares fieldRules (pricelist bug repro
       name: "mock-audited-tenant",
       repository: {
         async getAll() {
-          return { docs: [], total: 0 };
+          return { data: [], total: 0 };
         },
         async getById() {
           return null;

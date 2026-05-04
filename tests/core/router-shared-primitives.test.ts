@@ -565,8 +565,8 @@ describe("resolveRoutePreHandlers", () => {
       caught = err as Error;
     }
     expect(caught).not.toBeNull();
-    expect(caught!.message).toContain("POST /uploads/photos");
-    expect(caught!.message).toContain("preHandler: [yourHandler]");
-    expect(caught!.message).toContain("multipartBody"); // points at the common offender
+    expect(caught?.message).toContain("POST /uploads/photos");
+    expect(caught?.message).toContain("preHandler: [yourHandler]");
+    expect(caught?.message).toContain("multipartBody"); // points at the common offender
   });
 });

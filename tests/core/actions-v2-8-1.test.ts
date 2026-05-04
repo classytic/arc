@@ -15,10 +15,10 @@
  * 10. `buildActionBodySchema` is the single source of truth for runtime + docs
  */
 
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { buildActionBodySchema } from "../../src/core/createActionRouter.js";
 import { defineResource } from "../../src/core/defineResource.js";
@@ -188,7 +188,7 @@ describe("v2.8.1: action validation — end-to-end", () => {
     await app.ready();
 
     const list = await app.inject({ method: "GET", url: "/shipments" });
-    itemId = JSON.parse(list.body).docs[0]._id;
+    itemId = JSON.parse(list.body).data[0]._id;
   });
 
   afterAll(async () => {
@@ -230,7 +230,7 @@ describe("v2.8.1: action validation — end-to-end", () => {
       payload: { action: "dispatch", carrier: "UPS", trackingId: "T-1" },
     });
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).data.carrier).toBe("UPS");
+    expect(JSON.parse(res.body).carrier).toBe("UPS");
   });
 
   it("Zod action — missing required field → 400", async () => {
@@ -258,7 +258,7 @@ describe("v2.8.1: action validation — end-to-end", () => {
       payload: { action: "receive", condition: "good" },
     });
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).data.condition).toBe("good");
+    expect(JSON.parse(res.body).condition).toBe("good");
   });
 
   it("unknown action name → 400 (no matching discriminator branch)", async () => {
@@ -412,7 +412,6 @@ describe("v2.8.1: OpenAPI action path generation", () => {
       presets: [],
       permissions: {},
       routes: [],
-      routes: [],
       actions: [
         {
           name: "approve",
@@ -467,7 +466,6 @@ describe("v2.8.1: OpenAPI action path generation", () => {
       prefix: "/plains",
       presets: [],
       permissions: {},
-      routes: [],
       routes: [],
       plugin: () => {},
       disableDefaultRoutes: true,

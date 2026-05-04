@@ -24,6 +24,7 @@ import type {
   IRequestContext,
   UserLike,
 } from "../../types/index.js";
+import { createError } from "../../utils/errors.js";
 import type { BaseCrudController } from "../BaseCrudController.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: standard TS mixin Constructor pattern
@@ -47,16 +48,12 @@ export function BulkMixin<TBase extends Constructor<BaseCrudController>>(
         createMany?: (items: unknown[], options?: unknown) => Promise<AnyRecord[]>;
       };
       if (!repo.createMany) {
-        return { success: false, error: "Repository does not support createMany", status: 501 };
+        throw createError(501, "Repository does not support createMany");
       }
 
       const rawItems = (req.body as { items?: unknown[] })?.items;
       if (!Array.isArray(rawItems) || rawItems.length === 0) {
-        return {
-          success: false,
-          error: "Bulk create requires a non-empty items array",
-          status: 400,
-        };
+        throw createError(400, "Bulk create requires a non-empty items array");
       }
       const items = rawItems;
 
@@ -82,22 +79,16 @@ export function BulkMixin<TBase extends Constructor<BaseCrudController>>(
         const scope = arcContext?._scope;
         if (scope) {
           if (scope.kind === "public") {
-            return {
-              success: false,
-              error: "Organization context required to bulk-create resources",
-              details: { code: "ORG_CONTEXT_REQUIRED" },
-              status: 403,
-            };
+            throw createError(403, "Organization context required to bulk-create resources", {
+              code: "ORG_CONTEXT_REQUIRED",
+            });
           }
           if (!isElevated(scope)) {
             const orgId = getOrgIdFromScope(scope);
             if (!orgId) {
-              return {
-                success: false,
-                error: "Organization context required to bulk-create resources",
-                details: { code: "ORG_CONTEXT_REQUIRED" },
-                status: 403,
-              };
+              throw createError(403, "Organization context required to bulk-create resources", {
+                code: "ORG_CONTEXT_REQUIRED",
+              });
             }
             const tenantField = this.tenantField;
             scopedItems = sanitizedItems.map((item) => ({
@@ -114,7 +105,6 @@ export function BulkMixin<TBase extends Constructor<BaseCrudController>>(
       const skipped = requested - inserted;
 
       return {
-        success: true,
         data: created,
         // Partial-success reporting:
         //   all inserted  → 201
@@ -234,7 +224,7 @@ export function BulkMixin<TBase extends Constructor<BaseCrudController>>(
         }>;
       };
       if (!repo.updateMany) {
-        return { success: false, error: "Repository does not support updateMany", status: 501 };
+        throw createError(501, "Repository does not support updateMany");
       }
 
       const body = req.body as {
@@ -242,21 +232,18 @@ export function BulkMixin<TBase extends Constructor<BaseCrudController>>(
         data?: Record<string, unknown>;
       };
       if (!body.filter || Object.keys(body.filter).length === 0) {
-        return { success: false, error: "Bulk update requires a non-empty filter", status: 400 };
+        throw createError(400, "Bulk update requires a non-empty filter");
       }
       if (!body.data || Object.keys(body.data).length === 0) {
-        return { success: false, error: "Bulk update requires non-empty data", status: 400 };
+        throw createError(400, "Bulk update requires non-empty data");
       }
 
       // SECURITY: merge tenant scope + policy filters into the user filter.
       const scopedFilter = this.buildBulkFilter(body.filter, req);
       if (scopedFilter === null) {
-        return {
-          success: false,
-          error: "Organization context required for bulk update",
-          details: { code: "ORG_CONTEXT_REQUIRED" },
-          status: 403,
-        };
+        throw createError(403, "Organization context required for bulk update", {
+          code: "ORG_CONTEXT_REQUIRED",
+        });
       }
 
       // SECURITY: run the data payload through the same write-permission
@@ -270,27 +257,22 @@ export function BulkMixin<TBase extends Constructor<BaseCrudController>>(
       );
 
       if (mixedShape) {
-        return {
-          success: false,
-          error:
-            "Bulk update payload cannot mix operator keys ($set, $inc, ...) with flat fields. Pick one shape.",
-          details: { code: "MIXED_UPDATE_SHAPE" },
-          status: 400,
-        };
+        throw createError(
+          400,
+          "Bulk update payload cannot mix operator keys ($set, $inc, ...) with flat fields. Pick one shape.",
+          { code: "MIXED_UPDATE_SHAPE" },
+        );
       }
 
       if (Object.keys(sanitized).length === 0) {
-        return {
-          success: false,
-          error: "Bulk update payload contained only protected fields",
-          details: { code: "ALL_FIELDS_STRIPPED", stripped },
-          status: 400,
-        };
+        throw createError(400, "Bulk update payload contained only protected fields", {
+          code: "ALL_FIELDS_STRIPPED",
+          stripped,
+        });
       }
 
       const result = await repo.updateMany(scopedFilter, sanitized, { user, context: arcContext });
       return {
-        success: true,
         data: result,
         status: 200,
         ...(stripped.length > 0 && { meta: { stripped } }),
@@ -319,7 +301,7 @@ export function BulkMixin<TBase extends Constructor<BaseCrudController>>(
         ) => Promise<{ deletedCount: number; acknowledged?: boolean; soft?: boolean }>;
       };
       if (!repo.deleteMany) {
-        return { success: false, error: "Repository does not support deleteMany", status: 501 };
+        throw createError(501, "Repository does not support deleteMany");
       }
 
       const body = req.body as {
@@ -331,32 +313,21 @@ export function BulkMixin<TBase extends Constructor<BaseCrudController>>(
       let userFilter: Record<string, unknown>;
       if (body.ids && body.ids.length > 0) {
         if (body.filter && Object.keys(body.filter).length > 0) {
-          return {
-            success: false,
-            error: "Bulk delete accepts either `ids` or `filter`, not both",
-            status: 400,
-          };
+          throw createError(400, "Bulk delete accepts either `ids` or `filter`, not both");
         }
         userFilter = { [this.idField]: { $in: body.ids } };
       } else if (body.filter && Object.keys(body.filter).length > 0) {
         userFilter = body.filter;
       } else {
-        return {
-          success: false,
-          error: "Bulk delete requires a non-empty `filter` or `ids` array",
-          status: 400,
-        };
+        throw createError(400, "Bulk delete requires a non-empty `filter` or `ids` array");
       }
 
       // SECURITY: merge tenant scope + policy filters into the user filter.
       const scopedFilter = this.buildBulkFilter(userFilter, req);
       if (scopedFilter === null) {
-        return {
-          success: false,
-          error: "Organization context required for bulk delete",
-          details: { code: "ORG_CONTEXT_REQUIRED" },
-          status: 403,
-        };
+        throw createError(403, "Organization context required for bulk delete", {
+          code: "ORG_CONTEXT_REQUIRED",
+        });
       }
 
       // Hard-delete opt-in: `?hard=true` query or `{ mode: 'hard' }` body.
@@ -372,7 +343,7 @@ export function BulkMixin<TBase extends Constructor<BaseCrudController>>(
       };
       if (hardHint) options.mode = "hard";
       const result = await repo.deleteMany(scopedFilter, options);
-      return { success: true, data: result, status: 200 };
+      return { data: result, status: 200 };
     }
   };
 }

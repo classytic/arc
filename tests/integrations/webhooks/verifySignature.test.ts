@@ -6,7 +6,7 @@
  * round-trip contract.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { signPayload, verifySignature } from "../../../src/integrations/webhooks.js";
 
 const SECRET = "whsec_test_secret_abc123";
@@ -125,9 +125,9 @@ describe("verifySignature", () => {
       hmac.update(BODY);
       const sig = `sha512=${hmac.digest("hex")}`;
 
-      expect(
-        verifySignature(BODY, SECRET, sig, { prefix: "sha512=", algorithm: "sha512" }),
-      ).toBe(true);
+      expect(verifySignature(BODY, SECRET, sig, { prefix: "sha512=", algorithm: "sha512" })).toBe(
+        true,
+      );
     });
 
     it("should reject sha512 signature verified with sha256 algorithm", () => {
@@ -162,9 +162,7 @@ describe("verifySignature", () => {
         "x-webhook-event": "order.created",
       };
 
-      expect(
-        verifySignature(body, secret, headers["x-webhook-signature"]),
-      ).toBe(true);
+      expect(verifySignature(body, secret, headers["x-webhook-signature"])).toBe(true);
     });
 
     it("should reject when body was re-serialized (field order changed)", () => {

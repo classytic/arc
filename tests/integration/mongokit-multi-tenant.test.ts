@@ -14,12 +14,12 @@
  * scenario and a cross-tenant isolation check using seeded data.
  */
 
+import { multiTenantPlugin, Repository } from "@classytic/mongokit";
+import type { DataAdapter } from "@classytic/repo-core/adapter";
 import Fastify from "fastify";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { Schema } from "mongoose";
-import { multiTenantPlugin, Repository } from "@classytic/mongokit";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { DataAdapter } from "../../src/adapters/index.js";
 import { allowPublic, defineResource } from "../../src/index.js";
 import type { IRequestContext } from "../../src/types/index.js";
 
@@ -182,10 +182,10 @@ describe("Arc + mongokit multiTenantPlugin — end-to-end", () => {
 
     const body = res.json();
     const payload = body.data ?? body;
-    const docs = Array.isArray(payload) ? payload : (payload.docs ?? []);
-    expect(docs.length).toBe(2);
+    const data = Array.isArray(payload) ? payload : (payload.data ?? []);
+    expect(data.length).toBe(2);
     // None of ORG_B's invoices leak across tenants
-    expect(docs.every((d: InvoiceDoc) => d.organizationId === ORG_A)).toBe(true);
+    expect(data.every((d: InvoiceDoc) => d.organizationId === ORG_A)).toBe(true);
   });
 
   it("get by id returns 404 for a doc owned by a different tenant", async () => {

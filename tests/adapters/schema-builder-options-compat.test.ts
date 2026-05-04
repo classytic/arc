@@ -33,13 +33,13 @@
  */
 
 import { buildCrudSchemasFromModel } from "@classytic/mongokit";
+import type { MongooseAdapterOptions } from "@classytic/mongokit/adapter";
 import type {
   FieldRules,
   FieldRule as RepoCoreFieldRule,
   SchemaBuilderOptions,
 } from "@classytic/repo-core/schema";
 import { describe, expect, it } from "vitest";
-import type { MongooseAdapterOptions } from "../../src/adapters/mongoose.js";
 import type { ArcFieldRule, RouteSchemaOptions } from "../../src/types/index.js";
 
 // ============================================================================

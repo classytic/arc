@@ -19,10 +19,9 @@
  * the heavy lifting.
  */
 
+import type { DataAdapter, RepositoryLike } from "@classytic/repo-core/adapter";
 import type { MinimalRepo, StandardRepo } from "@classytic/repo-core/repository";
 import { describe, expect, it } from "vitest";
-
-import type { DataAdapter, RepositoryLike } from "../../src/adapters/interface.js";
 
 // ============================================================================
 // 1. RepositoryLike = MinimalRepo & Partial<StandardRepo>
@@ -117,7 +116,7 @@ describe("DataAdapter.repository — no redundant union", () => {
 
 describe("adapter classes — no redundant union on .repository", () => {
   it("MongooseAdapter.repository is RepositoryLike<TDoc>", async () => {
-    const { MongooseAdapter } = await import("../../src/adapters/mongoose.js");
+    const { MongooseAdapter } = await import("@classytic/mongokit/adapter");
     type Product = { _id: string; name: string };
     type RepoField = InstanceType<typeof MongooseAdapter<Product>>["repository"];
 
@@ -129,7 +128,7 @@ describe("adapter classes — no redundant union on .repository", () => {
   });
 
   it("DrizzleAdapter.repository is RepositoryLike<TDoc>", async () => {
-    const { DrizzleAdapter } = await import("../../src/adapters/drizzle.js");
+    const { DrizzleAdapter } = await import("@classytic/sqlitekit/adapter");
     type Product = { _id: string; name: string };
     type RepoField = InstanceType<typeof DrizzleAdapter<Product>>["repository"];
 

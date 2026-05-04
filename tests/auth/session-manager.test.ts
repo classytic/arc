@@ -242,7 +242,6 @@ describe("Session Manager", () => {
 
       expect(res.statusCode).toBe(401);
       const body = JSON.parse(res.body);
-      expect(body.success).toBe(false);
       expect(body.message).toBe("No session cookie");
     });
 
@@ -485,8 +484,8 @@ describe("Session Manager", () => {
 
       expect(res.statusCode).toBe(403);
       const body = JSON.parse(res.body);
-      expect(body.error).toBe("SessionNotFresh");
-      expect(body.code).toBe("SESSION_NOT_FRESH");
+      expect(body.code).toBe("arc.forbidden");
+      expect(body.message).toMatch(/not fresh/i);
     });
 
     it("should return 401 when no session at all", async () => {

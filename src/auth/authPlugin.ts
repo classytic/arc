@@ -37,6 +37,7 @@ import type {
   JwtContext,
   TokenPair,
 } from "../types/index.js";
+import { createDomainError, isArcError, UnauthorizedError } from "../utils/errors.js";
 
 // ============================================================================
 // Fastify Type Extensions
@@ -214,25 +215,36 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
           const decoded = jwtContext.verify(token) as Record<string, unknown>;
           // Always reject refresh tokens at the access endpoint.
           if (decoded.type === "refresh") {
-            throw new Error("Refresh tokens cannot be used for authentication");
+            throw createDomainError(
+              "arc.auth.invalid_token_type",
+              "Refresh tokens cannot be used for authentication",
+              401,
+            );
           }
           // Strict mode (default): reject tokens whose type is missing or not
           // "access". Lenient mode accepts any non-refresh token for
           // back-compat with legacy issuers that don't stamp a type claim.
           if (strictTokenType && decoded.type !== "access") {
-            throw new Error("Invalid token type: expected access token");
+            throw createDomainError(
+              "arc.auth.invalid_token_type",
+              "Invalid token type: expected access token",
+              401,
+            );
           }
           user = decoded;
         }
       } else {
-        // No authenticator and no JWT - configuration error
-        throw new Error(
+        // No authenticator and no JWT — configuration error. 500 because the
+        // server is misconfigured (the *client* can't fix this).
+        throw createDomainError(
+          "arc.auth.misconfigured",
           "No authenticator configured. Provide auth.authenticate function or auth.jwt.secret.",
+          500,
         );
       }
 
       if (!user) {
-        throw new Error("Authentication required");
+        throw new UnauthorizedError("Authentication required");
       }
 
       // Token revocation check — fail-closed (errors = revoked)
@@ -240,15 +252,20 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
         try {
           const revoked = await isRevoked(user as Record<string, unknown>);
           if (revoked) {
-            throw new Error("Token has been revoked");
+            throw createDomainError("arc.auth.token_revoked", "Token has been revoked", 401);
           }
         } catch (revokeErr) {
-          // If it's our own revocation error, re-throw
-          if (revokeErr instanceof Error && revokeErr.message === "Token has been revoked") {
+          // If it's already our own revocation error, re-throw it.
+          if (isArcError(revokeErr) && revokeErr.code === "arc.auth.token_revoked") {
             throw revokeErr;
           }
-          // Fail-closed: if revocation check itself fails, treat as revoked
-          throw new Error("Token revocation check failed");
+          // Fail-closed: if revocation check itself fails, treat as revoked.
+          // Distinct code so observability can alert on revocation-store outages.
+          throw createDomainError(
+            "arc.auth.revocation_check_failed",
+            "Token revocation check failed",
+            401,
+          );
         }
       }
 
@@ -285,13 +302,29 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
         return;
       }
 
-      // Default 401 response — hide internal details unless explicitly opted-in
-      const message = exposeAuthErrors ? error.message : "Authentication required";
+      // No-envelope contract: emit canonical `ErrorContract` directly.
+      // Preserve the inner ArcError's code/status so callers can discriminate
+      // `arc.auth.token_revoked` from `arc.auth.invalid_token_type` from
+      // `arc.auth.misconfigured` (500). `exposeAuthErrors` opt-in masks the
+      // human-readable message but keeps the machine code so client-side
+      // retry / observability still works.
+      if (isArcError(error)) {
+        const message = exposeAuthErrors ? error.message : "Authentication required";
+        reply.code(error.statusCode).send({
+          code: error.code,
+          message,
+          status: error.statusCode,
+        });
+        return;
+      }
 
+      // Fallback: a non-ArcError reached us (e.g. fastify-jwt verify
+      // failure). Collapse to generic 401 with the canonical code.
+      const message = exposeAuthErrors ? error.message : "Authentication required";
       reply.code(401).send({
-        success: false,
-        error: "Unauthorized",
+        code: "arc.unauthorized",
         message,
+        status: 401,
       });
     }
   };
@@ -392,7 +425,11 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
     options?: { expiresIn?: string; refreshExpiresIn?: string },
   ): TokenPair => {
     if (!jwtContext) {
-      throw new Error("JWT not configured. Provide auth.jwt.secret to use issueTokens.");
+      throw createDomainError(
+        "arc.auth.misconfigured",
+        "JWT not configured. Provide auth.jwt.secret to use issueTokens.",
+        500,
+      );
     }
 
     const accessTtl = options?.expiresIn ?? accessExpiresIn;
@@ -437,7 +474,11 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
    */
   const verifyRefreshToken = <T = Record<string, unknown>>(token: string): T => {
     if (!jwtContext) {
-      throw new Error("JWT not configured. Provide auth.jwt.secret to use verifyRefreshToken.");
+      throw createDomainError(
+        "arc.auth.misconfigured",
+        "JWT not configured. Provide auth.jwt.secret to use verifyRefreshToken.",
+        500,
+      );
     }
 
     const fastifyWithJwt = fastify as FastifyInstance & {
@@ -451,7 +492,11 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
 
     // Enforce token type — reject access tokens used at the refresh endpoint
     if (decoded.type !== "refresh") {
-      throw new Error("Invalid token type: expected refresh token");
+      throw createDomainError(
+        "arc.auth.invalid_token_type",
+        "Invalid token type: expected refresh token",
+        401,
+      );
     }
 
     return decoded as T;
@@ -475,9 +520,9 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
 
       if (!user) {
         reply.code(401).send({
-          success: false,
-          error: "Unauthorized",
+          code: "arc.unauthorized",
           message: "No user context",
+          status: 401,
         });
         return;
       }
@@ -494,9 +539,9 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
 
       if (!hasRole) {
         reply.code(403).send({
-          success: false,
-          error: "Forbidden",
+          code: "arc.forbidden",
           message: `Requires one of: ${allowedRoles.join(", ")}`,
+          status: 403,
         });
         return;
       }

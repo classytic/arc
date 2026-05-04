@@ -37,7 +37,7 @@ function plainResourceFile(modelName: string, resourceName: string): string {
 import mongoose from 'mongoose';
 import { Repository } from '@classytic/mongokit';
 import { defineResource } from '${ARC_ROOT}/src/core/defineResource.js';
-import { createMongooseAdapter } from '${ARC_ROOT}/src/adapters/mongoose.js';
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
 import { BaseController } from '${ARC_ROOT}/src/core/BaseController.js';
 import { allowPublic } from '${ARC_ROOT}/src/permissions/index.js';
 
@@ -65,7 +65,7 @@ function factoryResourceFile(modelName: string, baseName: string): string {
 import mongoose from 'mongoose';
 import { Repository } from '@classytic/mongokit';
 import { defineResource } from '${ARC_ROOT}/src/core/defineResource.js';
-import { createMongooseAdapter } from '${ARC_ROOT}/src/adapters/mongoose.js';
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
 import { BaseController } from '${ARC_ROOT}/src/core/BaseController.js';
 import { allowPublic } from '${ARC_ROOT}/src/permissions/index.js';
 
@@ -92,7 +92,7 @@ function asyncFactoryResourceFile(modelName: string, baseName: string): string {
 import mongoose from 'mongoose';
 import { Repository } from '@classytic/mongokit';
 import { defineResource } from '${ARC_ROOT}/src/core/defineResource.js';
-import { createMongooseAdapter } from '${ARC_ROOT}/src/adapters/mongoose.js';
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
 import { BaseController } from '${ARC_ROOT}/src/core/BaseController.js';
 import { allowPublic } from '${ARC_ROOT}/src/permissions/index.js';
 

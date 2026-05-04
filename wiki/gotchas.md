@@ -1,8 +1,8 @@
 # Gotchas
 
-**Summary**: Things that bite if you don't know about them. Each has a number used across wiki links.
+**Summary**: Things that bite if you don't know about them. Each has a number used across wiki links. Evergreen only — version-tagged behavior changes belong in [`/changelog/v2.md`](../changelog/v2.md).
 **Sources**: AGENTS.md §6, CLAUDE.md.
-**Last updated**: 2026-04-25 (#26 — `fieldRules.nullable` + `RouteSchemaOptions extends SchemaBuilderOptions`).
+**Last updated**: 2026-05-03 (pruned v2.11 history; #19–26 retired now that the new behavior is the only behavior).
 
 ---
 
@@ -22,19 +22,19 @@
 
 8. **Event WAL skips `arc.*` internal events.** Prevents startup timeout with durable stores.
 
-9. **CLI `init.ts` is ~3,400 lines.** Intentional — scaffolding templates are sequential. Don't split.
+9. **CLI `init.ts` is large and intentionally monolithic.** Scaffolding templates are sequential string emission; splitting fragments the templates without buying anything. Don't split.
 
 10. **Presets compose, but order matters.** `softDelete + bulk` both modify DELETE. Run `tests/presets/preset-conflicts.test.ts`. See [[presets]].
 
-11. **Field-write denial is reject-by-default (v2.9).** `BodySanitizer` throws `ForbiddenError` listing denied fields. Opt into silent strip via `defineResource({ onFieldWriteDenied: 'strip' })`. See [[core]].
+11. **Field-write denial is reject-by-default.** `BodySanitizer` throws `ForbiddenError` listing denied fields. Opt into silent strip via `defineResource({ onFieldWriteDenied: 'strip' })`. See [[core]].
 
-12. **multiTenant injects org on UPDATE too (v2.9).** Prior versions only ran on CREATE, letting members move their own docs. Body-supplied `organizationId` is overwritten with caller's scope. See [[presets]].
+12. **multiTenant injects org on UPDATE too.** Body-supplied `organizationId` is overwritten with caller's scope — prevents tenant-hop. See [[presets]].
 
-13. **Elevation always emits `arc.scope.elevated` (v2.9).** Subscribe for audit; `onElevation` callback still works. See [[request-scope]].
+13. **Elevation always emits `arc.scope.elevated`.** Subscribe for audit; `onElevation` callback still works. See [[request-scope]].
 
 14. **`verifySignature(body, ...)` throws `TypeError` on parsed body.** Pass `req.rawBody`, not parsed `req.body`. Register `@fastify/raw-body` before webhook routes. See [[auth]].
 
-15. **Plugins set response headers at `onRequest` or `preSerialization`, never `onSend` (v2.10.2).** Async `onSend` races with Fastify's flush path → `ERR_HTTP_HEADERS_SENT`. `isReplyCommitted()` in `src/utils/reply-guards.ts` remains for third-party plugin authors. See [[plugins]].
+15. **Plugins set response headers at `onRequest` or `preSerialization`, never `onSend`.** Async `onSend` races with Fastify's flush path → `ERR_HTTP_HEADERS_SENT`. `isReplyCommitted()` in `src/utils/reply-guards.ts` remains for third-party plugin authors. See [[plugins]].
 
 16. **MCP tools regenerate from resource config.** Changing field rules / permissions / routes changes tool schemas. Run `tests/integrations/mcp/`. See [[mcp]].
 
@@ -42,25 +42,20 @@
 
 18. **`multipartBody()` is a no-op for JSON.** Safe to always add to create/update middlewares.
 
-19. **`BaseController` is a mixin composition (v2.11).** `class MyCtrl extends BaseController<Product>` still works (declaration-merged interface threads `TDoc` through every method), but the surface is actually `SoftDelete ∘ Tree ∘ Slug ∘ Bulk ∘ BaseCrudController`. Hosts that only need CRUD extend `BaseCrudController<Product>` for an 869-LOC surface instead of the 1,650-LOC composed one. Shared helpers moved `private` → `protected` so mixins extend without duck-typing. See [[core]].
+19. **Don't import values from `@classytic/arc/types`** — it's a type-only barrel. Scope helpers live in `@classytic/arc/scope`; `envelope` + `getUserId(user)` in `@classytic/arc/utils`. The root barrel still re-exports for DX. See [[types]].
 
-20. **`systemManaged` fields stripped from body `required[]` (v2.11).** Field rules with `systemManaged: true` are stripped from adapter-generated `createBody` / `updateBody` `required[]` arrays via `stripSystemManagedFromBodyRequired`. Closes the gotcha where Fastify preValidation rejected requests for framework-injected fields (e.g. `organizationId` via `multiTenantPreset` + engine `tenant: { required: true }`) before the preset's preHandler could inject. `multiTenantPreset` declares these rules automatically — no per-consumer `createEngine({ tenant: { required: false } })` workaround needed. See [[presets]].
+20. **Dual-publish trap — modules that subscribe to `arcEvents` must not also publish to it.** Symptom: every subscriber fires twice for the same logical event, audit rows duplicate, downstream cache invalidation runs twice. Root cause is a domain service holding both a publisher and a notification helper that *also* publishes; both call `app.events.publish('order:placed', ...)` against the same bus, so subscribers see the event on each leg.
 
-21. **`@classytic/arc/types` is truly type-only (v2.11).** Value exports relocated: scope helpers (`AUTHENTICATED_SCOPE`, `PUBLIC_SCOPE`, `isAuthenticated`, `isElevated`, `isMember`, `getOrgId`, `getOrgRoles`, `getTeamId`, `hasOrgAccess`) → `@classytic/arc/scope`. `envelope` + `getUserId(user: UserLike)` → `@classytic/arc/utils` (root barrel still re-exports for DX). Don't import values from `/types` anymore — the old re-exports are gone. See [[types]].
+    Wrong:
+    ```ts
+    // services/transfer.service.ts — fires twice
+    await app.events.publish('transfer:dispatched', payload);
+    await notify.transferDispatched(payload); // also publishes internally
+    ```
 
-22. **`defineResource` never mutates caller's config (v2.11).** Even on the no-preset path, a fresh shallow clone runs before `_appliedPresets` / tenant-field rule auto-inject. Pre-2.11 bug: hosts who factored a shared `baseConfig` and spread it across multiple `defineResource` calls saw the second call silently pick up state from the first. Regression-tested in `tests/core/v2-11-defineResource-hygiene.test.ts`. See [[core]].
+    Right: notification modules subscribe (downstream of arc events), they don't publish. The service emits once.
 
-23. **Schema-generation errors warn instead of silently passing (v2.11).** If `adapter.generateSchemas()` / `convertOpenApiSchemas()` / the query-schema merge throws, the resource still boots (non-fatal) but `arcLog("defineResource").warn(...)` now fires with the resource name + error. Pre-2.11 `} catch {}` hid contract drift between OpenAPI docs and runtime. Honors `ARC_SUPPRESS_WARNINGS=1`. See [[core]].
-
-24. **`resourceToTools` split into 4 units (v2.11).** When editing MCP tool generation, go to the matching file — `crud-tools.ts`, `route-tools.ts`, `action-tools.ts`, or `input-schema.ts`. `resourceToTools.ts` is now a 260-LOC orchestrator; edits there should be rare. Shared helpers live in `tool-helpers.ts`. See [[mcp]].
-
-25. **Action routes share the canonical preHandler order with CRUD (v2.11).** `createActionRouter` installs `buildActionPermissionMw` into the `permissionMw` slot of `buildPreHandlerChain` — same position CRUD uses. Ordering: `preAuth → arc → auth → permission → pluginMw → routeGuards`. Pre-2.11.0 the per-action permission check ran inside the route handler (after `pluginMw` + `routeGuards`), so `idempotencyMw` recorded unauthorized requests and guards saw unfiltered `request.scope` / `_policyFilters`. Three co-landing fixes: (a) `buildActionPipelineHandler` returns `Promise<IControllerResponse<unknown>>` so pipeline interceptors that fail with `{success:false, status, error, details, meta}` flow straight to the client with every field intact; (b) invalid-action 400s route through `sendControllerResponse` in both the prehandler and the defensive fallback — one wire shape; (c) `buildAuthMiddlewareForPermissions` accepts `ReadonlyArray<PermissionCheck | undefined>` and treats undefined as "public by omission" so `{ ping: undefined, promote: requireRoles([...]) }` doesn't 401 the public action. See [src/core/routerShared.ts](../src/core/routerShared.ts) and [[core]].
-
-26. **`RouteSchemaOptions extends SchemaBuilderOptions` + `fieldRules.nullable` (v2.11).** Two aligned fixes closing host-side casts at the kit/arc schemagen boundary.
-
-    **(a)** Arc imports `SchemaBuilderOptions` + `FieldRule` from `@classytic/repo-core/schema` (peerDep `>=0.2.0`). `RouteSchemaOptions extends SchemaBuilderOptions`; `ArcFieldRule extends FieldRule`. Hosts pass `schemaGenerator: buildCrudSchemasFromModel` directly — no `Parameters<typeof buildCrudSchemasFromModel>[1]` cast, no wrapper lambda. Arc's per-field extensions (`preserveForElevated`, `nullable`, `minLength`/`maxLength`/`min`/`max`/`pattern`, `description`) live on the richer `ArcFieldRule`; kits only see the repo-core floor. Compile-time relationship locked in `tests/adapters/schema-builder-options-compat.test.ts` via 3 `AssertAssignable` checks.
-
-    **(b)** `fieldRules[field].nullable: true` widens kit-generated JSON-Schema `type` to include `null` AND appends `null` to `enum` if present (AJV's `enum` keyword rejects null independently of `type`). Post-kit transform in `mergeFieldRuleConstraints` — portable across adapters. Built-in mongoose fallback also detects `{ default: null }` on the Mongoose path and widens automatically, mirroring mongokit's convention. Rescues the Zod → Mongoose round-trip where `.nullable()` is dropped because Mongoose has no first-class nullable marker unless `default: null` is also set. See [[adapters]] and [docs/framework-extension/custom-adapters.mdx](../docs/framework-extension/custom-adapters.mdx#field-rules--shaping-kit-generated-schemas).
+    Arc ships an opt-in dev-mode duplicate-publish detector — toggled via `arcPlugins: { events: { warnOnDuplicate: true } }` (auto-enabled when `process.env.NODE_ENV !== 'production'`). 5-second LRU on `(eventName, correlationId)`, single warn per collision, no-op in production. See [src/events/eventPlugin.ts](../src/events/eventPlugin.ts) and [[events]].
 
 ## Related
 - [[rules]]? — see [[identity]] for non-negotiables

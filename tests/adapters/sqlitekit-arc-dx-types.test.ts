@@ -21,11 +21,11 @@
  * `SqliteRepository<TRow>` at construction time.
  */
 
+import type { DataAdapter, RepositoryLike } from "@classytic/repo-core/adapter";
 import type { MinimalRepo, StandardRepo } from "@classytic/repo-core/repository";
+import type { DrizzleAdapter } from "@classytic/sqlitekit/adapter";
 import type { SqliteRepository } from "@classytic/sqlitekit/repository";
 import { describe, expect, it } from "vitest";
-import type { DrizzleAdapter } from "../../src/adapters/drizzle.js";
-import type { DataAdapter, RepositoryLike } from "../../src/adapters/interface.js";
 
 // ============================================================================
 // 1. SqliteRepository satisfies RepositoryLike

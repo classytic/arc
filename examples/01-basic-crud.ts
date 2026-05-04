@@ -5,8 +5,9 @@
  */
 
 import mongoose from 'mongoose';
-import { defineResource, createMongooseAdapter, permissions, allowPublic } from '@classytic/arc';
+import { defineResource, permissions, allowPublic } from '@classytic/arc';
 import { Repository } from '@classytic/mongokit';
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
 
 // ============================================================================
 // 1. Define Mongoose Model
@@ -84,7 +85,7 @@ export const productResource = defineResource({
           name: { $regex: q, $options: 'i' },
           deletedAt: null,
         }).lean();
-        return reply.send({ success: true, data: results });
+        return reply.send({ data: results });
       },
     },
   ],

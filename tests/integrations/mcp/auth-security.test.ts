@@ -46,11 +46,7 @@ describe("MCP auth: false security", () => {
       "../../../src/integrations/mcp/buildRequestContext.js"
     );
 
-    const ctx = buildRequestContext(
-      {},
-      { userId: "user-123", organizationId: "org-1" },
-      "create",
-    );
+    const ctx = buildRequestContext({}, { userId: "user-123", organizationId: "org-1" }, "create");
 
     expect(ctx.user).not.toBeNull();
     expect((ctx.user as Record<string, unknown>)?.id).toBe("user-123");

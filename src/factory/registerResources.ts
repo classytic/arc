@@ -43,7 +43,7 @@ async function registerOne(
 
 /**
  * Execute the full resource lifecycle:
- * 1. plugins()                   — infra (DB, docs, webhooks)
+ * 1. plugins()                   — infra (DB, data, webhooks)
  * 2. bootstrap[]                 — domain init (singletons, event handlers)
  * 3. resources factory (if any)  — resolved AFTER bootstrap, so engine-backed
  *                                  adapters can `await ensureEngine()` and pass

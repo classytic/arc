@@ -23,11 +23,11 @@
  */
 
 import { Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";

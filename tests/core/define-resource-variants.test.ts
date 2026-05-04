@@ -14,12 +14,12 @@
  */
 
 import { QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import Fastify, { type FastifyInstance } from "fastify";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Model, Schema } from "mongoose";
 import qs from "qs";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { arcCorePlugin } from "../../src/core/arcCorePlugin.js";
 import { defineResourceVariants } from "../../src/core/defineResourceVariants.js";
 import { adminOnly, allowPublic, readOnly, requireRoles } from "../../src/permissions/index.js";
@@ -148,7 +148,7 @@ describe("defineResourceVariants — public-slug + admin-_id sharing one repo", 
 
       const res = await app.inject({ method: "GET", url: "/articles/hello-world" });
       expect(res.statusCode).toBe(200);
-      expect(res.json().data.slug).toBe("hello-world");
+      expect(res.json().slug).toBe("hello-world");
     });
 
     it("GET /articles lists all articles", async () => {
@@ -160,7 +160,7 @@ describe("defineResourceVariants — public-slug + admin-_id sharing one repo", 
       const res = await app.inject({ method: "GET", url: "/articles" });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.docs).toHaveLength(2);
+      expect(body.data).toHaveLength(2);
     });
 
     it("POST /articles is NOT registered (disabledRoutes excludes create)", async () => {
@@ -229,7 +229,7 @@ describe("defineResourceVariants — public-slug + admin-_id sharing one repo", 
         url: "/articles/shared-doc",
       });
       expect(publicRes.statusCode).toBe(200);
-      expect(publicRes.json().data.title).toBe("Same Data Two Interfaces");
+      expect(publicRes.json().title).toBe("Same Data Two Interfaces");
     });
   });
 });

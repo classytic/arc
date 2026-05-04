@@ -221,7 +221,6 @@ describe("Compensation + MongoKit Transaction", () => {
       },
     ]);
 
-    expect(result.success).toBe(false);
     expect(result.failedStep).toBe("charge-payment");
     expect(result.error).toBe("Card declined");
 
@@ -288,7 +287,6 @@ describe("Compensation + MongoKit Transaction", () => {
       },
     ]);
 
-    expect(result.success).toBe(false);
     expect(result.failedStep).toBe("notify");
 
     // DB was compensated

@@ -142,11 +142,16 @@ describe("Auth Error Detail Exposure", () => {
   // --------------------------------------------------------------------------
 
   describe("Better Auth adapter", () => {
-    /** Auth handler that throws an exception (simulates network/runtime failure) */
+    /** Auth handler whose direct API throws — simulates network/runtime failure. */
     function createThrowingAuthHandler(): BetterAuthHandler {
       return {
         handler: async () => {
           throw new Error("ECONNREFUSED: auth service unreachable");
+        },
+        api: {
+          getSession: async () => {
+            throw new Error("ECONNREFUSED: auth service unreachable");
+          },
         },
       };
     }

@@ -80,8 +80,8 @@ describeRedis("Upstash Redis — RedisWebSocketAdapter end-to-end", () => {
     await new Promise((r) => setTimeout(r, 200)); // give A extra time to echo if it's going to
 
     expect(receivedB).toHaveLength(1);
-    expect(receivedB[0]!.room).toBe("products");
-    expect(JSON.parse(receivedB[0]!.message)).toMatchObject({ action: "created", id: "p-1" });
+    expect(receivedB[0]?.room).toBe("products");
+    expect(JSON.parse(receivedB[0]?.message)).toMatchObject({ action: "created", id: "p-1" });
 
     // Echo suppression — A sent the message, A must NOT receive it.
     expect(receivedA).toHaveLength(0);

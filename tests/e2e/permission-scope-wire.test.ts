@@ -21,10 +21,10 @@
  */
 
 import { QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -169,10 +169,10 @@ describe("PermissionResult.scope → tenantField isolation", () => {
       headers: { "x-api-key": "key-acme" },
     });
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { docs: Array<{ title: string; companyId: string }> };
-    expect(body.docs).toHaveLength(2);
-    expect(body.docs.every((j) => j.companyId === ORG_A)).toBe(true);
-    expect(body.docs.map((j) => j.title).sort()).toEqual(["Acme Job 1", "Acme Job 2"]);
+    const body = res.json() as { data: Array<{ title: string; companyId: string }> };
+    expect(body.data).toHaveLength(2);
+    expect(body.data.every((j) => j.companyId === ORG_A)).toBe(true);
+    expect(body.data.map((j) => j.title).sort()).toEqual(["Acme Job 1", "Acme Job 2"]);
   });
 
   it("GET /jobs with globex key returns only globex jobs", async () => {
@@ -182,10 +182,10 @@ describe("PermissionResult.scope → tenantField isolation", () => {
       headers: { "x-api-key": "key-globex" },
     });
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { docs: Array<{ title: string; companyId: string }> };
-    expect(body.docs).toHaveLength(1);
-    expect(body.docs[0]?.companyId).toBe(ORG_B);
-    expect(body.docs[0]?.title).toBe("Globex Job 1");
+    const body = res.json() as { data: Array<{ title: string; companyId: string }> };
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0]?.companyId).toBe(ORG_B);
+    expect(body.data[0]?.title).toBe("Globex Job 1");
   });
 
   it("GET /jobs with no API key → 401", async () => {
@@ -225,7 +225,7 @@ describe("PermissionResult.scope → tenantField isolation", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { data: { title: string; companyId: string } };
-    expect(body.data.companyId).toBe(ORG_A);
+    expect(body.companyId).toBe(ORG_A);
   });
 
   it("PATCH cross-tenant → 404", async () => {
@@ -271,9 +271,9 @@ describe("PermissionResult.scope → tenantField isolation", () => {
     expect(res.statusCode).toBe(201);
     const body = res.json() as { data: { _id: string; companyId: string } };
     // Must belong to acme (from scope), NOT globex (from body)
-    expect(body.data.companyId).toBe(ORG_A);
+    expect(body.companyId).toBe(ORG_A);
 
-    const persisted = await Job.findById(body.data._id).lean();
+    const persisted = await Job.findById(body._id).lean();
     expect(persisted?.companyId).toBe(ORG_A);
   });
 });

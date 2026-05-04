@@ -8,8 +8,8 @@
  * or custom adapters get the same MCP auto-derive behaviour.
  */
 
+import type { DataAdapter } from "@classytic/repo-core/adapter";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { DataAdapter } from "../../src/adapters/interface.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { resourceToTools } from "../../src/integrations/mcp/resourceToTools.js";
@@ -43,7 +43,7 @@ function createInMemoryRepository() {
       page?: number;
       limit?: number;
     }) {
-      let docs = [...store];
+      let data = [...store];
 
       // Apply filters — BaseController passes `filters` (plural), raw callers may use `filter`
       const filterObj = params?.filters ?? params?.filter;
@@ -52,7 +52,7 @@ function createInMemoryRepository() {
           if (typeof value === "object" && value !== null) {
             // Operator filters: { $eq: 'open' }
             for (const [op, opVal] of Object.entries(value as Record<string, unknown>)) {
-              docs = docs.filter((d) => {
+              data = data.filter((d) => {
                 const fieldVal = (d as Record<string, unknown>)[key];
                 switch (op) {
                   case "$eq":
@@ -70,7 +70,7 @@ function createInMemoryRepository() {
             }
           } else {
             // Direct equality
-            docs = docs.filter((d) => (d as Record<string, unknown>)[key] === value);
+            data = data.filter((d) => (d as Record<string, unknown>)[key] === value);
           }
         }
       }
@@ -91,7 +91,7 @@ function createInMemoryRepository() {
           sortObj = sortSpec;
         }
         const sortEntries = Object.entries(sortObj);
-        docs.sort((a, b) => {
+        data.sort((a, b) => {
           for (const [field, dir] of sortEntries) {
             const aVal = (a as Record<string, unknown>)[field] as string;
             const bVal = (b as Record<string, unknown>)[field] as string;
@@ -105,16 +105,16 @@ function createInMemoryRepository() {
       const page = params?.page ?? 1;
       const limit = params?.limit ?? 20;
       const start = (page - 1) * limit;
-      const paged = docs.slice(start, start + limit);
+      const paged = data.slice(start, start + limit);
 
       return {
         method: "offset",
-        docs: paged,
+        data: paged,
         page,
         limit,
-        total: docs.length,
-        pages: Math.ceil(docs.length / limit),
-        hasNext: start + limit < docs.length,
+        total: data.length,
+        pages: Math.ceil(data.length / limit),
+        hasNext: start + limit < data.length,
         hasPrev: page > 1,
       };
     },
@@ -386,7 +386,7 @@ describe("MCP end-to-end with ArcQueryParser + in-memory store", () => {
     const result = await client.callTool("list_tasks", {});
     expect(result.isError).toBeFalsy();
     const data = JSON.parse(result.content[0]?.text);
-    expect(data.docs).toHaveLength(3);
+    expect(data.data).toHaveLength(3);
     expect(data.total).toBe(3);
   });
 
@@ -394,23 +394,23 @@ describe("MCP end-to-end with ArcQueryParser + in-memory store", () => {
     const result = await client.callTool("list_tasks", { status: "open" });
     expect(result.isError).toBeFalsy();
     const data = JSON.parse(result.content[0]?.text);
-    expect(data.docs).toHaveLength(1);
-    expect(data.docs[0].title).toBe("Write tests");
+    expect(data.data).toHaveLength(1);
+    expect(data.data[0].title).toBe("Write tests");
   });
 
   it("list_tasks filters by assignee", async () => {
     const result = await client.callTool("list_tasks", { assignee: "alice" });
     expect(result.isError).toBeFalsy();
     const data = JSON.parse(result.content[0]?.text);
-    expect(data.docs).toHaveLength(2);
+    expect(data.data).toHaveLength(2);
   });
 
   it("list_tasks filters by priority", async () => {
     const result = await client.callTool("list_tasks", { priority: "high" });
     expect(result.isError).toBeFalsy();
     const data = JSON.parse(result.content[0]?.text);
-    expect(data.docs).toHaveLength(1);
-    expect(data.docs[0].title).toBe("Write tests");
+    expect(data.data).toHaveLength(1);
+    expect(data.data[0].title).toBe("Write tests");
   });
 
   it("create_task creates via MCP", async () => {

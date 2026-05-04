@@ -1,114 +1,84 @@
 /**
- * Error Classes
+ * Arc error hierarchy.
  *
- * Standard error types for the Arc framework.
+ * Throw an `ArcError` (or one of its subclasses) anywhere in a controller
+ * or middleware. Arc's global error handler catches it and serializes to
+ * the canonical `ErrorContract` wire shape via repo-core's
+ * `toErrorContract(err)` — one contract across the org.
+ *
+ * `ArcError` implements the {@link HttpError} contract from
+ * `@classytic/repo-core/errors`, so any host that already speaks that
+ * contract (mongokit, sqlitekit, streamline, prismakit) catches and
+ * serializes arc errors with the same code path it uses for its own.
+ *
+ * **Code naming.** Hierarchical, lowercase + dot-separated:
+ * `arc.not_found`, `arc.validation_error`, `arc.org.access_denied`. New
+ * domain packages should follow the same pattern (`commerce.cart.locked`,
+ * `payment.gateway.timeout`). Cross-cutting canonical codes live in
+ * `@classytic/repo-core/errors`'s `ERROR_CODES` constant.
  */
 
-export interface ErrorDetails {
+import type { HttpError } from "@classytic/repo-core/errors";
+
+export interface ErrorOptions {
   code?: string;
   statusCode?: number;
   details?: Record<string, unknown>;
   cause?: Error;
-  requestId?: string;
 }
 
 /**
- * Base Arc Error
- *
- * All Arc errors extend this class and produce a consistent error envelope:
- * {
- *   success: false,
- *   error: "Human-readable message",
- *   code: "MACHINE_CODE",
- *   requestId: "uuid",     // For tracing
- *   timestamp: "ISO date", // When error occurred
- *   details: { ... }       // Additional context
- * }
+ * Base Arc Error. Implements the canonical `HttpError` contract — `status`
+ * mirrors `statusCode` and `meta` mirrors `details`, so consumers reading
+ * either name see the same value without adapter glue.
  */
-export class ArcError extends Error {
-  override name: string;
+export class ArcError extends Error implements HttpError {
+  override name = "ArcError";
   readonly code: string;
   readonly statusCode: number;
   readonly details?: Record<string, unknown>;
   override readonly cause?: Error;
-  readonly timestamp: string;
-  requestId?: string;
 
-  constructor(message: string, options: ErrorDetails = {}) {
-    // Pass cause to native Error for proper chain support (Node 16.9+)
+  constructor(message: string, options: ErrorOptions = {}) {
     super(message, options.cause ? { cause: options.cause } : undefined);
-    this.name = "ArcError";
-    this.code = options.code ?? "ARC_ERROR";
+    this.code = options.code ?? "arc.error";
     this.statusCode = options.statusCode ?? 500;
     this.details = options.details;
-    // cause is now set by super() — keep explicit assignment for TypeScript override
     this.cause = options.cause;
-    this.timestamp = new Date().toISOString();
-    this.requestId = options.requestId;
-
-    // Maintain proper stack trace
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, this.constructor);
-    }
+    if (Error.captureStackTrace) Error.captureStackTrace(this, this.constructor);
   }
 
-  /**
-   * Set request ID (typically from request context)
-   */
-  withRequestId(requestId: string): this {
-    this.requestId = requestId;
-    return this;
+  /** `HttpError.status` mirror — repo-core's `toErrorContract` reads this. */
+  get status(): number {
+    return this.statusCode;
   }
 
-  /**
-   * Convert to JSON response.
-   * Includes cause chain when present for debugging visibility.
-   */
-  toJSON(): Record<string, unknown> {
-    return {
-      success: false,
-      error: this.message,
-      code: this.code,
-      timestamp: this.timestamp,
-      ...(this.requestId && { requestId: this.requestId }),
-      ...(this.details && { details: this.details }),
-      ...(this.cause && {
-        cause:
-          this.cause instanceof ArcError
-            ? this.cause.toJSON()
-            : { message: (this.cause as Error).message, name: (this.cause as Error).name },
-      }),
-    };
+  /** `HttpError.meta` mirror — `details` under the canonical name. */
+  get meta(): Record<string, unknown> | undefined {
+    return this.details;
   }
 }
 
-/**
- * Not Found Error - 404
- */
 export class NotFoundError extends ArcError {
   constructor(resource: string, identifier?: string) {
     const message = identifier
       ? `${resource} with identifier '${identifier}' not found`
       : `${resource} not found`;
-
     super(message, {
-      code: "NOT_FOUND",
+      code: "arc.not_found",
       statusCode: 404,
-      details: { resource, identifier },
+      details: { resource, ...(identifier ? { identifier } : {}) },
     });
     this.name = "NotFoundError";
   }
 }
 
-/**
- * Validation Error - 400
- */
 export class ValidationError extends ArcError {
-  readonly errors: Array<{ field: string; message: string }>;
+  readonly errors: ReadonlyArray<{ field: string; message: string }>;
 
   constructor(message: string, errors: Array<{ field: string; message: string }> = []) {
     super(message, {
-      code: "VALIDATION_ERROR",
+      code: "arc.validation_error",
       statusCode: 400,
       details: { errors },
     });
@@ -117,147 +87,116 @@ export class ValidationError extends ArcError {
   }
 }
 
-/**
- * Unauthorized Error - 401
- */
 export class UnauthorizedError extends ArcError {
   constructor(message = "Authentication required") {
-    super(message, {
-      code: "UNAUTHORIZED",
-      statusCode: 401,
-    });
+    super(message, { code: "arc.unauthorized", statusCode: 401 });
     this.name = "UnauthorizedError";
   }
 }
 
-/**
- * Forbidden Error - 403
- */
 export class ForbiddenError extends ArcError {
   constructor(message = "Access denied") {
-    super(message, {
-      code: "FORBIDDEN",
-      statusCode: 403,
-    });
+    super(message, { code: "arc.forbidden", statusCode: 403 });
     this.name = "ForbiddenError";
   }
 }
 
-/**
- * Conflict Error - 409
- */
 export class ConflictError extends ArcError {
   constructor(message: string, field?: string) {
     super(message, {
-      code: "CONFLICT",
+      code: "arc.conflict",
       statusCode: 409,
-      details: field ? { field } : undefined,
+      ...(field ? { details: { field } } : {}),
     });
     this.name = "ConflictError";
   }
 }
 
-/**
- * Organization Required Error - 403
- */
 export class OrgRequiredError extends ArcError {
-  readonly organizations?: Array<{ id: string; roles?: string[] }>;
+  readonly organizations?: ReadonlyArray<{ id: string; roles?: string[] }>;
 
   constructor(message: string, organizations?: Array<{ id: string; roles?: string[] }>) {
     super(message, {
-      code: "ORG_SELECTION_REQUIRED",
+      code: "arc.org.selection_required",
       statusCode: 403,
-      details: organizations ? { organizations } : undefined,
+      ...(organizations ? { details: { organizations } } : {}),
     });
     this.name = "OrgRequiredError";
     this.organizations = organizations;
   }
 }
 
-/**
- * Organization Access Denied Error - 403
- */
 export class OrgAccessDeniedError extends ArcError {
   constructor(orgId?: string) {
     super("Organization access denied", {
-      code: "ORG_ACCESS_DENIED",
+      code: "arc.org.access_denied",
       statusCode: 403,
-      details: orgId ? { organizationId: orgId } : undefined,
+      ...(orgId ? { details: { organizationId: orgId } } : {}),
     });
     this.name = "OrgAccessDeniedError";
   }
 }
 
-/**
- * Rate Limit Error - 429
- */
 export class RateLimitError extends ArcError {
   readonly retryAfter?: number;
 
   constructor(message = "Too many requests", retryAfter?: number) {
     super(message, {
-      code: "RATE_LIMITED",
+      code: "arc.rate_limited",
       statusCode: 429,
-      details: retryAfter ? { retryAfter } : undefined,
+      ...(retryAfter ? { details: { retryAfter } } : {}),
     });
     this.name = "RateLimitError";
     this.retryAfter = retryAfter;
   }
 }
 
-/**
- * Service Unavailable Error - 503
- */
 export class ServiceUnavailableError extends ArcError {
   constructor(message = "Service temporarily unavailable") {
-    super(message, {
-      code: "SERVICE_UNAVAILABLE",
-      statusCode: 503,
-    });
+    super(message, { code: "arc.service_unavailable", statusCode: 503 });
     this.name = "ServiceUnavailableError";
   }
 }
 
 /**
- * Create error from status code
+ * Status-code → canonical `arc.*` code mapping. Used by {@link createError}
+ * and the global error handler when no explicit code is supplied.
  */
+const STATUS_CODE_MAP: Readonly<Record<number, string>> = {
+  400: "arc.bad_request",
+  401: "arc.unauthorized",
+  403: "arc.forbidden",
+  404: "arc.not_found",
+  409: "arc.conflict",
+  422: "arc.unprocessable_entity",
+  429: "arc.rate_limited",
+  500: "arc.internal_error",
+  502: "arc.bad_gateway",
+  503: "arc.service_unavailable",
+  504: "arc.gateway_timeout",
+};
+
+/** Status → canonical arc code, falling back to `arc.error`. */
+export function statusToArcCode(status: number): string {
+  return STATUS_CODE_MAP[status] ?? "arc.error";
+}
+
+/** Quick `ArcError` constructor when the bundled subclasses don't fit. */
 export function createError(
   statusCode: number,
   message: string,
   details?: Record<string, unknown>,
 ): ArcError {
-  const codes: Record<number, string> = {
-    400: "BAD_REQUEST",
-    401: "UNAUTHORIZED",
-    403: "FORBIDDEN",
-    404: "NOT_FOUND",
-    409: "CONFLICT",
-    429: "RATE_LIMITED",
-    500: "INTERNAL_ERROR",
-    503: "SERVICE_UNAVAILABLE",
-  };
-
   return new ArcError(message, {
-    code: codes[statusCode] ?? "ERROR",
+    code: statusToArcCode(statusCode),
     statusCode,
-    details,
+    ...(details ? { details } : {}),
   });
 }
 
 /**
- * Create a domain-specific error with automatic HTTP status mapping.
- *
- * Eliminates manual `if (err.code === 'X') return status` boilerplate.
- * Arc's error handler automatically maps `statusCode` to HTTP response.
- *
- * @example
- * ```typescript
- * import { createDomainError } from '@classytic/arc';
- *
- * throw createDomainError('MEMBER_NOT_FOUND', 'Member does not exist', 404);
- * throw createDomainError('SELF_REFERRAL', 'Cannot refer yourself', 422);
- * throw createDomainError('INSUFFICIENT_BALANCE', 'Not enough credits', 402, { balance: 0 });
- * ```
+ * Domain-error escape hatch. Use a hierarchical code that scopes the error
+ * to your package (`'commerce.cart.locked'`, `'payment.gateway.timeout'`).
  */
 export function createDomainError(
   code: string,
@@ -265,12 +204,10 @@ export function createDomainError(
   statusCode = 400,
   details?: Record<string, unknown>,
 ): ArcError {
-  return new ArcError(message, { code, statusCode, details });
+  return new ArcError(message, { code, statusCode, ...(details ? { details } : {}) });
 }
 
-/**
- * Check if error is an Arc error
- */
+/** Type guard. */
 export function isArcError(error: unknown): error is ArcError {
   return error instanceof ArcError;
 }

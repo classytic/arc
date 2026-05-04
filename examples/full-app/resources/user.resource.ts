@@ -7,7 +7,7 @@
 
 import mongoose from "mongoose";
 import { defineResource } from "../../../src/core/index.js";
-import { createMongooseAdapter } from "../../../src/adapters/index.js";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { allowPublic, requireRoles } from "../../../src/permissions/index.js";
 import { Repository } from "@classytic/mongokit";
 

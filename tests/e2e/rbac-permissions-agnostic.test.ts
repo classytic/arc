@@ -9,9 +9,9 @@
  * ensures Arc's "database-agnostic" promise holds for permissions.
  */
 
+import type { DataAdapter, RepositoryLike } from "@classytic/repo-core/adapter";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { DataAdapter, RepositoryLike } from "../../src/adapters/interface.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -54,7 +54,7 @@ function createInMemoryRepo(): RepositoryLike<AnyRecord> {
       if (filters) items = items.filter((item) => matches(item, filters));
       return {
         method: "offset" as const,
-        docs: items,
+        data: items,
         total: items.length,
         page: 1,
         limit: items.length || 20,
@@ -234,11 +234,11 @@ describe("RBAC Permissions E2E — DB-Agnostic (no Mongoose)", () => {
         payload: { title: "Public Article" },
       });
       expect(createRes.statusCode).toBe(201);
-      const id = JSON.parse(createRes.body).data._id;
+      const id = JSON.parse(createRes.body)._id;
 
       const res = await app.inject({ method: "GET", url: `/articles/${id}` });
       expect(res.statusCode).toBe(200);
-      expect(JSON.parse(res.body).data.title).toBe("Public Article");
+      expect(JSON.parse(res.body).title).toBe("Public Article");
     });
   });
 
@@ -295,7 +295,7 @@ describe("RBAC Permissions E2E — DB-Agnostic (no Mongoose)", () => {
         payload: { title: "To Delete" },
       });
       expect(res.statusCode).toBe(201);
-      articleId = JSON.parse(res.body).data._id;
+      articleId = JSON.parse(res.body)._id;
     });
 
     it("should reject non-admin from deleting articles", async () => {
@@ -343,7 +343,7 @@ describe("RBAC Permissions E2E — DB-Agnostic (no Mongoose)", () => {
         payload: { title: "Owned Article" },
       });
       expect(res.statusCode).toBe(201);
-      ownedArticleId = JSON.parse(res.body).data._id;
+      ownedArticleId = JSON.parse(res.body)._id;
     });
 
     it("should allow admin to update any article", async () => {
@@ -355,7 +355,7 @@ describe("RBAC Permissions E2E — DB-Agnostic (no Mongoose)", () => {
         payload: { title: "Admin Updated" },
       });
       expect(res.statusCode).toBe(200);
-      expect(JSON.parse(res.body).data.title).toBe("Admin Updated");
+      expect(JSON.parse(res.body).title).toBe("Admin Updated");
     });
 
     it("should allow owner to update their own article", async () => {

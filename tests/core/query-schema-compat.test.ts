@@ -9,10 +9,10 @@
  */
 
 import { QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -120,61 +120,61 @@ describe("Query Schema Compatibility", () => {
   it("name[contains]=Book", async () => {
     const res = await expectNotRejected("/products?name[contains]=Book");
     // "MacBook" and "TypeScript Book" both contain "Book"
-    expect(res.json().docs.length).toBe(2);
-    expect(res.json().docs.every((d: { name: string }) => d.name.includes("Book"))).toBe(true);
+    expect(res.json().data.length).toBe(2);
+    expect(res.json().data.every((d: { name: string }) => d.name.includes("Book"))).toBe(true);
   });
 
   it("price[gte]=100", async () => {
     const res = await expectNotRejected("/products?price[gte]=100");
-    expect(res.json().docs.length).toBe(1);
+    expect(res.json().data.length).toBe(1);
   });
 
   it("price[gt]=5&price[lt]=100", async () => {
     const res = await expectNotRejected("/products?price[gt]=5&price[lt]=100");
-    expect(res.json().docs.length).toBe(2); // Book (39) + Draft (10)
+    expect(res.json().data.length).toBe(2); // Book (39) + Draft (10)
   });
 
   it("status[in]=active,draft", async () => {
     const res = await expectNotRejected("/products?status[in]=active,draft");
-    expect(res.json().docs.length).toBe(3);
+    expect(res.json().data.length).toBe(3);
   });
 
   it("status[ne]=archived", async () => {
     const res = await expectNotRejected("/products?status[ne]=archived");
-    expect(res.json().docs.length).toBe(3);
+    expect(res.json().data.length).toBe(3);
   });
 
   // ── Exact match (no brackets) ──
 
   it("category=books (exact)", async () => {
     const res = await expectNotRejected("/products?category=books");
-    expect(res.json().docs.length).toBe(1);
+    expect(res.json().data.length).toBe(1);
   });
 
   it("status=active (exact)", async () => {
     const res = await expectNotRejected("/products?status=active");
-    expect(res.json().docs.length).toBe(2);
+    expect(res.json().data.length).toBe(2);
   });
 
   // ── Combined filters ──
 
   it("category=electronics&price[lte]=3000", async () => {
     const res = await expectNotRejected("/products?category=electronics&price[lte]=3000");
-    expect(res.json().docs.length).toBe(1);
+    expect(res.json().data.length).toBe(1);
   });
 
   it("status[in]=active,draft&sort=-price&limit=2", async () => {
     const res = await expectNotRejected("/products?status[in]=active,draft&sort=-price&limit=2");
-    const docs = res.json().docs;
-    expect(docs.length).toBe(2);
-    expect(docs[0].price).toBeGreaterThanOrEqual(docs[1].price);
+    const rows = res.json().data;
+    expect(rows.length).toBe(2);
+    expect(rows[0].price).toBeGreaterThanOrEqual(rows[1].price);
   });
 
   // ── Pagination + filters ──
 
   it("page=1&limit=1&status=active", async () => {
     const res = await expectNotRejected("/products?page=1&limit=1&status=active");
-    expect(res.json().docs.length).toBe(1);
+    expect(res.json().data.length).toBe(1);
     expect(res.json().total).toBe(2);
   });
 
@@ -188,17 +188,17 @@ describe("Query Schema Compatibility", () => {
 
   it("sort=price", async () => {
     const res = await expectNotRejected("/products?sort=price");
-    const docs = res.json().docs;
-    for (let i = 1; i < docs.length; i++) {
-      expect(docs[i].price).toBeGreaterThanOrEqual(docs[i - 1].price);
+    const data = res.json();
+    for (let i = 1; i < data.length; i++) {
+      expect(data[i].price).toBeGreaterThanOrEqual(data[i - 1].price);
     }
   });
 
   it("sort=-price", async () => {
     const res = await expectNotRejected("/products?sort=-price");
-    const docs = res.json().docs;
-    for (let i = 1; i < docs.length; i++) {
-      expect(docs[i].price).toBeLessThanOrEqual(docs[i - 1].price);
+    const data = res.json();
+    for (let i = 1; i < data.length; i++) {
+      expect(data[i].price).toBeLessThanOrEqual(data[i - 1].price);
     }
   });
 
@@ -215,9 +215,9 @@ describe("Query Schema Compatibility", () => {
     // A schema validation 400 has "Validation failed" in the response.
     if (res.statusCode === 400) {
       const body = res.json();
-      // Schema validation errors have code: "VALIDATION_ERROR"
+      // Schema validation errors have code: "arc.validation_error"
       // MongoKit/DB errors don't — they're operational errors
-      expect(body.code).not.toBe("VALIDATION_ERROR");
+      expect(body.code).not.toBe("arc.validation_error");
     }
   });
 });

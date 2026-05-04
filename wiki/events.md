@@ -9,9 +9,9 @@
 ## Shape
 
 ```ts
-import { EventMeta } from '@classytic/arc/events';
+import { EventMeta, DomainEvent, createEvent, createChildEvent } from '@classytic/primitives/events';
 
-// EventMeta (v2.9 contract)
+// EventMeta
 {
   id, timestamp,
   schemaVersion?, correlationId?, causationId?, partitionKey?,
@@ -21,7 +21,7 @@ import { EventMeta } from '@classytic/arc/events';
 }
 ```
 
-- Arc is source of truth for `EventMeta`; `@classytic/primitives` mirrors it.
+- `@classytic/primitives/events` is the source of truth for event types (`EventMeta`, `DomainEvent`, `EventHandler`, `EventLogger`, `EventTransport`, `DeadLetteredEvent`, `PublishManyResult`, `createEvent`, `createChildEvent`, `matchEventPattern`). Arc re-exports the runtime `MemoryEventTransport` only.
 - Domain packages narrow `aggregate.type` to a closed union via interface extension.
 - `createChildEvent(parent, type, payload)` auto-chains causation + inherits `correlation`, `source`, `idempotencyKey`. `aggregate` is **not** inherited.
 
@@ -40,6 +40,10 @@ Redis Streams does **not** dedupe — handlers must be idempotent. See [[gotchas
 ## Publishing is fire-and-forget (`failOpen: true`)
 
 If publishing fails, the HTTP request still succeeds. For guaranteed delivery, use the outbox. Don't change the default — it protects user-facing latency. See [[gotchas]] #7.
+
+## Dual-publish dev-warn
+
+Calling `app.events.publish()` manually for the same event type that an `eventStrategy: 'auto'` resource hook also emits triggers a one-shot `console.warn` in development. Pick one path: manual publish OR `eventStrategy`, not both.
 
 ## Outbox (v2.9+)
 

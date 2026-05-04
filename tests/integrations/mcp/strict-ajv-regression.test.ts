@@ -13,10 +13,10 @@
  */
 
 import { QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import Fastify from "fastify";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createMongooseAdapter } from "../../../src/adapters/index.js";
 import { BaseController, defineResource } from "../../../src/core/index.js";
 import { allowPublic } from "../../../src/permissions/index.js";
 

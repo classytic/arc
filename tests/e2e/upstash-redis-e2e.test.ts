@@ -97,7 +97,7 @@ describeRedis("Upstash Redis — arc distributed-system readiness", () => {
       unsub();
 
       expect(received).toHaveLength(1);
-      expect(received[0]!.type).toBe("order.created");
+      expect(received[0]?.type).toBe("order.created");
     }, 15_000);
 
     it("does not deliver non-matching events", async () => {
@@ -155,8 +155,8 @@ describeRedis("Upstash Redis — arc distributed-system readiness", () => {
       await waitFor(() => received.length > 0, { timeoutMs: 5_000 });
 
       expect(received).toHaveLength(1);
-      expect(received[0]!.type).toBe("invoice.paid");
-      expect(received[0]!.payload).toMatchObject({ invoiceId: "inv-1", amount: 100 });
+      expect(received[0]?.type).toBe("invoice.paid");
+      expect(received[0]?.payload).toMatchObject({ invoiceId: "inv-1", amount: 100 });
     }, 15_000);
 
     it("metadata (correlationId/userId/organizationId) round-trips across instances", async () => {
@@ -171,7 +171,7 @@ describeRedis("Upstash Redis — arc distributed-system readiness", () => {
       );
       await waitFor(() => received.length > 0, { timeoutMs: 5_000 });
 
-      const meta = received[0]!.meta;
+      const meta = received[0]?.meta;
       expect(meta.correlationId).toBe("trace-xyz");
       expect(meta.userId).toBe("u-7");
       expect(meta.organizationId).toBe("org-1");
@@ -222,7 +222,7 @@ describeRedis("Upstash Redis — arc distributed-system readiness", () => {
       unsub();
 
       expect(received).toHaveLength(1);
-      expect(received[0]!.type).toBe("payment.settled");
+      expect(received[0]?.type).toBe("payment.settled");
     }, 20_000);
   });
 
@@ -279,7 +279,7 @@ describeRedis("Upstash Redis — arc distributed-system readiness", () => {
       });
       await waitFor(() => received.length > 0, { timeoutMs: 5_000 });
 
-      expect(received[0]!.payload).toMatchObject({ userId: "u-1", email: "alice@example.com" });
+      expect(received[0]?.payload).toMatchObject({ userId: "u-1", email: "alice@example.com" });
     }, 15_000);
 
     it("rejects an invalid payload in reject mode", async () => {
@@ -335,7 +335,7 @@ describeRedis("Upstash Redis — arc distributed-system readiness", () => {
       expect(attempts).toBeGreaterThanOrEqual(3);
       expect(dlqReceived).toHaveLength(1);
       // DLQ payload wraps the original event + accumulated errors.
-      const dlqPayload = dlqReceived[0]!.payload as {
+      const dlqPayload = dlqReceived[0]?.payload as {
         originalEvent: { type: string };
         errors: unknown[];
       };
@@ -396,13 +396,13 @@ describeRedis("Upstash Redis — arc distributed-system readiness", () => {
       expect(handlerCalls[0]).toEqual({ to: "alice@example.com", attempt: 0 });
 
       await waitFor(() => completions.length > 0, { timeoutMs: 5_000 });
-      expect(completions[0]!.type).toBe(`job.${jobName}.completed`);
+      expect(completions[0]?.type).toBe(`job.${jobName}.completed`);
     }, 30_000);
 
     it("exposes queue stats via fastify.jobs.getStats()", async () => {
       const stats = await fastify.jobs.getStats();
       expect(stats[jobName]).toBeDefined();
-      expect(typeof stats[jobName]!.completed).toBe("number");
+      expect(typeof stats[jobName]?.completed).toBe("number");
     });
   });
 
@@ -458,7 +458,7 @@ describeRedis("Upstash Redis — arc distributed-system readiness", () => {
       await waitFor(() => failures.length > 0, { timeoutMs: 10_000 });
 
       expect(attempts).toBeGreaterThanOrEqual(2);
-      expect(failures[0]!.type).toBe(`job.${jobName}.failed`);
+      expect(failures[0]?.type).toBe(`job.${jobName}.failed`);
 
       // Verify DLQ received the job via a direct Redis scan (bullmq prefix).
       const keys = await redis.keys(`bull:${dlqName}:*`);

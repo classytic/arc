@@ -25,7 +25,11 @@ describe("MCP service scope", () => {
       "list",
     );
 
-    const scope = ctx.metadata?._scope as { kind: string; clientId?: string; scopes?: readonly string[] };
+    const scope = ctx.metadata?._scope as {
+      kind: string;
+      clientId?: string;
+      scopes?: readonly string[];
+    };
     expect(scope.kind).toBe("service");
     expect(scope.clientId).toBe("client_abc123");
     expect(scope.scopes).toEqual(["read:products", "write:orders"]);
@@ -47,7 +51,12 @@ describe("MCP service scope", () => {
       "list",
     );
 
-    const scope = ctx.metadata?._scope as { kind: string; userId?: string; userRoles?: string[]; orgRoles?: string[] };
+    const scope = ctx.metadata?._scope as {
+      kind: string;
+      userId?: string;
+      userRoles?: string[];
+      orgRoles?: string[];
+    };
     expect(scope.kind).toBe("member");
     expect(scope.userId).toBe("user-123");
     expect(scope.userRoles).toEqual(["admin"]);
@@ -59,11 +68,7 @@ describe("MCP service scope", () => {
       "../../../src/integrations/mcp/buildRequestContext.js"
     );
 
-    const ctx = buildRequestContext(
-      {},
-      { userId: "user-456", roles: ["viewer"] },
-      "get",
-    );
+    const ctx = buildRequestContext({}, { userId: "user-456", roles: ["viewer"] }, "get");
 
     const scope = ctx.metadata?._scope as { kind: string; userId?: string; userRoles?: string[] };
     expect(scope.kind).toBe("authenticated");
@@ -129,9 +134,7 @@ describe("MCP service scope", () => {
   });
 
   it("custom MCP auth resolver can return service identity", async () => {
-    const { resolveMcpAuth } = await import(
-      "../../../src/integrations/mcp/authBridge.js"
-    );
+    const { resolveMcpAuth } = await import("../../../src/integrations/mcp/authBridge.js");
 
     // Simulate a custom auth resolver returning service identity
     const serviceAuth = async (headers: Record<string, string | undefined>) => {
@@ -146,10 +149,7 @@ describe("MCP service scope", () => {
       return null;
     };
 
-    const result = await resolveMcpAuth(
-      { "x-service-key": "svc-secret-123" },
-      serviceAuth,
-    );
+    const result = await resolveMcpAuth({ "x-service-key": "svc-secret-123" }, serviceAuth);
 
     expect(result).not.toBeNull();
     expect(result?.clientId).toBe("pipeline-v2");

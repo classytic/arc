@@ -37,9 +37,9 @@
  */
 
 import { createHash } from "node:crypto";
+import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
-import type { RepositoryLike } from "../adapters/interface.js";
 import { repositoryAsIdempotencyStore } from "./repository-idempotency-adapter.js";
 import type { IdempotencyStore } from "./stores/interface.js";
 import { createIdempotencyResult } from "./stores/interface.js";

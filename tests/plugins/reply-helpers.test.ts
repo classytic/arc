@@ -2,8 +2,8 @@
  * Reply Helpers + Error Mappers + Streaming Tests
  */
 
-import Fastify, { type FastifyInstance } from "fastify";
 import { Readable } from "node:stream";
+import Fastify, { type FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 // ── Domain error for mapper tests ──
@@ -36,21 +36,24 @@ describe("reply helpers", () => {
     app = Fastify({ logger: false });
     await app.register(replyHelpersPlugin);
 
-    // Test routes
-    app.get("/ok", async (_req, reply) => reply.ok({ name: "MacBook", price: 2499 }));
-    app.get("/ok-201", async (_req, reply) => reply.ok({ id: "new-1" }, 201));
-    app.get("/fail", async (_req, reply) => reply.fail("Not found", 404));
-    app.get("/fail-array", async (_req, reply) => reply.fail(["Name required", "Price invalid"], 422));
-    app.get("/fail-default", async (_req, reply) => reply.fail("Bad request"));
-    app.get("/paginated", async (_req, reply) =>
-      reply.paginated({
-        docs: [{ id: "1" }, { id: "2" }],
+    // No-envelope contract: handlers return raw data via reply.send() (or just
+    // `return data`). The remaining decorators are sendList (canonical list
+    // wire envelope) and stream (file downloads).
+    app.get("/ok", async (_req, reply) => reply.send({ name: "MacBook", price: 2499 }));
+    app.get("/ok-201", async (_req, reply) => reply.code(201).send({ id: "new-1" }));
+    app.get("/list-paginated", async (_req, reply) =>
+      reply.sendList({
+        method: "offset",
+        data: [{ id: "1" }, { id: "2" }],
         total: 50,
         page: 1,
         limit: 20,
+        pages: 3,
         hasNext: true,
+        hasPrev: false,
       }),
     );
+    app.get("/list-bare", async (_req, reply) => reply.sendList([{ id: "a" }, { id: "b" }]));
     app.get("/stream-buffer", async (_req, reply) =>
       reply.stream(Buffer.from("id,name\n1,MacBook\n2,iPad"), {
         contentType: "text/csv",
@@ -81,59 +84,42 @@ describe("reply helpers", () => {
     await app.close();
   });
 
-  // ── reply.ok() ──
+  // ── raw send (no envelope) ──
 
-  it("reply.ok() sends success envelope with 200", async () => {
+  it("reply.send emits the raw payload at 200", async () => {
     const res = await app.inject({ method: "GET", url: "/ok" });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.success).toBe(true);
-    expect(body.data).toEqual({ name: "MacBook", price: 2499 });
+    expect(body).toEqual({ name: "MacBook", price: 2499 });
   });
 
-  it("reply.ok() accepts custom status code", async () => {
+  it("reply.code(201).send() emits the raw payload with custom status", async () => {
     const res = await app.inject({ method: "GET", url: "/ok-201" });
     expect(res.statusCode).toBe(201);
-    expect(res.json().success).toBe(true);
-    expect(res.json().data.id).toBe("new-1");
+    expect(res.json().id).toBe("new-1");
+    expect(res.json()).not.toHaveProperty("success");
   });
 
-  // ── reply.fail() ──
+  // ── reply.sendList() — canonical paginated envelope ──
 
-  it("reply.fail() sends error envelope with custom status", async () => {
-    const res = await app.inject({ method: "GET", url: "/fail" });
-    expect(res.statusCode).toBe(404);
-    const body = res.json();
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Not found");
-  });
-
-  it("reply.fail() with array sends errors field", async () => {
-    const res = await app.inject({ method: "GET", url: "/fail-array" });
-    expect(res.statusCode).toBe(422);
-    const body = res.json();
-    expect(body.success).toBe(false);
-    expect(body.errors).toEqual(["Name required", "Price invalid"]);
-    expect(body.error).toBeUndefined();
-  });
-
-  it("reply.fail() defaults to 400", async () => {
-    const res = await app.inject({ method: "GET", url: "/fail-default" });
-    expect(res.statusCode).toBe(400);
-  });
-
-  // ── reply.paginated() ──
-
-  it("reply.paginated() sends flat list envelope", async () => {
-    const res = await app.inject({ method: "GET", url: "/paginated" });
+  it("reply.sendList() emits the canonical offset-pagination wire shape", async () => {
+    const res = await app.inject({ method: "GET", url: "/list-paginated" });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.success).toBe(true);
-    expect(body.docs).toHaveLength(2);
+    expect(body.method).toBe("offset");
+    expect(body.data).toHaveLength(2);
     expect(body.total).toBe(50);
     expect(body.page).toBe(1);
     expect(body.limit).toBe(20);
     expect(body.hasNext).toBe(true);
+  });
+
+  it("reply.sendList() with a bare array wraps to { data: T[] }", async () => {
+    const res = await app.inject({ method: "GET", url: "/list-bare" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.data).toEqual([{ id: "a" }, { id: "b" }]);
+    expect(body).not.toHaveProperty("method");
   });
 
   // ── reply.stream() ──
@@ -185,7 +171,7 @@ describe("error mappers", () => {
           type: ValidationError,
           toResponse: (err) => ({
             status: 422,
-            code: "VALIDATION_ERROR",
+            code: "arc.validation_error",
             message: "Validation failed",
             details: { fields: err.fields },
           }),
@@ -215,26 +201,24 @@ describe("error mappers", () => {
     const res = await app.inject({ method: "GET", url: "/accounting-error" });
     expect(res.statusCode).toBe(409);
     const body = res.json();
-    expect(body.success).toBe(false);
     expect(body.code).toBe("ALREADY_POSTED");
-    expect(body.error).toBe("Journal already posted");
+    expect(body.message).toBe("Journal already posted");
   });
 
   it("maps ValidationError with details", async () => {
     const res = await app.inject({ method: "GET", url: "/validation-error" });
     expect(res.statusCode).toBe(422);
     const body = res.json();
-    expect(body.success).toBe(false);
-    expect(body.code).toBe("VALIDATION_ERROR");
-    expect(body.details.fields).toEqual(["amount", "currency"]);
+    expect(body.code).toBe("arc.validation_error");
+    // Custom errorMappers attach their `details` directly to the wire.
+    expect(body.details?.fields ?? body.meta?.fields).toEqual(["amount", "currency"]);
   });
 
   it("unmapped errors still get generic handling", async () => {
     const res = await app.inject({ method: "GET", url: "/generic-error" });
     expect(res.statusCode).toBe(500);
     const body = res.json();
-    expect(body.success).toBe(false);
-    expect(body.code).toBe("INTERNAL_ERROR");
+    expect(body.code).toBe("arc.internal_error");
   });
 });
 

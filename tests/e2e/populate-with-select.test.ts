@@ -11,10 +11,10 @@
  */
 
 import { QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -198,11 +198,10 @@ describe("Populate with Select - E2E Integration", () => {
 
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
-      expect(payload.success).toBe(true);
-      expect(payload.docs).toHaveLength(1);
+      expect(payload.data).toHaveLength(1);
 
       // Author should be populated with ALL fields
-      const post = payload.docs[0];
+      const post = payload.data[0];
       expect(post.authorId).toBeDefined();
       expect(typeof post.authorId).toBe("object");
       expect(post.authorId.name).toBe("John Doe");
@@ -225,11 +224,10 @@ describe("Populate with Select - E2E Integration", () => {
       if (response.statusCode !== 200) console.log("ERROR:", response.payload, response.statusCode);
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
-      expect(payload.success).toBe(true);
-      expect(payload.docs).toHaveLength(1);
+      expect(payload.data).toHaveLength(1);
 
       // Author should be populated with ONLY selected fields
-      const post = payload.docs[0];
+      const post = payload.data[0];
       expect(post.authorId).toBeDefined();
       expect(typeof post.authorId).toBe("object");
       expect(post.authorId.name).toBe("John Doe");
@@ -253,7 +251,7 @@ describe("Populate with Select - E2E Integration", () => {
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
 
-      const post = payload.docs[0];
+      const post = payload.data[0];
       expect(post.authorId).toBeDefined();
       expect(post.authorId.name).toBe("John Doe");
       expect(post.authorId.email).toBe("john@example.com");
@@ -274,7 +272,7 @@ describe("Populate with Select - E2E Integration", () => {
 
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
-      const post = payload.docs[0];
+      const post = payload.data[0];
 
       expect(post.authorId.name).toBe("John Doe");
       // Only _id should be returned alongside name (Mongoose always includes _id)
@@ -301,10 +299,11 @@ describe("Populate with Select - E2E Integration", () => {
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
 
-      expect(payload.data.authorId).toBeDefined();
-      expect(payload.data.authorId.name).toBe("John Doe");
-      expect(payload.data.authorId.email).toBe("john@example.com");
-      expect(payload.data.authorId.secretField).toBeUndefined();
+      // Single-doc response: emitted raw, no { data } wrapper.
+      expect(payload.authorId).toBeDefined();
+      expect(payload.authorId.name).toBe("John Doe");
+      expect(payload.authorId.email).toBe("john@example.com");
+      expect(payload.authorId.secretField).toBeUndefined();
     });
   });
 
@@ -419,7 +418,7 @@ describe("Populate with Select - E2E Integration", () => {
 
         expect(response.statusCode).toBe(200);
         const payload = JSON.parse(response.payload);
-        const post = payload.docs[0];
+        const post = payload.data[0];
 
         // Author should only have name
         expect(post.authorId.name).toBe("John Doe");
@@ -453,7 +452,7 @@ describe("Populate with Select - E2E Integration", () => {
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
       // authorId should be just the ObjectId, not populated
-      expect(typeof payload.docs[0].authorId).toBe("string");
+      expect(typeof payload.data[0].authorId).toBe("string");
     });
 
     it("should handle non-existent field in populate gracefully", async () => {
@@ -500,10 +499,10 @@ describe("Populate with Select - E2E Integration", () => {
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
 
-      expect(payload.docs).toHaveLength(2);
+      expect(payload.data).toHaveLength(2);
       expect(payload.total).toBe(3);
       // Each post should have author populated with only name
-      payload.docs.forEach((post: any) => {
+      payload.data.forEach((post: any) => {
         expect(post.authorId.name).toBe("John Doe");
         expect(post.authorId.email).toBeUndefined();
       });

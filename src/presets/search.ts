@@ -220,18 +220,19 @@ const BUILTINS: readonly BuiltinSpec[] = [
 
 /**
  * Wrap the user handler to normalise the return shape into arc's envelope.
- * If the handler already returns `{ success, data }`, arc passes it through;
- * otherwise we wrap the raw return value so callers don't have to.
+ * If the handler already returns an `IControllerResponse` envelope (carrying
+ * a `data` slot), arc passes it through; otherwise we wrap the raw return
+ * value so callers don't have to.
  */
 function wrapEnvelope(
   handler: SearchHandler | ((req: IRequestContext) => Promise<unknown>),
 ): ControllerHandler {
   return async (req) => {
     const out = (await handler(req)) as unknown;
-    if (out !== null && typeof out === "object" && "success" in out) {
+    if (out !== null && typeof out === "object" && "data" in out) {
       return out as IControllerResponse;
     }
-    return { success: true, data: out };
+    return { data: out };
   };
 }
 
@@ -251,7 +252,7 @@ function normaliseSection(value: SearchSection | undefined): SearchRouteConfig |
  * data which `wrapEnvelope` later coerces into `IControllerResponse`. The
  * looser return type is deliberate — `SearchHandler` requires `IControllerResponse`,
  * but auto-wired handlers proxy directly to repo methods that return arbitrary
- * shapes (arrays of docs, scored hits, vectors, …).
+ * shapes (arrays of data, scored hits, vectors, …).
  */
 type RawSearchHandler = (req: IRequestContext) => Promise<unknown>;
 

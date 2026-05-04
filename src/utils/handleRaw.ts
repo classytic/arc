@@ -1,16 +1,16 @@
 /**
- * handleRaw — Arc envelope wrapper for raw route handlers
+ * handleRaw — Raw route helper that emits the data slot directly.
  *
- * Wraps a raw Fastify handler so it returns Arc's standard response envelope
- * (`{ success: true, data }`) and maps errors to the standard error envelope
- * (`{ success: false, error, code }`). Eliminates the 3-line boilerplate
- * that every `raw: true` handler in downstream apps repeats.
+ * Wraps a raw Fastify handler so it returns the canonical no-envelope
+ * shape: success-path responses send `data` directly (HTTP status is the
+ * wire discriminator), error-path responses funnel through the global
+ * `ErrorContract` shape via `ArcError`.
  *
  * The handler function just returns data — `handleRaw` does the rest:
- * - Return value → `{ success: true, data }`
- * - `ArcError` subclass → `reply.code(err.statusCode).send(err.toJSON())`
+ * - Return value → sent raw (no envelope)
+ * - `ArcError` subclass → `{ error, code, details? }` with `err.statusCode`
  * - Error with `.statusCode` → uses that status code
- * - Generic Error → 500 with `{ success: false, error: message }`
+ * - Generic Error → 500 with `{ error }`
  * - Skips if `reply.sent` (streaming handlers, SSE)
  *
  * @example
@@ -37,11 +37,11 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { ArcError } from "./errors.js";
 
 /**
- * Wrap a raw Fastify handler with Arc's response envelope and error handling.
+ * Wrap a raw Fastify handler with Arc's response shape and error handling.
  *
  * @param handler - Async function that receives `(request, reply)` and returns data.
- *   The return value is sent as `{ success: true, data }`. If it returns
- *   `undefined` or `null`, `{ success: true }` is sent (no `data` field).
+ *   The return value is sent raw (no envelope). If it returns `undefined`,
+ *   the response body is empty (HTTP status only).
  * @param statusCode - HTTP status code for successful responses (default: 200)
  */
 export function handleRaw<T>(
@@ -56,16 +56,20 @@ export function handleRaw<T>(
       if (reply.sent) return;
 
       if (result === undefined || result === null) {
-        reply.code(statusCode).send({ success: true });
+        reply.code(statusCode).send();
       } else {
-        reply.code(statusCode).send({ success: true, data: result });
+        reply.code(statusCode).send(result);
       }
     } catch (err) {
       // Don't double-send if reply was already sent before the throw
       if (reply.sent) return;
 
       if (err instanceof ArcError) {
-        reply.code(err.statusCode).send(err.toJSON());
+        reply.code(err.statusCode).send({
+          error: err.message,
+          code: err.code,
+          ...(err.details ? { details: err.details } : {}),
+        });
         return;
       }
 
@@ -73,7 +77,6 @@ export function handleRaw<T>(
       const code = error.statusCode ?? error.status ?? 500;
 
       reply.code(code).send({
-        success: false,
         error: error.message ?? "Internal server error",
         ...(error.code && { code: error.code }),
       });

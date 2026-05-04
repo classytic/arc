@@ -10,10 +10,10 @@
  * 5. tenantField: false works in no-auth mode (platform-universal)
  */
 
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
 import { allowPublic, requireAuth } from "../../src/permissions/index.js";
@@ -148,9 +148,8 @@ describe("No-Auth Mode E2E (auth: false)", () => {
 
       expect(res.statusCode).toBe(201);
       const body = JSON.parse(res.body);
-      expect(body.success).toBe(true);
-      expect(body.data.name).toBe("Widget");
-      itemId = body.data._id;
+      expect(body.name).toBe("Widget");
+      itemId = body._id;
     });
 
     it("should list items without authentication", async () => {
@@ -161,8 +160,7 @@ describe("No-Auth Mode E2E (auth: false)", () => {
 
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.success).toBe(true);
-      expect(body.docs.length).toBeGreaterThanOrEqual(1);
+      expect(body.data.length).toBeGreaterThanOrEqual(1);
     });
 
     it("should get item by ID without authentication", async () => {
@@ -172,7 +170,7 @@ describe("No-Auth Mode E2E (auth: false)", () => {
       });
 
       expect(res.statusCode).toBe(200);
-      expect(JSON.parse(res.body).data.name).toBe("Widget");
+      expect(JSON.parse(res.body).name).toBe("Widget");
     });
 
     it("should update item without authentication", async () => {
@@ -183,7 +181,7 @@ describe("No-Auth Mode E2E (auth: false)", () => {
       });
 
       expect(res.statusCode).toBe(200);
-      expect(JSON.parse(res.body).data.price).toBe(24.99);
+      expect(JSON.parse(res.body).price).toBe(24.99);
     });
 
     it("should delete item without authentication", async () => {
@@ -212,8 +210,7 @@ describe("No-Auth Mode E2E (auth: false)", () => {
 
       expect(res.statusCode).toBe(201);
       const body = JSON.parse(res.body);
-      expect(body.success).toBe(true);
-      itemId = body.data._id;
+      itemId = body._id;
     });
 
     it("should list items without authentication", async () => {
@@ -224,7 +221,7 @@ describe("No-Auth Mode E2E (auth: false)", () => {
 
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.docs.length).toBeGreaterThanOrEqual(1);
+      expect(body.data.length).toBeGreaterThanOrEqual(1);
     });
 
     it("should get item by ID without authentication", async () => {

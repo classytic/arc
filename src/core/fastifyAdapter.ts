@@ -1,11 +1,27 @@
 /**
- * Fastify Adapter for IController
+ * Fastify ↔ arc-controller seam.
  *
- * Converts between Fastify's request/reply and framework-agnostic IRequestContext/IControllerResponse.
- * This allows controllers implementing IController to work seamlessly with Fastify.
+ * Arc is Fastify-only on the HTTP edge — this file is the one place where
+ * Fastify's `req` / `reply` get translated into arc's `IRequestContext` /
+ * `IControllerResponse`. The translation earns its keep on two grounds:
+ *
+ *   1. **MCP shares the controllers.** `src/integrations/mcp/` invokes
+ *      the same `IController.list/get/create/update/delete` methods as
+ *      HTTP routes — controllers that spoke `FastifyRequest` directly
+ *      would force MCP to fake a request shape. One controller, two
+ *      surfaces, no shadow code.
+ *   2. **Arc-specific projections** — `req.scope` (RBAC), `req.server`
+ *      (events / audit / queryCache decorators), `req.metadata` (hooks +
+ *      policy filters). These are arc concepts not native to Fastify;
+ *      this is where they get stamped onto the per-request context.
+ *
+ * Not a "future framework adapter" — arc has no plan to support
+ * Express / Hono / etc. The naming sticks for back-compat, but the role
+ * is the seam between Fastify and arc's controller call, not portability.
  */
 
-import type { OffsetPaginationResult } from "@classytic/repo-core/pagination";
+import type { AnyPaginationResult } from "@classytic/repo-core/pagination";
+import { isPaginatedResult, toCanonicalList } from "@classytic/repo-core/pagination";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { FieldPermissionMap } from "../permissions/fields.js";
 import { applyFieldReadPermissions, resolveEffectiveRoles } from "../permissions/fields.js";
@@ -278,44 +294,99 @@ export function sendControllerResponse<T>(
     }
   }
 
-  // Handle paginated responses specially (flatten to Arc's ApiResponse format)
+  // List-shaped responses — flatten via repo-core's `toCanonicalList` so
+  // the wire shape always matches the typed-client (`@classytic/arc-next`)
+  // contract regardless of which kit produced the result.
+  //
+  // Detection signal: presence of an array `data` field on the response
+  // payload. That covers the three shapes kits emit:
+  //   1. Modern paginated result — has `method` discriminant + `data: T[]`.
+  //   2. Legacy paginated result — has `page`+`limit`+`total` but no
+  //      `method` (pre-repo-core-0.2.0 callers / mocks). Back-fill
+  //      `method: 'offset'` so clients still see the discriminant.
+  //   3. Bare list — `{ data: T[] }` only (no pagination metadata).
   if (
-    response.success &&
     response.data &&
     typeof response.data === "object" &&
-    "docs" in response.data
+    Array.isArray((response.data as { data?: unknown }).data)
   ) {
-    const paginatedData = response.data as unknown as OffsetPaginationResult<unknown>;
-    const filteredDocs = hasFieldRestrictions
-      ? applyPermissions(paginatedData.docs)
-      : paginatedData.docs;
+    const payload = response.data as unknown as
+      | AnyPaginationResult<unknown>
+      | { data: unknown[]; page?: number; limit?: number; total?: number };
+
+    // Apply field-level read permissions BEFORE handing to toCanonicalList
+    // so the spread on the paginated path keeps the filtered rows.
+    const filteredRows = hasFieldRestrictions
+      ? (applyPermissions(payload.data) as unknown[])
+      : (payload.data as unknown[]);
+
+    let canonical: ReturnType<typeof toCanonicalList>;
+    if (isPaginatedResult(payload)) {
+      canonical = toCanonicalList({
+        ...(payload as AnyPaginationResult<unknown>),
+        data: filteredRows,
+      });
+    } else if (
+      typeof (payload as { page?: unknown }).page === "number" &&
+      typeof (payload as { limit?: unknown }).limit === "number" &&
+      typeof (payload as { total?: unknown }).total === "number"
+    ) {
+      canonical = toCanonicalList({
+        method: "offset" as const,
+        data: filteredRows,
+        page: (payload as { page: number }).page,
+        limit: (payload as { limit: number }).limit,
+        total: (payload as { total: number }).total,
+        pages:
+          (payload as { pages?: number }).pages ??
+          Math.ceil(
+            (payload as { total: number }).total /
+              Math.max(1, (payload as { limit: number }).limit),
+          ),
+        hasNext: (payload as { hasNext?: boolean }).hasNext ?? false,
+        hasPrev: (payload as { hasPrev?: boolean }).hasPrev ?? false,
+      });
+    } else {
+      canonical = toCanonicalList(filteredRows);
+    }
 
     reply.code(response.status ?? 200).send({
-      success: true,
-      docs: filteredDocs,
-      page: paginatedData.page,
-      limit: paginatedData.limit,
-      total: paginatedData.total,
-      pages: paginatedData.pages,
-      hasNext: paginatedData.hasNext,
-      hasPrev: paginatedData.hasPrev,
+      ...canonical,
       ...(response.meta ?? {}),
       ...(fieldCaps ? { fieldPermissions: fieldCaps } : {}),
     });
     return;
   }
 
-  // Handle standard responses
-  const filteredData = hasFieldRestrictions ? applyPermissions(response.data) : response.data;
+  // Single-doc / scalar response — emit data raw (no envelope; HTTP status
+  // discriminates success vs error). `fieldCaps`/`meta` merge in only when
+  // the data is an object; otherwise they would clobber primitive payloads.
+  //
+  // Mongoose documents carry framework internals (`$__`, `_doc`, `$isNew`)
+  // as enumerable own properties, so a naive `{...doc}` spread leaks them
+  // onto the wire. Call `.toJSON()` first (every mongoose doc implements
+  // it; it returns the projected `_doc` minus internals + applies any
+  // toJSON transforms the schema declares). Plain objects pass through.
+  const rawData = hasFieldRestrictions ? applyPermissions(response.data) : response.data;
+  const filteredData =
+    rawData !== null &&
+    typeof rawData === "object" &&
+    typeof (rawData as unknown as { toJSON?: () => unknown }).toJSON === "function"
+      ? ((rawData as unknown as { toJSON: () => unknown }).toJSON() as typeof rawData)
+      : rawData;
+  const status = response.status ?? 200;
+  const isObject =
+    filteredData !== null && typeof filteredData === "object" && !Array.isArray(filteredData);
 
-  reply.code(response.status ?? (response.success ? 200 : 400)).send({
-    success: response.success,
-    data: filteredData,
-    error: response.error,
-    details: response.details,
-    ...(response.meta ?? {}),
-    ...(fieldCaps ? { fieldPermissions: fieldCaps } : {}),
-  });
+  if (isObject && (response.meta || fieldCaps)) {
+    reply.code(status).send({
+      ...(filteredData as object),
+      ...(response.meta ?? {}),
+      ...(fieldCaps ? { fieldPermissions: fieldCaps } : {}),
+    });
+    return;
+  }
+  reply.code(status).send(filteredData);
 }
 
 /**

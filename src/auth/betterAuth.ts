@@ -66,7 +66,7 @@ export interface BetterAuthAdapterOptions {
   /**
    * OpenAPI documentation for auth endpoints.
    * - `true` (default): auto-extract from auth.api if available
-   * - `false`: disable (auth routes won't appear in OpenAPI docs)
+   * - `false`: disable (auth routes won't appear in OpenAPI data)
    * - `ExternalOpenApiPaths`: manual spec override
    */
   openapi?: boolean | ExternalOpenApiPaths;
@@ -249,10 +249,16 @@ async function sendFetchResponse(response: Response, reply: FastifyReply): Promi
 }
 
 // ============================================================================
-// Direct API Helpers (bypass HTTP round-trips)
+// Direct API helpers
 // ============================================================================
+//
+// arc 2.13+ requires `auth.api.*` (the in-process method map exposed by every
+// `betterAuth()` instance since 1.6.0). The 2.12 HTTP fallback chain
+// (auth.handler-based round-trips for /get-session, /organization/*) is gone.
+// If you've stubbed Better Auth with a hand-rolled `{ handler }`-only object,
+// add an `api: { getSession, organization: { ... } }` map mirroring whatever
+// methods you exercise.
 
-/** Type for Better Auth's direct API methods (optional, available in newer versions) */
 interface BetterAuthDirectApi {
   getSession?: (opts: {
     headers: Headers;
@@ -261,100 +267,131 @@ interface BetterAuthDirectApi {
 }
 
 /**
- * Try to get session via Better Auth's direct JS API.
- * Returns null if the API method is not available (older Better Auth versions).
+ * Resolve the current session via Better Auth's direct JS API.
+ *
+ * Throws `ArcError(BETTER_AUTH_API_MISSING)` when `auth.api.getSession` is
+ * absent — this surfaces immediately and clearly when an integrator passes a
+ * stub handler instead of a real `betterAuth()` instance.
  */
-async function tryDirectGetSession(
+async function getSessionDirect(
   auth: BetterAuthHandler,
   headers: Headers,
 ): Promise<{ user: Record<string, unknown>; session: Record<string, unknown> } | null> {
   const api = auth.api as BetterAuthDirectApi | undefined;
-  if (!api || typeof api.getSession !== "function") return null;
-
-  try {
-    const result = await api.getSession({ headers });
-    if (result?.user) return result;
-    return null;
-  } catch {
-    return null;
+  if (!api || typeof api.getSession !== "function") {
+    throw new ArcError(
+      "Better Auth instance is missing `api.getSession` — arc 2.13+ requires the in-process API map. Pass a real `betterAuth()` instance or supply an `api: { getSession }` stub.",
+      { code: "BETTER_AUTH_API_MISSING", statusCode: 500 },
+    );
   }
+
+  // Errors propagate to the caller's catch block — that's where `exposeAuthErrors`
+  // decides whether the original message reaches the client. authenticate maps
+  // them to 401; optionalAuthenticate swallows them as unauthenticated.
+  const result = await api.getSession({ headers });
+  return result?.user ? result : null;
 }
 
 /**
- * Try to get active org member via direct JS API.
- * Returns roles array or null if not available.
+ * Read a method from `auth.api` — supports both the flat shape that real
+ * `betterAuth()` instances expose (`api.getActiveMember`) and the nested
+ * shape some test mocks / older builds use (`api.organization.getActiveMember`).
+ *
+ * Real Better Auth 1.6.x flattens every plugin endpoint onto the top-level
+ * `api` object. The nested form is kept as a fallback for hand-rolled stubs.
  */
-async function tryDirectGetActiveMember(
+function pickApiMethod<T = unknown>(
+  auth: BetterAuthHandler,
+  name: string,
+  group?: string,
+): T | undefined {
+  const api = auth.api as Record<string, unknown> | undefined;
+  if (!api) return undefined;
+  const flat = api[name];
+  if (typeof flat === "function") return flat as T;
+  if (group) {
+    const nested = (api[group] as Record<string, unknown> | undefined)?.[name];
+    if (typeof nested === "function") return nested as T;
+  }
+  return undefined;
+}
+
+/** Resolve org roles for the active member (session.activeOrganizationId path). */
+async function getActiveMemberRoles(
   auth: BetterAuthHandler,
   headers: Headers,
 ): Promise<string[] | null> {
-  const api = auth.api as Record<string, unknown> | undefined;
-  const orgApi = api as { organization?: Record<string, unknown> } | undefined;
-  const getActiveMember = orgApi?.organization?.getActiveMember as
-    | ((opts: { headers: Headers }) => Promise<Record<string, unknown> | null>)
-    | undefined;
-
-  if (typeof getActiveMember !== "function") return null;
+  const fn = pickApiMethod<(opts: { headers: Headers }) => Promise<Record<string, unknown> | null>>(
+    auth,
+    "getActiveMember",
+    "organization",
+  );
+  if (!fn) return null;
 
   try {
-    const memberData = await getActiveMember({ headers });
-    if (memberData) return extractRolesFromMembership(memberData);
-    return null;
+    const memberData = await fn({ headers });
+    return memberData ? extractRolesFromMembership(memberData) : null;
   } catch {
     return null;
   }
 }
 
 /**
- * Look up member role by explicit organizationId (query param).
+ * Resolve org roles for an explicit organizationId.
  *
- * Better Auth's `getActiveMemberRole` endpoint accepts an `organizationId`
- * query parameter, bypassing the session's `activeOrganizationId`.
- * This is essential for API key auth where the synthetic session has no
- * active organization set — callers pass org context via `x-organization-id` header.
+ * Required for API key auth where the synthetic session lacks
+ * `activeOrganizationId` — callers pass org context via the
+ * `x-organization-id` header.
  */
-async function tryDirectGetMemberRole(
+async function getMemberRolesByOrg(
   auth: BetterAuthHandler,
   headers: Headers,
   organizationId: string,
 ): Promise<string[] | null> {
-  const api = auth.api as Record<string, unknown> | undefined;
-  const orgApi = api as { organization?: Record<string, unknown> } | undefined;
-  const getActiveMemberRole = orgApi?.organization?.getActiveMemberRole as
-    | ((opts: {
-        headers: Headers;
-        query: { organizationId: string };
-      }) => Promise<{ role?: unknown } | null>)
-    | undefined;
-
-  if (typeof getActiveMemberRole !== "function") return null;
+  const fn = pickApiMethod<
+    (opts: {
+      headers: Headers;
+      query: { organizationId: string };
+    }) => Promise<{ role?: unknown } | null>
+  >(auth, "getActiveMemberRole", "organization");
+  if (!fn) return null;
 
   try {
-    const result = await getActiveMemberRole({ headers, query: { organizationId } });
-    if (result?.role) return normalizeRoles(result.role);
-    return null;
+    const result = await fn({ headers, query: { organizationId } });
+    return result?.role ? normalizeRoles(result.role) : null;
   } catch {
     return null;
   }
 }
 
 /**
- * Try to list teams via direct JS API.
+ * List teams the current user is a member of. Used to validate
+ * `activeTeamId` against the membership set before binding it to scope.
+ *
+ * Better Auth 1.6+ exposes this as `auth.api.listUserTeams` (path:
+ * `/organization/list-user-teams`). Older 1.5.x exposed
+ * `auth.api.listTeams` — kept as a fallback so stubs/older versions still
+ * work.
  */
-async function tryDirectListTeams(
+async function listTeamsDirect(
   auth: BetterAuthHandler,
   headers: Headers,
 ): Promise<Array<Record<string, unknown>> | null> {
-  const api = auth.api as Record<string, unknown> | undefined;
-  const orgApi = api as { organization?: Record<string, unknown> } | undefined;
-  const listTeams = orgApi?.organization?.listTeams as
-    | ((opts: { headers: Headers }) => Promise<unknown>)
-    | undefined;
-
-  if (typeof listTeams !== "function") return null;
+  const fn =
+    pickApiMethod<(opts: { headers: Headers }) => Promise<unknown>>(
+      auth,
+      "listUserTeams",
+      "organization",
+    ) ??
+    pickApiMethod<(opts: { headers: Headers }) => Promise<unknown>>(
+      auth,
+      "listTeams",
+      "organization",
+    );
+  if (!fn) return null;
 
   try {
-    const result = await listTeams({ headers });
+    const result = await fn({ headers });
     const teams = Array.isArray(result) ? result : (result as Record<string, unknown>)?.teams;
     return Array.isArray(teams) ? teams : null;
   } catch {
@@ -407,81 +444,6 @@ function extractRolesFromMembership(membership: Record<string, unknown>): string
   }
 
   return [];
-}
-
-/** Match an organization membership entry against the active org id */
-function membershipMatchesOrg(membership: Record<string, unknown>, activeOrgId: string): boolean {
-  const candidates = [
-    normalizeId(membership.organizationId),
-    normalizeId(membership.orgId),
-    normalizeId(membership.id),
-    normalizeId((membership.organization as Record<string, unknown> | undefined)?._id),
-    normalizeId((membership.organization as Record<string, unknown> | undefined)?.id),
-    normalizeId((membership.organization as Record<string, unknown> | undefined)?.organizationId),
-  ].filter(Boolean) as string[];
-
-  return candidates.includes(activeOrgId);
-}
-
-/**
- * Resolve org roles with fallback chain:
- * 1) GET /organization/get-active-member (requires activeOrganizationId in session)
- * 2) GET /organization/get-active-member-role?organizationId=... (explicit org — works for API key auth)
- * 3) GET /organization/list (fallback for type mismatch/legacy ID storage)
- */
-async function resolveOrgRoles(
-  auth: BetterAuthHandler,
-  protocol: string,
-  host: string,
-  normalizedBase: string,
-  headers: Headers,
-  activeOrgId: string,
-): Promise<string[] | null> {
-  // 1) Primary lookup — works when session has activeOrganizationId
-  const memberUrl = `${protocol}://${host}${normalizedBase}/organization/get-active-member`;
-  const memberRequest = new Request(memberUrl, { method: "GET", headers });
-  const memberResponse = await auth.handler(memberRequest);
-
-  if (memberResponse.ok) {
-    const memberData = (await memberResponse.json()) as Record<string, unknown> | null;
-    if (memberData) {
-      return extractRolesFromMembership(memberData);
-    }
-  }
-
-  // 2) Explicit org lookup — works for API key auth (no activeOrganizationId in session)
-  const roleUrl = `${protocol}://${host}${normalizedBase}/organization/get-active-member-role?organizationId=${encodeURIComponent(activeOrgId)}`;
-  const roleRequest = new Request(roleUrl, { method: "GET", headers });
-  const roleResponse = await auth.handler(roleRequest);
-
-  if (roleResponse.ok) {
-    const roleData = (await roleResponse.json()) as Record<string, unknown> | null;
-    if (roleData?.role) {
-      return normalizeRoles(roleData.role);
-    }
-  }
-
-  // 3) Fallback lookup via org list
-  const listUrl = `${protocol}://${host}${normalizedBase}/organization/list`;
-  const listRequest = new Request(listUrl, { method: "GET", headers });
-  const listResponse = await auth.handler(listRequest);
-  if (!listResponse.ok) return null;
-
-  const listData = (await listResponse.json()) as unknown;
-  const memberships = Array.isArray(listData)
-    ? listData
-    : ((listData as Record<string, unknown>)?.organizations ??
-      (listData as Record<string, unknown>)?.data ??
-      []);
-  if (!Array.isArray(memberships)) return null;
-
-  const target = memberships.find((entry) => {
-    if (!entry || typeof entry !== "object") return false;
-    return membershipMatchesOrg(entry as Record<string, unknown>, activeOrgId);
-  }) as Record<string, unknown> | undefined;
-
-  if (!target) return null;
-  return extractRolesFromMembership(target);
 }
 
 // ============================================================================
@@ -546,42 +508,15 @@ export function createBetterAuthAdapter(
    */
   const authenticate = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     try {
-      const protocol = request.protocol ?? "http";
-      const host = request.hostname ?? "localhost";
       const headers = buildHeaders(request);
 
-      // 1. Get session — prefer direct API (avoids HTTP round-trip)
-      let sessionData: { user: Record<string, unknown>; session: Record<string, unknown> } | null =
-        null;
-
-      sessionData = await tryDirectGetSession(auth, headers);
-
-      if (!sessionData) {
-        // Fallback: HTTP round-trip via auth.handler
-        const sessionUrl = `${protocol}://${host}${normalizedBase}/get-session`;
-        const sessionRequest = new Request(sessionUrl, { method: "GET", headers });
-        const sessionResponse = await auth.handler(sessionRequest);
-
-        if (!sessionResponse.ok) {
-          reply.code(401).send({
-            success: false,
-            error: "Unauthorized",
-            message: "Invalid or expired session",
-          });
-          return;
-        }
-
-        sessionData = (await sessionResponse.json()) as {
-          user: Record<string, unknown>;
-          session: Record<string, unknown>;
-        };
-      }
+      const sessionData = await getSessionDirect(auth, headers);
 
       if (!sessionData?.user) {
         reply.code(401).send({
-          success: false,
-          error: "Unauthorized",
-          message: "No active session",
+          code: "arc.unauthorized",
+          message: "Invalid or expired session",
+          status: 401,
         });
         return;
       }
@@ -591,42 +526,27 @@ export function createBetterAuthAdapter(
       req.user = sessionData.user;
       req.session = sessionData.session;
 
-      // 2. Extract identity from user
       const baUser = sessionData.user as Record<string, unknown>;
       const userId = String(baUser.id ?? baUser._id ?? "") || undefined;
       const userRoles = normalizeRoles(baUser.role);
 
-      // 3. Set default scope for authenticated users
       req.scope = { kind: "authenticated", userId, userRoles };
 
-      // 4. Org context bridge (when enabled)
       if (orgEnabled) {
         const session = sessionData.session as Record<string, unknown> | undefined;
         // Prefer session's activeOrganizationId; fall back to x-organization-id header
-        // (needed for API key auth where sessions don't carry org context)
+        // (needed for API-key auth where synthetic sessions carry no org context)
         const activeOrgId =
           (session?.activeOrganizationId as string | undefined) ||
           (request.headers["x-organization-id"] as string | undefined);
 
         if (activeOrgId) {
-          // Try direct API first (session-based), then explicit org lookup, then HTTP fallback
-          let orgRoles = await tryDirectGetActiveMember(auth, headers);
+          let orgRoles = await getActiveMemberRoles(auth, headers);
           if (!orgRoles) {
-            orgRoles = await tryDirectGetMemberRole(auth, headers, activeOrgId);
-          }
-          if (!orgRoles) {
-            orgRoles = await resolveOrgRoles(
-              auth,
-              protocol,
-              host,
-              normalizedBase,
-              headers,
-              activeOrgId,
-            );
+            orgRoles = await getMemberRolesByOrg(auth, headers, activeOrgId);
           }
 
           if (orgRoles) {
-            // Valid membership — set member scope
             const scope: RequestScope = {
               kind: "member",
               userId,
@@ -635,29 +555,9 @@ export function createBetterAuthAdapter(
               orgRoles,
             };
 
-            // Team context bridge: validate activeTeamId belongs to current org
             const activeTeamId = session?.activeTeamId as string | undefined;
             if (activeTeamId) {
-              // Try direct API first
-              let teams = await tryDirectListTeams(auth, headers);
-
-              if (!teams) {
-                // Fallback: HTTP round-trip
-                const teamsUrl = `${protocol}://${host}${normalizedBase}/organization/list-teams`;
-                const teamsRequest = new Request(teamsUrl, { method: "GET", headers });
-                const teamsResponse = await auth.handler(teamsRequest);
-
-                if (teamsResponse.ok) {
-                  const teamsData = (await teamsResponse.json()) as unknown;
-                  const teamsList = Array.isArray(teamsData)
-                    ? teamsData
-                    : (teamsData as { teams?: unknown })?.teams;
-                  teams = Array.isArray(teamsList)
-                    ? (teamsList as Array<Record<string, unknown>>)
-                    : [];
-                }
-              }
-
+              const teams = await listTeamsDirect(auth, headers);
               if (teams?.some((t) => normalizeId(t.id) === activeTeamId)) {
                 scope.teamId = activeTeamId;
               }
@@ -665,10 +565,8 @@ export function createBetterAuthAdapter(
 
             req.scope = scope;
           }
-          // No membership → scope stays 'authenticated'.
-          // Elevation (if needed) is handled by the elevation plugin.
+          // No membership → scope stays 'authenticated'. Elevation plugin can promote.
         }
-        // No activeOrgId → scope stays 'authenticated'.
       }
     } catch (err) {
       // Don't leak internal error details to clients unless explicitly opted-in
@@ -679,9 +577,9 @@ export function createBetterAuthAdapter(
         : "Authentication required";
 
       reply.code(401).send({
-        success: false,
-        error: "Unauthorized",
+        code: "arc.unauthorized",
         message,
+        status: 401,
       });
     }
   };
@@ -704,68 +602,30 @@ export function createBetterAuthAdapter(
   ): Promise<void> => {
     try {
       const headers = buildHeaders(request);
-
-      // Try direct API first, fall back to HTTP
-      let sessionData: { user: Record<string, unknown>; session: Record<string, unknown> } | null =
-        null;
-
-      sessionData = await tryDirectGetSession(auth, headers);
-
-      if (!sessionData) {
-        const protocol = request.protocol ?? "http";
-        const host = request.hostname ?? "localhost";
-        const sessionUrl = `${protocol}://${host}${normalizedBase}/get-session`;
-        const sessionRequest = new Request(sessionUrl, { method: "GET", headers });
-        const sessionResponse = await auth.handler(sessionRequest);
-
-        if (sessionResponse.ok) {
-          sessionData = (await sessionResponse.json()) as {
-            user: Record<string, unknown>;
-            session: Record<string, unknown>;
-          };
-        }
-      }
+      const sessionData = await getSessionDirect(auth, headers);
 
       if (!sessionData?.user) return; // No session — continue as unauthenticated
 
-      // Attach user and session to request
       const req = request as unknown as Record<string, unknown>;
       req.user = sessionData.user;
       req.session = sessionData.session;
 
-      // Extract identity from user
       const optUser = sessionData.user as Record<string, unknown>;
       const optUserId = String(optUser.id ?? optUser._id ?? "") || undefined;
       const optUserRoles = normalizeRoles(optUser.role);
 
-      // Set scope for authenticated users
       req.scope = { kind: "authenticated", userId: optUserId, userRoles: optUserRoles };
 
-      // Org context bridge (when enabled)
       if (orgEnabled) {
         const session = sessionData.session as Record<string, unknown> | undefined;
-        // Prefer session's activeOrganizationId; fall back to x-organization-id header
-        // (needed for API key auth where sessions don't carry org context)
         const activeOrgId =
           (session?.activeOrganizationId as string | undefined) ||
           (request.headers["x-organization-id"] as string | undefined);
 
         if (activeOrgId) {
-          let orgRoles = await tryDirectGetActiveMember(auth, headers);
+          let orgRoles = await getActiveMemberRoles(auth, headers);
           if (!orgRoles) {
-            orgRoles = await tryDirectGetMemberRole(auth, headers, activeOrgId);
-          }
-          if (!orgRoles) {
-            const protocol = request.protocol ?? "http";
-            const host = request.hostname ?? "localhost";
-            orgRoles = await resolveOrgRoles(
-              auth,
-              protocol,
-              host,
-              normalizedBase,
-              headers,
-              activeOrgId,
-            );
+            orgRoles = await getMemberRolesByOrg(auth, headers, activeOrgId);
           }
 
           if (orgRoles) {

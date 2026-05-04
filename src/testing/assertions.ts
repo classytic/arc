@@ -103,7 +103,9 @@ export function expectArc(response: ArcResponseLike): ArcAssertion {
         response.statusCode,
         `expected 2xx (${status}) but got ${response.statusCode}. Body: ${response.body.slice(0, 200)}`,
       ).toBe(status);
-      expect(getBody().success).toBe(true);
+      // No envelope: HTTP status discriminates success vs error. Body must parse
+      // (handled by getBody throwing on invalid JSON) and may carry any shape.
+      getBody();
       return assertion;
     },
 
@@ -113,7 +115,9 @@ export function expectArc(response: ArcResponseLike): ArcAssertion {
       } else {
         expect(response.statusCode).toBeGreaterThanOrEqual(400);
       }
-      expect(getBody().success).toBe(false);
+      // No envelope: failure shape is the canonical ErrorContract (`code`, `message`, `status`).
+      const body = getBody();
+      expect(body.code, "expected ErrorContract.code on failed response").toBeDefined();
       return assertion;
     },
 
@@ -138,7 +142,12 @@ export function expectArc(response: ArcResponseLike): ArcAssertion {
     },
 
     hasData() {
-      expect(getBody().data, "expected body.data to be defined").toBeDefined();
+      // Single-doc responses have no envelope — body itself IS the data. Treat
+      // a non-empty parsed body as proof. Falls back to the legacy `data`
+      // field for paginated/bare-list shapes that still carry it.
+      const body = getBody();
+      const hasContent = Object.keys(body).length > 0;
+      expect(hasContent, "expected response body to be defined").toBe(true);
       return assertion;
     },
 
@@ -148,37 +157,32 @@ export function expectArc(response: ArcResponseLike): ArcAssertion {
     },
 
     hidesField(field) {
-      const data = getBody().data;
-      expect(data, "expected body.data to be defined before field check").toBeDefined();
+      // Single-doc responses have no envelope — body itself IS the data. For
+      // paginated/list responses, `body.data` is the array; field checks at
+      // the array level are no-ops, so we only inspect the top-level body.
+      const body = getBody();
       expect(
-        data as Record<string, unknown>,
-        `expected field '${field}' to be hidden from response.data`,
+        body as Record<string, unknown>,
+        `expected field '${field}' to be hidden from response`,
       ).not.toHaveProperty(field);
       return assertion;
     },
 
     showsField(field) {
-      const data = getBody().data;
-      expect(data, "expected body.data to be defined before field check").toBeDefined();
+      const body = getBody();
       expect(
-        data as Record<string, unknown>,
-        `expected field '${field}' on response.data`,
+        body as Record<string, unknown>,
+        `expected field '${field}' on response`,
       ).toHaveProperty(field);
       return assertion;
     },
 
     paginated(expected) {
       const body = getBody();
-      expect(body.success).toBe(true);
-      // arc's paginated envelope exposes `docs` at top-level (flattened from
-      // OffsetPaginationResult) — see sendControllerResponse. Some list
-      // endpoints still return arrays under `data`; accept either.
-      const docs = (body.docs ?? (Array.isArray(body.data) ? body.data : undefined)) as
-        | unknown[]
-        | undefined;
-      expect(Array.isArray(docs), "expected `docs[]` (or `data[]`) on paginated response").toBe(
-        true,
-      );
+      // No envelope: paginated wire shape is `{ method, data: T[], page, limit, total, ... }`.
+      // Bare lists are `{ data: T[] }`. Both expose the array under `data`.
+      const data = body.data as unknown[] | undefined;
+      expect(Array.isArray(data), "expected `data[]` array on paginated response").toBe(true);
       if (expected?.page !== undefined) expect(body.page).toBe(expected.page);
       if (expected?.limit !== undefined) expect(body.limit).toBe(expected.limit);
       if (expected?.total !== undefined) expect(body.total).toBe(expected.total);
@@ -189,8 +193,9 @@ export function expectArc(response: ArcResponseLike): ArcAssertion {
 
     hasError(matcher) {
       const body = getBody();
-      const errorField = (body.error ?? body.message) as string | undefined;
-      expect(errorField, "expected body.error or body.message to be set").toBeDefined();
+      // ErrorContract.message is canonical; legacy body.error preserved as fallback.
+      const errorField = (body.message ?? body.error) as string | undefined;
+      expect(errorField, "expected body.message (or body.error) to be set").toBeDefined();
       if (typeof matcher === "string") {
         expect(errorField).toBe(matcher);
       } else {

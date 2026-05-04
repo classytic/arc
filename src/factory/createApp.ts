@@ -37,6 +37,7 @@
 
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import qs from "qs";
+import { arcLog } from "../logger/index.js";
 import { getPreset } from "./presets.js";
 import { registerArcCore, registerArcPlugins } from "./registerArcPlugins.js";
 import {
@@ -136,7 +137,7 @@ function validateDistributedRuntime(options: CreateAppOptions): string[] {
  * 4. Arc core (fastify.arc, events)
  * 5. Arc plugins (requestId, health, caching, SSE, metrics, versioning)
  * 6. Auth (scope decoration, auth strategy, elevation, error handler)
- * 7. plugins()        — user infra (DB, docs, webhooks)
+ * 7. plugins()        — user infra (DB, data, webhooks)
  * 8. bootstrap[]      — domain init (singletons, event handlers)
  * 9. resources[]      — auto-discovered routes (prefix + skipGlobalPrefix)
  * 10. afterResources() — post-registration wiring
@@ -253,15 +254,43 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   }
 
   // ── BigInt serialization (opt-in) ──
+  //
+  // Modes (see `CreateAppConfig.serializeBigInt` JSDoc for full rationale):
+  //   - 'string' — lossless, recommended for IDs / money / counters
+  //   - 'number' — lossy above MAX_SAFE_INTEGER; ONLY for bounded ranges
+  //   - true     — back-compat alias for 'number'; emits warn (slated for removal)
+  //   - false / unset — no hook; JSON.stringify throws on bigint (default)
   if (config.serializeBigInt) {
+    const mode: "number" | "string" = config.serializeBigInt === "string" ? "string" : "number";
+
+    if (config.serializeBigInt === true) {
+      arcLog("createApp").warn(
+        "serializeBigInt: true is a back-compat alias for 'number' (lossy above " +
+          "Number.MAX_SAFE_INTEGER = 9007199254740991). For IDs / money / counters / " +
+          "ledger values use serializeBigInt: 'string' (lossless). The boolean form " +
+          "will be removed in a future major.",
+      );
+    } else if (mode === "number") {
+      arcLog("createApp").warn(
+        "serializeBigInt: 'number' loses precision above Number.MAX_SAFE_INTEGER " +
+          "(9007199254740991). Use 'string' instead unless you've audited that no " +
+          "bigint payload field can exceed the safe range.",
+      );
+    }
+
     fastify.addHook("preSerialization", async (_request, _reply, payload) => {
       if (payload === null || payload === undefined) return payload;
-      // Fast path: only transform if the payload actually contains BigInt
-      // JSON.stringify with a replacer handles nested values efficiently
+      // JSON.stringify with a replacer walks nested values once; we
+      // re-parse to hand Fastify a plain object/array tree (some
+      // serializer plugins inspect the value before final stringify).
       try {
         return JSON.parse(
           JSON.stringify(payload, (_key, value) =>
-            typeof value === "bigint" ? Number(value) : value,
+            typeof value === "bigint"
+              ? mode === "string"
+                ? value.toString()
+                : Number(value)
+              : value,
           ),
         );
       } catch {

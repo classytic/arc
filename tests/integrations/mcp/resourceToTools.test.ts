@@ -534,7 +534,8 @@ describe("resourceToTools", () => {
 
     it("returns isError on controller failure", async () => {
       const resource = mockResource();
-      (resource.controller as any).list.mockResolvedValue({ success: false, error: "DB error" });
+      // No-envelope contract: controllers THROW on failure (no success: false).
+      (resource.controller as any).list.mockRejectedValue(new Error("DB error"));
 
       const tools = resourceToTools(resource);
       const result = await tools[0].handler(
@@ -543,7 +544,7 @@ describe("resourceToTools", () => {
       );
 
       expect(result.isError).toBe(true);
-      expect(result.content[0]).toEqual({ type: "text", text: "DB error" });
+      expect(result.content[0]).toEqual({ type: "text", text: "Error: DB error" });
     });
 
     it("catches thrown errors", async () => {

@@ -54,15 +54,15 @@ describe("bridgeToMcp", () => {
     const tool = bridgeToMcp(echoBridge);
     const res = await call(tool, { msg: "hi" }, makeAnonCtx());
     expect(res.isError).toBe(true);
-    expect(res.content[0]!.text).toMatch(/auth/i);
+    expect(res.content[0]?.text).toMatch(/auth/i);
   });
 
   it("invokes the built tool when authenticated", async () => {
     const tool = bridgeToMcp(echoBridge);
     const res = await call(tool, { msg: "hi" }, makeAuthedCtx());
     expect(res.isError).toBeFalsy();
-    expect(res.content[0]!.text).toContain("echoed");
-    expect(res.content[0]!.text).toContain("hi");
+    expect(res.content[0]?.text).toContain("echoed");
+    expect(res.content[0]?.text).toContain("hi");
   });
 
   it("passes ctx to buildTool for per-request dep resolution", async () => {
@@ -78,7 +78,7 @@ describe("bridgeToMcp", () => {
     const tool = bridgeToMcp({ ...echoBridge, guard: () => "no write scope" });
     const res = await call(tool, { msg: "x" }, makeAuthedCtx());
     expect(res.isError).toBe(true);
-    expect(res.content[0]!.text).toContain("no write scope");
+    expect(res.content[0]?.text).toContain("no write scope");
   });
 
   it("proceeds when guard returns null", async () => {
@@ -94,7 +94,7 @@ describe("bridgeToMcp", () => {
     });
     const res = await call(tool, { msg: "x" }, makeAuthedCtx());
     expect(res.isError).toBe(true);
-    expect(res.content[0]!.text).toBe("recoverable failure");
+    expect(res.content[0]?.text).toBe("recoverable failure");
   });
 
   it("catches thrown errors and returns them as MCP errors", async () => {
@@ -108,7 +108,7 @@ describe("bridgeToMcp", () => {
     });
     const res = await call(tool, { msg: "x" }, makeAuthedCtx());
     expect(res.isError).toBe(true);
-    expect(res.content[0]!.text).toContain("boom");
+    expect(res.content[0]?.text).toContain("boom");
   });
 
   it("serializes plain objects to pretty JSON", async () => {
@@ -117,8 +117,8 @@ describe("bridgeToMcp", () => {
       buildTool: () => ({ execute: async () => ({ a: 1, b: [2, 3] }) }),
     });
     const res = await call(tool, { msg: "x" }, makeAuthedCtx());
-    expect(res.content[0]!.text).toContain('"a": 1');
-    expect(res.content[0]!.text).toContain('"b"');
+    expect(res.content[0]?.text).toContain('"a": 1');
+    expect(res.content[0]?.text).toContain('"b"');
   });
 
   it("passes through string results without extra serialization", async () => {
@@ -127,7 +127,7 @@ describe("bridgeToMcp", () => {
       buildTool: () => ({ execute: async () => "plain string" }),
     });
     const res = await call(tool, { msg: "x" }, makeAuthedCtx());
-    expect(res.content[0]!.text).toBe("plain string");
+    expect(res.content[0]?.text).toBe("plain string");
   });
 
   // ── Anti-regression: pin behavior we depend on ──
@@ -139,7 +139,7 @@ describe("bridgeToMcp", () => {
     const tool = bridgeToMcp(echoBridge);
     const res = await call(tool, { msg: "x" }, makeAnonymousSentinelCtx());
     expect(res.isError).toBe(true);
-    expect(res.content[0]!.text).toMatch(/auth/i);
+    expect(res.content[0]?.text).toMatch(/auth/i);
   });
 
   it("runs auth BEFORE custom guard (guard is never evaluated for anon)", async () => {
@@ -167,8 +167,8 @@ describe("bridgeToMcp", () => {
     const tool = bridgeToMcp(echoBridge);
     const res = await call(tool, { msg: "x" }, makeAuthedCtx());
     expect(Array.isArray(res.content)).toBe(true);
-    expect(res.content[0]!.type).toBe("text");
-    expect(typeof res.content[0]!.text).toBe("string");
+    expect(res.content[0]?.type).toBe("text");
+    expect(typeof res.content[0]?.text).toBe("string");
   });
 });
 
@@ -188,7 +188,7 @@ describe("buildMcpToolsFromBridges — config-driven filtering", () => {
   it("include: allowlist only", () => {
     const tools = buildMcpToolsFromBridges(all, { include: ["b"] });
     expect(tools).toHaveLength(1);
-    expect(tools[0]!.name).toBe("b");
+    expect(tools[0]?.name).toBe("b");
   });
 
   it("exclude: removes named bridges", () => {
@@ -240,11 +240,11 @@ describe("bridge registration end-to-end", () => {
 
       const ping = await client.callTool("ping", {});
       expect(ping.isError).toBeFalsy();
-      expect(ping.content[0]!.text).toBe("pong");
+      expect(ping.content[0]?.text).toBe("pong");
 
       const job = await client.callTool("trigger_job", { phase: "fix" });
       expect(job.isError).toBeFalsy();
-      expect(job.content[0]!.text).toContain("fix-123");
+      expect(job.content[0]?.text).toContain("fix-123");
     } finally {
       await client.close();
     }
@@ -279,7 +279,7 @@ describe("bridge registration end-to-end", () => {
     try {
       const res = await client.callTool("ping", {});
       expect(res.isError).toBe(true);
-      expect(res.content[0]!.text).toMatch(/auth/i);
+      expect(res.content[0]?.text).toMatch(/auth/i);
     } finally {
       await client.close();
     }

@@ -22,10 +22,10 @@
  */
 
 import { AggregationBuilder, LookupBuilder, Repository } from "@classytic/mongokit";
+import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import type { RepositoryLike } from "../../src/adapters/interface.js";
 
 interface ITask {
   title: string;
@@ -140,7 +140,7 @@ describe("RepositoryLike — aggregation builders", () => {
     // the call site MUST not throw.
     const stub: RepositoryLike = {
       async getAll() {
-        return { docs: [], total: 0, page: 1, pages: 0, hasNext: false, hasPrev: false };
+        return { data: [], total: 0, page: 1, pages: 0, hasNext: false, hasPrev: false };
       },
       async getById() {
         return null;

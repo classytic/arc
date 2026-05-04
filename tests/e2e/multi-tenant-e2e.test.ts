@@ -22,10 +22,10 @@
  * - Authenticated list with org → sees only org items
  */
 
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -194,8 +194,8 @@ describe("Multi-Tenant E2E (data isolation)", () => {
 
       expect(res.statusCode).toBe(201);
       const body = JSON.parse(res.body);
-      expect(body.data.title).toBe("Invoice A-1");
-      expect(body.data.organizationId).toBe(ORG_A);
+      expect(body.title).toBe("Invoice A-1");
+      expect(body.organizationId).toBe(ORG_A);
     });
 
     it("should reject create without org context", async () => {
@@ -267,8 +267,8 @@ describe("Multi-Tenant E2E (data isolation)", () => {
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
       // 3 seeded + 1 from the create test above = 4
-      expect(body.docs.length).toBe(4);
-      body.docs.forEach((d: any) => {
+      expect(body.data.length).toBe(4);
+      body.data.forEach((d: any) => {
         expect(d.organizationId).toBe(ORG_A);
       });
     });
@@ -284,8 +284,8 @@ describe("Multi-Tenant E2E (data isolation)", () => {
 
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.docs.length).toBe(2);
-      body.docs.forEach((d: any) => {
+      expect(body.data.length).toBe(2);
+      body.data.forEach((d: any) => {
         expect(d.organizationId).toBe(ORG_B);
       });
     });
@@ -301,7 +301,7 @@ describe("Multi-Tenant E2E (data isolation)", () => {
 
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.docs.length).toBe(4);
+      expect(body.data.length).toBe(4);
     });
 
     it("Org-A user cannot get Org-B invoice by ID (cross-tenant)", async () => {
@@ -312,7 +312,7 @@ describe("Multi-Tenant E2E (data isolation)", () => {
         url: "/invoices",
         headers: authHeader(tokenB),
       });
-      const orgBInvoiceId = JSON.parse(listRes.body).docs[0]._id;
+      const orgBInvoiceId = JSON.parse(listRes.body).data[0]._id;
 
       // Try to access it as Org-A user
       const tokenA = issueToken({ id: USER_A1, role: ["user"], organizationId: ORG_A });
@@ -334,7 +334,7 @@ describe("Multi-Tenant E2E (data isolation)", () => {
         url: "/invoices",
         headers: authHeader(tokenB),
       });
-      const orgBInvoiceId = JSON.parse(listRes.body).docs[0]._id;
+      const orgBInvoiceId = JSON.parse(listRes.body).data[0]._id;
 
       // Try to update as Org-A
       const tokenA = issueToken({ id: USER_A1, role: ["user"], organizationId: ORG_A });
@@ -355,7 +355,7 @@ describe("Multi-Tenant E2E (data isolation)", () => {
         url: "/invoices",
         headers: authHeader(tokenB),
       });
-      const orgBInvoiceId = JSON.parse(listRes.body).docs[0]._id;
+      const orgBInvoiceId = JSON.parse(listRes.body).data[0]._id;
 
       const tokenA = issueToken({ id: USER_A1, role: ["user"], organizationId: ORG_A });
       const deleteRes = await app.inject({
@@ -385,7 +385,7 @@ describe("Multi-Tenant E2E (data isolation)", () => {
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
       // 4 Org-A + 2 Org-B = 6 total
-      expect(body.docs.length).toBe(6);
+      expect(body.data.length).toBe(6);
     });
 
     it("superadmin should get any invoice regardless of org", async () => {
@@ -396,7 +396,7 @@ describe("Multi-Tenant E2E (data isolation)", () => {
         url: "/invoices",
         headers: authHeader(tokenB),
       });
-      const orgBInvoiceId = JSON.parse(listRes.body).docs[0]._id;
+      const orgBInvoiceId = JSON.parse(listRes.body).data[0]._id;
 
       // Superadmin can access it
       const adminToken = issueToken({ id: SUPERADMIN, role: ["superadmin"] });
@@ -529,7 +529,7 @@ describe("Single-Tenant E2E (no org filtering)", () => {
 
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.docs.length).toBe(5); // All 5 notes visible
+    expect(body.data.length).toBe(5); // All 5 notes visible
   });
 
   it("any user can get any note by ID", async () => {
@@ -540,7 +540,7 @@ describe("Single-Tenant E2E (no org filtering)", () => {
       url: "/notes",
       headers: { authorization: `Bearer ${tokenA}` },
     });
-    const noteId = JSON.parse(listRes.body).docs[0]._id;
+    const noteId = JSON.parse(listRes.body).data[0]._id;
 
     const tokenB = app.auth.issueTokens({ id: USER_B1, role: ["user"] }).accessToken;
     const getRes = await app.inject({
@@ -559,7 +559,7 @@ describe("Single-Tenant E2E (no org filtering)", () => {
       url: "/notes",
       headers: { authorization: `Bearer ${token}` },
     });
-    const noteId = JSON.parse(listRes.body).docs[0]._id;
+    const noteId = JSON.parse(listRes.body).data[0]._id;
 
     const tokenB = app.auth.issueTokens({ id: USER_B1, role: ["user"] }).accessToken;
     const updateRes = await app.inject({
@@ -570,7 +570,7 @@ describe("Single-Tenant E2E (no org filtering)", () => {
     });
 
     expect(updateRes.statusCode).toBe(200);
-    expect(JSON.parse(updateRes.body).data.title).toBe("Updated by User-B1");
+    expect(JSON.parse(updateRes.body).title).toBe("Updated by User-B1");
   });
 
   it("unauthenticated users still get 401", async () => {
@@ -685,7 +685,7 @@ describe("Flexible Multi-Tenant (allowPublic list/get)", () => {
 
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.docs.length).toBe(3); // All items visible
+    expect(body.data.length).toBe(3); // All items visible
   });
 
   it("authenticated user WITH org context should see only their org items", async () => {
@@ -706,8 +706,8 @@ describe("Flexible Multi-Tenant (allowPublic list/get)", () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     // Only 2 Org-A items — optionalAuthenticate populated user, flexible filter applied
-    expect(body.docs.length).toBe(2);
-    body.docs.forEach((d: any) => {
+    expect(body.data.length).toBe(2);
+    body.data.forEach((d: any) => {
       expect(d.organizationId).toBe(ORG_A);
     });
   });
@@ -725,13 +725,13 @@ describe("Flexible Multi-Tenant (allowPublic list/get)", () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     // All 3 items visible — user is authenticated but has no org, so no filtering
-    expect(body.docs.length).toBe(3);
+    expect(body.data.length).toBe(3);
   });
 
   it("unauthenticated get by ID should work (public)", async () => {
     // Get an ID first
     const listRes = await app.inject({ method: "GET", url: "/catalog" });
-    const itemId = JSON.parse(listRes.body).docs[0]._id;
+    const itemId = JSON.parse(listRes.body).data[0]._id;
 
     const getRes = await app.inject({ method: "GET", url: `/catalog/${itemId}` });
     expect(getRes.statusCode).toBe(200);
@@ -847,9 +847,9 @@ describe("Platform-Universal E2E (tenantField: false)", () => {
 
       expect(res.statusCode).toBe(201);
       const body = JSON.parse(res.body);
-      expect(body.data.name).toBe("John Doe");
+      expect(body.name).toBe("John Doe");
       // organizationId should NOT be injected — platform-universal
-      expect(body.data.organizationId).toBeUndefined();
+      expect(body.organizationId).toBeUndefined();
     });
 
     it("should create item when user has no org context", async () => {
@@ -865,7 +865,7 @@ describe("Platform-Universal E2E (tenantField: false)", () => {
       // Should succeed — platform-universal resources don't require org context
       expect(res.statusCode).toBe(201);
       const body = JSON.parse(res.body);
-      expect(body.data.name).toBe("Jane Doe");
+      expect(body.name).toBe("Jane Doe");
     });
   });
 
@@ -905,7 +905,7 @@ describe("Platform-Universal E2E (tenantField: false)", () => {
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
       // All 4 customers: 2 from Create tests + 2 from seeding
-      expect(body.docs.length).toBe(4);
+      expect(body.data.length).toBe(4);
     });
 
     it("Org-B user should see ALL customers (no org filtering)", async () => {
@@ -919,7 +919,7 @@ describe("Platform-Universal E2E (tenantField: false)", () => {
 
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.docs.length).toBe(4);
+      expect(body.data.length).toBe(4);
     });
 
     it("user without org context should see ALL customers", async () => {
@@ -933,7 +933,7 @@ describe("Platform-Universal E2E (tenantField: false)", () => {
 
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.docs.length).toBe(4);
+      expect(body.data.length).toBe(4);
     });
   });
 
@@ -953,7 +953,7 @@ describe("Platform-Universal E2E (tenantField: false)", () => {
         headers: authHeader(token),
         payload: { name: "Shared Customer", phone: "+333" },
       });
-      customerId = JSON.parse(res.body).data._id;
+      customerId = JSON.parse(res.body)._id;
     });
 
     it("Org-B user can get customer created by Org-A user", async () => {
@@ -966,7 +966,7 @@ describe("Platform-Universal E2E (tenantField: false)", () => {
       });
 
       expect(res.statusCode).toBe(200);
-      expect(JSON.parse(res.body).data.name).toBe("Shared Customer");
+      expect(JSON.parse(res.body).name).toBe("Shared Customer");
     });
 
     it("Org-B user can update customer created by Org-A user", async () => {
@@ -980,7 +980,7 @@ describe("Platform-Universal E2E (tenantField: false)", () => {
       });
 
       expect(res.statusCode).toBe(200);
-      expect(JSON.parse(res.body).data.name).toBe("Updated by Org-B");
+      expect(JSON.parse(res.body).name).toBe("Updated by Org-B");
     });
 
     it("Org-B user can delete customer created by Org-A user", async () => {

@@ -407,8 +407,12 @@ describe("arc generate resource — multi-tenant config", () => {
 
   it("should generate model with tenant field and index", async () => {
     const content = await readText(path.join(projectDir, "src/resources/project/project.model.ts"));
-    expect(content).toContain("organizationId: string");
-    expect(content).toContain("organizationId: { type: String, required: true, index: true }");
-    expect(content).toContain("projectSchema.index({ organizationId: 1, isActive: 1 })");
+    // 2.13+: tenant scaffold uses ObjectId (not string), and indexes pair
+    // with a stable timestamp instead of the removed `isActive` placeholder.
+    expect(content).toContain("organizationId: Types.ObjectId");
+    expect(content).toContain(
+      "organizationId: { type: Schema.Types.ObjectId, required: true, index: true }",
+    );
+    expect(content).toContain("projectSchema.index({ organizationId: 1, createdAt: -1 })");
   });
 });

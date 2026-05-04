@@ -10,11 +10,11 @@
  * `AccessControl.fetchWithAccessControl` → `repository.getOne({ [idField]: id })`).
  */
 
-import { QueryParser, Repository } from "@classytic/mongokit";
+import { buildCrudSchemasFromModel, QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../../src/adapters/mongoose.js";
 import { BaseController } from "../../../src/core/BaseController.js";
 import { defineResource } from "../../../src/core/defineResource.js";
 import { createTestMcpClient } from "../../../src/integrations/mcp/testing.js";
@@ -61,7 +61,11 @@ function buildResource() {
   return defineResource<IProduct>({
     name: "product",
     // biome-ignore lint: generic
-    adapter: createMongooseAdapter({ model: ProductModel, repository: repo }),
+    adapter: createMongooseAdapter({
+      model: ProductModel,
+      repository: repo,
+      schemaGenerator: buildCrudSchemasFromModel,
+    }),
     queryParser: parser,
     idField: "sku",
     tenantField: false,
@@ -101,10 +105,10 @@ describe("MCP tools with idField: 'sku' (real Mongoose + MongoKit)", () => {
       expect(result.isError).toBeFalsy();
       const text = result.content[0]?.text ?? "";
       const parsed = JSON.parse(text);
-      // BaseController returns { docs, total, page, ... }
-      expect(parsed.docs ?? parsed.data?.docs).toBeDefined();
-      const docs = parsed.docs ?? parsed.data?.docs;
-      expect(docs.length).toBe(3);
+      // BaseController returns { data, total, page, ... }
+      expect(parsed.data ?? parsed.data?.data).toBeDefined();
+      const data = parsed.data ?? parsed.data?.data;
+      expect(data.length).toBe(3);
     } finally {
       await client.close();
     }

@@ -11,10 +11,10 @@
  */
 
 import { Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { type BetterAuthHandler, createBetterAuthAdapter } from "../../src/auth/betterAuth.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
@@ -66,60 +66,39 @@ afterEach(async () => {
  * letting one app instance serve multiple "users".
  */
 function createMultiUserAuthHandler(): BetterAuthHandler {
+  /** Resolve user/org from the bearer-style mock token `user-X|org-Y`. */
+  const parseAuth = (headers: Headers) => {
+    const auth = headers.get("authorization") ?? "";
+    const token = auth.replace(/^Bearer\s+/i, "");
+    const [userId, orgId] = token.split("|");
+    return { userId, orgId };
+  };
+
   return {
-    handler: async (request: Request) => {
-      const url = new URL(request.url);
-      const auth = request.headers.get("authorization") ?? "";
-      // The "token" is just `user-X|org-Y` for the mock — real apps verify JWTs
-      const token = auth.replace(/^Bearer\s+/i, "");
-      const [userId, orgId] = token.split("|");
-
-      if (!userId) {
-        return new Response(JSON.stringify(null), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      }
-
-      if (url.pathname.endsWith("/get-session")) {
-        return new Response(
-          JSON.stringify({
-            user: { id: userId, name: userId, email: `${userId}@test.io`, roles: [] },
-            session: { id: `s-${userId}`, activeOrganizationId: orgId ?? null },
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
-      }
-
-      if (url.pathname.endsWith("/organization/get-active-member")) {
-        if (!orgId) {
-          return new Response("null", {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          });
-        }
-        return new Response(
-          JSON.stringify({
+    // Catch-all stub — none of these tests hit /api/auth/* routes directly.
+    handler: async () =>
+      new Response("null", { status: 200, headers: { "content-type": "application/json" } }),
+    api: {
+      getSession: async ({ headers }: { headers: Headers }) => {
+        const { userId, orgId } = parseAuth(headers);
+        if (!userId) return null;
+        return {
+          user: { id: userId, name: userId, email: `${userId}@test.io`, roles: [] },
+          session: { id: `s-${userId}`, activeOrganizationId: orgId ?? null },
+        };
+      },
+      organization: {
+        getActiveMember: async ({ headers }: { headers: Headers }) => {
+          const { userId, orgId } = parseAuth(headers);
+          if (!userId || !orgId) return null;
+          return {
             id: `m-${userId}`,
             userId,
             organizationId: orgId,
             role: "member",
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
-      }
-
-      if (url.pathname.endsWith("/organization/list")) {
-        return new Response(JSON.stringify({ organizations: [] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      }
-
-      return new Response("null", {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+          };
+        },
+      },
     },
   };
 }
@@ -202,8 +181,8 @@ describe("Better Auth + custom idField + multi-tenancy", () => {
       });
       expect([200, 201]).toContain(res.statusCode);
       const body = JSON.parse(res.body);
-      expect(body.data.sku).toBe("WIDGET-001");
-      expect(body.data.organizationId).toBe(ORG_A);
+      expect(body.sku).toBe("WIDGET-001");
+      expect(body.organizationId).toBe(ORG_A);
     } finally {
       await app.close();
     }
@@ -232,8 +211,8 @@ describe("Better Auth + custom idField + multi-tenancy", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.data.name).toBe("A's Widget");
-      expect(body.data.organizationId).toBe(ORG_A);
+      expect(body.name).toBe("A's Widget");
+      expect(body.organizationId).toBe(ORG_A);
     } finally {
       await app.close();
     }
@@ -262,8 +241,8 @@ describe("Better Auth + custom idField + multi-tenancy", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.data.name).toBe("B's Widget");
-      expect(body.data.organizationId).toBe(ORG_B);
+      expect(body.name).toBe("B's Widget");
+      expect(body.organizationId).toBe(ORG_B);
     } finally {
       await app.close();
     }

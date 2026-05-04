@@ -6,10 +6,10 @@
  */
 
 import { QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/index.js";
@@ -157,7 +157,7 @@ describe("defineResource({ hooks }) — inline hooks", () => {
       url: "/items",
       payload: { name: "Original", price: 5 },
     });
-    const id = JSON.parse(createRes.body).data._id;
+    const id = JSON.parse(createRes.body)._id;
 
     // Update
     const res = await app.inject({
@@ -184,7 +184,7 @@ describe("defineResource({ hooks }) — inline hooks", () => {
       url: "/items",
       payload: { name: "Pre-update", price: 1 },
     });
-    const id = JSON.parse(createRes.body).data._id;
+    const id = JSON.parse(createRes.body)._id;
 
     await app.inject({
       method: "PATCH",
@@ -209,7 +209,7 @@ describe("defineResource({ hooks }) — inline hooks", () => {
       url: "/items",
       payload: { name: "To Delete", price: 0 },
     });
-    const id = JSON.parse(createRes.body).data._id;
+    const id = JSON.parse(createRes.body)._id;
 
     const res = await app.inject({
       method: "DELETE",
@@ -236,7 +236,7 @@ describe("defineResource({ hooks }) — inline hooks", () => {
       url: "/items",
       payload: { name: "Will Delete", price: 42 },
     });
-    const id = JSON.parse(createRes.body).data._id;
+    const id = JSON.parse(createRes.body)._id;
 
     await app.inject({
       method: "DELETE",
@@ -284,7 +284,7 @@ describe("defineResource({ hooks }) — inline hooks", () => {
     });
 
     expect(res.statusCode).toBe(201);
-    expect(JSON.parse(res.body).data.name).toBe("No Hooks");
+    expect(JSON.parse(res.body).name).toBe("No Hooks");
   });
 
   // ── Context shape ──
@@ -322,7 +322,7 @@ describe("defineResource({ hooks }) — inline hooks", () => {
       url: "/items",
       payload: { name: "Before Update", price: 10 },
     });
-    const id = JSON.parse(createRes.body).data._id;
+    const id = JSON.parse(createRes.body)._id;
 
     await app.inject({
       method: "PATCH",
@@ -349,7 +349,7 @@ describe("defineResource({ hooks }) — inline hooks", () => {
       url: "/items",
       payload: { name: "Will Update", price: 5 },
     });
-    const id = JSON.parse(createRes.body).data._id;
+    const id = JSON.parse(createRes.body)._id;
 
     await app.inject({
       method: "PATCH",
@@ -374,7 +374,7 @@ describe("defineResource({ hooks }) — inline hooks", () => {
       url: "/items",
       payload: { name: "Delete Me", price: 0 },
     });
-    const id = JSON.parse(createRes.body).data._id;
+    const id = JSON.parse(createRes.body)._id;
 
     await app.inject({
       method: "DELETE",
@@ -403,7 +403,7 @@ describe("defineResource({ hooks }) — inline hooks", () => {
 
     // Response should succeed — after hook errors are swallowed
     expect(res.statusCode).toBe(201);
-    expect(JSON.parse(res.body).data.name).toBe("Should Succeed");
+    expect(JSON.parse(res.body).name).toBe("Should Succeed");
   });
 
   it("before hook error prevents the operation", async () => {
@@ -458,7 +458,7 @@ describe("defineResource({ hooks }) — inline hooks", () => {
       payload: { name: "Lifecycle", price: 10 },
     });
     expect(createRes.statusCode).toBe(201);
-    const id = JSON.parse(createRes.body).data._id;
+    const id = JSON.parse(createRes.body)._id;
 
     // Update
     const updateRes = await app.inject({

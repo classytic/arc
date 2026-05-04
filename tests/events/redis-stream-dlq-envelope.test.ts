@@ -18,8 +18,8 @@ import { describe, expect, it } from "vitest";
 import type { DeadLetteredEvent } from "../../src/events/EventTransport.js";
 import { createEvent } from "../../src/events/EventTransport.js";
 import {
-  RedisStreamTransport,
   type RedisStreamLike,
+  RedisStreamTransport,
 } from "../../src/events/transports/redis-stream.js";
 
 // ---------- Fake RedisStreamLike ----------
@@ -132,18 +132,20 @@ describe("RedisStreamTransport DLQ envelope — replayable contract", () => {
 
     // Reach into the private failure-context map so we can assert the DLQ
     // builder consumes it. Wraps a single failure record for the source id.
-    (transport as unknown as {
-      failureContext: Map<
-        string,
-        {
-          error: { message: string; code?: string; stack?: string };
-          firstFailedAt: Date;
-          lastFailedAt: Date;
-          attempts: number;
-          handlerName?: string;
-        }
-      >;
-    }).failureContext.set(sourceId, {
+    (
+      transport as unknown as {
+        failureContext: Map<
+          string,
+          {
+            error: { message: string; code?: string; stack?: string };
+            firstFailedAt: Date;
+            lastFailedAt: Date;
+            attempts: number;
+            handlerName?: string;
+          }
+        >;
+      }
+    ).failureContext.set(sourceId, {
       error: { message: "DB write timeout", code: "ETIMEDOUT" },
       firstFailedAt: new Date(Date.now() - 1000),
       lastFailedAt: new Date(),
@@ -153,9 +155,9 @@ describe("RedisStreamTransport DLQ envelope — replayable contract", () => {
 
     // Drive the DLQ writer directly — exercises the same path that
     // claimPending would take when a message exceeds maxRetries.
-    await (
-      transport as unknown as { moveToDlq: (ids: string[]) => Promise<void> }
-    ).moveToDlq([sourceId]);
+    await (transport as unknown as { moveToDlq: (ids: string[]) => Promise<void> }).moveToDlq([
+      sourceId,
+    ]);
 
     const envelope = readDlqEnvelope(redis, "arc:events:dlq");
     expect(envelope).not.toBeNull();
@@ -202,9 +204,9 @@ describe("RedisStreamTransport DLQ envelope — replayable contract", () => {
     });
 
     // No failureContext entry — this consumer never observed the failure.
-    await (
-      transport as unknown as { moveToDlq: (ids: string[]) => Promise<void> }
-    ).moveToDlq([sourceId]);
+    await (transport as unknown as { moveToDlq: (ids: string[]) => Promise<void> }).moveToDlq([
+      sourceId,
+    ]);
 
     const envelope = readDlqEnvelope(redis, "arc:events:dlq");
     expect(envelope?.event.type).toBe("notify.email");
@@ -227,9 +229,9 @@ describe("RedisStreamTransport DLQ envelope — replayable contract", () => {
       closeTimeoutMs: 50,
     });
 
-    await (
-      transport as unknown as { moveToDlq: (ids: string[]) => Promise<void> }
-    ).moveToDlq(["1234-0"]);
+    await (transport as unknown as { moveToDlq: (ids: string[]) => Promise<void> }).moveToDlq([
+      "1234-0",
+    ]);
 
     // No DLQ stream was created.
     expect(redis.store.has("arc:events:dlq")).toBe(false);
@@ -286,26 +288,28 @@ describe("RedisStreamTransport DLQ envelope — replayable contract", () => {
     });
 
     // Failure context exists locally — error reason should still survive.
-    (transport as unknown as {
-      failureContext: Map<
-        string,
-        {
-          error: { message: string; code?: string; stack?: string };
-          firstFailedAt: Date;
-          lastFailedAt: Date;
-          attempts: number;
-        }
-      >;
-    }).failureContext.set("legacy-1", {
+    (
+      transport as unknown as {
+        failureContext: Map<
+          string,
+          {
+            error: { message: string; code?: string; stack?: string };
+            firstFailedAt: Date;
+            lastFailedAt: Date;
+            attempts: number;
+          }
+        >;
+      }
+    ).failureContext.set("legacy-1", {
       error: { message: "DB unreachable" },
       firstFailedAt: new Date(),
       lastFailedAt: new Date(),
       attempts: 3,
     });
 
-    await (
-      transport as unknown as { moveToDlq: (ids: string[]) => Promise<void> }
-    ).moveToDlq(["legacy-1"]);
+    await (transport as unknown as { moveToDlq: (ids: string[]) => Promise<void> }).moveToDlq([
+      "legacy-1",
+    ]);
 
     const envelope = readDlqEnvelope(redis, "arc:events:dlq");
     expect(envelope).not.toBeNull();
@@ -323,17 +327,19 @@ describe("RedisStreamTransport DLQ envelope — replayable contract", () => {
     expect(String(warnings[0]?.[0])).toMatch(/lacks xrange/);
 
     // Second DLQ write does NOT re-warn (one-shot guard).
-    (transport as unknown as {
-      failureContext: Map<string, unknown>;
-    }).failureContext.set("legacy-2", {
+    (
+      transport as unknown as {
+        failureContext: Map<string, unknown>;
+      }
+    ).failureContext.set("legacy-2", {
       error: { message: "x" },
       firstFailedAt: new Date(),
       lastFailedAt: new Date(),
       attempts: 1,
     });
-    await (
-      transport as unknown as { moveToDlq: (ids: string[]) => Promise<void> }
-    ).moveToDlq(["legacy-2"]);
+    await (transport as unknown as { moveToDlq: (ids: string[]) => Promise<void> }).moveToDlq([
+      "legacy-2",
+    ]);
     expect(warnings.length).toBe(1);
   });
 

@@ -40,7 +40,7 @@ function createInMemoryRepo() {
       }
       return {
         method: "offset" as const,
-        docs: items,
+        data: items,
         total: items.length,
         page: 1,
         limit: items.length || 20,
@@ -146,7 +146,6 @@ describe("toFetchHandler — full Arc stack on edge", () => {
       const res = await handler(jsonRequest("/products"));
       expect(res.status).toBe(200);
       const body = await res.json();
-      expect(body.success).toBe(true);
     });
 
     it("404 for unknown route", async () => {
@@ -183,9 +182,8 @@ describe("toFetchHandler — full Arc stack on edge", () => {
       const body = await res.json();
       // BaseController wraps in { success, data } — data may include _id but
       // fields depend on what the in-memory repo returns
-      expect(body.success).toBe(true);
-      expect(body.data).toBeDefined();
-      expect(body.data._id).toBeDefined();
+      expect(body).toBeDefined();
+      expect(body._id).toBeDefined();
     });
 
     it("rejects invalid JWT (401)", async () => {
@@ -217,7 +215,7 @@ describe("toFetchHandler — full Arc stack on edge", () => {
         }),
       );
       const body = await res.json();
-      productId = body.data._id;
+      productId = body._id;
     });
 
     it("rejects non-admin update (403)", async () => {
@@ -243,7 +241,7 @@ describe("toFetchHandler — full Arc stack on edge", () => {
       );
       expect(res.status).toBe(200);
       const body = await res.json();
-      expect(body.data.name).toBe("Admin Updated");
+      expect(body.name).toBe("Admin Updated");
     });
 
     it("allows admin delete (200)", async () => {
@@ -276,22 +274,21 @@ describe("toFetchHandler — full Arc stack on edge", () => {
       );
       expect(res.status).toBe(201);
       const body = await res.json();
-      itemId = body.data._id;
-      expect(body.data.name).toBe("CRUD Item");
+      itemId = body._id;
+      expect(body.name).toBe("CRUD Item");
     });
 
     it("GET by ID → 200", async () => {
       const res = await handler(jsonRequest(`/products/${itemId}`));
       expect(res.status).toBe(200);
       const body = await res.json();
-      expect(body.data._id).toBe(itemId);
+      expect(body._id).toBe(itemId);
     });
 
     it("LIST → 200 with successful response", async () => {
       const res = await handler(jsonRequest("/products"));
       expect(res.status).toBe(200);
       const body = await res.json();
-      expect(body.success).toBe(true);
       // Response shape varies by adapter — data can be array, paginated, or wrapped
       // The key assertion: the route works through the edge handler
     });
@@ -307,7 +304,7 @@ describe("toFetchHandler — full Arc stack on edge", () => {
       );
       expect(res.status).toBe(200);
       const body = await res.json();
-      expect(body.data.price).toBe(99);
+      expect(body.price).toBe(99);
     });
 
     it("DELETE → 200", async () => {
@@ -379,7 +376,7 @@ describe("toFetchHandler — full Arc stack on edge", () => {
       const ids = new Set<string>();
       for (const res of responses) {
         const body = await res.json();
-        ids.add(body.data._id);
+        ids.add(body._id);
       }
       expect(ids.size).toBe(20);
     });

@@ -73,16 +73,15 @@ function makeRequestWithOrgScope(
 
 describe("AccessControl error DX — distinct failure codes", () => {
   describe("GET — doc genuinely missing", () => {
-    it("returns 404 with code NOT_FOUND when the doc doesn't exist", async () => {
+    it("throws NotFoundError with code arc.not_found when the doc doesn't exist", async () => {
       const repo = makeRepo({ getOne: vi.fn(async () => null) });
       const ctrl = new BaseController(repo, { resourceName: "agent" });
 
-      const result = await ctrl.get(makeRequest({ params: { id: "nonexistent" } }));
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(404);
-      expect(result.details).toBeDefined();
-      expect((result.details as Record<string, unknown>)?.code).toBe("NOT_FOUND");
+      await expect(ctrl.get(makeRequest({ params: { id: "nonexistent" } }))).rejects.toMatchObject({
+        status: 404,
+        code: "arc.not_found",
+        details: { code: "NOT_FOUND" },
+      });
     });
   });
 
@@ -104,12 +103,11 @@ describe("AccessControl error DX — distinct failure codes", () => {
         { projectId: null }, // filter: only docs with projectId===null
         { params: { id: "doc-1" } },
       );
-      const result = await ctrl.get(req);
 
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(404);
-      expect(result.details).toBeDefined();
-      expect((result.details as Record<string, unknown>)?.code).toBe("POLICY_FILTERED");
+      await expect(ctrl.get(req)).rejects.toMatchObject({
+        status: 404,
+        details: { code: "POLICY_FILTERED" },
+      });
     });
   });
 
@@ -134,12 +132,11 @@ describe("AccessControl error DX — distinct failure codes", () => {
 
       // User is in org-A, doc belongs to org-B
       const req = makeRequestWithOrgScope("org-A", { params: { id: "doc-1" } });
-      const result = await ctrl.get(req);
 
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(404);
-      expect(result.details).toBeDefined();
-      expect((result.details as Record<string, unknown>)?.code).toBe("ORG_SCOPE_DENIED");
+      await expect(ctrl.get(req)).rejects.toMatchObject({
+        status: 404,
+        details: { code: "ORG_SCOPE_DENIED" },
+      });
     });
   });
 
@@ -165,12 +162,12 @@ describe("AccessControl error DX — distinct failure codes", () => {
       const ctrl = new BaseController(repo, { resourceName: "agent" });
 
       const req = makeRequestWithPolicyFilters({ projectId: null }, { params: { id: "doc-1" } });
-      const result = await ctrl.get(req);
 
       // In-tenant doc excluded by policy → POLICY_FILTERED remains accurate.
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(404);
-      expect((result.details as Record<string, unknown>)?.code).toBe("POLICY_FILTERED");
+      await expect(ctrl.get(req)).rejects.toMatchObject({
+        status: 404,
+        details: { code: "POLICY_FILTERED" },
+      });
       // Both probes were attempted: unscoped first, then scoped.
       expect(getOne.mock.calls.length).toBeGreaterThanOrEqual(3);
     });
@@ -195,19 +192,20 @@ describe("AccessControl error DX — distinct failure codes", () => {
   });
 
   describe("PATCH — same three paths", () => {
-    it("returns NOT_FOUND for missing doc", async () => {
+    it("throws NotFoundError for missing doc on update", async () => {
       const repo = makeRepo({ getOne: vi.fn(async () => null) });
       const ctrl = new BaseController(repo, { resourceName: "agent" });
 
       const req = makeRequest({ params: { id: "ghost" }, body: { name: "new" } });
-      const result = await ctrl.update(req);
 
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(404);
-      expect((result.details as Record<string, unknown>)?.code).toBe("NOT_FOUND");
+      await expect(ctrl.update(req)).rejects.toMatchObject({
+        status: 404,
+        details: { code: "NOT_FOUND" },
+        code: "arc.not_found",
+      });
     });
 
-    it("returns POLICY_FILTERED when doc exists but update permission filters exclude it", async () => {
+    it("throws POLICY_FILTERED when doc exists but update permission filters exclude it", async () => {
       const doc = { _id: "doc-1", name: "Sadman", projectId: "proj-42" };
       const repo = makeRepo({
         getOne: vi.fn(async (filter: Record<string, unknown>) => {
@@ -222,25 +220,26 @@ describe("AccessControl error DX — distinct failure codes", () => {
         { projectId: null },
         { params: { id: "doc-1" }, body: { name: "new" } },
       );
-      const result = await ctrl.update(req);
 
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(404);
-      expect((result.details as Record<string, unknown>)?.code).toBe("POLICY_FILTERED");
+      await expect(ctrl.update(req)).rejects.toMatchObject({
+        status: 404,
+        details: { code: "POLICY_FILTERED" },
+      });
     });
   });
 
   describe("DELETE — same three paths", () => {
-    it("returns NOT_FOUND for missing doc", async () => {
+    it("throws NotFoundError for missing doc on delete", async () => {
       const repo = makeRepo({ getOne: vi.fn(async () => null) });
       const ctrl = new BaseController(repo, { resourceName: "agent" });
 
       const req = makeRequest({ params: { id: "ghost" } });
-      const result = await ctrl.delete(req);
 
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(404);
-      expect((result.details as Record<string, unknown>)?.code).toBe("NOT_FOUND");
+      await expect(ctrl.delete(req)).rejects.toMatchObject({
+        status: 404,
+        details: { code: "NOT_FOUND" },
+        code: "arc.not_found",
+      });
     });
   });
 
@@ -262,12 +261,14 @@ describe("AccessControl error DX — distinct failure codes", () => {
       });
       const ctrl = new BaseController(repo, { resourceName: "agent" });
 
-      const result = await ctrl.get(makeRequest({ params: { id: "bad-id" } }));
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(404);
-      expect((result.details as Record<string, unknown>)?.code).toBe("NOT_FOUND");
-      expect(result.error).not.toContain("stack");
+      // Adapter errors carrying `status: 404` are translated into Arc's
+      // canonical NotFoundError (no stack leak — `details.code` is the
+      // machine-readable signal).
+      await expect(ctrl.get(makeRequest({ params: { id: "bad-id" } }))).rejects.toMatchObject({
+        status: 404,
+        details: { code: "NOT_FOUND" },
+        code: "arc.not_found",
+      });
     });
 
     it("real errors propagate instead of being silently 404'd by string match", async () => {

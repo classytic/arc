@@ -22,8 +22,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineResource } from "../../src/core/defineResource.js";
-import { multiTenantPreset } from "../../src/presets/multiTenant.js";
 import { allowPublic } from "../../src/permissions/index.js";
+import { multiTenantPreset } from "../../src/presets/multiTenant.js";
 import type { DataAdapter } from "../../src/types/index.js";
 
 function noopAdapter(): DataAdapter {
@@ -32,7 +32,7 @@ function noopAdapter(): DataAdapter {
     name: "mock-noop",
     repository: {
       async getAll() {
-        return { docs: [], total: 0 };
+        return { data: [], total: 0 };
       },
       async getById() {
         return null;
@@ -188,9 +188,7 @@ describe("v2.11.0 — defineResource warns on schema-generation failure", () => 
     // Resource still boots (non-fatal)
     expect(resource).toBeDefined();
     // No registry metadata emitted (schema generation failed before assignment)
-    expect(
-      (resource as unknown as { _registryMeta?: unknown })._registryMeta,
-    ).toBeUndefined();
+    expect((resource as unknown as { _registryMeta?: unknown })._registryMeta).toBeUndefined();
 
     // The warning fired
     expect(warnSpy).toHaveBeenCalled();

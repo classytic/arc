@@ -9,8 +9,8 @@
  * "only owner can acknowledge held event"); `fail()` now matches.
  */
 
+import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import { describe, expect, it } from "vitest";
-import type { RepositoryLike } from "../../src/adapters/interface.js";
 import { OutboxOwnershipError } from "../../src/events/outbox.js";
 import { repositoryAsOutboxStore } from "../../src/events/repository-outbox-adapter.js";
 
@@ -68,7 +68,7 @@ describe("repositoryAsOutboxStore.fail() — post-write lease race", () => {
     const repository: RepositoryLike = {
       create: async () => ({}),
       getOne: async () => getOneResults.shift() ?? null,
-      getAll: async () => ({ docs: [], total: 0, page: 1, limit: 0, pages: 0 }),
+      getAll: async () => ({ data: [], total: 0, page: 1, limit: 0, pages: 0 }),
       deleteMany: async () => ({ deletedCount: 0 }),
       // Simulate the lease being stolen mid-write — no row matches
       // `_id=evt-1 AND leaseOwner=worker-A` once worker-B has it.
@@ -103,7 +103,7 @@ describe("repositoryAsOutboxStore.fail() — post-write lease race", () => {
     const repository: RepositoryLike = {
       create: async () => ({}),
       getOne: async () => makeRow({ leaseOwner: null }),
-      getAll: async () => ({ docs: [], total: 0, page: 1, limit: 0, pages: 0 }),
+      getAll: async () => ({ data: [], total: 0, page: 1, limit: 0, pages: 0 }),
       deleteMany: async () => ({ deletedCount: 0 }),
       findOneAndUpdate: async () => null,
     } as unknown as RepositoryLike;

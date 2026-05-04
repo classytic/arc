@@ -18,12 +18,12 @@
  */
 
 import { QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import Fastify, { type FastifyInstance } from "fastify";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Model, Schema } from "mongoose";
 import qs from "qs";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { arcCorePlugin } from "../../src/core/arcCorePlugin.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { buildOpenApiSpec, openApiPlugin } from "../../src/docs/openapi.js";
@@ -247,9 +247,8 @@ describe("defineResource → Fastify strict → OpenAPI integration", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.success).toBe(true);
     // Should get Mid ($75) and Expensive ($500), not Cheap or Draft
-    const names = (body.docs as Array<{ name: string }>).map((p) => p.name).sort();
+    const names = (body.data as Array<{ name: string }>).map((p) => p.name).sort();
     expect(names).toEqual(["Expensive", "Mid"]);
 
     await app.close();
@@ -276,7 +275,7 @@ describe("defineResource → Fastify strict → OpenAPI integration", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.data.name).toBe("FindMe");
+    expect(body.name).toBe("FindMe");
 
     await app.close();
   });

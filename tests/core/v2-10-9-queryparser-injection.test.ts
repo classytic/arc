@@ -23,16 +23,13 @@
  * their documented behavior. See tests/utils/query-parser.test.ts.
  */
 
+import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import { describe, expect, it } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { allowPublic } from "../../src/permissions/index.js";
-import {
-  ArcQueryParser,
-  createQueryParser,
-} from "../../src/utils/queryParser.js";
-import type { RepositoryLike } from "../../src/adapters/interface.js";
 import type { DataAdapter, QueryParserInterface } from "../../src/types/index.js";
+import { ArcQueryParser, createQueryParser } from "../../src/utils/queryParser.js";
 
 interface Doc {
   _id?: string;
@@ -42,7 +39,7 @@ interface Doc {
 function mockRepo(): RepositoryLike<Doc> {
   return {
     async getAll() {
-      return { docs: [], total: 0 };
+      return { data: [], total: 0 };
     },
     async getById() {
       return null;
@@ -60,17 +57,24 @@ function mockRepo(): RepositoryLike<Doc> {
 }
 
 describe("2.10.9 — BaseController.setQueryParser", () => {
-  it("rebuilds the QueryResolver so the new parser is used on list queries", () => {
+  it("swaps the parser in place — the resolver instance is referentially stable", () => {
     const ctrl = new BaseController<Doc>(mockRepo() as never);
-    const defaultResolver = ctrl.queryResolver;
+    const resolverRef = ctrl.queryResolver;
 
     // Swap in a sentinel parser
     const sentinel = createQueryParser({ maxLimit: 50 });
     ctrl.setQueryParser(sentinel);
 
-    expect(ctrl.queryResolver).not.toBe(defaultResolver);
-    // `queryParser` prop reflects the swap
+    // 2.13: setQueryParser mutates QueryResolver in place via setParser().
+    // No reconstruction → no second copy of defaultSort/tenantField for the
+    // swap to drift away from. Hosts that captured `ctrl.queryResolver`
+    // keep a valid ref.
+    expect(ctrl.queryResolver).toBe(resolverRef);
     expect((ctrl as unknown as { queryParser: QueryParserInterface }).queryParser).toBe(sentinel);
+    // The resolver itself now holds the sentinel
+    expect((resolverRef as unknown as { queryParser: QueryParserInterface }).queryParser).toBe(
+      sentinel,
+    );
   });
 
   it("preserves maxLimit / tenantField / schemaOptions across the swap", () => {
@@ -84,9 +88,7 @@ describe("2.10.9 — BaseController.setQueryParser", () => {
 
     // Internal state survives — setQueryParser only swaps the parser
     expect((ctrl as unknown as { maxLimit: number }).maxLimit).toBe(200);
-    expect((ctrl as unknown as { tenantField: string | false }).tenantField).toBe(
-      "workspaceId",
-    );
+    expect((ctrl as unknown as { tenantField: string | false }).tenantField).toBe("workspaceId");
   });
 });
 
@@ -103,7 +105,7 @@ describe("2.10.9 — defineResource wires queryParser into user-supplied control
     // User-supplied controller (subclassing BaseController — the
     // documented pattern for custom create/update overrides).
     const custom = new BaseController<Doc>(repo as never);
-    const before = custom.queryResolver;
+    const resolverRef = custom.queryResolver;
 
     defineResource<Doc>({
       name: "custom",
@@ -119,9 +121,11 @@ describe("2.10.9 — defineResource wires queryParser into user-supplied control
       },
     });
 
-    // The resolver was rebuilt in-place — the injection fired.
-    expect(custom.queryResolver).not.toBe(before);
-    expect((custom as unknown as { queryParser: QueryParserInterface }).queryParser).toBe(
+    // The injection fired: the resolver instance is the same (in-place mutate)
+    // and now holds the sentinel parser.
+    expect(custom.queryResolver).toBe(resolverRef);
+    expect((custom as unknown as { queryParser: QueryParserInterface }).queryParser).toBe(sentinel);
+    expect((resolverRef as unknown as { queryParser: QueryParserInterface }).queryParser).toBe(
       sentinel,
     );
   });
@@ -133,7 +137,7 @@ describe("2.10.9 — defineResource wires queryParser into user-supplied control
     const sentinel = createQueryParser();
     const custom = {
       async list() {
-        return { success: true, data: { docs: [], total: 0 } };
+        return { success: true, data: { data: [], total: 0 } };
       },
       async get() {
         return { success: true, data: null };
@@ -198,6 +202,32 @@ describe("2.10.9 — defineResource wires queryParser into user-supplied control
     });
 
     expect(custom.queryResolver).toBe(before);
+  });
+});
+
+describe("2.13 — setQueryParser preserves `defaultSort: false`", () => {
+  it("does not silently re-enable the framework default sort after a parser swap", () => {
+    // Pre-2.13: setQueryParser rebuilt QueryResolver from `this.defaultSort`,
+    // which collapsed `false → undefined` in the constructor — so the rebuild
+    // re-enabled the framework default `-createdAt`. SQL-style resources
+    // (no `createdAt` column) silently regained an invalid default sort
+    // whenever defineResource forwarded a custom queryParser.
+    //
+    // 2.13 fix: setQueryParser mutates the resolver in place; `defaultSort`
+    // lives in exactly one place (the resolver), so there is nothing to drift.
+    const ctrl = new BaseController<Doc>(mockRepo() as never, { defaultSort: false });
+    ctrl.setQueryParser(createQueryParser());
+
+    const result = ctrl.queryResolver.resolve({
+      params: {},
+      query: {},
+      body: {},
+      user: null,
+      headers: {},
+    } as never);
+
+    // `defaultSort: false` must persist across the swap → no sort clause.
+    expect(result.sort).toBeUndefined();
   });
 });
 

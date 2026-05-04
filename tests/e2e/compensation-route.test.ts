@@ -44,7 +44,8 @@ describe("Compensation in Arc additionalRoute", () => {
 
     // Build Arc app
     const { createApp } = await import("../../src/factory/createApp.js");
-    const { defineResource, createMongooseAdapter } = await import("../../src/index.js");
+    const { defineResource } = await import("../../src/index.js");
+    const { createMongooseAdapter } = await import("@classytic/mongokit/adapter");
     const { allowPublic, requireAuth } = await import("../../src/permissions/index.js");
     const { withCompensation } = await import("../../src/utils/compensation.js");
     const { Repository } = await import("@classytic/mongokit");
@@ -110,16 +111,14 @@ describe("Compensation in Arc additionalRoute", () => {
 
             if (!result.success) {
               return reply.code(422).send({
-                success: false,
-                error: result.error,
+                code: "arc.unprocessable_entity",
+                message: result.error,
+                status: 422,
                 failedStep: result.failedStep,
               });
             }
 
-            return reply.code(200).send({
-              success: true,
-              data: result.results,
-            });
+            return reply.code(200).send(result.results);
           },
         },
         {
@@ -149,8 +148,9 @@ describe("Compensation in Arc additionalRoute", () => {
             ]);
 
             return reply.code(422).send({
-              success: false,
-              error: result.error,
+              code: "arc.unprocessable_entity",
+              message: result.error,
+              status: 422,
               failedStep: result.failedStep,
               compensated: result.completedSteps,
             });
@@ -213,12 +213,12 @@ describe("Compensation in Arc additionalRoute", () => {
 
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.success).toBe(true);
-      expect(body.data.validate).toEqual({ valid: true });
-      expect(body.data["reserve-inventory"]).toEqual(
+      // Handler returns result.results — a flat record keyed by step name.
+      expect(body.validate).toEqual({ valid: true });
+      expect(body["reserve-inventory"]).toEqual(
         expect.objectContaining({ reservationId: expect.stringContaining("res-") }),
       );
-      expect(body.data["update-status"]).toEqual({ status: "confirmed" });
+      expect(body["update-status"]).toEqual({ status: "confirmed" });
 
       // Verify DB was actually updated
       const updated = await OrderModel.findById(order._id).lean();
@@ -243,8 +243,7 @@ describe("Compensation in Arc additionalRoute", () => {
 
       expect(res.statusCode).toBe(422);
       const body = JSON.parse(res.body);
-      expect(body.success).toBe(false);
-      expect(body.error).toBe("Card declined");
+      expect(body.message).toBe("Card declined");
       expect(body.failedStep).toBe("charge");
       expect(body.compensated).toEqual(["reserve"]);
 

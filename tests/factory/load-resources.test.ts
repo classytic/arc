@@ -8,8 +8,8 @@
 
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -34,7 +34,7 @@ function makeResourceFile(modelName: string, resourceName: string): string {
 import mongoose from 'mongoose';
 import { Repository } from '@classytic/mongokit';
 import { defineResource } from '${ARC_ROOT.replace(/\\/g, "/")}/src/core/defineResource.js';
-import { createMongooseAdapter } from '${ARC_ROOT.replace(/\\/g, "/")}/src/adapters/mongoose.js';
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
 import { BaseController } from '${ARC_ROOT.replace(/\\/g, "/")}/src/core/BaseController.js';
 import { allowPublic } from '${ARC_ROOT.replace(/\\/g, "/")}/src/permissions/index.js';
 
@@ -319,11 +319,11 @@ describe("loadResources()", () => {
     // Both resources have working CRUD
     const productList = await app.inject({ method: "GET", url: "/products" });
     expect(productList.statusCode).toBe(200);
-    expect(productList.json()).toHaveProperty("docs");
+    expect(productList.json()).toHaveProperty("data");
 
     const orderList = await app.inject({ method: "GET", url: "/orders" });
     expect(orderList.statusCode).toBe(200);
-    expect(orderList.json()).toHaveProperty("docs");
+    expect(orderList.json()).toHaveProperty("data");
 
     // Full CRUD lifecycle
     const created = await app.inject({
@@ -333,11 +333,11 @@ describe("loadResources()", () => {
     });
     expect(created.statusCode).toBe(201);
 
-    const id = created.json().data._id;
+    const id = created.json()._id;
 
     const fetched = await app.inject({ method: "GET", url: `/products/${id}` });
     expect(fetched.statusCode).toBe(200);
-    expect(fetched.json().data.name).toBe("Auto-Discovered Widget");
+    expect(fetched.json().name).toBe("Auto-Discovered Widget");
 
     const updated = await app.inject({
       method: "PATCH",
@@ -345,11 +345,10 @@ describe("loadResources()", () => {
       payload: { name: "Updated Widget" },
     });
     expect(updated.statusCode).toBe(200);
-    expect(updated.json().data.name).toBe("Updated Widget");
+    expect(updated.json().name).toBe("Updated Widget");
 
     const deleted = await app.inject({ method: "DELETE", url: `/products/${id}` });
     expect(deleted.statusCode).toBe(200);
-    expect(deleted.json().success).toBe(true);
 
     await app.close();
   });

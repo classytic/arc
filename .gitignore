@@ -31,3 +31,6 @@ pnpm-lock.yaml
 
 # Manual test scripts
 tests/integrations/mcp/test-mcp-server.mts
+
+# Local playground (scratch dev / runtime probes)
+playground/

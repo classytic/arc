@@ -1,54 +1,51 @@
 /**
- * Response Schemas
+ * JSON Schema definitions for arc API responses.
  *
- * Standard JSON Schema definitions for API responses.
+ * Wire shape (post-2.12): no envelope. HTTP status discriminates success
+ * vs error. Success-path schemas describe the data shape directly; the
+ * error path uses the canonical `ErrorContract` JSON Schema imported
+ * from `@classytic/repo-core/errors` — single source of truth shared
+ * with every other consumer in the org.
  */
 
+import { errorContractSchema, errorDetailSchema } from "@classytic/repo-core/errors";
 import type { AnyRecord } from "../types/index.js";
+
+// ============================================================================
+// Canonical error schemas — re-exported from repo-core
+// ============================================================================
+//
+// Both constants are owned by `@classytic/repo-core/errors` (the canonical
+// home for the `ErrorContract` + `ErrorDetail` interfaces and their
+// runtime JSON-Schema spec). Arc re-exports for DX so hosts can import
+// from `@classytic/arc/utils` alongside the rest of the response-schema
+// helpers without learning the second import path.
+
+export { errorContractSchema, errorDetailSchema };
 
 // ============================================================================
 // Schema Types
 // ============================================================================
 
 export interface JsonSchema {
-  type: string;
+  /**
+   * Optional because JSON Schema allows top-level combinator-only schemas
+   * (`{ oneOf: [...] }`, `{ anyOf: [...] }`, `{ allOf: [...] }`) — see
+   * `listResponse()`, which emits a `oneOf` of the four canonical list
+   * shapes with no top-level `type`.
+   */
+  type?: string | string[];
   properties?: Record<string, JsonSchema | AnyRecord>;
   required?: string[];
   items?: JsonSchema | AnyRecord;
   additionalProperties?: boolean | JsonSchema;
   description?: string;
   example?: unknown;
+  oneOf?: JsonSchema[];
+  anyOf?: JsonSchema[];
+  allOf?: JsonSchema[];
   [key: string]: unknown;
 }
-
-// ============================================================================
-// Response Wrapper Schemas
-// ============================================================================
-
-/**
- * Base success response schema
- */
-export const successResponseSchema: JsonSchema = {
-  type: "object",
-  properties: {
-    success: { type: "boolean", example: true },
-  },
-  required: ["success"],
-};
-
-/**
- * Error response schema
- */
-export const errorResponseSchema: JsonSchema = {
-  type: "object",
-  properties: {
-    success: { type: "boolean", example: false },
-    error: { type: "string", description: "Error message" },
-    code: { type: "string", description: "Error code" },
-    message: { type: "string", description: "Detailed message" },
-  },
-  required: ["success", "error"],
-};
 
 /**
  * Pagination schema - matches MongoKit/Arc runtime format
@@ -72,41 +69,48 @@ export const paginationSchema: JsonSchema = {
 // ============================================================================
 // Schema Builders
 // ============================================================================
+//
+// Single-doc responses (`get` / `create` / `update`) DON'T have a builder
+// — the doc IS the response (no envelope; HTTP status discriminates).
+// Pass your doc schema directly to Fastify's `response: { 200: schema }`
+// slot. If you need Fastify to accept extra fields, set
+// `additionalProperties: true` on your schema. Pre-2.13 `wrapResponse` /
+// `itemResponse` / `mutationResponse` were three names for one trivial
+// `{ ...schema, additionalProperties: true }` spread; deleted in the
+// post-2.13 cleanup.
 
 /**
- * Wrap a data schema in a success response
- */
-export function wrapResponse(dataSchema: JsonSchema): JsonSchema {
-  return {
-    type: "object",
-    properties: {
-      success: { type: "boolean", example: true },
-      data: dataSchema,
-    },
-    required: ["success", "data"],
-    // Allow extra fields (fieldPermissions, meta spreads, etc.)
-    additionalProperties: true,
-  };
-}
-
-/**
- * Create a list response schema with pagination - matches MongoKit/Arc runtime format
+ * List response schema — full union of every wire shape `toCanonicalList`
+ * can emit. Hosts who know their endpoint only ever produces one variant
+ * can pin to a narrower helper:
+ *   - `offsetListResponse(item)` — `{ method: 'offset', data, page, limit, total, pages, hasNext, hasPrev }`
+ *   - `keysetListResponse(item)` — `{ method: 'keyset', data, limit, hasMore, next: string|null }`
+ *   - `aggregateListResponse(item)` — `{ method: 'aggregate', ...offset fields }`
+ *   - `bareListResponse(item)` — `{ data }`
  *
- * Runtime format:
- * { success, docs: [...], page, limit, total, pages, hasNext, hasPrev }
- *
- * Note: Uses 'docs' array (not 'data') with flat pagination fields
+ * The default `listResponse(item)` is the union (`oneOf`) of all four so
+ * Fastify validation accepts any canonical kit shape — pre-2.13 this only
+ * modelled offset and rejected keyset/aggregate/bare lists at the
+ * response-schema gate.
  */
 export function listResponse(itemSchema: JsonSchema): JsonSchema {
   return {
+    oneOf: [
+      offsetListResponse(itemSchema),
+      keysetListResponse(itemSchema),
+      aggregateListResponse(itemSchema),
+      bareListResponse(itemSchema),
+    ],
+  };
+}
+
+/** Offset variant — `{ method: 'offset', data, page, limit, total, pages, hasNext, hasPrev }`. */
+export function offsetListResponse(itemSchema: JsonSchema): JsonSchema {
+  return {
     type: "object",
     properties: {
-      success: { type: "boolean", example: true },
-      docs: {
-        type: "array",
-        items: itemSchema,
-      },
-      // Flat pagination fields (not nested)
+      method: { type: "string", const: "offset", example: "offset" },
+      data: { type: "array", items: itemSchema },
       page: { type: "integer", example: 1 },
       limit: { type: "integer", example: 20 },
       total: { type: "integer", example: 100 },
@@ -114,60 +118,65 @@ export function listResponse(itemSchema: JsonSchema): JsonSchema {
       hasNext: { type: "boolean", example: false },
       hasPrev: { type: "boolean", example: false },
     },
-    required: ["success", "docs"],
-    // Allow extra fields (fieldPermissions, meta spreads, etc.)
+    required: ["method", "data", "page", "limit", "total", "pages", "hasNext", "hasPrev"],
     additionalProperties: true,
   };
 }
 
-/**
- * Create a single item response schema
- *
- * Runtime format: { success, data: {...} }
- */
-export function itemResponse(itemSchema: JsonSchema): JsonSchema {
-  return wrapResponse(itemSchema);
-}
-
-/**
- * Create a create/update response schema
- */
-export function mutationResponse(itemSchema: JsonSchema): JsonSchema {
+/** Keyset variant — `{ method: 'keyset', data, limit, hasMore, next: string | null }`. */
+export function keysetListResponse(itemSchema: JsonSchema): JsonSchema {
   return {
     type: "object",
     properties: {
-      success: { type: "boolean", example: true },
-      data: itemSchema,
-      message: { type: "string", example: "Created successfully" },
+      method: { type: "string", const: "keyset", example: "keyset" },
+      data: { type: "array", items: itemSchema },
+      limit: { type: "integer", example: 20 },
+      hasMore: { type: "boolean", example: true },
+      next: { type: ["string", "null"], description: "Cursor token for the next page, or null." },
     },
-    required: ["success", "data"],
-    // Allow extra fields (fieldPermissions, meta spreads, etc.)
+    required: ["method", "data", "limit", "hasMore", "next"],
     additionalProperties: true,
   };
 }
 
-/**
- * Create a delete response schema
- *
- * Runtime format: { success, data: { message, id?, soft? } }
- */
+/** Aggregate variant — same shape as offset, discriminated by `method: 'aggregate'`. */
+export function aggregateListResponse(itemSchema: JsonSchema): JsonSchema {
+  return {
+    type: "object",
+    properties: {
+      method: { type: "string", const: "aggregate", example: "aggregate" },
+      data: { type: "array", items: itemSchema },
+      page: { type: "integer" },
+      limit: { type: "integer" },
+      total: { type: "integer" },
+      pages: { type: "integer" },
+      hasNext: { type: "boolean" },
+      hasPrev: { type: "boolean" },
+    },
+    required: ["method", "data", "page", "limit", "total", "pages", "hasNext", "hasPrev"],
+    additionalProperties: true,
+  };
+}
+
+/** Bare variant — `{ data }`, no `method` discriminant. */
+export function bareListResponse(itemSchema: JsonSchema): JsonSchema {
+  return {
+    type: "object",
+    properties: { data: { type: "array", items: itemSchema } },
+    required: ["data"],
+    additionalProperties: true,
+  };
+}
+
+/** Delete response — flat shape mirroring the canonical delete envelope. */
 export function deleteResponse(): JsonSchema {
   return {
     type: "object",
     properties: {
-      success: { type: "boolean", example: true },
-      data: {
-        type: "object",
-        properties: {
-          message: { type: "string", example: "Deleted successfully" },
-          id: { type: "string", example: "507f1f77bcf86cd799439011" },
-          soft: { type: "boolean", example: false },
-        },
-        required: ["message"],
-      },
+      message: { type: "string", example: "Deleted successfully" },
+      id: { type: "string", example: "507f1f77bcf86cd799439011" },
+      soft: { type: "boolean", example: false },
     },
-    required: ["success"],
-    // Allow extra fields (fieldPermissions, meta spreads, etc.)
     additionalProperties: true,
   };
 }
@@ -175,6 +184,28 @@ export function deleteResponse(): JsonSchema {
 // ============================================================================
 // HTTP Status Response Schemas
 // ============================================================================
+
+const ERROR_DESCRIPTIONS: Readonly<Record<number, string>> = {
+  400: "Bad Request",
+  401: "Unauthorized",
+  403: "Forbidden",
+  404: "Not Found",
+  409: "Conflict",
+  422: "Unprocessable Entity",
+  429: "Too Many Requests",
+  500: "Internal Server Error",
+  503: "Service Unavailable",
+};
+
+/** Build an OpenAPI response entry for an `ErrorContract` at the given status. */
+function errorResponse(status: number) {
+  return {
+    description: ERROR_DESCRIPTIONS[status] ?? "Error",
+    content: {
+      "application/json": { schema: errorContractSchema },
+    },
+  };
+}
 
 export const responses = {
   200: (schema: JsonSchema) => ({
@@ -187,114 +218,16 @@ export const responses = {
   201: (schema: JsonSchema) => ({
     description: "Created successfully",
     content: {
-      "application/json": { schema: mutationResponse(schema) },
+      "application/json": { schema: { ...schema, additionalProperties: true } },
     },
   }),
 
-  400: {
-    description: "Bad Request",
-    content: {
-      "application/json": {
-        schema: {
-          ...errorResponseSchema,
-          properties: {
-            ...errorResponseSchema.properties,
-            code: { type: "string", example: "VALIDATION_ERROR" },
-            details: {
-              type: "object",
-              properties: {
-                errors: {
-                  type: "array",
-                  items: {
-                    type: "object",
-                    properties: {
-                      field: { type: "string" },
-                      message: { type: "string" },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-  },
-
-  401: {
-    description: "Unauthorized",
-    content: {
-      "application/json": {
-        schema: {
-          ...errorResponseSchema,
-          properties: {
-            ...errorResponseSchema.properties,
-            code: { type: "string", example: "UNAUTHORIZED" },
-          },
-        },
-      },
-    },
-  },
-
-  403: {
-    description: "Forbidden",
-    content: {
-      "application/json": {
-        schema: {
-          ...errorResponseSchema,
-          properties: {
-            ...errorResponseSchema.properties,
-            code: { type: "string", example: "FORBIDDEN" },
-          },
-        },
-      },
-    },
-  },
-
-  404: {
-    description: "Not Found",
-    content: {
-      "application/json": {
-        schema: {
-          ...errorResponseSchema,
-          properties: {
-            ...errorResponseSchema.properties,
-            code: { type: "string", example: "NOT_FOUND" },
-          },
-        },
-      },
-    },
-  },
-
-  409: {
-    description: "Conflict",
-    content: {
-      "application/json": {
-        schema: {
-          ...errorResponseSchema,
-          properties: {
-            ...errorResponseSchema.properties,
-            code: { type: "string", example: "CONFLICT" },
-          },
-        },
-      },
-    },
-  },
-
-  500: {
-    description: "Internal Server Error",
-    content: {
-      "application/json": {
-        schema: {
-          ...errorResponseSchema,
-          properties: {
-            ...errorResponseSchema.properties,
-            code: { type: "string", example: "INTERNAL_ERROR" },
-          },
-        },
-      },
-    },
-  },
+  400: errorResponse(400),
+  401: errorResponse(401),
+  403: errorResponse(403),
+  404: errorResponse(404),
+  409: errorResponse(409),
+  500: errorResponse(500),
 };
 
 // ============================================================================
@@ -406,17 +339,12 @@ export function getDefaultCrudSchemas(): Record<string, Record<string, unknown>>
       querystring: getListQueryParams(),
       response: { 200: listResponse(genericItemSchema) },
     },
-    get: {
-      response: { 200: itemResponse(genericItemSchema) },
-    },
-    create: {
-      response: { 201: mutationResponse(genericItemSchema) },
-    },
-    update: {
-      response: { 200: itemResponse(genericItemSchema) },
-    },
-    delete: {
-      response: { 200: deleteResponse() },
-    },
+    // `genericItemSchema` already carries `additionalProperties: true`,
+    // so single-doc routes get the same permissive shape the deleted
+    // `itemResponse` / `mutationResponse` aliases used to stamp.
+    get: { response: { 200: genericItemSchema } },
+    create: { response: { 201: genericItemSchema } },
+    update: { response: { 200: genericItemSchema } },
+    delete: { response: { 200: deleteResponse() } },
   });
 }

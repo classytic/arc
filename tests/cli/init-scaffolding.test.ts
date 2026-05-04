@@ -406,12 +406,17 @@ describe("arc init — Custom Adapter", () => {
 
   it("should create custom adapter template", async () => {
     const content = await readText(path.join(projectPath, "src/shared/adapter.ts"));
-    // Custom adapter should NOT contain mongokit references
+    // Custom adapter should NOT pull in any kit-specific package — that's
+    // the whole point of "custom". Hosts that want a kit-supplied factory
+    // pick a different `arc init` adapter option.
     expect(content).not.toContain("@classytic/mongokit");
+    expect(content).not.toContain("@classytic/sqlitekit");
+    expect(content).not.toContain("@classytic/prismakit");
     expect(content).not.toContain("createMongooseAdapter");
+    expect(content).not.toContain("createDrizzleAdapter");
+    expect(content).not.toContain("createPrismaAdapter");
     expect(content).toContain("RepositoryLike");
-    expect(content).toContain("sqlitekit/Drizzle");
-    expect(content).toContain("Prisma can be wired with createPrismaAdapter");
+    expect(content).toContain("@classytic/repo-core/adapter");
   });
 
   it("should save custom adapter in .arcrc", async () => {

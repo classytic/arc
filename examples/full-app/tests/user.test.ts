@@ -38,9 +38,8 @@ describe("User Resource", () => {
       const res = await app.inject({ method: "GET", url: "/users" });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.success).toBe(true);
-      expect(body.docs).toBeDefined();
-      expect(body.docs.length).toBeGreaterThanOrEqual(2);
+      expect(body.data).toBeDefined();
+      expect(body.data.length).toBeGreaterThanOrEqual(2);
     });
   });
 
@@ -49,7 +48,7 @@ describe("User Resource", () => {
       const user = await UserModel.findOne({ email: "admin@test.com" }).lean();
       const res = await app.inject({ method: "GET", url: `/users/${user!._id}` });
       expect(res.statusCode).toBe(200);
-      expect(res.json().data.email).toBe("admin@test.com");
+      expect(res.json().email).toBe("admin@test.com");
     });
 
     it("returns 404 for nonexistent ID", async () => {
@@ -70,7 +69,7 @@ describe("User Resource", () => {
         payload: { name: "New User", email: "new@test.com", role: "editor" },
       });
       expect(res.statusCode).toBe(201);
-      expect(res.json().data.name).toBe("New User");
+      expect(res.json().name).toBe("New User");
     });
 
     it("rejects creation without auth", async () => {
@@ -113,7 +112,7 @@ describe("User Resource", () => {
         payload: { name: "Updated" },
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json().data.name).toBe("Updated");
+      expect(res.json().name).toBe("Updated");
     });
   });
 
@@ -126,7 +125,7 @@ describe("User Resource", () => {
         headers: { authorization: `Bearer ${adminToken}` },
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json().success).toBe(true);
+      expect(res.json().message).toBeDefined();
     });
   });
 
@@ -141,7 +140,7 @@ describe("User Resource", () => {
         payload: { name: "Mixed Case", email: "MixedCase@Test.COM" },
       });
       expect(res.statusCode).toBe(201);
-      expect(res.json().data.email).toBe("mixedcase@test.com");
+      expect(res.json().email).toBe("mixedcase@test.com");
     });
   });
 });

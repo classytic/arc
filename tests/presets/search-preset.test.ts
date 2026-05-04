@@ -151,7 +151,6 @@ describe("searchPreset — auto-wire from `repository`", () => {
     const sOut = (await callRoute("/search", { query: "widget", limit: 5 })) as {
       success: boolean;
     };
-    expect(sOut.success).toBe(true);
     expect(search).toHaveBeenCalledWith("widget", { query: "widget", limit: 5 });
 
     // searchSimilar(params) — single VectorSearchParams-compatible object
@@ -160,7 +159,6 @@ describe("searchPreset — auto-wire from `repository`", () => {
       limit: 10,
       filter: { category: "widget" },
     })) as { success: boolean };
-    expect(simOut.success).toBe(true);
     expect(searchSimilar).toHaveBeenCalledTimes(1);
     expect(searchSimilar).toHaveBeenCalledWith({
       query: [0.1, 0.2],
@@ -173,7 +171,6 @@ describe("searchPreset — auto-wire from `repository`", () => {
       success: boolean;
       data: number[];
     };
-    expect(eOut.success).toBe(true);
     expect(embed).toHaveBeenCalledWith("hello");
     expect(eOut.data[2]).toBe(5);
   });
@@ -278,7 +275,7 @@ describe("searchPreset — per-path MCP opt-out", () => {
 });
 
 describe("searchPreset — envelope wrapping", () => {
-  it("wraps a raw return value into { success, data }", async () => {
+  it("wraps a raw return value into the IControllerResponse { data } shape", async () => {
     const hit = [{ id: "a" }];
     const handler = vi.fn(async () => hit);
     const routes = extractRoutes(searchPreset({ search: { handler } }));
@@ -289,11 +286,14 @@ describe("searchPreset — envelope wrapping", () => {
     const out = await fn(req);
 
     expect(handler).toHaveBeenCalledTimes(1);
-    expect(out).toEqual({ success: true, data: hit });
+    // No-envelope contract: preset returns IControllerResponse { data } —
+    // no `success` discriminator. Arc's adapter unwraps this to the wire
+    // (single-doc → raw, list → flat list envelope).
+    expect(out).toEqual({ data: hit });
   });
 
   it("passes through an IControllerResponse shape the handler already emits", async () => {
-    const response = { success: true, data: ["x"], meta: { total: 1 } };
+    const response = { data: ["x"], meta: { total: 1 } };
     const routes = extractRoutes(searchPreset({ search: { handler: async () => response } }));
     const fn = routes[0]?.handler as (r: unknown) => Promise<unknown>;
     const out = await fn({ body: {}, params: {}, query: {} });
@@ -374,8 +374,7 @@ describe("searchPreset — end-to-end via createApp", () => {
 
     expect(good.statusCode).toBe(200);
     const body = good.json() as { success: boolean; data: { hits: Array<{ title: string }> } };
-    expect(body.success).toBe(true);
-    expect(body.data.hits[0]?.title).toBe("match for widget");
+    expect(body.hits[0]?.title).toBe("match for widget");
 
     expect(backend).toHaveBeenCalledWith("widget", 5);
 
@@ -393,7 +392,7 @@ describe("searchPreset — end-to-end via createApp", () => {
 
   it("accepts a Zod v4 schema and converts it for Fastify validation + OpenAPI", async () => {
     // Arc's convertRouteSchema auto-converts Zod → JSON Schema (draft-7 for
-    // Fastify AJV validation, openapi-3.0 for docs). Users can pass
+    // Fastify AJV validation, openapi-3.0 for data). Users can pass
     // `z.object(...)` directly to searchPreset and get both HTTP validation
     // and OpenAPI path entries without calling zod.toJSONSchema() themselves.
     const Fastify = (await import("fastify")).default;
@@ -456,9 +455,9 @@ describe("searchPreset — end-to-end via createApp", () => {
     expect(backend).not.toHaveBeenCalled();
 
     // 3) OpenAPI document includes the converted schema at the preset path
-    const docs = await app.inject({ method: "GET", url: "/_docs/openapi.json" });
-    expect(docs.statusCode).toBe(200);
-    const spec = docs.json() as {
+    const data = await app.inject({ method: "GET", url: "/_docs/openapi.json" });
+    expect(data.statusCode).toBe(200);
+    const spec = data.json() as {
       paths: Record<
         string,
         Record<string, { requestBody?: { content: Record<string, { schema: unknown }> } }>
@@ -581,7 +580,7 @@ describe("searchPreset — end-to-end via createApp", () => {
               permissions: allowPublic(),
               handler: async (req) => {
                 const q = (req.query as { q?: string }).q ?? "";
-                return { success: true, data: await autocompleteBackend() };
+                return { data: await autocompleteBackend() };
               },
             },
           ],
@@ -604,14 +603,17 @@ describe("searchPreset — end-to-end via createApp", () => {
       payload: { vector: [0.1, 0.2] },
     });
     expect(similar.statusCode).toBe(200);
-    expect((similar.json() as { data: unknown[] }).data).toHaveLength(1);
+    // No-envelope contract: arc emits the IControllerResponse.data raw at the
+    // top level. The preset wraps the handler's array return into { data },
+    // arc's fastifyAdapter then sends `data` as the body.
+    expect(similar.json()).toHaveLength(1);
 
     const ac = await app.inject({
       method: "GET",
       url: "/docs/autocomplete?q=wid",
     });
     expect(ac.statusCode).toBe(200);
-    expect((ac.json() as { data: string[] }).data).toEqual(["widget", "widgets"]);
+    expect(ac.json()).toEqual(["widget", "widgets"]);
 
     expect(similarBackend).toHaveBeenCalledTimes(1);
     expect(autocompleteBackend).toHaveBeenCalledTimes(1);

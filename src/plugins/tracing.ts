@@ -28,14 +28,7 @@
  */
 
 import { createRequire } from "node:module";
-import type {
-  ContextAPI,
-  Context as OTContext,
-  Span,
-  SpanStatus,
-  TraceAPI,
-  Tracer,
-} from "@opentelemetry/api";
+import type { ContextAPI, Span, SpanStatus, TraceAPI, Tracer } from "@opentelemetry/api";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
 
@@ -420,11 +413,6 @@ export function traced(spanName?: string) {
 export function isTracingAvailable(): boolean {
   return isAvailable;
 }
-
-// Internal — exported only for the lifecycle integration tests. The types
-// here give the test suite enough surface to construct a plugin context,
-// but are NOT part of the public API. Signal via the `_` prefix.
-export type _OTContext = OTContext;
 
 export default fp(tracingPlugin, {
   name: "arc-tracing",

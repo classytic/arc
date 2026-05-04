@@ -157,7 +157,6 @@ describe("MCP: action tool handler execution", () => {
     // Result should be success
     expect(result.isError).toBeUndefined();
     const parsed = JSON.parse(result.content.find((c) => c.type === "text")?.text ?? "{}");
-    expect(parsed.success).toBe(true);
   });
 
   it("permission denied returns isError response", async () => {
@@ -180,8 +179,15 @@ describe("MCP: action tool handler execution", () => {
 
     expect(result.isError).toBe(true);
     const parsed = JSON.parse(result.content.find((c) => c.type === "text")?.text ?? "{}");
-    expect(parsed.success).toBe(false);
-    expect(parsed.error).toBe("nope");
+    // 2.13 wire-shape sweep: MCP error path now emits canonical
+    // `ErrorContract` (`{code, message, status}`) — same shape HTTP
+    // emits — instead of the legacy `{success: false, error}` envelope.
+    // No session passed (`session: null`) → "not authenticated" → 401
+    // (`arc.unauthorized`). With a session, denial would be 403
+    // (`arc.forbidden`) — same status split HTTP applies.
+    expect(parsed.code).toBe("arc.unauthorized");
+    expect(parsed.message).toBe("nope");
+    expect(parsed.status).toBe(401);
   });
 
   it("handler error returns isError response", async () => {
@@ -451,7 +457,6 @@ describe("MCP: OpenAPI action auth respects actionPermissions fallback", () => {
       presets: [],
       permissions: {},
       routes: [],
-      routes: [],
       actions: [{ name: "finalize" }],
       actionPermissions: requireAuth,
       plugin: () => {},
@@ -474,7 +479,6 @@ describe("MCP: OpenAPI action auth respects actionPermissions fallback", () => {
       prefix: "/widgets",
       presets: [],
       permissions: {},
-      routes: [],
       routes: [],
       actions: [{ name: "toggle", permissions: allowPublic() }],
       actionPermissions: allowPublic(),

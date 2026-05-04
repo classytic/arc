@@ -38,7 +38,7 @@ describe("Security: Idempotency namespace isolation", () => {
     let counter = 0;
     instance.post("/orders", { preHandler: [instance.idempotency.middleware] }, async () => {
       counter += 1;
-      return { success: true, data: { n: counter, deployment: namespace ?? "none" } };
+      return { n: counter, deployment: namespace ?? "none" };
     });
     await instance.ready();
     return instance;
@@ -58,7 +58,7 @@ describe("Security: Idempotency namespace isolation", () => {
       payload: body,
     });
     expect(prodFirst.statusCode).toBe(200);
-    expect(prodFirst.json().data.deployment).toBe("prod");
+    expect(prodFirst.json().deployment).toBe("prod");
 
     // Canary with the same idempotency key must NOT replay prod's response.
     const canaryFirst = await canary.inject({
@@ -68,7 +68,7 @@ describe("Security: Idempotency namespace isolation", () => {
       payload: body,
     });
     expect(canaryFirst.statusCode).toBe(200);
-    expect(canaryFirst.json().data.deployment).toBe("canary");
+    expect(canaryFirst.json().deployment).toBe("canary");
 
     // Second call to prod with the same key DOES replay — namespace alone
     // doesn't change same-deployment semantics.
@@ -79,7 +79,7 @@ describe("Security: Idempotency namespace isolation", () => {
       payload: body,
     });
     expect(prodSecond.headers["x-idempotency-replayed"]).toBe("true");
-    expect(prodSecond.json().data.deployment).toBe("prod");
+    expect(prodSecond.json().deployment).toBe("prod");
 
     await prod.close();
     await canary.close();
@@ -96,8 +96,8 @@ describe("Security: Idempotency namespace isolation", () => {
     });
     let countA = 0;
     a.post("/orders", { preHandler: [a.idempotency.middleware] }, async () => ({
-      success: true,
-      data: { n: ++countA, deployment: "a" },
+      n: ++countA,
+      deployment: "a",
     }));
     await a.ready();
 
@@ -109,8 +109,8 @@ describe("Security: Idempotency namespace isolation", () => {
     });
     let countB = 0;
     b.post("/orders", { preHandler: [b.idempotency.middleware] }, async () => ({
-      success: true,
-      data: { n: ++countB, deployment: "b" },
+      n: ++countB,
+      deployment: "b",
     }));
     await b.ready();
 
@@ -123,7 +123,7 @@ describe("Security: Idempotency namespace isolation", () => {
       headers: { "idempotency-key": key },
       payload,
     });
-    expect(first.json().data.deployment).toBe("a");
+    expect(first.json().deployment).toBe("a");
 
     // Without namespace isolation the shared store replays a's response to b.
     const second = await b.inject({
@@ -133,7 +133,7 @@ describe("Security: Idempotency namespace isolation", () => {
       payload,
     });
     expect(second.headers["x-idempotency-replayed"]).toBe("true");
-    expect(second.json().data.deployment).toBe("a");
+    expect(second.json().deployment).toBe("a");
 
     await a.close();
     await b.close();

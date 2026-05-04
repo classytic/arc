@@ -55,13 +55,13 @@ function createInMemoryRepo() {
     getAll: vi.fn(async (params?: AnyRecord) => {
       const items = Array.from(store.values());
       const filters = params?.filters as AnyRecord | undefined;
-      const docs = items.filter((i) => matchesFilter(i, filters));
+      const data = items.filter((i) => matchesFilter(i, filters));
       return {
         method: "offset" as const,
-        docs,
-        total: docs.length,
+        data,
+        total: data.length,
         page: 1,
-        limit: docs.length || 20,
+        limit: data.length || 20,
         pages: 1,
         hasNext: false,
         hasPrev: false,
@@ -296,8 +296,8 @@ describe("Security: Cross-org isolation on UPDATE / DELETE", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    const docs = body.data ?? body.docs ?? [];
-    for (const doc of docs) {
+    const data = body.data ?? body.data ?? [];
+    for (const doc of data) {
       expect(doc.organizationId).toBe(ORG_A);
     }
   });

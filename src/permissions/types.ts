@@ -163,7 +163,7 @@ export type PermissionCheck<TDoc = Record<string, unknown>> = ((
 
 /**
  * Optional metadata attached to permission check functions.
- * Used for OpenAPI docs, introspection, and route-level auth decisions.
+ * Used for OpenAPI data, introspection, and route-level auth decisions.
  *
  * Each helper from `permissions/index.ts` writes its own discriminating tag
  * so downstream tooling (OpenAPI generator, MCP resource builder, route
@@ -202,4 +202,25 @@ export interface PermissionCheckMeta {
    * (e.g. from route params).
    */
   _orgInScopeTarget?: string | ((ctx: PermissionContext) => string | undefined);
+  /**
+   * Set by requireDPoP() — the inbound credential must be sender-constrained
+   * via DPoP (RFC 9449), with `scope.dpopJkt` set by the authenticate
+   * function after a successful proof verification.
+   */
+  _dpopRequired?: boolean;
+  /**
+   * Set by requireMandate() — the capability string the mandate on
+   * `scope.mandate` must authorize (e.g. `payment.charge`, `data.export`).
+   */
+  _mandateCapability?: string;
+  /**
+   * Set by requireAgentScope() — composite descriptor for AI-agent flows.
+   * Tools (audit, OpenAPI, MCP) can render the full agent-auth requirement
+   * in one read instead of unpacking three separate metadata fields.
+   */
+  _agentScope?: {
+    capability: string;
+    scopes?: readonly string[];
+    dpop: boolean;
+  };
 }

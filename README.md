@@ -1,8 +1,8 @@
 # @classytic/arc
 
-Database-agnostic resource framework for Fastify. One `defineResource()` call → REST + auth + permissions + events + caching + OpenAPI + MCP tools.
+Database-agnostic resource framework for Fastify. One `defineResource()` call -> REST + auth + permissions + events + caching + OpenAPI + MCP tools.
 
-Fastify 5+ · Node.js 22+ · ESM only
+Fastify 5+ | Node.js 22+ | ESM only
 
 ```bash
 npm install @classytic/arc fastify
@@ -10,10 +10,11 @@ npm install @classytic/arc fastify
 # Security defaults createApp() loads (each opt-out via `cors: false` etc.)
 npm install @fastify/cors @fastify/helmet @fastify/rate-limit @fastify/under-pressure @fastify/sensible
 
-# Storage adapter — pick one
-npm install @classytic/mongokit mongoose          # MongoDB
-# OR @classytic/sqlitekit drizzle-orm better-sqlite3 (sqlite)
-# OR implement RepositoryLike from @classytic/repo-core
+# Storage adapter — pick one (kits ship their own adapters under `/adapter`)
+npm install @classytic/mongokit mongoose             # MongoDB → @classytic/mongokit/adapter
+# OR @classytic/sqlitekit drizzle-orm better-sqlite3 # → @classytic/sqlitekit/adapter
+# OR @classytic/prismakit @prisma/client             # → @classytic/prismakit/adapter
+# OR implement DataAdapter / RepositoryLike from @classytic/repo-core/adapter
 ```
 
 ---
@@ -23,7 +24,7 @@ npm install @classytic/mongokit mongoose          # MongoDB
 | | |
 |---|---|
 | **One call, full REST** | `defineResource({ name, adapter, presets, permissions })` → `GET /`, `GET /:id`, `POST /`, `PATCH /:id`, `DELETE /:id` + custom routes + actions |
-| **DB-agnostic** | Mongoose, Drizzle/sqlitekit, or any `RepositoryLike` impl — swap backends without rewriting routes. (Prisma adapter is experimental: implemented, no integration tests yet.) |
+| **DB-agnostic** | Mongoose (`@classytic/mongokit/adapter`), Drizzle/SQLite (`@classytic/sqlitekit/adapter`), Prisma (`@classytic/prismakit/adapter`), or any `RepositoryLike` impl — swap backends without rewriting routes. Adapter contract lives in `@classytic/repo-core/adapter`; arc 2.12 ships zero kit-specific adapters. |
 | **Multi-tenant by default** | Tenant-field auto-injected, scope-aware queries, per-org cache keys, elevation events. |
 | **Tree-shakable subpaths** | `@classytic/arc/auth`, `/events`, `/cache`, `/mcp`, `/integrations/jobs` — pay only for what you import. |
 | **MCP tools, free** | Resources auto-generate Model Context Protocol tools for AI agents. Same permissions, same field rules. |
@@ -79,8 +80,9 @@ resources: async () => {
 ## Define a resource
 
 ```typescript
-import { defineResource, createMongooseAdapter } from '@classytic/arc';
+import { defineResource } from '@classytic/arc';
 import { allowPublic, requireRoles, requireAuth } from '@classytic/arc/permissions';
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
 import { buildCrudSchemasFromModel } from '@classytic/mongokit';
 import ProductModel from './product.model.js';
 import productRepository from './product.repository.js';
@@ -172,7 +174,7 @@ auth: { type: 'custom', plugin: myAuthPlugin }
 auth: false
 ```
 
-Better Auth + Mongoose `populate()`: import `registerBetterAuthMongooseModels` from `@classytic/arc/auth/mongoose` to register `strict: false` stub models for BA collections. Subpath gate keeps Mongoose out of Prisma/Drizzle bundles.
+Better Auth + arc resources over BA tables: the kit owns the bridge. `@classytic/mongokit/better-auth` ships `createBetterAuthOverlay()` (per-collection `DataAdapter` for `defineResource`) and `registerBetterAuthStubs()` (bulk stub models for `populate()`). Sqlitekit users hand-roll the Drizzle table — see [auth.md](skills/arc/references/auth.md).
 
 ---
 
@@ -182,14 +184,16 @@ Tree-shake by importing only the subpath you need:
 
 | Subpath | Purpose |
 |---|---|
-| `@classytic/arc` | `defineResource`, `BaseController`, `createMongooseAdapter`, error classes |
+| `@classytic/arc` | `defineResource`, `BaseController`, error classes |
+| `@classytic/repo-core/adapter` | Adapter contract types: `DataAdapter`, `RepositoryLike`, `AdapterRepositoryInput`, `asRepositoryLike`, `isRepository`. **Imported from repo-core directly** — arc deliberately does not re-export the contract to keep one source of truth. |
 | `@classytic/arc/factory` | `createApp`, `loadResources`, presets |
 | `@classytic/arc/auth` | JWT + Better Auth adapters |
-| `@classytic/arc/auth/mongoose` | Better Auth Mongoose stub models (opt-in) |
+| `@classytic/mongokit/better-auth` | BA overlay for Mongoose: `createBetterAuthOverlay`, `registerBetterAuthStubs` (kit-owned) |
+| `@classytic/repo-core/better-auth` | BA collection registry shared by every kit's overlay |
 | `@classytic/arc/permissions` | All permission helpers |
 | `@classytic/arc/scope` | `RequestScope` accessors (`isMember`, `isElevated`, `getOrgId`, …) |
 | `@classytic/arc/cache` | `QueryCache`, transports, plugin |
-| `@classytic/arc/events` | Event plugin, transports, outbox |
+| `@classytic/arc/events` | Event plugin, `MemoryEventTransport`, outbox (event types live in `@classytic/primitives/events`) |
 | `@classytic/arc/events/redis` · `/redis-stream` | Redis Pub/Sub + Streams transports (opt-in) |
 | `@classytic/arc/plugins` | Health, request-id, versioning, tracing, response-cache |
 | `@classytic/arc/integrations/jobs` | BullMQ job dispatcher |

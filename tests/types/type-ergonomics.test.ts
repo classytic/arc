@@ -7,9 +7,9 @@
  * These are compile-time + runtime structural tests — zero behavior changes.
  */
 
+import type { DataAdapter } from "@classytic/repo-core/adapter";
 import type { FastifyReply, FastifyRequest, RouteHandlerMethod } from "fastify";
 import { describe, expect, it } from "vitest";
-import type { DataAdapter } from "../../src/adapters/interface.js";
 import type {
   EventDefinition,
   KeysetPaginatedResult,
@@ -163,7 +163,7 @@ describe("EventDefinition.handler optionality", () => {
   });
 
   it("should still accept events with a handler", () => {
-    const handler = async (data: unknown) => {
+    const handler = async (_data: unknown) => {
       // handler logic
     };
 
@@ -358,7 +358,7 @@ describe("schemaGenerator widened return type", () => {
       },
     };
 
-    const result = mockAdapter.generateSchemas!();
+    const result = mockAdapter.generateSchemas?.();
     expect(result).toHaveProperty("createBody");
   });
 });
@@ -376,7 +376,7 @@ describe("Pagination result types — TExtra generic", () => {
   it("default TExtra = {} keeps the standard offset shape", () => {
     const page: OffsetPaginatedResult<Product> = {
       method: "offset",
-      docs: [{ _id: "a", name: "alpha" }],
+      data: [{ _id: "a", name: "alpha" }],
       page: 1,
       limit: 20,
       total: 1,
@@ -384,7 +384,7 @@ describe("Pagination result types — TExtra generic", () => {
       hasNext: false,
       hasPrev: false,
     };
-    expect(page.docs).toHaveLength(1);
+    expect(page.data).toHaveLength(1);
   });
 
   it("TExtra fields appear flat alongside the standard ones", () => {
@@ -392,7 +392,7 @@ describe("Pagination result types — TExtra generic", () => {
     type KitExtras = { tookMs: number; region: string };
     const page: OffsetPaginatedResult<Product, KitExtras> = {
       method: "offset",
-      docs: [],
+      data: [],
       page: 1,
       limit: 20,
       total: 0,
@@ -411,7 +411,7 @@ describe("Pagination result types — TExtra generic", () => {
     type KeysetExtras = { cursorVersion: number };
     const page: KeysetPaginatedResult<Product, KeysetExtras> = {
       method: "keyset",
-      docs: [],
+      data: [],
       limit: 20,
       hasMore: false,
       next: null,
@@ -424,7 +424,7 @@ describe("Pagination result types — TExtra generic", () => {
     type Extras = { tookMs: number };
     const offset: PaginationResult<Product, Extras> = {
       method: "offset",
-      docs: [],
+      data: [],
       page: 1,
       limit: 20,
       total: 0,
@@ -435,7 +435,7 @@ describe("Pagination result types — TExtra generic", () => {
     };
     const keyset: PaginationResult<Product, Extras> = {
       method: "keyset",
-      docs: [],
+      data: [],
       limit: 20,
       hasMore: false,
       next: null,
@@ -453,7 +453,7 @@ describe("Pagination result types — TExtra generic", () => {
   it("warning field (offset-only) is typed as optional string", () => {
     const page: OffsetPaginatedResult<Product> = {
       method: "offset",
-      docs: [],
+      data: [],
       page: 101,
       limit: 50,
       total: 50000,

@@ -21,12 +21,46 @@
  * pipeline `$ifNull`. Leases guarantee single-writer during the failure
  * window (`claimPending` filters out non-owned rows), so the two calls are
  * safe under concurrent relayers.
+ *
+ * Why we DON'T use `StandardRepo.claim()` (repo-core 0.4+) anywhere in this
+ * adapter — design note for the next reader who wants to "modernize" us:
+ *
+ *   • `claimPending` (FIFO claim-next loop): `claim(id, ...)` requires the
+ *     candidate id upfront, but the relayer doesn't have it — that's the
+ *     whole point of `findOneAndUpdate({ filter, sort: { createdAt: 1 } })`,
+ *     which finds + claims in a SINGLE round-trip per claimed event.
+ *     Replacing with `getOne(filter, sort) → claim(id, ...)` doubles the
+ *     round-trips, opens a TOCTOU window where the candidate state can
+ *     change between read and CAS (we'd need a retry loop on null-on-race),
+ *     and gains nothing — the existing call is already atomic and
+ *     race-free. Throughput regression with no upside; do not adopt.
+ *
+ *   • `acknowledge` (pending → delivered): id is in scope, but the current
+ *     filter uses `ne('status', 'delivered')` to allow ack from any
+ *     non-delivered state (defensive; lease invariant means it's pending
+ *     in practice). `claim` requires an exact `from` value, so adopting
+ *     would tighten the source-state predicate from "not delivered" to
+ *     "exactly pending". That's a behavior change — even if the new
+ *     behavior is arguably tighter/safer, the constraint here is "no
+ *     semantic regression". Keep `findOneAndUpdate`.
+ *
+ *   • `fail` (any → pending|dead_letter): the current `baseFilter` is
+ *     id-only (with optional `leaseOwner` guard) — there's NO source-state
+ *     predicate at all. Adopting `claim` would ADD `from: 'pending'`,
+ *     blocking `fail()` calls against rows in any other state. Same "no
+ *     semantic regression" concern; keep `findOneAndUpdate`. The
+ *     read-then-write pair also exists here to preserve `firstFailedAt`
+ *     portably (see paragraph above) — `claim` doesn't simplify that.
+ *
+ * No kit currently ships a filter-based `claimNext`/`claimPending` (Path C
+ * in the v2.11.x evaluation) — checked mongokit 3.13.0 + sqlitekit 0.3.0.
+ * If/when one appears, the FIFO loop becomes a 1-call adoption candidate.
  */
 
+import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import { and, anyOf, eq as eqFilter, lte, ne, or } from "@classytic/repo-core/filter";
 import { update } from "@classytic/repo-core/update";
-import type { RepositoryLike } from "../adapters/interface.js";
-import { createIsDuplicateKeyError, createSafeGetOne } from "../adapters/store-helpers.js";
+import { createIsDuplicateKeyError, createSafeGetOne } from "../utils/store-helpers.js";
 import type { DeadLetteredEvent, DomainEvent } from "./EventTransport.js";
 import {
   InvalidOutboxEventError,
@@ -93,13 +127,13 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
   const idField = repository.idField ?? "_id";
 
   /**
-   * Unwrap mongokit's pagination envelope ({ docs, total, ... }) — some
+   * Unwrap mongokit's pagination envelope ({ data, total, ... }) — some
    * kits may return a bare array when pagination is disabled. Handle both.
    */
   const unwrapDocs = <T>(result: unknown): T[] => {
     if (Array.isArray(result)) return result as T[];
-    const envelope = result as { docs?: T[] } | null | undefined;
-    return envelope?.docs ?? [];
+    const envelope = result as { data?: T[] } | null | undefined;
+    return envelope?.data ?? [];
   };
 
   const isDuplicateKeyError = createIsDuplicateKeyError(repository);
@@ -163,8 +197,8 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
         page: 1,
         limit,
       });
-      const docs = unwrapDocs<OutboxDoc>(result);
-      return docs.map((d) => d.event).filter(isWellFormed);
+      const data = unwrapDocs<OutboxDoc>(result);
+      return data.map((d) => d.event).filter(isWellFormed);
     },
 
     async claimPending(options?: OutboxClaimOptions): Promise<DomainEvent[]> {
@@ -176,7 +210,9 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
       const claimed: DomainEvent[] = [];
       // Atomic per-doc FIFO claim via findOneAndUpdate. The compound filter
       // excludes docs under an active lease, so concurrent relayers never
-      // see the same doc.
+      // see the same doc. Cannot be replaced by `StandardRepo.claim` —
+      // see the module docblock; `claim` requires an id upfront which the
+      // relayer doesn't have. find+sort+CAS in one round-trip stays.
       for (let i = 0; i < limit; i++) {
         const now = new Date();
         const leaseExpiresAt = new Date(now.getTime() + leaseMs);
@@ -295,8 +331,8 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
         page: 1,
         limit,
       });
-      const docs = unwrapDocs<OutboxDoc>(result);
-      return docs
+      const data = unwrapDocs<OutboxDoc>(result);
+      return data
         .filter((d) => isWellFormed(d.event))
         .map((d) => ({
           event: d.event,

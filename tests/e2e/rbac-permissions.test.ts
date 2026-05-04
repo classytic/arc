@@ -12,10 +12,10 @@
  * so all user IDs must be valid ObjectId strings when the model has `createdBy: ObjectId`.
  */
 
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -171,12 +171,12 @@ describe("RBAC Permissions E2E", () => {
         payload: { title: "Public Article", content: "Hello" },
       });
       expect(createRes.statusCode).toBe(201);
-      const id = JSON.parse(createRes.body).data._id;
+      const id = JSON.parse(createRes.body)._id;
 
       // Get without auth — should work (public read)
       const res = await app.inject({ method: "GET", url: `/articles/${id}` });
       expect(res.statusCode).toBe(200);
-      expect(JSON.parse(res.body).data.title).toBe("Public Article");
+      expect(JSON.parse(res.body).title).toBe("Public Article");
     });
   });
 
@@ -235,7 +235,7 @@ describe("RBAC Permissions E2E", () => {
         payload: { title: "To Delete", content: "Will be deleted" },
       });
       expect(res.statusCode).toBe(201);
-      articleId = JSON.parse(res.body).data._id;
+      articleId = JSON.parse(res.body)._id;
     });
 
     it("should reject non-admin from deleting articles", async () => {
@@ -285,7 +285,7 @@ describe("RBAC Permissions E2E", () => {
         payload: { title: "Owned Article", content: "By owner" },
       });
       expect(res.statusCode).toBe(201);
-      ownedArticleId = JSON.parse(res.body).data._id;
+      ownedArticleId = JSON.parse(res.body)._id;
     });
 
     it("should allow admin to update any article", async () => {
@@ -298,7 +298,7 @@ describe("RBAC Permissions E2E", () => {
         payload: { title: "Admin Updated" },
       });
       expect(res.statusCode).toBe(200);
-      expect(JSON.parse(res.body).data.title).toBe("Admin Updated");
+      expect(JSON.parse(res.body).title).toBe("Admin Updated");
     });
 
     it("should allow owner to update their own article", async () => {
@@ -369,7 +369,7 @@ describe("RBAC Permissions E2E", () => {
         payload: { title: "Target" },
       });
       expect(createRes.statusCode).toBe(201);
-      const id = JSON.parse(createRes.body).data._id;
+      const id = JSON.parse(createRes.body)._id;
 
       // Try to delete as non-admin
       const deleteRes = await app.inject({

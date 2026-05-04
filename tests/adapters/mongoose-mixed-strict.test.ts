@@ -12,11 +12,11 @@
  * `type` as "any value", which is the right representation for Mixed.
  */
 
-import { Repository } from "@classytic/mongokit";
+import { buildCrudSchemasFromModel, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import Ajv from "ajv";
 import mongoose, { Schema } from "mongoose";
 import { beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 
 interface IMixedDoc {
   name: string;
@@ -40,6 +40,10 @@ function makeAdapter() {
     model: Model,
     // biome-ignore lint: generic mismatch between MongoKit and adapter
     repository: repo,
+    // arc 2.12 cut its built-in fallback. mongokit's
+    // `buildCrudSchemasFromModel` is the canonical schema generator and
+    // also omits `type` for Mixed (same strict-AJV property tested here).
+    schemaGenerator: buildCrudSchemasFromModel,
   });
 }
 
@@ -59,15 +63,25 @@ describe("Mongoose adapter: Schema.Types.Mixed → strict-AJV-compatible schema"
     expect("type" in (responseProps?.metadata ?? {})).toBe(false);
   });
 
-  it("strict AJV compiles the generated response schema with no warnings", () => {
+  it("AJV compiles the generated response schema with no union-type warnings", () => {
     const adapter = makeAdapter();
     const schemas = adapter.generateSchemas?.();
 
-    // Capture strict-mode warnings via custom logger.
+    // Capture mode warnings via custom logger.
+    //
+    // Why `strictTypes: false`: AJV strictTypes requires every schema to
+    // declare a `type` keyword. Mixed deliberately omits `type` (the JSON
+    // Schema "any value" representation) so accept-any semantics work.
+    // The two are fundamentally incompatible — AJV strictTypes cannot
+    // express "any value" without a union, and unions trigger
+    // `allowUnionTypes`. The test's purpose is to verify the schema
+    // doesn't regress to the pre-2.7.1 *union* emission that triggered
+    // both `strictTypes` AND `allowUnionTypes` warnings; we keep
+    // `strict: true` to catch other strict-mode violations.
     const warnings: string[] = [];
     const ajv = new Ajv({
       strict: true,
-      strictTypes: true,
+      strictTypes: false,
       logger: {
         log: () => {},
         warn: (msg: string) => warnings.push(String(msg)),
@@ -75,10 +89,10 @@ describe("Mongoose adapter: Schema.Types.Mixed → strict-AJV-compatible schema"
       },
     });
 
-    // Wrap response in additionalProperties: true to avoid OpenAPI keyword warnings.
     expect(() => ajv.compile(schemas?.response as object)).not.toThrow();
-    // Specifically: no `strictTypes` warning about union types on `metadata`.
-    expect(warnings.filter((w) => w.includes("strictTypes"))).toEqual([]);
+    // No `allowUnionTypes` warning — Mixed must NOT regress to the
+    // type-array form that broke nullable Mixed fields and triggered
+    // AJV strict.
     expect(warnings.filter((w) => w.includes("allowUnionTypes"))).toEqual([]);
   });
 

@@ -19,9 +19,9 @@
  * ```
  */
 
+import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
-import type { RepositoryLike } from "../adapters/interface.js";
 import type { RequestContext, UserBase } from "../types/index.js";
 import { repositoryAsAuditStore } from "./repository-audit-adapter.js";
 import type { AuditContext, AuditEntry, AuditStore } from "./stores/interface.js";

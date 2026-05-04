@@ -12,10 +12,10 @@
  */
 
 import { QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../../src/adapters/mongoose.js";
 import { BaseController } from "../../../src/core/BaseController.js";
 import { defineResource } from "../../../src/core/defineResource.js";
 import {
@@ -208,7 +208,7 @@ describe("disableDefaultRoutes + MCP", () => {
     // List via MCP
     const listResult = await client.callTool({ name: "list_products", arguments: {} });
     const listed = JSON.parse((listResult.content[0] as { text: string }).text);
-    expect(listed.docs.length).toBeGreaterThanOrEqual(1);
+    expect(listed.data.length).toBeGreaterThanOrEqual(1);
   });
 
   it("disabledRoutes still respected — delete disabled means no delete tool", () => {
@@ -488,8 +488,8 @@ describe("Full CRUD lifecycle through MCP", () => {
     // List
     const listResult = await client.callTool({ name: "list_products", arguments: {} });
     const listed = JSON.parse((listResult.content[0] as { text: string }).text);
-    expect(listed.docs.length).toBe(1);
-    expect(listed.docs[0].name).toBe("Super Widget");
+    expect(listed.data.length).toBe(1);
+    expect(listed.data[0].name).toBe("Super Widget");
 
     // Delete
     const deleteResult = await client.callTool({ name: "delete_product", arguments: { id } });
@@ -498,6 +498,6 @@ describe("Full CRUD lifecycle through MCP", () => {
     // Verify deleted
     const afterDelete = await client.callTool({ name: "list_products", arguments: {} });
     const afterData = JSON.parse((afterDelete.content[0] as { text: string }).text);
-    expect(afterData.docs.length).toBe(0);
+    expect(afterData.data.length).toBe(0);
   });
 });

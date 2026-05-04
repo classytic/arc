@@ -11,9 +11,9 @@
  * `DataAdapter` at runtime, not just a type.
  */
 
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { Model } from "mongoose";
 import { describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import type { OpenApiSchemas, RepositoryLike, RouteSchemaOptions } from "../../src/types/index.js";
 import { createMockModel, createMockRepository } from "../setup.js";
 
@@ -121,7 +121,7 @@ describe("RepositoryLike — type contract", () => {
       getById: async () => null,
       getAll: async () => ({
         method: "offset",
-        docs: [],
+        data: [],
         total: 0,
         page: 1,
         limit: 20,

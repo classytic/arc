@@ -114,7 +114,7 @@ function makeMockAdapter() {
       update: vi.fn(),
       delete: vi.fn(),
       count: vi.fn().mockResolvedValue(0),
-      getAll: vi.fn().mockResolvedValue({ docs: [], total: 0, page: 1, limit: 20, hasNext: false }),
+      getAll: vi.fn().mockResolvedValue({ data: [], total: 0, page: 1, limit: 20, hasNext: false }),
       getById: vi.fn().mockResolvedValue(null),
     },
     generateSchemas: () => ({
@@ -138,7 +138,7 @@ function makeStubController() {
   return {
     list: vi.fn(async () => ({
       success: true,
-      data: { docs: [], total: 0, page: 1, limit: 20, hasNext: false },
+      data: { data: [], total: 0, page: 1, limit: 20, hasNext: false },
     })),
     get: vi.fn(async () => ({ success: true, data: null })),
     create: vi.fn(async () => ({ success: true, data: {} })),

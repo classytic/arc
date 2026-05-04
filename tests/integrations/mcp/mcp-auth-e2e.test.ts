@@ -13,11 +13,11 @@
  */
 
 import { QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { createMongooseAdapter } from "../../../src/adapters/mongoose.js";
 import { BaseController } from "../../../src/core/BaseController.js";
 import { defineResource } from "../../../src/core/defineResource.js";
 import {
@@ -138,7 +138,7 @@ describe("No auth mode", () => {
     // List should return it
     const listResult = await client.callTool({ name: "list_projects", arguments: {} });
     const listed = JSON.parse((listResult.content[0] as { text: string }).text);
-    expect(listed.docs.length).toBeGreaterThanOrEqual(1);
+    expect(listed.data.length).toBeGreaterThanOrEqual(1);
   });
 
   it("session is null when no authRef provided", async () => {
@@ -256,8 +256,8 @@ describe("Multi-tenancy via org-scoped BaseController", () => {
     const resultA = await clientA.callTool({ name: "list_projects", arguments: {} });
     const dataA = JSON.parse((resultA.content[0] as { text: string }).text);
 
-    expect(dataA.docs.length).toBe(2);
-    expect(dataA.docs.every((p: { organizationId: string }) => p.organizationId === "org-a")).toBe(
+    expect(dataA.data.length).toBe(2);
+    expect(dataA.data.every((p: { organizationId: string }) => p.organizationId === "org-a")).toBe(
       true,
     );
 
@@ -269,13 +269,13 @@ describe("Multi-tenancy via org-scoped BaseController", () => {
     const resultB = await clientB.callTool({ name: "list_projects", arguments: {} });
     const dataB = JSON.parse((resultB.content[0] as { text: string }).text);
 
-    expect(dataB.docs.length).toBe(2);
-    expect(dataB.docs.every((p: { organizationId: string }) => p.organizationId === "org-b")).toBe(
+    expect(dataB.data.length).toBe(2);
+    expect(dataB.data.every((p: { organizationId: string }) => p.organizationId === "org-b")).toBe(
       true,
     );
 
     // Org A never sees Org B's data
-    const allNamesA = dataA.docs.map((p: { name: string }) => p.name);
+    const allNamesA = dataA.data.map((p: { name: string }) => p.name);
     expect(allNamesA).not.toContain("Org B Secret");
     expect(allNamesA).not.toContain("Org B Internal");
   });
@@ -321,9 +321,9 @@ describe("Multi-tenancy via org-scoped BaseController", () => {
     });
     const data = JSON.parse((result.content[0] as { text: string }).text);
 
-    expect(data.docs.length).toBe(2);
-    expect(data.docs.every((p: { status: string }) => p.status === "active")).toBe(true);
-    expect(data.docs.every((p: { organizationId: string }) => p.organizationId === "org-f")).toBe(
+    expect(data.data.length).toBe(2);
+    expect(data.data.every((p: { status: string }) => p.status === "active")).toBe(true);
+    expect(data.data.every((p: { organizationId: string }) => p.organizationId === "org-f")).toBe(
       true,
     );
   });
@@ -477,9 +477,9 @@ describe("Permission filters flow into _policyFilters", () => {
     const data = JSON.parse((result.content[0] as { text: string }).text);
 
     // Only tasks in org-a + br-1 should be visible
-    expect(data.docs.length).toBe(2);
-    expect(data.docs.every((t: { orgId: string }) => t.orgId === "org-a")).toBe(true);
-    expect(data.docs.every((t: { branchId: string }) => t.branchId === "br-1")).toBe(true);
+    expect(data.data.length).toBe(2);
+    expect(data.data.every((t: { orgId: string }) => t.orgId === "org-a")).toBe(true);
+    expect(data.data.every((t: { branchId: string }) => t.branchId === "br-1")).toBe(true);
   });
 
   it("permission denial blocks MCP tool call entirely", async () => {
@@ -544,9 +544,9 @@ describe("Permission filters flow into _policyFilters", () => {
 
     const resultA = await clientA.callTool({ name: "list_tasks", arguments: {} });
     const dataA = JSON.parse((resultA.content[0] as { text: string }).text);
-    expect(dataA.docs.length).toBe(1);
-    expect(dataA.docs[0].title).toBe("Alice Task");
-    expect(dataA.docs[0].branchId).toBe("main");
+    expect(dataA.data.length).toBe(1);
+    expect(dataA.data[0].title).toBe("Alice Task");
+    expect(dataA.data[0].branchId).toBe("main");
 
     // Bob sees dev branch
     const authB: AuthRef = { current: { userId: "bob" } };
@@ -555,9 +555,9 @@ describe("Permission filters flow into _policyFilters", () => {
 
     const resultB = await clientB.callTool({ name: "list_tasks", arguments: {} });
     const dataB = JSON.parse((resultB.content[0] as { text: string }).text);
-    expect(dataB.docs.length).toBe(1);
-    expect(dataB.docs[0].title).toBe("Bob Task");
-    expect(dataB.docs[0].branchId).toBe("dev");
+    expect(dataB.data.length).toBe(1);
+    expect(dataB.data[0].title).toBe("Bob Task");
+    expect(dataB.data[0].branchId).toBe("dev");
   });
 
   it("async permission check with external service simulation", async () => {
@@ -586,9 +586,9 @@ describe("Permission filters flow into _policyFilters", () => {
     const result = await client.callTool({ name: "list_tasks", arguments: {} });
     const data = JSON.parse((result.content[0] as { text: string }).text);
 
-    expect(data.docs.length).toBe(1);
-    expect(data.docs[0].title).toBe("Permitted Task");
-    expect(data.docs[0].branchId).toBe("release");
+    expect(data.data.length).toBe(1);
+    expect(data.data[0].title).toBe("Permitted Task");
+    expect(data.data[0].branchId).toBe("release");
   });
 });
 

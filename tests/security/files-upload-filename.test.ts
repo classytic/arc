@@ -133,7 +133,7 @@ describe("filesUploadPreset: sanitizeFilename flexibility", () => {
   });
 
   it("custom policy function can reject via `false`", async () => {
-    const policy: FilenamePolicy = (name) => (name.endsWith(".exe") ? false : true);
+    const policy: FilenamePolicy = (name) => !name.endsWith(".exe");
     const { handler, upload } = getUploadHandler(policy);
     const req = makeRequest("malware.exe");
     const reply = makeReply();

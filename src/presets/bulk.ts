@@ -69,15 +69,10 @@ export function bulkPreset(opts?: BulkPresetOptions): PresetResult {
               },
               required: ["items"],
             },
+            // No-envelope contract: bulkCreate emits the inserted docs as a
+            // bare array at the top level. No success/data wrapper.
             response: {
-              201: {
-                type: "object",
-                properties: {
-                  success: { type: "boolean" },
-                  data: { type: "array" },
-                  meta: { type: "object", properties: { count: { type: "number" } } },
-                },
-              },
+              201: { type: "array" },
             },
           },
         });
@@ -100,18 +95,13 @@ export function bulkPreset(opts?: BulkPresetOptions): PresetResult {
               },
               required: ["filter", "data"],
             },
+            // No-envelope contract: bulkUpdate emits the result counts raw.
             response: {
               200: {
                 type: "object",
                 properties: {
-                  success: { type: "boolean" },
-                  data: {
-                    type: "object",
-                    properties: {
-                      matchedCount: { type: "number" },
-                      modifiedCount: { type: "number" },
-                    },
-                  },
+                  matchedCount: { type: "number" },
+                  modifiedCount: { type: "number" },
                 },
               },
             },
@@ -135,16 +125,11 @@ export function bulkPreset(opts?: BulkPresetOptions): PresetResult {
               },
               required: ["filter"],
             },
+            // No-envelope contract: bulkDelete emits the count raw.
             response: {
               200: {
                 type: "object",
-                properties: {
-                  success: { type: "boolean" },
-                  data: {
-                    type: "object",
-                    properties: { deletedCount: { type: "number" } },
-                  },
-                },
+                properties: { deletedCount: { type: "number" } },
               },
             },
           },

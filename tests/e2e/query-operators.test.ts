@@ -11,10 +11,10 @@
  * - Boolean filtering
  */
 
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -160,16 +160,16 @@ describe("Query Operators E2E", () => {
   describe("Comparison operators", () => {
     it("should filter with gte (greater than or equal)", async () => {
       const body = await query("price[gte]=100");
-      expect(body.docs.length).toBe(2); // Gamma 199.99, Epsilon 149.99
-      body.docs.forEach((d: any) => {
+      expect(body.data.length).toBe(2); // Gamma 199.99, Epsilon 149.99
+      body.data.forEach((d: any) => {
         expect(d.price).toBeGreaterThanOrEqual(100);
       });
     });
 
     it("should filter with lte (less than or equal)", async () => {
       const body = await query("price[lte]=15");
-      expect(body.docs.length).toBe(2); // Delta 9.99, Zeta 14.99
-      body.docs.forEach((d: any) => {
+      expect(body.data.length).toBe(2); // Delta 9.99, Zeta 14.99
+      body.data.forEach((d: any) => {
         expect(d.price).toBeLessThanOrEqual(15);
       });
     });
@@ -177,8 +177,8 @@ describe("Query Operators E2E", () => {
     it("should filter with gt (greater than)", async () => {
       const body = await query("price[gt]=49.99");
       // Only Gamma (199.99) and Epsilon (149.99)
-      expect(body.docs.length).toBe(2);
-      body.docs.forEach((d: any) => {
+      expect(body.data.length).toBe(2);
+      body.data.forEach((d: any) => {
         expect(d.price).toBeGreaterThan(49.99);
       });
     });
@@ -186,8 +186,8 @@ describe("Query Operators E2E", () => {
     it("should filter with lt (less than)", async () => {
       const body = await query("price[lt]=15");
       // Delta (9.99) and Zeta (14.99) are both < 15
-      expect(body.docs.length).toBe(2);
-      body.docs.forEach((d: any) => {
+      expect(body.data.length).toBe(2);
+      body.data.forEach((d: any) => {
         expect(d.price).toBeLessThan(15);
       });
     });
@@ -195,8 +195,8 @@ describe("Query Operators E2E", () => {
     it("should filter with ne (not equal)", async () => {
       const body = await query("category[ne]=widgets");
       // gadgets, devices, tools — all non-widget items
-      expect(body.docs.length).toBe(4);
-      body.docs.forEach((d: any) => {
+      expect(body.data.length).toBe(4);
+      body.data.forEach((d: any) => {
         expect(d.category).not.toBe("widgets");
       });
     });
@@ -204,8 +204,8 @@ describe("Query Operators E2E", () => {
     it("should filter with in (in set)", async () => {
       const body = await query("category[in]=widgets,gadgets");
       // Alpha, Beta, Epsilon, Zeta
-      expect(body.docs.length).toBe(4);
-      body.docs.forEach((d: any) => {
+      expect(body.data.length).toBe(4);
+      body.data.forEach((d: any) => {
         expect(["widgets", "gadgets"]).toContain(d.category);
       });
     });
@@ -213,8 +213,8 @@ describe("Query Operators E2E", () => {
     it("should combine gte and lte for range", async () => {
       const body = await query("price[gte]=10&price[lte]=50");
       // Alpha 29.99, Beta 49.99, Zeta 14.99
-      expect(body.docs.length).toBe(3);
-      body.docs.forEach((d: any) => {
+      expect(body.data.length).toBe(3);
+      body.data.forEach((d: any) => {
         expect(d.price).toBeGreaterThanOrEqual(10);
         expect(d.price).toBeLessThanOrEqual(50);
       });
@@ -228,24 +228,24 @@ describe("Query Operators E2E", () => {
   describe("Exact match filters", () => {
     it("should filter by exact category match", async () => {
       const body = await query("category=widgets");
-      expect(body.docs.length).toBe(2);
-      body.docs.forEach((d: any) => {
+      expect(body.data.length).toBe(2);
+      body.data.forEach((d: any) => {
         expect(d.category).toBe("widgets");
       });
     });
 
     it("should filter by boolean field", async () => {
       const body = await query("isActive=true");
-      expect(body.docs.length).toBe(4);
-      body.docs.forEach((d: any) => {
+      expect(body.data.length).toBe(4);
+      body.data.forEach((d: any) => {
         expect(d.isActive).toBe(true);
       });
     });
 
     it("should filter inactive items", async () => {
       const body = await query("isActive=false");
-      expect(body.docs.length).toBe(2);
-      body.docs.forEach((d: any) => {
+      expect(body.data.length).toBe(2);
+      body.data.forEach((d: any) => {
         expect(d.isActive).toBe(false);
       });
     });
@@ -253,8 +253,8 @@ describe("Query Operators E2E", () => {
     it("should combine exact match with comparison", async () => {
       const body = await query("category=gadgets&price[gte]=100");
       // Only Epsilon (gadget, 149.99)
-      expect(body.docs.length).toBe(1);
-      expect(body.docs[0].name).toBe("Epsilon Gizmo");
+      expect(body.data.length).toBe(1);
+      expect(body.data[0].name).toBe("Epsilon Gizmo");
     });
   });
 
@@ -265,7 +265,7 @@ describe("Query Operators E2E", () => {
   describe("Sorting", () => {
     it("should sort ascending by price", async () => {
       const body = await query("sort=price");
-      const prices = body.docs.map((d: any) => d.price);
+      const prices = body.data.map((d: any) => d.price);
       for (let i = 1; i < prices.length; i++) {
         expect(prices[i]).toBeGreaterThanOrEqual(prices[i - 1]);
       }
@@ -273,7 +273,7 @@ describe("Query Operators E2E", () => {
 
     it("should sort descending by price", async () => {
       const body = await query("sort=-price");
-      const prices = body.docs.map((d: any) => d.price);
+      const prices = body.data.map((d: any) => d.price);
       for (let i = 1; i < prices.length; i++) {
         expect(prices[i]).toBeLessThanOrEqual(prices[i - 1]);
       }
@@ -281,14 +281,14 @@ describe("Query Operators E2E", () => {
 
     it("should sort by name ascending", async () => {
       const body = await query("sort=name");
-      const names = body.docs.map((d: any) => d.name);
+      const names = body.data.map((d: any) => d.name);
       const sorted = [...names].sort();
       expect(names).toEqual(sorted);
     });
 
     it("should sort descending by stock", async () => {
       const body = await query("sort=-stock");
-      const stocks = body.docs.map((d: any) => d.stock);
+      const stocks = body.data.map((d: any) => d.stock);
       for (let i = 1; i < stocks.length; i++) {
         expect(stocks[i]).toBeLessThanOrEqual(stocks[i - 1]);
       }
@@ -302,8 +302,8 @@ describe("Query Operators E2E", () => {
   describe("Field selection", () => {
     it("should select specific fields only", async () => {
       const body = await query("select=name,price");
-      expect(body.docs.length).toBeGreaterThan(0);
-      body.docs.forEach((d: any) => {
+      expect(body.data.length).toBeGreaterThan(0);
+      body.data.forEach((d: any) => {
         expect(d.name).toBeDefined();
         expect(d.price).toBeDefined();
         expect(d._id).toBeDefined(); // _id is always included
@@ -316,8 +316,8 @@ describe("Query Operators E2E", () => {
 
     it("should work with filters and select", async () => {
       const body = await query("category=widgets&select=name,price");
-      expect(body.docs.length).toBe(2);
-      body.docs.forEach((d: any) => {
+      expect(body.data.length).toBe(2);
+      body.data.forEach((d: any) => {
         expect(d.name).toBeDefined();
         expect(d.price).toBeDefined();
         expect(d.description).toBeUndefined();
@@ -333,7 +333,7 @@ describe("Query Operators E2E", () => {
     it("should paginate with page and limit", async () => {
       const body = await query("page=1&limit=2&sort=name");
 
-      expect(body.docs.length).toBe(2);
+      expect(body.data.length).toBe(2);
       expect(body.page).toBe(1);
       expect(body.limit).toBe(2);
       expect(body.total).toBe(6);
@@ -345,7 +345,7 @@ describe("Query Operators E2E", () => {
     it("should return second page", async () => {
       const body = await query("page=2&limit=2&sort=name");
 
-      expect(body.docs.length).toBe(2);
+      expect(body.data.length).toBe(2);
       expect(body.page).toBe(2);
       expect(body.hasNext).toBe(true);
       expect(body.hasPrev).toBe(true);
@@ -354,7 +354,7 @@ describe("Query Operators E2E", () => {
     it("should return last page", async () => {
       const body = await query("page=3&limit=2&sort=name");
 
-      expect(body.docs.length).toBe(2);
+      expect(body.data.length).toBe(2);
       expect(body.page).toBe(3);
       expect(body.hasNext).toBe(false);
       expect(body.hasPrev).toBe(true);
@@ -363,7 +363,7 @@ describe("Query Operators E2E", () => {
     it("should return empty docs for page beyond range", async () => {
       const body = await query("page=10&limit=2");
 
-      expect(body.docs.length).toBe(0);
+      expect(body.data.length).toBe(0);
       expect(body.page).toBe(10);
       expect(body.total).toBe(6);
     });
@@ -384,29 +384,29 @@ describe("Query Operators E2E", () => {
   describe("Text search", () => {
     it("should find products by text search (name/description)", async () => {
       const body = await query("search=professional");
-      expect(body.docs.length).toBeGreaterThanOrEqual(1);
+      expect(body.data.length).toBeGreaterThanOrEqual(1);
       // Alpha Widget has "Professional" in description
-      const names = body.docs.map((d: any) => d.name);
+      const names = body.data.map((d: any) => d.name);
       expect(names).toContain("Alpha Widget");
     });
 
     it("should find products by name search", async () => {
       const body = await query("search=gadget");
-      expect(body.docs.length).toBeGreaterThanOrEqual(1);
-      const names = body.docs.map((d: any) => d.name);
+      expect(body.data.length).toBeGreaterThanOrEqual(1);
+      const names = body.data.map((d: any) => d.name);
       expect(names).toContain("Beta Gadget");
     });
 
     it("should return empty for non-matching search", async () => {
       const body = await query("search=nonexistent-product-xyz");
-      expect(body.docs.length).toBe(0);
+      expect(body.data.length).toBe(0);
     });
 
     it("should combine search with filters", async () => {
       const body = await query("search=widget&isActive=true");
       // Alpha Widget (active) but not Zeta Widget (inactive)
-      expect(body.docs.length).toBe(1);
-      expect(body.docs[0].name).toBe("Alpha Widget");
+      expect(body.data.length).toBe(1);
+      expect(body.data[0].name).toBe("Alpha Widget");
     });
   });
 
@@ -418,19 +418,19 @@ describe("Query Operators E2E", () => {
     it("should combine filter + sort + pagination", async () => {
       const body = await query("isActive=true&sort=-price&page=1&limit=2");
 
-      expect(body.docs.length).toBe(2);
+      expect(body.data.length).toBe(2);
       expect(body.total).toBe(4); // 4 active products
       // Sorted descending by price, so first should be most expensive active
-      expect(body.docs[0].price).toBeGreaterThanOrEqual(body.docs[1].price);
+      expect(body.data[0].price).toBeGreaterThanOrEqual(body.data[1].price);
     });
 
     it("should combine filter + sort + select", async () => {
       const body = await query("category=gadgets&sort=price&select=name,price");
 
-      expect(body.docs.length).toBe(2);
+      expect(body.data.length).toBe(2);
       // Beta (49.99) before Epsilon (149.99)
-      expect(body.docs[0].price).toBeLessThanOrEqual(body.docs[1].price);
-      body.docs.forEach((d: any) => {
+      expect(body.data[0].price).toBeLessThanOrEqual(body.data[1].price);
+      body.data.forEach((d: any) => {
         expect(d.description).toBeUndefined();
       });
     });
@@ -438,8 +438,8 @@ describe("Query Operators E2E", () => {
     it("should combine range + sort + limit", async () => {
       const body = await query("price[gte]=10&price[lte]=200&sort=price&limit=3");
 
-      expect(body.docs.length).toBe(3);
-      const prices = body.docs.map((d: any) => d.price);
+      expect(body.data.length).toBe(3);
+      const prices = body.data.map((d: any) => d.price);
       // Should be ascending
       for (let i = 1; i < prices.length; i++) {
         expect(prices[i]).toBeGreaterThanOrEqual(prices[i - 1]);

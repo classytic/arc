@@ -13,15 +13,15 @@
  * → sqlitekit should keep its field-rule semantics byte-for-byte.
  */
 
+import { createDrizzleAdapter } from "@classytic/sqlitekit/adapter";
+import { timestampPlugin } from "@classytic/sqlitekit/plugins/timestamp";
+import { SqliteRepository } from "@classytic/sqlitekit/repository";
+import { buildCrudSchemasFromTable } from "@classytic/sqlitekit/schema/crud";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SqliteRepository } from "@classytic/sqlitekit/repository";
-import { buildCrudSchemasFromTable } from "@classytic/sqlitekit/schema/crud";
-import { timestampPlugin } from "@classytic/sqlitekit/plugins/timestamp";
-import { createDrizzleAdapter } from "../../src/adapters/drizzle.js";
 import { allowPublic, defineResource } from "../../src/index.js";
 
 // ──────────────────────────────────────────────────────────────────────

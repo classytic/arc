@@ -20,9 +20,9 @@
  * assertions about compilation show up as real pass/fail signals.
  */
 
+import { createMongooseAdapter, type MongooseAdapterOptions } from "@classytic/mongokit/adapter";
 import type { Model, Schema } from "mongoose";
 import { describe, expect, it } from "vitest";
-import { createMongooseAdapter, type MongooseAdapterOptions } from "../../src/adapters/mongoose.js";
 import type { OpenApiSchemas, RepositoryLike, RouteSchemaOptions } from "../../src/types/index.js";
 import { createMockModel } from "../setup.js";
 
@@ -38,7 +38,7 @@ import { createMockModel } from "../setup.js";
 /** Mock of `OffsetPaginationResult<T>` from @classytic/repo-core/pagination. */
 interface PaginationResult<T> {
   method: "offset";
-  docs: T[];
+  data: T[];
   total: number;
   page: number;
   limit: number;
@@ -52,12 +52,10 @@ interface PaginationResult<T> {
  * Matches the public CRUD surface that arc's `RepositoryLike` spec defines.
  */
 class MockMongokitRepository<TDoc> {
-  constructor(_model: Model<TDoc>) {}
-
   async getAll(_options?: Record<string, unknown>): Promise<PaginationResult<TDoc>> {
     return {
       method: "offset",
-      docs: [],
+      data: [],
       total: 0,
       page: 1,
       limit: 20,

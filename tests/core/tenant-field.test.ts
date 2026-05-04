@@ -32,7 +32,7 @@ function createMinimalRepo() {
       return null;
     },
     getAll: async () => ({
-      docs: [...store.values()],
+      data: [...store.values()],
       page: 1,
       limit: 20,
       total: store.size,
@@ -194,7 +194,6 @@ describe("BaseController with tenantField", () => {
       });
       const res = await controller.create(req);
 
-      expect(res.success).toBe(true);
       expect(res.data).toHaveProperty("organizationId", "org-123");
     });
   });
@@ -212,7 +211,6 @@ describe("BaseController with tenantField", () => {
       });
       const res = await controller.create(req);
 
-      expect(res.success).toBe(true);
       expect(res.data).not.toHaveProperty("organizationId");
     });
 

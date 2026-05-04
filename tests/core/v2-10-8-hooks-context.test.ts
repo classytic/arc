@@ -25,12 +25,11 @@
  * in isolation.
  */
 
-import type { FastifyInstance } from "fastify";
+import { Repository } from "@classytic/mongokit";
+import type { DataAdapter } from "@classytic/repo-core/adapter";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { Schema } from "mongoose";
-import { Repository } from "@classytic/mongokit";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { DataAdapter } from "../../src/adapters/index.js";
 import { createApp } from "../../src/factory/index.js";
 import { allowPublic, defineResource } from "../../src/index.js";
 import type { ResourceHookContext } from "../../src/types/index.js";
@@ -120,9 +119,7 @@ describe("2.10.8 regression — config.hooks handlers receive context + scope", 
             phase: "beforeCreate",
             data: ctx.data,
             scope: ctx.scope,
-            contextScope: (
-              ctx.context as { _scope?: Record<string, unknown> } | undefined
-            )?._scope,
+            contextScope: (ctx.context as { _scope?: Record<string, unknown> } | undefined)?._scope,
             userId: (ctx.user as { id?: string } | undefined)?.id,
           });
         },
@@ -131,9 +128,7 @@ describe("2.10.8 regression — config.hooks handlers receive context + scope", 
             phase: "afterCreate",
             data: ctx.data,
             scope: ctx.scope,
-            contextScope: (
-              ctx.context as { _scope?: Record<string, unknown> } | undefined
-            )?._scope,
+            contextScope: (ctx.context as { _scope?: Record<string, unknown> } | undefined)?._scope,
             userId: (ctx.user as { id?: string } | undefined)?.id,
           });
         },
@@ -142,9 +137,7 @@ describe("2.10.8 regression — config.hooks handlers receive context + scope", 
             phase: "beforeUpdate",
             data: ctx.data,
             scope: ctx.scope,
-            contextScope: (
-              ctx.context as { _scope?: Record<string, unknown> } | undefined
-            )?._scope,
+            contextScope: (ctx.context as { _scope?: Record<string, unknown> } | undefined)?._scope,
             userId: (ctx.user as { id?: string } | undefined)?.id,
           });
         },
@@ -153,9 +146,7 @@ describe("2.10.8 regression — config.hooks handlers receive context + scope", 
             phase: "afterUpdate",
             data: ctx.data,
             scope: ctx.scope,
-            contextScope: (
-              ctx.context as { _scope?: Record<string, unknown> } | undefined
-            )?._scope,
+            contextScope: (ctx.context as { _scope?: Record<string, unknown> } | undefined)?._scope,
             userId: (ctx.user as { id?: string } | undefined)?.id,
           });
         },
@@ -232,9 +223,9 @@ describe("2.10.8 regression — config.hooks handlers receive context + scope", 
     // Full context is also exposed for hosts that need to discriminate
     // on `scope.kind` or reach auth-adapter-specific fields.
     expect(after?.contextScope).toBeDefined();
-    expect(
-      (after?.contextScope as { organizationId?: string } | undefined)?.organizationId,
-    ).toBe(ORG_A);
+    expect((after?.contextScope as { organizationId?: string } | undefined)?.organizationId).toBe(
+      ORG_A,
+    );
     // afterCreate data is the created doc (not the input body)
     expect(after?.data?._id).toBeDefined();
 

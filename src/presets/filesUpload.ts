@@ -83,7 +83,7 @@ export interface FilesUploadPresetPermissions {
  * - function: custom policy. Return a string to *transform* the filename,
  *   `false` to reject (triggers `ValidationError`), or `true`/`void` to accept.
  */
-export type FilenamePolicy = boolean | "*" | ((filename: string) => string | boolean | void);
+export type FilenamePolicy = boolean | "*" | ((filename: string) => string | boolean | undefined);
 
 export interface FilesUploadPresetOptions {
   /** Any implementation of the `Storage` interface. App owns it. */
@@ -167,7 +167,7 @@ function parseRangeHeader(
   header: string | undefined,
   totalSize: number | undefined,
 ): StorageReadRange | undefined {
-  if (!header || !header.startsWith("bytes=")) return undefined;
+  if (!header?.startsWith("bytes=")) return undefined;
   const spec = header.slice("bytes=".length).split(",")[0]?.trim();
   if (!spec) return undefined;
 
@@ -280,7 +280,8 @@ function makeUploadHandler(deps: HandlerDeps): RouteHandlerMethod {
       ctx,
     );
 
-    return reply.code(201).send({ success: true, data: toResponseFile(result) });
+    // No-envelope contract: emit the file payload raw.
+    return reply.code(201).send(toResponseFile(result));
   };
 }
 

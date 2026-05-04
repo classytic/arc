@@ -2,20 +2,20 @@
 
 **Summary**: Arc is a resource-oriented backend framework on Fastify. One `defineResource()` produces REST + auth + permissions + events + caching + OpenAPI + MCP.
 **Sources**: CLAUDE.md, AGENTS.md §1.
-**Last updated**: 2026-04-21.
+**Last updated**: 2026-05-03.
 
 ---
 
 ## Shape
 
-- v2.10.3 | Node.js 22+ | TypeScript 6+ | ESM-only | Fastify 5+
+- Node.js 22+ | TypeScript strict | ESM-only | Fastify 5+
 - Build: tsdown. Test: Vitest + mongodb-memory-server. Lint: Biome. Dead code: knip.
-- Only required peer dep: `fastify >=5.0.0`. See [[peer-deps]].
+- Required peer deps: `fastify`, `@classytic/primitives` (events). See [[peer-deps]] for the canonical version table.
 
 ## Philosophy
 
 1. Resource-oriented — CRUD, schemas, auth, perms, hooks, events all hang off `defineResource()`.
-2. DB-agnostic — core never imports mongoose/prisma. Adapters implement [[adapters|RepositoryLike]].
+2. DB-agnostic — core never imports any DB driver. Every kit-specific adapter (Mongoose, Drizzle, Prisma, future kits) lives in its kit (`@classytic/<kit>/adapter`). Cross-framework contract in `@classytic/repo-core/adapter`. See [[adapters]].
 3. Primitives not opinions — building blocks (outbox, hooks, role hierarchy, scope), not workflow engines or mailers.
 4. Optional peer deps, never bundled. dist must force-install nothing.
 5. Tree-shakable — 88+ subpath exports. Users import `@classytic/arc/factory`, not root barrel.
@@ -27,7 +27,7 @@
 Violating these breaks users, the build, or the design.
 
 - No `console.log` in `src/` outside `cli/` — use logger injection.
-- No mongoose/prisma imports in core — adapter files only.
+- No DB driver imports anywhere in arc. Every kit-specific adapter (Mongoose, Drizzle, Prisma, …) lives in its kit's `/adapter` subpath.
 - No `any` — use `unknown`. `unknown` defaults are intentional.
 - No `@ts-ignore` — fix the type (`as unknown as X` as last resort).
 - No default exports — named only (knip enforces).

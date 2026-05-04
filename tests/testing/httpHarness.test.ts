@@ -79,7 +79,7 @@ describe("HttpTestHarness — fully-public resource", () => {
       authMode: "jwt",
       resources: [resource],
     });
-    ctx.auth!.register("admin", { user: { id: "u1", roles: ["admin"] } });
+    ctx.auth?.register("admin", { user: { id: "u1", roles: ["admin"] } });
   });
 
   afterAll(async () => {
@@ -176,7 +176,7 @@ describe("HttpTestHarness — mixed public/protected resource", () => {
       authMode: "jwt",
       resources: [resource],
     });
-    ctx.auth!.register("admin", { user: { id: "u1", roles: ["admin"] } });
+    ctx.auth?.register("admin", { user: { id: "u1", roles: ["admin"] } });
   });
 
   afterAll(async () => {

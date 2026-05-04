@@ -121,7 +121,7 @@ describe("2.10.6 review — BaseController.list honors all three repo-core shape
       async getAll() {
         return getAllReturn;
       },
-      async getById(id: string) {
+      async getById(_id: string) {
         return null;
       },
       async create(data: unknown) {
@@ -136,22 +136,21 @@ describe("2.10.6 review — BaseController.list honors all three repo-core shape
     };
   }
 
-  it("forwards an offset-envelope verbatim (`{ docs, total, page, limit }`)", async () => {
-    const envelope = { docs: [{ _id: "1", name: "A" }], total: 1, page: 1, limit: 10 };
+  it("forwards an offset-envelope verbatim (`{ data, total, page, limit }`)", async () => {
+    const envelope = { data: [{ _id: "1", name: "A" }], total: 1, page: 1, limit: 10 };
     const ctrl = new BaseController<Doc>(makeRepo(envelope) as never);
 
     const res = await ctrl.list(createReq());
 
-    expect(res.success).toBe(true);
     expect(res.data).toBe(envelope);
   });
 
-  it("forwards a keyset-envelope verbatim (`{ docs, nextCursor }`)", async () => {
+  it("forwards a keyset-envelope verbatim (`{ data, nextCursor }`)", async () => {
     // repo-core allows keyset shapes with `nextCursor` / `hasMore` instead
     // of `total`. Pre-fix arc typed the return as offset-only; this test
     // asserts the union is honored.
     const envelope = {
-      docs: [{ _id: "1", name: "A" }],
+      data: [{ _id: "1", name: "A" }],
       nextCursor: "opaque-token",
       hasMore: true,
     };
@@ -159,7 +158,6 @@ describe("2.10.6 review — BaseController.list honors all three repo-core shape
 
     const res = await ctrl.list(createReq());
 
-    expect(res.success).toBe(true);
     expect(res.data).toBe(envelope);
     // The caller narrows on shape:
     const data = res.data as { nextCursor?: string };
@@ -177,7 +175,6 @@ describe("2.10.6 review — BaseController.list honors all three repo-core shape
 
     const res = await ctrl.list(createReq());
 
-    expect(res.success).toBe(true);
     expect(Array.isArray(res.data)).toBe(true);
     expect(res.data).toEqual(arr);
   });

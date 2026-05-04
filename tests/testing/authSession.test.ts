@@ -49,7 +49,7 @@ describe("createJwtAuthProvider", () => {
     auth.register("bot", { token: "pre-signed-token" });
 
     expect(auth.as("bot").token).toBe("pre-signed-token");
-    expect(vi.mocked(app.jwt!.sign).mock.calls.length).toBe(0);
+    expect(vi.mocked(app.jwt?.sign).mock.calls.length).toBe(0);
   });
 
   it("withExtra merges headers without mutating the original session", () => {

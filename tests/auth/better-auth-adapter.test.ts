@@ -17,23 +17,21 @@ import { type BetterAuthHandler, createBetterAuthAdapter } from "../../src/auth/
 
 /** Returns a JSON session response */
 function createJsonAuthHandler(sessionData: Record<string, unknown> = {}): BetterAuthHandler {
+  const sessionPayload = {
+    user: { id: "user-1", name: "Test User", email: "test@example.com" },
+    session: { id: "session-1", expiresAt: new Date(Date.now() + 86400000).toISOString() },
+    ...sessionData,
+  };
   return {
     handler: async (request: Request) => {
       const url = new URL(request.url);
 
-      // GET /api/auth/get-session → return session
+      // Catch-all routes that ride the /api/auth/* fastify route
       if (url.pathname.endsWith("/get-session")) {
-        return new Response(
-          JSON.stringify({
-            user: { id: "user-1", name: "Test User", email: "test@example.com" },
-            session: { id: "session-1", expiresAt: new Date(Date.now() + 86400000).toISOString() },
-            ...sessionData,
-          }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          },
-        );
+        return new Response(JSON.stringify(sessionPayload), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       }
 
       // POST /api/auth/sign-in → return user
@@ -53,6 +51,10 @@ function createJsonAuthHandler(sessionData: Record<string, unknown> = {}): Bette
         status: 200,
         headers: { "content-type": "application/json" },
       });
+    },
+    api: {
+      // Direct in-process API used by authenticate/optionalAuthenticate
+      getSession: async () => sessionPayload,
     },
   };
 }
@@ -93,7 +95,7 @@ function createStreamingAuthHandler(): BetterAuthHandler {
   };
 }
 
-/** Returns 401 for get-session (unauthenticated) */
+/** Returns null session (unauthenticated) — `api.getSession` returns null. */
 function createUnauthenticatedHandler(): BetterAuthHandler {
   return {
     handler: async () => {
@@ -101,6 +103,9 @@ function createUnauthenticatedHandler(): BetterAuthHandler {
         status: 401,
         headers: { "content-type": "application/json" },
       });
+    },
+    api: {
+      getSession: async () => null,
     },
   };
 }
@@ -152,7 +157,6 @@ describe("Better Auth Adapter", () => {
 
       expect(response.statusCode).toBe(200);
       const body = JSON.parse(response.body);
-      expect(body.success).toBe(true);
       expect(body.body).toEqual({ email: "test@example.com", password: "secret123" });
     });
 
@@ -247,7 +251,7 @@ describe("Better Auth Adapter", () => {
 
       expect(response.statusCode).toBe(401);
       const body = JSON.parse(response.body);
-      expect(body.error).toBe("Unauthorized");
+      expect(body.code).toBe("arc.unauthorized");
 
       await app.close();
     });

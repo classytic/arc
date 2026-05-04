@@ -7,13 +7,14 @@
  * Prevents type mismatches that could expose internal structures.
  */
 
+import type { StandardRepo } from "@classytic/repo-core/repository";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/index.js";
 import { allowPublic } from "../../src/permissions/index.js";
-import type { StandardRepo } from "@classytic/repo-core/repository";
 import type { AnyRecord, DataAdapter, IRequestContext } from "../../src/types/index.js";
+import { createError } from "../../src/utils/errors.js";
 
 // Helper to create test adapter
 function createTestAdapter(repository: StandardRepo): DataAdapter {
@@ -72,13 +73,10 @@ class TestController extends BaseController {
     };
   }
 
-  // Another custom method with error - must have context param for auto-detection
+  // Another custom method with error - must have context param for auto-detection.
+  // No-envelope contract: throw the error and let the global error handler emit it.
   async errorAction(_context: IRequestContext) {
-    return {
-      success: false,
-      error: "Something went wrong",
-      status: 500,
-    };
+    throw createError(500, "Something went wrong", { code: "arc.internal_error" });
   }
 }
 
@@ -131,14 +129,12 @@ describe("Security: String Handler Response Adapter", () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
 
-    // Should be properly formatted Fastify response
-    expect(body).toHaveProperty("success");
-    expect(body).toHaveProperty("data");
-    expect(body.success).toBe(true);
-    expect(body.data.message).toBe("Custom action executed");
-    expect(body.data.paramId).toBe("42");
+    // No-envelope contract: HTTP status discriminates; the handler's data
+    // is emitted directly at the top level.
+    expect(body).not.toHaveProperty("success");
+    expect(body.message).toBe("Custom action executed");
+    expect(body.paramId).toBe("42");
 
-    // Should NOT be raw IControllerResponse with status field exposed
     expect(res.headers["content-type"]).toContain("application/json");
   });
 
@@ -151,8 +147,7 @@ describe("Security: String Handler Response Adapter", () => {
     expect(res.statusCode).toBe(500);
     const body = JSON.parse(res.body);
 
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Something went wrong");
+    expect(body.message).toBe("Something went wrong");
   });
 
   it("should work with CRUD operations (built-in handlers)", async () => {
@@ -164,9 +159,8 @@ describe("Security: String Handler Response Adapter", () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
 
-    expect(body.success).toBe(true);
-    expect(body.data).toHaveProperty("_id");
-    expect(body.data).toHaveProperty("name");
+    expect(body).toHaveProperty("_id");
+    expect(body).toHaveProperty("name");
   });
 
   it("should preserve authentication context in string handlers", async () => {
@@ -182,10 +176,10 @@ describe("Security: String Handler Response Adapter", () => {
 
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.data).toHaveProperty("message");
-    expect(body.data).toHaveProperty("paramId");
-    expect(body.data.message).toBe("Custom action executed");
-    expect(body.data.paramId).toBe("1");
+    expect(body).toHaveProperty("message");
+    expect(body).toHaveProperty("paramId");
+    expect(body.message).toBe("Custom action executed");
+    expect(body.paramId).toBe("1");
     // Note: userId is undefined without auth middleware and won't be serialized in JSON
   });
 
@@ -288,9 +282,8 @@ describe("Security: String Handler Response Adapter", () => {
 
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.success).toBe(true);
-    expect(body.data.async).toBe(true);
-    expect(body.data.paramId).toBe("999");
+    expect(body.async).toBe(true);
+    expect(body.paramId).toBe("999");
 
     await app3.close();
   });
@@ -300,10 +293,8 @@ describe("Security: String Handler Response Adapter", () => {
     const fastifyNativeController = {
       getBySlug: async (req: any, reply: any) => {
         const { slug } = req.params;
-        return reply.code(200).send({
-          success: true,
-          data: { slug, message: "Fastify-native" },
-        });
+        // No-envelope: emit raw data.
+        return reply.code(200).send({ slug, message: "Fastify-native" });
       },
     };
 
@@ -334,9 +325,8 @@ describe("Security: String Handler Response Adapter", () => {
 
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.success).toBe(true);
-    expect(body.data.slug).toBe("test-slug");
-    expect(body.data.message).toBe("Fastify-native");
+    expect(body.slug).toBe("test-slug");
+    expect(body.message).toBe("Fastify-native");
 
     await app4.close();
   });
@@ -381,9 +371,8 @@ describe("Security: String Handler Response Adapter", () => {
 
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.success).toBe(true);
-    expect(body.data.slug).toBe("test-slug");
-    expect(body.data.message).toBe("IController wrapped");
+    expect(body.slug).toBe("test-slug");
+    expect(body.message).toBe("IController wrapped");
 
     await app5.close();
   });

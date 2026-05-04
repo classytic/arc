@@ -83,6 +83,16 @@ export class QueryResolver {
   }
 
   /**
+   * Swap the underlying parser. Mutates in place so the resolver instance
+   * stays referentially stable (hosts capturing a `queryResolver` ref via
+   * `defineResource({ controller })` keep that ref valid). Single source of
+   * truth — pairs with `BaseCrudController.setQueryParser()`.
+   */
+  setParser(parser: QueryParserInterface): void {
+    this.queryParser = parser;
+  }
+
+  /**
    * Resolve a request into parsed query options -- ONE parse per request.
    * Combines what was previously _buildContext + _parseQueryOptions + _applyFilters.
    */

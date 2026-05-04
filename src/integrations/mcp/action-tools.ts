@@ -21,7 +21,12 @@ import {
 import type { PermissionCheck } from "../../permissions/types.js";
 import type { ResourcePermissions } from "../../types/index.js";
 import { buildRequestContext } from "./buildRequestContext.js";
-import { evaluatePermission } from "./tool-helpers.js";
+import {
+  evaluatePermission,
+  permissionDeniedResult,
+  toCallToolError,
+  toCallToolSuccess,
+} from "./tool-helpers.js";
 import type { ToolDefinition } from "./types.js";
 
 /**
@@ -78,19 +83,18 @@ export function createActionToolHandler(
     if (allowedKeys) {
       const extras = Object.keys(input).filter((k) => !allowedKeys.has(k));
       if (extras.length > 0) {
-        return {
-          content: [
+        return toCallToolError({
+          code: "arc.bad_request",
+          message: `Unknown properties not allowed: ${extras.join(", ")}`,
+          status: 400,
+          details: [
             {
-              type: "text",
-              text: JSON.stringify({
-                success: false,
-                error: `Unknown properties not allowed: ${extras.join(", ")}`,
-                details: { action: actionName, unexpected: extras },
-              }),
+              path: "input",
+              code: "unknown_properties",
+              message: `Unexpected fields: ${extras.join(", ")}`,
             },
           ],
-          isError: true,
-        };
+        });
       }
     }
 
@@ -102,18 +106,12 @@ export function createActionToolHandler(
       input,
     );
     if (permResult && !permResult.granted) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              success: false,
-              error: permResult.reason ?? `Permission denied for action '${actionName}'`,
-            }),
-          },
-        ],
-        isError: true,
-      };
+      return permissionDeniedResult({
+        resource: resourceName,
+        operation: `action.${actionName}`,
+        reason: permResult.reason,
+        session,
+      });
     }
 
     // The "action" operation kind puts id in params, everything else in body,
@@ -134,12 +132,16 @@ export function createActionToolHandler(
       // Pass the full IRequestContext as `req` so action handlers see user,
       // scope, metadata, and filters in the same shape as the HTTP path.
       const result = await handler(id, data, reqCtx);
-      return {
-        content: [{ type: "text", text: JSON.stringify({ success: true, data: result }) }],
-      };
+      // No-envelope contract: emit the action's raw return as the success
+      // payload. The `isError: false` (default) on `CallToolResult`
+      // discriminates success/error for MCP, mirroring HTTP status.
+      return toCallToolSuccess(result);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
+      // Route ArcError / HttpError throws through the canonical
+      // `toErrorContract` so MCP agents see the same shape HTTP clients
+      // do (`arc.not_found` 404, `arc.forbidden` 403, etc.). Raw errors
+      // collapse to `arc.internal_error` 500.
+      return toCallToolError(err instanceof Error ? err : new Error(String(err)));
     }
   };
 }

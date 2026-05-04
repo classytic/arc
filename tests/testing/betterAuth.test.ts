@@ -123,7 +123,7 @@ describe("createBetterAuthTestHelpers — signUp", () => {
       password: "pw",
       name: "Alice",
     });
-    expect(app.calls[0]!.url).toBe("/auth/sign-up/email");
+    expect(app.calls[0]?.url).toBe("/auth/sign-up/email");
   });
 
   it("tolerates token under .session.token (Better Auth version drift)", async () => {
@@ -140,7 +140,7 @@ describe("createBetterAuthTestHelpers — signUp", () => {
     expect(result.token).toBe("nested-tok");
   });
 
-  it("tolerates token under .data.token", async () => {
+  it("tolerates token under .token", async () => {
     const app = makeInjector(() => ({
       statusCode: 200,
       body: JSON.stringify({ data: { token: "data-tok", id: "u3" } }),
@@ -182,7 +182,7 @@ describe("createBetterAuthTestHelpers — signIn / createOrg / setActiveOrg / au
       email: "e@x.com",
       password: "pw",
     });
-    expect(app.calls[0]!.url).toBe("/api/auth/sign-in/email");
+    expect(app.calls[0]?.url).toBe("/api/auth/sign-in/email");
     expect(res.token).toBe("signed-in");
     expect(res.userId).toBe("u5");
   });
@@ -323,9 +323,9 @@ describe("setupBetterAuthTestApp — composite flow", () => {
     //   2 setActive calls (one per user)
     expect(result.orgId).toMatch(/^org-\d+$/);
     expect(Object.keys(result.users)).toEqual(["admin", "member"]);
-    expect(result.users.admin!.userId).toBe(users["a@x.com"]);
-    expect(result.users.member!.userId).toBe(users["m@x.com"]);
-    expect(result.users.admin!.token).toMatch(/^tok-/);
+    expect(result.users.admin?.userId).toBe(users["a@x.com"]);
+    expect(result.users.member?.userId).toBe(users["m@x.com"]);
+    expect(result.users.admin?.token).toMatch(/^tok-/);
 
     // addMember was invoked for the non-creator only
     expect(addMember).toHaveBeenCalledTimes(1);

@@ -13,10 +13,10 @@ import {
   Repository,
   softDeletePlugin,
 } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -134,10 +134,10 @@ describe("Soft-delete preset + custom idField", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      const docs = body.docs ?? body.data?.docs ?? body.data;
-      expect(Array.isArray(docs)).toBe(true);
-      expect(docs.length).toBeGreaterThanOrEqual(2);
-      const slugs = docs.map((d: { slug: string }) => d.slug);
+      const data = body.data ?? body.data?.data ?? body;
+      expect(Array.isArray(data)).toBe(true);
+      expect(data.length).toBeGreaterThanOrEqual(2);
+      const slugs = data.map((d: { slug: string }) => d.slug);
       expect(slugs).toContain("deleted-1");
       expect(slugs).toContain("deleted-2");
     } finally {
@@ -160,7 +160,7 @@ describe("Soft-delete preset + custom idField", () => {
       const listRes = await app.inject({ method: "GET", url: "/articles" });
       expect(listRes.statusCode).toBe(200);
       const list = JSON.parse(listRes.body);
-      const slugs = (list.docs ?? []).map((d: { slug: string }) => d.slug);
+      const slugs = (list.data ?? []).map((d: { slug: string }) => d.slug);
       expect(slugs).not.toContain("restore-me");
 
       // Restore by SLUG (not _id)

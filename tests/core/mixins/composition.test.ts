@@ -15,8 +15,8 @@
  * If any of these fail, the split regressed or the composition is wrong.
  */
 
+import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import { describe, expect, it } from "vitest";
-import type { RepositoryLike } from "../../../src/adapters/interface.js";
 import { BaseController } from "../../../src/core/BaseController.js";
 import { BaseCrudController } from "../../../src/core/BaseCrudController.js";
 import { BulkMixin } from "../../../src/core/mixins/bulk.js";
@@ -32,7 +32,7 @@ interface Doc {
 function mockRepo(): RepositoryLike {
   return {
     async getAll() {
-      return { docs: [], total: 0 };
+      return { data: [], total: 0 };
     },
     async getById() {
       return null;

@@ -9,7 +9,7 @@ This file covers: philosophy, architecture, what not to do, testing workflow, bu
 ## 1. Philosophy
 
 1. **Resource-oriented** — everything hangs off `defineResource()`. CRUD, schemas, auth, permissions, hooks, events all flow from one config.
-2. **DB-agnostic via `@classytic/repo-core`** — arc never imports mongoose/prisma/drizzle directly in core. Adapters bridge driver-specific repositories to arc's `RepositoryLike` compound.
+2. **DB-agnostic via `@classytic/repo-core`** — arc never imports any DB driver directly. Every kit-specific adapter (Mongoose, Drizzle, Prisma, …) lives in its kit (`@classytic/mongokit/adapter`, `@classytic/sqlitekit/adapter`, `@classytic/prismakit/adapter`); the cross-framework adapter contract lives in `@classytic/repo-core/adapter`. Custom kits implementing `DataAdapter<TDoc>` plug in identically.
 3. **Primitives, not opinions** — building blocks (outbox, hooks, role hierarchy, scope) NOT workflow engines or email senders. Streamline / Temporal / BullMQ are separate packages.
 4. **Peer deps, never bundled** — every integration is optional. Arc's `dist/` forces nothing beyond `fastify`.
 5. **Tree-shakable** — many subpath exports. Hosts import `@classytic/arc/factory`, `@classytic/arc/auth`, etc. Root barrel is essentials only.
@@ -24,7 +24,6 @@ This file covers: philosophy, architecture, what not to do, testing workflow, bu
 src/
   core/          defineResource · BaseCrudController + mixins → BaseController · QueryResolver · createCrudRouter · routerShared · schemaIR
   factory/       createApp (main entry point) · registerResources · loadResources
-  adapters/      RepositoryLike interface · mongoose · prisma · drizzle · repo-core-compat
   auth/          JWT · Better Auth · sessions · revocation
   permissions/   core (auth/roles/ownership + combinators) · scope · dynamic (matrices) · fields · presets · roleHierarchy
   scope/         RequestScope discriminated union (public | authenticated | member | service | elevated)
@@ -38,7 +37,7 @@ src/
   cli/           init · generate · doctor · describe · introspect · docs
   testing/       createHttpTestHarness · createTestApp · TestAuthSession · TestFixtures · expectArc
   docs/          OpenAPI spec · Scalar UI
-  utils/         queryParser · stateMachine · compensate · retry · circuitBreaker · schemaConverter · envelope
+  utils/         queryParser · stateMachine · compensate · retry · circuitBreaker · schemaConverter · store-helpers (internal)
   types/         shared type definitions · Fastify declaration merges (type-only)
   schemas/       JSON Schema from field rules
   pipeline/      guard · pipe · intercept · transform · executePipeline
@@ -62,10 +61,10 @@ These rules are non-negotiable. Violating them breaks users, the build, or the d
 | Rule | Why |
 |------|-----|
 | No `console.log` outside `cli/` | Use logger injection — hosts configure their own transports. |
-| No mongoose/prisma imports in core | DB-agnostic contract. Only adapter files touch drivers. |
+| No DB driver imports anywhere in arc | Every kit-specific adapter (Mongoose, Drizzle, Prisma, …) lives in its kit's `/adapter` subpath. Arc has zero kit-bound adapters. |
 | No `any`; `unknown` defaults stay | Type safety at boundaries. `as unknown as X` only as last resort. |
 | No `@ts-ignore` | Fix the type. |
-| No default exports | Named exports only; knip enforces. |
+| No default exports | Named exports only; knip enforces. **Documented exception**: Fastify plugin entry files (`auditPlugin`, `authPlugin`, `eventPlugin`, `idempotencyPlugin`, `introspectionPlugin`) MAY `export default fp(plugin, …)` so `app.register(import('@classytic/arc/<plugin>'))` resolves via Node's import-default semantics. Each plugin ALSO ships a named export for hosts that prefer named imports. |
 | No ESM+CJS dual package | ESM-only, intentionally. CJS hosts use dynamic `import()`. |
 | No enums | `as const` objects or string literal unions. |
 | No new dependencies without need | Check Node.js built-ins first. Add to `tsdown.config.ts neverBundle` if peer. |
@@ -93,8 +92,11 @@ Discriminated union on `kind`: `public | authenticated | member | service | elev
 import {
   getUserId, getUserRoles, getOrgId, getServiceScopes,
   getScopeContext, getAncestorOrgIds, hasOrgAccess,
+  requireUserId, requireOrgId, requireClientId, requireTeamId,
 } from '@classytic/arc/scope';
 ```
+
+The `requireXxxId(scope, hint?)` accessors return the value or throw an `ArcError` when absent — use these at handler boundaries instead of hand-rolling `if (!getOrgId(scope)) throw ...`. Status code splits by identity dimension: `requireUserId` / `requireClientId` throw `UnauthorizedError` (401, "you're not authenticated as the right principal"); `requireOrgId` / `requireTeamId` throw `OrgRequiredError` (403, "you're authenticated but lack the tenancy context").
 
 Permission helpers that read scope: `requireOrgMembership`, `requireOrgRole` (humans-only), `requireServiceScope` (machines, OAuth-style), `requireScopeContext` (custom dimensions), `requireOrgInScope` (hierarchy), `requireTeamMembership`. Full behaviour matrix in `docs/getting-started/permissions.mdx`.
 
@@ -102,8 +104,8 @@ Permission helpers that read scope: `requireOrgMembership`, `requireOrgRole` (hu
 
 - `BaseController<TDoc extends AnyRecord = AnyRecord>` — the `extends` bound IS load-bearing here. The mixin-composed base (`SoftDeleteMixin(TreeMixin(SlugMixin(BulkMixin(BaseCrudController))))`) pins `AnyRecord`, so derived method returns (`ListResult<TDoc>`) must be assignable to the base's (`ListResult<AnyRecord>`). Declaration merging threads `TDoc` through the public interface while the runtime composition stays pinned.
 - `defineResource<TDoc = AnyRecord>` — NO `extends` bound. Widens internally once at the BaseController boundary so hosts pass narrow domain types (Mongoose `HydratedDocument<T>`, Prisma row types, plain interfaces without index signatures).
-- Every adapter factory (`createMongooseAdapter`, `createPrismaAdapter`, `createDrizzleAdapter`) — NO `extends` bound. Mongoose's own document types don't carry index signatures; constraining here would fire on the exact idioms these factories accept.
-- `RepositoryLike<TDoc = unknown> = MinimalRepo<TDoc> & Partial<StandardRepo<TDoc>>` — arc's compound. Hosts importing the underlying contract types go to `@classytic/repo-core/repository` directly.
+- Every adapter factory (`createMongooseAdapter` from mongokit, `createDrizzleAdapter` from sqlitekit, `createPrismaAdapter` from prismakit, future kits) — NO `extends` bound. Mongoose's own document types don't carry index signatures; constraining here would fire on the exact idioms these factories accept.
+- `RepositoryLike<TDoc = unknown> = MinimalRepo<TDoc> & Partial<StandardRepo<TDoc>>` — arc's compound, re-exported from `@classytic/repo-core/adapter`. Hosts can also import directly from `@classytic/repo-core/adapter` (canonical) or `@classytic/repo-core/repository` (underlying `MinimalRepo` / `StandardRepo`).
 
 ### Override utility types
 
@@ -195,16 +197,15 @@ See [RELEASING.md](RELEASING.md) — canonical for every `@classytic/*` package.
 | Peer | Required? | Used by |
 |------|-----------|---------|
 | fastify | **Yes** | Everything |
-| @classytic/repo-core | No | Publishes `MinimalRepo` / `StandardRepo` contract |
-| @classytic/mongokit | No | MongoDB-backed repository (recommended) |
-| @classytic/sqlitekit | No | SQLite-backed repository via Drizzle |
-| mongoose | No | Mongoose adapter |
-| @prisma/client | No | Prisma adapter |
+| @classytic/primitives | **Yes** | Event types (`EventMeta`, `DomainEvent`, `EventTransport`, `createEvent`, ...) |
+| @classytic/repo-core | No | `RepositoryLike`, adapter contract (`/adapter`), canonical pagination / tenant / errors / schema-generator contracts |
 | better-auth | No | Better Auth integration |
 | ioredis | No | Redis event transport, caching, sessions |
 | bullmq | No | Job-queue integration |
 | @opentelemetry/* | No | Tracing plugin |
 | @classytic/streamline | No | Workflow bridge (separate package) |
+
+**Removed in arc 2.12:** `@classytic/mongokit`, `@classytic/sqlitekit`, `mongoose`, `@prisma/client`. Every kit-specific adapter (Mongoose, Drizzle, Prisma) lives in its own kit — hosts depend on the kit and import from its `/adapter` subpath. The kit owns the driver peer dep. Arc has zero kit- or driver-bound peers.
 
 **Rule:** never bundle peer deps. `tsdown.config.ts neverBundle` enforces at build time.
 
@@ -250,11 +251,13 @@ When touching auth, permissions, MCP, idempotency, or data handling:
 
 ### New adapter
 
-1. `src/adapters/myAdapter.ts` — implement `RepositoryLike` contract.
+Adapters live in their owning kit, never in arc. Ship the adapter from `@classytic/<kit>/adapter`. Steps:
+
+1. In the kit, implement `DataAdapter` from `@classytic/repo-core/adapter` and expose the factory via the kit's `/adapter` subpath.
 2. Return `Promise<unknown>` from minimum-contract methods (`MinimalRepo`). Implement `StandardRepo` optionals where the backend supports them.
-3. Add as optional peer dep in `package.json`.
-4. Add to `tsdown.config.ts neverBundle` + `knip.config.ts ignoreDependencies`.
-5. Tests in `tests/adapters/my-adapter.test.ts`.
+3. The kit owns the driver peer dep (e.g. `mongoose`, `drizzle-orm`, `@prisma/client`) — arc does NOT.
+4. Tests in the kit's test suite. Run arc's `tests/adapters/` against the kit-built adapter for cross-kit conformance.
+5. Add the kit to `arc-code-review` migration tables + the relevant wiki pages if it's the first one to use a new strategy (e.g., column-based vs document-based).
 
 ### New CLI command
 
@@ -269,7 +272,7 @@ When touching auth, permissions, MCP, idempotency, or data handling:
 | Pattern | Purpose | Example |
 |---------|---------|---------|
 | `index.ts` | Module entry point | `src/auth/index.ts` |
-| `interface.ts` | Type-only contract | `src/adapters/interface.ts` |
+| `interface.ts` | Type-only contract | `src/events/interface.ts` |
 | `types.ts` | Shared type defs | `src/factory/types.ts` |
 | `*.test.ts` | Vitest test file | `tests/auth/token-revocation.test.ts` |
 | `*Plugin.ts` | Fastify plugin | `src/org/organizationPlugin.ts` |
@@ -282,7 +285,7 @@ When touching auth, permissions, MCP, idempotency, or data handling:
 | Term | Meaning in arc |
 |------|---------------|
 | Resource | A `defineResource()` config — the fundamental unit. |
-| Adapter | Implements `RepositoryLike` — bridges arc to a database. |
+| Adapter | Implements `DataAdapter` (`@classytic/repo-core/adapter`) — bridges arc to a database. Lives in the owning kit; arc retains zero kit-bound adapters. |
 | Preset | Composable behaviour modifier (softDelete, bulk, ownedByUser, …). |
 | Scope | `RequestScope` — discriminated union describing the current request's auth state. |
 | Guard | Pipeline stage that allows or denies request execution. |
@@ -292,7 +295,7 @@ When touching auth, permissions, MCP, idempotency, or data handling:
 | MCP | Model Context Protocol — AI tool generation from resources. |
 | RepositoryLike | `MinimalRepo<TDoc> & Partial<StandardRepo<TDoc>>` — arc's compound contract. |
 | MinimalRepo / StandardRepo | Repo-core's contracts. Import directly from `@classytic/repo-core/repository`. |
-| mongokit / sqlitekit | `@classytic/mongokit` (MongoDB) / `@classytic/sqlitekit` (SQLite via Drizzle). |
+| mongokit / sqlitekit / prismakit | `@classytic/mongokit` (MongoDB) / `@classytic/sqlitekit` (SQLite via Drizzle) / `@classytic/prismakit` (any DB via Prisma). |
 | Streamline | `@classytic/streamline` — workflow / saga orchestration (separate package). |
 
 ---

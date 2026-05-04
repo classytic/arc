@@ -22,10 +22,10 @@
  */
 
 import { QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -152,8 +152,8 @@ describe("MongoKit geo query integration via Arc", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { docs: Place[]; total: number };
-    const names = body.docs.map((d) => d.name).sort();
+    const body = res.json() as { data: Place[]; total: number };
+    const names = body.data.map((d) => d.name).sort();
     // Within 2 km: Blue Bottle, Sightglass, Ritual. Outside: Philz, Joe Coffee.
     expect(names).toEqual(["Blue Bottle", "Ritual", "Sightglass"]);
     expect(body.total).toBe(3);
@@ -166,9 +166,9 @@ describe("MongoKit geo query integration via Arc", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { docs: Place[]; total: number };
+    const body = res.json() as { data: Place[]; total: number };
     expect(body.total).toBe(4);
-    expect(body.docs.map((d) => d.name)).not.toContain("Joe Coffee");
+    expect(body.data.map((d) => d.name)).not.toContain("Joe Coffee");
   });
 
   it("[geoWithin] bounding box returns places inside the box", async () => {
@@ -179,10 +179,10 @@ describe("MongoKit geo query integration via Arc", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { docs: Place[]; total: number };
+    const body = res.json() as { data: Place[]; total: number };
     // Inside the box: Blue Bottle (-122.42, 37.78), Sightglass (-122.41, 37.77),
     // Ritual (-122.42, 37.76)
-    const names = body.docs.map((d) => d.name).sort();
+    const names = body.data.map((d) => d.name).sort();
     expect(names).toContain("Blue Bottle");
     expect(names).toContain("Sightglass");
     expect(names).toContain("Ritual");
@@ -207,19 +207,19 @@ describe("MongoKit geo query integration via Arc", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { docs: Place[]; total?: number };
+    const body = res.json() as { data: Place[]; total?: number };
     // Distance order from SF center (-122.4194, 37.7749):
     //   Blue Bottle (-122.4234, 37.7805) ≈ 707 m
     //   Sightglass  (-122.4115, 37.7770) ≈ 717 m
     //   Ritual      (-122.4220, 37.7611) ≈ 1535 m
     //   Philz       (-122.4380, 37.7600) ≈ 2400 m
     // (Joe Coffee in NYC is far outside the 5 km cap.)
-    expect(body.docs.length).toBeGreaterThanOrEqual(3);
-    expect(body.docs.map((d) => d.name)).not.toContain("Joe Coffee");
+    expect(body.data.length).toBeGreaterThanOrEqual(3);
+    expect(body.data.map((d) => d.name)).not.toContain("Joe Coffee");
     // Distance-sorted: Blue Bottle is closest
-    expect(body.docs[0]?.name).toBe("Blue Bottle");
+    expect(body.data[0]?.name).toBe("Blue Bottle");
     // Second closest: Sightglass
-    expect(body.docs[1]?.name).toBe("Sightglass");
+    expect(body.data[1]?.name).toBe("Sightglass");
   });
 
   it("composes geo filter with non-geo filter (?category=cafe&location[withinRadius]=...)", async () => {
@@ -229,9 +229,9 @@ describe("MongoKit geo query integration via Arc", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { docs: Place[]; total: number };
+    const body = res.json() as { data: Place[]; total: number };
     expect(body.total).toBe(3);
-    expect(body.docs.every((d) => d.category === "cafe")).toBe(true);
+    expect(body.data.every((d) => d.category === "cafe")).toBe(true);
   });
 
   it("invalid coordinates → empty result, not 500 (parser drops malformed filter)", async () => {

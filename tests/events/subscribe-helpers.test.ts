@@ -14,7 +14,12 @@
 
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { defineEvent } from "../../src/events/defineEvent.js";
-import { createEvent, type DomainEvent, type EventLogger } from "../../src/events/EventTransport.js";
+import {
+  createEvent,
+  type DomainEvent,
+  type EventLogger,
+} from "../../src/events/EventTransport.js";
+import { withRetry } from "../../src/events/retry.js";
 import {
   type PayloadOf,
   subscribeWithBoundary,
@@ -22,7 +27,6 @@ import {
   wrapWithBoundary,
   wrapWithSchema,
 } from "../../src/events/subscribe-helpers.js";
-import { withRetry } from "../../src/events/retry.js";
 
 // ---------- Test fixtures ----------
 
@@ -86,7 +90,7 @@ describe("PayloadOf<D>", () => {
   });
 
   it("resolves to never for non-definition types", () => {
-    type NotAnEventDef = { foo: 'bar' };
+    type NotAnEventDef = { foo: "bar" };
     type Inferred = PayloadOf<NotAnEventDef>;
     expectTypeOf<Inferred>().toEqualTypeOf<never>();
   });
@@ -139,7 +143,9 @@ describe("wrapWithSchema", () => {
 
     const wrapped = wrapWithSchema(OrderPaid, handler, { logger });
     // Missing `total` — required field.
-    await wrapped(createEvent("order.paid", { orderId: "ord-1" } as unknown as PayloadOf<typeof OrderPaid>));
+    await wrapped(
+      createEvent("order.paid", { orderId: "ord-1" } as unknown as PayloadOf<typeof OrderPaid>),
+    );
 
     expect(handler).not.toHaveBeenCalled();
     expect(logger.warns.length).toBe(1);
@@ -332,9 +338,7 @@ describe("subscribeWithBoundary", () => {
     expect(bus.subs[0]?.pattern).toBe("product.*");
 
     // Bus delivers — handler throws — boundary swallows.
-    await expect(
-      bus.subs[0]?.handler(createEvent("product.changed", {})),
-    ).resolves.toBeUndefined();
+    await expect(bus.subs[0]?.handler(createEvent("product.changed", {}))).resolves.toBeUndefined();
     expect(handler).toHaveBeenCalledTimes(1);
   });
 });

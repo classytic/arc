@@ -59,7 +59,12 @@ describe("Auth Plugin — isRevoked hook", () => {
     });
     expect(res2.statusCode).toBe(401);
     const body = JSON.parse(res2.body);
-    expect(body.error).toBe("Unauthorized");
+    // 2.13 error-contract audit: revoked tokens now carry their own
+    // hierarchical code so observability can alert on revocation-store
+    // hits separately from generic auth failures, and clients can
+    // surface "your session was ended" UX vs "log in again". Pre-2.13
+    // both collapsed to `arc.unauthorized`.
+    expect(body.code).toBe("arc.auth.token_revoked");
   });
 
   it("should allow token when isRevoked returns false", async () => {

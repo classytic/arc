@@ -13,10 +13,10 @@
  */
 
 import { QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -250,13 +250,13 @@ describe("Multi-Tenant Hierarchy E2E", () => {
     it("anonymous can list plans", async () => {
       const res = await app.inject({ method: "GET", url: "/plans" });
       expect(res.statusCode).toBe(200);
-      expect(res.json().docs.length).toBe(2);
+      expect(res.json().data.length).toBe(2);
     });
 
     it("any org user sees all plans (no org scoping)", async () => {
       const res = await authed({ method: "GET", url: "/plans", userId: "u1", orgId: "org-a" });
       expect(res.statusCode).toBe(200);
-      expect(res.json().docs.length).toBe(2);
+      expect(res.json().data.length).toBe(2);
     });
 
     it("admin can create plan", async () => {
@@ -288,23 +288,23 @@ describe("Multi-Tenant Hierarchy E2E", () => {
     it("org-a user sees only org-a projects", async () => {
       const res = await authed({ method: "GET", url: "/projects", userId: "u1", orgId: "org-a" });
       expect(res.statusCode).toBe(200);
-      const docs = res.json().docs;
-      expect(docs.length).toBe(2);
-      expect(docs.every((d: any) => d.organizationId === "org-a")).toBe(true);
+      const data = res.json().data;
+      expect(data.length).toBe(2);
+      expect(data.every((d: any) => d.organizationId === "org-a")).toBe(true);
     });
 
     it("org-b user sees only org-b projects", async () => {
       const res = await authed({ method: "GET", url: "/projects", userId: "u2", orgId: "org-b" });
       expect(res.statusCode).toBe(200);
-      const docs = res.json().docs;
-      expect(docs.length).toBe(1);
-      expect(docs[0].name).toBe("Gamma");
+      const data = res.json().data;
+      expect(data.length).toBe(1);
+      expect(data[0].name).toBe("Gamma");
     });
 
     it("org-a user cannot see org-b project by ID", async () => {
       // Get org-b project ID
       const orgB = await authed({ method: "GET", url: "/projects", userId: "u2", orgId: "org-b" });
-      const gammaId = orgB.json().docs[0]._id;
+      const gammaId = orgB.json().data[0]._id;
 
       // Try to access from org-a context
       const res = await authed({
@@ -341,7 +341,7 @@ describe("Multi-Tenant Hierarchy E2E", () => {
         orgId: "org-a",
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json().docs.every((d: any) => d.status === "active")).toBe(true);
+      expect(res.json().data.every((d: any) => d.status === "active")).toBe(true);
     });
 
     it("filter by teamId within org scope", async () => {
@@ -352,9 +352,9 @@ describe("Multi-Tenant Hierarchy E2E", () => {
         orgId: "org-a",
       });
       expect(res.statusCode).toBe(200);
-      const docs = res.json().docs;
-      expect(docs.length).toBe(1);
-      expect(docs[0].name).toBe("Alpha");
+      const data = res.json().data;
+      expect(data.length).toBe(1);
+      expect(data[0].name).toBe("Alpha");
     });
   });
 
@@ -364,7 +364,7 @@ describe("Multi-Tenant Hierarchy E2E", () => {
     it("org member can list tasks in their org", async () => {
       const res = await authed({ method: "GET", url: "/tasks", userId: "u1", orgId: "org-a" });
       expect(res.statusCode).toBe(200);
-      expect(res.json().docs.length).toBe(2);
+      expect(res.json().data.length).toBe(2);
     });
 
     it("org member can create task", async () => {
@@ -380,7 +380,7 @@ describe("Multi-Tenant Hierarchy E2E", () => {
 
     it("non-admin cannot delete task (roles('admin') check)", async () => {
       const list = await authed({ method: "GET", url: "/tasks", userId: "u1", orgId: "org-a" });
-      const id = list.json().docs[0]._id;
+      const id = list.json().data[0]._id;
 
       const res = await authed({
         method: "DELETE",
@@ -394,7 +394,7 @@ describe("Multi-Tenant Hierarchy E2E", () => {
 
     it("org admin can delete task (roles('admin') checks orgRole)", async () => {
       const list = await authed({ method: "GET", url: "/tasks", userId: "u1", orgId: "org-a" });
-      const id = list.json().docs[0]._id;
+      const id = list.json().data[0]._id;
 
       const res = await authed({
         method: "DELETE",
@@ -408,7 +408,7 @@ describe("Multi-Tenant Hierarchy E2E", () => {
 
     it("platform admin can delete task (roles('admin') checks userRole)", async () => {
       const list = await authed({ method: "GET", url: "/tasks", userId: "u1", orgId: "org-a" });
-      const id = list.json().docs[0]._id;
+      const id = list.json().data[0]._id;
 
       const res = await authed({
         method: "DELETE",

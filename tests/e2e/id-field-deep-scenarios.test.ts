@@ -32,10 +32,10 @@
  */
 
 import { QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import mongoose, { Schema } from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -392,9 +392,9 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
         });
         expect(res.statusCode).toBe(201);
         const body = JSON.parse(res.body);
-        expect(body.data.sku).toBe(p.sku);
-        expect(String(body.data.organizationId)).toBe(ORG_A);
-        expect(String(body.data.createdBy)).toBe(USER_A);
+        expect(body.sku).toBe(p.sku);
+        expect(String(body.organizationId)).toBe(ORG_A);
+        expect(String(body.createdBy)).toBe(USER_A);
       }
     });
 
@@ -439,9 +439,9 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.data.name).toBe("Widget Classic");
-      expect(body.data.price).toBe(50);
-      expect(String(body.data.organizationId)).toBe(ORG_A);
+      expect(body.name).toBe("Widget Classic");
+      expect(body.price).toBe(50);
+      expect(String(body.organizationId)).toBe(ORG_A);
     });
 
     it("Org B user GET /products/WIDGET-001 returns B's widget (different document)", async () => {
@@ -452,9 +452,9 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.data.name).toBe("B's Widget");
-      expect(body.data.price).toBe(25);
-      expect(String(body.data.organizationId)).toBe(ORG_B);
+      expect(body.name).toBe("B's Widget");
+      expect(body.price).toBe(25);
+      expect(String(body.organizationId)).toBe(ORG_B);
     });
 
     it("Org B user cannot GET /products/GADGET-A1 (belongs to Org A)", async () => {
@@ -514,8 +514,8 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.data.price).toBe(175);
-      expect(String(body.data.updatedBy)).toBe(USER_A);
+      expect(body.price).toBe(175);
+      expect(String(body.updatedBy)).toBe(USER_A);
     });
   });
 
@@ -532,9 +532,8 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.success).toBe(true);
       // WIDGET-002 (175 after update), GADGET-A1 (299), GADGET-A2 (499)
-      const skus = body.docs.map((p: { sku: string }) => p.sku).sort();
+      const skus = body.data.map((p: { sku: string }) => p.sku).sort();
       expect(skus).toEqual(["GADGET-A1", "GADGET-A2", "WIDGET-002"]);
     });
 
@@ -546,7 +545,7 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      const skus = body.docs.map((p: { sku: string }) => p.sku);
+      const skus = body.data.map((p: { sku: string }) => p.sku);
       // published only, sorted by price desc: GADGET-A1 (299), WIDGET-002 (175), WIDGET-001 (50)
       expect(skus).toEqual(["GADGET-A1", "WIDGET-002", "WIDGET-001"]);
     });
@@ -559,11 +558,11 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.docs.length).toBe(2);
+      expect(body.data.length).toBe(2);
       expect(body.page).toBe(1);
       expect(body.limit).toBe(2);
       // All 5 Org A products, first page sorted by price asc: LEGACY-999 (10), WIDGET-001 (50)
-      const skus = body.docs.map((p: { sku: string }) => p.sku);
+      const skus = body.data.map((p: { sku: string }) => p.sku);
       expect(skus).toEqual(["LEGACY-999", "WIDGET-001"]);
     });
 
@@ -575,7 +574,7 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      const skus = body.docs.map((p: { sku: string }) => p.sku);
+      const skus = body.data.map((p: { sku: string }) => p.sku);
       // Next 2 sorted by price asc: WIDGET-002 (175), GADGET-A1 (299)
       expect(skus).toEqual(["WIDGET-002", "GADGET-A1"]);
     });
@@ -589,9 +588,9 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
       // Category should be an object (populated), not an ObjectId
-      expect(typeof body.data.category).toBe("object");
-      expect(body.data.category.name).toBe("Electronics");
-      expect(body.data.category.slug).toBe("electronics");
+      expect(typeof body.category).toBe("object");
+      expect(body.category.name).toBe("Electronics");
+      expect(body.category.slug).toBe("electronics");
     });
 
     it("cross-tenant population isolation — Org B populating sees only their category", async () => {
@@ -602,7 +601,7 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.data.category.name).toBe("Books");
+      expect(body.category.name).toBe("Books");
     });
   });
 
@@ -656,8 +655,8 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.data.orderNumber).toBe("ORD-2026-0001");
-      expect(body.data.total).toBe(598);
+      expect(body.orderNumber).toBe("ORD-2026-0001");
+      expect(body.total).toBe(598);
     });
 
     it("filter orders by status + total range: ?status=paid&total[gte]=500", async () => {
@@ -668,8 +667,8 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.docs.length).toBe(1);
-      expect(body.docs[0].orderNumber).toBe("ORD-2026-0001");
+      expect(body.data.length).toBe(1);
+      expect(body.data[0].orderNumber).toBe("ORD-2026-0001");
     });
 
     it("PATCH /orders/ORD-2026-0002 updates status", async () => {
@@ -681,7 +680,7 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.data.status).toBe("paid");
+      expect(body.status).toBe("paid");
 
       // Verify in DB by orderNumber
       const doc = await OrderModel.findOne({ orderNumber: "ORD-2026-0002" });
@@ -723,9 +722,9 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
       // 5 Org A products + 2 Org B products = 7 total
-      expect(body.docs.length).toBeGreaterThanOrEqual(7);
+      expect(body.data.length).toBeGreaterThanOrEqual(7);
       const orgs = new Set(
-        body.docs.map((p: { organizationId: string }) => String(p.organizationId)),
+        body.data.map((p: { organizationId: string }) => String(p.organizationId)),
       );
       expect(orgs.has(ORG_A)).toBe(true);
       expect(orgs.has(ORG_B)).toBe(true);

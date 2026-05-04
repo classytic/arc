@@ -15,12 +15,12 @@
  */
 
 import { QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import Fastify, { type FastifyInstance } from "fastify";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Model, Schema } from "mongoose";
 import qs from "qs";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { arcCorePlugin } from "../../src/core/arcCorePlugin.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { allowPublic } from "../../src/permissions/index.js";
@@ -110,9 +110,8 @@ describe("idField auto-derive: repo configures it once, everything else follows"
 
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.success).toBe(true);
-    expect(body.data.id).toBe(UUID);
-    expect(body.data.title).toBe("Hello");
+    expect(body.id).toBe(UUID);
+    expect(body.title).toBe("Hello");
   });
 
   it("PATCH /chats/:id with UUID — auto-derived idField pass-through to repo", async () => {

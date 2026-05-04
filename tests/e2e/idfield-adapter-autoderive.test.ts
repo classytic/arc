@@ -18,9 +18,9 @@
  */
 
 import { Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import mongoose, { Schema } from "mongoose";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
 import type { ResourceDefinition } from "../../src/types/index.js";
@@ -113,8 +113,8 @@ describe("BaseController — idField auto-derive from adapter.repository", () =>
     });
     expect(res.statusCode).toBe(201);
     const body = res.json();
-    expect(body.data.slug).toBe("sadman");
-    expect(body.data.name).toBe("Sadman");
+    expect(body.slug).toBe("sadman");
+    expect(body.name).toBe("Sadman");
   });
 
   it("GET /agents/:slug resolves by slug", async () => {
@@ -122,7 +122,7 @@ describe("BaseController — idField auto-derive from adapter.repository", () =>
 
     const res = await app.inject({ method: "GET", url: "/agents/sadman" });
     expect(res.statusCode).toBe(200);
-    expect(res.json().data.slug).toBe("sadman");
+    expect(res.json().slug).toBe("sadman");
   });
 
   it("PATCH /agents/:slug resolves by slug (the PR's reported bug)", async () => {
@@ -134,7 +134,7 @@ describe("BaseController — idField auto-derive from adapter.repository", () =>
       payload: { description: "new" },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().data.description).toBe("new");
+    expect(res.json().description).toBe("new");
 
     // Verify the update landed in Mongo.
     const reloaded = await Model.findOne({ slug: "sadman" });
@@ -173,7 +173,7 @@ describe("BaseController — idField auto-derive from adapter.repository", () =>
       payload: { description: "matched by slug, not _id" },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().data.description).toBe("matched by slug, not _id");
+    expect(res.json().description).toBe("matched by slug, not _id");
   });
 
   it("DELETE with a slug that does not exist returns 404 cleanly", async () => {
@@ -289,6 +289,6 @@ describe("fetchWithAccessControl — permission-filter asymmetry is the real 404
       payload: { name: "new" },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().data.name).toBe("new");
+    expect(res.json().name).toBe("new");
   });
 });

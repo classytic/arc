@@ -20,7 +20,8 @@
  * @example
  * ```typescript
  * import { Repository } from '@classytic/mongokit';
- * import { defineResourceVariants, createMongooseAdapter } from '@classytic/arc';
+ * import { createMongooseAdapter } from '@classytic/mongokit/adapter';
+ * import { defineResourceVariants } from '@classytic/arc';
  * import { allowPublic, adminOnly, readOnly } from '@classytic/arc/permissions';
  * import { ArticleModel, type IArticle } from './article.model.js';
  *

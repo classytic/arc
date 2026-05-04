@@ -25,6 +25,7 @@ import type { PermissionCheck } from "../../permissions/types.js";
 import type { ResourcePermissions } from "../../types/index.js";
 import { pluralize } from "../../utils/pluralize.js";
 import { convertActionSchemaToZod, createActionToolHandler } from "./action-tools.js";
+import { buildAggregationTools } from "./aggregation-tools.js";
 import {
   ALL_CRUD_OPS,
   CRUD_ANNOTATIONS,
@@ -305,6 +306,52 @@ export function resourceToTools(
         ),
       });
     }
+  }
+
+  // ── Declarative aggregations → MCP tools (v2.13) ──
+  //
+  // One tool per declared aggregation. Same boot-time validation,
+  // permission gate, and cross-cutting middleware the REST route
+  // applies — `executeAggregation` is the single source of truth.
+  if (resource.aggregations && Object.keys(resource.aggregations).length > 0) {
+    const repoForAgg = (resource.controller as unknown as { repository?: unknown })?.repository;
+    // MCP doesn't have a Fastify request, so build the tenant
+    // options bag from the session directly. The session already
+    // carries auth state; we project it into the same shape
+    // `BaseCrudController.tenantRepoOptions(req)` produces.
+    const buildOptionsFromSession = (session: unknown): Record<string, unknown> => {
+      const s = session as
+        | {
+            user?: Record<string, unknown>;
+            scope?: { kind?: string; organizationId?: string; userId?: string };
+            requestId?: string;
+          }
+        | undefined;
+      const out: Record<string, unknown> = {};
+      const orgId = s?.scope?.organizationId;
+      if (orgId) {
+        // Default tenantField is 'organizationId' — match
+        // BaseCrudController's stamping convention.
+        out.organizationId = orgId;
+      }
+      const userId = s?.scope?.userId ?? (s?.user?.id as string | undefined);
+      if (userId) out.userId = userId;
+      if (s?.user) out.user = s.user;
+      if (s?.requestId) out.requestId = s.requestId;
+      return out;
+    };
+
+    tools.push(
+      ...buildAggregationTools({
+        resourceName: resource.name,
+        displayName: resource.displayName ?? resource.name,
+        aggregations: resource.aggregations,
+        schemaOptions: resource.schemaOptions,
+        repo: repoForAgg,
+        buildOptionsFromSession,
+        prefix,
+      }),
+    );
   }
 
   return tools;

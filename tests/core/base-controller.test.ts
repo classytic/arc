@@ -52,7 +52,6 @@ describe("BaseController", () => {
       const response = await controller.create(req);
 
       expect(response.status).toBe(201);
-      expect(response.success).toBe(true);
       expect(response.data).toMatchObject({
         name: "Test Product",
         price: 100,
@@ -73,7 +72,6 @@ describe("BaseController", () => {
       const response = await controller.create(req);
 
       expect(beforeHook).toHaveBeenCalled();
-      expect(response.success).toBe(true);
       expect(response.data).toMatchObject({ price: 200 });
     });
 
@@ -129,7 +127,6 @@ describe("BaseController", () => {
 
       const response = await controller.update(req);
 
-      expect(response.success).toBe(true);
       expect(response.data).toMatchObject({
         name: "Updated Product",
         price: 150,
@@ -170,7 +167,6 @@ describe("BaseController", () => {
 
       const response = await controller.delete(req);
 
-      expect(response.success).toBe(true);
       expect(response.data).toMatchObject({
         message: "Deleted successfully",
         id: item._id.toString(),
@@ -211,7 +207,6 @@ describe("BaseController", () => {
 
       const response = await controller.get(req);
 
-      expect(response.success).toBe(true);
       expect(response.data).toMatchObject({ name: "Product" });
     });
 
@@ -220,11 +215,10 @@ describe("BaseController", () => {
         params: { id: "507f1f77bcf86cd799439011" }, // Valid ObjectId that doesn't exist
       });
 
-      const response = await controller.get(req);
-
-      expect(response.success).toBe(false);
-      expect(response.status).toBe(404);
-      expect(response.error).toBe("Resource not found");
+      await expect(controller.get(req)).rejects.toMatchObject({
+        status: 404,
+        code: "arc.not_found",
+      });
     });
   });
 
@@ -242,9 +236,8 @@ describe("BaseController", () => {
 
       const response = await controller.list(req);
 
-      expect(response.success).toBe(true);
-      expect(response.data?.docs.length).toBeGreaterThanOrEqual(3);
-      const names = response.data?.docs.map((p: any) => p.name);
+      expect(response.data?.data.length).toBeGreaterThanOrEqual(3);
+      const names = response.data?.data.map((p: any) => p.name);
       expect(names).toEqual(expect.arrayContaining(["Product 1", "Product 2", "Product 3"]));
       expect(response.data?.total).toBeGreaterThanOrEqual(3);
     });
@@ -261,9 +254,8 @@ describe("BaseController", () => {
 
       const response = await controller.list(req);
 
-      expect(response.success).toBe(true);
-      expect(response.data?.docs.length).toBeGreaterThanOrEqual(1);
-      const expensiveProducts = response.data?.docs.filter((p: any) => p.price >= 500);
+      expect(response.data?.data.length).toBeGreaterThanOrEqual(1);
+      const expensiveProducts = response.data?.data.filter((p: any) => p.price >= 500);
       expect(expensiveProducts.length).toBeGreaterThanOrEqual(1);
     });
   });
@@ -310,7 +302,7 @@ describe("BaseController", () => {
   });
 
   describe("Error Handling", () => {
-    it("should return error response from beforeCreate hook failures", async () => {
+    it("should throw an ArcError when a beforeCreate hook fails", async () => {
       hooks.before("product", "create", async () => {
         throw new Error("Validation failed");
       });
@@ -319,12 +311,14 @@ describe("BaseController", () => {
         body: { name: "Test", price: 100 },
       });
 
-      const result = await controller.create(req);
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(400);
-      expect(result.error).toBe("Hook execution failed");
-      expect((result as any).details.code).toBe("BEFORE_CREATE_HOOK_ERROR");
-      expect((result as any).details.message).toBe("Validation failed");
+      await expect(controller.create(req)).rejects.toMatchObject({
+        status: 400,
+        message: "Hook execution failed",
+        details: {
+          code: "BEFORE_CREATE_HOOK_ERROR",
+          message: "Validation failed",
+        },
+      });
     });
 
     it("should log but not fail on afterCreate hook errors", async () => {
@@ -342,7 +336,6 @@ describe("BaseController", () => {
       // Should not throw
       const response = await controller.create(req);
 
-      expect(response.success).toBe(true);
       expect(response.status).toBe(201);
       expect(errorSpy).toHaveBeenCalled();
     });
@@ -419,7 +412,6 @@ describe("BaseController", () => {
 
       const response = await jobController.create(req);
 
-      expect(response.success).toBe(true);
       expect(response.data).toMatchObject({
         name: "React Dev",
         // Fields should NOT be stripped — bypass users skip field permissions
@@ -448,7 +440,6 @@ describe("BaseController", () => {
 
       const response = await jobController.create(req);
 
-      expect(response.success).toBe(true);
       // account_manager can write assignedRecruiters but not assignedDeliveryManagers
       expect(response.data).toMatchObject({
         name: "React Dev",
@@ -476,7 +467,6 @@ describe("BaseController", () => {
 
       const response = await jobController.create(req);
 
-      expect(response.success).toBe(true);
       expect(response.data).toMatchObject({
         name: "React Dev",
         assignedDeliveryManagers: ["dm-id"],

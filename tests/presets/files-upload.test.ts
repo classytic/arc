@@ -10,8 +10,8 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import { filesUploadPreset } from "../../src/presets/filesUpload.js";
 import { allowPublic, requireAuth, requireRoles } from "../../src/permissions/index.js";
+import { filesUploadPreset } from "../../src/presets/filesUpload.js";
 import type { ResourcePermissions, RouteDefinition } from "../../src/types/index.js";
 import type { Storage } from "../../src/types/storage.js";
 
@@ -106,15 +106,16 @@ describe("filesUploadPreset — configuration", () => {
 
     expect(routes.find((r) => r.path === "/upload")?.permissions).toBe(uploadPerm);
     expect(routes.find((r) => r.path === "/:id" && r.method === "GET")?.permissions).toBe(readPerm);
-    expect(routes.find((r) => r.path === "/:id" && r.method === "DELETE")?.permissions).toBe(deletePerm);
+    expect(routes.find((r) => r.path === "/:id" && r.method === "DELETE")?.permissions).toBe(
+      deletePerm,
+    );
   });
 
   it("falls back to resource permissions when preset permissions are not set", () => {
     const resourceCreate = requireRoles(["admin"]);
-    const routes = resolveRoutes(
-      filesUploadPreset({ storage: fakeStorage() }),
-      { create: resourceCreate },
-    );
+    const routes = resolveRoutes(filesUploadPreset({ storage: fakeStorage() }), {
+      create: resourceCreate,
+    });
     const upload = routes.find((r) => r.path === "/upload");
     expect(upload?.permissions).toBe(resourceCreate);
   });

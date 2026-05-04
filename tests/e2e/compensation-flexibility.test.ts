@@ -116,7 +116,6 @@ describe("Compensation — Flexibility", () => {
         metadata: { arc: { hooks } },
       });
 
-      expect(result.success).toBe(true);
       expect(result.data).toEqual({
         "update-status": { status: "published" },
         "notify-search-index": { indexed: true },
@@ -184,7 +183,6 @@ describe("Compensation — Flexibility", () => {
         metadata: { arc: { hooks } },
       });
 
-      expect(result.success).toBe(false);
       expect(result.error).toBe("Search service down");
 
       // DB was rolled back
@@ -277,7 +275,6 @@ describe("Compensation — Flexibility", () => {
         },
       ]);
 
-      expect(result.success).toBe(true);
       // 'respond' ran before 'analytics' resolved
       expect(order).toEqual(["db", "respond"]);
       expect(result.completedSteps).toContain("send-analytics");
@@ -315,7 +312,6 @@ describe("Compensation — Flexibility", () => {
         },
       ]);
 
-      expect(result.success).toBe(true);
       expect(log).toEqual(["1", "2"]);
       expect(result.results).toEqual({ step1: { a: 1 }, step2: { b: 2 } });
     });

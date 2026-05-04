@@ -16,7 +16,6 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { defineResource } from "../../src/core/defineResource.js";
-import { defineErrorMapper } from "../../src/utils/defineErrorMapper.js";
 import { allowPublic, requireAuth } from "../../src/permissions/index.js";
 import type { ErrorMapper } from "../../src/plugins/errorHandler.js";
 import type {
@@ -24,6 +23,7 @@ import type {
   IControllerResponse,
   IRequestContext,
 } from "../../src/types/index.js";
+import { defineErrorMapper } from "../../src/utils/defineErrorMapper.js";
 
 // ────────────────────────────────────────────────────────────────────────
 // Fix 1 — auto-mark tenantField as systemManaged
@@ -133,16 +133,11 @@ describe("2.10.6 · auto-mark tenantField as systemManaged", () => {
 describe("2.10.6 · ControllerLike accepts class instances without cast", () => {
   it("class with extra methods + private fields assigns to ControllerLike", () => {
     class ScrapController {
-      #redactionRules = new Map<string, string>();
       async list(_req: IRequestContext): Promise<IControllerResponse> {
         return { success: true, data: [] };
       }
       async create(_req: IRequestContext): Promise<IControllerResponse> {
         return { success: true, data: {} };
-      }
-      // Extra domain method the controller needs — not part of the contract.
-      private redact(value: string): string {
-        return this.#redactionRules.get(value) ?? value;
       }
     }
 
@@ -213,7 +208,7 @@ describe("2.10.6 · first-class req.scope projection on IRequestContext", () => 
       });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      const scope = body.data?.scope;
+      const scope = body.scope;
       expect(scope).toBeDefined();
       expect(scope.organizationId).toBe("org_alpha");
       expect(scope.userId).toBe("user_test");
@@ -248,7 +243,7 @@ describe("2.10.6 · first-class req.scope projection on IRequestContext", () => 
       const res = await fastify.inject({ method: "GET", url: "/probe-public/whoami" });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.data.scope).toBeNull();
+      expect(body.scope).toBeNull();
     } finally {
       await fastify.close();
     }

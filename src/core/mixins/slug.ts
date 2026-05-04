@@ -11,8 +11,9 @@
  * ```
  */
 
-import type { RepositoryLike } from "../../adapters/interface.js";
+import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import type { AnyRecord, IControllerResponse, IRequestContext } from "../../types/index.js";
+import { createError, NotFoundError } from "../../utils/errors.js";
 import type { BaseCrudController } from "../BaseCrudController.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: standard TS mixin Constructor pattern
@@ -54,21 +55,27 @@ export function SlugMixin<TBase extends Constructor<BaseCrudController>>(
         } as Record<string, unknown>;
         item = (await repo.getOne(filter, options)) as AnyRecord | null;
       } else {
-        return {
-          success: false,
-          error: "Slug lookup not implemented — repository needs getBySlug() or getOne()",
-          status: 501,
-        };
+        throw createError(
+          501,
+          "Slug lookup not implemented — repository needs getBySlug() or getOne()",
+        );
       }
 
       // Full access control: org scope + policy filters (same as GET /:id).
       if (!this.accessControl.validateItemAccess(item as AnyRecord, req)) {
         // POLICY_FILTERED when the item exists but was filtered out — keeps
         // the details.code signal consistent with the GET /:id path.
-        return this.notFoundResponse(item ? "POLICY_FILTERED" : "NOT_FOUND");
+        const code = item ? "POLICY_FILTERED" : "NOT_FOUND";
+        const resource = (this as unknown as { resourceName?: string }).resourceName ?? "Resource";
+        const err = new NotFoundError(resource);
+        (err as unknown as { details: Record<string, unknown> }).details = {
+          ...(err.details ?? {}),
+          code,
+        };
+        throw err;
       }
 
-      return { success: true, data: item as AnyRecord, status: 200 };
+      return { data: item as AnyRecord, status: 200 };
     }
   };
 }

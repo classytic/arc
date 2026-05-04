@@ -130,9 +130,12 @@ export function requireApiKey(): PermissionCheck {
 Then wire it into the resource:
 
 ```ts
+// import { createMongooseAdapter } from '@classytic/mongokit/adapter';
+// import { buildCrudSchemasFromModel } from '@classytic/mongokit';
+
 defineResource({
   name: 'job',
-  adapter: createMongooseAdapter({ model: Job, repository: jobRepo }),
+  adapter: createMongooseAdapter({ model: Job, repository: jobRepo, schemaGenerator: buildCrudSchemasFromModel }),
   controller: new BaseController(jobRepo, { tenantField: 'companyId' }),
   permissions: {
     list: requireApiKey(),
@@ -174,7 +177,7 @@ Arc does NOT auto-derive scope from `request.user.organizationId` — that's a f
 
 ## Gotchas
 
-1. **`tenantField` is per-resource, not per-app.** Different resources can use different tenant field names (`companyId`, `workspaceId`, `tenantId`). The org ID always comes from `getOrgId(scope)`.
+1. **`tenantField` is per-resource, not per-app.** Different resources can use different tenant field names (`companyId`, `workspaceId`, `tenantId`). The org ID always comes from `getOrgId(scope)`. **Auto-inference (2.12):** when the Mongoose model has no `organizationId` path AND no other tenant field is configured, arc auto-infers `tenantField: false` rather than emitting queries against a non-existent column.
 2. **`elevated` with no `organizationId` bypasses tenant filtering.** This is intentional (admin sees everything), but it means you can't use `kind: 'elevated'` for normal per-org access.
 3. **`systemManaged` is your seatbelt for create/update.** Mark tenant fields (`companyId`, `organizationId`) as `systemManaged` in `fieldRules` so `BodySanitizer` strips any client-supplied value. The tenant field is then injected from the scope at write time — not from the request body.
 4. **Rate-limit keys respect all 5 scope kinds.** The built-in `createTenantKeyGenerator` uses `organizationId` for member/service/elevated and falls back to `userId`/IP for authenticated/public.
@@ -239,6 +242,12 @@ import {
   getOrgRoles,     // member only
   getServiceScopes, // service only (OAuth-style scope strings)
   getTeamId,       // member with teamId set
+
+  // Throwing accessors — return the value or throw a 403 ArcError
+  requireUserId,
+  requireOrgId,
+  requireClientId,
+  requireTeamId,
 
   // Canonical request extractor
   getOrgContext,

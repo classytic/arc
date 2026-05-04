@@ -130,7 +130,7 @@ describeRedis("Upstash Redis — RedisCacheStore production readiness", () => {
 
     const stats = store.stats?.();
     expect(stats).toBeDefined();
-    expect(stats!.misses).toBeGreaterThanOrEqual(1);
+    expect(stats?.misses).toBeGreaterThanOrEqual(1);
   }, 15_000);
 
   // ────────────────────────────────────────────────────────────────────
@@ -149,7 +149,7 @@ describeRedis("Upstash Redis — RedisCacheStore production readiness", () => {
     const before = await redis.keys(`${prefix}*`);
     expect(before.length).toBe(25);
 
-    await store.clear!();
+    await store.clear?.();
 
     const after = await redis.keys(`${prefix}*`);
     expect(after.length).toBe(0);
@@ -177,7 +177,7 @@ describeRedis("Upstash Redis — RedisCacheStore production readiness", () => {
     }
 
     // Cleanup so we don't leave 100 keys behind in Upstash.
-    await store.clear!();
+    await store.clear?.();
     const remaining = await redis.keys(`arc-test-load-${runId}:*`);
     expect(remaining.length).toBe(0);
   }, 60_000);
@@ -199,8 +199,8 @@ describeRedis("Upstash Redis — RedisCacheStore production readiness", () => {
 
     const stats = store.stats?.();
     expect(stats).toBeDefined();
-    expect(stats!.hits).toBeGreaterThanOrEqual(2);
-    expect(stats!.misses).toBeGreaterThanOrEqual(1);
+    expect(stats?.hits).toBeGreaterThanOrEqual(2);
+    expect(stats?.misses).toBeGreaterThanOrEqual(1);
 
     await store.delete("hit");
   }, 15_000);

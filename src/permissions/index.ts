@@ -31,6 +31,11 @@
  */
 
 // ──────────────────────────────────────────────────────────────────────
+// Agent-auth — DPoP + capability mandates (AP2 / x402 / MCP authorization)
+// ──────────────────────────────────────────────────────────────────────
+export type { RequireAgentScopeOptions, RequireMandateOptions } from "./agent.js";
+export { requireAgentScope, requireDPoP, requireMandate } from "./agent.js";
+// ──────────────────────────────────────────────────────────────────────
 // Framework-internal primitives
 // Exported because the package has `sideEffects: false`, so ESM
 // tree-shaking eliminates unused re-exports for end users. Internal call

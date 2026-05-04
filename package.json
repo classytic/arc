@@ -1,7 +1,7 @@
 {
   "name": "@classytic/arc",
-  "version": "2.11.4",
-  "description": "Resource-oriented backend framework for Fastify — clean, minimal, powerful, tree-shakable",
+  "version": "2.13.0",
+  "description": "Resource-oriented backend framework for Fastify - clean, minimal, powerful, tree-shakable",
   "type": "module",
   "exports": {
     ".": {
@@ -23,10 +23,6 @@
     "./types/storage": {
       "types": "./dist/types/storage.d.mts",
       "default": "./dist/types/storage.mjs"
-    },
-    "./adapters": {
-      "types": "./dist/adapters/index.d.mts",
-      "default": "./dist/adapters/index.mjs"
     },
     "./core": {
       "types": "./dist/core/index.d.mts",
@@ -184,10 +180,6 @@
       "types": "./dist/auth/redis-session.d.mts",
       "default": "./dist/auth/redis-session.mjs"
     },
-    "./auth/mongoose": {
-      "types": "./dist/auth/mongoose.d.mts",
-      "default": "./dist/auth/mongoose.mjs"
-    },
     "./plugins/response-cache": {
       "types": "./dist/plugins/response-cache.d.mts",
       "default": "./dist/plugins/response-cache.mjs"
@@ -203,12 +195,23 @@
     "./mcp/testing": {
       "types": "./dist/integrations/mcp/testing.d.mts",
       "default": "./dist/integrations/mcp/testing.mjs"
+    },
+    "./scim": {
+      "types": "./dist/scim/index.d.mts",
+      "default": "./dist/scim/index.mjs"
+    },
+    "./auth/audit": {
+      "types": "./dist/auth/audit.d.mts",
+      "default": "./dist/auth/audit.mjs"
     }
   },
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
   "bin": {
     "arc": "./bin/arc.js"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "sideEffects": false,
   "files": [
@@ -242,9 +245,9 @@
     "node": ">=22"
   },
   "peerDependencies": {
-    "@classytic/mongokit": ">=3.11.1",
-    "@classytic/repo-core": ">=0.2.0",
-    "@classytic/streamline": ">=2.2.0",
+    "@classytic/primitives": ">=0.4.0",
+    "@classytic/repo-core": ">=0.4.0",
+    "@classytic/streamline": ">=2.3.0",
     "@fastify/cors": ">=11.0.0",
     "@fastify/helmet": ">=13.0.0",
     "@fastify/jwt": ">=10.0.0",
@@ -267,24 +270,10 @@
     "fastify": "^5.8.5",
     "fastify-raw-body": ">=5.0.0",
     "ioredis": ">=5.0.0",
-    "mongodb": ">=7.0.0",
-    "mongoose": "^9.4.1",
     "pino-pretty": ">=13.0.0",
     "zod": ">=4.0.0"
   },
   "peerDependenciesMeta": {
-    "@classytic/mongokit": {
-      "optional": true
-    },
-    "@classytic/repo-core": {
-      "optional": true
-    },
-    "mongodb": {
-      "optional": true
-    },
-    "mongoose": {
-      "optional": true
-    },
     "better-auth": {
       "optional": true
     },
@@ -364,14 +353,15 @@
     "secure-json-parse": "^4.1.0"
   },
   "devDependencies": {
-    "@better-auth/drizzle-adapter": "^1.6.2",
-    "@better-auth/mongo-adapter": "^1.6.2",
+    "@better-auth/drizzle-adapter": "^1.6.9",
+    "@better-auth/mongo-adapter": "^1.6.9",
     "@biomejs/biome": "^2.4.11",
     "@classytic/dev-tools": "^0.2.0",
-    "@classytic/mongokit": "^3.11.1",
-    "@classytic/repo-core": "^0.2.0",
-    "@classytic/sqlitekit": "^0.2.0",
-    "@classytic/streamline": "^2.2.0",
+    "@classytic/mongokit": "^3.13.0",
+    "@classytic/primitives": "^0.4.0",
+    "@classytic/repo-core": "^0.4.0",
+    "@classytic/sqlitekit": "^0.3.0",
+    "@classytic/streamline": "^2.3.0",
     "@fastify/cors": "^11.2.0",
     "@fastify/helmet": "^13.0.2",
     "@fastify/jwt": "^10.0.0",
@@ -388,7 +378,7 @@
     "@types/qs": "^6.14.0",
     "@vitest/coverage-v8": "^3.2.4",
     "ajv": "^8.18.0",
-    "better-auth": "^1.6.2",
+    "better-auth": "^1.6.9",
     "better-sqlite3": "^12.9.0",
     "bullmq": "^5.73.5",
     "dotenv": "^17.4.2",

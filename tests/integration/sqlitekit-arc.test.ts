@@ -10,15 +10,15 @@
  * runtime, not just types.
  */
 
+import type { DataAdapter } from "@classytic/repo-core/adapter";
+import { timestampPlugin } from "@classytic/sqlitekit/plugins/timestamp";
+import { SqliteRepository } from "@classytic/sqlitekit/repository";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import Fastify from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SqliteRepository } from "@classytic/sqlitekit/repository";
-import { timestampPlugin } from "@classytic/sqlitekit/plugins/timestamp";
 import { allowPublic, defineResource } from "../../src/index.js";
-import type { DataAdapter } from "../../src/adapters/index.js";
 
 // ──────────────────────────────────────────────────────────────────────
 // Fixture — a `products` table with typed columns
@@ -148,11 +148,11 @@ describe("Arc + sqlitekit — end-to-end integration", () => {
     expect(res.statusCode).toBe(200);
 
     const body = res.json();
-    // Arc's default list shape: envelope { data: { docs, total, ... } } or bare { docs }
+    // Arc's default list shape: envelope { data: { data, total, ... } } or bare { data }
     const payload = body.data ?? body;
-    const docs = Array.isArray(payload) ? payload : (payload.docs ?? []);
-    expect(docs.length).toBe(2);
-    const names = docs.map((d: ProductDoc) => d.name).sort();
+    const data = Array.isArray(payload) ? payload : (payload.data ?? []);
+    expect(data.length).toBe(2);
+    const names = data.map((d: ProductDoc) => d.name).sort();
     expect(names).toEqual(["Laptop", "Mouse"]);
   });
 

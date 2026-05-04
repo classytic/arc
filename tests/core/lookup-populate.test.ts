@@ -11,11 +11,11 @@
  */
 
 import { QueryParser, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import Fastify from "fastify";
 import mongoose from "mongoose";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { allowPublic } from "../../src/permissions/index.js";
 import { setupTestDatabase, teardownTestDatabase } from "../setup.js";
@@ -181,9 +181,9 @@ describe("Populate with select (ref-based)", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.data.category).toBeDefined();
-    expect(body.data.category.name).toBe("Electronics");
-    expect(body.data.category.slug).toBe("electronics");
+    expect(body.category).toBeDefined();
+    expect(body.category.name).toBe("Electronics");
+    expect(body.category.slug).toBe("electronics");
   });
 
   it("should populate category with select (only name)", async () => {
@@ -195,10 +195,10 @@ describe("Populate with select (ref-based)", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.data.category).toBeDefined();
-    expect(body.data.category.name).toBe("Electronics");
+    expect(body.category).toBeDefined();
+    expect(body.category.name).toBe("Electronics");
     // slug should NOT be included when only 'name' is selected
-    expect(body.data.category.slug).toBeUndefined();
+    expect(body.category.slug).toBeUndefined();
   });
 
   it("should populate on list endpoint", async () => {
@@ -210,9 +210,9 @@ describe("Populate with select (ref-based)", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.docs.length).toBe(3);
+    expect(body.data.length).toBe(3);
     // At least one should have populated category
-    const withCategory = body.docs.find((d: any) => d.category && typeof d.category === "object");
+    const withCategory = body.data.find((d: any) => d.category && typeof d.category === "object");
     expect(withCategory).toBeDefined();
     expect(withCategory.category.name).toBeDefined();
   });
@@ -227,7 +227,7 @@ describe("Populate with select (ref-based)", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     // Should return data but without populated secret_field
-    expect(body.docs.length).toBe(3);
+    expect(body.data.length).toBe(3);
   });
 });
 
@@ -256,10 +256,10 @@ describe("Lookup/join (no refs — $lookup aggregation)", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.docs.length).toBe(3);
+    expect(body.data.length).toBe(3);
 
     // Each product should have joined category data
-    const phone = body.docs.find((d: any) => d.name === "Phone");
+    const phone = body.data.find((d: any) => d.name === "Phone");
     expect(phone.cat).toBeDefined();
     expect(phone.cat.name).toBe("Electronics");
   });
@@ -273,7 +273,7 @@ describe("Lookup/join (no refs — $lookup aggregation)", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    const phone = body.docs.find((d: any) => d.name === "Phone");
+    const phone = body.data.find((d: any) => d.name === "Phone");
     expect(phone.cat).toBeDefined();
     expect(phone.cat.name).toBe("Electronics");
     // slug should NOT be in the result when only 'name' is selected
@@ -290,9 +290,9 @@ describe("Lookup/join (no refs — $lookup aggregation)", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.docs.length).toBeGreaterThan(0);
+    expect(body.data.length).toBeGreaterThan(0);
     // Docs should have the joined category data
-    const phone = body.docs.find((d: any) => d.name === "Phone");
+    const phone = body.data.find((d: any) => d.name === "Phone");
     expect(phone.cat).toBeDefined();
     expect(phone.cat.name).toBe("Electronics");
     // Lookup select should limit the joined fields
@@ -309,8 +309,8 @@ describe("Lookup/join (no refs — $lookup aggregation)", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     // Should return data but without the lookup
-    expect(body.docs.length).toBe(3);
-    const phone = body.docs.find((d: any) => d.name === "Phone");
+    expect(body.data.length).toBe(3);
+    const phone = body.data.find((d: any) => d.name === "Phone");
     expect(phone.secret).toBeUndefined();
   });
 });
@@ -336,7 +336,7 @@ describe("Lookup without allowedLookups (unrestricted)", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    const phone = body.docs.find((d: any) => d.name === "Phone");
+    const phone = body.data.find((d: any) => d.name === "Phone");
     expect(phone.cat).toBeDefined();
     expect(phone.cat.name).toBe("Electronics");
   });
@@ -361,11 +361,11 @@ describe("Lookup combined with sort and filter", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     // Only active products (Phone and Laptop), sorted by price desc
-    expect(body.docs.length).toBe(2);
-    expect(body.docs[0].name).toBe("Laptop"); // 1999 first
-    expect(body.docs[1].name).toBe("Phone"); // 999 second
+    expect(body.data.length).toBe(2);
+    expect(body.data[0].name).toBe("Laptop"); // 1999 first
+    expect(body.data[1].name).toBe("Phone"); // 999 second
     // Both should have lookup data
-    expect(body.docs[0].cat.name).toBe("Electronics");
+    expect(body.data[0].cat.name).toBe("Electronics");
   });
 
   it("should paginate with lookup", async () => {
@@ -377,7 +377,7 @@ describe("Lookup combined with sort and filter", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.docs.length).toBeLessThanOrEqual(2);
+    expect(body.data.length).toBeLessThanOrEqual(2);
     expect(body.total).toBe(3);
   });
 });
@@ -400,8 +400,8 @@ describe("Root select + lookup combined", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.docs.length).toBe(3);
-    const phone = body.docs.find((d: any) => d.name === "Phone");
+    expect(body.data.length).toBe(3);
+    const phone = body.data.find((d: any) => d.name === "Phone");
     expect(phone).toBeDefined();
     expect(phone.name).toBe("Phone");
     expect(phone.price).toBe(999);
@@ -421,7 +421,7 @@ describe("Root select + lookup combined", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.docs.length).toBe(3);
+    expect(body.data.length).toBe(3);
   });
 });
 
@@ -444,13 +444,13 @@ describe("Keyset pagination + lookup", () => {
     });
     expect(page1.statusCode).toBe(200);
     const body1 = page1.json();
-    expect(body1.docs.length).toBe(2);
+    expect(body1.data.length).toBe(2);
     expect(body1.total).toBe(3);
     expect(body1.hasNext).toBe(true);
     // First page should have Laptop (1999) and Phone (999)
-    expect(body1.docs[0].name).toBe("Laptop");
-    expect(body1.docs[0].cat).toBeDefined();
-    expect(body1.docs[0].cat.name).toBe("Electronics");
+    expect(body1.data[0].name).toBe("Laptop");
+    expect(body1.data[0].cat).toBeDefined();
+    expect(body1.data[0].cat.name).toBe("Electronics");
 
     // Page 2
     const page2 = await app.inject({
@@ -459,11 +459,11 @@ describe("Keyset pagination + lookup", () => {
     });
     expect(page2.statusCode).toBe(200);
     const body2 = page2.json();
-    expect(body2.docs.length).toBe(1);
+    expect(body2.data.length).toBe(1);
     expect(body2.hasNext).toBe(false);
-    expect(body2.docs[0].name).toBe("Shirt");
-    expect(body2.docs[0].cat).toBeDefined();
-    expect(body2.docs[0].cat.name).toBe("Clothing");
+    expect(body2.data[0].name).toBe("Shirt");
+    expect(body2.data[0].cat).toBeDefined();
+    expect(body2.data[0].cat.name).toBe("Clothing");
   });
 
   it("should work without lookup (standard offset pagination)", async () => {
@@ -475,9 +475,9 @@ describe("Keyset pagination + lookup", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.docs.length).toBe(2);
+    expect(body.data.length).toBe(2);
     expect(body.total).toBe(3);
-    expect(body.docs[0].name).toBe("Laptop");
+    expect(body.data[0].name).toBe("Laptop");
   });
 
   it("should work with keyset (cursor) pagination", async () => {
@@ -489,17 +489,17 @@ describe("Keyset pagination + lookup", () => {
     });
     expect(page1.statusCode).toBe(200);
     const body1 = page1.json();
-    expect(body1.docs.length).toBe(2);
+    expect(body1.data.length).toBe(2);
 
     // Use last doc's _id as cursor for next page
-    const cursor = body1.docs[body1.docs.length - 1]._id;
+    const cursor = body1.data[body1.data.length - 1]._id;
     const page2 = await app.inject({
       method: "GET",
       url: `/lookup-products?limit=2&after=${cursor}&sort=price`,
     });
     expect(page2.statusCode).toBe(200);
     const body2 = page2.json();
-    expect(body2.docs.length).toBeGreaterThanOrEqual(1);
+    expect(body2.data.length).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -525,9 +525,9 @@ describe("Advanced populate options", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.data.category).toBeDefined();
-    expect(body.data.category.name).toBe("Electronics");
+    expect(body.category).toBeDefined();
+    expect(body.category.name).toBe("Electronics");
     // isActive should be excluded
-    expect(body.data.category.isActive).toBeUndefined();
+    expect(body.category.isActive).toBeUndefined();
   });
 });

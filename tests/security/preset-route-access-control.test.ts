@@ -11,8 +11,8 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
-import { simpleEqualityMatcher } from "../../src/utils/simpleEqualityMatcher.js";
 import type { AnyRecord, IRequestContext } from "../../src/types/index.js";
+import { simpleEqualityMatcher } from "../../src/utils/simpleEqualityMatcher.js";
 
 // ============================================================================
 // Helpers
@@ -99,10 +99,7 @@ describe("Security: Preset Route Access Control", () => {
         },
       );
 
-      const result = await controller.getBySlug(ctx);
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(404);
+      await expect(controller.getBySlug(ctx)).rejects.toMatchObject({ statusCode: 404 });
     });
 
     it("should allow access when policy filters match", async () => {
@@ -123,7 +120,6 @@ describe("Security: Preset Route Access Control", () => {
 
       const result = await controller.getBySlug(ctx);
 
-      expect(result.success).toBe(true);
       expect(result.status).toBe(200);
     });
 
@@ -143,10 +139,7 @@ describe("Security: Preset Route Access Control", () => {
         },
       );
 
-      const result = await controller.getBySlug(ctx);
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(404);
+      await expect(controller.getBySlug(ctx)).rejects.toMatchObject({ statusCode: 404 });
     });
 
     it("should deny when both policy filters AND org scope fail", async () => {
@@ -166,10 +159,7 @@ describe("Security: Preset Route Access Control", () => {
         },
       );
 
-      const result = await controller.getBySlug(ctx);
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(404);
+      await expect(controller.getBySlug(ctx)).rejects.toMatchObject({ statusCode: 404 });
     });
 
     it("should return 404 for non-existent slug", async () => {
@@ -181,10 +171,7 @@ describe("Security: Preset Route Access Control", () => {
 
       const ctx = createContext({ params: { slug: "does-not-exist" } });
 
-      const result = await controller.getBySlug(ctx);
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(404);
+      await expect(controller.getBySlug(ctx)).rejects.toMatchObject({ statusCode: 404 });
     });
   });
 
@@ -207,11 +194,7 @@ describe("Security: Preset Route Access Control", () => {
         },
       );
 
-      const result = await controller.restore(ctx);
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(404);
-      // Verify restore was NOT called
+      await expect(controller.restore(ctx)).rejects.toMatchObject({ statusCode: 404 });
       expect(repo.restore).not.toHaveBeenCalled();
     });
 
@@ -231,10 +214,7 @@ describe("Security: Preset Route Access Control", () => {
         },
       );
 
-      const result = await controller.restore(ctx);
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(404);
+      await expect(controller.restore(ctx)).rejects.toMatchObject({ statusCode: 404 });
       expect(repo.restore).not.toHaveBeenCalled();
     });
 
@@ -252,11 +232,7 @@ describe("Security: Preset Route Access Control", () => {
         },
       );
 
-      const result = await controller.restore(ctx);
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(403);
-      expect(result.error).toContain("permission");
+      await expect(controller.restore(ctx)).rejects.toMatchObject({ statusCode: 403 });
       expect(repo.restore).not.toHaveBeenCalled();
     });
 
@@ -285,7 +261,6 @@ describe("Security: Preset Route Access Control", () => {
 
       const result = await controller.restore(ctx);
 
-      expect(result.success).toBe(true);
       expect(result.status).toBe(200);
       expect(repo.restore).toHaveBeenCalledWith("1");
     });
@@ -297,10 +272,7 @@ describe("Security: Preset Route Access Control", () => {
 
       const ctx = createContext({ params: { id: "nonexistent" } });
 
-      const result = await controller.restore(ctx);
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(404);
+      await expect(controller.restore(ctx)).rejects.toMatchObject({ statusCode: 404 });
     });
 
     it("should return 400 when ID is missing", async () => {
@@ -310,10 +282,7 @@ describe("Security: Preset Route Access Control", () => {
 
       const ctx = createContext({ params: {} });
 
-      const result = await controller.restore(ctx);
-
-      expect(result.success).toBe(false);
-      expect(result.status).toBe(400);
+      await expect(controller.restore(ctx)).rejects.toMatchObject({ statusCode: 400 });
     });
   });
 });

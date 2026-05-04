@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { Repository } from '@classytic/mongokit';
-import { defineResource, BaseController, createMongooseAdapter, allowPublic } from '@classytic/arc';
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
+import { defineResource, BaseController, allowPublic } from '@classytic/arc';
 
 const HookSchema = new mongoose.Schema({ event: String }, { timestamps: true });
 const HookModel = mongoose.model('ConsumerHook', HookSchema);

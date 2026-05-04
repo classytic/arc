@@ -5,9 +5,9 @@
  * correctly with working CRUD endpoints, same as manual toPlugin() registration.
  */
 
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -91,30 +91,29 @@ describe("createApp({ resources })", () => {
     });
     expect(res.statusCode).toBe(201);
     const body = res.json();
-    expect(body.success).toBe(true);
-    expect(body.data.name).toBe("Widget");
+    expect(body.name).toBe("Widget");
   });
 
   it("lists products via GET", async () => {
     const res = await app.inject({ method: "GET", url: "/products" });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.docs.length).toBeGreaterThanOrEqual(1);
-    expect(body.docs[0].name).toBe("Widget");
+    expect(body.data.length).toBeGreaterThanOrEqual(1);
+    expect(body.data[0].name).toBe("Widget");
   });
 
   it("gets a product by ID", async () => {
     const list = await app.inject({ method: "GET", url: "/products" });
-    const id = list.json().docs[0]._id;
+    const id = list.json().data[0]._id;
 
     const res = await app.inject({ method: "GET", url: `/products/${id}` });
     expect(res.statusCode).toBe(200);
-    expect(res.json().data.name).toBe("Widget");
+    expect(res.json().name).toBe("Widget");
   });
 
   it("updates a product", async () => {
     const list = await app.inject({ method: "GET", url: "/products" });
-    const id = list.json().docs[0]._id;
+    const id = list.json().data[0]._id;
 
     const res = await app.inject({
       method: "PATCH",
@@ -122,16 +121,15 @@ describe("createApp({ resources })", () => {
       payload: { name: "Super Widget" },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().data.name).toBe("Super Widget");
+    expect(res.json().name).toBe("Super Widget");
   });
 
   it("deletes a product", async () => {
     const list = await app.inject({ method: "GET", url: "/products" });
-    const id = list.json().docs[0]._id;
+    const id = list.json().data[0]._id;
 
     const res = await app.inject({ method: "DELETE", url: `/products/${id}` });
     expect(res.statusCode).toBe(200);
-    expect(res.json().success).toBe(true);
   });
 
   // ── Second resource works independently ──
@@ -146,7 +144,7 @@ describe("createApp({ resources })", () => {
 
     const list = await app.inject({ method: "GET", url: "/orders" });
     expect(list.statusCode).toBe(200);
-    expect(list.json().docs.length).toBeGreaterThanOrEqual(1);
+    expect(list.json().data.length).toBeGreaterThanOrEqual(1);
   });
 
   // ── Works alongside plugins callback ──

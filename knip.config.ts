@@ -15,8 +15,6 @@ const config: KnipConfig = {
   // Optional peer deps — conditionally required at runtime, not statically imported
   ignoreDependencies: [
     "pino-pretty",
-    "@classytic/streamline",
-    "@opentelemetry/api",
     "@opentelemetry/sdk-node",
     "@opentelemetry/sdk-trace-base",
     "@opentelemetry/sdk-trace-node",
@@ -28,11 +26,11 @@ const config: KnipConfig = {
 
   // Files whose exports are consumed by downstream apps / kit authors,
   // OR type-only CI-gate fixtures that intentionally have no importer.
-  ignore: [
-    "src/adapters/types.ts",
-    // Type-level compatibility gate — verified by `tsc --noEmit`, not bundled to dist.
-    "src/adapters/repo-core-compat.ts",
-  ],
+  // (Empty after arc 2.12 — `src/adapters/` was removed entirely; the
+  // adapter contract now lives in `@classytic/repo-core/adapter`, and
+  // every kit-specific adapter ships from its own `<kit>/adapter`
+  // subpath.)
+  ignore: [],
 
   // Public API exports for downstream consumers, not used in src/ itself
   ignoreExportsUsedInFile: true,

@@ -20,8 +20,8 @@
  * asserted via a captured logger in item (4).
  */
 
+import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import { describe, expect, it, vi } from "vitest";
-import type { RepositoryLike } from "../../src/adapters/interface.js";
 import type { BaseController } from "../../src/core/BaseController.js";
 import type {
   ArcCreateResult,
@@ -171,7 +171,7 @@ describe("createMongooseAdapter — TDoc constraint surfaces at the adapter", ()
     // satisfies AnyRecord is accepted.
     type OkDoc = AnyRecord & { name: string };
     // biome-ignore lint/suspicious/noExplicitAny: import-cycle-free type test
-    type _Check = typeof import("../../src/adapters/mongoose.js").createMongooseAdapter<OkDoc>;
+    type _Check = typeof import("@classytic/mongokit/adapter").createMongooseAdapter<OkDoc>;
     expect(true).toBe(true);
   });
 
@@ -512,7 +512,7 @@ describe("defineResource — user-controller dropped-options warn", () => {
     const { defineResource } = await import("../../src/core/defineResource.js");
     const { allowPublic } = await import("../../src/permissions/index.js");
     const { createMockModel, createMockRepository } = await import("../setup.js");
-    const { createMongooseAdapter } = await import("../../src/adapters/mongoose.js");
+    const { createMongooseAdapter } = await import("@classytic/mongokit/adapter");
 
     const Model = createMockModel("AutoBuildCtrl");
     const repo = createMockRepository(Model);

@@ -21,8 +21,9 @@
  */
 
 import mongoose from 'mongoose';
-import { defineResource, createMongooseAdapter, requireRoles } from '@classytic/arc';
+import { defineResource, requireRoles } from '@classytic/arc';
 import { Repository } from '@classytic/mongokit';
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
 
 // ============================================================================
 // 1. Define the Mongoose Schema

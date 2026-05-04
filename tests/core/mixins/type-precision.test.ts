@@ -17,13 +17,17 @@
  * CRUD AND preset methods.
  */
 
+import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import { describe, expect, expectTypeOf, it } from "vitest";
-import type { RepositoryLike } from "../../../src/adapters/interface.js";
 import { BaseController } from "../../../src/core/BaseController.js";
 import { BaseCrudController } from "../../../src/core/BaseCrudController.js";
-import { SoftDeleteMixin } from "../../../src/core/mixins/softDelete.js";
 import { BulkMixin } from "../../../src/core/mixins/bulk.js";
-import type { IControllerResponse, IRequestContext, PaginationResult } from "../../../src/types/index.js";
+import { SoftDeleteMixin } from "../../../src/core/mixins/softDelete.js";
+import type {
+  IControllerResponse,
+  IRequestContext,
+  PaginationResult,
+} from "../../../src/types/index.js";
 
 interface Product {
   _id?: string;
@@ -34,7 +38,7 @@ interface Product {
 function mockRepo(): RepositoryLike {
   return {
     async getAll() {
-      return { docs: [], total: 0 };
+      return { data: [], total: 0 };
     },
     async getById() {
       return null;
@@ -112,7 +116,9 @@ describe("v2.11.0 — BaseController<TDoc> generic precision", () => {
       }
     }
     const custom = new ProductController(mockRepo());
-    expectTypeOf(custom.customAction).returns.resolves.toEqualTypeOf<IControllerResponse<Product>>();
+    expectTypeOf(custom.customAction).returns.resolves.toEqualTypeOf<
+      IControllerResponse<Product>
+    >();
     expect(custom).toBeInstanceOf(BaseController);
   });
 

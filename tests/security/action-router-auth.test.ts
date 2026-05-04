@@ -76,7 +76,6 @@ describe("Security: Action Router Auth Handling", () => {
       // Key assertion: unauthenticated request to public action returns 200, not 401
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.success).toBe(true);
     });
 
     it("should reject unauthenticated access to protected actions", async () => {
@@ -90,7 +89,6 @@ describe("Security: Action Router Auth Handling", () => {
       // Should get 401 or 403, not 200
       expect(res.statusCode).toBeGreaterThanOrEqual(401);
       const body = JSON.parse(res.body);
-      expect(body.success).toBe(false);
     });
   });
 
@@ -198,7 +196,6 @@ describe("Security: Action Router Auth Handling", () => {
       });
 
       expect(res.statusCode).toBe(200);
-      expect(JSON.parse(res.body).success).toBe(true);
       // `fastify.authenticate` must NOT have fired — the route selected
       // `optionalAuthenticate` because one action slot is public-by-omission.
       expect(authCalled).toBe(false);
@@ -214,7 +211,8 @@ describe("Security: Action Router Auth Handling", () => {
       // Per-action permission check sees `user: null` and denies — same
       // fail-closed path as the explicit-allowPublic mixed case.
       expect(res.statusCode).toBeGreaterThanOrEqual(401);
-      expect(JSON.parse(res.body).success).toBe(false);
+      // Error envelope: `{ code, message, status, ... }` — no `success` field.
+      expect(JSON.parse(res.body).code).toBeDefined();
     });
   });
 

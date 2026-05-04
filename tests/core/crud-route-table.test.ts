@@ -20,12 +20,12 @@
  * wrong one will) and these tests fail.
  */
 
+import { methodRegistryPlugin, mongoOperationsPlugin, Repository } from "@classytic/mongokit";
+import { createMongooseAdapter } from "@classytic/mongokit/adapter";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { Repository, methodRegistryPlugin, mongoOperationsPlugin } from "@classytic/mongokit";
-import type { FastifyReply, FastifyRequest } from "fastify";
-import { createMongooseAdapter } from "../../src/adapters/mongoose.js";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
@@ -47,9 +47,7 @@ let ItemModel: Model<IItem>;
 beforeAll(async () => {
   mongoServer = await MongoMemoryServer.create();
   await mongoose.connect(mongoServer.getUri());
-  ItemModel =
-    mongoose.models.CrudTableItem ||
-    mongoose.model<IItem>("CrudTableItem", ItemSchema);
+  ItemModel = mongoose.models.CrudTableItem || mongoose.model<IItem>("CrudTableItem", ItemSchema);
 });
 
 afterAll(async () => {
@@ -122,7 +120,7 @@ describe("CRUD route-table regression", () => {
         payload: { name: "Alpha" },
       });
       expect(created.statusCode).toBe(201);
-      const createdId = (created.json() as { data: { _id: string } }).data._id;
+      const createdId = (created.json() as { _id: string })._id;
 
       const list = await app.inject({ method: "GET", url: "/items" });
       expect(list.statusCode).toBe(200);
@@ -160,7 +158,7 @@ describe("CRUD route-table regression", () => {
         url: "/items",
         payload: { name: "First" },
       });
-      const id = (created.json() as { data: { _id: string } }).data._id;
+      const id = (created.json() as { _id: string })._id;
 
       const list = await app.inject({ method: "GET", url: "/items" });
       expect(list.statusCode).toBe(200);
@@ -170,10 +168,9 @@ describe("CRUD route-table regression", () => {
       // The key routing invariant: GET /:id MUST resolve to the get handler
       // (returns the specific document we asked for by id), not the list
       // handler. If the table swapped URLs, this would return a list.
-      const singleBody = single.json() as { data: { _id: string; name: string } };
-      expect(singleBody.data).toBeDefined();
-      expect(singleBody.data._id).toBe(id);
-      expect(singleBody.data.name).toBe("First");
+      const singleBody = single.json() as { _id: string; name: string };
+      expect(singleBody._id).toBe(id);
+      expect(singleBody.name).toBe("First");
     } finally {
       await app.close();
     }
@@ -187,7 +184,7 @@ describe("CRUD route-table regression", () => {
         url: "/items",
         payload: { name: "Bravo" },
       });
-      const id = (created.json() as { data: { _id: string } }).data._id;
+      const id = (created.json() as { _id: string })._id;
 
       const patched = await app.inject({
         method: "PATCH",
@@ -228,7 +225,7 @@ describe("CRUD route-table regression", () => {
         payload: { name: "Charlie" },
       });
       expect(created.statusCode).toBe(201);
-      const id = (created.json() as { data: { _id: string } }).data._id;
+      const id = (created.json() as { _id: string })._id;
 
       const got = await app.inject({ method: "GET", url: `/items/${id}` });
       expect(got.statusCode).toBe(200);

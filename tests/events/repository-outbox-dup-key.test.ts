@@ -6,9 +6,8 @@
  * the event.
  */
 
+import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import { describe, expect, it } from "vitest";
-
-import type { RepositoryLike } from "../../src/adapters/interface.js";
 
 async function getOutbox() {
   const { EventOutbox } = await import("../../src/events/outbox.js");
@@ -24,8 +23,8 @@ function makeRepository(
     getOne: async () => null,
     // 2.10.2 switched from findAll → getAll for bounded reads (mongokit's
     // findAll has no skip/limit). Return a pagination envelope so the adapter
-    // unwraps .docs correctly.
-    getAll: async () => ({ docs: [], total: 0, page: 1, limit: 0, pages: 0 }),
+    // unwraps .data correctly.
+    getAll: async () => ({ data: [], total: 0, page: 1, limit: 0, pages: 0 }),
     deleteMany: async () => ({ deletedCount: 0 }),
     findOneAndUpdate: async () => null,
     ...(isDuplicateKeyError ? { isDuplicateKeyError } : {}),

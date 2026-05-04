@@ -17,7 +17,7 @@ import { executePipeline } from "../../pipeline/pipe.js";
 import type { PipelineConfig, PipelineContext } from "../../pipeline/types.js";
 import type { IControllerResponse } from "../../types/index.js";
 import { buildRequestContext } from "./buildRequestContext.js";
-import { evaluatePermission, toCallToolResult } from "./tool-helpers.js";
+import { evaluatePermission, permissionDeniedResult, toCallToolResult } from "./tool-helpers.js";
 import type { CallToolResult, ToolDefinition } from "./types.js";
 
 type ControllerMethod = (ctx: unknown) => Promise<IControllerResponse>;
@@ -97,20 +97,12 @@ export function createCustomRouteHandler(
       input,
     );
     if (permResult && !permResult.granted) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              success: false,
-              error:
-                permResult.reason ??
-                (session ? `Permission denied for '${operationName}'` : "Authentication required"),
-            }),
-          },
-        ],
-        isError: true,
-      };
+      return permissionDeniedResult({
+        resource: resourceName,
+        operation: operationName,
+        reason: permResult.reason,
+        session,
+      });
     }
 
     try {
@@ -143,9 +135,12 @@ export function createCustomRouteHandler(
             pipeCtx,
             async (ctx) => {
               const raw = await fn(ctx as typeof reqCtx);
-              return raw !== null && typeof raw === "object" && "success" in raw
+              // New IControllerResponse shape: `{ data, status?, headers?, meta? }`.
+              // Wrap raw return values; pass through full envelopes that already
+              // carry a `data` slot.
+              return raw !== null && typeof raw === "object" && "data" in raw
                 ? (raw as IControllerResponse)
-                : ({ success: true, data: raw } as IControllerResponse);
+                : ({ data: raw } as IControllerResponse);
             },
             operationName,
           );
@@ -153,10 +148,10 @@ export function createCustomRouteHandler(
         }
         const out = (await fn(reqCtx)) as unknown;
         const envelope =
-          out !== null && typeof out === "object" && "success" in out
-            ? (out as { success: boolean; data?: unknown })
-            : { success: true, data: out };
-        return toCallToolResult(envelope as IControllerResponse);
+          out !== null && typeof out === "object" && "data" in out
+            ? (out as IControllerResponse)
+            : ({ data: out } as IControllerResponse);
+        return toCallToolResult(envelope);
       }
 
       // String-handler case — look up on the controller.

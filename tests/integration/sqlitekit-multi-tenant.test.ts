@@ -11,16 +11,16 @@
  * `allowDataInjection` + the full `resolveTenantId` API surface).
  */
 
+import type { DataAdapter } from "@classytic/repo-core/adapter";
+import { multiTenantPlugin } from "@classytic/sqlitekit/plugins/multi-tenant";
+import { timestampPlugin } from "@classytic/sqlitekit/plugins/timestamp";
+import { SqliteRepository } from "@classytic/sqlitekit/repository";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { eq, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import Fastify from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SqliteRepository } from "@classytic/sqlitekit/repository";
-import { multiTenantPlugin } from "@classytic/sqlitekit/plugins/multi-tenant";
-import { timestampPlugin } from "@classytic/sqlitekit/plugins/timestamp";
 import { allowPublic, defineResource } from "../../src/index.js";
-import type { DataAdapter } from "../../src/adapters/index.js";
 
 // ──────────────────────────────────────────────────────────────────────
 // Fixture — `invoices` table with an `organizationId` column
@@ -197,9 +197,9 @@ describe("Arc + sqlitekit multiTenantPlugin — end-to-end", () => {
 
     const body = res.json();
     const payload = body.data ?? body;
-    const docs = Array.isArray(payload) ? payload : (payload.docs ?? []);
-    expect(docs.length).toBe(2);
-    expect(docs.every((d: InvoiceDoc) => d.organizationId === ORG_A)).toBe(true);
+    const data = Array.isArray(payload) ? payload : (payload.data ?? []);
+    expect(data.length).toBe(2);
+    expect(data.every((d: InvoiceDoc) => d.organizationId === ORG_A)).toBe(true);
   });
 
   it("get by id returns 404 for a doc owned by a different tenant", async () => {

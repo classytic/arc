@@ -24,9 +24,9 @@ import {
   Repository,
 } from "@classytic/mongokit";
 import Fastify, { type FastifyInstance } from "fastify";
-import mongoose, { type Model, Schema } from "mongoose";
 import { MongoMemoryServer } from "mongodb-memory-server";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import mongoose, { type Model, Schema } from "mongoose";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { idempotencyPlugin } from "../../src/idempotency/idempotencyPlugin.js";
 
 // ============================================================================
@@ -52,15 +52,20 @@ async function buildApp(storeOverrides?: Record<string, unknown>): Promise<Fasti
 
   // Test endpoint — creates an "order"
   let orderCounter = 0;
-  app.post("/orders", {
-    preHandler: [app.idempotency.middleware],
-  }, async (_req, reply) => {
-    orderCounter++;
-    return reply.code(201).send({
-      success: true,
-      data: { orderId: `order-${orderCounter}`, counter: orderCounter },
-    });
-  });
+  app.post(
+    "/orders",
+    {
+      preHandler: [app.idempotency.middleware],
+    },
+    async (_req, reply) => {
+      orderCounter++;
+      // No-envelope: emit raw payload directly.
+      return reply.code(201).send({
+        orderId: `order-${orderCounter}`,
+        counter: orderCounter,
+      });
+    },
+  );
 
   // Test endpoint — GET should be ignored by idempotency
   app.get("/orders", async () => ({ success: true, data: [] }));
@@ -97,8 +102,7 @@ describe("idempotencyPlugin + MemoryStore — e2e", () => {
 
     expect(res.statusCode).toBe(201);
     const body = JSON.parse(res.body);
-    expect(body.success).toBe(true);
-    expect(body.data.orderId).toBeDefined();
+    expect(body.orderId).toBeDefined();
     expect(res.headers["x-idempotency-replayed"]).toBeUndefined();
   });
 
@@ -131,8 +135,8 @@ describe("idempotencyPlugin + MemoryStore — e2e", () => {
     expect(second.headers["x-idempotency-replayed"]).toBe("true");
     const secondBody = JSON.parse(second.body);
     // Same orderId — response was replayed, not re-executed
-    expect(secondBody.data.orderId).toBe(firstBody.data.orderId);
-    expect(secondBody.data.counter).toBe(firstBody.data.counter);
+    expect(secondBody.orderId).toBe(firstBody.orderId);
+    expect(secondBody.counter).toBe(firstBody.counter);
   });
 
   it("same key from different user is NOT replayed (user-scoped)", async () => {
@@ -152,7 +156,7 @@ describe("idempotencyPlugin + MemoryStore — e2e", () => {
     const bodyA = JSON.parse(userA.body);
     const bodyB = JSON.parse(userB.body);
     // Different order IDs — not replayed across users
-    expect(bodyA.data.orderId).not.toBe(bodyB.data.orderId);
+    expect(bodyA.orderId).not.toBe(bodyB.orderId);
     expect(userB.headers["x-idempotency-replayed"]).toBeUndefined();
   });
 
@@ -173,7 +177,7 @@ describe("idempotencyPlugin + MemoryStore — e2e", () => {
     const bodyA = JSON.parse(first.body);
     const bodyB = JSON.parse(second.body);
     // Different counters — both executed independently
-    expect(bodyA.data.counter).not.toBe(bodyB.data.counter);
+    expect(bodyA.counter).not.toBe(bodyB.counter);
   });
 
   it("GET requests are ignored by idempotency", async () => {
@@ -203,8 +207,7 @@ describe("idempotencyPlugin + repository (mongokit) — e2e", () => {
     // Open schema — idempotency stores serialize arbitrary response shapes.
     const schema = new Schema({}, { strict: false, _id: false });
     IdempotencyModel =
-      mongoose.models.IdempotencyE2e ||
-      mongoose.model("IdempotencyE2e", schema, "idemp_e2e");
+      mongoose.models.IdempotencyE2e || mongoose.model("IdempotencyE2e", schema, "idemp_e2e");
 
     // Pass the repository DIRECTLY to the plugin — no wrapper class.
     // mongokit 3.8+ implements findOneAndUpdate; the plugin uses it for
@@ -259,9 +262,7 @@ describe("idempotencyPlugin + repository (mongokit) — e2e", () => {
 
     expect(second.statusCode).toBe(201);
     expect(second.headers["x-idempotency-replayed"]).toBe("true");
-    expect(JSON.parse(second.body).data.orderId).toBe(
-      JSON.parse(first.body).data.orderId,
-    );
+    expect(JSON.parse(second.body).orderId).toBe(JSON.parse(first.body).orderId);
   });
 });
 
@@ -291,9 +292,13 @@ describe("idempotencyPlugin — error handling", () => {
       store: brokenStore,
     });
 
-    app.post("/test", {
-      preHandler: [app.idempotency.middleware],
-    }, async () => ({ ok: true }));
+    app.post(
+      "/test",
+      {
+        preHandler: [app.idempotency.middleware],
+      },
+      async () => ({ ok: true }),
+    );
 
     await app.ready();
 
@@ -328,21 +333,13 @@ describe("idempotencyPlugin — empty-body responses release the lock", () => {
       }
     });
 
-    app.post(
-      "/204-endpoint",
-      { preHandler: [app.idempotency.middleware] },
-      async (_req, reply) => {
-        reply.code(204).send();
-      },
-    );
+    app.post("/204-endpoint", { preHandler: [app.idempotency.middleware] }, async (_req, reply) => {
+      reply.code(204).send();
+    });
 
-    app.post(
-      "/empty-200",
-      { preHandler: [app.idempotency.middleware] },
-      async (_req, reply) => {
-        reply.code(200).send();
-      },
-    );
+    app.post("/empty-200", { preHandler: [app.idempotency.middleware] }, async (_req, reply) => {
+      reply.code(200).send();
+    });
 
     app.post(
       "/non-2xx-empty",
