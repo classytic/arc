@@ -45,26 +45,45 @@ describe("CLI docs command", () => {
       const listOp = spec.paths["/products"]?.get;
       const createOp = spec.paths["/products"]?.post;
       const getOp = spec.paths["/products/{id}"]?.get;
+      const deleteOp = spec.paths["/products/{id}"]?.delete;
 
       expect(listOp).toBeDefined();
       expect(createOp).toBeDefined();
       expect(getOp).toBeDefined();
+      expect(deleteOp).toBeDefined();
 
-      expect(listOp.responses["200"].content["application/json"].schema.properties).toHaveProperty(
-        "data",
+      // Arc 2.13 runtime: list response is a discriminated union of the
+      // four canonical pagination shapes — branch on `method`. NOT a
+      // `{ success, data }` envelope. Every variant carries `data`
+      // inside the union, but the top-level schema is `oneOf`.
+      const listSchema = listOp.responses["200"].content["application/json"].schema;
+      expect(listSchema.oneOf).toBeDefined();
+      expect(Array.isArray(listSchema.oneOf)).toBe(true);
+      // Every variant should declare a `data` array property.
+      for (const variant of listSchema.oneOf) {
+        expect(variant.properties).toHaveProperty("data");
+      }
+
+      // Create / get / update / delete all return the doc (or DeleteResult)
+      // DIRECTLY — no `{ success, data }` wrapper — via $ref.
+      expect(createOp.responses["201"].content["application/json"].schema.$ref).toBe(
+        "#/components/schemas/product",
       );
-      expect(
-        createOp.responses["201"].content["application/json"].schema.properties,
-      ).toHaveProperty("data");
-      expect(
-        createOp.responses["201"].content["application/json"].schema.properties,
-      ).not.toHaveProperty("doc");
-      expect(getOp.responses["200"].content["application/json"].schema.properties).toHaveProperty(
-        "data",
+      expect(getOp.responses["200"].content["application/json"].schema.$ref).toBe(
+        "#/components/schemas/product",
       );
-      expect(
-        getOp.responses["200"].content["application/json"].schema.properties,
-      ).not.toHaveProperty("doc");
+      expect(deleteOp.responses["200"].content["application/json"].schema.$ref).toBe(
+        "#/components/schemas/DeleteResult",
+      );
+
+      // Error responses everywhere reference the canonical ErrorContract,
+      // not the legacy `{ success, error, code, requestId, timestamp }`.
+      expect(createOp.responses["400"].content["application/json"].schema.$ref).toBe(
+        "#/components/schemas/ErrorContract",
+      );
+      expect(createOp.responses["500"].content["application/json"].schema.$ref).toBe(
+        "#/components/schemas/ErrorContract",
+      );
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
