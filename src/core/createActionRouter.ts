@@ -43,6 +43,7 @@
 
 import type { FastifyReply, FastifyRequest, RouteHandlerMethod } from "fastify";
 
+import { DEFAULT_ID_FIELD } from "../constants.js";
 import type { FieldPermissionMap } from "../permissions/fields.js";
 import type { PermissionCheck } from "../permissions/types.js";
 import type { PipelineConfig } from "../pipeline/types.js";
@@ -147,6 +148,17 @@ export interface ActionRouterConfig {
   /** Schema options for `req.arc` (used by hook system + body sanitizer) */
   readonly schemaOptions?: RouteSchemaOptions;
 
+  /**
+   * Resource's configured `idField` (e.g. `_id`, `slug`, `reportId`).
+   * Surfaced on `req.arc.idField` inside every action handler so the
+   * handler can compose a correct lookup query without re-reading
+   * resource config. Defaults to `_id` when omitted.
+   *
+   * Pair with `getEntityQuery(req)` from `@classytic/arc/scope` for the
+   * idiomatic `Model.findOne(getEntityQuery(req))` shape.
+   */
+  readonly idField?: string;
+
   /** Resource-level permissions (for `req.arc.permissions`) */
   readonly permissions?: Record<string, PermissionCheck>;
 
@@ -186,6 +198,7 @@ export function createActionRouter(
     onError,
     fields: fieldPermissions,
     schemaOptions,
+    idField = DEFAULT_ID_FIELD,
     permissions: resourcePermissions,
     routeGuards = [],
     pipeline,
@@ -226,6 +239,10 @@ export function createActionRouter(
     hooks: fastify.arc?.hooks,
     events: fastify.events,
     fields: fieldPermissions,
+    // Frozen here — pre-allocated once per resource, every request reads
+    // `req.arc.idField` for free. Per-request `entityId` is layered on
+    // top inside the action handler below.
+    idField,
   });
 
   // Auth — pick the right decorator for the whole action endpoint given the
@@ -313,6 +330,18 @@ export function createActionRouter(
     handler: async (req: FastifyRequest, reply: FastifyReply) => {
       const { action, ...data } = req.body as { action: string; [key: string]: unknown };
       const { id } = req.params as { id: string };
+
+      // Layer the per-request entity handle on top of the frozen
+      // resource meta (`idField` rides on the meta, set once by
+      // `buildArcDecorator`). One object allocation per action call —
+      // worth it for the `Model.findOne(getEntityQuery(req))` ergonomics.
+      // Without the spread we'd be mutating the per-resource frozen
+      // object, which throws.
+      const reqWithExtras = req as RequestWithExtras;
+      reqWithExtras.arc = {
+        ...(reqWithExtras.arc ?? {}),
+        entityId: id,
+      };
 
       // `buildActionPermissionMw` has already rejected invalid actions (400)
       // and denied permissions (401/403), so the handler lookup is guaranteed

@@ -89,6 +89,32 @@ export interface ArcFieldRule extends RepoCoreFieldRule {
    */
   preserveForElevated?: boolean;
   hidden?: boolean;
+  /**
+   * Aggregation visibility override. By default, only `hidden: true`
+   * blocks a field from `groupBy` / `measures.field` / `sort` / `dateBuckets`
+   * — that's the genuine cardinality-leak guard (the value is omitted from
+   * list/get responses, so exposing it via aggregation would reveal data
+   * the client can't otherwise see).
+   *
+   * `systemManaged: true` does **not** block aggregation — it's a write
+   * rule, not a visibility rule. Server-stamped fields like `createdAt`,
+   * `status`, or plugin-generated handles are visible in every list
+   * response and should aggregate freely.
+   *
+   * Use this flag to override the default:
+   *
+   * - `aggregable: false` — explicit deny, even on visible fields. Useful
+   *   when a value is exposed per-row but the cardinality across rows is
+   *   itself sensitive (e.g. `email` is visible in `get/:id` to admins
+   *   but you don't want a public-readable agg of email distributions).
+   * - `aggregable: true` — escape hatch on `hidden` fields. Lets you
+   *   aggregate a hidden column when you're sure cardinality leakage
+   *   isn't a concern (e.g. `internalScore` hidden from list, but a
+   *   committee-only `byScore` agg is fine).
+   *
+   * Defaults to `undefined` (use the `hidden`-only rule).
+   */
+  aggregable?: boolean;
   /** String minimum length — auto-maps to OpenAPI `minLength` and MCP tool schema */
   minLength?: number;
   /** String maximum length — auto-maps to OpenAPI `maxLength` and MCP tool schema */

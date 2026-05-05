@@ -1,0 +1,134 @@
+- generic [active] [ref=e1]:
+  - region "Notifications alt+T"
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e5]:
+        - link "A ANIRBAN Survivor Voice" [ref=e6] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e7]: A
+          - generic [ref=e8]:
+            - generic [ref=e9]: ANIRBAN
+            - generic [ref=e10]: Survivor Voice
+        - navigation [ref=e11]:
+          - link "Home" [ref=e12] [cursor=pointer]:
+            - /url: /
+          - link "About" [ref=e13] [cursor=pointer]:
+            - /url: /about
+          - link "Members" [ref=e14] [cursor=pointer]:
+            - /url: /members
+          - link "Our Work" [ref=e15] [cursor=pointer]:
+            - /url: /gallery
+          - link "Get Help" [ref=e16] [cursor=pointer]:
+            - /url: /get-help
+          - link "Apply" [ref=e17] [cursor=pointer]:
+            - /url: /apply
+        - generic [ref=e18]:
+          - button "Emergency Help" [ref=e19] [cursor=pointer]:
+            - img
+            - text: Emergency Help
+          - button "Sign in" [ref=e20] [cursor=pointer]:
+            - img
+            - text: Sign in
+    - main [ref=e21]:
+      - generic [ref=e23]:
+        - generic [ref=e24]:
+          - generic [ref=e25]: Member directory
+          - heading "Survivors. Leaders. Family." [level=1] [ref=e26]
+          - paragraph [ref=e27]: Search by name, role, or district. Filter by division, status, or pick a division visually from the Bangladesh map. URL stays in sync — copy it to share a curated view.
+        - generic [ref=e28]:
+          - generic [ref=e29]:
+            - generic [ref=e30]:
+              - img
+              - textbox "Search name, district or role" [ref=e31]
+            - combobox [ref=e32]:
+              - generic [ref=e33]: all
+              - img: ▼
+            - textbox [ref=e34]: all
+            - combobox [disabled] [ref=e35]:
+              - generic [ref=e36]: all
+              - img: ▼
+            - textbox [disabled] [ref=e37]: all
+            - button "Open map" [ref=e38]:
+              - img
+              - text: Open map
+            - button "Apply" [ref=e39]
+          - generic [ref=e40]:
+            - button "All" [ref=e41]
+            - button "Founding" [ref=e42]
+            - button "Active" [ref=e43]
+            - button "Ambassador" [ref=e44]
+            - button "Alumni" [ref=e45]
+            - button "Become a member" [ref=e46] [cursor=pointer]:
+              - text: Become a member
+              - img
+        - generic [ref=e47]:
+          - img [ref=e48]
+          - generic [ref=e53]:
+            - strong [ref=e54]: "0"
+            - text: members
+        - generic [ref=e56]: Loading directory…
+    - contentinfo [ref=e57]:
+      - generic [ref=e58]:
+        - generic [ref=e59]:
+          - generic [ref=e60]:
+            - generic [ref=e61]:
+              - generic [ref=e62]: A
+              - generic [ref=e63]:
+                - generic [ref=e64]: ANIRBAN
+                - generic [ref=e65]: Survivor Voice Foundation
+            - paragraph [ref=e66]: A survivor-led movement building safer communities through advocacy, legal support and lived-experience leadership.
+          - generic [ref=e67]:
+            - heading "Quick Links" [level=4] [ref=e68]
+            - list [ref=e69]:
+              - listitem [ref=e70]:
+                - link "Home" [ref=e71] [cursor=pointer]:
+                  - /url: /
+              - listitem [ref=e72]:
+                - link "About" [ref=e73] [cursor=pointer]:
+                  - /url: /about
+              - listitem [ref=e74]:
+                - link "Members" [ref=e75] [cursor=pointer]:
+                  - /url: /members
+              - listitem [ref=e76]:
+                - link "Become a member" [ref=e77] [cursor=pointer]:
+                  - /url: /apply
+              - listitem [ref=e78]:
+                - link "Impact Gallery" [ref=e79] [cursor=pointer]:
+                  - /url: /gallery
+              - listitem [ref=e80]:
+                - link "File a report" [ref=e81] [cursor=pointer]:
+                  - /url: /get-help
+              - listitem [ref=e82]:
+                - link "Track a report" [ref=e83] [cursor=pointer]:
+                  - /url: /track
+          - generic [ref=e84]:
+            - heading "Contact" [level=4] [ref=e85]
+            - list [ref=e86]:
+              - listitem [ref=e87]:
+                - img [ref=e88]
+                - generic [ref=e90]:
+                  - text: +880-XXXX-XXXXXX
+                  - text: 24/7 Helpline
+              - listitem [ref=e91]:
+                - img [ref=e92]
+                - generic [ref=e95]: support@anirban.org
+              - listitem [ref=e96]:
+                - img [ref=e97]
+                - generic [ref=e100]: Dhaka · Khulna · Sylhet · Chattogram
+          - generic [ref=e101]:
+            - heading "Stay Informed" [level=4] [ref=e102]
+            - paragraph [ref=e103]: Quarterly updates on advocacy, programs, and impact.
+            - generic [ref=e104]:
+              - textbox "you@email.com" [ref=e105]
+              - button "Subscribe" [ref=e106]
+        - generic [ref=e107]:
+          - paragraph [ref=e108]: © 2026 ANIRBAN Survivor Voice Foundation. All rights reserved.
+          - generic [ref=e109]:
+            - link "Privacy" [ref=e110] [cursor=pointer]:
+              - /url: /legal/privacy
+            - link "Terms" [ref=e111] [cursor=pointer]:
+              - /url: /legal/terms
+            - link "Track a report" [ref=e112] [cursor=pointer]:
+              - /url: /track
+  - button "Open Next.js Dev Tools" [ref=e118] [cursor=pointer]:
+    - img [ref=e119]

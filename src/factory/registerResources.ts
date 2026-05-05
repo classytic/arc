@@ -26,18 +26,22 @@ async function registerOne(
   try {
     await parent.register(resource.toPlugin() as FastifyPlugin);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    parent.log.error(`Failed to register resource "${name}": ${msg}`);
+    const rawMsg = err instanceof Error ? err.message : String(err);
+    // Underlying ArcError messages already start with `Resource "name"
+    // ...` — strip the redundant prefix so the wrapper isn't a Russian
+    // doll of "Resource "x" failed to register: Resource "x" aggregation
+    // ..." with its trailing double period. Cause chain still preserves
+    // the original via `{ cause }`.
+    const stripped = rawMsg
+      .replace(new RegExp(`^Resource "${name}"\\s*`), "")
+      .replace(/\.+\s*$/, "");
+    parent.log.error(`Failed to register resource "${name}": ${rawMsg}`);
     // Preserve the original via `{ cause }` so adapter / plugin / Mongoose
     // errors keep their stack + any custom properties (statusCode, code,
-    // etc.). Before this, the original was dropped — boot failures became
-    // "Resource "x" failed to register: foo" with no way to walk back to
-    // the real throw site. Node + V8 both render `err.cause` in stacks.
-    throw new Error(
-      `Resource "${name}" failed to register: ${msg}. ` +
-        "Check the resource definition, adapter, and permissions.",
-      { cause: err },
-    );
+    // etc.). Node + V8 both render `err.cause` in stacks.
+    throw new Error(`Resource "${name}" failed to register — ${stripped}.`, {
+      cause: err,
+    });
   }
 }
 

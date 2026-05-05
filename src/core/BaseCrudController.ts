@@ -43,6 +43,7 @@ import { scheduleBackground } from "../utils/runtime.js";
 import { getUserId } from "../utils/userHelpers.js";
 import { AccessControl, type FetchDenialReason } from "./AccessControl.js";
 import { BodySanitizer, type FieldWriteDenialPolicy } from "./BodySanitizer.js";
+import { isFieldReadable } from "./fieldRulePredicates.js";
 
 // Type primitives + override utility types live in `controllerTypes.ts`
 // to keep this file focused on runtime code. Re-exported so existing
@@ -804,15 +805,16 @@ export class BaseCrudController<
   }
 
   /**
-   * True when `field` is safe to expose via `_distinct`. Mirrors the
-   * `select` allowlist â€” fields marked `hidden` or `systemManaged` in
-   * `schemaOptions.fieldRules` are NOT exposed (would leak password
-   * hashes, internal flags, etc).
+   * True when `field` is safe to expose via `_distinct`.
+   *
+   * Read-side gate only — only `hidden: true` blocks. `systemManaged`
+   * is a *write* rule (clients can't PATCH the value); the field is
+   * still in every list response, so blocking `_distinct` adds nothing
+   * but inconvenience. See `core/fieldRulePredicates.ts` for the
+   * canonical predicate shared with `QueryResolver`.
    */
   protected isFieldExposedForRead(field: string): boolean {
-    const rules = this.schemaOptions.fieldRules?.[field];
-    if (!rules) return true;
-    return !(rules.hidden || rules.systemManaged);
+    return isFieldReadable(this.schemaOptions.fieldRules?.[field]);
   }
 
   /** Execute list query through hooks (extracted for cache revalidation) */

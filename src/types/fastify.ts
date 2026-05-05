@@ -12,13 +12,33 @@ export interface FastifyRequestExtras {
 
 export interface RequestWithExtras extends FastifyRequest {
   /**
-   * Arc metadata — set by createCrudRouter. Contains resource configuration
-   * and schema options.
+   * Arc metadata — set by createCrudRouter / createActionRouter / etc.
+   * Contains resource configuration and runtime resolution of the URL
+   * `:id` path param into the resource's `idField`.
    */
   arc?: {
     resourceName?: string;
     schemaOptions?: import("./resource.js").RouteSchemaOptions;
     permissions?: import("./resource.js").ResourcePermissions;
+    /**
+     * The configured `idField` for this resource (e.g. `_id`, `slug`,
+     * `reportId`). Set by routers that bind a path `:id` segment so
+     * handlers can compose the right query without remembering the
+     * resource-config detail.
+     *
+     * Use `getEntityQuery(req)` for the canonical
+     * `{ [idField]: entityId }` filter shape — saves the action handler
+     * from a typo class where `Model.findById(id)` silently fails when
+     * `idField !== "_id"`.
+     */
+    idField?: string;
+    /**
+     * The current request's `:id` path-param value, surfaced verbatim.
+     * For most resources this equals `req.params.id`; we mirror it on
+     * `req.arc` so middleware that doesn't have a typed `params` shape
+     * can still read the entity handle.
+     */
+    entityId?: string;
   };
   context?: Record<string, unknown>;
   _policyFilters?: Record<string, unknown>;

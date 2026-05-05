@@ -335,7 +335,13 @@ describe("QueryResolver", () => {
   // --------------------------------------------------------------------------
 
   describe("select field sanitization", () => {
-    it("blocks systemManaged fields from select", () => {
+    // `systemManaged` is a *write* rule (server stamps the value, clients
+    // can't PATCH it) — the field IS still in every list/get response,
+    // so blocking it from `select=` was over-conservative. Pre-fix, the
+    // resolver stripped `systemManaged` fields and clients had no way to
+    // request server-stamped columns like `createdAt` / `status`. See
+    // `core/fieldRulePredicates.ts` for the canonical predicate.
+    it("ALLOWS systemManaged fields in select (write rule, not visibility)", () => {
       const resolver = createResolver({
         schemaOptions: {
           fieldRules: {
@@ -347,8 +353,8 @@ describe("QueryResolver", () => {
 
       const result = resolver.resolve(req);
 
-      // internalScore should be filtered out from object projection
-      expect(result.select).toEqual({ name: 1, price: 1 });
+      // internalScore stays in projection — it's readable per-row.
+      expect(result.select).toEqual({ name: 1, internalScore: 1, price: 1 });
     });
 
     it("blocks hidden fields from select", () => {
@@ -390,6 +396,102 @@ describe("QueryResolver", () => {
 
       // Preserved as object projection from parser
       expect(result.select).toEqual({ name: 1, price: 1 });
+    });
+
+    // ─── New systemManaged contract (v2.14) ──────────────────────────
+    // `systemManaged` is a *write* rule (server stamps the value,
+    // clients can't PATCH it) — the field IS still in every list/get
+    // response. Pre-2.14, the resolver stripped it from `select=` too,
+    // which meant clients had no way to project a server-stamped
+    // column like `createdAt` / `status`. See
+    // `src/core/fieldRulePredicates.ts` for the canonical predicate.
+
+    it("ALLOWS systemManaged fields when select is a space-separated string", () => {
+      const resolver = createResolver({
+        schemaOptions: {
+          fieldRules: {
+            createdAt: { systemManaged: true },
+            status: { systemManaged: true },
+          },
+        },
+      });
+      const req = createReq({ query: { select: "name createdAt status" } });
+      const result = resolver.resolve(req);
+      // Space-separated form passes through unmodified — the resolver
+      // only strips when it identifies blocked fields, and there are
+      // none under the new contract.
+      expect(typeof result.select === "string" || Array.isArray(result.select)).toBe(true);
+      const projected =
+        typeof result.select === "string"
+          ? result.select.split(/\s+/)
+          : (result.select as string[]);
+      expect(projected).toContain("createdAt");
+      expect(projected).toContain("status");
+      expect(projected).toContain("name");
+    });
+
+    it("ALLOWS systemManaged fields when select is an array", () => {
+      const resolver = createResolver({
+        schemaOptions: {
+          fieldRules: { reportId: { systemManaged: true } },
+        },
+      });
+      const req = createReq({ query: { select: ["name", "reportId"] } });
+      const result = resolver.resolve(req);
+      // QueryParser may normalise to projection object; accept either
+      // shape for forward-compat with parser internals.
+      const accepted =
+        Array.isArray(result.select)
+          ? result.select.includes("reportId")
+          : !!(result.select as Record<string, 0 | 1>)?.reportId;
+      expect(accepted).toBe(true);
+    });
+
+    it("blocks `hidden` AND allows `systemManaged` in the same fieldRules bag", () => {
+      const resolver = createResolver({
+        schemaOptions: {
+          fieldRules: {
+            passwordHash: { hidden: true },
+            createdAt: { systemManaged: true },
+          },
+        },
+      });
+      const req = createReq({
+        query: { select: "name,passwordHash,createdAt" },
+      });
+      const result = resolver.resolve(req);
+      // passwordHash filtered (hidden), createdAt preserved (systemManaged
+      // is a write rule, doesn't gate reads).
+      expect(result.select).toEqual({ name: 1, createdAt: 1 });
+    });
+
+    it("explicit `aggregable: false` does NOT block `select=` (aggregation-specific)", () => {
+      // `aggregable: false` is an aggregation-only opt-out — it doesn't
+      // gate per-row reads. The field should still flow through `select`.
+      const resolver = createResolver({
+        schemaOptions: {
+          fieldRules: { email: { aggregable: false } },
+        },
+      });
+      const req = createReq({ query: { select: "name,email" } });
+      const result = resolver.resolve(req);
+      expect(result.select).toEqual({ name: 1, email: 1 });
+    });
+
+    it("multiple write rules (readonly + immutable) don't block reads", () => {
+      const resolver = createResolver({
+        schemaOptions: {
+          fieldRules: {
+            createdAt: { systemManaged: true },
+            slug: { readonly: true },
+            sku: { immutable: true },
+          },
+        },
+      });
+      const req = createReq({ query: { select: "name,createdAt,slug,sku" } });
+      const result = resolver.resolve(req);
+      // All four flow through — none of these flags gate reads.
+      expect(result.select).toEqual({ name: 1, createdAt: 1, slug: 1, sku: 1 });
     });
   });
 

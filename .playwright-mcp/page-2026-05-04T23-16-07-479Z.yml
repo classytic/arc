@@ -1,0 +1,129 @@
+- generic [active] [ref=e1]:
+  - region "Notifications alt+T"
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e5]:
+        - link "Anirban logo ANIRBAN Trafficking Survivors' Network" [ref=e6] [cursor=pointer]:
+          - /url: /
+          - img "Anirban logo" [ref=e7]
+          - generic [ref=e8]:
+            - generic [ref=e9]: ANIRBAN
+            - generic [ref=e10]: Trafficking Survivors' Network
+        - navigation [ref=e11]:
+          - link "Home" [ref=e12] [cursor=pointer]:
+            - /url: /
+          - link "About" [ref=e13] [cursor=pointer]:
+            - /url: /about
+          - link "Members" [ref=e14] [cursor=pointer]:
+            - /url: /members
+          - link "Our Work" [ref=e15] [cursor=pointer]:
+            - /url: /gallery
+          - link "Apply" [ref=e16] [cursor=pointer]:
+            - /url: /apply
+        - generic [ref=e17]:
+          - button "Emergency Help" [ref=e18] [cursor=pointer]:
+            - img
+            - text: Emergency Help
+          - button "Sign in" [ref=e19] [cursor=pointer]:
+            - img
+            - text: Sign in
+    - main [ref=e20]:
+      - complementary [ref=e24]:
+        - generic [ref=e26]:
+          - link "Anirban logo ANIRBAN Trafficking Survivors' Network" [ref=e27] [cursor=pointer]:
+            - /url: /
+            - img "Anirban logo" [ref=e28]
+            - generic [ref=e29]:
+              - generic [ref=e30]: ANIRBAN
+              - generic [ref=e31]: Trafficking Survivors' Network
+          - generic [ref=e32]:
+            - generic [ref=e33]:
+              - generic [ref=e34]:
+                - img [ref=e35]
+                - text: Survivor-led since 2011
+              - heading "Stand with survivors. Build futures." [level=2] [ref=e37]:
+                - text: Stand with survivors.
+                - text: Build futures.
+              - paragraph [ref=e38]: Sign in to coordinate casework, review applications, and stay connected with our committee.
+            - list [ref=e39]:
+              - listitem [ref=e40]:
+                - img [ref=e42]
+                - generic [ref=e45]:
+                  - generic [ref=e46]: Confidential by default
+                  - generic [ref=e47]: End-to-end encryption. Your identity is never published without consent.
+              - listitem [ref=e48]:
+                - img [ref=e50]
+                - generic [ref=e55]:
+                  - generic [ref=e56]: 190 members across 10 chapters
+                  - generic [ref=e57]: Survivor-led network operating in 26 FSTIP districts.
+              - listitem [ref=e58]:
+                - img [ref=e60]
+                - generic [ref=e63]:
+                  - generic [ref=e64]: USAID & Winrock supported
+                  - generic [ref=e65]: Founded 2011 under the FSTIP Activity.
+          - paragraph [ref=e66]: USAID · Winrock International · FSTIP Activity
+    - contentinfo [ref=e69]:
+      - generic [ref=e70]:
+        - generic [ref=e71]:
+          - generic [ref=e72]:
+            - generic [ref=e73]:
+              - img "Anirban logo" [ref=e74]
+              - generic [ref=e75]:
+                - generic [ref=e76]: ANIRBAN
+                - generic [ref=e77]: Trafficking Survivors' Network
+            - paragraph [ref=e78]: A Bangladeshi survivors' network of former victims of trafficking — established in 2011 under USAID's FSTIP Activity, implemented by Winrock International.
+          - generic [ref=e79]:
+            - heading "Quick Links" [level=4] [ref=e80]
+            - list [ref=e81]:
+              - listitem [ref=e82]:
+                - link "Home" [ref=e83] [cursor=pointer]:
+                  - /url: /
+              - listitem [ref=e84]:
+                - link "About" [ref=e85] [cursor=pointer]:
+                  - /url: /about
+              - listitem [ref=e86]:
+                - link "Members" [ref=e87] [cursor=pointer]:
+                  - /url: /members
+              - listitem [ref=e88]:
+                - link "Become a member" [ref=e89] [cursor=pointer]:
+                  - /url: /apply
+              - listitem [ref=e90]:
+                - link "Impact Gallery" [ref=e91] [cursor=pointer]:
+                  - /url: /gallery
+              - listitem [ref=e92]:
+                - link "File a report" [ref=e93] [cursor=pointer]:
+                  - /url: /get-help
+              - listitem [ref=e94]:
+                - link "Track a report" [ref=e95] [cursor=pointer]:
+                  - /url: /track
+          - generic [ref=e96]:
+            - heading "Contact" [level=4] [ref=e97]
+            - list [ref=e98]:
+              - listitem [ref=e99]:
+                - img [ref=e100]
+                - generic [ref=e102]:
+                  - text: +880-XXXX-XXXXXX
+                  - text: 24/7 Helpline
+              - listitem [ref=e103]:
+                - img [ref=e104]
+                - generic [ref=e107]: support@anirban.org
+              - listitem [ref=e108]:
+                - img [ref=e109]
+                - generic [ref=e112]: Dhaka · Khulna · Sylhet · Chattogram
+          - generic [ref=e113]:
+            - heading "Stay Informed" [level=4] [ref=e114]
+            - paragraph [ref=e115]: Quarterly updates on advocacy, programs, and impact.
+            - generic [ref=e116]:
+              - textbox "you@email.com" [ref=e117]
+              - button "Subscribe" [ref=e118]
+        - generic [ref=e119]:
+          - paragraph [ref=e120]: © 2026 ANIRBAN Survivor Voice Foundation. All rights reserved.
+          - generic [ref=e121]:
+            - link "Privacy" [ref=e122] [cursor=pointer]:
+              - /url: /legal/privacy
+            - link "Terms" [ref=e123] [cursor=pointer]:
+              - /url: /legal/terms
+            - link "Track a report" [ref=e124] [cursor=pointer]:
+              - /url: /track
+  - button "Open Next.js Dev Tools" [ref=e130] [cursor=pointer]:
+    - img [ref=e131]

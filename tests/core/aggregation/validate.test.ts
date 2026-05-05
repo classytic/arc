@@ -196,22 +196,99 @@ describe("validateAggregations — boot errors", () => {
         },
         { fieldRules: { passwordHash: { hidden: true } } },
       ),
-    ).toThrow(/marked hidden or systemManaged/);
+    ).toThrow(/blocked from aggregation/);
   });
 
-  it("rejects measure field referencing systemManaged field", () => {
+  // `systemManaged` is a write rule (server stamps the value), not a
+  // visibility rule — the field IS in every list/get response, so
+  // aggregating it leaks nothing. Pre-fix, the validator conflated this
+  // with `hidden` and rejected legitimate aggs over `status`,
+  // `createdAt`, plugin-stamped IDs, etc. See arc issue: "validator
+  // over-conservative on systemManaged fields".
+  it("ALLOWS measure field on a `systemManaged`-only field (visible in responses)", () => {
     expect(() =>
       validateAggregations(
         "user",
         {
-          sumInternal: {
-            measures: { total: "sum:internalCounter" },
+          sumServerStamped: {
+            measures: { total: "sum:loginCount" },
             permissions: requireRoles(["admin"]),
           },
         },
-        { fieldRules: { internalCounter: { systemManaged: true } } },
+        { fieldRules: { loginCount: { systemManaged: true } } },
       ),
-    ).toThrow(/marked hidden or systemManaged/);
+    ).not.toThrow();
+  });
+
+  it("ALLOWS groupBy on a `systemManaged`-only field", () => {
+    expect(() =>
+      validateAggregations(
+        "case",
+        {
+          byStatus: {
+            groupBy: "status",
+            measures: { count: "count" },
+            permissions: requireRoles(["admin"]),
+          },
+        },
+        { fieldRules: { status: { systemManaged: true } } },
+      ),
+    ).not.toThrow();
+  });
+
+  it("ALLOWS dateBucket on a `systemManaged`-only field (e.g. `createdAt`)", () => {
+    expect(() =>
+      validateAggregations(
+        "order",
+        {
+          ordersByDay: {
+            measures: { count: "count" },
+            dateBuckets: { day: { field: "createdAt", interval: "day" } },
+            permissions: requireRoles(["admin"]),
+          },
+        },
+        { fieldRules: { createdAt: { systemManaged: true } } },
+      ),
+    ).not.toThrow();
+  });
+
+  it("rejects field with explicit `aggregable: false` even when otherwise visible", () => {
+    expect(() =>
+      validateAggregations(
+        "user",
+        {
+          emailDistribution: {
+            groupBy: "email",
+            measures: { count: "count" },
+            permissions: requireRoles(["admin"]),
+          },
+        },
+        { fieldRules: { email: { aggregable: false } } },
+      ),
+    ).toThrow(/blocked from aggregation/);
+  });
+
+  it("ALLOWS aggregation on `hidden` field when `aggregable: true` overrides", () => {
+    // Escape hatch — caller asserts cardinality leak isn't a concern.
+    // E.g. an internal score hidden from list payload but a committee-only
+    // distribution agg is fine.
+    expect(() =>
+      validateAggregations(
+        "case",
+        {
+          byInternalScore: {
+            groupBy: "internalScore",
+            measures: { count: "count" },
+            permissions: requireRoles(["admin"]),
+          },
+        },
+        {
+          fieldRules: {
+            internalScore: { hidden: true, aggregable: true },
+          },
+        },
+      ),
+    ).not.toThrow();
   });
 
   it("accepts dotted-path references as nested embedded-document fields", () => {
@@ -234,7 +311,7 @@ describe("validateAggregations — boot errors", () => {
     ).not.toThrow();
   });
 
-  it("rejects dotted-path reference whose root is hidden/systemManaged", () => {
+  it("rejects dotted-path reference whose root is `hidden`", () => {
     expect(() =>
       validateAggregations(
         "order",
@@ -247,7 +324,23 @@ describe("validateAggregations — boot errors", () => {
         },
         { fieldRules: { internalAudit: { hidden: true } } },
       ),
-    ).toThrow(/marked hidden or systemManaged/);
+    ).toThrow(/blocked from aggregation/);
+  });
+
+  it("rejects dotted-path reference whose root has `aggregable: false`", () => {
+    expect(() =>
+      validateAggregations(
+        "order",
+        {
+          leakInternals: {
+            groupBy: "billing.method",
+            measures: { revenue: "sum:totalPrice" },
+            permissions: requireRoles(["admin"]),
+          },
+        },
+        { fieldRules: { billing: { aggregable: false } } },
+      ),
+    ).toThrow(/blocked from aggregation/);
   });
 
   it("error class is identifiable for catching", () => {
@@ -661,7 +754,23 @@ describe("validateAggregations — dateBuckets", () => {
         },
         { fieldRules: { secretAt: { hidden: true } } },
       ),
-    ).toThrow(/marked hidden or systemManaged/);
+    ).toThrow(/blocked from aggregation/);
+  });
+
+  it("ALLOWS bucket field on a `systemManaged`-only field (e.g. `createdAt`)", () => {
+    expect(() =>
+      validateAggregations(
+        "order",
+        {
+          ordersByDay: {
+            dateBuckets: { day: { field: "createdAt", interval: "day" } },
+            measures: { count: "count" },
+            permissions: allowPublic(),
+          },
+        },
+        { fieldRules: { createdAt: { systemManaged: true } } },
+      ),
+    ).not.toThrow();
   });
 
   it("topN.partitionBy can reference a dateBucket alias", () => {

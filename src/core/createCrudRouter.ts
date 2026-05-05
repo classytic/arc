@@ -226,6 +226,10 @@ export function createCrudRouter<TDoc = unknown>(
     pipe: pipeline,
     fields: fieldPermissions,
     updateMethod = DEFAULT_UPDATE_METHOD,
+    // Surfaces on `req.arc.idField` for every CRUD route — handlers
+    // and downstream middleware compose `findOne` filters via
+    // `getEntityQuery(req)` without re-reading resource config.
+    idField,
   } = options;
 
   const rateLimitConfig = buildRateLimitConfig(rateLimit);
@@ -249,6 +253,7 @@ export function createCrudRouter<TDoc = unknown>(
     hooks: fastify.arc?.hooks,
     events: fastify.events,
     fields: fieldPermissions,
+    idField,
   });
 
   // Per-op middlewares (user-declared route guards for individual CRUD ops)

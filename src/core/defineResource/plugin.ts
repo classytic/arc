@@ -443,6 +443,9 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
           updateMethod: resource.updateMethod,
           pipe: resource.pipe,
           fields: resource.fields,
+          // Surfaces on `req.arc.idField` via `buildArcDecorator` — see
+          // `core/entityHelpers.ts` for the read-side helpers.
+          idField: resource.idField,
         });
 
         // Register first-class actions (v2.8) — after CRUD routes, inside
@@ -467,6 +470,10 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
             resourceName: resource.name,
             fields: resource.fields,
             schemaOptions: resource.schemaOptions,
+            // Surfaces on `req.arc.idField` inside every action handler —
+            // pair with `getEntityQuery(req)` to compose the right
+            // `findOne` filter when `idField !== "_id"`.
+            idField: resource.idField,
             permissions: resource.permissions as Record<string, PermissionCheck> | undefined,
             routeGuards: resource.routeGuards,
             pipeline: resource.pipe,

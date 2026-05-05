@@ -31,6 +31,7 @@ export function validateDefineResourceConfig<TDoc>(config: ResourceConfig<TDoc>)
   validatePermissionsShape(config);
   validateCustomRoutePermissions(config);
   validateActionsShape(config);
+  warnRedundantFieldRules(config);
 }
 
 /** Permissions must be `PermissionCheck` functions, not arbitrary values. */
@@ -57,6 +58,52 @@ function validateCustomRoutePermissions<TDoc>(config: ResourceConfig<TDoc>): voi
       throw new Error(
         `[Arc] Resource '${config.name}' route ${route.method} ${route.path}: ` +
           `permissions is required and must be a PermissionCheck function.`,
+      );
+    }
+  }
+}
+
+/**
+ * Surface common field-rule misconfigurations at boot — non-fatal,
+ * just a `console.warn` so hosts notice and clean up.
+ *
+ * Catches:
+ *   1. `immutable: true` + `immutableAfterCreate: true` — `immutable`
+ *      already covers `immutableAfterCreate`. Picking both signals the
+ *      author wasn't sure which to use.
+ *   2. `systemManaged: true` + `readonly: true` — both are write rules
+ *      and `BodySanitizer` strips on either; the second flag is dead.
+ *   3. `hidden: true` + `aggregable: false` — `hidden` already blocks
+ *      aggregation; `aggregable: false` is redundant.
+ *
+ * NOT a hard error — write-rule overlap is harmless at runtime, just
+ * noisy in code review.
+ */
+function warnRedundantFieldRules<TDoc>(config: ResourceConfig<TDoc>): void {
+  const fieldRules = config.schemaOptions?.fieldRules;
+  if (!fieldRules) return;
+  for (const [field, rule] of Object.entries(fieldRules)) {
+    if (!rule) continue;
+    const r = rule as Record<string, unknown>;
+    if (r.immutable === true && r.immutableAfterCreate === true) {
+      // biome-ignore lint/suspicious/noConsole: dev-time DX hint
+      console.warn(
+        `[Arc] Resource '${config.name}' fieldRules.${field}: ` +
+          "`immutable: true` already implies `immutableAfterCreate: true` — drop the second flag.",
+      );
+    }
+    if (r.systemManaged === true && r.readonly === true) {
+      // biome-ignore lint/suspicious/noConsole: dev-time DX hint
+      console.warn(
+        `[Arc] Resource '${config.name}' fieldRules.${field}: ` +
+          "`systemManaged` and `readonly` both strip writes — pick one (`systemManaged` is the canonical name).",
+      );
+    }
+    if (r.hidden === true && r.aggregable === false) {
+      // biome-ignore lint/suspicious/noConsole: dev-time DX hint
+      console.warn(
+        `[Arc] Resource '${config.name}' fieldRules.${field}: ` +
+          "`hidden: true` already blocks aggregation — `aggregable: false` is redundant.",
       );
     }
   }

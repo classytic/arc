@@ -413,8 +413,9 @@ function assertBucketFieldAllowed(input: BucketFieldCheckInput): void {
     if (blockedFields.has(a)) {
       throw new ArcAggregationConfigError(
         `Resource "${resourceName}" aggregation "${aggregationName}" dateBucket "${alias}" ` +
-          `references field "${field}" whose root "${a}" is marked hidden or systemManaged ` +
-          `in schemaOptions.fieldRules. Bucketing on hidden fields would leak temporal info.`,
+          `references field "${field}" whose root "${a}" is blocked from aggregation ` +
+          `(\`hidden: true\` or \`aggregable: false\` in schemaOptions.fieldRules). ` +
+          `Bucketing hidden fields would leak temporal info.`,
       );
     }
     return;
@@ -422,8 +423,9 @@ function assertBucketFieldAllowed(input: BucketFieldCheckInput): void {
   if (blockedFields.has(field)) {
     throw new ArcAggregationConfigError(
       `Resource "${resourceName}" aggregation "${aggregationName}" dateBucket "${alias}" ` +
-        `references field "${field}", but the field is marked hidden or systemManaged ` +
-        `in schemaOptions.fieldRules. Bucketing on hidden fields would leak temporal info.`,
+        `references field "${field}", but the field is blocked from aggregation ` +
+        `(\`hidden: true\` or \`aggregable: false\` in schemaOptions.fieldRules). ` +
+        `Bucketing hidden fields would leak temporal info.`,
     );
   }
 }
@@ -581,13 +583,34 @@ function collectLookupAliases(lookups: readonly LookupSpec[] | undefined): Set<s
   return aliases;
 }
 
+/**
+ * Collect fields that aggregation MUST NOT reference.
+ *
+ * Default rule: only `hidden: true` blocks. `hidden` means the field is
+ * omitted from list/get responses, so exposing it via aggregation would
+ * leak data the client can't otherwise see. `systemManaged` is a write
+ * rule (server stamps the value, clients can't PATCH it) — those fields
+ * are still visible per-row, so aggregating them leaks nothing.
+ *
+ * Two opt-in overrides via `ArcFieldRule.aggregable`:
+ *   - `aggregable: false` — explicit deny on a visible field (rare; use
+ *     when the per-row value is fine but the across-row distribution is
+ *     itself sensitive).
+ *   - `aggregable: true` — explicit allow, even on a `hidden` field
+ *     (escape hatch — caller asserts cardinality leak isn't a concern).
+ */
 function collectBlockedFields(schemaOptions: RouteSchemaOptions | undefined): Set<string> {
   const blocked = new Set<string>();
   const fieldRules = schemaOptions?.fieldRules;
   if (!fieldRules) return blocked;
   for (const [field, rules] of Object.entries(fieldRules)) {
     if (!rules) continue;
-    if (rules.hidden || rules.systemManaged) blocked.add(field);
+    if (rules.aggregable === true) continue; // explicit allow
+    if (rules.aggregable === false) {
+      blocked.add(field); // explicit deny
+      continue;
+    }
+    if (rules.hidden) blocked.add(field);
   }
   return blocked;
 }
@@ -653,9 +676,10 @@ function assertFieldAllowed(context: string, ref: string, input: FieldRefValidat
     if (blockedFields.has(alias)) {
       throw new ArcAggregationConfigError(
         `Resource "${resourceName}" aggregation "${aggregationName}" references ` +
-          `field "${ref}" in ${context} whose root "${alias}" is marked hidden or ` +
-          `systemManaged in schemaOptions.fieldRules. Aggregating hidden ` +
-          `fields would leak cardinality information.`,
+          `field "${ref}" in ${context} whose root "${alias}" is blocked from ` +
+          `aggregation (\`hidden: true\` or \`aggregable: false\` in ` +
+          `schemaOptions.fieldRules). Aggregating hidden fields would leak ` +
+          `cardinality information.`,
       );
     }
     return;
@@ -663,9 +687,9 @@ function assertFieldAllowed(context: string, ref: string, input: FieldRefValidat
   if (blockedFields.has(ref)) {
     throw new ArcAggregationConfigError(
       `Resource "${resourceName}" aggregation "${aggregationName}" references ` +
-        `field "${ref}" in ${context}, but the field is marked hidden or ` +
-        `systemManaged in schemaOptions.fieldRules. Aggregating hidden ` +
-        `fields would leak cardinality information.`,
+        `field "${ref}" in ${context}, but the field is blocked from aggregation ` +
+        `(\`hidden: true\` or \`aggregable: false\` in schemaOptions.fieldRules). ` +
+        `Aggregating hidden fields would leak cardinality information.`,
     );
   }
 }

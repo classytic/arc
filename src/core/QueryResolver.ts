@@ -21,6 +21,7 @@ import type {
   UserLike,
 } from "../types/index.js";
 import { ArcQueryParser } from "../utils/queryParser.js";
+import { collectReadBlockedFields } from "./fieldRulePredicates.js";
 
 // ============================================================================
 // Configuration
@@ -269,11 +270,14 @@ export class QueryResolver {
     return sanitized.length > 0 ? sanitized : undefined;
   }
 
-  /** Get blocked fields from schema options */
+  /**
+   * Read-side allowlist gate for `select=` / `populate=`.
+   *
+   * Only `hidden: true` blocks. `systemManaged` is a *write* rule and
+   * doesn't gate visibility — see `core/fieldRulePredicates.ts`.
+   */
   private getBlockedFields(schemaOptions: RouteSchemaOptions): string[] {
-    const fieldRules = schemaOptions.fieldRules ?? {};
-    return Object.entries(fieldRules)
-      .filter(([, rules]) => rules.systemManaged || rules.hidden)
-      .map(([field]) => field);
+    const blocked = collectReadBlockedFields(schemaOptions);
+    return blocked ? Array.from(blocked) : [];
   }
 }

@@ -279,6 +279,108 @@ describe("registerResources — unit", () => {
     });
   });
 
+  describe("registration failure: cleaner wrapping format (v2.14)", () => {
+    // The wrapper used to read like:
+    //   "Resource "x" failed to register: Resource "x" aggregation
+    //    "byStatus" references field "status"... .. Check the resource
+    //    definition, adapter, and permissions."
+    // — Russian-doll prefix + double period from the inner ArcError's
+    // own period being concatenated with the wrapper's. The cleanup:
+    //   - strip the redundant inner `Resource "x" ...` prefix
+    //   - drop the trailing dot before joining
+    //   - separate with an em-dash (` — `) for readability
+    //   - drop the boilerplate "Check the resource definition..." tail
+    //
+    // `cause` chain still preserves the original.
+
+    it("strips the redundant inner `Resource \"name\" ...` prefix", async () => {
+      app = await createBareApp();
+      const badResource = {
+        name: "support",
+        skipGlobalPrefix: false,
+        toPlugin: () => {
+          // Simulates ArcError shape — inner messages start with the
+          // same `Resource "name"` prefix the wrapper would add.
+          throw new Error(
+            'Resource "support" aggregation "byStatus" references field "status".',
+          );
+        },
+      };
+
+      try {
+        await registerResources(app, { resources: [badResource] });
+        throw new Error("expected throw");
+      } catch (err) {
+        const msg = (err as Error).message;
+        // The "Resource "support" ..." prefix appears EXACTLY once.
+        expect(msg.match(/Resource "support"/g)?.length).toBe(1);
+        // No double period.
+        expect(msg).not.toMatch(/\.\./);
+        // The aggregation context survives.
+        expect(msg).toContain("aggregation");
+        expect(msg).toContain("status");
+      }
+    });
+
+    it("uses an em-dash separator (readable on a single line)", async () => {
+      app = await createBareApp();
+      const badResource = {
+        name: "broken",
+        skipGlobalPrefix: false,
+        toPlugin: () => {
+          throw new Error("adapter not configured");
+        },
+      };
+
+      try {
+        await registerResources(app, { resources: [badResource] });
+        throw new Error("expected throw");
+      } catch (err) {
+        expect((err as Error).message).toBe(
+          'Resource "broken" failed to register — adapter not configured.',
+        );
+      }
+    });
+
+    it("preserves single trailing period when the inner has none", async () => {
+      app = await createBareApp();
+      const bad = {
+        name: "noPeriod",
+        skipGlobalPrefix: false,
+        toPlugin: () => {
+          throw new Error("nope");
+        },
+      };
+      try {
+        await registerResources(app, { resources: [bad] });
+        throw new Error("expected throw");
+      } catch (err) {
+        const msg = (err as Error).message;
+        expect(msg.endsWith(".")).toBe(true);
+        expect(msg.endsWith("..")).toBe(false);
+      }
+    });
+
+    it("works for non-Error throws (string / object)", async () => {
+      app = await createBareApp();
+      const stringThrower = {
+        name: "weird",
+        skipGlobalPrefix: false,
+        toPlugin: () => {
+          // biome-ignore lint/suspicious/noThenProperty: we want to throw a string
+          throw "raw string failure";
+        },
+      };
+      try {
+        await registerResources(app, { resources: [stringThrower] });
+        throw new Error("expected throw");
+      } catch (err) {
+        expect((err as Error).message).toContain("raw string failure");
+        expect((err as Error).message).toContain('Resource "weird"');
+      }
+    });
+  });
+
   describe("registration failure preserves the original error via `cause`", () => {
     it("throws an error whose `.cause` is the underlying adapter/plugin throw", async () => {
       // Regression: before v2.11 the catch-and-rethrow stringified the
