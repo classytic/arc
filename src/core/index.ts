@@ -41,6 +41,16 @@ export {
 } from "./createCrudRouter.js";
 export { defineResource, ResourceDefinition } from "./defineResource.js";
 export { defineResourceVariants } from "./defineResourceVariants.js";
+// Entity helpers — read `req.arc.idField` / `entityId` inside action and
+// custom-route handlers without re-reading resource config. Use
+// `getEntityQuery(req)` as the canonical `findOne` filter shape — fixes
+// the historical footgun where `findById(id)` silently returned null
+// for resources binding a non-`_id` `idField` (slug, reportId, etc.).
+export {
+  getEntityId,
+  getEntityIdField,
+  getEntityQuery,
+} from "./entityHelpers.js";
 // Fastify ↔ arc-controller seam (also consumed by MCP integration)
 export {
   createCrudHandlers,
@@ -50,6 +60,11 @@ export {
   getControllerScope,
   sendControllerResponse,
 } from "./fastifyAdapter.js";
+// Field-rule predicates — single source of truth for read-side gates
+// (`select=`, `_distinct`, response shaping). Mirrors the rule used by
+// aggregation validation: only `hidden` blocks; `systemManaged` is a
+// write rule and doesn't gate visibility.
+export { collectReadBlockedFields, isFieldReadable } from "./fieldRulePredicates.js";
 export type { BulkExt } from "./mixins/bulk.js";
 export { BulkMixin } from "./mixins/bulk.js";
 export type { SlugExt } from "./mixins/slug.js";

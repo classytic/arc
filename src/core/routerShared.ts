@@ -78,6 +78,11 @@ export interface RouteRateLimitConfig {
  * Frozen metadata stamped onto `req.arc` by `arcDecorator`. Downstream
  * consumers (`sendControllerResponse`, hook system, event bus) read it to
  * find the resource's wiring without threading config through every layer.
+ *
+ * `idField` rides on the same frozen object so action / CRUD / custom-route
+ * handlers can read the resource's bound entity-handle field via
+ * `getEntityIdField(req)` / `getEntityQuery(req)` without touching resource
+ * config — a one-time per-route allocation, zero-cost per request.
  */
 export interface ArcRouteMeta {
   readonly resourceName: string;
@@ -86,6 +91,7 @@ export interface ArcRouteMeta {
   readonly hooks: unknown;
   readonly events: unknown;
   readonly fields: unknown;
+  readonly idField?: string;
 }
 
 /**

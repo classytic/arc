@@ -40,3 +40,11 @@ export type {
 } from "./sessionManager.js";
 // Session Manager
 export { createSessionManager, MemorySessionStore } from "./sessionManager.js";
+// Trusted-origins helper — union of CORS allowlist + canonical FE URL.
+// Pass result to `betterAuth({ trustedOrigins })` so BA's origin guard
+// stays in sync with what CORS already permits.
+export type {
+  CorsOriginsConfig,
+  MirrorTrustedOriginsOptions,
+} from "./trustedOrigins.js";
+export { mirrorTrustedOriginsFromCors } from "./trustedOrigins.js";

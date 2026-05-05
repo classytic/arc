@@ -1,0 +1,196 @@
+- generic [active] [ref=e1]:
+  - region "Notifications alt+T"
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e5]:
+        - link "Anirban logo ANIRBAN Trafficking Survivors' Network" [ref=e6] [cursor=pointer]:
+          - /url: /
+          - img "Anirban logo" [ref=e7]
+          - generic [ref=e8]:
+            - generic [ref=e9]: ANIRBAN
+            - generic [ref=e10]: Trafficking Survivors' Network
+        - navigation [ref=e11]:
+          - link "Home" [ref=e12] [cursor=pointer]:
+            - /url: /
+          - link "About" [ref=e13] [cursor=pointer]:
+            - /url: /about
+          - link "Members" [ref=e14] [cursor=pointer]:
+            - /url: /members
+          - link "Our Work" [ref=e15] [cursor=pointer]:
+            - /url: /gallery
+          - link "Apply" [ref=e16] [cursor=pointer]:
+            - /url: /apply
+        - generic [ref=e17]:
+          - button "Emergency Help" [ref=e18] [cursor=pointer]:
+            - img
+            - text: Emergency Help
+          - button "Sign in" [ref=e19] [cursor=pointer]:
+            - img
+            - text: Sign in
+    - main [ref=e20]:
+      - generic [ref=e22]:
+        - generic [ref=e23]: Become a member
+        - heading "Survivors. Leaders. Family." [level=1] [ref=e24]
+        - paragraph [ref=e25]: Apply to join Anirban's survivor-led network. The committee reviews every application personally — there is no algorithm here.
+        - generic [ref=e26]:
+          - img [ref=e27]
+          - generic [ref=e30]:
+            - strong [ref=e31]: Confidential review.
+            - text: Your story stays with our trained committee — never published without your explicit consent. Approval triggers an emailed invitation; you set your own password.
+        - generic [ref=e32]:
+          - generic [ref=e33]:
+            - generic [ref=e34]:
+              - heading "About you" [level=3] [ref=e36]
+              - separator [ref=e37]
+              - generic [ref=e38]:
+                - group [ref=e40]:
+                  - generic [ref=e41]:
+                    - text: Full name
+                    - generic [ref=e42]: "*"
+                    - generic [ref=e43]: (required)
+                  - textbox "Full name (required)" [ref=e44]:
+                    - /placeholder: Your name
+                - group [ref=e46]:
+                  - generic [ref=e47]:
+                    - text: Email
+                    - generic [ref=e48]: "*"
+                    - generic [ref=e49]: (required)
+                  - textbox "Email (required)" [ref=e50]:
+                    - /placeholder: you@example.com
+                  - paragraph [ref=e51]: We use this to send the invitation if you're approved.
+                - group [ref=e53]:
+                  - generic [ref=e54]: Phone (optional)
+                  - textbox "Phone (optional)" [ref=e55]:
+                    - /placeholder: +880 …
+                - group [ref=e57]:
+                  - generic [ref=e58]: How would you like to contribute?
+                  - group [ref=e59]:
+                    - combobox "How would you like to contribute?" [ref=e60]
+                    - group [ref=e61]:
+                      - combobox [ref=e62]:
+                        - img
+                  - textbox [ref=e63]
+                  - paragraph [ref=e64]: This appears on your public member card after approval.
+            - generic [ref=e65]:
+              - heading "Where you are" [level=3] [ref=e67]
+              - separator [ref=e68]
+              - generic [ref=e69]:
+                - group [ref=e71]:
+                  - generic [ref=e72]:
+                    - text: Division
+                    - generic [ref=e73]: "*"
+                    - generic [ref=e74]: (required)
+                  - combobox "Division (required)" [ref=e75]:
+                    - generic [ref=e77]: Choose a division
+                    - img: ▼
+                  - textbox [ref=e78]: __CLEAR__
+                - group [ref=e80]:
+                  - generic [ref=e81]:
+                    - text: District / city
+                    - generic [ref=e82]: "*"
+                    - generic [ref=e83]: (required)
+                  - combobox "District / city (required)" [ref=e84]:
+                    - generic [ref=e86]: Choose a district
+                    - img: ▼
+                  - textbox [ref=e87]: __CLEAR__
+            - generic [ref=e88]:
+              - heading "Your story" [level=3] [ref=e90]
+              - separator [ref=e91]
+              - generic [ref=e92]:
+                - group [ref=e94]:
+                  - generic [ref=e95]: Short directory bio
+                  - textbox "Short directory bio" [ref=e96]:
+                    - /placeholder: 1–2 sentences — this appears on your public member card.
+                - group [ref=e98]:
+                  - generic [ref=e99]:
+                    - text: Why join Anirban?
+                    - generic [ref=e100]: "*"
+                    - generic [ref=e101]: (required)
+                  - textbox "Why join Anirban? (required)" [ref=e102]:
+                    - /placeholder: Share what brings you here, your lived experience, and how you'd like to contribute. Only the review committee sees this — it's never published.
+            - generic [ref=e103]:
+              - heading "Consent" [level=3] [ref=e105]
+              - separator [ref=e106]
+              - group [ref=e109]:
+                - generic [ref=e110]:
+                  - text: I understand my application will be reviewed by trained survivor-led committee members. My story will not be shared without my permission.
+                  - generic [ref=e111]: "*"
+                  - generic [ref=e112]: (required)
+                - group
+          - generic [ref=e113]:
+            - generic [ref=e114]:
+              - img [ref=e115]
+              - text: Encrypted in transit. Visible only to verified committee members.
+            - button "Submit application" [ref=e118]:
+              - text: Submit application
+              - img
+        - paragraph [ref=e119]:
+          - text: Need urgent help instead?
+          - link "File a confidential report" [ref=e120] [cursor=pointer]:
+            - /url: /get-help
+          - text: .
+    - contentinfo [ref=e121]:
+      - generic [ref=e122]:
+        - generic [ref=e123]:
+          - generic [ref=e124]:
+            - generic [ref=e125]:
+              - img "Anirban logo" [ref=e126]
+              - generic [ref=e127]:
+                - generic [ref=e128]: ANIRBAN
+                - generic [ref=e129]: Trafficking Survivors' Network
+            - paragraph [ref=e130]: A Bangladeshi survivors' network of former victims of trafficking — established in 2011 under USAID's FSTIP Activity, implemented by Winrock International.
+          - generic [ref=e131]:
+            - heading "Quick Links" [level=4] [ref=e132]
+            - list [ref=e133]:
+              - listitem [ref=e134]:
+                - link "Home" [ref=e135] [cursor=pointer]:
+                  - /url: /
+              - listitem [ref=e136]:
+                - link "About" [ref=e137] [cursor=pointer]:
+                  - /url: /about
+              - listitem [ref=e138]:
+                - link "Members" [ref=e139] [cursor=pointer]:
+                  - /url: /members
+              - listitem [ref=e140]:
+                - link "Become a member" [ref=e141] [cursor=pointer]:
+                  - /url: /apply
+              - listitem [ref=e142]:
+                - link "Impact Gallery" [ref=e143] [cursor=pointer]:
+                  - /url: /gallery
+              - listitem [ref=e144]:
+                - link "File a report" [ref=e145] [cursor=pointer]:
+                  - /url: /get-help
+              - listitem [ref=e146]:
+                - link "Track a report" [ref=e147] [cursor=pointer]:
+                  - /url: /track
+          - generic [ref=e148]:
+            - heading "Contact" [level=4] [ref=e149]
+            - list [ref=e150]:
+              - listitem [ref=e151]:
+                - img [ref=e152]
+                - generic [ref=e154]:
+                  - text: +880-XXXX-XXXXXX
+                  - text: 24/7 Helpline
+              - listitem [ref=e155]:
+                - img [ref=e156]
+                - generic [ref=e159]: support@anirban.org
+              - listitem [ref=e160]:
+                - img [ref=e161]
+                - generic [ref=e164]: Dhaka · Khulna · Sylhet · Chattogram
+          - generic [ref=e165]:
+            - heading "Stay Informed" [level=4] [ref=e166]
+            - paragraph [ref=e167]: Quarterly updates on advocacy, programs, and impact.
+            - generic [ref=e168]:
+              - textbox "you@email.com" [ref=e169]
+              - button "Subscribe" [ref=e170]
+        - generic [ref=e171]:
+          - paragraph [ref=e172]: © 2026 ANIRBAN Survivor Voice Foundation. All rights reserved.
+          - generic [ref=e173]:
+            - link "Privacy" [ref=e174] [cursor=pointer]:
+              - /url: /legal/privacy
+            - link "Terms" [ref=e175] [cursor=pointer]:
+              - /url: /legal/terms
+            - link "Track a report" [ref=e176] [cursor=pointer]:
+              - /url: /track
+  - button "Open Next.js Dev Tools" [ref=e182] [cursor=pointer]:
+    - img [ref=e183]

@@ -79,4 +79,11 @@ export interface CrudRouterOptions {
   rateLimit?: RateLimitConfig | false;
   /** PreHandler guards applied to every route (CRUD + custom + preset). */
   routeGuards?: RouteHandlerMethod[];
+  /**
+   * Resource's bound `idField` (`_id`, `slug`, `reportId`, …). Surfaces on
+   * `req.arc.idField` for every CRUD route so handlers + middleware can
+   * compose `findOne` filters via `getEntityQuery(req)` without
+   * re-reading resource config. Defaults to `_id`.
+   */
+  idField?: string;
 }

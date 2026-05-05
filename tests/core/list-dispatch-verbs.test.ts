@@ -111,9 +111,15 @@ describe("BaseController — list() resource-dispatch verbs", () => {
       expect((repo as any).distinct).not.toHaveBeenCalled();
     });
 
-    it("throws 400 for systemManaged fields", async () => {
+    // `systemManaged` is a *write* rule (server stamps the value); the
+    // field is still in every list response, so blocking `_distinct`
+    // gives nothing but inconvenience. Pre-fix, the controller refused
+    // distinct queries for server-stamped fields like `createdAt` /
+    // `status`. Now only `hidden: true` blocks. See
+    // `core/fieldRulePredicates.ts` for the canonical predicate.
+    it("ALLOWS _distinct on systemManaged fields (write rule, not visibility)", async () => {
       // biome-ignore lint/suspicious/noExplicitAny: test mock extension
-      (repo as any).distinct = vi.fn();
+      (repo as any).distinct = vi.fn().mockResolvedValue(["a", "b"]);
       controller = new BaseController(repo as never, {
         resourceName: "user",
         schemaOptions: {
@@ -121,9 +127,12 @@ describe("BaseController — list() resource-dispatch verbs", () => {
         },
       });
 
-      await expect(
-        controller.list(createReq(hooks, { query: { _distinct: "internalFlag" } })),
-      ).rejects.toMatchObject({ status: 400 });
+      const res = await controller.list(
+        createReq(hooks, { query: { _distinct: "internalFlag" } }),
+      );
+      expect(res).toMatchObject({ data: ["a", "b"] });
+      // biome-ignore lint/suspicious/noExplicitAny: test mock extension
+      expect((repo as any).distinct).toHaveBeenCalledOnce();
     });
 
     it("throws 501 when the adapter does not implement distinct()", async () => {
