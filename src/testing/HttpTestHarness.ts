@@ -159,9 +159,10 @@ export class HttpTestHarness<T = unknown> {
           });
           expect(res.statusCode).toBeLessThan(300);
           const body = JSON.parse(res.body);
-          expect(body.success).toBe(true);
-          expect(body.data?._id).toBeDefined();
-          createdId = body.data._id;
+          // Arc 2.13+ emits flat payloads — no { success, data } envelope.
+          // The entity is the response body directly.
+          expect(body._id).toBeDefined();
+          createdId = body._id;
         });
       }
 
@@ -175,8 +176,9 @@ export class HttpTestHarness<T = unknown> {
           });
           expect(res.statusCode).toBe(200);
           const body = JSON.parse(res.body);
-          expect(body.success).toBe(true);
-          const list = body.data ?? body.data;
+          // Arc 2.13+ list shape: { data: [...], page, limit, total, ... }
+          // `data` is the array of entities; there is no `success` field.
+          const list = body.data;
           expect(Array.isArray(list)).toBe(true);
         });
       }
@@ -191,7 +193,8 @@ export class HttpTestHarness<T = unknown> {
             headers: this.adminHeaders(),
           });
           expect(res.statusCode).toBe(200);
-          expect(JSON.parse(res.body).data?._id).toBe(createdId);
+          // Flat entity response — _id is top-level.
+          expect(JSON.parse(res.body)._id).toBe(createdId);
         });
 
         it("GET /:id with non-existent ID should return 404", async () => {
@@ -202,7 +205,8 @@ export class HttpTestHarness<T = unknown> {
             headers: this.adminHeaders(),
           });
           expect(res.statusCode).toBe(404);
-          expect(JSON.parse(res.body).success).toBe(false);
+          // Arc 2.13+ error shape: { code, status, message } — no `success` field.
+          expect(JSON.parse(res.body).status).toBe(404);
         });
       }
 
@@ -222,7 +226,8 @@ export class HttpTestHarness<T = unknown> {
               payload,
             });
             expect(res.statusCode).toBe(200);
-            expect(JSON.parse(res.body).success).toBe(true);
+            // Flat entity response — _id is top-level.
+            expect(JSON.parse(res.body)._id).toBe(createdId);
           });
 
           it(`${verb} /:id with non-existent ID should return 404`, async () => {
@@ -250,7 +255,7 @@ export class HttpTestHarness<T = unknown> {
               headers: this.adminHeaders(),
               payload: fixtures.valid as Record<string, unknown>,
             });
-            deleteId = JSON.parse(createRes.body).data?._id;
+            deleteId = JSON.parse(createRes.body)._id;
           }
           if (!deleteId) return;
 
@@ -377,10 +382,11 @@ export class HttpTestHarness<T = unknown> {
           });
           expect(res.statusCode).toBeLessThan(400);
           const body = JSON.parse(res.body);
-          if (body.data?._id && enabledRoutes.has("delete")) {
+          // Arc 2.13+ flat response — _id is top-level.
+          if (body._id && enabledRoutes.has("delete")) {
             await app.inject({
               method: "DELETE",
-              url: `${this.getBaseUrl()}/${body.data._id}`,
+              url: `${this.getBaseUrl()}/${body._id}`,
               headers: this.adminHeaders(),
             });
           }
@@ -404,7 +410,8 @@ export class HttpTestHarness<T = unknown> {
           payload: fixtures.invalid as Record<string, unknown>,
         });
         expect(res.statusCode).toBeGreaterThanOrEqual(400);
-        expect(JSON.parse(res.body).success).toBe(false);
+        // Arc 2.13+ error shape: { code, status, message } — no `success` field.
+        expect(JSON.parse(res.body).status).toBeGreaterThanOrEqual(400);
       });
     });
   }

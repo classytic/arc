@@ -167,6 +167,64 @@ describe("aggregation routes — end-to-end", () => {
     });
   });
 
+  it("bracket-shorthand operators translate to canonical Mongo-shape", async () => {
+    // Regression: arc 2.14.x and earlier shallow-merged the qs-parsed
+    // nested object `{ createdAt: { gte, lte } }` straight into
+    // AggRequest.filter. Mongokit < 3.13.1 then matched it as `$eq` of
+    // the literal object instead of a range — silent broken behavior.
+    // Arc owns URL→IR for aggregations (CRUD goes via QueryParser which
+    // does the same translation), so the expansion belongs HERE so kits
+    // receive a canonical, kit-portable filter shape.
+    aggregateStub.mockClear();
+
+    const from = "2026-01-01T00:00:00.000Z";
+    const to = "2026-12-31T23:59:59.999Z";
+    await app.inject({
+      method: "GET",
+      url:
+        `/orders/aggregations/revenueByStatus?status=pending` +
+        `&createdAt[gte]=${encodeURIComponent(from)}` +
+        `&createdAt[lte]=${encodeURIComponent(to)}` +
+        `&priority[in]=high,urgent`,
+    });
+
+    const calledWith = aggregateStub.mock.calls[0][0];
+    const filter = calledWith.filter as Record<string, unknown>;
+    expect(filter.status).toBe("pending");
+    // Range operators → canonical $gte/$lte with ISO strings coerced to Date
+    const createdAt = filter.createdAt as Record<string, unknown>;
+    expect(createdAt.$gte).toBeInstanceOf(Date);
+    expect(createdAt.$lte).toBeInstanceOf(Date);
+    expect((createdAt.$gte as Date).toISOString()).toBe(from);
+    expect((createdAt.$lte as Date).toISOString()).toBe(to);
+    // Non-range operators preserve their value verbatim under $-prefix
+    const priority = filter.priority as Record<string, unknown>;
+    expect(priority.$in).toBeDefined();
+    // Bare shorthand keys (no `$`) must not leak through
+    expect((createdAt as { gte?: unknown }).gte).toBeUndefined();
+    expect((createdAt as { lte?: unknown }).lte).toBeUndefined();
+  });
+
+  it("non-operator nested objects are NOT misinterpreted as shorthand", async () => {
+    // Guard against false positives: equality-matching on an embedded
+    // sub-document. arc must only expand objects whose keys are ALL
+    // known operators — anything else passes through untouched.
+    aggregateStub.mockClear();
+
+    await app.inject({
+      method: "GET",
+      url: "/orders/aggregations/revenueByStatus?address[city]=NYC",
+    });
+
+    const calledWith = aggregateStub.mock.calls[0][0];
+    const filter = calledWith.filter as Record<string, unknown>;
+    const address = filter.address as Record<string, unknown>;
+    // `city` is not a known operator → no `$` translation, original
+    // shape preserved for kits to handle as embedded-doc match.
+    expect(address.city).toBe("NYC");
+    expect(address.$city).toBeUndefined();
+  });
+
   it("control params (page, limit, _count) are stripped from filter", async () => {
     aggregateStub.mockClear();
 

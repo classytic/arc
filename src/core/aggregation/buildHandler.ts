@@ -323,13 +323,74 @@ function parseDateRange(
 }
 
 /**
+ * Bracket-syntax operator shorthand → canonical Mongo operator. Mirrors
+ * the `operators` map in `ArcQueryParser` so the aggregation route emits
+ * the same shape the CRUD list route produces. Aggregations don't run
+ * through the resource-level QueryParser (they have their own URL→IR
+ * compile path), so this translation has to happen in arc itself —
+ * downstream kits' filter compilers expect canonical `$gte/$lte/$in/...`
+ * keys, not bare `gte/lte/in/...` shorthand.
+ */
+const OPERATOR_SHORTHAND: Record<string, string> = {
+  eq: "$eq",
+  ne: "$ne",
+  gt: "$gt",
+  gte: "$gte",
+  lt: "$lt",
+  lte: "$lte",
+  in: "$in",
+  nin: "$nin",
+  like: "$regex",
+  contains: "$regex",
+  regex: "$regex",
+  exists: "$exists",
+  size: "$size",
+  type: "$type",
+};
+
+const SHORTHAND_RANGE_OPS = new Set(["gt", "gte", "lt", "lte"]);
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+
+function tryCoerceDate(v: unknown): unknown {
+  if (typeof v !== "string" || !ISO_DATE_RE.test(v)) return v;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? v : d;
+}
+
+/**
+ * Translate a qs-parsed nested-operator object (`{ field: { gte, lte } }`)
+ * into Mongo-shape (`{ field: { $gte: Date, $lte: Date } }`). Only fires
+ * when EVERY key is a known shorthand operator — leaves user-data
+ * objects untouched so callers can still equality-match on a stored
+ * sub-document.
+ */
+function expandShorthandOperators(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const nested = value as Record<string, unknown>;
+  const keys = Object.keys(nested);
+  if (keys.length === 0) return value;
+  if (!keys.every((k) => !k.startsWith("$") && OPERATOR_SHORTHAND[k] !== undefined)) {
+    return value;
+  }
+  const expanded: Record<string, unknown> = {};
+  for (const [op, opVal] of Object.entries(nested)) {
+    const mongoOp = OPERATOR_SHORTHAND[op];
+    if (!mongoOp) continue;
+    expanded[mongoOp] = SHORTHAND_RANGE_OPS.has(op) ? tryCoerceDate(opVal) : opVal;
+  }
+  return expanded;
+}
+
+/**
  * Strip control params (page/limit/sort/select/...) and the resource-
  * dispatch verbs from the query, leaving only filter predicates the
- * caller used to narrow the aggregation.
+ * caller used to narrow the aggregation. Bracket-syntax operator
+ * shorthand (`createdAt[gte]=...`) gets translated to canonical Mongo-
+ * shape here so kits don't have to reimplement the URL grammar — same
+ * contract `ArcQueryParser` enforces for the CRUD list route.
  *
  * The resulting record is shallow-merged into the AggRequest filter
- * via `compileAggRequest`. Bracket-syntax keys (`createdAt[gte]`) are
- * preserved — the kit's filter compiler handles them.
+ * via `compileAggRequest`.
  */
 function extractCallerFilter(query: Record<string, unknown>): AnyRecord {
   const out: AnyRecord = {};
@@ -348,7 +409,7 @@ function extractCallerFilter(query: Record<string, unknown>): AnyRecord {
   for (const [key, value] of Object.entries(query)) {
     if (reserved.has(key)) continue;
     if (value === undefined || value === "") continue;
-    out[key] = value;
+    out[key] = expandShorthandOperators(value);
   }
   return out;
 }
