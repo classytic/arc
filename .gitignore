@@ -17,6 +17,7 @@ coverage/
 
 # Build output
 dist/
+.playwright-mcp/
 
 # npm pack artifacts (local dev-bridge tarballs)
 *.tgz
