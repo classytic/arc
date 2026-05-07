@@ -25,7 +25,7 @@ import { buildQueryKey } from "../cache/keys.js";
 import type { QueryCacheConfig } from "../cache/QueryCache.js";
 import { DEFAULT_ID_FIELD, DEFAULT_LIMIT, DEFAULT_TENANT_FIELD } from "../constants.js";
 import type { HookSystem } from "../hooks/HookSystem.js";
-import { getOrgId as getOrgIdFromScope } from "../scope/types.js";
+import { getOrgId as getOrgIdFromScope, isElevated } from "../scope/types.js";
 import type {
   AnyRecord,
   ArcInternalMetadata,
@@ -448,6 +448,20 @@ export class BaseCrudController<
       for (const [key, value] of Object.entries(presetFields)) {
         if (value != null && out[key] == null) out[key] = value;
       }
+    }
+
+    // 1b. Elevated bypass (2.15.3) â€” when the caller is acting in an
+    //     elevated capacity (platform admin via `x-arc-scope: platform`)
+    //     AND no specific tenant target was resolved (no `tenantField`
+    //     value in `out`), forward `bypassTenant: true` so kits with
+    //     `multiTenantPlugin({ required: true })` skip the tenant guard.
+    //     Without this, elevated cross-org reads (e.g. /super/* admin
+    //     dashboards aggregating across tenants) 500 with "Missing
+    //     'organizationId' in context". Elevated callers WITH a target
+    //     org keep the org filter â€” impersonation semantics are still
+    //     scoped, only true cross-tenant queries bypass.
+    if (this.tenantField && out[this.tenantField] == null && scope && isElevated(scope)) {
+      out.bypassTenant = true;
     }
 
     // 2. Audit attribution â€” `userId` (canonical id) and `user` (full
