@@ -585,16 +585,18 @@ describe("aggregation routes — tenant scope threading (2.14.3 regression)", ()
 
     expect(res.statusCode).toBe(200);
     expect(aggregateStub).toHaveBeenCalledTimes(1);
-    const aggReq = aggregateStub.mock.calls[0][0];
-    // The bug surfaced as a missing `organizationId` here — without the
-    // FastifyRequest → IRequestContext conversion, tenantRepoOptions
-    // returned an empty options bag and compileAggRequest had no tenant
-    // filter to compose.
-    expect(aggReq.filter).toBeDefined();
-    expect(aggReq.filter.organizationId).toBe("org-test-123");
+    // Arc threads tenant via the SECOND arg of repo.aggregate(req,
+    // tenantOptions). It does NOT inject `organizationId` into
+    // `aggReq.filter` because arc is DB-agnostic — the kit's
+    // multi-tenant plugin owns the type contract (string / ObjectId /
+    // UUID / …). Before 2.15.2 arc dual-injected and produced a
+    // typed clash (string vs ObjectId) that AND-ed to zero matches.
+    const [aggReq, tenantOptions] = aggregateStub.mock.calls[0];
+    expect(aggReq.filter?.organizationId).toBeUndefined();
+    expect(tenantOptions?.organizationId).toBe("org-test-123");
   });
 
-  it("caller filters compose with tenant scope (tenant LEFT, caller wins on conflict)", async () => {
+  it("caller filters compose with tenant scope (tenant via options, caller in filter)", async () => {
     aggregateStub.mockClear();
 
     await app.inject({
@@ -602,9 +604,13 @@ describe("aggregation routes — tenant scope threading (2.14.3 regression)", ()
       url: "/orders-tenant/aggregations/byStatus?status=delivered",
     });
 
-    const aggReq = aggregateStub.mock.calls[0][0];
-    expect(aggReq.filter.organizationId).toBe("org-test-123");
+    const [aggReq, tenantOptions] = aggregateStub.mock.calls[0];
+    // Tenant flows via the options arg (kit's plugin will read it).
+    expect(tenantOptions?.organizationId).toBe("org-test-123");
+    // Caller filters land in `aggReq.filter`.
     expect(aggReq.filter.status).toBe("delivered");
+    // Arc deliberately keeps tenant out of the filter slot.
+    expect(aggReq.filter.organizationId).toBeUndefined();
   });
 });
 
@@ -675,7 +681,7 @@ describe("aggregation routes — scope-variant coverage (2.15.0 sweep)", () => {
     await teardownTestDatabase();
   });
 
-  it("service scope — organizationId flows from kind:'service'", async () => {
+  it("service scope — organizationId flows from kind:'service' via tenantOptions", async () => {
     aggregateStub.mockClear();
     currentScope = {
       kind: "service",
@@ -684,11 +690,14 @@ describe("aggregation routes — scope-variant coverage (2.15.0 sweep)", () => {
       scopes: ["aggregations:read"],
     };
     await app.inject({ method: "GET", url: "/orders-sweep/aggregations/byStatus" });
-    const aggReq = aggregateStub.mock.calls[0][0];
-    expect(aggReq.filter.organizationId).toBe("org-sweep-svc");
+    // Tenant flows via the SECOND arg of repo.aggregate, not the filter.
+    // Arc is DB-agnostic — type-coercion is the kit's responsibility.
+    const [aggReq, tenantOptions] = aggregateStub.mock.calls[0];
+    expect(tenantOptions?.organizationId).toBe("org-sweep-svc");
+    expect(aggReq.filter?.organizationId).toBeUndefined();
   });
 
-  it("elevated scope — organizationId flows from kind:'elevated'", async () => {
+  it("elevated scope — organizationId flows from kind:'elevated' via tenantOptions", async () => {
     aggregateStub.mockClear();
     currentScope = {
       kind: "elevated",
@@ -699,8 +708,9 @@ describe("aggregation routes — scope-variant coverage (2.15.0 sweep)", () => {
       elevatedFrom: "platform",
     };
     await app.inject({ method: "GET", url: "/orders-sweep/aggregations/byStatus" });
-    const aggReq = aggregateStub.mock.calls[0][0];
-    expect(aggReq.filter.organizationId).toBe("org-target-by-platform-admin");
+    const [aggReq, tenantOptions] = aggregateStub.mock.calls[0];
+    expect(tenantOptions?.organizationId).toBe("org-target-by-platform-admin");
+    expect(aggReq.filter?.organizationId).toBeUndefined();
   });
 
   it("public scope — no tenant filter in AggRequest (allowPublic aggregation, no auth)", async () => {
@@ -719,13 +729,12 @@ describe("aggregation routes — scope-variant coverage (2.15.0 sweep)", () => {
     }
   });
 
-  it("audit attribution — userId flows into tenantOptions, NOT into the filter", async () => {
+  it("audit attribution — userId/requestId flow into tenantOptions, never into the filter", async () => {
     // tenantRepoOptions returns userId / user / requestId in the same
-    // bag as organizationId. extractTenantFilter explicitly excludes
-    // those keys so audit IDs don't leak into Mongo predicates. Lock
-    // the contract here — a regression that started forwarding userId
-    // as a filter would silently scope reads to "rows owned by the
-    // caller," changing the result set.
+    // bag as organizationId. None of those audit keys may leak into
+    // the AggRequest filter — they are operation context, not query
+    // predicates. As of 2.15.2, organizationId itself ALSO stays out
+    // of the filter (arc is DB-agnostic — kit owns the type contract).
     aggregateStub.mockClear();
     currentScope = {
       kind: "member",
@@ -735,11 +744,18 @@ describe("aggregation routes — scope-variant coverage (2.15.0 sweep)", () => {
       orgRoles: ["member"],
     };
     await app.inject({ method: "GET", url: "/orders-sweep/aggregations/byStatus" });
-    const aggReq = aggregateStub.mock.calls[0][0];
-    expect(aggReq.filter.organizationId).toBe("org-audit");
-    expect(aggReq.filter.userId).toBeUndefined();
-    expect(aggReq.filter.user).toBeUndefined();
-    expect(aggReq.filter.requestId).toBeUndefined();
+    const [aggReq, tenantOptions] = aggregateStub.mock.calls[0];
+    // tenant flows via the options arg (userId may also be there
+    // when req.user is set by the auth middleware — controller reads
+    // it from req.user, NOT from scope.userId).
+    expect(tenantOptions?.organizationId).toBe("org-audit");
+    // filter stays clean — no tenant, no audit IDs
+    if (aggReq.filter !== undefined) {
+      expect(aggReq.filter.organizationId).toBeUndefined();
+      expect(aggReq.filter.userId).toBeUndefined();
+      expect(aggReq.filter.user).toBeUndefined();
+      expect(aggReq.filter.requestId).toBeUndefined();
+    }
   });
 });
 

@@ -386,12 +386,18 @@ describe("compileAggRequest — runtime IR composition", () => {
       { organizationId: "org-1", userId: "u-1", requestId: "r-99" }, // tenant + audit options
     );
 
-    // tenant first, host next, caller last
+    // Filter contains ONLY host base + caller — not tenant. Arc is
+    // DB-agnostic: the kit's multi-tenant plugin owns the tenant
+    // type (string / ObjectId / UUID / …) and injects via the 2nd
+    // arg of `repo.aggregate(req, tenantOptions)`. Before 2.15.2 arc
+    // dual-injected an untyped string here AND mongokit cast a typed
+    // clause; the two AND-ed to zero matches.
     expect(req.filter).toEqual({
-      organizationId: "org-1",
       archived: false,
       customerId: "c-42",
     });
+    // organizationId flows via the 2nd arg of repo.aggregate, not filter.
+    expect((req.filter as Record<string, unknown>).organizationId).toBeUndefined();
     // userId / requestId / session / user MUST NOT leak into the filter
     expect((req.filter as Record<string, unknown>).userId).toBeUndefined();
     expect((req.filter as Record<string, unknown>).requestId).toBeUndefined();

@@ -246,6 +246,33 @@ Modes: `memory` (default) | `distributed` (`stores.queryCache: RedisCacheStore`)
 
 ---
 
+## Aggregations (declarative dashboards)
+
+```typescript
+import { defineAggregation } from '@classytic/arc';
+
+aggregations: {
+  byMethod: defineAggregation({
+    groupBy: 'method',
+    measures: { total: 'sum:amount', count: 'count' },
+    sort: { total: -1 },
+    cache: { staleTime: 60, swr: true, tags: ['revenue'] },
+    permissions: canViewRevenue(),
+  }),
+  byDay: defineAggregation({
+    dateBuckets: { day: { field: 'createdAt', interval: 'day' } },
+    groupBy: 'flow',
+    measures: { total: 'sum:amount' },
+    requireDateRange: { field: 'createdAt', maxRangeDays: 365 },
+    permissions: canViewRevenue(),
+  }),
+}
+```
+
+Registers `GET /:prefix/aggregations/:name` per entry. Same permissions, OpenAPI, MCP tool, cache + tag invalidation as CRUD. Tenant flows via the kit's multi-tenant plugin (string → ObjectId casting handled by the kit, **not** by hand). Caller filters via query string (`?status=verified&createdAt[gte]=...`) compose with the declaration. Safety: `requireFilters`, `requireDateRange`, `maxGroups`. **Anti-pattern:** custom routes calling `Model.aggregate([...])` directly — see anti-patterns §33.
+
+---
+
 ## CLI
 
 ```bash

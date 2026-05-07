@@ -197,11 +197,13 @@ describe("MCP — aggregation tool generation", () => {
 
     expect(result.isError).toBeFalsy();
     expect(repo.aggregate).toHaveBeenCalledTimes(1);
-    const req = repo.aggregate.mock.calls[0][0];
-    expect(req.filter).toMatchObject({
-      organizationId: "org-1", // tenant injected
-      status: "delivered", // caller filter
-    });
+    // 2.15.2+: arc threads tenant via the SECOND arg of repo.aggregate
+    // (kit's plugin handles type-coercion). Filter holds caller-side
+    // narrows only.
+    const [req, tenantOptions] = repo.aggregate.mock.calls[0];
+    expect(req.filter).toMatchObject({ status: "delivered" });
+    expect(req.filter?.organizationId).toBeUndefined();
+    expect(tenantOptions?.organizationId).toBe("org-1");
   });
 
   it("denies the call when permissions check fails", async () => {

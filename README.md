@@ -155,6 +155,50 @@ Custom checks return `{ granted, reason?, filters?, scope? }` — `filters` prop
 
 ---
 
+## Aggregations
+
+Add `aggregations: { … }` to a resource and arc registers `GET /:prefix/aggregations/:name` per entry. Each runs a portable `$match → $group → $project → $sort → $limit` pipeline against the kit's `repo.aggregate(req, options)` — same shape across mongokit / sqlitekit / prismakit, so dashboards work unchanged across backends.
+
+```typescript
+import { defineResource, defineAggregation } from '@classytic/arc';
+
+defineResource({
+  name: 'transaction',
+  adapter,
+  presets: [multiTenantPreset({ tenantField: 'organizationId' })],
+  permissions: { list: canViewRevenue() },
+
+  aggregations: {
+    byPaymentMethod: defineAggregation({
+      groupBy: 'method',
+      measures: { total: 'sum:amount', count: 'count' },
+      sort: { total: -1 },
+      cache: { staleTime: 60, swr: true, tags: ['revenue'] },
+      permissions: canViewRevenue(),
+    }),
+    byDay: defineAggregation({
+      dateBuckets: { day: { field: 'createdAt', interval: 'day' } },
+      groupBy: 'flow',
+      measures: { total: 'sum:amount', count: 'count' },
+      requireDateRange: { field: 'createdAt', maxRangeDays: 365 },
+      cache: { staleTime: 60, swr: true, tags: ['revenue'] },
+      permissions: canViewRevenue(),
+    }),
+  },
+});
+```
+
+Caller filters via query string compose with the declaration:
+
+```
+GET /api/transactions/aggregations/byPaymentMethod?status=verified
+GET /api/transactions/aggregations/byDay?createdAt[gte]=2026-01-01&createdAt[lt]=2026-02-01
+```
+
+Tenant scope flows through `repo.aggregate(req, options)` — the kit's multi-tenant plugin handles type-coercion (string → ObjectId for mongokit `fieldType: 'objectId'`, UUID/text for sqlitekit, etc.). Arc itself stays out of the filter slot because it's DB-agnostic. Safety guards on the declaration: `requireFilters`, `requireDateRange { maxRangeDays }`, `maxGroups`. SWR cache + tag invalidation tie aggregations to CRUD writes. Every aggregation auto-exports as an MCP tool with the same permissions and filter validation.
+
+---
+
 ## Authentication
 
 Discriminated union on `type`:
