@@ -499,6 +499,250 @@ describe("aggregation routes — adapter without aggregate()", () => {
   });
 });
 
+describe("aggregation routes — tenant scope threading (2.14.3 regression)", () => {
+  // Pre-2.14.3: defineResource wired aggregation `buildOptions` as
+  // `req => ctrl.tenantRepoOptions(req)` and passed the raw FastifyRequest
+  // straight through. `tenantRepoOptions` reads `req.metadata?._scope`,
+  // which is only populated by `createRequestContext()` in the CRUD path,
+  // so resources declaring `tenantField` WITHOUT `multiTenantPreset` (the
+  // preset independently stashes `_tenantFields` on the raw request) saw
+  // `organizationId` drop and the kit fail with "Missing organizationId
+  // in context". 2.14.3 wraps the conversion at the seam so both surfaces
+  // see the same IRequestContext shape.
+  let app: FastifyInstance;
+  // biome-ignore lint/suspicious/noExplicitAny: stubbed for assertions
+  let aggregateStub: any;
+
+  beforeAll(async () => {
+    await setupTestDatabase();
+
+    const Model = createMockModel("OrderAggTenant");
+    const repo = createMockRepository(Model) as Record<string, unknown>;
+    aggregateStub = vi.fn().mockResolvedValue({ rows: [] });
+    repo.aggregate = aggregateStub;
+
+    const resource = defineResource({
+      name: "ordertenant",
+      prefix: "/orders-tenant",
+      adapter: createMongooseAdapter(Model, repo as never),
+      // tenantField on the controller WITHOUT a multiTenantPreset.
+      // Path 1 (read scope from metadata._scope) is the only org-id
+      // source the controller has under this configuration.
+      controller: new BaseController(repo as never, {
+        resourceName: "ordertenant",
+        tenantField: "organizationId",
+      }),
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
+      },
+      aggregations: {
+        byStatus: defineAggregation({
+          groupBy: "status",
+          measures: { count: "count" },
+          permissions: allowPublic(),
+        }),
+      },
+    });
+
+    app = await createApp({
+      preset: "testing",
+      auth: false,
+      logger: false,
+      plugins: async (f) => {
+        // Stand-in for the auth adapter — sets req.scope on every
+        // request so tenantRepoOptions has something to project.
+        f.addHook("onRequest", async (req) => {
+          (req as unknown as { scope: unknown }).scope = {
+            kind: "member",
+            userId: "u-1",
+            userRoles: ["admin"],
+            organizationId: "org-test-123",
+            orgRoles: ["owner"],
+          };
+        });
+        await f.register(resource.toPlugin());
+      },
+    });
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app?.close();
+    await teardownTestDatabase();
+  });
+
+  it("threads organizationId from req.scope into AggRequest.filter (no preset)", async () => {
+    aggregateStub.mockClear();
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/orders-tenant/aggregations/byStatus",
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(aggregateStub).toHaveBeenCalledTimes(1);
+    const aggReq = aggregateStub.mock.calls[0][0];
+    // The bug surfaced as a missing `organizationId` here — without the
+    // FastifyRequest → IRequestContext conversion, tenantRepoOptions
+    // returned an empty options bag and compileAggRequest had no tenant
+    // filter to compose.
+    expect(aggReq.filter).toBeDefined();
+    expect(aggReq.filter.organizationId).toBe("org-test-123");
+  });
+
+  it("caller filters compose with tenant scope (tenant LEFT, caller wins on conflict)", async () => {
+    aggregateStub.mockClear();
+
+    await app.inject({
+      method: "GET",
+      url: "/orders-tenant/aggregations/byStatus?status=delivered",
+    });
+
+    const aggReq = aggregateStub.mock.calls[0][0];
+    expect(aggReq.filter.organizationId).toBe("org-test-123");
+    expect(aggReq.filter.status).toBe("delivered");
+  });
+});
+
+describe("aggregation routes — scope-variant coverage (2.15.0 sweep)", () => {
+  // The 2.14.3 fix wraps FastifyRequest → IRequestContext at the
+  // aggregation seam. The original regression test only covered a
+  // `member` scope. This block sweeps the other RequestScope kinds
+  // arc supports — making sure the conversion is correct under
+  // service callers, public callers, and audit-attribution flow.
+  let app: FastifyInstance;
+  // biome-ignore lint/suspicious/noExplicitAny: stubbed for assertions
+  let aggregateStub: any;
+  // Scope reference set by a closure so each test can re-arm.
+  let currentScope: unknown = null;
+
+  beforeAll(async () => {
+    await setupTestDatabase();
+
+    const Model = createMockModel("OrderAggScopeSweep");
+    const repo = createMockRepository(Model) as Record<string, unknown>;
+    aggregateStub = vi.fn().mockResolvedValue({ rows: [] });
+    repo.aggregate = aggregateStub;
+
+    const resource = defineResource({
+      name: "ordersweep",
+      prefix: "/orders-sweep",
+      adapter: createMongooseAdapter(Model, repo as never),
+      controller: new BaseController(repo as never, {
+        resourceName: "ordersweep",
+        tenantField: "organizationId",
+      }),
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
+      },
+      aggregations: {
+        byStatus: defineAggregation({
+          groupBy: "status",
+          measures: { count: "count" },
+          permissions: allowPublic(),
+        }),
+      },
+    });
+
+    app = await createApp({
+      preset: "testing",
+      auth: false,
+      logger: false,
+      plugins: async (f) => {
+        f.addHook("onRequest", async (req) => {
+          // Allow each test to swap the scope before injecting the
+          // request. A null scope simulates an unauthenticated caller.
+          if (currentScope) {
+            (req as unknown as { scope: unknown }).scope = currentScope;
+          }
+        });
+        await f.register(resource.toPlugin());
+      },
+    });
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app?.close();
+    await teardownTestDatabase();
+  });
+
+  it("service scope — organizationId flows from kind:'service'", async () => {
+    aggregateStub.mockClear();
+    currentScope = {
+      kind: "service",
+      clientId: "svc-cron-runner",
+      organizationId: "org-sweep-svc",
+      scopes: ["aggregations:read"],
+    };
+    await app.inject({ method: "GET", url: "/orders-sweep/aggregations/byStatus" });
+    const aggReq = aggregateStub.mock.calls[0][0];
+    expect(aggReq.filter.organizationId).toBe("org-sweep-svc");
+  });
+
+  it("elevated scope — organizationId flows from kind:'elevated'", async () => {
+    aggregateStub.mockClear();
+    currentScope = {
+      kind: "elevated",
+      userId: "u-platform-admin",
+      userRoles: ["superadmin"],
+      organizationId: "org-target-by-platform-admin",
+      orgRoles: [],
+      elevatedFrom: "platform",
+    };
+    await app.inject({ method: "GET", url: "/orders-sweep/aggregations/byStatus" });
+    const aggReq = aggregateStub.mock.calls[0][0];
+    expect(aggReq.filter.organizationId).toBe("org-target-by-platform-admin");
+  });
+
+  it("public scope — no tenant filter in AggRequest (allowPublic aggregation, no auth)", async () => {
+    aggregateStub.mockClear();
+    currentScope = { kind: "public" };
+    const res = await app.inject({
+      method: "GET",
+      url: "/orders-sweep/aggregations/byStatus",
+    });
+    expect(res.statusCode).toBe(200);
+    const aggReq = aggregateStub.mock.calls[0][0];
+    // No organizationId on a public scope — controller must NOT inject
+    // an undefined value as a filter (would scope away every row).
+    if (aggReq.filter !== undefined) {
+      expect(aggReq.filter.organizationId).toBeUndefined();
+    }
+  });
+
+  it("audit attribution — userId flows into tenantOptions, NOT into the filter", async () => {
+    // tenantRepoOptions returns userId / user / requestId in the same
+    // bag as organizationId. extractTenantFilter explicitly excludes
+    // those keys so audit IDs don't leak into Mongo predicates. Lock
+    // the contract here — a regression that started forwarding userId
+    // as a filter would silently scope reads to "rows owned by the
+    // caller," changing the result set.
+    aggregateStub.mockClear();
+    currentScope = {
+      kind: "member",
+      userId: "u-audit-target",
+      userRoles: [],
+      organizationId: "org-audit",
+      orgRoles: ["member"],
+    };
+    await app.inject({ method: "GET", url: "/orders-sweep/aggregations/byStatus" });
+    const aggReq = aggregateStub.mock.calls[0][0];
+    expect(aggReq.filter.organizationId).toBe("org-audit");
+    expect(aggReq.filter.userId).toBeUndefined();
+    expect(aggReq.filter.user).toBeUndefined();
+    expect(aggReq.filter.requestId).toBeUndefined();
+  });
+});
+
 describe("aggregation routes — boot validation errors", () => {
   it("missing permissions → defineResource registration throws", async () => {
     const Model = createMockModel("OrderBootBad");

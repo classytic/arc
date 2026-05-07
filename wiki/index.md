@@ -11,6 +11,7 @@ One-line hooks per page. Load only what you need.
 ## Core
 - [core](core.md) — `defineResource`, `BaseController`, `QueryResolver`, `createCrudRouter`
 - [factory](factory.md) — `createApp` entry point + resource loading
+- [engine-backed-resources](engine-backed-resources.md) — factory-export pattern for async-booted engines (catalog / flow / revenue / etc.)
 - [adapters](adapters.md) — adapter contract in repo-core; every kit (mongokit, sqlitekit, prismakit, custom) ships its adapter factory at `@classytic/<kit>/adapter`; arc 2.12 has zero kit-bound adapters
 - [types](types.md) — `request.user`, generics, `unknown` defaults, `AnyRecord`
 

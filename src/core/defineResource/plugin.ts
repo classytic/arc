@@ -43,6 +43,7 @@ import { convertRouteSchema } from "../../utils/schemaConverter.js";
 import { hasEvents } from "../../utils/typeGuards.js";
 import { resolveActionPermission } from "../actionPermissions.js";
 import { createCrudRouter } from "../createCrudRouter.js";
+import { createRequestContext } from "../fastifyAdapter.js";
 import type { ResourceDefinition } from "./ResourceDefinition.js";
 
 // ============================================================================
@@ -491,12 +492,24 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
           );
           const repoForAgg = (resource.controller as unknown as { repository?: unknown })
             ?.repository;
+          // Aggregation handlers receive raw FastifyRequest. `tenantRepoOptions`
+          // reads `req.metadata?._scope` and `req._tenantFields`, both of which
+          // are projected by `createRequestContext()` from `req.scope` /
+          // `req._tenantFields` set by auth + presets. CRUD path runs that
+          // conversion via `routerShared.createRequestContext`; the aggregation
+          // path used to skip it, so resources declaring `tenantField` without
+          // `multiTenantPreset` (which independently stashes `_tenantFields` on
+          // the raw request) saw `organizationId` drop and the kit fail with
+          // "Missing organizationId in context". Convert here so both surfaces
+          // see the same IRequestContext shape. (arc 2.14.3 fix)
           const buildOptions = (req: unknown): AnyRecord => {
             type CtrlWithOptions = {
               tenantRepoOptions?: (req: unknown) => AnyRecord;
             };
             const ctrl = resource.controller as unknown as CtrlWithOptions | undefined;
-            return ctrl?.tenantRepoOptions?.(req) ?? {};
+            if (!ctrl?.tenantRepoOptions) return {};
+            const ctx = createRequestContext(req as Parameters<typeof createRequestContext>[0]);
+            return ctrl.tenantRepoOptions(ctx);
           };
           createAggregationRouter(typedInstance, {
             tag: resource.tag,

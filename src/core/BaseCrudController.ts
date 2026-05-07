@@ -67,8 +67,36 @@ import { getDefaultQueryParser, QueryResolver } from "./QueryResolver.js";
 // Controller Options
 // ============================================================================
 
-export interface BaseControllerOptions {
-  /** Schema options for field sanitization */
+/**
+ * Construction-only options — fields that participate in the
+ * controller's mixin composition / hook identity and **cannot** be
+ * re-tuned post-construction via `configure()`. Pass these once at
+ * construction; if they need to change, build a new controller.
+ *
+ * Layer split (2.15.0): keeping this distinct from the configurable
+ * surface makes the layer explicit at compile time — `configure()`
+ * can't accept these, so accidental "I'll re-name the resource at
+ * runtime" calls fail to typecheck.
+ */
+export interface ControllerConstructionOptions {
+  /** Resource name for hook execution (e.g., 'product' → 'product.created'). */
+  resourceName?: string;
+}
+
+/**
+ * Configurable options — fields arc can forward post-construction via
+ * `BaseController.configure(opts)`. `defineResource()` calls
+ * `configure()` automatically when a user-supplied controller exposes
+ * the method, so resource-level options reach the controller without a
+ * `super(repo, { ... })` dance. Everything except `resourceName` /
+ * `repository` lives here.
+ *
+ * Each field maps 1:1 to a resource-level option on `defineResource()`:
+ * the resource is the public-API source of truth, this interface is
+ * the controller-internal surface arc forwards into.
+ */
+export interface ControllerConfigurableOptions {
+  /** Schema options for field sanitization. */
   schemaOptions?: RouteSchemaOptions;
   /**
    * Query parser instance.
@@ -76,19 +104,17 @@ export interface BaseControllerOptions {
    * Swap in MongoKit QueryParser, pgkit parser, etc.
    */
   queryParser?: QueryParserInterface;
-  /** Maximum limit for pagination (default: 100) */
+  /** Maximum limit for pagination (default: 100). */
   maxLimit?: number;
-  /** Default limit for pagination (default: 20) */
+  /** Default limit for pagination (default: 20). */
   defaultLimit?: number;
   /**
    * Default sort applied when the request doesn't specify one.
-   *   - `string` (default: `'-createdAt'`) â€” Mongo `-field` DESC convention.
-   *   - `false` â€” disable the default sort entirely (SQL/Drizzle resources
+   *   - `string` (default: `'-createdAt'`) — Mongo `-field` DESC convention.
+   *   - `false` — disable the default sort entirely (SQL/Drizzle resources
    *     without a `createdAt` column).
    */
   defaultSort?: string | false;
-  /** Resource name for hook execution (e.g., 'product' -> 'product.created') */
-  resourceName?: string;
   /**
    * Field name used for multi-tenant scoping (default: 'organizationId').
    * Override to match your schema: 'workspaceId', 'tenantId', 'teamId', etc.
@@ -105,9 +131,9 @@ export interface BaseControllerOptions {
    * Provided by the DataAdapter for non-MongoDB databases (SQL, etc.).
    */
   matchesFilter?: (item: unknown, filters: Record<string, unknown>) => boolean;
-  /** Cache configuration for the resource */
+  /** Cache configuration for the resource. */
   cache?: ResourceCacheConfig;
-  /** Internal preset fields map (slug, tree, etc.) */
+  /** Internal preset fields map (slug, tree, etc.). */
   presetFields?: { slugField?: string; parentField?: string };
   /**
    * Policy for requests that include fields the caller can't write.
@@ -116,6 +142,15 @@ export interface BaseControllerOptions {
    */
   onFieldWriteDenied?: FieldWriteDenialPolicy;
 }
+
+/**
+ * Full constructor options — union of construction-only + configurable.
+ * The constructor accepts everything; `configure()` accepts only
+ * `ControllerConfigurableOptions`.
+ */
+export interface BaseControllerOptions
+  extends ControllerConstructionOptions,
+    ControllerConfigurableOptions {}
 
 // ============================================================================
 // Base CRUD Controller â€” core + list/get/create/update/delete only
@@ -145,10 +180,21 @@ export class BaseCrudController<
   protected tenantField: string | false;
   protected idField: string = DEFAULT_ID_FIELD;
 
-  /** Composable access control (ID filtering, policy checks, org scope, ownership) */
-  readonly accessControl: AccessControl;
-  /** Composable body sanitization (field permissions, system fields) */
-  readonly bodySanitizer: BodySanitizer;
+  /**
+   * Composable access control (ID filtering, policy checks, org scope, ownership).
+   *
+   * Not `readonly` since 2.15.0 — `configure()` rebuilds it when the host
+   * supplies tenant/idField/matchesFilter post-construction. Same model as
+   * `queryResolver` after `setQueryParser` shipped in 2.10.9.
+   */
+  accessControl: AccessControl;
+  /**
+   * Composable body sanitization (field permissions, system fields).
+   *
+   * Not `readonly` since 2.15.0 — `configure()` rebuilds it when the host
+   * supplies schemaOptions/onFieldWriteDenied post-construction.
+   */
+  bodySanitizer: BodySanitizer;
   /**
    * Composable query resolution (parsing, pagination, sort, select/populate).
    *
@@ -223,6 +269,117 @@ export class BaseCrudController<
   setQueryParser(queryParser: QueryParserInterface): void {
     this.queryParser = queryParser;
     this.queryResolver.setParser(queryParser);
+  }
+
+  // ============================================================================
+  // Resource-level option configuration (post-construction)
+  // ============================================================================
+
+  /**
+   * Apply resource-level options to a custom controller AFTER construction.
+   *
+   * Closes the pre-2.15 footgun where `defineResource({ controller, tenantField,
+   * schemaOptions, ... })` warned that the options were "dropped" because the
+   * user-supplied controller never received them. Hosts had to remember to
+   * forward each one through `super(repo, { ... })` — easy to miss, silently
+   * mis-scopes queries when missed.
+   *
+   * `defineResource()` now calls `controller.configure(resolvedOpts)` after
+   * `resolveOrAutoCreateController()` runs. Configure-aware controllers receive
+   * the resolved values; arc skips the dropped-options warn for them.
+   *
+   * Only the keys that affect cross-cutting state (tenant scope, schema/field
+   * rules, sort/limit policy, cache, write-denial policy) are honoured —
+   * `repository` / `resourceName` are constructor-only because they participate
+   * in mixin composition. Each known key rebuilds the affected sub-component
+   * (AccessControl / BodySanitizer / QueryResolver) so referentially-stable
+   * consumers don't see stale state.
+   *
+   * Idempotent: safe to call zero, one, or many times before first request;
+   * arc calls it exactly once.
+   *
+   * Type narrowed to `ControllerConfigurableOptions` — `resourceName` is
+   * construction-only and intentionally excluded so accidental "rename
+   * the resource at runtime" calls fail to typecheck.
+   */
+  configure(options: ControllerConfigurableOptions): void {
+    let rebuildAccessControl = false;
+    let rebuildBodySanitizer = false;
+    let rebuildQueryResolver = false;
+    let bodySanitizerOnFieldWriteDenied: FieldWriteDenialPolicy | undefined;
+    let resolverDefaultSort: string | false | undefined;
+
+    if (options.tenantField !== undefined) {
+      this.tenantField = options.tenantField;
+      rebuildAccessControl = true;
+      rebuildQueryResolver = true;
+    }
+    if (options.idField !== undefined) {
+      this.idField = options.idField;
+      rebuildAccessControl = true;
+    }
+    if (options.matchesFilter !== undefined) {
+      this._matchesFilter = options.matchesFilter;
+      rebuildAccessControl = true;
+    }
+    if (options.schemaOptions !== undefined) {
+      this.schemaOptions = options.schemaOptions;
+      rebuildBodySanitizer = true;
+      rebuildQueryResolver = true;
+    }
+    if (options.onFieldWriteDenied !== undefined) {
+      bodySanitizerOnFieldWriteDenied = options.onFieldWriteDenied;
+      rebuildBodySanitizer = true;
+    }
+    if (options.queryParser !== undefined) {
+      this.setQueryParser(options.queryParser);
+    }
+    if (options.maxLimit !== undefined) {
+      this.maxLimit = options.maxLimit;
+      rebuildQueryResolver = true;
+    }
+    if (options.defaultLimit !== undefined) {
+      this.defaultLimit = options.defaultLimit;
+      rebuildQueryResolver = true;
+    }
+    if (options.defaultSort !== undefined) {
+      resolverDefaultSort = options.defaultSort;
+      rebuildQueryResolver = true;
+    }
+    if (options.cache !== undefined) {
+      this._cacheConfig = options.cache;
+    }
+    if (options.presetFields !== undefined) {
+      this._presetFields = options.presetFields;
+    }
+
+    if (rebuildAccessControl) {
+      this.accessControl = new AccessControl({
+        tenantField: this.tenantField,
+        idField: this.idField,
+        matchesFilter: this._matchesFilter,
+      });
+    }
+    if (rebuildBodySanitizer) {
+      this.bodySanitizer = new BodySanitizer({
+        schemaOptions: this.schemaOptions,
+        onFieldWriteDenied: bodySanitizerOnFieldWriteDenied,
+      });
+    }
+    if (rebuildQueryResolver) {
+      // Preserve the existing resolver's parser (might have been swapped via
+      // setQueryParser) when we rebuild for non-parser reasons. Configure
+      // calls that change `queryParser` go through `setQueryParser` above
+      // and don't trip this rebuild.
+      this.queryResolver = new QueryResolver({
+        queryParser: this.queryParser,
+        maxLimit: this.maxLimit,
+        defaultLimit: this.defaultLimit,
+        defaultSort: resolverDefaultSort,
+        schemaOptions: this.schemaOptions,
+        tenantField: this.tenantField,
+      });
+    }
   }
 
   // ============================================================================

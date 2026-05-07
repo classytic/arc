@@ -8,9 +8,13 @@ Detailed release notes now live under [changelog/](changelog/). This root file s
 
 See [changelog/v2.md](changelog/v2.md) for the full v2 release history.
 
+## 2.15
+
+See [changelog/v2.md#2150](changelog/v2.md#2150).
+
 ## 2.14
 
-See [changelog/v2.md#2142](changelog/v2.md#2142).
+See [changelog/v2.md#2143](changelog/v2.md#2143).
 
 ## 2.13
 

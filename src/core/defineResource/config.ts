@@ -43,6 +43,13 @@ export interface InternalConfigExtras {
   /** Names of presets that ran (for introspection / registry metadata). */
   _appliedPresets?: string[];
   /**
+   * Snapshot of the keys the caller literally passed (before presets,
+   * before `inferTenantFieldFromAdapter`, before any auto-inject). Used
+   * by `warnOnDroppedAuthorOptions` so warns fire only on keys the
+   * USER set — not on values arc itself injected. (2.15.0)
+   */
+  _declaredKeys?: ReadonlySet<string>;
+  /**
    * Controller-construction options collected from presets
    * (slugLookup → `slugField`, parent → `parentField`, etc.).
    * Threaded into auto-built `BaseController` via the `presetFields`

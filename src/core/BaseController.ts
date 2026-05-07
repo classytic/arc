@@ -46,7 +46,11 @@ import type {
   QueryParserInterface,
 } from "../types/index.js";
 import type { AccessControl } from "./AccessControl.js";
-import { BaseCrudController, type ListResult } from "./BaseCrudController.js";
+import {
+  BaseCrudController,
+  type ControllerConfigurableOptions,
+  type ListResult,
+} from "./BaseCrudController.js";
 import type { BodySanitizer } from "./BodySanitizer.js";
 import { BulkMixin } from "./mixins/bulk.js";
 import { SlugMixin } from "./mixins/slug.js";
@@ -151,13 +155,22 @@ export interface BaseController<
   TDoc extends AnyRecord = AnyRecord,
   _TRepository extends RepositoryLike = RepositoryLike<TDoc>,
 > {
-  // Composable surface (readonly refs, typed for consumer use)
-  readonly accessControl: AccessControl;
-  readonly bodySanitizer: BodySanitizer;
+  // Composable surface — mutable since 2.15.0 to align with `configure()`
+  // rebuild semantics; consumers should still treat them as stable refs
+  // between requests.
+  accessControl: AccessControl;
+  bodySanitizer: BodySanitizer;
   queryResolver: QueryResolver;
 
   // Post-construction parser swap (v2.10.9)
   setQueryParser(queryParser: QueryParserInterface): void;
+
+  // Post-construction option configure (v2.15.0) — arc auto-calls this
+  // after `resolveOrAutoCreateController` so user-supplied controllers
+  // receive resource-level options without a `super(repo, ...)` dance.
+  // Narrowed to ControllerConfigurableOptions — resourceName and other
+  // construction-only fields are intentionally excluded.
+  configure(options: ControllerConfigurableOptions): void;
 
   // CRUD core (inherited from BaseCrudController) — redeclared to thread TDoc
   list(req: IRequestContext): Promise<IControllerResponse<ListResult<TDoc>>>;
