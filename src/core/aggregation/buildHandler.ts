@@ -153,12 +153,22 @@ export async function executeAggregation(
   // compileAggRequest) — repo-core 0.4's portable channel. Mongokit
   // applies them via `applyExecutionHints()`; sqlitekit and other
   // kits ignore unsupported hints silently.
+  //
+  // Pass `tenantOptions` as the second arg so the kit's per-op
+  // context bag receives `organizationId` / `userId` / `requestId`.
+  // Without this, plugins registered via `before:aggregate` (multi-
+  // tenant, soft-delete, audit) can't read tenant scope and fail
+  // closed with "Missing 'organizationId' in context". The tenant
+  // info also lands in `aggReq.filter` via `extractTenantFilter()`
+  // for backwards compatibility with kits whose `aggregate()` is
+  // still single-arg — kits with the two-arg signature get scope on
+  // both channels and the merge is idempotent.
   let result: AggResult<AnyRecord>;
   try {
     const repoLike = repo as {
-      aggregate: (req: AggRequest) => Promise<AggResult<AnyRecord>>;
+      aggregate: (req: AggRequest, options?: AnyRecord) => Promise<AggResult<AnyRecord>>;
     };
-    result = await repoLike.aggregate(aggReq);
+    result = await repoLike.aggregate(aggReq, tenantOptions);
   } catch (err) {
     return mapAggregateError(err, aggregationName);
   }

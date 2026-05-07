@@ -343,6 +343,17 @@ export interface CreateAppOptions {
   /** Fastify plugin/onReady timeout in ms (default: 10_000). Raise for slow boot work (index materialisation, WAL replay, external warm-up). */
   pluginTimeout?: number;
 
+  /**
+   * Maximum JSON body size in bytes. Pass-through to Fastify's
+   * server-level `bodyLimit` option; default is Fastify's 1 MiB
+   * (1_048_576 bytes). Raise for hosts shipping bulk-import / CSV ingest
+   * / JSON-RPC batch endpoints — without this, Fastify rejects oversized
+   * payloads with `FST_ERR_CTP_BODY_TOO_LARGE` (413) before any route
+   * handler runs. File uploads on `multipart` routes are governed
+   * separately by `multipart.limits.fileSize`. (2.15.1)
+   */
+  bodyLimit?: number;
+
   // ============================================
   // Authentication (New Clean API)
   // ============================================
@@ -471,8 +482,33 @@ export interface CreateAppOptions {
   arcPlugins?: {
     /** Request ID tracking (default: true) */
     requestId?: boolean;
-    /** Health endpoints (default: true) */
-    health?: boolean;
+    /**
+     * Health endpoints (default: true).
+     *
+     * Three forms:
+     *   - `true` (default) — register Arc's health plugin with no extra checks
+     *     (`/_health/live` always 200, `/_health/ready` 200 unless explicit
+     *     readiness probes are added later).
+     *   - `false` — disable Arc's health plugin entirely; the host registers
+     *     its own (or none).
+     *   - `{ checks: HealthCheck[] }` — register Arc's health plugin AND
+     *     attach the supplied readiness probes (Mongo connectivity, engine
+     *     warmup, queue connectivity, etc.). Closes the pre-2.15.1 hole
+     *     where adding checks meant `health: false` + manual re-registration.
+     *
+     * @example
+     * ```typescript
+     * arcPlugins: {
+     *   health: {
+     *     checks: [
+     *       { name: 'mongo', check: async () => mongoose.connection.readyState === 1 },
+     *       { name: 'catalog-engine', check: async () => catalog.isReady() },
+     *     ],
+     *   },
+     * }
+     * ```
+     */
+    health?: boolean | import("../plugins/health.js").HealthOptions;
     /** Graceful shutdown handling (default: true) */
     gracefulShutdown?: boolean;
     /** Emit events for CRUD operations (default: true) */

@@ -35,7 +35,11 @@
  * });
  */
 
-import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
+import Fastify, {
+  type FastifyInstance,
+  type FastifyRequest,
+  type FastifyServerOptions,
+} from "fastify";
 import qs from "qs";
 import { arcLog } from "../logger/index.js";
 import { getPreset } from "./presets.js";
@@ -53,6 +57,63 @@ import type { CreateAppOptions } from "./types.js";
 // ── Constants ──
 
 const MEMORY_STORE_NAMES = new Set(["memory", "memory-cache"]);
+
+/**
+ * Default redact paths layered into Fastify's pino logger when the host
+ * doesn't supply a `logger.redact` of their own. Covers the common token /
+ * cookie / password leak surfaces — `Authorization` and `Cookie` headers
+ * (and their case-variants because Node lower-cases incoming headers but
+ * outgoing logs may carry either), API-key headers, and any nested
+ * `password` / `token` / `secret` / `apiKey` fields anywhere in the log
+ * tree.
+ *
+ * Hosts that need NO redaction (test fixtures, security audits) opt out
+ * with `logger: { redact: [] }`. Hosts that need MORE redaction supply
+ * their own `redact` and arc steps aside — this default never overrides
+ * an explicit setting. (2.15.1)
+ */
+export const DEFAULT_LOGGER_REDACT_PATHS = [
+  "req.headers.authorization",
+  'req.headers["x-api-key"]',
+  'req.headers["x-internal-api-key"]',
+  "req.headers.cookie",
+  'req.headers["set-cookie"]',
+  'res.headers["set-cookie"]',
+  "*.password",
+  "*.passwordHash",
+  "*.token",
+  "*.accessToken",
+  "*.refreshToken",
+  "*.secret",
+  "*.apiKey",
+] as const;
+
+/**
+ * Resolve the host's `logger` option, layering safe redact defaults
+ * when the host hasn't supplied any. Returns the value Fastify expects
+ * for its `logger` server option.
+ *
+ * Three branches:
+ *   - `logger === false` → pass through (no logger).
+ *   - `logger === undefined` → enable with default redact paths.
+ *   - `logger === true` → enable with default redact paths.
+ *   - `logger` is an object → respect explicit `redact` (host wins);
+ *     otherwise inject defaults.
+ */
+export function resolveLoggerConfig(
+  logger: CreateAppOptions["logger"],
+): FastifyServerOptions["logger"] {
+  if (logger === false) return false;
+  if (logger === true || logger === undefined) {
+    return { redact: [...DEFAULT_LOGGER_REDACT_PATHS] };
+  }
+  if (typeof logger === "object" && logger !== null) {
+    const objLogger = logger as Record<string, unknown>;
+    if (objLogger.redact !== undefined) return logger;
+    return { ...objLogger, redact: [...DEFAULT_LOGGER_REDACT_PATHS] } as typeof logger;
+  }
+  return logger;
+}
 
 // ── Validation ──
 
@@ -161,9 +222,11 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   const config: CreateAppOptions = { ...presetConfig, ...options };
 
   const fastify: FastifyInstance = Fastify({
-    logger: config.logger ?? true,
+    logger: resolveLoggerConfig(config.logger),
     trustProxy: config.trustProxy ?? false,
     pluginTimeout: config.pluginTimeout ?? 10_000,
+    // Honour an explicit override; Fastify's default (1 MiB) applies otherwise.
+    ...(config.bodyLimit !== undefined ? { bodyLimit: config.bodyLimit } : {}),
     routerOptions: {
       querystringParser: (str: string) => qs.parse(str),
     },

@@ -10,7 +10,7 @@ See [changelog/v2.md](changelog/v2.md) for the full v2 release history.
 
 ## 2.15
 
-See [changelog/v2.md#2150](changelog/v2.md#2150).
+See [changelog/v2.md#2151](changelog/v2.md#2151).
 
 ## 2.14
 
