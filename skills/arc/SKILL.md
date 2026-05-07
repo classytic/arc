@@ -639,6 +639,83 @@ defineResource({
 
 MCP auto-derives `filterableFields` from `queryParser`.
 
+## Aggregations — dashboards in declarative form
+
+Add `aggregations: { … }` to a resource and Arc registers `GET
+/{prefix}/aggregations/:name` per entry. Each runs a portable `$match
+→ $group → $project → $sort → $limit` pipeline against the kit's
+`repo.aggregate(req, options)` — same shape across mongokit /
+sqlitekit / prismakit, so dashboards work unchanged across backends.
+
+```typescript
+import { defineResource, defineAggregation } from '@classytic/arc';
+
+defineResource({
+  name: 'transaction',
+  adapter,
+  presets: [multiTenantPreset({ tenantField: 'organizationId' })],
+  permissions: { list: canViewRevenue() },
+
+  aggregations: {
+    byPaymentMethod: defineAggregation({
+      groupBy: 'method',
+      measures: { total: 'sum:amount', count: 'count' },
+      sort: { total: -1 },
+      cache: { staleTime: 60, swr: true, tags: ['revenue'] },
+      permissions: canViewRevenue(),
+    }),
+    byFlow: defineAggregation({
+      groupBy: 'flow',
+      measures: { total: 'sum:amount', count: 'count' },
+      cache: { staleTime: 60, swr: true, tags: ['revenue'] },
+      permissions: canViewRevenue(),
+    }),
+    byDay: defineAggregation({
+      dateBuckets: { day: { field: 'createdAt', interval: 'day' } },
+      groupBy: 'flow',
+      measures: { total: 'sum:amount', count: 'count' },
+      sort: { day: 1 },
+      requireDateRange: { field: 'createdAt', maxRangeDays: 365 },
+      cache: { staleTime: 60, swr: true, tags: ['revenue'] },
+      permissions: canViewRevenue(),
+    }),
+  },
+});
+```
+
+**Tenant scope flows through the second arg, NOT the filter.** Arc is
+DB-agnostic — type-coercion (string → ObjectId for mongokit
+`fieldType: 'objectId'`, UUID/text for sqlitekit, etc.) belongs to the
+kit. Arc threads `tenantOptions` to `repo.aggregate(req, options)`;
+the kit's multi-tenant plugin reads `context.organizationId`, casts
+correctly, and merges into the request. Authors never inject the
+tenant key into `aggReq.filter` themselves.
+
+**Caller filters via query string compose with `groupBy` / measures:**
+
+```
+GET /api/transactions/aggregations/byPaymentMethod?status=verified
+GET /api/transactions/aggregations/byDay?createdAt[gte]=2026-01-01&createdAt[lt]=2026-02-01
+```
+
+**Safety guards on the declaration:**
+- `requireDateRange: { field, maxRangeDays }` — bounded range mandatory; kills accidental all-time scans
+- `requireFilters: ['orgId']` — mandatory scope keys
+- `maxGroups: 1000` — post-execution row cap; 422 on overflow
+
+**Cache invalidation:** writes through resource CRUD bump the
+matching tag. Aggregations cached with the same `tags` invalidate
+together. SWR mode serves stale immediately while revalidating in
+background.
+
+**MCP auto-export:** every aggregation surfaces as an MCP tool
+named `{resource}_aggregations_{name}` with the same permission gate
+and filter validation as the HTTP route.
+
+For backends without `repo.aggregate` (custom adapters), declare a
+`materialized` hook on the aggregation — Arc routes through it
+instead of the kit and returns the same `{ rows }` envelope.
+
 ## QueryCache
 
 TanStack Query-style server cache, stale-while-revalidate, auto-invalidation on mutations.

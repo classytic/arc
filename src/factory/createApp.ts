@@ -227,6 +227,17 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     pluginTimeout: config.pluginTimeout ?? 10_000,
     // Honour an explicit override; Fastify's default (1 MiB) applies otherwise.
     ...(config.bodyLimit !== undefined ? { bodyLimit: config.bodyLimit } : {}),
+    // Arc deliberately replaces Fastify 5's default error handler with the
+    // canonical ErrorContract converter (see plugins/errorHandler.ts).
+    // Fastify 5 emits FSTWRN004 when `setErrorHandler` runs in a scope
+    // that already has one — true for our case because the default
+    // handler counts as "set" at root. The value semantics are:
+    //   - undefined / 'warn' (default) → allow + emit FSTWRN004
+    //   - true                          → allow silently
+    //   - false                         → throw FST_ERR_ERROR_HANDLER_ALREADY_SET
+    // Pick `true`: the cross-cutting handler is the documented arc
+    // contract, override is intentional, no need to bark at boot.
+    allowErrorHandlerOverride: true,
     routerOptions: {
       querystringParser: (str: string) => qs.parse(str),
     },
@@ -235,6 +246,17 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         coerceTypes: true,
         useDefaults: true,
         removeAdditional: false,
+        // Disable Ajv `strictTypes` because mongokit (and other kits) emit
+        // `additionalProperties: true` WITHOUT `type: 'object'` for
+        // `Schema.Types.Mixed` fields. That's deliberate: a `Mixed` field
+        // accepts ANY JS value (string, number, boolean, object, array,
+        // null), so adding `type: 'object'` would reject valid primitives
+        // at AJV validation. See `mongokit/src/utils/mongooseToJsonSchema.ts`
+        // line 481-487 for the rationale. Strict mode flags this combo
+        // and pollutes boot logs even though the schemas validate
+        // correctly. Other strict-mode signals (`strict`, `strictSchema`,
+        // `strictNumbers`, `strictRequired`) stay on by Ajv default.
+        strictTypes: false,
         keywords: ["example", ...(config.ajv?.keywords ?? [])],
       },
     },

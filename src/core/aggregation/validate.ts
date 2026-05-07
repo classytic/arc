@@ -188,11 +188,28 @@ export function compileAggRequest(
   tenantOptions: AnyRecord,
 ): AggRequest {
   const baseFilter = normalized.compiled.filter ?? {};
-  const tenantFilter = extractTenantFilter(tenantOptions);
 
-  // Compose: tenant FIRST (LEFT-most for index alignment) → host base → caller
+  // Tenant scope is DELIBERATELY NOT merged into `aggReq.filter`. Arc
+  // is DB-agnostic — it knows the orgId as a JS string from request
+  // scope, but it has no idea whether the kit stores it as an
+  // ObjectId (mongokit `fieldType: 'objectId'`), a UUID (pgkit), a
+  // text column (sqlitekit), or something else. The kit's
+  // multi-tenant plugin owns that type contract.
+  //
+  // Arc threads tenant through `tenantOptions` — the second arg of
+  // `repo.aggregate(req, options)`. The kit's `before:aggregate` hook
+  // reads `context.organizationId` from there, casts to its native
+  // type, and injects into the right slot (`context.query` /
+  // `context.filters`). Mongokit's `_injectPolicyScopeIntoAgg` then
+  // merges that into `req.filter` for the actual `$match`.
+  //
+  // Earlier 2.15.x called `extractTenantFilter(tenantOptions)` here
+  // and produced a string clause. Mongokit's plugin produced the
+  // matching ObjectId clause. The two AND-ed to zero matches because
+  // Mongo doesn't auto-coerce string ↔ ObjectId in `$match`. Lesson:
+  // type-coercion belongs in the kit, not the framework. (2.15.2)
+  void tenantOptions;
   const filter: AnyRecord = {
-    ...tenantFilter,
     ...baseFilter,
     ...callerFilter,
   };

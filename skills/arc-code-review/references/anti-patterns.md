@@ -894,6 +894,49 @@ Then check whether the hook body sets headers (`reply.header(`, `reply.headers[`
 
 ---
 
+## §33. Hand-rolled aggregation routes when `aggregations: { … }` would do 🟠
+
+**Detection:**
+```
+pattern: "Model\\.aggregate\\(\\["
+output_mode: content
+```
+Also: `\\.aggregate\\(\\s*\\[`, `\\$group\\b`, `\\$match\\b` inside resource handler files. Plus inline mongoose pipeline imports inside route handlers (vs. inside the kit's repository).
+
+**Anti-pattern:**
+```typescript
+// In a custom GET /aggregate/byPaymentMethod route:
+const orgId = getOrgId(getScope(req));
+const rows = await Transaction.aggregate([
+  { $match: { organizationId: new mongoose.Types.ObjectId(orgId), status: 'verified' } },
+  { $group: { _id: '$method', total: { $sum: '$amount' }, count: { $sum: 1 } } },
+  { $sort: { total: -1 } },
+]);
+return reply.send({ rows });
+```
+
+**Why high:** loses every cross-cutting feature arc's aggregation router gives for free — per-aggregation permissions, OpenAPI schema, MCP tool export, SWR cache + tag invalidation, `requireFilters` / `requireDateRange` safety guards, `maxGroups` cap, multi-tenant scope without manual `ObjectId` casting. The hand-rolled version also drifts: every new bucket needs a new route, no central declaration, no unified shape across kits.
+
+**Fix:** declare `aggregations: { name: defineAggregation({ groupBy, measures, sort, cache, permissions }) }` on the resource. Arc registers `GET /:prefix/aggregations/:name` per entry, threads `tenantOptions` to `repo.aggregate(req, options)`, and the kit's multi-tenant plugin handles type-coercion. Type-coercion (string → ObjectId / UUID / text) is **the kit's responsibility, not the framework's** — never inject the tenant key into `aggReq.filter` from arc-host code.
+
+```typescript
+import { defineAggregation } from '@classytic/arc';
+
+aggregations: {
+  byPaymentMethod: defineAggregation({
+    groupBy: 'method',
+    measures: { total: 'sum:amount', count: 'count' },
+    sort: { total: -1 },
+    cache: { staleTime: 60, swr: true, tags: ['revenue'] },
+    permissions: canViewRevenue(),
+  }),
+}
+```
+
+For backends without `repo.aggregate`, declare a `materialized` hook on the aggregation — the router calls it instead of the kit and keeps the same `{ rows }` envelope, permission gate, and cache contract.
+
+---
+
 ## Detection checklist (run-order)
 
 Run sweeps in this order — early hits often invalidate later context:
@@ -909,3 +952,4 @@ Run sweeps in this order — early hits often invalidate later context:
 9. §14, §18, §19 — preset adoption + custom controller wiring
 10. §11, §12, §13, §29, §30, §31 — style and edges
 11. §32a–§32g — canonical-contract drift (pagination / events / tenant / errors / adapter imports), missing `requireOrgId` accessors, missing `schemaGenerator`, kit-specific adapter imports from arc (3.0 break)
+12. §33 — hand-rolled `Model.aggregate([...])` in resource routes vs declarative `aggregations: { … }`

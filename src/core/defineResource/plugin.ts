@@ -171,6 +171,10 @@ export function normalizeListQuerySchema(listQuerySchema: AnyRecord): AnyRecord 
     }
   }
   return {
+    // Ajv strict mode requires `type: 'object'` next to `additionalProperties`
+    // (otherwise `strictTypes` warns at compile time). Stamp it explicitly
+    // so list query schemas validate cleanly under strict Ajv.
+    type: "object",
     ...listQuerySchema,
     ...(normalizedProps ? { properties: normalizedProps } : {}),
     additionalProperties: listQuerySchema.additionalProperties ?? true,
@@ -211,6 +215,10 @@ function safeBody(schema: AnyRecord): AnyRecord {
   // fallback extractor doesn't reject unknown fields. Adapters that want
   // strict rejection can opt in by setting `additionalProperties: false`
   // explicitly — the spread order means an explicit value wins.
+  //
+  // Both `type: 'object'` and `additionalProperties: true` ship together
+  // — Ajv strict mode warns when `additionalProperties` lands on a
+  // schema that lacks a declared `type`.
   if (schema && typeof schema === "object" && schema.type === "object") {
     return { additionalProperties: true, ...schema };
   }
