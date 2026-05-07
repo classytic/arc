@@ -759,6 +759,384 @@ describe("aggregation routes — scope-variant coverage (2.15.0 sweep)", () => {
   });
 });
 
+describe("aggregation routes — preset-driven multi-tenant scoping", () => {
+  // Regression: shajghor + fitverse hit a bug where a resource using
+  // `presets: [multiTenantPreset({ tenantField: 'organizationId' })]`
+  // (with no `controller:` override) had its CRUD list correctly tenant-
+  // scoped but its `/aggregations/:name` routes leaked across orgs.
+  //
+  // Root cause: multiTenantPreset returns middlewares for the 5 CRUD
+  // slots (list, get, create, update, delete) but NO `aggregations`
+  // slot. The preset's preHandler — which writes `req._tenantFields`
+  // and `req._policyFilters` — never ran on aggregation routes. Arc's
+  // `tenantRepoOptions` then had nothing to project from for callers
+  // whose `scope.kind !== 'member'` (BA users without a `member`
+  // collection entry, sessions where activeOrg isn't promoted to a
+  // member-shape scope, etc.) — so the AggRequest reached the kit
+  // with no organizationId and returned every org's rows.
+  //
+  // Lock-in: the preset must populate `_tenantFields` for aggregation
+  // requests too, so `tenantRepoOptions`'s path-2 fallback fires even
+  // when path-1 (scope.organizationId) is empty.
+  let app: FastifyInstance;
+  // biome-ignore lint/suspicious/noExplicitAny: stubbed for assertions
+  let aggregateStub: any;
+  let currentScope: unknown = null;
+
+  beforeAll(async () => {
+    await setupTestDatabase();
+
+    const { multiTenantPreset } = await import("../../../src/presets/multiTenant.js");
+
+    const Model = createMockModel("OrderAggPreset");
+    const repo = createMockRepository(Model) as Record<string, unknown>;
+    aggregateStub = vi.fn().mockResolvedValue({ rows: [] });
+    repo.aggregate = aggregateStub;
+
+    const resource = defineResource({
+      name: "orderpreset",
+      prefix: "/orders-preset",
+      adapter: createMongooseAdapter(Model, repo as never),
+      // NO `controller:` — arc auto-builds. Preset is the SOLE source
+      // of tenant configuration.
+      presets: [multiTenantPreset({ tenantField: "organizationId" })],
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
+      },
+      aggregations: {
+        byStatus: defineAggregation({
+          groupBy: "status",
+          measures: { count: "count" },
+          permissions: allowPublic(),
+        }),
+      },
+    });
+
+    app = await createApp({
+      preset: "testing",
+      auth: false,
+      logger: false,
+      plugins: async (f) => {
+        f.addHook("onRequest", async (req) => {
+          if (currentScope) {
+            (req as unknown as { scope: unknown }).scope = currentScope;
+          }
+        });
+        await f.register(resource.toPlugin());
+      },
+    });
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app?.close();
+    await teardownTestDatabase();
+  });
+
+  it("multiTenantPreset wires tenant scope to /aggregations/:name (org A request → orgId in tenantOptions)", async () => {
+    aggregateStub.mockClear();
+    currentScope = {
+      kind: "member",
+      userId: "u-org-a",
+      userRoles: [],
+      organizationId: "org-a",
+      orgRoles: ["member"],
+    };
+    const res = await app.inject({
+      method: "GET",
+      url: "/orders-preset/aggregations/byStatus",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(aggregateStub).toHaveBeenCalledTimes(1);
+    const [, tenantOptions] = aggregateStub.mock.calls[0];
+    // The bug surfaced as `tenantOptions.organizationId === undefined`
+    // because the preset preHandler never ran on aggregation routes
+    // and `_tenantFields` was empty.
+    expect(tenantOptions?.organizationId).toBe("org-a");
+  });
+
+  it("preset rejects aggregation requests with no scope (strict tenant filter, same as CRUD list)", async () => {
+    // Pre-fix this leaked silently. Post-fix the preset's strict tenant
+    // filter applies on aggregation routes too — non-elevated callers
+    // without an org context get 403.
+    aggregateStub.mockClear();
+    currentScope = { kind: "authenticated", userId: "u-no-org" };
+    const res = await app.inject({
+      method: "GET",
+      url: "/orders-preset/aggregations/byStatus",
+    });
+    expect([401, 403]).toContain(res.statusCode);
+    expect(aggregateStub).not.toHaveBeenCalled();
+  });
+
+  it("elevated scope bypasses tenant filter on aggregation routes (platform admin sees all orgs)", async () => {
+    aggregateStub.mockClear();
+    currentScope = {
+      kind: "elevated",
+      userId: "u-platform-admin",
+      userRoles: ["superadmin"],
+      organizationId: "org-target",
+      orgRoles: [],
+      elevatedFrom: "platform",
+    };
+    const res = await app.inject({
+      method: "GET",
+      url: "/orders-preset/aggregations/byStatus",
+    });
+    expect(res.statusCode).toBe(200);
+    const [, tenantOptions] = aggregateStub.mock.calls[0];
+    // Elevation still resolves orgId from scope (so the kit can scope
+    // to the target org if the admin is acting on a single org); the
+    // preset's elevated branch passes through without 403.
+    expect(tenantOptions?.organizationId).toBe("org-target");
+  });
+
+  it("elevated scope WITHOUT a target org → bypassTenant: true (cross-org admin view)", async () => {
+    // Platform admin querying aggregations with `x-arc-scope: platform`
+    // but no specific org target should see ALL tenants. The kit's
+    // `multiTenantPlugin({ required: true })` would otherwise 500 with
+    // "Missing 'organizationId' in context" — arc 2.15.3 detects the
+    // elevated-without-target case and forwards `bypassTenant: true`
+    // so the kit skips the tenant guard.
+    aggregateStub.mockClear();
+    currentScope = {
+      kind: "elevated",
+      userId: "u-platform-admin",
+      userRoles: ["superadmin"],
+      // No organizationId — admin wants the cross-org view
+      orgRoles: [],
+      elevatedFrom: "platform",
+    };
+    const res = await app.inject({
+      method: "GET",
+      url: "/orders-preset/aggregations/byStatus",
+    });
+    expect(res.statusCode).toBe(200);
+    const [, tenantOptions] = aggregateStub.mock.calls[0];
+    expect(tenantOptions?.organizationId).toBeUndefined();
+    expect(tenantOptions?.bypassTenant).toBe(true);
+  });
+});
+
+describe("aggregation routes — Org A vs Org B HTTP isolation (fitverse-style)", () => {
+  // Mirrors `fitverse/apps/server/scripts/verify-aggregation-tenancy.ts`
+  // but at the HTTP layer (the path 2.15.3 actually fixes).
+  //
+  // Fitverse's script proves repo.aggregate(req, { organizationId })
+  // works in isolation — i.e. mongokit's multi-tenant plugin applies
+  // the filter when given options.organizationId. That always worked.
+  //
+  // What fitverse's script does NOT prove: arc's `createAggregationRouter`
+  // populates options.organizationId correctly from the request scope
+  // when the resource is wired via `presets: [multiTenantPreset(...)]`.
+  // That seam was the bug — fitverse worked around it with custom
+  // `/aggregate/byX` handlers that called repo.aggregate directly.
+  //
+  // This test seeds two orgs' worth of stubbed rows, hits the auto-
+  // generated `/aggregations/:name` route once per org via different
+  // request scopes, and asserts that the aggregate stub received the
+  // correct `tenantOptions.organizationId` per call AND that the
+  // returned rows match each org's seed values. Zero cross-tenant
+  // bleed at the HTTP layer.
+  let app: FastifyInstance;
+  // biome-ignore lint/suspicious/noExplicitAny: stubbed for assertions
+  let aggregateStub: any;
+  let currentScope: unknown = null;
+
+  // Mirror fitverse's seed shape — different totals per org so we can
+  // tell them apart from the aggregate response.
+  const ORG_A_TOTAL = 600; // 100 + 200 + 300 (3 verified inflows)
+  const ORG_B_TOTAL = 6500; // 5000 inflow + 1500 outflow
+
+  beforeAll(async () => {
+    await setupTestDatabase();
+
+    const { multiTenantPreset } = await import("../../../src/presets/multiTenant.js");
+
+    const Model = createMockModel("OrderAggHttpIsolation");
+    const repo = createMockRepository(Model) as Record<string, unknown>;
+
+    // Stub aggregate — returns different rows per org based on the
+    // organizationId in the options bag. Mirrors what mongokit's
+    // multi-tenant plugin would do: filter by org and aggregate.
+    aggregateStub = vi.fn(async (_req: unknown, options: { organizationId?: string } = {}) => {
+      if (options.organizationId === "org-a") {
+        return {
+          rows: [{ status: "verified", count: 3, total: ORG_A_TOTAL }],
+        };
+      }
+      if (options.organizationId === "org-b") {
+        return {
+          rows: [{ status: "verified", count: 2, total: ORG_B_TOTAL }],
+        };
+      }
+      // No tenant context — return everything (the leak case)
+      return {
+        rows: [{ status: "verified", count: 5, total: ORG_A_TOTAL + ORG_B_TOTAL }],
+      };
+    });
+    repo.aggregate = aggregateStub;
+
+    const resource = defineResource({
+      name: "orderiso",
+      prefix: "/orders-iso",
+      adapter: createMongooseAdapter(Model, repo as never),
+      presets: [multiTenantPreset({ tenantField: "organizationId" })],
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
+      },
+      aggregations: {
+        byStatus: defineAggregation({
+          groupBy: "status",
+          measures: { count: "count", total: "sum:amount" },
+          permissions: allowPublic(),
+        }),
+      },
+    });
+
+    app = await createApp({
+      preset: "testing",
+      auth: false,
+      logger: false,
+      plugins: async (f) => {
+        f.addHook("onRequest", async (req) => {
+          if (currentScope) {
+            (req as unknown as { scope: unknown }).scope = currentScope;
+          }
+        });
+        await f.register(resource.toPlugin());
+      },
+    });
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app?.close();
+    await teardownTestDatabase();
+  });
+
+  it("Org A request → repo.aggregate receives organizationId='org-a' AND response is Org A's totals only", async () => {
+    aggregateStub.mockClear();
+    currentScope = {
+      kind: "member",
+      userId: "u-org-a-owner",
+      userRoles: [],
+      organizationId: "org-a",
+      orgRoles: ["owner"],
+    };
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/orders-iso/aggregations/byStatus",
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body) as { rows: Array<{ count: number; total: number }> };
+    // Org A's seed total — Org B's 6500 must NOT appear.
+    expect(body.rows).toHaveLength(1);
+    expect(body.rows[0]?.total).toBe(ORG_A_TOTAL);
+    expect(body.rows[0]?.count).toBe(3);
+
+    // Lock-in: the second arg of repo.aggregate carried Org A's id.
+    expect(aggregateStub).toHaveBeenCalledTimes(1);
+    const [, tenantOptions] = aggregateStub.mock.calls[0];
+    expect(tenantOptions.organizationId).toBe("org-a");
+    expect(tenantOptions.bypassTenant).toBeUndefined();
+  });
+
+  it("Org B request → repo.aggregate receives organizationId='org-b' AND response is Org B's totals only", async () => {
+    aggregateStub.mockClear();
+    currentScope = {
+      kind: "member",
+      userId: "u-org-b-owner",
+      userRoles: [],
+      organizationId: "org-b",
+      orgRoles: ["owner"],
+    };
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/orders-iso/aggregations/byStatus",
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body) as { rows: Array<{ count: number; total: number }> };
+    expect(body.rows).toHaveLength(1);
+    expect(body.rows[0]?.total).toBe(ORG_B_TOTAL);
+    expect(body.rows[0]?.count).toBe(2);
+
+    const [, tenantOptions] = aggregateStub.mock.calls[0];
+    expect(tenantOptions.organizationId).toBe("org-b");
+  });
+
+  it("zero cross-tenant bleed — back-to-back A/B/A calls each see only their own data", async () => {
+    aggregateStub.mockClear();
+
+    const fetchAs = async (orgId: string): Promise<number> => {
+      currentScope = {
+        kind: "member",
+        userId: `u-${orgId}-owner`,
+        userRoles: [],
+        organizationId: orgId,
+        orgRoles: ["owner"],
+      };
+      const res = await app.inject({
+        method: "GET",
+        url: "/orders-iso/aggregations/byStatus",
+      });
+      const body = JSON.parse(res.body) as { rows: Array<{ total: number }> };
+      return body.rows[0]?.total ?? 0;
+    };
+
+    const a1 = await fetchAs("org-a");
+    const b1 = await fetchAs("org-b");
+    const a2 = await fetchAs("org-a");
+    const b2 = await fetchAs("org-b");
+
+    // Each org sees its own total — no caching of one org's response into another's.
+    expect(a1).toBe(ORG_A_TOTAL);
+    expect(a2).toBe(ORG_A_TOTAL);
+    expect(b1).toBe(ORG_B_TOTAL);
+    expect(b2).toBe(ORG_B_TOTAL);
+    // And totals differ — would have collided if the leak wasn't fixed.
+    expect(a1).not.toBe(b1);
+  });
+
+  it("platform-elevated request without target org → bypassTenant + cross-org rows", async () => {
+    aggregateStub.mockClear();
+    currentScope = {
+      kind: "elevated",
+      userId: "u-platform-admin",
+      userRoles: ["superadmin"],
+      // No organizationId — admin wants cross-org view
+      orgRoles: [],
+      elevatedFrom: "platform",
+    };
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/orders-iso/aggregations/byStatus",
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body) as { rows: Array<{ count: number; total: number }> };
+    // Stub's no-tenant branch returns BOTH orgs' totals combined.
+    expect(body.rows[0]?.total).toBe(ORG_A_TOTAL + ORG_B_TOTAL);
+
+    const [, tenantOptions] = aggregateStub.mock.calls[0];
+    expect(tenantOptions.organizationId).toBeUndefined();
+    expect(tenantOptions.bypassTenant).toBe(true);
+  });
+});
+
 describe("aggregation routes — boot validation errors", () => {
   it("missing permissions → defineResource registration throws", async () => {
     const Model = createMockModel("OrderBootBad");

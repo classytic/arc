@@ -69,6 +69,21 @@ export interface AggregationRouterConfig {
    * requestId into every kit call.
    */
   buildOptions: (req: FastifyRequest) => AnyRecord;
+  /**
+   * Resource-level middlewares for the aggregation slot. Pre-2.15.3
+   * the aggregation router never received resource middlewares — the
+   * `multiTenantPreset` correctly emitted `list/get/create/update/delete`
+   * tenant filters but had no `aggregations` slot, so its preHandler
+   * never ran on aggregation routes and `req._tenantFields` was empty.
+   * `tenantRepoOptions`'s path-2 fallback then didn't populate
+   * `organizationId` for callers whose `scope.kind !== 'member'`,
+   * leaking aggregated rows across orgs. 2.15.3 wires the slot.
+   *
+   * Applied as `customMws` in the preHandler chain — runs AFTER auth
+   * + permission (so the tenant filter sees an authenticated scope),
+   * BEFORE the aggregation handler.
+   */
+  middlewares?: ReadonlyArray<RouteHandlerMethod | null | undefined>;
 }
 
 /**
@@ -89,6 +104,7 @@ export function createAggregationRouter(
     routeGuards = [],
     repository,
     buildOptions,
+    middlewares = [],
   } = config;
 
   if (!aggregations || Object.keys(aggregations).length === 0) {
@@ -118,6 +134,7 @@ export function createAggregationRouter(
       routeGuards,
       repository,
       buildOptions,
+      middlewares,
     });
   }
 
@@ -140,6 +157,8 @@ interface RegisterOneCtx {
   routeGuards: ReadonlyArray<RouteHandlerMethod | null | undefined>;
   repository: unknown;
   buildOptions: (req: FastifyRequest) => AnyRecord;
+  /** Preset-emitted preHandlers for the aggregation slot (2.15.3). */
+  middlewares: ReadonlyArray<RouteHandlerMethod | null | undefined>;
 }
 
 function registerOne(
@@ -147,7 +166,7 @@ function registerOne(
   normalized: NormalizedAggregation,
   ctx: RegisterOneCtx,
 ): void {
-  const { tag, arcDecorator, routeGuards, repository, buildOptions } = ctx;
+  const { tag, arcDecorator, routeGuards, repository, buildOptions, middlewares } = ctx;
   const { name } = normalized;
   const config = normalized.base;
 
@@ -188,6 +207,12 @@ function registerOne(
     permissionMw,
     pluginMw,
     routeGuards,
+    // Preset-emitted middlewares (e.g. multiTenantPreset's tenant filter
+    // for the aggregation slot). Run AFTER auth + permission so the
+    // filter sees an authenticated scope, BEFORE the aggregation handler
+    // so `_tenantFields` / `_policyFilters` are populated when
+    // `tenantRepoOptions` reads them. (2.15.3)
+    customMws: middlewares,
   });
 
   const rateLimitConfig = buildRateLimitConfig(

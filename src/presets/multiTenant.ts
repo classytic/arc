@@ -376,6 +376,17 @@ export function multiTenantPreset(options: MultiTenantOptions = {}): PresetResul
       // document to another tenant by sending `{ organizationId: <other> }`.
       update: [getFilter("update"), tenantInjection],
       delete: [getFilter("delete")],
+      // 2.15.3 — wire `/aggregations/:name` routes to the same strict
+      // tenant filter the CRUD list uses. Pre-2.15.3 the preset emitted
+      // no `aggregations` slot, so `req._tenantFields` was never set on
+      // aggregation routes and `tenantRepoOptions`'s path-2 fallback
+      // didn't fire — the AggRequest reached the kit with no orgId
+      // and returned every org's rows. Always strict here (no
+      // `flexibleTenantFilter` analog) — aggregations have no
+      // public-list semantic; if the host wants public aggregation
+      // they'd declare a permissions-level `allowPublic` AND not use
+      // `multiTenantPreset` for that resource.
+      aggregations: [strictTenantFilter],
     } as MiddlewareConfig,
   };
 }

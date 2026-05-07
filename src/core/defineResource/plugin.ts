@@ -529,6 +529,13 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
             routeGuards: resource.routeGuards,
             repository: repoForAgg,
             buildOptions,
+            // 2.15.3 — wire the preset-emitted `aggregations` middleware
+            // slot through to the aggregation router. multiTenantPreset
+            // emits `aggregations: [strictTenantFilter]` here so each
+            // /aggregations/:name route gets the same tenant filter as
+            // CRUD list. Pre-2.15.3 these middlewares were silently
+            // dropped, leaking aggregated rows across orgs.
+            middlewares: resource.middlewares?.aggregations,
           });
         }
 
