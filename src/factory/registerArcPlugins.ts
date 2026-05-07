@@ -74,8 +74,15 @@ export async function registerArcPlugins(
   }
 
   if (config.arcPlugins?.health !== false) {
-    await fastify.register(healthPlugin);
-    trackPlugin("arc-health");
+    // 2.15.1 — `health` accepts a HealthOptions object so hosts can pass
+    // readiness checks (Mongo connectivity, engine warmup, queue probes,
+    // etc.) inline instead of disabling Arc's plugin and re-registering.
+    const healthOpts =
+      typeof config.arcPlugins?.health === "object" && config.arcPlugins.health !== null
+        ? config.arcPlugins.health
+        : {};
+    await fastify.register(healthPlugin, healthOpts);
+    trackPlugin("arc-health", healthOpts as Record<string, unknown>);
   }
 
   if (config.arcPlugins?.gracefulShutdown !== false) {
