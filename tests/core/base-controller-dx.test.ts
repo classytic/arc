@@ -183,30 +183,18 @@ describe("createMongooseAdapter — TDoc constraint surfaces at the adapter", ()
 });
 
 // ============================================================================
-// 4. defineResource warns when queryParser set but controller lacks setQueryParser
+// 4. defineResource throws when queryParser set but controller lacks setQueryParser (2.15.0)
 // ============================================================================
 
-describe("defineResource — setQueryParser forwarding warn", () => {
-  // Import locally so the test stays isolated — the arc logger module
-  // caches its writer, so we reset between tests to keep captures clean.
-  it("warns when a custom queryParser is set but the controller has no setQueryParser", async () => {
-    const warns: string[] = [];
-    const { configureArcLogger } = await import("../../src/logger/index.js");
-    configureArcLogger({
-      writer: {
-        warn: (...args: unknown[]) => warns.push(args.map(String).join(" ")),
-        info: () => {},
-        error: () => {},
-        debug: () => {},
-      },
-    });
-
+describe("defineResource — setQueryParser forwarding fail-loud (2.15.0)", () => {
+  it("throws at registration when a custom queryParser is set but the controller has no setQueryParser", async () => {
     const { defineResource } = await import("../../src/core/defineResource.js");
     const { allowPublic } = await import("../../src/permissions/index.js");
 
     // Hand-rolled controller — no setQueryParser. This is the exact shape
     // of the reporter's review.controller.ts that triggered the 90-minute
-    // debug session.
+    // debug session — pre-2.15 it warned and shipped a silently-shadowed
+    // parser; 2.15+ throws so the misconfig surfaces immediately.
     const handRolledController = {
       list: async () => ({ success: true, data: [] }),
       get: async () => ({ success: true, data: null }),
@@ -224,36 +212,25 @@ describe("defineResource — setQueryParser forwarding warn", () => {
       }),
     };
 
-    defineResource({
-      name: "hand-rolled",
-      prefix: "/hand-rolled",
-      // biome-ignore lint/suspicious/noExplicitAny: test shim — we're testing the duck-typed forwarding
-      controller: handRolledController as any,
-      // biome-ignore lint/suspicious/noExplicitAny: test shim
-      queryParser: customParser as any,
-      permissions: {
-        list: allowPublic(),
-        get: allowPublic(),
-        create: allowPublic(),
-        update: allowPublic(),
-        delete: allowPublic(),
-      },
-      skipValidation: true,
-      skipRegistry: true,
-    });
-
-    const forwardingWarn = warns.find(
-      (w) => w.includes("setQueryParser") && w.includes("hand-rolled"),
-    );
-    expect(forwardingWarn).toBeDefined();
-    // The warn must name the controller method hosts need to add — actionable,
-    // not "something went wrong".
-    expect(forwardingWarn).toContain("setQueryParser");
-    // And the resource name so operators can grep their config.
-    expect(forwardingWarn).toContain("hand-rolled");
-
-    // Reset logger so other tests aren't affected.
-    configureArcLogger({});
+    expect(() =>
+      defineResource({
+        name: "hand-rolled",
+        prefix: "/hand-rolled",
+        // biome-ignore lint/suspicious/noExplicitAny: test shim — we're testing the duck-typed forwarding
+        controller: handRolledController as any,
+        // biome-ignore lint/suspicious/noExplicitAny: test shim
+        queryParser: customParser as any,
+        permissions: {
+          list: allowPublic(),
+          get: allowPublic(),
+          create: allowPublic(),
+          update: allowPublic(),
+          delete: allowPublic(),
+        },
+        skipValidation: true,
+        skipRegistry: true,
+      }),
+    ).toThrow(/does not expose `setQueryParser/);
   });
 
   it("does NOT warn when the controller DOES expose setQueryParser", async () => {

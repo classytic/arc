@@ -136,6 +136,11 @@ function makeMockAdapter() {
  */
 function makeStubController() {
   return {
+    // arc 2.15.0+ requires `setQueryParser` on a custom controller when the
+    // resource declares its own `queryParser` (fail-loud at registration).
+    // The stub here is just for routing; a no-op accept is sufficient since
+    // the tests assert schema-normalization behaviour, not parser wiring.
+    setQueryParser: vi.fn(),
     list: vi.fn(async () => ({
       success: true,
       data: { data: [], total: 0, page: 1, limit: 20, hasNext: false },

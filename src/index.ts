@@ -127,6 +127,8 @@ export type {
   AggregationsMap,
   BaseControllerOptions,
   BulkExt,
+  ControllerConfigurableOptions,
+  ControllerConstructionOptions,
   ListResult,
   SlugExt,
   SoftDeleteExt,

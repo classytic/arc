@@ -28,7 +28,12 @@ export { BaseController } from "./BaseController.js";
 // v2.11.0 mixin split — BaseCrudController is the slim CRUD core; BaseController
 // remains as the full-stack composition that extends it via the four preset
 // mixins. `BaseControllerOptions` + `ListResult` live on the slim core.
-export type { BaseControllerOptions, ListResult } from "./BaseCrudController.js";
+export type {
+  BaseControllerOptions,
+  ControllerConfigurableOptions,
+  ControllerConstructionOptions,
+  ListResult,
+} from "./BaseCrudController.js";
 export { BaseCrudController } from "./BaseCrudController.js";
 export type { BodySanitizerConfig } from "./BodySanitizer.js";
 export { BodySanitizer } from "./BodySanitizer.js";

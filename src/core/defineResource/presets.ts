@@ -35,11 +35,25 @@ export function applyPresetsAndAutoInject<TDoc>(
     typeof p === "string" ? p : (p as { name: string }).name,
   );
 
+  // Snapshot the keys the USER literally typed BEFORE any preset / inference /
+  // auto-inject runs. Downstream warns about "dropped author options" must only
+  // fire for declared keys — pre-2.15 we leaked false-positives whenever a
+  // preset OR `inferTenantFieldFromAdapter` mutated the config (e.g. setting
+  // `tenantField: false` automatically and then complaining the user "set"
+  // tenantField on a custom-controller resource). Any future inference
+  // benefits from this provenance for free.
+  const declaredKeys = new Set<string>(
+    Object.keys(config).filter(
+      (k) => (config as unknown as Record<string, unknown>)[k] !== undefined,
+    ),
+  );
+
   const resolvedConfig = (
     config.presets?.length ? applyPresets(config, config.presets) : { ...config }
   ) as InternalResourceConfig<TDoc>;
 
   resolvedConfig._appliedPresets = originalPresets;
+  resolvedConfig._declaredKeys = declaredKeys;
 
   inferTenantFieldFromAdapter(resolvedConfig);
 

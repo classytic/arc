@@ -130,10 +130,12 @@ describe("2.10.9 — defineResource wires queryParser into user-supplied control
     );
   });
 
-  it("leaves a non-BaseController custom controller alone (no setQueryParser → no throw)", () => {
-    // Some hosts ship a completely custom controller that doesn't
-    // extend BaseController. Arc must not throw just because
-    // `setQueryParser` is missing — the caller knows what they built.
+  it("throws at registration when a non-BaseController custom controller has no setQueryParser (2.15.0 fail-loud)", () => {
+    // arc 2.15.0 hardened the duck-typed warn into a registration-time
+    // throw. Pre-2.15 the resource registered with a silently-shadowed
+    // parser — `[contains]` / `[like]` semantics drifted away from the
+    // OpenAPI schema and surfaced as 90-minute "why doesn't this filter
+    // work" debugs. Now the misconfig surfaces immediately.
     const sentinel = createQueryParser();
     const custom = {
       async list() {
@@ -159,13 +161,57 @@ describe("2.10.9 — defineResource wires queryParser into user-supplied control
       name: "mock",
     };
 
-    // Should NOT throw
     expect(() =>
       defineResource<Doc>({
         name: "custom-noctrl",
         adapter,
         controller: custom as unknown as never,
         queryParser: sentinel,
+        permissions: {
+          list: allowPublic(),
+          get: allowPublic(),
+          create: allowPublic(),
+          update: allowPublic(),
+          delete: allowPublic(),
+        },
+      }),
+    ).toThrow(/does not expose `setQueryParser/);
+  });
+
+  it("non-BaseController custom controllers without queryParser declared are accepted as-is (no throw)", () => {
+    // The 2.15 fail-loud only fires when `queryParser` is declared at
+    // the resource level. A non-BaseController without setQueryParser
+    // and no resource-level parser registers fine — there's no parser
+    // to forward, and the caller's controller owns its own parsing.
+    const custom = {
+      async list() {
+        return { success: true, data: { data: [], total: 0 } };
+      },
+      async get() {
+        return { success: true, data: null };
+      },
+      async create() {
+        return { success: true, data: {} };
+      },
+      async update() {
+        return { success: true, data: {} };
+      },
+      async delete() {
+        return { success: true, data: { message: "ok" } };
+      },
+    };
+
+    const adapter: DataAdapter<Doc> = {
+      repository: mockRepo() as unknown as DataAdapter<Doc>["repository"],
+      type: "mock",
+      name: "mock",
+    };
+
+    expect(() =>
+      defineResource<Doc>({
+        name: "custom-noparser",
+        adapter,
+        controller: custom as unknown as never,
         permissions: {
           list: allowPublic(),
           get: allowPublic(),
