@@ -27,7 +27,7 @@ progressive_disclosure:
   entry_point:
     summary: "Resource-oriented Fastify framework: defineResource(), presets, permissions, QueryCache, events, multi-tenant, OpenAPI, MCP"
     when_to_use: "Building REST APIs with Fastify, resource CRUD, authentication, presets, caching, events, or production deployment"
-    quick_start: "1. arc init my-api --mongokit --jwt --ts  2. defineResource({ name, adapter, presets, permissions })  3. createApp({ preset: 'production', resources, auth })"
+    quick_start: "1. npx @classytic/arc init my-api --mongokit --better-auth --single --ts  2. defineResource({ name, adapter, presets, permissions })  3. createApp({ preset: 'production', resources, auth })"
 ---
 
 # @classytic/arc
@@ -39,11 +39,11 @@ One `defineResource()` call → REST + auth + permissions + events + cache + Ope
 ## Scaffold a project
 
 ```bash
-npx @classytic/arc@latest init my-api --mongokit --jwt --ts
+npx @classytic/arc@latest init my-api --mongokit --better-auth --single --ts
 cd my-api && npm install && npm run dev
 ```
 
-Flags: `--mongokit | --custom`, `--jwt | --better-auth`, `--single | --multi`, `--ts | --js`. The scaffold seeds full `dependencies` + `devDependencies` so `npm install` works without the CLI's pre-pass.
+Flags: `--mongokit | --custom`, `--better-auth | --jwt`, `--single | --multi`, `--ts | --js`, `--edge`, `--force`, `--skip-install`. Defaults: `--mongokit --better-auth --single --ts`. The scaffold seeds full `dependencies` + `devDependencies` so `npm install` works without the CLI's pre-pass.
 
 ## createApp()
 
@@ -691,6 +691,19 @@ the kit's multi-tenant plugin reads `context.organizationId`, casts
 correctly, and merges into the request. Authors never inject the
 tenant key into `aggReq.filter` themselves.
 
+**2.15.3 — `multiTenantPreset` now wires `/aggregations/:name`.** Pre-2.15.3
+the preset only scoped CRUD; aggregation routes leaked across orgs for any
+caller whose `scope.kind !== 'member'`. Adding `multiTenantPreset({ tenantField: 'organizationId' })`
+now emits an `aggregations` middleware slot alongside the five CRUD slots, so
+member callers see only their org and `kind: 'elevated'` callers WITHOUT a
+target org get `bypassTenant: true` (platform-admin cross-tenant dashboards).
+**Kit config note:** set `scope: true` (or `scope: { fieldType: 'objectId' }`)
+on revenue/order/etc. engines — the pre-2.15.2 advice to use `scope: false`
+"to avoid double-scoping with arc" is no longer correct; arc 2.15.2+
+deliberately leaves `aggReq.filter` clean and relies on the kit. Required
+peers: `@classytic/repo-core ≥ 0.4.1`, `@classytic/mongokit ≥ 3.13.2`,
+`@classytic/sqlitekit ≥ 0.3.1`.
+
 **Caller filters via query string compose with `groupBy` / measures:**
 
 ```
@@ -833,14 +846,17 @@ Full testing recipes → [references/testing.md](references/testing.md).
 
 ## CLI
 
+The bin is `arc` (registered by `@classytic/arc`). Outside an arc project use `npx @classytic/arc <cmd>`; inside one (devDep installed) bare `arc` resolves through `node_modules/.bin`.
+
 ```bash
-arc init my-api --mongokit --jwt --ts          # scaffold (also: --custom, --better-auth, --multi)
-arc generate resource product                   # generate a resource
-arc generate resource product --mcp             # + MCP tools file
-arc generate mcp analytics                      # standalone MCP tools file
-arc docs ./openapi.json --entry ./dist/index.js # emit OpenAPI
-arc introspect --entry ./dist/index.js
-arc doctor
+npx @classytic/arc init my-api --mongokit --better-auth --single --ts   # scaffold (also: --custom, --jwt, --multi, --js, --edge)
+npx @classytic/arc generate resource product                            # generate a resource (alias: arc g r product)
+npx @classytic/arc generate resource product --mcp                      # + MCP tools file
+npx @classytic/arc generate mcp analytics                               # standalone MCP tools file
+npx @classytic/arc docs ./openapi.json --entry ./dist/index.js          # emit OpenAPI
+npx @classytic/arc introspect --entry ./dist/index.js
+npx @classytic/arc describe ./dist/resources.js --json                  # JSON metadata for AI agents
+npx @classytic/arc doctor
 ```
 
 Set `"mcp": true` in `.arcrc` to always generate `.mcp.ts` alongside resources.
