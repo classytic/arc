@@ -648,17 +648,41 @@ function packageJsonTemplate(config: ProjectConfig): string {
           "test:watch": "vitest",
         };
 
-  // Subpath imports — always point to ./src/ for tsx dev mode.
-  // Production builds (tsc → dist/) can override via tsconfig paths or build step.
-  const imports: Record<string, string> = {
-    "#config/*": "./src/config/*",
-    "#shared/*": "./src/shared/*",
-    "#resources/*": "./src/resources/*",
-    "#plugins/*": "./src/plugins/*",
-    "#services/*": "./src/services/*",
-    "#lib/*": "./src/lib/*",
-    "#utils/*": "./src/utils/*",
-  };
+  // Subpath imports — point at the COMPILED output so production
+  // (`node dist/index.js`) can resolve `#alias/*.js` correctly.
+  //
+  // Why dist/ and not src/: `tsc` is a transpiler, not a rewriter — the
+  // compiled `dist/index.js` keeps every `import '#config/env.js'` line
+  // byte-for-byte. At runtime Node walks `package.json#imports` to find
+  // the real file. If that map points at `./src/*`, prod tries to load
+  // `.ts` files Node can't run and crashes with `ERR_MODULE_NOT_FOUND`.
+  //
+  // Dev still works because `tsx` reads `tsconfig.json#paths` (which we
+  // emit pointing at `./src/*`) BEFORE falling back to package.json
+  // imports. Vitest takes the `resolve.alias` route from `vitest.config`.
+  // So both runtimes resolve correctly:
+  //   tsx watch src/index.ts  → tsconfig paths   → ./src/*
+  //   node dist/index.js      → package imports  → ./dist/*
+  //   vitest                  → vite resolve.alias → ./src/*
+  const imports: Record<string, string> = config.typescript
+    ? {
+        "#config/*": "./dist/config/*",
+        "#shared/*": "./dist/shared/*",
+        "#resources/*": "./dist/resources/*",
+        "#plugins/*": "./dist/plugins/*",
+        "#services/*": "./dist/services/*",
+        "#lib/*": "./dist/lib/*",
+        "#utils/*": "./dist/utils/*",
+      }
+    : {
+        "#config/*": "./src/config/*",
+        "#shared/*": "./src/shared/*",
+        "#resources/*": "./src/resources/*",
+        "#plugins/*": "./src/plugins/*",
+        "#services/*": "./src/services/*",
+        "#lib/*": "./src/lib/*",
+        "#utils/*": "./src/utils/*",
+      };
 
   return JSON.stringify(
     {

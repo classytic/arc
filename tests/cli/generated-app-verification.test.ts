@@ -482,12 +482,18 @@ describe("Generated App — Package.json Patterns", () => {
     expect(pkg.scripts.test).toContain("vitest");
   });
 
-  it("should have subpath imports for clean architecture", async () => {
+  it("should have subpath imports pointing at compiled output (TS projects)", async () => {
+    // TypeScript projects: `imports` MUST resolve to ./dist/* so
+    // `node dist/index.js` can find compiled modules at runtime.
+    // `tsc` doesn't rewrite #alias imports — if this map points at
+    // ./src/* the production process crashes with ERR_MODULE_NOT_FOUND
+    // while looking for `.js` files in the .ts source tree.
+    // Dev still works because tsx reads `tsconfig.json#paths` first.
     const pkg = await readJson(path.join(projectPath, "package.json"));
-    expect(pkg.imports["#config/*"]).toBe("./src/config/*");
-    expect(pkg.imports["#shared/*"]).toBe("./src/shared/*");
-    expect(pkg.imports["#resources/*"]).toBe("./src/resources/*");
-    expect(pkg.imports["#plugins/*"]).toBe("./src/plugins/*");
+    expect(pkg.imports["#config/*"]).toBe("./dist/config/*");
+    expect(pkg.imports["#shared/*"]).toBe("./dist/shared/*");
+    expect(pkg.imports["#resources/*"]).toBe("./dist/resources/*");
+    expect(pkg.imports["#plugins/*"]).toBe("./dist/plugins/*");
   });
 
   it("should require the same Node engine as @classytic/arc itself", async () => {
