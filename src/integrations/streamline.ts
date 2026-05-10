@@ -39,6 +39,7 @@
  * ```
  */
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
+import fp from "fastify-plugin";
 import { createError, ForbiddenError, NotFoundError } from "../utils/errors.js";
 
 // ============================================================================
@@ -91,7 +92,40 @@ export interface WorkflowLike {
     /** Repository — used by the list-runs endpoint to query workflow_runs. */
     repository?: {
       getAll(params: Record<string, unknown>, options?: Record<string, unknown>): Promise<unknown>;
+      /**
+       * Tenant-scoped lookup by id. Used by the DELETE handler for a
+       * defense-in-depth pre-flight: streamline 2.3.3's `wf.get(runId)` /
+       * `engine.get` does NOT accept tenant options, so a cross-tenant
+       * runId can leak data through the engine path. Going through the
+       * repository here means mongokit's tenant-filter plugin scopes the
+       * read — cross-tenant requests get a clean 404 and DELETEs only
+       * touch rows the caller actually owns.
+       */
+      getById?(id: string, options?: Record<string, unknown>): Promise<WorkflowRunLike | null>;
+      /**
+       * Hard-delete a run by id. Routed through mongokit's inherited
+       * `Repository.delete()` so multi-tenant scope + audit/cache plugins
+       * fire. Wired into `DELETE /:workflowId/runs/:runId` — operator
+       * escape hatch for dead-lettered or stuck rows.
+       */
+      delete?(id: string, options?: Record<string, unknown>): Promise<unknown>;
     };
+    /**
+     * Streamline >= 2.3.2 — explicit deploy-time index sync (TTL on
+     * terminal runs + tenant compounds). When the host configured
+     * `createContainer({ retention })`, arc's app-level deploy hook
+     * should call `await container.syncRetentionIndexes()` after
+     * `mongoose.connect`. Optional so older streamline versions
+     * (and partial mocks) still satisfy the structural shape.
+     */
+    syncRetentionIndexes?: () => Promise<void>;
+    /**
+     * Streamline >= 2.3.2 — stop background sweepers and release timers.
+     * Arc's `onClose` hook below calls this on every workflow's container
+     * during graceful shutdown so SIGTERM doesn't leave the stale-run
+     * sweeper running. Optional + idempotent.
+     */
+    dispose?: () => void;
   };
 }
 
@@ -109,7 +143,37 @@ export interface WorkflowRunLike {
   stepLogs?: unknown[];
   createdAt?: Date;
   updatedAt?: Date;
+  /**
+   * Streamline >= 2.3.3 — pinned definition version (semver) the run
+   * started under. Hosts surfacing a "stuck on old version" UI read this
+   * to decide whether to nudge a migration. Optional for back-compat
+   * with runs created before 2.3.3.
+   */
+  definitionVersion?: string;
+  /**
+   * Streamline >= 2.3.3 — count of stale-recovery / sweeper transitions
+   * applied to this run. Sweeper dead-letters once this hits
+   * `RetentionOptions.maxStaleRecoveries`; UIs can highlight runs trending
+   * toward dead-letter.
+   */
+  recoveryAttempts?: number;
 }
+
+/**
+ * Streamline >= 2.3.3 dead-letter discriminator. The run.status stays
+ * `'failed'`; the discrimination is `error.code`:
+ *   - `'stale_heartbeat'` — sweeper terminated; transient crash signal.
+ *   - `'dead_lettered'`   — exceeded `maxStaleRecoveries`; permanent.
+ *   - `'VERSION_MISMATCH'` — engine deployed a step graph the run can't
+ *     resume against; admin must rewind / migrate / cancel.
+ *
+ * Hosts switch on `error.code` for dashboards / alerting.
+ */
+export const STREAMLINE_FAILURE_CODES = {
+  STALE_HEARTBEAT: "stale_heartbeat",
+  DEAD_LETTERED: "dead_lettered",
+  VERSION_MISMATCH: "VERSION_MISMATCH",
+} as const;
 
 export interface StreamlinePluginOptions {
   /** Array of workflows created with createWorkflow() */
@@ -273,6 +337,12 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
     permissions: perms,
   } = options;
 
+  // The plugin is wrapped in `fastify-plugin` (see export below) so
+  // Fastify does NOT treat `options.prefix` as an encapsulation prefix.
+  // That means routes use `options.prefix` directly here — no duplicate
+  // prefix when the host passes `register(plugin, { prefix: '/api/...' })`.
+  const routeScope = prefix;
+
   const bridgeBus = options.bridgeBusEvents ?? false;
 
   // Registry: workflowId → workflow instance
@@ -340,9 +410,27 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
   // the same arc instance — exactly the seam-divergence the repo-core
   // contract exists to prevent.
 
-  // Register routes per workflow
+  // ============ Per-run handlers and tenant scope ============
+  //
+  // streamline 2.3.3's per-run methods (`engine.get`, `engine.cancel`,
+  // `engine.resume`, `engine.execute`, `engine.pause`, `engine.rewindTo`,
+  // `engine.waitFor`) do NOT accept a tenant-options argument — they walk
+  // the cache and call `repository.getById(runId)` without forwarding
+  // tenant scope. With `multiTenant.strict: true`, the tenant-filter
+  // plugin throws "missing tenantId" and per-run requests 500.
+  //
+  // Until streamline grows tenant-aware overloads (`wf.cancel(runId, {
+  // tenantId, bypassTenant })`, etc.), hosts running multi-tenant should
+  // either (a) configure `multiTenant.strict: false` or (b) set
+  // `staticTenantId` on the container. Arc enforces tenant ownership at
+  // the HTTP boundary on the DELETE handler via `repository.getById` —
+  // see the DELETE block below — and the GET-runs list handler already
+  // forwards tenant scope. Other engine-driven endpoints (cancel, resume,
+  // execute, pause, rewind, wait) inherit streamline's current
+  // limitation; they SHOULD become tenant-scoped once the streamline
+  // surface accepts the option.
   for (const [id, wf] of registry) {
-    const routePrefix = `${prefix}/${id}`;
+    const routePrefix = `${routeScope}/${id}`;
 
     // POST /:workflowId/start — Start a new workflow run
     fastify.post(`${routePrefix}/start`, { preHandler: authPreHandler }, async (request, reply) => {
@@ -518,6 +606,64 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
         return run;
       },
     );
+
+    // DELETE /:workflowId/runs/:runId — Hard-delete a workflow run.
+    //
+    // Operator escape hatch for dead-lettered / wedged rows that
+    // shouldn't sit in the collection waiting for TTL. The handler:
+    //   1. Tenant-scoped existence check via `repository.getById` (NOT
+    //      `wf.get` — engine.get bypasses the tenant filter). Returns 404
+    //      both for "doesn't exist" and "exists in another tenant" — same
+    //      response on purpose (no existence-leak across tenants).
+    //   2. Best-effort cancel so listening compensation hooks fire;
+    //      swallows "already terminal" errors — the delete is the
+    //      load-bearing intent.
+    //   3. Repository-level delete with tenant scope so the multi-tenant
+    //      plugin actually narrows the write. 204 on success.
+    //
+    // Reuses the `cancel` permission slot — deletion is strictly more
+    // destructive than cancel, so anyone authorized to cancel is
+    // implicitly authorized to delete. Hosts that want a separate gate
+    // should add their own preHandler.
+    type DeleteRepo = {
+      getById?: (id: string, opts?: Record<string, unknown>) => Promise<WorkflowRunLike | null>;
+      delete?: (id: string, opts?: Record<string, unknown>) => Promise<unknown>;
+    };
+    const deleteRepo = wf.container?.repository as DeleteRepo | undefined;
+    // Both methods required: the tenant-scoped pre-flight is the load-
+    // bearing security gate, so a repo that ships `delete` without
+    // `getById` is structurally incomplete and the route stays unmounted.
+    const repoDeleteFn = deleteRepo?.delete;
+    const repoGetByIdFn = deleteRepo?.getById;
+    if (repoDeleteFn && repoGetByIdFn) {
+      fastify.delete(
+        `${routePrefix}/runs/:runId`,
+        { preHandler: authPreHandler },
+        async (request, reply) => {
+          if (!(await checkPerm("cancel", request))) {
+            throw new ForbiddenError();
+          }
+          const { runId } = request.params as { runId: string };
+          const tenantOpts = resolveTenantOpts(request);
+          const repoOpts = {
+            ...(tenantOpts.tenantId !== undefined ? { tenantId: tenantOpts.tenantId } : {}),
+            ...(tenantOpts.bypassTenant ? { bypassTenant: true } : {}),
+          };
+
+          const existing = await repoGetByIdFn(runId, repoOpts);
+          if (!existing) throw new NotFoundError(`Workflow run ${runId} not found`);
+
+          try {
+            await wf.cancel(runId);
+          } catch {
+            // already done/failed/cancelled — fall through to delete
+          }
+
+          await repoDeleteFn(runId, repoOpts);
+          return reply.status(204).send();
+        },
+      );
+    }
 
     // GET /:workflowId/runs/:runId/wait — Poll until workflow reaches terminal state (if supported)
     if (wf.engine.waitFor) {
@@ -700,7 +846,7 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
     let resumeHookFn: ResumeHookFn | undefined;
 
     fastify.post(
-      `${prefix}/hooks/:token`,
+      `${routeScope}/hooks/:token`,
       { preHandler: authPreHandler },
       async (request, _reply) => {
         // Lazy import — keeps the streamline dep out of the module load
@@ -720,7 +866,7 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
   }
 
   // List all registered workflows
-  fastify.get(prefix, { preHandler: authPreHandler }, async () => {
+  fastify.get(routeScope || "/", { preHandler: authPreHandler }, async () => {
     const list = Array.from(registry.entries()).map(([id, wf]) => ({
       id,
       name: wf.definition.name ?? id,
@@ -731,13 +877,27 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
     return list;
   });
 
-  // Graceful shutdown
+  // Graceful shutdown — stop the engine's scheduler AND the container's
+  // retention sweeper (streamline >= 2.3.2). `dispose()` is idempotent and
+  // optional on the structural shape so older streamline versions are a
+  // no-op here.
   fastify.addHook("onClose", async () => {
     for (const wf of registry.values()) {
       wf.shutdown?.();
+      wf.container?.dispose?.();
     }
   });
 };
 
-/** Pluggable streamline integration for Arc */
-export const streamlinePlugin: FastifyPluginAsync<StreamlinePluginOptions> = streamlinePluginImpl;
+/**
+ * Pluggable streamline integration for Arc.
+ *
+ * Wrapped in `fastify-plugin` so Fastify treats `options.prefix` as a
+ * plain plugin option (NOT an encapsulation prefix). Without the wrapper,
+ * Fastify would prepend `options.prefix` to every route, then the plugin
+ * code would prepend it again — the duplicate-prefix bug.
+ */
+export const streamlinePlugin = fp(streamlinePluginImpl, {
+  name: "streamline-routes",
+  fastify: "5.x",
+});

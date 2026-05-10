@@ -440,10 +440,9 @@ describe("QueryResolver", () => {
       const result = resolver.resolve(req);
       // QueryParser may normalise to projection object; accept either
       // shape for forward-compat with parser internals.
-      const accepted =
-        Array.isArray(result.select)
-          ? result.select.includes("reportId")
-          : !!(result.select as Record<string, 0 | 1>)?.reportId;
+      const accepted = Array.isArray(result.select)
+        ? result.select.includes("reportId")
+        : !!(result.select as Record<string, 0 | 1>)?.reportId;
       expect(accepted).toBe(true);
     });
 

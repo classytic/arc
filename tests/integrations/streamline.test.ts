@@ -552,6 +552,221 @@ describe("Streamline Integration Plugin", () => {
     });
   });
 
+  // ---------- Custom prefix (regression: duplicate-prefix bug) ----------
+
+  describe("Custom prefix", () => {
+    it("registers routes ONCE under the custom prefix (no double-prefix)", async () => {
+      const wf = createMockWorkflow("orders");
+      app = Fastify({ logger: false });
+      await app.register(streamlinePlugin, {
+        prefix: "/api/workflows",
+        workflows: [wf],
+        auth: false,
+      });
+      await app.ready();
+
+      // Routes must register at /api/workflows/orders/start, NOT at
+      // /api/workflows/api/workflows/orders/start. Fastify already scopes
+      // the plugin under the register-time `prefix`; the plugin must NOT
+      // also prepend `options.prefix` to the route paths it builds.
+      const ok = await app.inject({
+        method: "POST",
+        url: "/api/workflows/orders/start",
+        payload: { input: { orderId: "1" } },
+      });
+      expect(ok.statusCode).toBe(201);
+
+      const doubled = await app.inject({
+        method: "POST",
+        url: "/api/workflows/api/workflows/orders/start",
+        payload: { input: { orderId: "1" } },
+      });
+      expect(doubled.statusCode).toBe(404);
+    });
+
+    it("default prefix still works without explicit register prefix", async () => {
+      const wf = createMockWorkflow("orders");
+      app = Fastify({ logger: false });
+      await app.register(streamlinePlugin, { workflows: [wf], auth: false });
+      await app.ready();
+
+      const ok = await app.inject({
+        method: "POST",
+        url: "/workflows/orders/start",
+        payload: { input: { orderId: "1" } },
+      });
+      expect(ok.statusCode).toBe(201);
+    });
+  });
+
+  // ---------- DELETE endpoint (operator escape hatch for stuck runs) ----------
+
+  describe("DELETE /:workflowId/runs/:runId", () => {
+    function workflowWithRepo(opts?: { tenantOwner?: string }): {
+      wf: WorkflowLike;
+      deleteCalls: Array<{ id: string; options?: Record<string, unknown> }>;
+      getByIdCalls: Array<{ id: string; options?: Record<string, unknown> }>;
+    } {
+      const wf = createMockWorkflow("orders");
+      const deleteCalls: Array<{ id: string; options?: Record<string, unknown> }> = [];
+      const getByIdCalls: Array<{ id: string; options?: Record<string, unknown> }> = [];
+      const tenantOwner = opts?.tenantOwner;
+      wf.container = {
+        ...wf.container!,
+        repository: {
+          getAll: vi.fn(async () => ({ data: [], total: 0 })),
+          getById: vi.fn(async (id: string, options?: Record<string, unknown>) => {
+            getByIdCalls.push({ id, options });
+            // Existence backed by the workflow's internal run map (via
+            // `wf.get`). Layer the tenant-filter on top: row visible only
+            // when the caller's tenantId matches the row's owner (or
+            // `bypassTenant`, or no owner configured for the test).
+            const exists = await wf.get(id);
+            if (!exists) return null;
+            if (options?.bypassTenant) return exists;
+            if (tenantOwner === undefined) return exists;
+            if (options?.tenantId === tenantOwner) return exists;
+            return null;
+          }),
+          delete: vi.fn(async (id: string, options?: Record<string, unknown>) => {
+            deleteCalls.push({ id, options });
+            return { acknowledged: true };
+          }),
+        },
+      };
+      return { wf, deleteCalls, getByIdCalls };
+    }
+
+    it("cancels-then-deletes a run and returns 204", async () => {
+      const { wf, deleteCalls } = workflowWithRepo();
+      app = Fastify({ logger: false });
+      await app.register(streamlinePlugin, { workflows: [wf], auth: false });
+      await app.ready();
+
+      const start = await app.inject({
+        method: "POST",
+        url: "/workflows/orders/start",
+        payload: { input: {} },
+      });
+      const runId = start.json()._id as string;
+
+      const del = await app.inject({
+        method: "DELETE",
+        url: `/workflows/orders/runs/${runId}`,
+      });
+      expect(del.statusCode).toBe(204);
+      expect(wf.cancel).toHaveBeenCalledWith(runId);
+      expect(deleteCalls).toHaveLength(1);
+      expect(deleteCalls[0]?.id).toBe(runId);
+    });
+
+    it("returns 404 when the run does not exist", async () => {
+      const { wf } = workflowWithRepo();
+      app = Fastify({ logger: false });
+      await app.register(streamlinePlugin, { workflows: [wf], auth: false });
+      await app.ready();
+
+      const del = await app.inject({
+        method: "DELETE",
+        url: "/workflows/orders/runs/nonexistent",
+      });
+      expect(del.statusCode).toBe(404);
+    });
+
+    it("forwards tenantId when the resolver supplies one", async () => {
+      const { wf, deleteCalls, getByIdCalls } = workflowWithRepo();
+      app = Fastify({ logger: false });
+      await app.register(streamlinePlugin, {
+        workflows: [wf],
+        auth: false,
+        tenantResolver: () => "org-7",
+      });
+      await app.ready();
+
+      const start = await app.inject({
+        method: "POST",
+        url: "/workflows/orders/start",
+        payload: { input: {} },
+      });
+      const runId = start.json()._id as string;
+
+      await app.inject({ method: "DELETE", url: `/workflows/orders/runs/${runId}` });
+      expect(deleteCalls[0]?.options).toEqual({ tenantId: "org-7" });
+      // Pre-flight existence check must also be tenant-scoped — that's
+      // the load-bearing security invariant for the DELETE handler.
+      expect(getByIdCalls[0]?.options).toEqual({ tenantId: "org-7" });
+    });
+
+    it("returns 404 for a cross-tenant runId (no existence leak)", async () => {
+      // Row belongs to org-A; caller is from org-B. Even though the runId
+      // is correct AND the run physically exists, the tenant-scoped
+      // pre-flight must hide the row.
+      const { wf, deleteCalls } = workflowWithRepo({ tenantOwner: "org-A" });
+      app = Fastify({ logger: false });
+      await app.register(streamlinePlugin, {
+        workflows: [wf],
+        auth: false,
+        tenantResolver: () => "org-B",
+      });
+      await app.ready();
+
+      // Start the run as org-A so it exists in the workflow's run map.
+      const start = await app.inject({
+        method: "POST",
+        url: "/workflows/orders/start",
+        payload: { input: {} },
+      });
+      const runId = start.json()._id as string;
+
+      const del = await app.inject({
+        method: "DELETE",
+        url: `/workflows/orders/runs/${runId}`,
+      });
+      expect(del.statusCode).toBe(404);
+      // Critically: delete must NOT have been called. The handler must
+      // bail at the pre-flight; only then is the 404 honest.
+      expect(deleteCalls).toHaveLength(0);
+    });
+
+    it("does not register the route when the repository has no delete method", async () => {
+      const wf = createMockWorkflow("orders");
+      // No repository on container
+      app = Fastify({ logger: false });
+      await app.register(streamlinePlugin, { workflows: [wf], auth: false });
+      await app.ready();
+
+      const del = await app.inject({
+        method: "DELETE",
+        url: "/workflows/orders/runs/r1",
+      });
+      expect(del.statusCode).toBe(404);
+    });
+
+    it("does not register the route when the repository has no getById method", async () => {
+      // Pre-flight is the load-bearing security gate — without getById
+      // we'd be falling back to a non-tenant-scoped read, so the route
+      // refuses to mount.
+      const wf = createMockWorkflow("orders");
+      wf.container = {
+        ...wf.container!,
+        repository: {
+          getAll: vi.fn(async () => ({ data: [], total: 0 })),
+          delete: vi.fn(async () => ({ acknowledged: true })),
+          // getById omitted on purpose
+        },
+      };
+      app = Fastify({ logger: false });
+      await app.register(streamlinePlugin, { workflows: [wf], auth: false });
+      await app.ready();
+
+      const del = await app.inject({
+        method: "DELETE",
+        url: "/workflows/orders/runs/r1",
+      });
+      expect(del.statusCode).toBe(404);
+    });
+  });
+
   // ---------- Multiple Workflows ----------
 
   describe("Multiple workflows", () => {

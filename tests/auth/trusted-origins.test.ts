@@ -15,15 +15,15 @@ describe("mirrorTrustedOriginsFromCors", () => {
   });
 
   it("returns [canonicalUrl] when corsOrigins is false", () => {
-    expect(
-      mirrorTrustedOriginsFromCors({ corsOrigins: false, canonicalUrl: FRONTEND }),
-    ).toEqual([FRONTEND]);
+    expect(mirrorTrustedOriginsFromCors({ corsOrigins: false, canonicalUrl: FRONTEND })).toEqual([
+      FRONTEND,
+    ]);
   });
 
   it('returns ["*"] when corsOrigins is true (wildcard)', () => {
-    expect(
-      mirrorTrustedOriginsFromCors({ corsOrigins: true, canonicalUrl: FRONTEND }),
-    ).toEqual(["*"]);
+    expect(mirrorTrustedOriginsFromCors({ corsOrigins: true, canonicalUrl: FRONTEND })).toEqual([
+      "*",
+    ]);
   });
 
   it("merges canonicalUrl with array, deduped", () => {
@@ -53,8 +53,8 @@ describe("mirrorTrustedOriginsFromCors", () => {
   });
 
   it("handles empty array — just returns [canonicalUrl]", () => {
-    expect(
-      mirrorTrustedOriginsFromCors({ corsOrigins: [], canonicalUrl: FRONTEND }),
-    ).toEqual([FRONTEND]);
+    expect(mirrorTrustedOriginsFromCors({ corsOrigins: [], canonicalUrl: FRONTEND })).toEqual([
+      FRONTEND,
+    ]);
   });
 });

@@ -293,7 +293,7 @@ describe("registerResources — unit", () => {
     //
     // `cause` chain still preserves the original.
 
-    it("strips the redundant inner `Resource \"name\" ...` prefix", async () => {
+    it('strips the redundant inner `Resource "name" ...` prefix', async () => {
       app = await createBareApp();
       const badResource = {
         name: "support",
@@ -301,9 +301,7 @@ describe("registerResources — unit", () => {
         toPlugin: () => {
           // Simulates ArcError shape — inner messages start with the
           // same `Resource "name"` prefix the wrapper would add.
-          throw new Error(
-            'Resource "support" aggregation "byStatus" references field "status".',
-          );
+          throw new Error('Resource "support" aggregation "byStatus" references field "status".');
         },
       };
 

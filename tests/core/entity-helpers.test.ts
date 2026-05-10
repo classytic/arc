@@ -3,11 +3,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import {
-  getEntityId,
-  getEntityIdField,
-  getEntityQuery,
-} from "../../src/core/entityHelpers.js";
+import { getEntityId, getEntityIdField, getEntityQuery } from "../../src/core/entityHelpers.js";
 import type { RequestWithExtras } from "../../src/types/index.js";
 
 function reqWith(arc?: RequestWithExtras["arc"], params?: Record<string, unknown>) {
@@ -40,17 +36,15 @@ describe("getEntityId", () => {
 
 describe("getEntityQuery", () => {
   it("composes `{ [idField]: entityId }` for the standard custom-handle case", () => {
-    expect(
-      getEntityQuery(
-        reqWith({ idField: "reportId", entityId: "ANB-2026-0001" }),
-      ),
-    ).toEqual({ reportId: "ANB-2026-0001" });
+    expect(getEntityQuery(reqWith({ idField: "reportId", entityId: "ANB-2026-0001" }))).toEqual({
+      reportId: "ANB-2026-0001",
+    });
   });
 
   it("defaults to `_id` when idField isn't bound", () => {
-    expect(
-      getEntityQuery(reqWith({ entityId: "507f1f77bcf86cd799439011" })),
-    ).toEqual({ _id: "507f1f77bcf86cd799439011" });
+    expect(getEntityQuery(reqWith({ entityId: "507f1f77bcf86cd799439011" }))).toEqual({
+      _id: "507f1f77bcf86cd799439011",
+    });
   });
 
   it("returns {} when entity context isn't available", () => {
@@ -58,8 +52,8 @@ describe("getEntityQuery", () => {
   });
 
   it("works for slug-driven resources too", () => {
-    expect(
-      getEntityQuery(reqWith({ idField: "slug", entityId: "premium-headphones" })),
-    ).toEqual({ slug: "premium-headphones" });
+    expect(getEntityQuery(reqWith({ idField: "slug", entityId: "premium-headphones" }))).toEqual({
+      slug: "premium-headphones",
+    });
   });
 });
