@@ -7,10 +7,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import {
-  collectReadBlockedFields,
-  isFieldReadable,
-} from "../../src/core/fieldRulePredicates.js";
+import { collectReadBlockedFields, isFieldReadable } from "../../src/core/fieldRulePredicates.js";
 
 describe("isFieldReadable", () => {
   it("treats undefined rule as readable (no entry → no rule)", () => {

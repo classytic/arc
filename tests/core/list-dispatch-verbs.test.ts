@@ -127,9 +127,7 @@ describe("BaseController — list() resource-dispatch verbs", () => {
         },
       });
 
-      const res = await controller.list(
-        createReq(hooks, { query: { _distinct: "internalFlag" } }),
-      );
+      const res = await controller.list(createReq(hooks, { query: { _distinct: "internalFlag" } }));
       expect(res).toMatchObject({ data: ["a", "b"] });
       // biome-ignore lint/suspicious/noExplicitAny: test mock extension
       expect((repo as any).distinct).toHaveBeenCalledOnce();
