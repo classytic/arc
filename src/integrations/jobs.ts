@@ -173,9 +173,11 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
 ) => {
   const { connection, jobs, prefix = "/jobs", bridgeEvents = true, defaults = {} } = options;
 
-  // Dynamic import of BullMQ (only when plugin is actually registered)
-  let Queue: any;
-  let Worker: any;
+  // Dynamic import of BullMQ (only when plugin is actually registered).
+  // `bullmq` is a peer-optional dep; the ambient declaration in
+  // `src/optional-peers.d.ts` ships the minimal class shapes arc uses.
+  let Queue: typeof import("bullmq").Queue;
+  let Worker: typeof import("bullmq").Worker;
 
   try {
     const bullmq = await import("bullmq");
@@ -274,10 +276,10 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
     const jobTimeout = job.timeout ?? defaults.timeout;
     const worker = new Worker(
       queueName,
-      async (bullJob: any) => {
+      async (bullJob: { id?: string; attemptsMade?: number; data?: unknown }) => {
         const meta: JobMeta = {
-          jobId: bullJob.id,
-          attemptsMade: bullJob.attemptsMade,
+          jobId: bullJob.id ?? "",
+          attemptsMade: bullJob.attemptsMade ?? 0,
           timestamp: Date.now(),
         };
 
@@ -329,40 +331,46 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
     );
 
     // Bridge failure event + DLQ routing
-    worker.on("failed", async (bullJob: any, error: Error) => {
-      // Move to dead-letter queue when all retries are exhausted
-      const maxAttempts = job.retries ?? defaults.retries ?? 3;
-      if (dlqQueue && bullJob && bullJob.attemptsMade >= maxAttempts) {
-        try {
-          await dlqQueue.add(`${queueName}:dead`, bullJob.data, {
-            jobId: `${bullJob.id}:dlq`,
-            removeOnComplete: false,
-          });
-          fastify.log.warn(
-            { jobId: bullJob.id, dlq: job.deadLetterQueue ?? `${queueName}:dead` },
-            `Job moved to dead-letter queue`,
-          );
-        } catch (dlqErr) {
-          fastify.log.error({ err: dlqErr, jobId: bullJob.id }, `Failed to move job to DLQ`);
+    worker.on(
+      "failed",
+      async (
+        bullJob: { id?: string; attemptsMade?: number; data?: unknown } | undefined,
+        error: Error,
+      ) => {
+        // Move to dead-letter queue when all retries are exhausted
+        const maxAttempts = job.retries ?? defaults.retries ?? 3;
+        if (dlqQueue && bullJob && (bullJob.attemptsMade ?? 0) >= maxAttempts) {
+          try {
+            await dlqQueue.add(`${queueName}:dead`, bullJob.data, {
+              jobId: `${bullJob.id}:dlq`,
+              removeOnComplete: false,
+            });
+            fastify.log.warn(
+              { jobId: bullJob.id, dlq: job.deadLetterQueue ?? `${queueName}:dead` },
+              `Job moved to dead-letter queue`,
+            );
+          } catch (dlqErr) {
+            fastify.log.error({ err: dlqErr, jobId: bullJob.id }, `Failed to move job to DLQ`);
+          }
         }
-      }
 
-      if (bridgeEvents && fastify.events?.publish) {
-        try {
-          await fastify.events.publish(`job.${queueName}.failed`, {
-            jobId: bullJob?.id,
-            data: bullJob?.data,
-            error: error.message,
-            attemptsMade: bullJob?.attemptsMade,
-          });
-        } catch (err) {
-          fastify.log.warn(
-            { err, jobId: bullJob?.id },
-            `Failed to publish job.${queueName}.failed event`,
-          );
+        if (bridgeEvents && fastify.events?.publish) {
+          try {
+            await fastify.events.publish(`job.${queueName}.failed`, {
+              jobId: bullJob?.id,
+              data: bullJob?.data,
+              error: error.message,
+              attemptsMade: bullJob?.attemptsMade,
+            });
+          } catch (err) {
+            fastify.log.warn(
+              { err, jobId: bullJob?.id },
+              `Failed to publish job.${queueName}.failed event`,
+            );
+          }
         }
-      }
-    });
+      },
+    );
 
     // Stalled-job detection — BullMQ fires this when a worker's lock lapses
     // without a heartbeat, which usually means the worker process crashed.
@@ -451,7 +459,7 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
       // dispatch can leave orphaned jobs mid-execution.
       await Promise.all(
         Array.from(workers.values()).map((w) =>
-          (w as { pause: () => Promise<void> }).pause().catch(() => {
+          (w as unknown as { pause: () => Promise<void> }).pause().catch(() => {
             /* worker may already be stopped */
           }),
         ),

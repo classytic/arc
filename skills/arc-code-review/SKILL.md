@@ -84,7 +84,7 @@ One `defineResource()` call **replaces all of these** in a typical Fastify servi
 ```markdown
 # Arc Convention Audit — <project-name>
 
-**Arc version:** 3.0.x · **Mongokit:** <version or "not installed"> · **Sqlitekit:** <version or "n/a"> · **Date:** <YYYY-MM-DD>
+**Arc version:** 2.16.x · **Mongokit:** <version or "not installed"> · **Sqlitekit:** <version or "n/a"> · **Date:** <YYYY-MM-DD>
 **Files scanned:** <N> · **Findings:** <N critical · <N high · <N medium · <N low>
 
 ## Executive summary

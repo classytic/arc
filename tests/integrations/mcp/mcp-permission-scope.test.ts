@@ -224,8 +224,11 @@ describe("MCP resourceToTools — PermissionResult.scope propagation", () => {
     const result = await listTool.handler({}, toolCtx(null));
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]?.text).toContain("Permission denied");
-    expect(result.content[0]?.text).toContain("Invalid API key");
+    // 2.15.5: canonical ErrorContract — no session + denial → arc.unauthorized 401.
+    // The denial `reason` from the permission check propagates into `message`.
+    const denial = JSON.parse(result.content[0]?.text ?? "{}");
+    expect(denial).toMatchObject({ code: "arc.unauthorized", status: 401 });
+    expect(denial.message).toContain("Invalid API key");
     expect(calls).toHaveLength(0); // Handler MUST NOT run
   });
 

@@ -76,6 +76,12 @@ describe("Scaffolded App — Better Auth + Multi-Tenant", () => {
       auth: "better-auth",
       tenant: "multi",
       typescript: true,
+      // 2.16 — Docker scaffolding is opt-in. The two "generates
+      // Dockerfile / docker-compose.yml" tests below explicitly request
+      // it via `--docker`; the default-deny behaviour is asserted in
+      // `tests/fixes-216-followup.test.ts` so we don't need a parallel
+      // assertion here.
+      docker: true,
     });
   });
 

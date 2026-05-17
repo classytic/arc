@@ -22,7 +22,7 @@ import { resolveActionPermission } from "../../core/actionPermissions.js";
 import type { ResourceDefinition } from "../../core/defineResource.js";
 import { normalizeSchemaIR, schemaIRToZodShape } from "../../core/schemaIR.js";
 import type { PermissionCheck } from "../../permissions/types.js";
-import type { ResourcePermissions } from "../../types/index.js";
+import type { ResourcePermissions, RouteDefinition } from "../../types/index.js";
 import { pluralize } from "../../utils/pluralize.js";
 import { convertActionSchemaToZod, createActionToolHandler } from "./action-tools.js";
 import { buildAggregationTools } from "./aggregation-tools.js";
@@ -31,6 +31,7 @@ import {
   CRUD_ANNOTATIONS,
   createCrudHandler,
   defaultCrudDescription,
+  resolveCrudDescription,
 } from "./crud-tools.js";
 import type { FieldRuleEntry } from "./fieldRulesToZod.js";
 import { buildInputSchema, deriveFieldRulesFromAdapter, getAdapterBodies } from "./input-schema.js";
@@ -121,15 +122,26 @@ export function resourceToTools(
           ? `${prefix ? `${prefix}_` : ""}list_${pluralize(resource.name)}`
           : `${prefix ? `${prefix}_` : ""}${op}_${resource.name}`);
 
+      // Render the auto-derived blurb once, then pass it into the override
+      // resolver so the function-form override can extend the default
+      // without re-deriving filterable/sortable lists by hand.
+      const defaultDescription = defaultCrudDescription(op, resource.displayName, hasSoftDelete, {
+        filterableFields,
+        allowedOperators,
+        sortableFields,
+      });
+
       tools.push({
         name,
-        description:
-          config.descriptions?.[op] ??
-          defaultCrudDescription(op, resource.displayName, hasSoftDelete, {
-            filterableFields,
-            allowedOperators,
-            sortableFields,
-          }),
+        description: resolveCrudDescription(config.descriptions?.[op], {
+          operation: op,
+          displayName: resource.displayName,
+          softDelete: hasSoftDelete,
+          defaultDescription,
+          filterableFields,
+          allowedOperators,
+          sortableFields,
+        }),
         annotations: CRUD_ANNOTATIONS[op],
         inputSchema: buildInputSchema(op, fieldRules, {
           hiddenFields,
@@ -158,8 +170,41 @@ export function resourceToTools(
 
     const wrapHandler = !route.raw;
     if (!wrapHandler && !mcpHandler) continue;
-    if (!mcpHandler && !["POST", "PUT", "PATCH", "DELETE"].includes(route.method)) continue;
+    // 2.15.5 — GET routes are now auto-bridged to MCP via the shared
+    // pipeline path (see `operationKindForRoute` in `route-tools.ts`).
+    // Pre-2.15.5 every collection-style GET route forced authors to write
+    // a parallel `mcpHandler` that hand-serialised the same data the HTTP
+    // handler returned. The exclusion below stays only for the niche
+    // case of a raw GET route with no `mcpHandler` — without `route.raw`
+    // false AND no `mcpHandler`, the auto-bridge can wrap the handler
+    // identically to a POST.
     if (!mcpHandler && typeof route.handler === "string" && !controller) continue;
+
+    // 2.16 — resolve `controllerMethod` (typed function-ref form) into
+    // a concrete handler value here, BEFORE calling `createCustomRouteHandler`
+    // which still expects the narrow `{handler}` contract. This mirrors what
+    // `createCrudRouter` does for the HTTP path so MCP and HTTP route
+    // resolution use the same rule. A route declared with only
+    // `controllerMethod` (no `handler`) is unreachable from MCP unless we
+    // resolve it here; the validator already enforces "exactly one of
+    // handler / controllerMethod" so we don't need a mutual-exclusion check.
+    const routeWithRef = route as typeof route & {
+      controllerMethod?: (controller: unknown) => unknown;
+    };
+    let resolvedRouteHandler = route.handler;
+    if (typeof routeWithRef.controllerMethod === "function" && !resolvedRouteHandler) {
+      if (!controller) continue; // No controller → can't resolve the ref; skip MCP tool.
+      const referenced = routeWithRef.controllerMethod(controller);
+      if (typeof referenced !== "function") continue;
+      resolvedRouteHandler = (referenced as (...args: unknown[]) => unknown).bind(controller) as
+        | RouteDefinition["handler"]
+        | undefined;
+    }
+    // Skip routes that still have no resolvable handler — the validator
+    // already catches "neither handler nor controllerMethod" at boot, so
+    // this is a defensive backstop for direct `resourceToTools()` callers
+    // that bypass `defineResource`'s validation.
+    if (!resolvedRouteHandler) continue;
 
     const opName = route.operation ?? slugifyRoute(route.method, route.path);
     const hasId = route.path.includes(":id");
@@ -215,12 +260,25 @@ export function resourceToTools(
       inputSchema: inputShape,
       handler: mcpHandler
         ? createMcpHandlerPassthrough(mcpHandler)
-        : createCustomRouteHandler(route, controller, hasId, {
-            resourceName: resource.name,
-            operationName: opName,
-            permissions: route.permissions,
-            pipeline: resource.pipe,
-          }),
+        : createCustomRouteHandler(
+            // Project the route into the narrow shape `createCustomRouteHandler`
+            // expects. `handler` is guaranteed defined here (we either
+            // resolved `controllerMethod` above or short-circuited the loop).
+            {
+              handler: resolvedRouteHandler,
+              operation: route.operation,
+              method: route.method,
+              path: route.path,
+            },
+            controller,
+            hasId,
+            {
+              resourceName: resource.name,
+              operationName: opName,
+              permissions: route.permissions,
+              pipeline: resource.pipe,
+            },
+          ),
     });
   }
 
@@ -240,10 +298,16 @@ export function resourceToTools(
         ? { ...((mcpCfg as Record<string, unknown>).annotations as ToolAnnotations) }
         : { destructiveHint: true };
 
-      // Build input schema: always requires `id`, plus action-specific fields
-      const inputShape: Record<string, z.ZodTypeAny> = {
-        id: z.string().describe("Resource ID"),
-      };
+      // 2.15.5 — id-less actions (declared with `id: false`) mount at the
+      // resource root (`POST /<prefix>/action`) and the MCP tool drops
+      // the `id` input field. The handler receives `id: ""` for parity.
+      const idLess = typeof def !== "function" && def.id === false;
+
+      // Build input schema. Id-bound actions advertise an `id` field;
+      // id-less actions skip it so agents don't pass a meaningless value.
+      const inputShape: Record<string, z.ZodTypeAny> = idLess
+        ? {}
+        : { id: z.string().describe("Resource ID") };
 
       const rawSchema = typeof def !== "function" ? def.schema : undefined;
       if (rawSchema && typeof rawSchema === "object") {
@@ -303,6 +367,9 @@ export function resourceToTools(
           // `additionalProperties: false` at request time — HTTP AJV handles
           // this natively via the oneOf branches, MCP handles it here.
           rawSchema as Record<string, unknown> | undefined,
+          // 2.15.5 — `idLess: true` drops `id` from the strict-mode allowed
+          // key set and forces `id: ""` into the handler signature.
+          idLess,
         ),
       });
     }

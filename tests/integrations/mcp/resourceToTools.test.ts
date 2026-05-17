@@ -103,6 +103,23 @@ describe("resourceToTools", () => {
     expect(tools[0].description).toBe("Browse all items");
   });
 
+  it("supports a function-form description override that receives the auto-derived default", () => {
+    // The mentora review flagged that authors who want to extend the auto
+    // CRUD description (e.g. append a behavior note) had to either replace
+    // the whole string and lose Arc's auto-filterable-fields blurb, or
+    // copy-paste the rendering logic. Function form fixes that: the meta
+    // object carries Arc's pre-rendered default plus the same filterable /
+    // sortable inputs `defaultCrudDescription()` consumed.
+    const tools = resourceToTools(mockResource(), {
+      descriptions: {
+        list: (meta) => `${meta.defaultDescription} Prefer category=a for tests.`,
+      },
+    });
+    expect(tools[0].description).toContain("List products with optional filters and pagination.");
+    expect(tools[0].description).toContain("Filterable fields: category.");
+    expect(tools[0].description.endsWith("Prefer category=a for tests.")).toBe(true);
+  });
+
   // ============================================================================
   // Bug fix: disableDefaultRoutes should NOT block MCP tools
   // ============================================================================
@@ -425,7 +442,10 @@ describe("resourceToTools", () => {
       );
 
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain("Permission denied");
+      // 2.15.5: canonical ErrorContract JSON shape (arc.forbidden when session present)
+      const denied = JSON.parse(result.content[0].text);
+      expect(denied).toMatchObject({ code: "arc.forbidden", status: 403 });
+      expect(denied.message).toContain("Not authorized");
       expect((resource.controller as any).create).not.toHaveBeenCalled();
     });
 
@@ -444,7 +464,11 @@ describe("resourceToTools", () => {
       );
 
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain("Permission denied");
+      // No session + denial → arc.unauthorized 401 (mirrors HTTP errorHandler).
+      expect(JSON.parse(result.content[0].text)).toMatchObject({
+        code: "arc.unauthorized",
+        status: 401,
+      });
     });
 
     it("allows access with empty _policyFilters when permission returns true", async () => {
@@ -544,7 +568,13 @@ describe("resourceToTools", () => {
       );
 
       expect(result.isError).toBe(true);
-      expect(result.content[0]).toEqual({ type: "text", text: "Error: DB error" });
+      // 2.15.5: collapses unknown errors to the canonical arc.internal_error 500
+      // shape via toErrorContract so MCP agents see the same JSON HTTP clients do.
+      expect(JSON.parse(result.content[0].text)).toMatchObject({
+        code: "arc.internal_error",
+        status: 500,
+        message: "DB error",
+      });
     });
 
     it("catches thrown errors", async () => {

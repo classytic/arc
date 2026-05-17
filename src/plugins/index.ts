@@ -4,17 +4,21 @@
  * Fastify plugins for production-ready features.
  *
  * @example
+ * ```ts
  * import {
  *   requestIdPlugin,
  *   healthPlugin,
- *   tracingPlugin,
  *   gracefulShutdownPlugin,
  * } from '@classytic/arc/plugins';
+ * // `tracingPlugin` ships from a dedicated subpath so @opentelemetry/*
+ * // never enters your bundle unless you opt in:
+ * import { tracingPlugin } from '@classytic/arc/plugins/tracing';
  *
  * await fastify.register(requestIdPlugin);
  * await fastify.register(healthPlugin, { metrics: true });
  * await fastify.register(tracingPlugin, { serviceName: 'my-api' });
  * await fastify.register(gracefulShutdownPlugin);
+ * ```
  */
 
 export type { ArcCore, ArcCorePluginOptions, PluginMeta } from "../core/arcCorePlugin.js";

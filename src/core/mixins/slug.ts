@@ -11,9 +11,9 @@
  * ```
  */
 
-import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import type { AnyRecord, IControllerResponse, IRequestContext } from "../../types/index.js";
 import { createError, NotFoundError } from "../../utils/errors.js";
+import { withRepoFeatures } from "../../utils/repoFeature.js";
 import type { BaseCrudController } from "../BaseCrudController.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: standard TS mixin Constructor pattern
@@ -40,10 +40,10 @@ export function SlugMixin<TBase extends Constructor<BaseCrudController>>(
         ...this.tenantRepoOptions(req),
       } as typeof baseOptions;
 
-      const repo = this.repository as RepositoryLike & {
+      const repo = withRepoFeatures<{
         getBySlug?: (slug: string, options?: unknown) => Promise<AnyRecord | null>;
         getOne?: (filter: Record<string, unknown>, options?: unknown) => Promise<AnyRecord | null>;
-      };
+      }>(this.repository);
 
       let item: AnyRecord | null = null;
       if (repo.getBySlug) {

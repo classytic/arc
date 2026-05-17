@@ -127,7 +127,8 @@ export function createTestFixtures(): TestFixtures {
       // they run. Callers needing strict ordering can split into multiple
       // fixture instances.
       for (let i = tracked.length - 1; i >= 0; i--) {
-        const entry = tracked[i]!;
+        const entry = tracked[i];
+        if (!entry) continue;
         if (entry.destroy) {
           await entry.destroy(entry.record).catch(() => {
             /* swallow — tests tear the whole DB down anyway */

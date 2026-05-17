@@ -2,18 +2,25 @@
  * CRUD → MCP tool generation.
  *
  * Owns: list / get / create / update / delete tool factories + their
- * default descriptions + op-level annotations. Handler calls BaseController
- * methods via the same pipeline as REST — permission check, request-context
- * builder, envelope translation.
+ * default descriptions + op-level annotations. Handler dispatch is
+ * delegated to {@link invokeController} so CRUD tools share the exact
+ * permission-eval + context-build + canonical-error path with custom MCP
+ * tools, scheduled jobs, and workflow steps. The previous inline
+ * "permission denied" / "Error: …" string shapes drifted from the
+ * `ErrorContract` shape every other surface uses; routing through
+ * `invokeController` eliminates that drift.
  */
 
-import type { IControllerResponse, ResourcePermissions } from "../../types/index.js";
+import type { ResourcePermissions } from "../../types/index.js";
 import { pluralize } from "../../utils/pluralize.js";
-import { buildRequestContext, type McpOperation } from "./buildRequestContext.js";
-import { evaluatePermission, toCallToolResult } from "./tool-helpers.js";
-import type { CrudOperation, ToolAnnotations, ToolDefinition } from "./types.js";
-
-type ControllerMethod = (ctx: unknown) => Promise<IControllerResponse>;
+import { invokeController } from "./invokeController.js";
+import type {
+  CrudDescriptionMeta,
+  CrudDescriptionOverride,
+  CrudOperation,
+  ToolAnnotations,
+  ToolDefinition,
+} from "./types.js";
 
 export const ALL_CRUD_OPS: CrudOperation[] = ["list", "get", "create", "update", "delete"];
 
@@ -26,9 +33,10 @@ export const CRUD_ANNOTATIONS: Record<CrudOperation, ToolAnnotations> = {
 };
 
 /**
- * Build a handler that dispatches to the controller method for `op`,
- * passing through arc's MCP → IRequestContext adapter. Permission check
- * runs first and short-circuits with a structured tool error on denial.
+ * Build a handler that dispatches to the controller method for `op` via
+ * the shared {@link invokeController} pipeline. Permission check + context
+ * build + envelope/error conversion all live in one place — this factory
+ * only resolves the op-specific permission and threads it through.
  */
 export function createCrudHandler(
   op: CrudOperation,
@@ -36,59 +44,23 @@ export function createCrudHandler(
   resourceName: string,
   permissions?: ResourcePermissions,
 ): ToolDefinition["handler"] {
-  const ctrl = controller as unknown as Record<string, ControllerMethod>;
-
-  return async (input, ctx) => {
-    try {
-      const method = ctrl[op];
-      if (typeof method !== "function") {
-        return {
-          content: [{ type: "text", text: `Operation "${op}" not available on ${resourceName}` }],
-          isError: true,
-        };
-      }
-
-      const permResult = await evaluatePermission(
-        permissions?.[op as keyof ResourcePermissions],
-        ctx.session,
-        resourceName,
-        op,
-        input,
-      );
-      if (permResult && !permResult.granted) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Permission denied: ${op} on ${resourceName}${
-                permResult.reason ? ` — ${permResult.reason}` : ""
-              }`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      const reqCtx = buildRequestContext(
-        input,
-        ctx.session,
-        op as McpOperation,
-        permResult?.filters,
-        permResult?.scope,
-      );
-      return toCallToolResult(await method(reqCtx));
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      ctx.log("error", `${resourceName}.${op}: ${msg}`).catch(() => {});
-      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
-    }
-  };
+  const permission = permissions?.[op as keyof ResourcePermissions];
+  return (input, ctx) =>
+    invokeController(controller, op, input, {
+      session: ctx.session,
+      resourceName,
+      permissions: permission,
+    });
 }
 
 /**
  * Default description for a CRUD tool. Enriches list descriptions with the
  * configured filter/sort metadata so MCP clients can see what's queryable
  * without reading the resource source.
+ *
+ * Exposed publicly so authors using the function-form `descriptions`
+ * override can call this from their own override to keep the auto-derived
+ * blurb intact and only append extra context.
  */
 export function defaultCrudDescription(
   op: CrudOperation,
@@ -100,10 +72,16 @@ export function defaultCrudDescription(
     sortableFields?: readonly string[];
   },
 ): string {
-  const name = displayName.toLowerCase();
+  // 2.15.5 — `displayName` is now SINGULAR by default (was plural pre-2.15.5),
+  // so singular contexts ("Get a single …") read correctly and `pluralize()`
+  // doesn't double-pluralize when we need the plural form. Hosts that
+  // explicitly pass a plural-form displayName still get the right shape for
+  // singular contexts because `singularize` is NOT called — Arc trusts the
+  // declared display name and only PLURALIZES when grammar demands it.
+  const singular = displayName.toLowerCase();
   switch (op) {
     case "list": {
-      const parts = [`List ${pluralize(name)} with optional filters and pagination.`];
+      const parts = [`List ${pluralize(singular)} with optional filters and pagination.`];
       if (queryMeta?.filterableFields?.length) {
         parts.push(`Filterable fields: ${queryMeta.filterableFields.join(", ")}.`);
       }
@@ -118,14 +96,30 @@ export function defaultCrudDescription(
       return parts.join(" ");
     }
     case "get":
-      return `Get a single ${name} by ID`;
+      return `Get a single ${singular} by ID`;
     case "create":
-      return `Create a new ${name}`;
+      return `Create a new ${singular}`;
     case "update":
-      return `Update an existing ${name} by ID`;
+      return `Update an existing ${singular} by ID`;
     case "delete":
       return softDelete
-        ? `Delete a ${name} by ID (soft delete — marks as deleted, not permanently removed)`
-        : `Delete a ${name} by ID`;
+        ? `Delete a ${singular} by ID (soft delete — marks as deleted, not permanently removed)`
+        : `Delete a ${singular} by ID`;
   }
+}
+
+/**
+ * Resolve a {@link CrudDescriptionOverride} (string or function) into a
+ * concrete description. Centralises the function-form contract so every
+ * call site that consumes an override applies it the same way.
+ *
+ * Falls back to {@link defaultCrudDescription} when no override is set.
+ */
+export function resolveCrudDescription(
+  override: CrudDescriptionOverride | undefined,
+  meta: CrudDescriptionMeta,
+): string {
+  if (override === undefined) return meta.defaultDescription;
+  if (typeof override === "string") return override;
+  return override(meta);
 }

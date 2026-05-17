@@ -13,6 +13,7 @@
 
 import type { PermissionCheck } from "../../permissions/types.js";
 import type { RegistryEntry } from "../../types/index.js";
+import { pluralize } from "../../utils/pluralize.js";
 import type { Operation, Response } from "./types.js";
 
 /**
@@ -127,9 +128,15 @@ export function createOperation(
     return s.operations.includes(operation);
   });
 
+  // 2.15.5 — `displayName` is the SINGULAR form (CRUD descriptions read
+  // correctly without "Get a single shots by ID"). For the list operation
+  // alone the summary noun must be plural — pluralize on the way out so the
+  // summary reads "List all posts" / "Create new post" / "Get post by ID".
+  const summaryNoun = (resource.displayName || resource.name).toLowerCase();
+  const finalNoun = operation === "list" ? pluralize(summaryNoun) : summaryNoun;
   const op: Operation = {
     tags: [resource.tag || "Resource"],
-    summary: `${summary} ${(resource.displayName || resource.name).toLowerCase()}`,
+    summary: `${summary} ${finalNoun}`,
     operationId: `${resource.name}_${operation}`,
     ...(descParts.length > 0 && { description: descParts.join("\n\n") }),
     ...(requiresAuth && {

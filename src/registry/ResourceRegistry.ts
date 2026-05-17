@@ -37,11 +37,32 @@ export interface RouteRow {
 
 export class ResourceRegistry {
   private _resources: Map<string, RegistryEntry>;
+  /**
+   * Parallel map of full `DataAdapter` instances. The public `RegistryEntry.adapter`
+   * field is intentionally narrowed to `{ type, name }` so introspection can be
+   * JSON-serialized — but cascade / cleanup / migration helpers need the live
+   * adapter (and its `.repository`) to do real work. Stored here, behind
+   * `getAdapter(name)`, so the public metadata stays serializable and the
+   * runtime-only handle is still reachable.
+   */
+  private _adapters: Map<string, unknown>;
   private _frozen: boolean;
 
   constructor() {
     this._resources = new Map();
+    this._adapters = new Map();
     this._frozen = false;
+  }
+
+  /**
+   * Get the live `DataAdapter` for a registered resource — the handle whose
+   * `.repository` cascade / cleanup helpers actually call. Returns `undefined`
+   * when the resource is unknown OR was registered without an adapter
+   * (service-only resources). Typed loosely (`unknown`-shaped fields) so
+   * consumers cast to their kit's adapter type at the use site.
+   */
+  getAdapter<T = unknown>(name: string): T | undefined {
+    return this._adapters.get(name) as T | undefined;
   }
 
   /**
@@ -75,7 +96,11 @@ export class ResourceRegistry {
         method: r.method,
         path: r.path,
         handler:
-          typeof r.handler === "string" ? r.handler : (r.handler as Function).name || "anonymous",
+          typeof r.handler === "string"
+            ? r.handler
+            : typeof r.handler === "function"
+              ? r.handler.name || "anonymous"
+              : "anonymous",
         operation: r.operation,
         summary: r.summary,
         description: r.description,
@@ -86,6 +111,12 @@ export class ResourceRegistry {
       events: Object.keys(resource.events ?? {}),
       registeredAt: new Date().toISOString(),
       disableDefaultRoutes: resource.disableDefaultRoutes,
+      // 2.15.5 — surface tenant + cascade flag so introspection scripts and
+      // `cascadeDeleteForOrganization()` can iterate without re-reading the
+      // resource definition. `tenantField: undefined` is normalized to the
+      // adapter-aware default at runtime; we pass it through verbatim here.
+      tenantField: resource.tenantField,
+      resolvedTenantPurge: resource.resolvedTenantPurge,
       updateMethod: resource.updateMethod,
       disabledRoutes: resource.disabledRoutes ? [...resource.disabledRoutes] : undefined,
       openApiSchemas: options.openApiSchemas,
@@ -106,6 +137,11 @@ export class ResourceRegistry {
               schema: entry.schema as Record<string, unknown> | undefined,
               permissions: entry.permissions,
               mcp: entry.mcp,
+              // 2.15.5: surface the mount preference so consumers (OpenAPI,
+              // registry route enumeration, FE manifests) can pick the
+              // right URL without re-reading the action definition.
+              // `undefined` is treated as `true` (legacy id-bound default).
+              id: entry.id,
             };
           })
         : undefined,
@@ -130,6 +166,9 @@ export class ResourceRegistry {
     };
 
     this._resources.set(resource.name, entry);
+    // Keep the live adapter reachable for cascade / cleanup / migration
+    // helpers. The public `entry.adapter` stays serializable-narrow.
+    if (resource.adapter) this._adapters.set(resource.name, resource.adapter);
     return this;
   }
 
@@ -266,8 +305,20 @@ export class ResourceRegistry {
       });
     }
 
+    // 2.15.5 — actions can mount under `POST /:id/action` (id-bound,
+    // default) AND/OR `POST /action` (resource-root, `id: false`). Emit
+    // the corresponding row only if at least one action prefers that
+    // mount, so introspection / OpenAPI counts reflect the actual wire
+    // surface. `id` undefined is treated as `true` (legacy default).
     if (r.actions && r.actions.length > 0) {
-      routes.push({ method: "POST", path: `${r.prefix}/:id/action`, operation: "action" });
+      const hasIdBound = r.actions.some((a) => a.id !== false);
+      const hasIdLess = r.actions.some((a) => a.id === false);
+      if (hasIdBound) {
+        routes.push({ method: "POST", path: `${r.prefix}/:id/action`, operation: "action" });
+      }
+      if (hasIdLess) {
+        routes.push({ method: "POST", path: `${r.prefix}/action`, operation: "action" });
+      }
     }
 
     for (const agg of r.aggregations ?? []) {
@@ -304,10 +355,20 @@ export class ResourceRegistry {
   }
 
   /**
-   * Reset registry — clear all resources and unfreeze
+   * Reset registry — clear all resources, drop their parallel live-adapter
+   * handles, and unfreeze.
+   *
+   * The `_adapters` map (added in 2.15.5 so cascade / cleanup helpers can
+   * reach `adapter.repository` after registration) must clear alongside
+   * `_resources`. Pre-2.16 this method dropped the public entries but
+   * left the live adapters dangling, so a test that called `reset()`
+   * between cases would see ghost adapters and either (a) leak a live
+   * Mongo connection across describe blocks or (b) `cascadeDeleteForOrganization`
+   * iterate over a defunct registry entry. Clear both halves together.
    */
   reset(): void {
     this._resources.clear();
+    this._adapters.clear();
     this._frozen = false;
   }
 

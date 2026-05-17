@@ -25,10 +25,30 @@ export interface ToolAnnotations {
   openWorldHint?: boolean;
 }
 
-/** Context passed to tool handlers at invocation time */
-export interface ToolContext {
-  /** Session identity — null in no-auth mode */
-  session: McpAuthResult | null;
+/**
+ * Context passed to tool handlers at invocation time.
+ *
+ * The `TSession` parameter widens `session` to a host-specific shape — pass
+ * an interface that extends `McpAuthResult` (or omits it entirely for fully
+ * custom auth resolvers) to drop the `as any` casts at call sites:
+ *
+ * ```ts
+ * interface MySession extends McpAuthResult {
+ *   userId: string;            // required, not optional
+ *   organizationId: string;
+ *   tenantPlan: 'free' | 'pro';
+ * }
+ *
+ * defineTool<MySession>('upgrade', {
+ *   handler: async (_input, ctx) => {
+ *     ctx.session?.tenantPlan;  // typed, no cast
+ *   },
+ * });
+ * ```
+ */
+export interface ToolContext<TSession = McpAuthResult> {
+  /** Session identity — `null` in no-auth mode */
+  session: TSession | null;
   /** Log to MCP client (best-effort, non-blocking) */
   log: (level: "info" | "warning" | "error" | "debug", message: string) => Promise<void>;
   /** Raw MCP SDK extra context (for advanced use) */
@@ -64,8 +84,11 @@ export interface CallToolResult {
  *
  * `inputSchema` is a flat Zod shape `{ name: z.string(), age: z.number() }` —
  * the SDK wraps it in z.object() internally. Do NOT pass z.object() here.
+ *
+ * The `TSession` parameter lets hosts widen the session shape on the
+ * handler — same generic the `defineTool()` builder accepts.
  */
-export interface ToolDefinition {
+export interface ToolDefinition<TSession = McpAuthResult> {
   name: string;
   description: string;
   title?: string;
@@ -74,7 +97,7 @@ export interface ToolDefinition {
   /** Flat Zod shape for structured output validation */
   outputSchema?: Record<string, z.ZodTypeAny>;
   annotations?: ToolAnnotations;
-  handler: (input: Record<string, unknown>, ctx: ToolContext) => Promise<CallToolResult>;
+  handler: (input: Record<string, unknown>, ctx: ToolContext<TSession>) => Promise<CallToolResult>;
 }
 
 /** Output of definePrompt() — plain data, not yet registered */
@@ -99,12 +122,59 @@ export interface PromptResult {
 // Plugin Options
 // ============================================================================
 
+/**
+ * Metadata threaded into a function-form description override so authors
+ * can produce a context-aware description without re-deriving filter /
+ * sort / operator lists from the resource definition by hand.
+ *
+ * Equivalent to the inputs `defaultCrudDescription()` consumes — the
+ * default description is also passed (`defaultDescription`) so authors
+ * can prepend or append to it without duplicating Arc's auto-derived
+ * filterable-fields blurb.
+ */
+export interface CrudDescriptionMeta {
+  readonly operation: CrudOperation;
+  /** Resource display name (e.g. `Posts`) — Arc derives this from `defineResource`. */
+  readonly displayName: string;
+  readonly softDelete: boolean;
+  /** Pre-rendered default description Arc would have used. */
+  readonly defaultDescription: string;
+  readonly filterableFields?: readonly string[];
+  readonly allowedOperators?: readonly string[];
+  readonly sortableFields?: readonly string[];
+}
+
+/**
+ * Override shape for a single CRUD tool description.
+ *
+ * - `string` — replace the default outright.
+ * - Function — receives the auto-rendered default plus the same metadata
+ *   `defaultCrudDescription()` consumes, returns a final string. Use this
+ *   to append context (`'Note: prefer isActive: true'`) without losing
+ *   Arc's auto-derived filterable-fields blurb.
+ */
+export type CrudDescriptionOverride = string | ((meta: CrudDescriptionMeta) => string);
+
 /** Per-resource MCP configuration overrides */
 export interface McpResourceConfig {
   /** Which CRUD operations to expose (default: all enabled on the resource) */
   operations?: CrudOperation[];
-  /** Override tool descriptions per operation */
-  descriptions?: Partial<Record<CrudOperation, string>>;
+  /**
+   * Override tool descriptions per operation.
+   *
+   * Each entry is either a plain replacement string OR a function
+   * `(meta) => string` that receives the auto-rendered default plus the
+   * filterable / sortable metadata Arc would have used. Use the function
+   * form to extend the default without losing the auto-derived blurb:
+   *
+   * ```ts
+   * descriptions: {
+   *   list: ({ defaultDescription }) =>
+   *     `${defaultDescription} Sort by createdAt desc for newest first.`,
+   * }
+   * ```
+   */
+  descriptions?: Partial<Record<CrudOperation, CrudDescriptionOverride>>;
   /** Fields to hide from MCP tool schemas (beyond schemaOptions.hiddenFields) */
   hideFields?: string[];
   /** Per-operation tool name overrides: `{ get: 'get_job_by_id' }` */
@@ -178,9 +248,35 @@ export interface McpPluginOptions {
   serverVersion?: string;
   /** Instructions for the LLM — guidance on tool usage, constraints */
   instructions?: string;
-  /** Resources to exclude by name (ignored if `include` is set) */
+  /**
+   * Resources to exclude by name (ignored if `expose`/`include` is set).
+   *
+   * Drift-prone for LLM-facing surfaces: a new `defineResource()` is exposed
+   * by default and you have to remember to add it here. Prefer `expose` when
+   * the principle of least authority matters.
+   */
   exclude?: string[];
-  /** Resources to include by name — only these get MCP tools. Takes priority over `exclude`. */
+  /**
+   * Default-deny allowlist — only resources whose names appear here are
+   * surfaced to MCP. New `defineResource()` calls are auto-denied (the
+   * inverse of `exclude`), matching the principle-of-least-authority that
+   * LLM-driven tool surfaces want.
+   *
+   * Mutually exclusive with `include` (a deprecated alias) — passing both
+   * throws at registration. Mutually exclusive with `exclude`: the deny
+   * default would render the exclude list redundant; passing both throws
+   * with a hint to drop `exclude`.
+   *
+   * @example
+   * ```ts
+   * await app.register(mcpPlugin, { resources, expose: ['post'] });
+   * ```
+   */
+  expose?: string[];
+  /**
+   * @deprecated Use `expose` — same default-deny semantics with a clearer
+   * verb. Kept for backwards compatibility with pre-2.15.5 hosts.
+   */
   include?: string[];
   /** Tool name prefix: 'crm' → 'crm_list_products' */
   toolNamePrefix?: string;

@@ -20,6 +20,7 @@
  */
 
 import { createMcpServer, type McpServerInstance } from "./createMcpServer.js";
+import { filterResourcesForMcp } from "./mcpPlugin.js";
 import { resourceToTools } from "./resourceToTools.js";
 import type { McpAuthResult, McpPluginOptions, ToolDefinition } from "./types.js";
 
@@ -33,6 +34,7 @@ export interface TestMcpClientOptions {
     McpPluginOptions,
     | "resources"
     | "overrides"
+    | "expose"
     | "include"
     | "exclude"
     | "toolNamePrefix"
@@ -97,16 +99,15 @@ export async function createTestMcpClient(
   const auth = options.auth ?? { userId: "test-user" };
   const serverName = options.serverName ?? "test-mcp";
 
-  // Build tools from resources
+  // Build tools from resources — share `filterResourcesForMcp` with the
+  // Fastify plugin so the same `expose` / `include` / `exclude` precedence
+  // applies (including the throw on conflicting combinations).
   const overrides = pluginOpts.overrides ?? {};
-  let enabledResources = pluginOpts.resources ?? [];
-  if (pluginOpts.include) {
-    const includeSet = new Set(pluginOpts.include);
-    enabledResources = enabledResources.filter((r) => includeSet.has(r.name));
-  } else if (pluginOpts.exclude) {
-    const excludeSet = new Set(pluginOpts.exclude);
-    enabledResources = enabledResources.filter((r) => !excludeSet.has(r.name));
-  }
+  const enabledResources = filterResourcesForMcp(pluginOpts.resources ?? [], {
+    expose: pluginOpts.expose,
+    include: pluginOpts.include,
+    exclude: pluginOpts.exclude,
+  });
 
   const tools: ToolDefinition[] = enabledResources.flatMap((r) => {
     const resOverrides = overrides[r.name] ?? {};

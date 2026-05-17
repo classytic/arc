@@ -33,13 +33,17 @@ declare module "bullmq" {
     close(): Promise<void>;
   }
 
+  // `processor` accepts a `never`-typed arg so concrete callers can declare
+  // their own job-shape parameter without TS rejecting on variance. The
+  // event handler takes `never[]` for the same reason — bullmq emits a
+  // mix of (job, error) tuples and concrete shapes vary per event name.
   export class Worker {
     constructor(
       name: string,
-      processor: (job: any) => Promise<unknown>,
+      processor: (job: never) => Promise<unknown>,
       opts?: Record<string, unknown>,
     );
-    on(event: string, handler: (...args: any[]) => void): void;
+    on(event: string, handler: (...args: never[]) => void): void;
     close(): Promise<void>;
   }
 }

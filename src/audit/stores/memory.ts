@@ -54,12 +54,14 @@ export class MemoryAuditStore implements AuditStore {
       results = results.filter((e) => actions.includes(e.action));
     }
 
-    if (options.from) {
-      results = results.filter((e) => e.timestamp >= options.from!);
+    const from = options.from;
+    if (from !== undefined) {
+      results = results.filter((e) => e.timestamp >= from);
     }
 
-    if (options.to) {
-      results = results.filter((e) => e.timestamp <= options.to!);
+    const to = options.to;
+    if (to !== undefined) {
+      results = results.filter((e) => e.timestamp <= to);
     }
 
     // Pagination

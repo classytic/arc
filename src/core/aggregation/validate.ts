@@ -710,20 +710,3 @@ function assertFieldAllowed(context: string, ref: string, input: FieldRefValidat
     );
   }
 }
-
-function extractTenantFilter(tenantOptions: AnyRecord): AnyRecord {
-  // Tenant options bag (from BaseCrudController.tenantRepoOptions)
-  // contains organizationId / tenantField, plus userId / user / requestId.
-  // For aggregation filter composition we only want fields that are
-  // semantic tenant scope — userId / user / requestId are kit options,
-  // NOT filter predicates. Conservative pass: forward only string-valued
-  // entries that aren't part of the canonical option bag.
-  const out: AnyRecord = {};
-  const optionOnlyKeys = new Set(["userId", "user", "session", "requestId"]);
-  for (const [key, value] of Object.entries(tenantOptions)) {
-    if (optionOnlyKeys.has(key)) continue;
-    if (value === undefined || value === null) continue;
-    out[key] = value;
-  }
-  return out;
-}

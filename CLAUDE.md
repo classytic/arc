@@ -112,8 +112,8 @@ Arc's boot order is **fixed** (do not reorder; do not skip slots):
 | Peer | Min | Required? |
 |------|-----|-----------|
 | fastify | >=5.0.0 | **Yes** |
-| @classytic/primitives | >=0.3.0 | **Yes** |
-| @classytic/repo-core | >=0.3.1 | No |
+| @classytic/primitives | >=0.6.0 | **Yes** |
+| @classytic/repo-core | >=0.5.0 | **Yes** |
 | better-auth | >=1.6.2 | No |
 | ioredis | >=5.0.0 | No |
 | bullmq | >=5.0.0 | No |

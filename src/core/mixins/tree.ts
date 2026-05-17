@@ -12,9 +12,9 @@
  * ```
  */
 
-import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import type { AnyRecord, IControllerResponse, IRequestContext } from "../../types/index.js";
 import { createError } from "../../utils/errors.js";
+import { withRepoFeatures } from "../../utils/repoFeature.js";
 import type { BaseCrudController } from "../BaseCrudController.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: standard TS mixin Constructor pattern
@@ -31,9 +31,9 @@ export function TreeMixin<TBase extends Constructor<BaseCrudController>>(
 ): TBase & Constructor<TreeExt> {
   return class TreeController extends Base {
     async getTree(req: IRequestContext): Promise<IControllerResponse<AnyRecord[]>> {
-      const repo = this.repository as RepositoryLike & {
+      const repo = withRepoFeatures<{
         getTree?: (options?: unknown) => Promise<AnyRecord[]>;
-      };
+      }>(this.repository);
       if (!repo.getTree) {
         throw createError(501, "Tree structure not implemented");
       }
@@ -45,9 +45,9 @@ export function TreeMixin<TBase extends Constructor<BaseCrudController>>(
     }
 
     async getChildren(req: IRequestContext): Promise<IControllerResponse<AnyRecord[]>> {
-      const repo = this.repository as RepositoryLike & {
+      const repo = withRepoFeatures<{
         getChildren?: (parentId: string, options?: unknown) => Promise<AnyRecord[]>;
-      };
+      }>(this.repository);
       if (!repo.getChildren) {
         throw createError(501, "Tree structure not implemented");
       }

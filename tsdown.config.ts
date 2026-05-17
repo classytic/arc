@@ -20,10 +20,8 @@ export default defineConfig({
     // Scope
     "src/scope/index.ts",
 
-    // Auth & Org
+    // Auth
     "src/auth/index.ts",
-    "src/org/index.ts",
-    "src/org/types.ts",
 
     // Hooks, Registry, Utils
     "src/hooks/index.ts",

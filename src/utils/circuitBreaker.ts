@@ -36,6 +36,18 @@ export const CircuitState = {
 
 export type CircuitState = (typeof CircuitState)[keyof typeof CircuitState];
 
+/**
+ * Generic constraint for "any async function" that survives strict TS.
+ *
+ * `(...args: never[]) => Promise<unknown>` is the canonical modern pattern:
+ * `never` in the contravariant args position lets concrete signatures
+ * like `(amount: number) => Promise<Charge>` satisfy the constraint via
+ * function-parameter bivariance, while `unknown` in the covariant return
+ * position is the no-info-leak escape from `any`. `(...args: any[]) =>
+ * Promise<any>` would silently disable type checking everywhere `T` flows.
+ */
+type AnyAsyncFn = (...args: never[]) => Promise<unknown>;
+
 export interface CircuitBreakerOptions {
   /**
    * Number of failures before opening circuit
@@ -103,8 +115,7 @@ export class CircuitBreakerError extends Error {
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic constraint must accept any async fn
-export class CircuitBreaker<T extends (...args: any[]) => Promise<any>> {
+export class CircuitBreaker<T extends AnyAsyncFn> {
   private state: CircuitState = CircuitState.CLOSED;
   private failures: number = 0;
   private successes: number = 0;
@@ -190,7 +201,10 @@ export class CircuitBreaker<T extends (...args: any[]) => Promise<any>> {
       this.fn(...args)
         .then((result) => {
           clearTimeout(timeoutId);
-          resolve(result);
+          // `T extends AnyAsyncFn` widens the return slot to `Promise<unknown>`
+          // for variance reasons; the value at runtime is whatever the caller's
+          // concrete signature returns. Cast at the resolve boundary only.
+          resolve(result as Awaited<ReturnType<T>>);
         })
         .catch((error) => {
           clearTimeout(timeoutId);
@@ -324,8 +338,7 @@ export class CircuitBreaker<T extends (...args: any[]) => Promise<any>> {
  *   { name: 'email-service' }
  * );
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic constraint must accept any async fn
-export function createCircuitBreaker<T extends (...args: any[]) => Promise<any>>(
+export function createCircuitBreaker<T extends AnyAsyncFn>(
   fn: T,
   options?: CircuitBreakerOptions,
 ): CircuitBreaker<T> {
@@ -336,32 +349,32 @@ export function createCircuitBreaker<T extends (...args: any[]) => Promise<any>>
  * Circuit breaker registry for managing multiple breakers
  */
 export class CircuitBreakerRegistry {
-  private breakers: Map<string, CircuitBreaker<any>> = new Map();
+  private breakers: Map<string, CircuitBreaker<AnyAsyncFn>> = new Map();
 
   /**
    * Register a circuit breaker
    */
-  register<T extends (...args: any[]) => Promise<any>>(
+  register<T extends AnyAsyncFn>(
     name: string,
     fn: T,
     options?: Omit<CircuitBreakerOptions, "name">,
   ): CircuitBreaker<T> {
     const breaker = new CircuitBreaker(fn, { ...options, name });
-    this.breakers.set(name, breaker);
+    this.breakers.set(name, breaker as unknown as CircuitBreaker<AnyAsyncFn>);
     return breaker;
   }
 
   /**
    * Get a circuit breaker by name
    */
-  get(name: string): CircuitBreaker<any> | undefined {
+  get(name: string): CircuitBreaker<AnyAsyncFn> | undefined {
     return this.breakers.get(name);
   }
 
   /**
    * Get all breakers
    */
-  getAll(): Map<string, CircuitBreaker<any>> {
+  getAll(): Map<string, CircuitBreaker<AnyAsyncFn>> {
     return this.breakers;
   }
 

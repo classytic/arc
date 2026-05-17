@@ -41,7 +41,28 @@
  * ```
  */
 
-import type { FastifyReply, FastifyRequest, RouteHandlerMethod } from "fastify";
+import type {
+  FastifyReply,
+  FastifyRequest,
+  FastifySchema,
+  preHandlerHookHandler,
+  RouteHandlerMethod,
+} from "fastify";
+
+/**
+ * Local projection of `request.validationError` — Fastify types this as
+ * `Error & { validation: any }` so we narrow at the use-site rather than
+ * pulling AJV's `ErrorObject` type into a runtime-optional dependency.
+ */
+interface FastifyValidationError extends Error {
+  validation?: ReadonlyArray<{
+    keyword?: string;
+    instancePath?: string;
+    schemaPath?: string;
+    params?: Record<string, unknown>;
+    message?: string;
+  }>;
+}
 
 import { DEFAULT_ID_FIELD } from "../constants.js";
 import type { FieldPermissionMap } from "../permissions/fields.js";
@@ -170,6 +191,24 @@ export interface ActionRouterConfig {
 
   /** Rate limit override (per-route Fastify config) */
   readonly rateLimit?: RateLimitConfig | false;
+
+  /**
+   * Names of actions that should mount at the resource root
+   * (`POST /<prefix>/action`) instead of `POST /<prefix>/:id/action`.
+   *
+   * Use for actions that don't operate on an existing entity:
+   *   - `propose` (creates a new entity from `body`)
+   *   - `search` (returns rows for a query)
+   *   - `bulk` (operates on a filter, not a single id)
+   *
+   * The handler still receives `(id, data, req)` for signature parity,
+   * but `id` is `""` (the empty string) since no id-path-param exists.
+   * Each action name appears in EITHER the id-bound enum OR the id-less
+   * enum — the same action can't mount under both paths.
+   *
+   * Defaults to `[]` (all actions are id-bound — pre-2.15.5 behaviour).
+   */
+  readonly idLessActionNames?: readonly string[];
 }
 
 // ============================================================================
@@ -203,32 +242,35 @@ export function createActionRouter(
     routeGuards = [],
     pipeline,
     rateLimit,
+    idLessActionNames = [],
   } = config;
 
-  const actionEnum = Object.keys(actions);
+  const allActionNames = Object.keys(actions);
 
-  if (actionEnum.length === 0) {
+  if (allActionNames.length === 0) {
     fastify.log.warn("[createActionRouter] No actions defined, skipping route creation");
     return;
   }
 
-  // Discriminated body schema — AJV enforces required fields per action.
-  const bodySchema = buildActionBodySchema(actionEnum, actionSchemas);
+  // 2.15.5 — partition actions into id-bound and id-less groups so each
+  // mount point only advertises (and validates against) its own subset.
+  // Same action name can't appear in both — `idLessActionNames` is the
+  // single source of truth coming from `normalizeActionsToRouterConfig`.
+  const idLessSet = new Set(idLessActionNames);
+  const idBoundActionNames = allActionNames.filter((name) => !idLessSet.has(name));
+  const idLessActions = allActionNames.filter((name) => idLessSet.has(name));
 
-  const routeSchema = {
-    tags: tag ? [tag] : undefined,
-    summary: `Perform action (${actionEnum.join("/")})`,
-    description: buildActionDescription(actions, actionPermissions),
-    params: {
-      type: "object",
-      properties: { id: { type: "string", description: "Resource ID" } },
-      required: ["id"],
-    },
-    body: bodySchema,
-    // No response schema — action handlers return dynamic shapes that cannot
-    // be described with a single static JSON Schema. Fastify serializes them
-    // with plain JSON.stringify, which honours toJSON() on documents.
-  };
+  // A typo in `idLessActionNames` would silently leave the action mounted
+  // at `/:id/action` (the default branch) and have the developer chasing a
+  // phantom routing bug — throw at boot instead.
+  for (const name of idLessActionNames) {
+    if (!Object.hasOwn(actions, name)) {
+      throw new Error(
+        `[Arc/Actions] Resource '${resourceName}': idLess action '${name}' is not declared ` +
+          `in the actions map. Valid actions: ${allActionNames.join(", ")}.`,
+      );
+    }
+  }
 
   // Arc metadata decorator — same wiring that CRUD uses, so
   // `sendControllerResponse` can read `req.arc.fields` for field masking.
@@ -245,35 +287,15 @@ export function createActionRouter(
     idField,
   });
 
-  // Auth — pick the right decorator for the whole action endpoint given the
-  // mix of per-action permissions. Mixed public/protected uses
-  // `optionalAuthenticate` so public actions don't 401 on missing tokens;
-  // protected actions still fail-closed via the per-action permission check
-  // when `req.user` is null.
-  //
-  // `globalAuth` is only the fallback for actions without a per-action check —
-  // applied via `??` so it fills the gap without masquerading as a separate
-  // action. An action whose per-action permission is `undefined` AND has no
-  // `globalAuth` fallback stays `undefined` in the resolved array — and that
-  // undefined is semantically "public by omission" to
-  // `buildAuthMiddlewareForPermissions`. Filtering undefineds out (as an
-  // earlier version did) silently broke mixed omitted-public + protected
-  // endpoints: `{ ping: undefined, promote: requireRoles([...]) }` collapsed
-  // to "all protected" and 401'd the public `ping` action at the auth layer
-  // before the per-action permission check could let it through.
-  const perActionPermissions: Array<PermissionCheck | undefined> = actionEnum.map(
-    (name) => actionPermissions[name] ?? globalAuth,
-  );
-  const authMw = buildAuthMiddlewareForPermissions(fastify, perActionPermissions);
-
   // Cache/idempotency middlewares — same decorator lookup as CRUD.
+  // Shared across both mount points; the dispatch surface is identical.
   const pluginMw = resolveRouterPluginMw(fastify, /* resourceHasQueryCache */ false);
 
-  // Per-action pipeline pre-wrapping — actions share the pipeline config with
-  // CRUD ops (keyed by action name). `buildActionPipelineHandler` now always
-  // returns a `Promise<IControllerResponse<unknown>>`, so pipeline failures
-  // preserve `status`/`meta`/`details`/`error` on the way to the client
-  // (same contract the CRUD router holds via `buildPipelineHandler`).
+  // Per-action pipeline pre-wrapping — actions share the pipeline config
+  // with CRUD ops (keyed by action name). `buildActionPipelineHandler`
+  // always returns `Promise<IControllerResponse<unknown>>`, so pipeline
+  // failures preserve `status`/`meta`/`details`/`error` on the way to the
+  // client. Built ONCE for every action; both mounts pull from the same map.
   type WrappedActionHandler = (
     id: string,
     data: Record<string, unknown>,
@@ -297,104 +319,254 @@ export function createActionRouter(
     );
   }
 
-  // Dynamic permission gate — evaluates from `body.action` in the canonical
-  // `permissionMw` slot, so `_policyFilters` + `request.scope` installed by
-  // the permission result are visible to `pluginMw` (idempotency) and
-  // `routeGuards` that run AFTER it. Previously this check lived inside the
-  // handler, which meant unauthorized requests still recorded idempotency
-  // keys and guards saw unfiltered scope.
-  const permissionMw = buildActionPermissionMw(
-    actionEnum,
-    actionPermissions,
-    globalAuth,
-    resourceName,
-  );
-
-  const preHandler = buildPreHandlerChain({
-    arcDecorator,
-    authMw,
-    permissionMw,
-    pluginMw: selectPluginMw("POST", pluginMw),
-    routeGuards,
-  });
-
   const rateLimitConfig = buildRateLimitConfig(rateLimit);
 
-  fastify.route({
-    method: "POST",
-    url: "/:id/action",
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    schema: routeSchema as any,
-    preHandler: preHandler.length > 0 ? (preHandler as any) : undefined,
-    ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
-    handler: async (req: FastifyRequest, reply: FastifyReply) => {
-      const { action, ...data } = req.body as { action: string; [key: string]: unknown };
-      const { id } = req.params as { id: string };
+  /**
+   * Register one action mount point. Called once per mount (id-bound and/or
+   * id-less). Each mount has its OWN AJV `oneOf` body schema filtered to
+   * just `actionSubset` so the mount-point boundary is also a contract
+   * boundary: hitting `POST /<prefix>/action` with an id-bound action name
+   * fails at AJV (the discriminator enum excludes it) — and the
+   * formatter's "wrong mount" message points the caller at the right URL.
+   */
+  const registerActionRoute = (mountOpts: {
+    readonly urlPath: "/:id/action" | "/action";
+    readonly actionSubset: readonly string[];
+    readonly hasId: boolean;
+  }): void => {
+    const { urlPath, actionSubset, hasId } = mountOpts;
+    if (actionSubset.length === 0) return;
 
-      // Layer the per-request entity handle on top of the frozen
-      // resource meta (`idField` rides on the meta, set once by
-      // `buildArcDecorator`). One object allocation per action call —
-      // worth it for the `Model.findOne(getEntityQuery(req))` ergonomics.
-      // Without the spread we'd be mutating the per-resource frozen
-      // object, which throws.
-      const reqWithExtras = req as RequestWithExtras;
-      reqWithExtras.arc = {
-        ...(reqWithExtras.arc ?? {}),
-        entityId: id,
+    const subsetSet = new Set(actionSubset);
+
+    // Auth — pick the decorator for THIS mount's actions only. Mixed
+    // public/protected uses `optionalAuthenticate` so public actions don't
+    // 401 on missing tokens; the per-action permission gate still fails
+    // closed for protected actions when `req.user` is null.
+    //
+    // `globalAuth` is only the fallback for actions without a per-action
+    // check — applied via `??`. An action whose per-action permission is
+    // `undefined` AND has no `globalAuth` fallback stays `undefined` in
+    // the resolved array — that's "public by omission" to
+    // `buildAuthMiddlewareForPermissions`. Filtering undefineds out would
+    // silently break mixed omitted-public + protected endpoints.
+    const perActionPermissions: Array<PermissionCheck | undefined> = actionSubset.map(
+      (name) => actionPermissions[name] ?? globalAuth,
+    );
+    const authMw = buildAuthMiddlewareForPermissions(fastify, perActionPermissions);
+
+    // Dynamic permission gate — evaluates from `body.action` in the
+    // canonical `permissionMw` slot, so `_policyFilters` / `request.scope`
+    // set by the permission result are visible to plugin mw and route
+    // guards that run AFTER it. Permission map is filtered to the subset.
+    const subsetPermissions: Record<string, PermissionCheck> = {};
+    for (const name of actionSubset) {
+      const perm = actionPermissions[name];
+      if (perm) subsetPermissions[name] = perm;
+    }
+    const permissionMw = buildActionPermissionMw(
+      actionSubset,
+      subsetPermissions,
+      globalAuth,
+      resourceName,
+    );
+
+    // Filtered body schema. Filtering at the schema level means cross-mount
+    // calls (id-bound name on `/action`, id-less name on `/:id/action`)
+    // fail AJV BEFORE auth/pipeline overhead.
+    const subsetSchemas: Record<string, Record<string, unknown>> = {};
+    for (const name of actionSubset) {
+      if (actionSchemas[name]) subsetSchemas[name] = actionSchemas[name];
+    }
+    const bodySchema = buildActionBodySchema(actionSubset, subsetSchemas);
+
+    const routeSchema: Record<string, unknown> = {
+      tags: tag ? [tag] : undefined,
+      summary: `Perform action (${actionSubset.join("/")})`,
+      description: buildActionDescription(
+        Object.fromEntries(
+          actionSubset.map((name) => [name, actions[name] as ActionHandler]),
+        ) as Record<string, ActionHandler>,
+        subsetPermissions,
+      ),
+      body: bodySchema,
+      // No response schema — action handlers return dynamic shapes that
+      // can't be described with a single JSON Schema. Fastify falls back
+      // to JSON.stringify, which honours toJSON() on documents.
+    };
+    if (hasId) {
+      routeSchema.params = {
+        type: "object",
+        properties: { id: { type: "string", description: "Resource ID" } },
+        required: ["id"],
       };
+    }
 
-      // `buildActionPermissionMw` has already rejected invalid actions (400)
-      // and denied permissions (401/403), so the handler lookup is guaranteed
-      // to hit. The defensive fallback stays for hosts that bypass the
-      // preHandler chain (internal invocation paths).
-      const handler = wrappedHandlers.get(action);
-      if (!handler) {
-        throw createError(
-          400,
-          `Invalid action '${action}'. Valid actions: ${actionEnum.join(", ")}`,
-          { validActions: actionEnum },
-        );
+    // 2.15.5 — action-scoped validation-error formatter. The body schema
+    // uses an AJV `oneOf` (one branch per action) and AJV emits a failing-
+    // branch error for EVERY branch on a mismatch. Without filtering,
+    // Fastify's default error rendering points at an unrelated action's
+    // `required` field — the mentora repro. We pick the branch matching
+    // `body.action` and re-throw a Fastify-shaped error so the global
+    // error handler maps it to the canonical `arc.validation_error`
+    // contract. The filter is keyed off `schemaPath` (`/oneOf/<idx>/...`),
+    // so the schema shape itself stays unchanged — the per-branch
+    // property-union strict-mode mechanics keep working (see
+    // `buildActionBodySchema`'s JSDoc).
+    const actionValidationFormatter: RouteHandlerMethod = async (req, _reply) => {
+      const validationError = (req as { validationError?: FastifyValidationError }).validationError;
+      if (!validationError) return;
+
+      const body = req.body as { action?: unknown } | undefined;
+      const submitted = typeof body?.action === "string" ? body.action : undefined;
+
+      if (!submitted || !subsetSet.has(submitted)) {
+        // Sharper hint when the action exists but is mounted under the
+        // OTHER path — turns "Unknown action 'approve'" into something the
+        // caller can act on without grepping the resource definition.
+        const wrongMount = submitted && allActionNames.includes(submitted) ? submitted : undefined;
+        const otherMount = hasId ? "/action" : "/:id/action";
+        const message = wrongMount
+          ? `Action '${wrongMount}' on '${resourceName}' is mounted at 'POST ${otherMount}', not 'POST ${urlPath}'`
+          : submitted
+            ? `Unknown action '${submitted}' on '${resourceName}'. Valid at 'POST ${urlPath}': ${actionSubset.join(", ")}`
+            : `Missing 'action' field on '${resourceName}'. Valid at 'POST ${urlPath}': ${actionSubset.join(", ")}`;
+        throw createError(400, message, {
+          code: "arc.invalid_action",
+          validActions: actionSubset,
+          mount: urlPath,
+          ...(submitted ? { submitted } : {}),
+          ...(wrongMount ? { mountedAt: otherMount } : {}),
+        });
       }
 
-      try {
-        // The wrapped handler produces a full IControllerResponse — pipeline
-        // interceptors flow straight through `sendControllerResponse`. Errors
-        // throw ArcError; the global handler emits the canonical contract.
-        const response = await handler(id, data, req as RequestWithExtras);
-        return sendControllerResponse(reply, response, req);
-      } catch (error) {
-        if (onError) {
-          const { statusCode, error: errorMsg, code } = onError(error as Error, action, id);
-          throw createError(statusCode, errorMsg, code ? { code } : undefined);
+      const branchIdx = actionSubset.indexOf(submitted);
+      const branchPath = `/oneOf/${branchIdx}/`;
+      const ajvErrors = validationError.validation ?? [];
+      const scoped = ajvErrors.filter(
+        (e) =>
+          e.keyword !== "oneOf" &&
+          (e.schemaPath?.includes(branchPath) || !e.schemaPath?.includes("/oneOf/")),
+      );
+      const useErrors = scoped.length > 0 ? scoped : ajvErrors;
+
+      const scopedError = new Error(
+        `Validation failed for action '${submitted}' on '${resourceName}'`,
+      ) as Error & {
+        statusCode: number;
+        code: string;
+        validation: typeof useErrors;
+        validationContext: string;
+        meta: { action: string };
+      };
+      scopedError.statusCode = 400;
+      scopedError.code = "arc.validation_error";
+      scopedError.validation = useErrors;
+      scopedError.validationContext = "body";
+      scopedError.meta = { action: submitted };
+      throw scopedError;
+    };
+
+    const preHandler = [
+      actionValidationFormatter,
+      ...buildPreHandlerChain({
+        arcDecorator,
+        authMw,
+        permissionMw,
+        pluginMw: selectPluginMw("POST", pluginMw),
+        routeGuards,
+      }),
+    ];
+
+    fastify.route({
+      method: "POST",
+      url: urlPath,
+      schema: routeSchema as FastifySchema,
+      // `attachValidation: true` parks AJV errors on `request.validationError`
+      // so the formatter above can re-throw with the matching action's scope.
+      attachValidation: true,
+      preHandler: preHandler.length > 0 ? (preHandler as preHandlerHookHandler[]) : undefined,
+      ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
+      handler: async (req: FastifyRequest, reply: FastifyReply) => {
+        const { action, ...data } = req.body as { action: string; [key: string]: unknown };
+        // For id-less mounts there's no `:id` param — pass empty string.
+        // Handlers declared with `id: false` are documented to receive `""`.
+        const id = hasId ? (req.params as { id: string }).id : "";
+
+        // Layer per-request entity handle on top of the frozen resource
+        // meta (`idField` rides on the meta set once by `buildArcDecorator`).
+        // Skip for id-less routes — `entityId: ""` is useless and
+        // `getEntityQuery(req)` callers shouldn't see it.
+        if (hasId) {
+          const reqWithExtras = req as RequestWithExtras;
+          reqWithExtras.arc = {
+            ...(reqWithExtras.arc ?? {}),
+            entityId: id,
+          };
         }
 
-        const err = error as Record<string, unknown>;
-        const statusCode = (err.statusCode as number) || (err.status as number) || 500;
-        const errorCode = (err.code as string) || "ACTION_FAILED";
-
-        if (statusCode >= 500) {
-          req.log.error({ err: error, action, id }, "Action handler error");
+        // `buildActionPermissionMw` has rejected invalid actions / denied
+        // permissions before we get here. The defensive fallback stays for
+        // hosts that bypass the preHandler chain (internal invocation).
+        const handler = wrappedHandlers.get(action);
+        if (!handler) {
+          throw createError(
+            400,
+            `Invalid action '${action}'. Valid actions: ${actionSubset.join(", ")}`,
+            { validActions: actionSubset },
+          );
         }
 
-        // Re-throw ArcError instances unchanged so the global error handler
-        // preserves their `code`/`details`. Non-Arc errors (raw throws from
-        // user handlers) get wrapped into the canonical ArcError shape.
-        if ((error as { name?: string })?.name === "ArcError" || error instanceof Error === false) {
-          throw error;
+        try {
+          const response = await handler(id, data, req as RequestWithExtras);
+          return sendControllerResponse(reply, response, req);
+        } catch (error) {
+          if (onError) {
+            const { statusCode, error: errorMsg, code } = onError(error as Error, action, id);
+            throw createError(statusCode, errorMsg, code ? { code } : undefined);
+          }
+
+          const err = error as Record<string, unknown>;
+          const statusCode = (err.statusCode as number) || (err.status as number) || 500;
+          const errorCode = (err.code as string) || "ACTION_FAILED";
+
+          if (statusCode >= 500) {
+            req.log.error({ err: error, action, id }, "Action handler error");
+          }
+
+          if (
+            (error as { name?: string })?.name === "ArcError" ||
+            error instanceof Error === false
+          ) {
+            throw error;
+          }
+          throw createError(
+            statusCode,
+            (err.message as string) || `Failed to execute '${action}' action`,
+            { code: errorCode },
+          );
         }
-        throw createError(
-          statusCode,
-          (err.message as string) || `Failed to execute '${action}' action`,
-          { code: errorCode },
-        );
-      }
-    },
+      },
+    });
+
+    fastify.log.debug(
+      { actions: actionSubset, mount: urlPath, tag, resourceName },
+      "[createActionRouter] Registered action endpoint",
+    );
+  };
+
+  // Two mounts for two intents. Id-bound is the legacy default; id-less
+  // light up when the resource declares `id: false` actions.
+  registerActionRoute({
+    urlPath: "/:id/action",
+    actionSubset: idBoundActionNames,
+    hasId: true,
   });
-
-  fastify.log.debug(
-    { actions: actionEnum, tag, resourceName },
-    "[createActionRouter] Registered action endpoint: POST /:id/action",
-  );
+  registerActionRoute({
+    urlPath: "/action",
+    actionSubset: idLessActions,
+    hasId: false,
+  });
 }
 
 // ============================================================================
@@ -516,22 +688,25 @@ export function buildActionBodySchema(
   };
 }
 
+// ============================================================================
+// OpenAPI description helper
+// ============================================================================
+
 /**
- * Build OpenAPI description with action list + role hints.
- * Reads `_roles` metadata from permission checks for docs.
+ * Build OpenAPI description for an action mount from the action map + the
+ * permission map for THAT mount's subset. Used by both `/:id/action` and
+ * `/action` to render an "Available actions" list with role hints.
  */
 function buildActionDescription(
   actions: Record<string, ActionHandler>,
   actionPermissions: Record<string, PermissionCheck>,
 ): string {
   const lines = ["Unified action endpoint for state transitions.\n\n**Available actions:**"];
-
-  Object.keys(actions).forEach((action) => {
+  for (const action of Object.keys(actions)) {
     const perm = actionPermissions[action];
-    const roles = (perm as PermissionCheck)?._roles;
+    const roles = (perm as PermissionCheck | undefined)?._roles;
     const roleStr = roles?.length ? ` (requires: ${roles.join(" or ")})` : "";
     lines.push(`- \`${action}\`${roleStr}`);
-  });
-
+  }
   return lines.join("\n");
 }

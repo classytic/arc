@@ -13,7 +13,7 @@
  * - Framework-agnostic controllers via adapter pattern
  */
 
-import type { RouteHandlerMethod } from "fastify";
+import type { FastifySchema, preHandlerHookHandler, RouteHandlerMethod } from "fastify";
 
 import { CRUD_OPERATIONS, DEFAULT_UPDATE_METHOD } from "../constants.js";
 import type { PermissionCheck } from "../permissions/types.js";
@@ -67,18 +67,84 @@ function createCustomRoutes<TDoc = unknown>(
     pluginMw: RouterPluginMw;
     pipeline?: PipelineConfig;
     routeGuards: RouteHandlerMethod[];
+    /**
+     * Tenant-scope middleware list emitted by `multiTenantPreset` (and
+     * compatible presets) on the `tenantScope` slot. Applied to any
+     * custom route that opts in via `RouteDefinition.tenantScope: true`.
+     * `undefined` when the resource has no multiTenant preset wired —
+     * in that case `tenantScope: true` is a config bug and we throw.
+     */
+    tenantScopeMw?: readonly RouteHandlerMethod[];
   },
 ): void {
-  const { tag, resourceName, arcDecorator, rateLimitConfig, pluginMw, pipeline, routeGuards } =
-    options;
+  const {
+    tag,
+    resourceName,
+    arcDecorator,
+    rateLimitConfig,
+    pluginMw,
+    pipeline,
+    routeGuards,
+    tenantScopeMw,
+  } = options;
 
   for (const route of routes) {
+    // 2.16 — `controllerMethod` (typed function-ref) is mutually exclusive
+    // with `handler`. Resolve one of the two into a single dispatch target
+    // BEFORE the rest of the per-route wiring, so the downstream code
+    // sees a uniform "have a function or have a string" decision.
+    const routeWithRefs = route as typeof route & {
+      controllerMethod?: (controller: unknown) => unknown;
+    };
+    const hasHandler = route.handler !== undefined;
+    const hasControllerMethod = typeof routeWithRefs.controllerMethod === "function";
+    if (hasHandler && hasControllerMethod) {
+      throw new Error(
+        `Route ${route.method} ${route.path}: pass either \`handler\` or \`controllerMethod\`, not both. ` +
+          "Prefer `controllerMethod: (c: MyController) => c.method` for typed handler refs (TS catches typos).",
+      );
+    }
+    if (!hasHandler && !hasControllerMethod) {
+      throw new Error(
+        `Route ${route.method} ${route.path}: must declare either \`handler\` (string / function) or ` +
+          "`controllerMethod: (c) => c.method` (typed function-ref form).",
+      );
+    }
+
+    // Resolve `controllerMethod` against the live controller — this is
+    // the typed counterpart of the string-handler lookup. Throws if no
+    // controller is available, or if the function returns a non-function
+    // (defensive — TS catches this normally, but a host might still
+    // forget to return the method).
+    let resolvedHandler: RouteDefinition["handler"];
+    if (hasControllerMethod) {
+      if (!controller) {
+        throw new Error(
+          `Route ${route.method} ${route.path}: \`controllerMethod\` requires a controller. ` +
+            "Provide one via `defineResource({ controller, … })`, or use `defineResource` with an `adapter` " +
+            "so arc auto-creates a BaseController.",
+        );
+      }
+      const referenced = routeWithRefs.controllerMethod?.(controller);
+      if (typeof referenced !== "function") {
+        throw new Error(
+          `Route ${route.method} ${route.path}: \`controllerMethod\` did not return a function. ` +
+            "Return the method itself: `controllerMethod: (c) => c.myMethod`.",
+        );
+      }
+      resolvedHandler = (referenced as (...args: unknown[]) => unknown).bind(controller) as
+        | ControllerHandler
+        | RouteHandlerMethod;
+    } else {
+      resolvedHandler = route.handler;
+    }
+
     // Derive logical operation name for pipeline keys and permission actions.
     // Priority: explicit operation > handler name (string) > method+path slug
     const opName =
       route.operation ??
-      (typeof route.handler === "string"
-        ? route.handler
+      (typeof resolvedHandler === "string"
+        ? resolvedHandler
         : `${route.method.toLowerCase()}${route.path.replace(/[/:]/g, "_")}`);
 
     // Derive pipeline wrapping from `raw`: `raw: true` → no wrap;
@@ -87,20 +153,20 @@ function createCustomRoutes<TDoc = unknown>(
 
     let handler: RouteHandlerMethod;
 
-    if (typeof route.handler === "string") {
+    if (typeof resolvedHandler === "string") {
       // String handlers require a controller
       if (!controller) {
         throw new Error(
-          `Route ${route.method} ${route.path}: string handler '${route.handler}' requires a controller. ` +
+          `Route ${route.method} ${route.path}: string handler '${resolvedHandler}' requires a controller. ` +
             "Either provide a controller or use a function handler instead.",
         );
       }
       const ctrl = controller as unknown as Record<string, unknown>;
-      const method = ctrl[route.handler];
+      const method = ctrl[resolvedHandler];
       if (typeof method !== "function") {
-        throw new Error(`Handler '${route.handler}' not found on controller`);
+        throw new Error(`Handler '${resolvedHandler}' not found on controller`);
       }
-      const boundMethod = (method as Function).bind(controller);
+      const boundMethod = (method as (...args: unknown[]) => unknown).bind(controller);
 
       if (wrapHandler) {
         const steps = resolvePipelineSteps(pipeline, opName);
@@ -117,20 +183,20 @@ function createCustomRoutes<TDoc = unknown>(
         handler = boundMethod as RouteHandlerMethod;
       }
     } else {
-      // Function handler
+      // Function handler (inline OR resolved-from-controllerMethod)
       if (wrapHandler) {
         const steps = resolvePipelineSteps(pipeline, opName);
         handler =
           steps.length > 0
             ? buildPipelineHandler(
-                route.handler as (ctx: IRequestContext) => Promise<IControllerResponse<unknown>>,
+                resolvedHandler as (ctx: IRequestContext) => Promise<IControllerResponse<unknown>>,
                 steps,
                 opName,
                 resourceName,
               )
-            : createFastifyHandler(route.handler as ControllerHandler);
+            : createFastifyHandler(resolvedHandler as ControllerHandler);
       } else {
-        handler = route.handler as RouteHandlerMethod;
+        handler = resolvedHandler as RouteHandlerMethod;
       }
     }
 
@@ -158,6 +224,23 @@ function createCustomRoutes<TDoc = unknown>(
       `${route.method} ${route.path}`,
     );
 
+    // tenantScope: true → prepend the multiTenant preset's filter +
+    // injection middlewares so this custom route sees the same tenant
+    // wiring auto-CRUD does. Fail-fast on misconfig: if the flag is set
+    // but no preset emitted the `tenantScope` slot, the route would be
+    // silently insecure for read paths (returns all-org data) — reject
+    // at registration time with an actionable message.
+    if (route.tenantScope === true) {
+      if (!tenantScopeMw || tenantScopeMw.length === 0) {
+        throw new Error(
+          `Route ${route.method} ${route.path}: \`tenantScope: true\` requires a multi-tenant preset. ` +
+            `Add \`multiTenantPreset()\` (or \`flexibleMultiTenantPreset()\`) to the resource's \`presets\`, ` +
+            `or remove the \`tenantScope\` flag from this route.`,
+        );
+      }
+      customPreHandlers.unshift(...(tenantScopeMw as RouteHandlerMethod[]));
+    }
+
     // preAuth runs BEFORE auth — for token promotion (e.g., EventSource ?token= → Authorization)
     const preAuthHandlers = (route as { preAuth?: PreHandlerHook[] }).preAuth ?? [];
 
@@ -177,9 +260,8 @@ function createCustomRoutes<TDoc = unknown>(
     fastify.route({
       method: route.method,
       url: route.path,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      schema: schema as Record<string, any>, // Fastify RouteOptions.schema requires this shape
-      preHandler: preHandler.length > 0 ? (preHandler as any) : undefined,
+      schema: schema as FastifySchema,
+      preHandler: preHandler.length > 0 ? (preHandler as preHandlerHookHandler[]) : undefined,
       handler: isStream
         ? async (request, reply) => {
             reply.raw.setHeader("Content-Type", "text/event-stream");
@@ -264,6 +346,15 @@ export function createCrudRouter<TDoc = unknown>(
     update: (middlewares.update ?? []) as RouteHandlerMethod[],
     delete: (middlewares.delete ?? []) as RouteHandlerMethod[],
   };
+
+  // Tenant-scope middleware slot — emitted by `multiTenantPreset` so custom
+  // routes can opt in via `RouteDefinition.tenantScope: true`. The slot rides
+  // on the same `MiddlewareConfig` map the CRUD slots use (its string index
+  // signature accepts arbitrary keys); we read it here and forward it to
+  // `createCustomRoutes` instead of having that function reach back through
+  // the options bag. Stays `undefined` when no multi-tenant preset is wired
+  // — `createCustomRoutes` then throws when a route tries to opt in.
+  const tenantScopeMw = middlewares.tenantScope as RouteHandlerMethod[] | undefined;
 
   // ID params schema
   const idParamsSchema = {
@@ -383,9 +474,8 @@ export function createCrudRouter<TDoc = unknown>(
             },
             defaultSchemas[spec.op],
             schemas[spec.op] as Record<string, unknown> | undefined,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          ) as Record<string, any>,
-          preHandler: preHandler.length > 0 ? (preHandler as any) : undefined,
+          ) as FastifySchema,
+          preHandler: preHandler.length > 0 ? (preHandler as preHandlerHookHandler[]) : undefined,
           handler: handlers[spec.op],
           ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
         });
@@ -406,6 +496,7 @@ export function createCrudRouter<TDoc = unknown>(
       pluginMw,
       pipeline,
       routeGuards,
+      tenantScopeMw,
     });
   }
 }

@@ -213,7 +213,7 @@ class LRUCache {
       const colonIdx = key.indexOf(":");
       const path = colonIdx >= 0 ? key.slice(colonIdx + 1) : key;
       // Strip query string and user/org suffix for prefix matching
-      const pathOnly = path.split("?")[0]!;
+      const pathOnly = path.split("?")[0] ?? "";
       if (pathOnly.startsWith(prefix)) {
         this.cache.delete(key);
         count++;
@@ -234,7 +234,7 @@ class LRUCache {
 
     const colonIdx = key.indexOf(":");
     const path = colonIdx >= 0 ? key.slice(colonIdx + 1) : key;
-    const pathOnly = path.split("?")[0]!;
+    const pathOnly = path.split("?")[0] ?? "";
 
     const now = Date.now();
     for (const [prefix, expiresAt] of this.invalidatedPrefixes.entries()) {
@@ -329,7 +329,7 @@ const responseCachePluginImpl: FastifyPluginAsync<ResponseCacheOptions> = async 
 
   /** Find TTL for a given URL path (seconds) */
   function getTTL(url: string): number {
-    const path = url.split("?")[0]!;
+    const path = url.split("?")[0] ?? url;
     for (const rule of rules) {
       if (path.startsWith(rule.match)) {
         return rule.ttl;
@@ -378,7 +378,7 @@ const responseCachePluginImpl: FastifyPluginAsync<ResponseCacheOptions> = async 
     const statusCode = reply.statusCode;
     if (statusCode < 200 || statusCode >= 300) return;
 
-    const path = request.url.split("?")[0]!;
+    const path = request.url.split("?")[0] ?? request.url;
     const segments = path.split("/").filter(Boolean);
 
     // Detect item-scoped paths by checking if the last segment looks like
@@ -518,7 +518,7 @@ const responseCachePluginImpl: FastifyPluginAsync<ResponseCacheOptions> = async 
         const parts = event.type.split(".");
         if (parts.length !== 2) return;
         const [resource, action] = parts;
-        if (!resource || !["created", "updated", "deleted"].includes(action!)) return;
+        if (!resource || !action || !["created", "updated", "deleted"].includes(action)) return;
 
         // Invalidate the resource's own cache prefix (both singular and plural)
         cache.invalidatePrefix(`/${resource}s`);

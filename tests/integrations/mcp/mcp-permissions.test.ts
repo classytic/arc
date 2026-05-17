@@ -145,13 +145,17 @@ describe("Mixed per-operation permissions", () => {
     const listed = JSON.parse((listResult.content[0] as { text: string }).text);
     expect(listed.data.length).toBe(1);
 
-    // Create — denied (no user)
+    // Create — denied (no user). 2.15.5: canonical ErrorContract — no
+    // session + denial → `arc.unauthorized` 401 (mirrors HTTP errorHandler).
     const createResult = await client.callTool({
       name: "create_post",
       arguments: { title: "Anon Post" },
     });
     expect((createResult as any).isError).toBe(true);
-    expect((createResult.content[0] as { text: string }).text).toContain("Permission denied");
+    expect(JSON.parse((createResult.content[0] as { text: string }).text)).toMatchObject({
+      code: "arc.unauthorized",
+      status: 401,
+    });
   });
 
   it("authenticated user can create but cannot delete", async () => {
@@ -168,14 +172,18 @@ describe("Mixed per-operation permissions", () => {
     });
     expect((createResult as any).isError).toBeFalsy();
 
-    // Delete — always denied
+    // Delete — always denied. 2.15.5: canonical ErrorContract — session
+    // present + denial → `arc.forbidden` 403.
     const created = JSON.parse((createResult.content[0] as { text: string }).text);
     const deleteResult = await client.callTool({
       name: "delete_post",
       arguments: { id: created.data._id },
     });
     expect((deleteResult as any).isError).toBe(true);
-    expect((deleteResult.content[0] as { text: string }).text).toContain("Permission denied");
+    expect(JSON.parse((deleteResult.content[0] as { text: string }).text)).toMatchObject({
+      code: "arc.forbidden",
+      status: 403,
+    });
   });
 
   it("delete returns custom denial reason", async () => {
@@ -187,8 +195,11 @@ describe("Mixed per-operation permissions", () => {
 
     const result = await client.callTool({ name: "delete_post", arguments: { id: "any-id" } });
     expect((result as any).isError).toBe(true);
-    // The denial reason should be propagated
-    expect((result.content[0] as { text: string }).text).toContain("Permission denied");
+    // The denial reason should propagate into the canonical ErrorContract
+    // `message` field (was an ad-hoc inline string pre-2.15.5).
+    const error = JSON.parse((result.content[0] as { text: string }).text);
+    expect(error).toMatchObject({ code: "arc.forbidden", status: 403 });
+    expect(error.message).toContain("archive instead");
   });
 });
 

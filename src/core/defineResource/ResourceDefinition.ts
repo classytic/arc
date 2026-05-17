@@ -20,6 +20,7 @@ import type { DataAdapter } from "@classytic/repo-core/adapter";
 import type { FastifyPluginAsync } from "fastify";
 import { CRUD_OPERATIONS } from "../../constants.js";
 import type { RegisterOptions } from "../../registry/ResourceRegistry.js";
+import { resolveTenantPurge } from "../../registry/resolveTenantPurge.js";
 import type {
   ActionDefinition,
   ActionsMap,
@@ -29,9 +30,11 @@ import type {
   EventDefinition,
   IController,
   MiddlewareConfig,
+  OnTenantDeleteConfig,
   PermissionCheck,
   QueryParserInterface,
   RateLimitConfig,
+  ResolvedTenantPurge,
   ResourceCacheConfig,
   ResourceConfig,
   ResourceMetadata,
@@ -40,6 +43,8 @@ import type {
   RouteHandlerMethod,
   RouteSchemaOptions,
 } from "../../types/index.js";
+import { pluralize } from "../../utils/pluralize.js";
+import type { ResourceDiagnostic } from "./diagnostics.js";
 import { buildResourcePlugin } from "./plugin.js";
 
 /**
@@ -105,8 +110,26 @@ export class ResourceDefinition<TDoc = AnyRecord> {
   readonly fields?: import("../../permissions/fields.js").FieldPermissionMap;
   readonly cache?: ResourceCacheConfig;
 
+  // ── MCP integration ──
+  /**
+   * Per-resource MCP opt-out. `false` keeps the resource out of every
+   * `mcpPlugin` registration regardless of the plugin's `expose` /
+   * `include` allowlist — local opt-out is authoritative. See
+   * `ResourceConfig.mcp` for the host-facing surface.
+   */
+  readonly mcp: boolean;
+
   // ── Multi-tenant / id config (stored for MCP auto-controller creation) ──
   readonly tenantField?: string | false;
+  /** Tenant-cleanup strategy on org delete — see `OnTenantDeleteConfig`. */
+  readonly onTenantDelete?: OnTenantDeleteConfig;
+  /**
+   * Resolved tenant-purge strategy — what `cascadeDeleteForOrganization`
+   * actually runs. Computed once at boot from `onTenantDelete`. Audit /
+   * introspection tooling reads this instead of re-running the rule at
+   * the call site.
+   */
+  readonly resolvedTenantPurge: ResolvedTenantPurge;
   readonly idField?: string;
 
   // ── Query parser (stored for MCP auto-derivation of filterableFields) ──
@@ -123,6 +146,18 @@ export class ResourceDefinition<TDoc = AnyRecord> {
   _registryMeta?: RegisterOptions;
 
   /**
+   * Boot-time validation diagnostics (non-fatal — hard errors throw
+   * synchronously in `validateDefineResourceConfig`). Populated when
+   * the host's config contains redundant / ambiguous flags that
+   * shouldn't crash the boot but the host should clean up. Flushed
+   * through `fastify.log.warn` on first mount inside
+   * `buildResourcePlugin` so the host's configured logger owns the
+   * output — the framework never speaks to `console.*` from `src/`
+   * outside of the CLI.
+   */
+  _diagnostics?: ResourceDiagnostic[];
+
+  /**
    * Per-host idempotency guard used by `buildResourcePlugin` to
    * skip duplicate shared-state writes when the same resource is
    * mounted at multiple prefixes (`/v1`, `/v2`). See the plugin
@@ -133,8 +168,21 @@ export class ResourceDefinition<TDoc = AnyRecord> {
 
   constructor(config: ResolvedResourceConfig<TDoc>) {
     this.name = config.name;
-    this.displayName = config.displayName ?? `${capitalize(config.name)}s`;
-    this.tag = config.tag ?? this.displayName;
+    // 2.15.5 — `displayName` defaults to the SINGULAR form (`Capitalize(name)`)
+    // because the original `${capitalize(name)}s` default produced wrong
+    // descriptions in every singular context: "Get a single shots by ID",
+    // "List shotses" (double-pluralized by `pluralize()` on a plural input).
+    // Singular-default + `pluralize(displayName)` in plural contexts (CRUD list
+    // description, OpenAPI list summary, …) yields grammatical output for
+    // every resource name including compound names like `voice-clip` /
+    // `image-post` without forcing hosts to pass `displayName` by hand.
+    this.displayName = config.displayName ?? capitalize(config.name);
+    // Tag stays plural by convention (it's the OpenAPI section heading and the
+    // surface where readers want a group label — "Posts", "Voice clips").
+    // Falls back to a pluralized displayName so hosts that ONLY set
+    // `displayName: "Post"` still get a group called "Posts" without
+    // declaring the plural twice.
+    this.tag = config.tag ?? pluralize(this.displayName);
     this.prefix = config.prefix ?? `/${config.name}s`;
     this.skipGlobalPrefix = config.skipGlobalPrefix ?? false;
 
@@ -161,6 +209,10 @@ export class ResourceDefinition<TDoc = AnyRecord> {
       ...(config.permissions ?? {}),
     }) as ResourcePermissions;
     this.routes = freezeRoutes(config.routes);
+    // 2.16 — `crud:` allow-list is resolved upstream in `defineResource`
+    // (Phase 0) before validation, so by the time we get here `config`
+    // already carries the canonical `disabledRoutes` /
+    // `disableDefaultRoutes` shape. The constructor just reads.
     this.disabledRoutes = Object.freeze([
       ...(config.disabledRoutes ?? []),
     ]) as readonly CrudRouteKey[];
@@ -181,7 +233,19 @@ export class ResourceDefinition<TDoc = AnyRecord> {
     this.fields = config.fields;
     this.cache = config.cache;
 
+    // Default-allow for MCP — opt-out is explicit `mcp: false`.
+    this.mcp = config.mcp !== false;
+
     this.tenantField = config.tenantField;
+    this.onTenantDelete = config.onTenantDelete;
+    // Resolve once at boot — `cascadeDeleteForOrganization` and
+    // introspection helpers read `resolvedTenantPurge` instead of
+    // re-running the rule per call.
+    this.resolvedTenantPurge = resolveTenantPurge({
+      resourceName: this.name,
+      tenantField: this.tenantField,
+      onTenantDelete: this.onTenantDelete,
+    });
     this.idField = config.idField;
     this.queryParser = config.queryParser as QueryParserInterface | undefined;
 

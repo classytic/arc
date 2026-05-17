@@ -24,10 +24,26 @@
  */
 
 import type { z } from "zod";
-import type { CallToolResult, ToolAnnotations, ToolContext, ToolDefinition } from "./types.js";
+import type {
+  CallToolResult,
+  McpAuthResult,
+  ToolAnnotations,
+  ToolContext,
+  ToolDefinition,
+} from "./types.js";
 
-/** defineTool() config — uses flat Zod shapes for SDK compatibility */
-export interface DefineToolConfig<TInput extends Record<string, z.ZodTypeAny>> {
+/**
+ * defineTool() config — uses flat Zod shapes for SDK compatibility.
+ *
+ * The `TSession` parameter widens `ctx.session` to a host-specific shape.
+ * Pass an interface that extends `McpAuthResult` (or one that omits it
+ * entirely for custom auth resolvers) to drop the `as any` casts that
+ * pre-2.15.5 handlers needed when reading session fields.
+ */
+export interface DefineToolConfig<
+  TInput extends Record<string, z.ZodTypeAny>,
+  TSession = McpAuthResult,
+> {
   description: string;
   title?: string;
   /** Flat Zod shape: `{ name: z.string(), age: z.number() }` */
@@ -37,7 +53,7 @@ export interface DefineToolConfig<TInput extends Record<string, z.ZodTypeAny>> {
   annotations?: ToolAnnotations;
   handler: (
     input: { [K in keyof TInput]: z.infer<TInput[K]> },
-    ctx: ToolContext,
+    ctx: ToolContext<TSession>,
   ) => Promise<CallToolResult>;
 }
 
@@ -47,10 +63,10 @@ export interface DefineToolConfig<TInput extends Record<string, z.ZodTypeAny>> {
  * @param name - Tool name (snake_case recommended)
  * @param config - Tool description, input schema, annotations, handler
  */
-export function defineTool<TInput extends Record<string, z.ZodTypeAny>>(
+export function defineTool<TInput extends Record<string, z.ZodTypeAny>, TSession = McpAuthResult>(
   name: string,
-  config: DefineToolConfig<TInput>,
-): ToolDefinition {
+  config: DefineToolConfig<TInput, TSession>,
+): ToolDefinition<TSession> {
   return {
     name,
     description: config.description,
@@ -58,6 +74,6 @@ export function defineTool<TInput extends Record<string, z.ZodTypeAny>>(
     inputSchema: config.input as ToolDefinition["inputSchema"],
     outputSchema: config.output,
     annotations: config.annotations,
-    handler: config.handler as ToolDefinition["handler"],
+    handler: config.handler as ToolDefinition<TSession>["handler"],
   };
 }

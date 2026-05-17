@@ -94,11 +94,25 @@ export interface ArcQueryParserOptions {
  * Converts URL query parameters to a structured query format:
  * - Pagination: ?page=1&limit=20
  * - Sorting: ?sort=-createdAt,name (- prefix = descending)
- * - Filtering: ?status=active&price[gte]=100&price[lte]=500
+ * - Filtering — TWO supported forms (both produce identical output):
+ *     - Bare (default, terse):     `?status=active&price[gte]=100&price[lte]=500`
+ *     - Bracket envelope:          `?filter[status]=active&filter[price][gte]=100`
+ *   The envelope form matches the convention used by JSON:API / Stripe /
+ *   most modern REST style guides, and is the safe choice on busy URLs
+ *   that might otherwise collide with reserved meta keys (`page`, `sort`,
+ *   `select`, `populate`, etc.). Operator notation (`[gte]`, `[lte]`,
+ *   `[ne]`, `[in]`, ...) works inside either form.
  * - Search: ?search=keyword
  * - Populate: ?populate=author,category
  * - Field selection: ?select=name,price,status
  * - Keyset pagination: ?after=cursor_value
+ *
+ * **NOTE on parser portability.** `ArcQueryParser` accepts both filter
+ * forms. Other parser implementations (`@classytic/mongokit`'s
+ * `QueryParser`, custom hosts-side parsers) may accept only one form —
+ * MongoKit historically only accepts the bare form. If your host swaps
+ * `queryParser` to a different implementation, double-check which forms
+ * it understands before publishing URLs that mix the two.
  *
  * For advanced MongoDB features ($lookup, aggregations), use MongoKit's QueryParser.
  */
@@ -349,107 +363,152 @@ export class ArcQueryParser implements QueryParserInterface {
     );
   }
 
+  /**
+   * Parse all filter entries from the query, supporting BOTH the bare
+   * top-level form and the bracket-wrapped `filter[...]` envelope.
+   *
+   * Two equivalent ways to express the same query:
+   *   - Bare (legacy, arc default): `?status=active&price[gte]=40`
+   *   - Bracket envelope (REST convention): `?filter[status]=active&filter[price][gte]=40`
+   *
+   * Both forms parse to the same `filters: { status: 'active', price: { $gte: 40 } }`.
+   * The envelope form mirrors the convention used by most REST API style
+   * guides (JSON:API, Stripe API, etc.) and disambiguates filter fields
+   * from reserved meta params on busy URLs — a query string with a field
+   * literally named `page` or `sort` can't collide with the framework's
+   * meta keys when wrapped under `filter[...]`. The bare form stays as
+   * the default since it's the shortest path for simple queries; expect
+   * it to remain supported indefinitely.
+   *
+   * Precedence when the same key appears in both forms:
+   *   `?status=closed&filter[status]=active` → bare wins (`status: closed`).
+   * Mixing should be rare; the deterministic rule avoids silent surprises.
+   */
   private parseFilters(query: Record<string, unknown>): Record<string, unknown> {
     const filters: Record<string, unknown> = {};
 
-    for (const [key, value] of Object.entries(query)) {
-      if (RESERVED_QUERY_PARAMS.has(key)) continue;
-      if (value === undefined || value === null) continue;
-
-      // Validate field name (prevent injection)
-      if (!/^[a-zA-Z_][a-zA-Z0-9_.]*$/.test(key)) continue;
-
-      // Enforce filter field whitelist
-      if (this._allowedFilterFields && !this._allowedFilterFields.has(key)) continue;
-
-      // Enforce max filter depth (prevents filter bombs)
-      if (this.exceedsDepth(value)) continue;
-
-      // Handle nested object format from qs parser: { price: { gte: '40', lte: '100' } }
-      // This happens when URL is ?price[gte]=40&price[lte]=100 and qs parses it
-      if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-        const operatorObj = value as Record<string, unknown>;
-        const operatorKeys = Object.keys(operatorObj);
-
-        // Check if all keys are known operators (respecting operator whitelist)
-        const allOperators = operatorKeys.every(
-          (op) => this.operators[op] && (!this._allowedOperators || this._allowedOperators.has(op)),
-        );
-
-        // Check if all keys are known operators (ignoring whitelist)
-        const allKnownOperators = operatorKeys.every((op) => this.operators[op]);
-
-        if (allOperators && operatorKeys.length > 0) {
-          // All operators known and allowed — convert: { gte: '40', lte: '100' } → { $gte: 40, $lte: 100 }
-          const mongoFilters: Record<string, unknown> = {};
-          let needsCaseInsensitive = false;
-          for (const [op, opValue] of Object.entries(operatorObj)) {
-            const mongoOp = this.operators[op];
-            if (mongoOp) {
-              mongoFilters[mongoOp] = this.parseFilterValue(opValue, op);
-              // v2.10.9 — `contains` / `like` promise case-insensitive
-              // matching in their OpenAPI descriptions. Emit `$options: 'i'`
-              // so the engine honors that promise. `regex` stays
-              // caller-controlled. See the bracket-notation path below
-              // for the companion stamp.
-              if (op === "contains" || op === "like") {
-                needsCaseInsensitive = true;
-              }
-            }
-          }
-          if (needsCaseInsensitive) {
-            mongoFilters.$options = "i";
-          }
-          filters[key] = mongoFilters;
-          continue;
-        }
-
-        // Keys are known operators but blocked by whitelist — drop the field entirely
-        if (allKnownOperators && this._allowedOperators) {
-          continue;
-        }
-      }
-
-      // Handle key-based bracket notation: price[gte]=100 (when not parsed by qs)
-      const match = key.match(/^([a-zA-Z_][a-zA-Z0-9_.]*)(?:\[([a-z]+)\])?$/);
-      if (!match) continue;
-
-      const [, fieldName, operator] = match;
-      if (!fieldName) continue;
-
-      if (
-        operator &&
-        this.operators[operator] &&
-        (!this._allowedOperators || this._allowedOperators.has(operator))
-      ) {
-        // Operator filter: status[ne]=deleted → { status: { $ne: 'deleted' } }
-        const mongoOp = this.operators[operator];
-        const parsedValue = this.parseFilterValue(value, operator);
-
-        if (!filters[fieldName]) {
-          filters[fieldName] = {};
-        }
-        const fieldFilter = filters[fieldName] as Record<string, unknown>;
-        fieldFilter[mongoOp] = parsedValue;
-
-        // v2.10.9 — `contains` and `like` advertise case-insensitive
-        // matching in their OpenAPI descriptions ("Contains substring
-        // (case-insensitive)" / "Pattern match (case-insensitive)") but
-        // previously emitted `{ $regex: pattern }` without `$options`,
-        // so Mongo evaluated them case-sensitively. The `regex` operator
-        // is left untouched — callers supplying a raw regex pattern
-        // control flags themselves (and can still use `[contains]` or
-        // `[like]` if they want the documented case-insensitive shape).
-        if (operator === "contains" || operator === "like") {
-          fieldFilter.$options = "i";
-        }
-      } else if (!operator) {
-        // Direct equality: status=active → { status: 'active' }
-        filters[fieldName] = this.parseFilterValue(value);
+    // 1. Bracket envelope form: ?filter[foo]=X / ?filter[price][gte]=40
+    //    `qs` parses these as `query.filter = { foo: 'X', price: { gte: '40' } }`.
+    //    Process FIRST so bare top-level filters can override on key clash.
+    const envelope = query.filter;
+    if (typeof envelope === "object" && envelope !== null && !Array.isArray(envelope)) {
+      for (const [key, value] of Object.entries(envelope as Record<string, unknown>)) {
+        this.applyFilterEntry(filters, key, value);
       }
     }
 
+    // 2. Bare top-level form: ?foo=X / ?price[gte]=40 (the historical default).
+    for (const [key, value] of Object.entries(query)) {
+      if (RESERVED_QUERY_PARAMS.has(key)) continue;
+      this.applyFilterEntry(filters, key, value);
+    }
+
     return filters;
+  }
+
+  /**
+   * Apply one filter entry — used by both the bracket-envelope branch and
+   * the bare top-level branch of `parseFilters`. Centralising the field-
+   * validation + operator-conversion logic keeps the two forms in
+   * lockstep; a future regex/security tweak only changes one place.
+   */
+  private applyFilterEntry(filters: Record<string, unknown>, key: string, value: unknown): void {
+    if (value === undefined || value === null) return;
+
+    // Validate field name (prevent injection)
+    if (!/^[a-zA-Z_][a-zA-Z0-9_.]*(?:\[[a-z]+\])?$/.test(key)) return;
+
+    // Strip optional `[operator]` suffix when checking against the field
+    // whitelist — `price[gte]` and `price` should both be gated by the
+    // `price` entry in `allowedFilterFields`.
+    const bareKey = key.replace(/\[[a-z]+\]$/, "");
+    if (this._allowedFilterFields && !this._allowedFilterFields.has(bareKey)) return;
+
+    // Enforce max filter depth (prevents filter bombs)
+    if (this.exceedsDepth(value)) return;
+
+    // Handle nested object format from qs parser: { price: { gte: '40', lte: '100' } }
+    // This happens when URL is ?price[gte]=40&price[lte]=100 and qs parses it
+    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+      const operatorObj = value as Record<string, unknown>;
+      const operatorKeys = Object.keys(operatorObj);
+
+      // Check if all keys are known operators (respecting operator whitelist)
+      const allOperators = operatorKeys.every(
+        (op) => this.operators[op] && (!this._allowedOperators || this._allowedOperators.has(op)),
+      );
+
+      // Check if all keys are known operators (ignoring whitelist)
+      const allKnownOperators = operatorKeys.every((op) => this.operators[op]);
+
+      if (allOperators && operatorKeys.length > 0) {
+        // All operators known and allowed — convert: { gte: '40', lte: '100' } → { $gte: 40, $lte: 100 }
+        const mongoFilters: Record<string, unknown> = {};
+        let needsCaseInsensitive = false;
+        for (const [op, opValue] of Object.entries(operatorObj)) {
+          const mongoOp = this.operators[op];
+          if (mongoOp) {
+            mongoFilters[mongoOp] = this.parseFilterValue(opValue, op);
+            // v2.10.9 — `contains` / `like` promise case-insensitive
+            // matching in their OpenAPI descriptions. Emit `$options: 'i'`
+            // so the engine honors that promise. `regex` stays
+            // caller-controlled. See the bracket-notation path below
+            // for the companion stamp.
+            if (op === "contains" || op === "like") {
+              needsCaseInsensitive = true;
+            }
+          }
+        }
+        if (needsCaseInsensitive) {
+          mongoFilters.$options = "i";
+        }
+        filters[key] = mongoFilters;
+        return;
+      }
+
+      // Keys are known operators but blocked by whitelist — drop the field entirely
+      if (allKnownOperators && this._allowedOperators) {
+        return;
+      }
+    }
+
+    // Handle key-based bracket notation: price[gte]=100 (when not parsed by qs)
+    const match = key.match(/^([a-zA-Z_][a-zA-Z0-9_.]*)(?:\[([a-z]+)\])?$/);
+    if (!match) return;
+
+    const [, fieldName, operator] = match;
+    if (!fieldName) return;
+
+    if (
+      operator &&
+      this.operators[operator] &&
+      (!this._allowedOperators || this._allowedOperators.has(operator))
+    ) {
+      // Operator filter: status[ne]=deleted → { status: { $ne: 'deleted' } }
+      const mongoOp = this.operators[operator];
+      const parsedValue = this.parseFilterValue(value, operator);
+
+      if (!filters[fieldName]) {
+        filters[fieldName] = {};
+      }
+      const fieldFilter = filters[fieldName] as Record<string, unknown>;
+      fieldFilter[mongoOp] = parsedValue;
+
+      // v2.10.9 — `contains` and `like` advertise case-insensitive
+      // matching in their OpenAPI descriptions ("Contains substring
+      // (case-insensitive)" / "Pattern match (case-insensitive)") but
+      // previously emitted `{ $regex: pattern }` without `$options`,
+      // so Mongo evaluated them case-sensitively. The `regex` operator
+      // is left untouched — callers supplying a raw regex pattern
+      // control flags themselves (and can still use `[contains]` or
+      // `[like]` if they want the documented case-insensitive shape).
+      if (operator === "contains" || operator === "like") {
+        fieldFilter.$options = "i";
+      }
+    } else if (!operator) {
+      // Direct equality: status=active → { status: 'active' }
+      filters[fieldName] = this.parseFilterValue(value);
+    }
   }
 
   private parseFilterValue(value: unknown, operator?: string): unknown {

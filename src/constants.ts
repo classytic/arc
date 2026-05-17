@@ -100,6 +100,12 @@ export const MAX_FILTER_DEPTH = 10 as const;
 /**
  * Query parameters consumed by the framework — never treated as filters.
  * Shared by all query parsers (Arc built-in, Prisma, custom).
+ *
+ * `filter` is reserved so the bracket-wrapped form
+ * (`?filter[foo.bar]=X` / `?filter[price][gte]=40`) lands as the parser's
+ * canonical filter envelope instead of being attempted as a flat field
+ * filter. See `ArcQueryParser.parseFilters()` for the unwrap step that
+ * merges `q.filter[*]` back into the top-level filter map.
  */
 export const RESERVED_QUERY_PARAMS = Object.freeze(
   new Set([
@@ -112,6 +118,7 @@ export const RESERVED_QUERY_PARAMS = Object.freeze(
     "after",
     "cursor",
     "lean",
+    "filter",
     "_policyFilters",
   ]),
 );

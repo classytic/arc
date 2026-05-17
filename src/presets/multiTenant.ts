@@ -387,6 +387,18 @@ export function multiTenantPreset(options: MultiTenantOptions = {}): PresetResul
       // they'd declare a permissions-level `allowPublic` AND not use
       // `multiTenantPreset` for that resource.
       aggregations: [strictTenantFilter],
+      // 2.15.5 — opt-in slot for custom routes via `tenantScope: true`
+      // on a `RouteDefinition`. Mirrors the `update` slot (filter +
+      // injection) so a custom POST/PATCH route gets the same
+      // protection as auto-CRUD: filter pins reads/lookups to the
+      // caller's tenant, injection stamps the body so a member can't
+      // hop their write to another tenant by spoofing the field. The
+      // handler reads the resolved tenant via `getOrgId(req.scope)` or
+      // `req._tenantFields` without re-implementing the scope-read +
+      // header-fallback boilerplate. Always strict — `tenantScope` is
+      // an explicit opt-in; if the host wants the route reachable
+      // without tenant context they wouldn't set the flag.
+      tenantScope: [strictTenantFilter, tenantInjection],
     } as MiddlewareConfig,
   };
 }

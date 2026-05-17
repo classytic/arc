@@ -80,13 +80,17 @@ export type CacheStatus = "HIT" | "STALE" | "MISS";
  * the minimal shape without a circular dependency on the full
  * `BaseCrudController` / `BaseController` declarations.
  */
-// biome-ignore lint/suspicious/noExplicitAny: reads any controller shape — the utility types narrow at the call site
+// `never` in the contravariant args slot lets concrete controller method
+// signatures (`list(ctx: IRequestContext)`) satisfy this constraint via
+// function-parameter bivariance, while `unknown` in the covariant return
+// position keeps `ReturnType<...>` precise at every call site. This is
+// the modern TS replacement for `(...args: any[]) => any`.
 export type ArcControllerLike = {
-  list: (...args: any[]) => unknown;
-  get: (...args: any[]) => unknown;
-  create: (...args: any[]) => unknown;
-  update: (...args: any[]) => unknown;
-  delete: (...args: any[]) => unknown;
+  list: (...args: never[]) => unknown;
+  get: (...args: never[]) => unknown;
+  create: (...args: never[]) => unknown;
+  update: (...args: never[]) => unknown;
+  delete: (...args: never[]) => unknown;
 };
 
 /**

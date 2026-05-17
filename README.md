@@ -122,6 +122,7 @@ export default defineResource({
   actions: {
     approve: { handler: approveOrder, permissions: requireRoles(['admin']) },
   },
+  // mcp: false,    // opt out of MCP tool generation for this resource (2.16)
 });
 ```
 

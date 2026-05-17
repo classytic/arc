@@ -437,7 +437,63 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
       if (!(await checkPerm("start", request))) {
         throw new ForbiddenError();
       }
-      const { input, meta, idempotencyKey, priority } = (request.body ?? {}) as {
+
+      // Envelope validation. The handler accepts `{ input, meta, idempotencyKey,
+      // priority }` — every workflow payload nests under `input`. Historically,
+      // callers who passed their workflow fields directly (`{ orderId: '...' }`
+      // instead of `{ input: { orderId: '...' } }`) hit a downstream
+      // streamline validator that surfaced as a cryptic `"Invalid Date"` 400.
+      // Reject the mistake here with a 422 + actionable message so the DX
+      // pointer is immediate.
+      const body = request.body;
+      if (body !== null && body !== undefined && typeof body !== "object") {
+        throw createError(422, `[Arc/Streamline] '/${id}/start' body must be a JSON object.`, {
+          code: "arc.streamline.invalid_body",
+          workflowId: id,
+        });
+      }
+      const envelopeKeys = new Set(["input", "meta", "idempotencyKey", "priority"]);
+      const bodyRecord = (body ?? {}) as Record<string, unknown>;
+      const presentKeys = Object.keys(bodyRecord);
+      const unknownKeys = presentKeys.filter((k) => !envelopeKeys.has(k));
+      const hasInputKey = Object.hasOwn(bodyRecord, "input");
+      if (unknownKeys.length > 0 && !hasInputKey) {
+        // The caller passed workflow fields at the top level instead of
+        // wrapping them in `{ input: { ... } }`. Surface the canonical
+        // shape so they don't have to chase the downstream validator.
+        throw createError(
+          422,
+          `[Arc/Streamline] '/${id}/start' expects '{ input: {...} }'. ` +
+            `Got top-level keys [${unknownKeys.join(", ")}] but no 'input' key. ` +
+            `Wrap your workflow payload: { "input": { ${unknownKeys
+              .map((k) => `"${k}": ...`)
+              .join(", ")} } }.`,
+          {
+            code: "arc.streamline.missing_input_envelope",
+            workflowId: id,
+            received: unknownKeys,
+            expected: "input",
+          },
+        );
+      }
+      if (unknownKeys.length > 0) {
+        // `input` is present but the caller also included keys outside the
+        // envelope. Likely a misplaced field — point at them explicitly so
+        // they don't silently flow nowhere.
+        throw createError(
+          422,
+          `[Arc/Streamline] '/${id}/start' got unknown top-level keys [${unknownKeys.join(", ")}]. ` +
+            `Allowed envelope keys: input, meta, idempotencyKey, priority. ` +
+            `Did you mean to nest these under 'input'?`,
+          {
+            code: "arc.streamline.unknown_envelope_keys",
+            workflowId: id,
+            unknown: unknownKeys,
+          },
+        );
+      }
+
+      const { input, meta, idempotencyKey, priority } = bodyRecord as {
         input?: unknown;
         meta?: Record<string, unknown>;
         idempotencyKey?: string;

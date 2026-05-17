@@ -16,7 +16,13 @@
  * frontend code reads dashboards with the same envelope across kits.
  */
 
-import type { FastifyReply, FastifyRequest, RouteHandlerMethod } from "fastify";
+import type {
+  FastifyReply,
+  FastifyRequest,
+  FastifySchema,
+  preHandlerHookHandler,
+  RouteHandlerMethod,
+} from "fastify";
 import type { FieldPermissionMap } from "../../permissions/fields.js";
 import type {
   PermissionCheck,
@@ -238,10 +244,8 @@ function registerOne(
   fastify.route({
     method: "GET",
     url: `/aggregations/${name}`,
-    // biome-ignore lint/suspicious/noExplicitAny: Fastify schema type
-    schema: routeSchema as any,
-    // biome-ignore lint/suspicious/noExplicitAny: Fastify preHandler type
-    preHandler: preHandler.length > 0 ? (preHandler as any) : undefined,
+    schema: routeSchema as FastifySchema,
+    preHandler: preHandler.length > 0 ? (preHandler as preHandlerHookHandler[]) : undefined,
     ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
     handler: async (req: FastifyRequest, reply: FastifyReply) => {
       try {

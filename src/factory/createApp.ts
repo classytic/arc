@@ -240,6 +240,12 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     allowErrorHandlerOverride: true,
     routerOptions: {
       querystringParser: (str: string) => qs.parse(str),
+      // 2.16 — Fastify 5.8+ moved maxParamLength under `routerOptions`
+      // (the top-level option is deprecated, emits FSTDEP022). Default 400
+      // overrides Fastify's stock 100 so modern signed-token URLs
+      // (HMAC, magic-link, JWT-in-URL, OAuth state) route correctly
+      // without per-host wiring.
+      maxParamLength: config.maxParamLength ?? 400,
     },
     ajv: {
       customOptions: {

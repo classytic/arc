@@ -87,7 +87,7 @@ const cachingPlugin: FastifyPluginAsync<CachingOptions> = async (
   /** Find the first matching rule for a URL path */
   function findRule(url: string): CachingRule | undefined {
     // Strip query string
-    const path = url.split("?")[0]!;
+    const path = url.split("?")[0] ?? url;
     return rules.find((r) => path.startsWith(r.match));
   }
 

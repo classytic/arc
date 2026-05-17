@@ -6,6 +6,7 @@
  */
 
 import type { DataAdapter } from "@classytic/repo-core/adapter";
+import type { TenantPurgeStrategy } from "@classytic/repo-core/repository";
 import type {
   FieldRule as RepoCoreFieldRule,
   SchemaBuilderOptions,
@@ -28,10 +29,69 @@ export type CrudController<TDoc> = IController<TDoc>;
 // ──────────────────────────────────────────────────────────────────────
 
 /**
+ * Tenant-cleanup declaration on a resource — compliance-grade strategy
+ * for what happens to this resource's rows when the owning organization
+ * is deleted. Surfaces in arc's org-delete cascade runner and in
+ * registry introspection (audit scripts ask "what happens to this
+ * resource on org delete?").
+ *
+ * Strategy variants:
+ *   - `hard` — permanent removal (GDPR right-to-be-forgotten).
+ *   - `soft` — recoverable; pair with TTL for eventual hard-purge.
+ *   - `anonymize` — keep the row (legal retention) but clear PII
+ *     (HIPAA / PCI / SOX-compatible).
+ *   - `skip` — explicit opt-out with mandatory `reason`.
+ *
+ * See {@link ResourceConfig.onTenantDelete} for the full decision tree.
+ */
+export interface OnTenantDeleteConfig {
+  /**
+   * What to do with rows whose `tenantField` matches the deleted org.
+   * Discriminated union from `@classytic/repo-core/repository` — every
+   * kit's `purgeByField` consumes the same shape.
+   */
+  strategy: TenantPurgeStrategy;
+  /**
+   * Resources are processed in ascending `priority` order. Use to land
+   * leaf data (logs, events) before aggregate references. Default `100`.
+   */
+  priority?: number;
+  /**
+   * Rows per chunk for the underlying `purgeByField` call — bounds
+   * lock contention + replication-log pressure on very large tenants.
+   * Default kit-specific (~1000).
+   */
+  batchSize?: number;
+}
+
+/**
+ * Resolved tenant-purge declaration — what arc actually runs when
+ * `cascadeDeleteForOrganization` fires. Computed once at boot from the
+ * resource's `onTenantDelete` declaration.
+ *
+ * Exposed via `ResourceDefinition.resolvedTenantPurge` and
+ * `getCascadingResourcesWithMetadata(registry)` so audit tooling can
+ * answer "is this resource really going to hard-delete?" without
+ * reading the source.
+ */
+export interface ResolvedTenantPurge {
+  readonly strategy: TenantPurgeStrategy;
+  readonly priority: number;
+  readonly batchSize?: number;
+  /**
+   * Where the strategy came from — `'declared'` (host wrote
+   * `onTenantDelete` explicitly) or `'disabled'` (no declaration —
+   * runner skips this resource).
+   */
+  readonly source: "declared" | "disabled";
+}
+
+/**
  * Per-resource cache configuration for QueryCache. Enables
  * stale-while-revalidate, auto-invalidation on mutations, and
  * cross-resource tag-based invalidation.
  */
+
 export interface ResourceCacheConfig {
   /** Seconds data is "fresh" (no revalidation). Default: 0 */
   staleTime?: number;
@@ -361,15 +421,59 @@ export interface RouteDefinition {
   readonly path: string;
   /**
    * Route handler.
-   * - String: controller method name (Arc pipeline)
+   * - String: controller method name (Arc pipeline) — runtime lookup, no TS coverage on typos.
    * - Function without `raw: true`: receives IRequestContext, returns IControllerResponse (Arc pipeline)
    * - Function with `raw: true`: raw Fastify handler `(request, reply)`
+   *
+   * Prefer `controllerMethod` (2.16) over the string form when you want the
+   * compiler to catch typos. `handler` stays optional when `controllerMethod`
+   * is set — exactly one of the two must be declared.
    */
-  readonly handler:
+  readonly handler?:
     | string
     | ControllerHandler
     | RouteHandlerMethod
     | ((request: FastifyRequest<Record<string, unknown>>, reply: FastifyReply) => unknown);
+  /**
+   * Typed function-reference handler (2.16). Receives the live controller
+   * instance and returns the method to invoke — TypeScript catches typos
+   * and surfaces autocomplete on the controller's method names. Prefer
+   * this over the string `handler` form for any host that uses a typed
+   * controller subclass.
+   *
+   * Resolved ONCE at route-registration time (the same path string
+   * handlers go through), so there's no per-request lookup overhead.
+   * The returned method is bound to the controller before dispatch.
+   *
+   * Mutually exclusive with `handler` — passing both throws at boot
+   * with a clear "pick one" message. The runtime contract on what the
+   * returned function accepts mirrors the `handler` rules: a plain
+   * `ControllerHandler` for pipeline routes, a raw Fastify handler when
+   * the route is `raw: true`.
+   *
+   * Typed loosely (`(controller: unknown) => …`) at the type-system
+   * boundary because `RouteDefinition` is not generic over the
+   * controller shape — host code annotates the parameter to opt in:
+   *
+   * @example
+   * ```ts
+   * class PostController extends BaseController<Post> {
+   *   async getStats(ctx: IRequestContext) { … }
+   * }
+   *
+   * defineResource({
+   *   controller: new PostController(repo),
+   *   routes: [{
+   *     method: 'GET',
+   *     path: '/stats',
+   *     controllerMethod: (c: PostController) => c.getStats,
+   *     //                       ^^^^^^^^^^^^^^ TS catches typos here
+   *     permissions: requireAuth(),
+   *   }],
+   * });
+   * ```
+   */
+  readonly controllerMethod?: (controller: unknown) => ControllerHandler | RouteHandlerMethod;
   /** Permission check — REQUIRED */
   readonly permissions: PermissionCheck;
   /**
@@ -389,6 +493,24 @@ export interface RouteDefinition {
   readonly preHandler?: RouteHandlerMethod[] | ((fastify: FastifyInstance) => RouteHandlerMethod[]);
   /** Pre-auth handlers (run before authentication) */
   readonly preAuth?: RouteHandlerMethod[];
+  /**
+   * Opt this custom route into the multiTenant preset's tenant scoping.
+   *
+   * When `true` AND the resource declares `multiTenantPreset` (or
+   * `flexibleMultiTenantPreset`), arc prepends the preset's tenant
+   * filter + injection middleware to this route's chain — the same
+   * pair `update` gets. The handler can then read the resolved tenant
+   * via `getOrgId(req.scope)` / `req._tenantFields` (or, for write
+   * routes, off `req.body` after injection) without re-implementing
+   * the scope read + header fallback + 400 boilerplate.
+   *
+   * Throws at boot if set when no multiTenant preset is wired — the
+   * misconfiguration would otherwise be silently insecure (read routes
+   * returning every tenant's rows).
+   *
+   * @default false
+   */
+  readonly tenantScope?: boolean;
   /** SSE streaming mode */
   readonly streamResponse?: boolean;
   /**
@@ -451,6 +573,25 @@ export interface ActionDefinition {
   readonly schema?: unknown;
   /** Description for OpenAPI docs and MCP tool */
   readonly description?: string;
+  /**
+   * Whether this action needs an entity id from the URL.
+   *
+   * - `true` (default) — mounts under `POST /<prefix>/:id/action`. The `id`
+   *   path param is required; handler receives it as the first argument.
+   *   Use for actions that operate on an existing entity: `approve`,
+   *   `dispatch`, `cancel`, `archive`.
+   * - `false` — mounts under `POST /<prefix>/action` (no `:id` segment).
+   *   Handler receives an empty-string first argument. Use for
+   *   collection-level actions that create / search / bulk-mutate:
+   *   `propose` (creates a new entity), `search` (returns rows), `bulk`.
+   *
+   * 2.15.5: previously every action had to live under `:id/action`, forcing
+   * `propose`-style actions to swallow a meaningless URL parameter and
+   * making the auto-generated MCP tool advertise an `id` field agents
+   * had no value for. Setting `id: false` mounts the action at the
+   * resource root and drops `id` from the MCP tool's input shape.
+   */
+  readonly id?: boolean;
   /**
    * MCP tool generation:
    * - omitted/true: auto-generate
@@ -736,13 +877,84 @@ export interface ResourceConfig<TDoc = AnyRecord> {
   aggregations?: import("../core/aggregation/types.js").AggregationsMap;
   disableCrud?: boolean;
   disableDefaultRoutes?: boolean;
-  /** Specific routes to disable */
+  /** Specific routes to disable (negative-form opt-out). */
   disabledRoutes?: CrudRouteKey[];
+  /**
+   * Declarative CRUD allow-list — what's ENABLED is explicit (positive form).
+   *
+   * Mutually exclusive with `disabledRoutes` — passing both is a config
+   * error and throws at boot. Use this when you want least-privilege
+   * defaults: a new CRUD op added in a future arc release won't silently
+   * leak through your `disabledRoutes` list because every op is opt-in.
+   *
+   * - `crud: { list: true, get: true }` — only `list` + `get` mount;
+   *   `create` / `update` / `delete` are NOT mounted.
+   * - `crud: false` — equivalent to `disableDefaultRoutes: true` (no CRUD at all).
+   * - `crud: undefined` (default) — every op mounts (legacy behaviour).
+   *
+   * 2.16: prefer this over `disabledRoutes` for new resources. The
+   * negative form stays for back-compat but won't be the documented
+   * default going forward.
+   *
+   * @example
+   * ```ts
+   * defineResource({
+   *   name: 'audit-log',
+   *   crud: { list: true, get: true },  // read-only — no create/update/delete
+   *   permissions: { list: requireRoles(['admin']), get: requireRoles(['admin']) },
+   * });
+   * ```
+   */
+  crud?: false | { [K in CrudRouteKey]?: boolean };
   /**
    * Field name used for multi-tenant scoping (default: 'organizationId').
    * Override to match your schema: 'workspaceId', 'tenantId', etc.
    */
   tenantField?: string | false;
+  /**
+   * Tenant-cleanup declaration — what `cascadeDeleteForOrganization`
+   * does with this resource's rows when an organization is deleted.
+   * Required for the resource to participate in the cascade; unflagged
+   * resources are never touched.
+   *
+   *   - `{ strategy: { type: 'hard' } }` — permanent delete (GDPR).
+   *   - `{ strategy: { type: 'soft' } }` — set `deleted: true` + `deletedAt`
+   *     (recoverable; pair with TTL for eventual hard-purge).
+   *   - `{ strategy: { type: 'anonymize', fields: { name: '[REDACTED]', email: null } } }`
+   *     — keep the row (legal retention) but clear PII linkage. HIPAA /
+   *     PCI / SOX-compatible. Field values can be static or `(doc) =>
+   *     value` for derived patches (hashes, etc.).
+   *   - `{ strategy: { type: 'skip', reason: 'audit-retained-per-SOX' } }`
+   *     — explicit opt-out with **mandatory** reason. Surfaces in audit reports.
+   *
+   * **Priority** — lower runs first. Default `100`. Use to land leaf data
+   * before aggregate references:
+   *   - `10`  : bulk leaf data (events, logs)
+   *   - `50`  : business entities (orders, invoices)
+   *   - `100` : default
+   *
+   * Priority groups are barriers even under concurrency — all
+   * priority-10 resources finish before any priority-50 starts.
+   *
+   * **Batch size** — rows per chunk for the underlying `purgeByField`
+   * call. Default kit-specific (~1000). Tune for very large tenants.
+   *
+   * @example Compliance-retained financial ledger
+   * ```ts
+   * defineResource({
+   *   name: 'invoice',
+   *   tenantField: 'organizationId',
+   *   onTenantDelete: {
+   *     strategy: {
+   *       type: 'anonymize',
+   *       fields: { customerName: '[REDACTED]', customerEmail: null },
+   *     },
+   *     priority: 50,
+   *   },
+   * });
+   * ```
+   */
+  onTenantDelete?: OnTenantDeleteConfig;
   /**
    * Default sort applied to `list` responses when the request doesn't
    * specify one. Arc's built-in default is `-createdAt` (Mongo convention).
@@ -784,6 +996,28 @@ export interface ResourceConfig<TDoc = AnyRecord> {
   skipValidation?: boolean;
   /** Don't register in introspection */
   skipRegistry?: boolean;
+  /**
+   * Per-resource MCP opt-out.
+   *
+   * - omitted / `true` (default) — resource may be surfaced by `mcpPlugin`,
+   *   subject to the plugin's `expose` / `include` / `exclude` selection.
+   * - `false` — opt this resource OUT of MCP tool generation entirely.
+   *   Always wins over the plugin's `expose` / `include` allowlist;
+   *   keeps the opt-out colocated with the resource definition instead
+   *   of in a host-side blocklist that drifts as resources are added.
+   *
+   * Use the local opt-out for resources that should never expose tools
+   * (internal back-office, audit-trail readers, system-managed entities).
+   * Use the plugin-level `expose`/`include` allowlist when the cut is
+   * cross-cutting (only a handful of resources should be agent-callable
+   * across the whole app).
+   *
+   * @example
+   * ```ts
+   * defineResource({ name: 'internal-job-log', mcp: false, ... });
+   * ```
+   */
+  mcp?: boolean;
   /** Internal: track applied presets */
   _appliedPresets?: string[];
   /** HTTP method for update routes. Default: 'PATCH' */

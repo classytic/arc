@@ -114,7 +114,7 @@ export function validateResourceConfig(
   // ========================================
 
   if (config.controller && !options.skipControllerCheck && !config.disableDefaultRoutes) {
-    const ctrl = config.controller as any;
+    const ctrl = config.controller as unknown as Record<string, unknown>;
 
     // Check for IController methods (MongoKit-compatible standard)
     const requiredMethods = CRUD_OPERATIONS;
@@ -343,10 +343,18 @@ function validateRoutes(routes: RouteDefinition[], errors: ConfigError[]): void 
       });
     }
 
-    if (!route.handler) {
+    // 2.16 — routes accept either `handler` (string / function) OR
+    // `controllerMethod` (typed function-ref form). The runtime layer
+    // enforces "exactly one"; this gate just rejects "neither set".
+    const routeWithRefs = route as typeof route & {
+      controllerMethod?: unknown;
+    };
+    if (!route.handler && typeof routeWithRefs.controllerMethod !== "function") {
       errors.push({
         field: `routes[${i}].handler`,
-        message: "Route handler is required",
+        message: "Route must declare either `handler` (string / function) or `controllerMethod`",
+        suggestion:
+          "Prefer `controllerMethod: (c: MyController) => c.method` for typed handler refs.",
       });
     }
 

@@ -31,7 +31,6 @@ src/
   schemas/       JSON Schema generation from field rules
   pipeline/      guard, pipe, intercept, transform — execution pipeline stages
   middleware/    request-level middleware, multipartBody (file upload)
-  org/           organizationPlugin, orgMembership, org types
   audit/         auditPlugin, store interface + memory + repository adapter
   idempotency/   idempotencyPlugin, MongoDB + Redis stores
   context/       async request context (AsyncLocalStorage)

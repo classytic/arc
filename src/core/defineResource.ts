@@ -61,6 +61,7 @@ import type { DataAdapter } from "@classytic/repo-core/adapter";
 import type { AnyRecord, ResourceConfig } from "../types/index.js";
 import type { InternalResourceConfig } from "./defineResource/config.js";
 import { resolveOrAutoCreateController } from "./defineResource/controller.js";
+import type { ResourceDiagnostic } from "./defineResource/diagnostics.js";
 import { wireHooks } from "./defineResource/hooks.js";
 import { resolveIdField } from "./defineResource/idField.js";
 import { applyPresetsAndAutoInject, computeHasCrudRoutes } from "./defineResource/presets.js";
@@ -90,12 +91,30 @@ import { validateDefineResourceConfig } from "./defineResource/validate.js";
 export function defineResource<TDoc = AnyRecord>(
   config: ResourceConfig<TDoc>,
 ): ResourceDefinition<TDoc> {
-  // Phase 1 — validate
-  if (!config.skipValidation) validateDefineResourceConfig(config);
+  // Phase 0 — normalise the 2.16 `crud:` allow-list into the canonical
+  // `disabledRoutes` / `disableDefaultRoutes` pair the rest of arc reads.
+  // Lifted BEFORE validation so the validator sees the resolved shape:
+  // `crud: false` looks like `disableDefaultRoutes: true` (no adapter
+  // required) instead of "CRUD enabled but no adapter" (a confusing
+  // false-positive error). Pure transformation — `config` itself stays
+  // untouched; the rest of the pipeline reads the normalised copy.
+  const normalisedConfig = resolveCrudAllowList(config);
 
-  // Phase 2 — auto-derive idField from repository before presets see it
-  const repository = config.adapter?.repository;
-  const configWithId = resolveIdField(config, repository);
+  // Phase 1 — validate. Hard errors throw synchronously; non-fatal
+  // diagnostics flow back as an array so they can be flushed through
+  // the host's Fastify logger on first mount (see `buildResourcePlugin`).
+  // `console.*` is reserved for `src/cli/` — the framework never speaks
+  // directly to stdout from `src/`.
+  let diagnostics: ResourceDiagnostic[] = [];
+  if (!normalisedConfig.skipValidation) {
+    diagnostics = validateDefineResourceConfig(normalisedConfig);
+  }
+
+  // Phase 2 — auto-derive idField from repository before presets see it.
+  // Reads from the post-Phase-0 normalised config so all later phases
+  // observe the resolved `disabledRoutes` / `disableDefaultRoutes`.
+  const repository = normalisedConfig.adapter?.repository;
+  const configWithId = resolveIdField(normalisedConfig, repository);
 
   // Phase 3 — apply presets + auto-inject tenant-field rules
   const resolvedConfig = applyPresetsAndAutoInject<TDoc>(configWithId);
@@ -121,7 +140,7 @@ export function defineResource<TDoc = AnyRecord>(
     controller,
   } as unknown as ResolvedResourceConfig<TDoc>);
 
-  if (!config.skipValidation && controller) resource._validateControllerMethods();
+  if (!normalisedConfig.skipValidation && controller) resource._validateControllerMethods();
 
   // Phase 6 — wire preset hooks + inline config.hooks
   wireHooks(resource, narrowedConfig, configWithId.hooks);
@@ -129,10 +148,15 @@ export function defineResource<TDoc = AnyRecord>(
   // Phase 7 — resolve OpenAPI schemas (non-fatal; failure leaves
   // _registryMeta undefined so registry consumers see "no metadata"
   // instead of a half-built object).
-  if (!config.skipRegistry) {
+  if (!normalisedConfig.skipRegistry) {
     const registryMeta = resolveOpenApiSchemas(narrowedConfig);
     if (registryMeta) resource._registryMeta = registryMeta;
   }
+
+  // Attach boot-time diagnostics. `buildResourcePlugin` flushes them
+  // through `fastify.log.warn` on first mount so the host's configured
+  // logger handles framework output.
+  if (diagnostics.length > 0) resource._diagnostics = diagnostics;
 
   return resource;
 }
@@ -142,3 +166,61 @@ export function defineResource<TDoc = AnyRecord>(
 // host code) continue to resolve. The class itself lives next to its
 // phase-module siblings under `./defineResource/`.
 export { ResourceDefinition } from "./defineResource/ResourceDefinition.js";
+
+// ============================================================================
+// `crud:` allow-list resolver (2.16)
+// ============================================================================
+
+/**
+ * Normalise the 2.16 `crud:` positive-form allow-list into the canonical
+ * `{ disabledRoutes, disableDefaultRoutes }` pair the rest of arc reads.
+ *
+ * Three input forms collapse to one output:
+ *   - `crud: false`           → `disableDefaultRoutes: true`
+ *   - `crud: { list: true }`  → `disabledRoutes: [get,create,update,delete]`
+ *   - legacy `disabledRoutes` → passed through unchanged
+ *
+ * Mutually exclusive: `crud` + `disabledRoutes` together is a config bug
+ * (the host meant ONE of two intents) — throw rather than pick.
+ *
+ * Lifted out of the `ResourceDefinition` constructor in 2.16 so the
+ * validator (Phase 1) observes the post-resolve shape — `crud: false`
+ * now looks like `disableDefaultRoutes: true` to the validator, so it
+ * doesn't false-positive "Data adapter required when CRUD routes are
+ * enabled" on a host that explicitly opted CRUD out.
+ */
+function resolveCrudAllowList<TDoc>(config: ResourceConfig<TDoc>): ResourceConfig<TDoc> {
+  const { crud, disabledRoutes: legacyDisabled, disableDefaultRoutes: legacyDisableAll } = config;
+  if (crud === undefined) return config;
+
+  if (legacyDisabled !== undefined) {
+    throw new Error(
+      `[Arc] Resource '${config.name}': pass either \`crud\` (positive allow-list) ` +
+        "or `disabledRoutes` (negative opt-out), not both. The positive form is " +
+        "the documented default going forward; drop `disabledRoutes` when both are set.",
+    );
+  }
+
+  if (crud === false) {
+    return { ...config, crud: undefined, disableDefaultRoutes: true };
+  }
+
+  // `crud: { list: true, ... }` — push every op NOT explicitly enabled
+  // into `disabledRoutes`. The four-CRUD list is hardcoded here (same
+  // shape `CRUD_OPERATIONS` exposes) to avoid pulling that import into
+  // this orchestrator file.
+  const allowedOps: ReadonlyArray<"list" | "get" | "create" | "update" | "delete"> = [
+    "list",
+    "get",
+    "create",
+    "update",
+    "delete",
+  ];
+  const disabled = allowedOps.filter((op) => crud[op] !== true);
+  return {
+    ...config,
+    crud: undefined,
+    disabledRoutes: disabled,
+    disableDefaultRoutes: legacyDisableAll ?? false,
+  };
+}

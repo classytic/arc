@@ -66,8 +66,20 @@ export function buildRequestContext(
     case "list":
       return { ...base, params: {}, query: expandOperatorKeys(input), body: undefined };
 
-    case "get":
-      return { ...base, params: { id: String(input.id ?? "") }, query: {}, body: undefined };
+    case "get": {
+      // CRUD `get` tools only ever pass `{ id }` — but a custom route
+      // (`GET /thing/:id?mode=verbose`) carries query params too.
+      // 2.15.5: route everything except `id` into `query` so custom GET
+      // route handlers that read `ctx.query.mode` keep working when
+      // auto-bridged to MCP. Pre-2.15.5 the extras silently disappeared.
+      const { id, ...rest } = input;
+      return {
+        ...base,
+        params: { id: String(id ?? "") },
+        query: expandOperatorKeys(rest),
+        body: undefined,
+      };
+    }
 
     case "create": {
       return { ...base, params: {}, query: {}, body: { ...input } };

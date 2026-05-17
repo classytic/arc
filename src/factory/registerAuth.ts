@@ -16,9 +16,19 @@ type PluginTracker = (name: string, opts?: Record<string, unknown>) => void;
  * Every request starts as public; auth hooks upgrade it.
  */
 export function decorateRequestScope(fastify: FastifyInstance): void {
-  // Initial value is null — the onRequest hook sets the real default per-request.
-  // Using null avoids Fastify 5's reference-type sharing bug.
-  fastify.decorateRequest("scope", null!);
+  // Initial value is `null` — the onRequest hook below sets the real
+  // default (`PUBLIC_SCOPE`) per-request. Using `null` here, not the
+  // public scope literal, avoids Fastify 5's reference-type sharing bug
+  // (a single mutable scope object would otherwise be shared across
+  // concurrent requests under high concurrency, since `decorateRequest`
+  // copies the reference, not the value).
+  //
+  // Fastify's `decorateRequest` overload set narrows the value parameter
+  // against the augmented `FastifyRequest.scope` shape and rejects raw
+  // `null`. Reach the second-overload via the `as unknown as` cast — one
+  // narrow, documented boundary instead of a non-null assertion at the
+  // call site.
+  (fastify.decorateRequest as unknown as (name: string, value: unknown) => void)("scope", null);
   fastify.addHook("onRequest", async (request) => {
     if (!request.scope) {
       request.scope = PUBLIC_SCOPE;

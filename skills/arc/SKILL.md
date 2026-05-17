@@ -7,7 +7,7 @@ description: |
   multi-tenant SaaS, OpenAPI, job queues, WebSocket, MCP tools, or production deployment.
   Triggers: arc, fastify resource, defineResource, createApp, BaseController, arc preset,
   arc auth, arc events, arc jobs, arc websocket, arc mcp, arc plugin, arc testing, arc cli,
-  arc permissions, arc hooks, arc pipeline, arc factory, arc cache, arc QueryCache.
+  arc permissions, arc hooks, arc factory, arc cache.
 license: MIT
 metadata:
   author: Classytic
@@ -23,49 +23,42 @@ tags:
   - cache
   - events
   - openapi
-progressive_disclosure:
-  entry_point:
-    summary: "Resource-oriented Fastify framework: defineResource(), presets, permissions, QueryCache, events, multi-tenant, OpenAPI, MCP"
-    when_to_use: "Building REST APIs with Fastify, resource CRUD, authentication, presets, caching, events, or production deployment"
-    quick_start: "1. npx @classytic/arc init my-api --mongokit --better-auth --single --ts  2. defineResource({ name, adapter, presets, permissions })  3. createApp({ preset: 'production', resources, auth })"
 ---
 
 # @classytic/arc
 
-Resource-oriented backend framework for Fastify. **Fastify ≥5.8.5 · Node ≥22 · ESM only.**
+Resource-oriented backend framework for Fastify. **Fastify ≥5.8 · Node ≥22 · ESM only.**
 
-One `defineResource()` call → REST + auth + permissions + events + cache + OpenAPI + MCP. Database-agnostic (Mongoose, Drizzle/sqlitekit, Prisma, custom).
+One `defineResource()` call → REST + auth + permissions + events + cache + OpenAPI + MCP. Database-agnostic (Mongoose, Drizzle/sqlite, Prisma, custom).
 
-## Scaffold a project
+## Install
 
 ```bash
+# Scaffold
 npx @classytic/arc@latest init my-api --mongokit --better-auth --single --ts
-cd my-api && npm install && npm run dev
+
+# Or add to an existing project
+npm install @classytic/arc fastify
+npm install @fastify/cors @fastify/helmet @fastify/rate-limit @fastify/sensible @fastify/under-pressure
+npm install @classytic/mongokit mongoose                # or sqlitekit / prismakit / custom
 ```
 
-Flags: `--mongokit | --custom`, `--better-auth | --jwt`, `--single | --multi`, `--ts | --js`, `--edge`, `--force`, `--skip-install`. Defaults: `--mongokit --better-auth --single --ts`. The scaffold seeds full `dependencies` + `devDependencies` so `npm install` works without the CLI's pre-pass.
+`init` flags: `--mongokit | --custom`, `--better-auth | --jwt`, `--single | --multi`, `--ts | --js`, `--edge`, `--force`, `--skip-install`.
 
-## createApp()
+## Boot
 
 ```typescript
-import { createApp } from '@classytic/arc/factory';
+import { createApp, loadResources } from '@classytic/arc/factory';
 
 const app = await createApp({
-  preset: 'production',                  // production | development | testing | edge
-  runtime: 'memory',                     // memory (default) | distributed
+  preset: 'production',                         // production | development | testing | edge
+  runtime: 'memory',                            // memory | distributed
+  resourcePrefix: '/api/v1',
   auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
-  cors: { origin: ['https://myapp.com'] },
-  helmet: true,                          // false to disable
-  rateLimit: { max: 100 },               // false to disable
-  ajv: { keywords: ['x-internal'] },
-  resources: [productResource, orderResource],   // canonical: factory wires them in the right slot
-  arcPlugins: {
-    events: true,                        // default true — disables CRUD event emission if false
-    queryCache: true,                    // default false
-    sse: true,                           // default false
-    caching: true,                       // ETag + Cache-Control
-  },
-  stores: {                              // required when runtime: 'distributed'
+  cors: { origin: process.env.ALLOWED_ORIGINS!.split(','), credentials: true },
+  resources: await loadResources(import.meta.url),    // auto-discovers *.resource.ts
+  arcPlugins: { events: true, queryCache: false, sse: false, caching: true },
+  stores: {                                     // required when runtime: 'distributed'
     events: new RedisEventTransport({ client: redis }),
     queryCache: new RedisCacheStore({ client: redis }),
   },
@@ -74,45 +67,35 @@ const app = await createApp({
 await app.listen({ port: 8040, host: '0.0.0.0' });
 ```
 
-**Boot sequence:** `plugins` → `bootstrap[]` → `resources` (factory form runs here) → `afterResources` → `onReady`.
+**Boot order (fixed):** `plugins` → `bootstrap[]` → `resources` → `afterResources` → `onReady`.
 
-**Async-booted engines** — use the factory form for `resources` so it runs after `bootstrap[]`:
+For async-booted engines, pass `resources` as a factory so it runs after `bootstrap[]`:
 
 ```typescript
 resources: async (fastify) => {
   const engine = await ensureCatalogEngine();
-  return [buildProductResource(engine), buildCategoryResource(engine)];
+  return [buildProductResource(engine)];
 }
 ```
 
-**Auto-discover resources:**
-
-```typescript
-import { loadResources } from '@classytic/arc/factory';
-
-resources: await loadResources(import.meta.url),                          // discovers *.resource.ts
-resources: await loadResources(import.meta.url, { context: { engine } }), // threads ctx into (ctx) => defineResource(...)
-```
-
-Pass `import.meta.url` for dev/prod parity (resolves `src/` in dev, `dist/` in prod). Discovers `default` export, `export const resource`, OR any named export with `.toPlugin()`. Works with relative imports + Node `#` subpath imports — **NOT** tsconfig path aliases (`@/*` are compile-time only).
+`loadResources(import.meta.url)` resolves `src/` in dev and `dist/` in prod. Use `loadResources(import.meta.url, { context: { engine } })` to thread engine handles into `(ctx) => defineResource(...)` default exports.
 
 ## defineResource()
 
 ```typescript
-import { defineResource, allowPublic, requireRoles } from '@classytic/arc';
+import { defineResource, allowPublic, requireRoles, requireAuth } from '@classytic/arc';
 import { createMongooseAdapter } from '@classytic/mongokit/adapter';
 import { buildCrudSchemasFromModel } from '@classytic/mongokit';
 
-const productResource = defineResource({
+export default defineResource({
   name: 'product',
   adapter: createMongooseAdapter({
     model: ProductModel,
     repository: productRepo,
-    schemaGenerator: buildCrudSchemasFromModel,   // required (no built-in fallback)
+    schemaGenerator: buildCrudSchemasFromModel,
   }),
-  controller: productController,        // optional — auto-built if omitted
 
-  presets: ['softDelete', 'slugLookup', { name: 'multiTenant', tenantField: 'orgId' }],
+  presets: ['softDelete', 'slugLookup', { name: 'multiTenant', tenantField: 'organizationId' }],
 
   permissions: {
     list: allowPublic(),
@@ -122,109 +105,70 @@ const productResource = defineResource({
     delete: requireRoles(['admin']),
   },
 
-  cache: { staleTime: 30, gcTime: 300, tags: ['catalog'] },
-
-  routeGuards: [orgGuard.preHandler],   // applied to ALL routes (CRUD + custom + preset)
-
   schemaOptions: {
     fieldRules: {
       name: { minLength: 2, maxLength: 200 },
       sku: { pattern: '^[A-Z]{3}-\\d{3}$' },
       status: { enum: ['draft', 'active', 'archived'] },
-      deletedAt: { systemManaged: true },     // arc stamps it; strip from body + required[]
-      priceMode: { nullable: true },          // widen JSON-Schema type to accept null
+      deletedAt: { systemManaged: true },         // framework stamps; strip from body
+      priceMode: { nullable: true },              // accept null
+      organizationId: { systemManaged: true, preserveForElevated: true },
+    },
+    query: {
+      allowedPopulate: ['category', 'createdBy'],
+      filterableFields: { status: { type: 'string' } },
     },
   },
+
+  cache: { staleTime: 30, gcTime: 300, tags: ['catalog'] },
 
   routes: [
-    { method: 'GET', path: '/featured', handler: 'getFeatured', permissions: allowPublic() },
-    { method: 'POST', path: '/webhook', handler: webhookFn, raw: true, permissions: requireAuth() },
+    { method: 'GET',  path: '/featured', handler: 'getFeatured', permissions: allowPublic() },
+    { method: 'POST', path: '/webhook',  handler: webhookFn, raw: true, permissions: requireAuth() },
   ],
-
-  actions: {                            // single POST /:id/action endpoint, discriminated on `action`
-    approve: async (id, data, req) => service.approve(id, req.user._id),
-    cancel: {
-      handler: async (id, data, req) => service.cancel(id, data.reason, req.user._id),
-      permissions: requireRoles('admin'),
-      schema: { reason: { type: 'string' } },
-    },
+  actions: {
+    approve: { handler: approveOrder, permissions: requireRoles(['admin']) },
   },
-  actionPermissions: requireAuth(),     // fallback gate for actions without per-action perm
 });
 ```
 
-**Generated routes:** `GET /`, `GET /:id`, `POST /`, `PATCH /:id`, `DELETE /:id`. Presets add `/deleted` + `/:id/restore` (softDelete), `/slug/:slug` (slugLookup), etc.
+**Auto-generated:** `GET /`, `GET /:id`, `POST /`, `PATCH /:id`, `DELETE /:id`. Presets add their own routes (see table below).
 
-## Active behavior to know about
+## fieldRules
 
-- **Field-write reject (default).** Requests carrying non-writable fields → 403 with denied list. Opt into silent strip: `defineResource({ onFieldWriteDenied: 'strip' })`.
-- **multiTenant injects org on UPDATE.** Body `organizationId` is overwritten with caller's scope (closes tenant-hop).
-- **MCP tools fail-closed.** A resource action without per-action perm + no `actionPermissions` + no `permissions.update` fallback → throws at tool generation. Declare `allowPublic()` to opt into unauthenticated.
-- **`systemManaged` fields** auto-strip from `required[]` so AJV doesn't reject before arc's framework injection runs.
-- **`request.user`** is `Record<string, unknown> | undefined` — guard with `if (req.user)` on public routes.
-- **Arc's permission engine reads singular `user.role`** (string, comma-separated, or array). Don't use plural `roles` on the model.
-- **`verifySignature(body, ...)`** throws on parsed body — pass `req.rawBody`.
-- **Upload `sanitizeFilename`** strict by default; pass `false` / `'*'` / fn to relax.
+| Flag | Effect |
+|---|---|
+| `systemManaged` | Strip from body, drop from `required[]`. Framework stamps the value. |
+| `preserveForElevated` | Elevated admins keep the field on ingest (cross-tenant writes). |
+| `immutable` / `immutableAfterCreate` | Omit from update body. |
+| `optional` | Strip from `required[]` without touching `properties`. |
+| `nullable` | Widen JSON-Schema `type` to include null. |
+| `hidden` | Block from response projection + OpenAPI. |
+| `minLength` · `maxLength` · `min` · `max` · `pattern` · `enum` · `description` | Map to AJV + OpenAPI. |
 
-## Authentication
+Mongoose model constraints take precedence; `fieldRules` supplements what the model doesn't declare.
 
-Discriminated union on `type`:
+## Presets
 
-```typescript
-// Arc JWT (with optional revocation + custom token extractor)
-auth: {
-  type: 'jwt',
-  jwt: { secret, expiresIn: '15m', refreshSecret, refreshExpiresIn: '7d' },
-  tokenExtractor: (req) => req.cookies?.['auth-token'] ?? null,
-  isRevoked: async (decoded) => redis.sismember('revoked', decoded.jti),
-}
-
-// Better Auth (recommended for SaaS with orgs)
-import { createBetterAuthAdapter } from '@classytic/arc/auth';
-auth: { type: 'betterAuth', betterAuth: createBetterAuthAdapter({ auth, orgContext: true }) }
-
-// Custom Fastify plugin / function
-auth: { type: 'custom', plugin: myAuthPlugin }
-auth: { type: 'authenticator', authenticate: async (req, reply) => { ... } }
-
-// Disabled
-auth: false
-```
-
-Decorates `app.authenticate`, `app.optionalAuthenticate`, `app.authorize`.
-
-**Better Auth — arc is plugin-agnostic.** `auth.$context.tables` introspection lets the kit overlays read whatever plugins you've enabled — no per-plugin code in arc/mongokit/sqlitekit. Tested combinations: `organization`, `twoFactor`, `admin`, `bearer` (built-in), plus `apiKey` from the **separate** `@better-auth/api-key` package.
+| Preset | Routes added | Config |
+|---|---|---|
+| `softDelete` | `GET /deleted`, `POST /:id/restore` | `{ deletedField }` |
+| `slugLookup` | `GET /slug/:slug` | `{ slugField }` |
+| `tree` | `GET /tree`, `GET /:parent/children` | `{ parentField }` |
+| `ownedByUser` | (middleware only) | `{ ownerField }` |
+| `multiTenant` | (middleware only) | `{ tenantField }` or `{ tenantFields: [...] }` |
+| `audited` | (middleware only) | — |
+| `bulk` | `POST/PATCH/DELETE /bulk` | `{ operations?, maxCreateItems? }` |
+| `filesUpload` | `POST /upload`, `GET /:id`, `DELETE /:id` | `{ storage, sanitizeFilename?, allowedMimeTypes?, maxFileSize? }` |
+| `search` | `POST /search`, `/search-similar`, `/embed` | `{ repository?, search?, similar?, embed? }` |
 
 ```typescript
-import { betterAuth } from 'better-auth';
-import { mongodbAdapter } from '@better-auth/mongo-adapter';
-import { organization, twoFactor, admin, bearer } from 'better-auth/plugins';
-import { apiKey } from '@better-auth/api-key';                        // ← separate npm package
-import { createBetterAuthOverlay, registerBetterAuthStubs } from '@classytic/mongokit/better-auth';
-
-const auth = betterAuth({
-  database: mongodbAdapter(mongoose.connection.getClient().db()),
-  emailAndPassword: { enabled: true },
-  plugins: [organization(), twoFactor(), admin(), bearer(), apiKey({ enableSessionForAPIKeys: true })],
-});
-
-// Bulk-register populate() stubs. extraCollections covers tables not in the plugin map (apikey, passkey, …).
-registerBetterAuthStubs(mongoose, { plugins: ['organization'], extraCollections: ['apikey'] });
-
-// Per-resource overlay — DataAdapter ready for defineResource. Async (reads BA's resolved schema once at boot).
-const orgAdapter    = await createBetterAuthOverlay({ auth, mongoose, collection: 'organization' });
-const apiKeyAdapter = await createBetterAuthOverlay({ auth, mongoose, collection: 'apikey' });
-
-// Sqlitekit is symmetric: { auth, db, collection } + additionalColumns instead of additionalFields.
+presets: ['softDelete', { name: 'multiTenant', tenantField: 'organizationId' }]
 ```
 
-**Multi-role members**: BA stores `member.role = "admin,recruiter,viewer"` (comma-separated string). Arc splits it into `scope.orgRoles = ['admin', 'recruiter', 'viewer']`; `requireOrgRole('admin')` matches. Filtering by exact `?role=admin` will NOT match — use `role[like]=admin`.
+**`tenantField: false`** disables the silent org filter — use it for lookup tables, platform settings, cross-org reports.
 
-**API key flow**: client sends `x-api-key: ak_live_...` + `x-organization-id: org_abc` (header required because API-key sessions have no `activeOrganizationId`). Arc adds `apiKeyAuth` to OpenAPI security only when the plugin is active.
-
-**Bearer plugin** (`bearer()` from `better-auth/plugins`): SPA / mobile clients use `Authorization: Bearer <session>` instead of cookies — same `auth.api.getSession()` path, no arc config change. Enable both for hybrid apps.
-
-Full overlay recipes (Tier 1 hand-roll vs Tier 2 factory), plugin matrix, `registerBetterAuthStubs` options, multi-plugin merge, write path, and CLI scaffolding flags → [references/auth.md](references/auth.md). Live end-to-end smoke: [`playground/better-auth/mongo/`](../../playground/better-auth/mongo/) · [`playground/better-auth/sqlite/`](../../playground/better-auth/sqlite/).
+**`idField`** picks the lookup column for `:id` (default `_id`). URL segment is always `:id`. A 404 on `PATCH /agents/foo` when `GET` works is usually a permission `filters` clause excluding the row — not an `idField` bug.
 
 ## Permissions
 
@@ -234,20 +178,16 @@ A `PermissionCheck` returns `boolean | { granted, reason?, filters?, scope? }`. 
 import {
   allowPublic, requireAuth, requireRoles, requireOwnership,
   requireOrgMembership, requireOrgRole, requireTeamMembership,
-  requireServiceScope,           // OAuth-style API-key scopes
-  requireScopeContext,           // app-defined dimensions (branch, project, region)
-  requireOrgInScope,             // parent-child org hierarchy
+  requireServiceScope, requireScopeContext, requireOrgInScope,
   allOf, anyOf, when, denyAll,
-  createDynamicPermissionMatrix, // DB-managed ACL
-} from '@classytic/arc';
+  createDynamicPermissionMatrix,
+} from '@classytic/arc/permissions';
 
 permissions: {
-  list: allowPublic(),
+  list:   allowPublic(),
   create: requireRoles(['admin', 'editor']),
   update: anyOf(requireOwnership('userId'), requireRoles(['admin'])),
   delete: allOf(requireAuth(), requireRoles(['admin'])),
-
-  // Mixed human + machine
   bulkImport: anyOf(requireOrgRole('admin'), requireServiceScope('jobs:bulk-write')),
 }
 ```
@@ -264,12 +204,12 @@ const requirePro = (): PermissionCheck => async (ctx) => {
 **Field-level:**
 
 ```typescript
-import { fields } from '@classytic/arc';
+import { fields } from '@classytic/arc/permissions';
 fields: {
   password: fields.hidden(),
-  salary: fields.visibleTo(['admin', 'hr']),
-  role: fields.writableBy(['admin']),
-  email: fields.redactFor(['viewer'], '***'),
+  salary:   fields.visibleTo(['admin', 'hr']),
+  role:     fields.writableBy(['admin']),
+  email:    fields.redactFor(['viewer'], '***'),
 }
 ```
 
@@ -277,116 +217,79 @@ fields: {
 
 ```typescript
 const acl = createDynamicPermissionMatrix({
-  resolveRolePermissions: async (ctx) => aclService.getRoleMatrix(ctx.user.orgId),
+  resolveRolePermissions: (ctx) => aclService.getRoleMatrix(ctx.user.orgId),
   cacheStore: new RedisCacheStore({ client: redis, prefix: 'acl:' }),
 });
 permissions: { list: acl.canAction('product', 'read') }
 ```
 
-`requireRoles()` checks BOTH platform roles (`user.role`) and org roles (`scope.orgRoles`). `requireOrgRole()` is human-only — use `anyOf(requireOrgRole(...), requireServiceScope(...))` for mixed routes.
+`requireRoles()` checks BOTH platform roles (`user.role`) and org roles (`scope.orgRoles`). For mixed human + machine routes, combine with `requireServiceScope(...)` via `anyOf(...)`.
 
-### RequestScope — the auth context
+## RequestScope
 
-Five kinds, populated by your auth function. **Always read via accessors from `@classytic/arc/scope`, never direct property access.**
+Five kinds, populated by your auth function. **Always read via accessors from `@classytic/arc/scope`** — never direct property access.
 
 ```typescript
 type RequestScope =
   | { kind: 'public' }
   | { kind: 'authenticated'; userId?; userRoles? }
-  | { kind: 'member';   userId?; userRoles; organizationId; orgRoles; teamId?; context?; ancestorOrgIds? }
-  | { kind: 'service';  clientId; organizationId; scopes?; context?; ancestorOrgIds? }
-  | { kind: 'elevated'; userId?; organizationId?; elevatedBy; context?; ancestorOrgIds? };
+  | { kind: 'member';        userId?; userRoles; organizationId; orgRoles; teamId?; context?; ancestorOrgIds? }
+  | { kind: 'service';       clientId;  organizationId; scopes?; context?; ancestorOrgIds?; mandate?; dpopJkt? }
+  | { kind: 'elevated';      userId?;   organizationId?; elevatedBy; context?; ancestorOrgIds? };
+
+import {
+  isMember, isService, isElevated, hasOrgAccess,
+  getOrgId, getUserId, getUserRoles, getOrgRoles, getServiceScopes,
+  getScopeContext, getAncestorOrgIds, isOrgInScope,
+  requireOrgId, requireUserId,           // throwing accessors for handler boundaries
+} from '@classytic/arc/scope';
 ```
 
 | Helper | `member` | `service` | `elevated` |
 |---|---|---|---|
 | `requireOrgMembership()` | ✅ | ✅ | ✅ |
-| `requireOrgRole(roles)` | role match | ❌ deny | ✅ bypass |
-| `requireServiceScope(scopes)` | ❌ | scope match | ✅ bypass |
-| `requireScopeContext(...)` | key match | key match | ✅ bypass |
-| `requireTeamMembership()` | `teamId` set | n/a | ✅ bypass |
-| `requireOrgInScope(target)` | target in chain | target in chain | ✅ bypass |
+| `requireOrgRole(roles)` | role match | ❌ | bypass |
+| `requireServiceScope(scopes)` | ❌ | scope match | bypass |
+| `requireTeamMembership()` | `teamId` set | n/a | bypass |
+| `requireOrgInScope(target)` | target in chain | target in chain | bypass |
+
+Populate `scope.context` / `scope.ancestorOrgIds` in your auth function for branch/region scoping and parent-child org chains. Then `multiTenantPreset({ tenantFields: [...] })` auto-filters by every dimension. → [references/multi-tenancy.md](references/multi-tenancy.md)
+
+## Authentication
+
+Discriminated union on `type`:
 
 ```typescript
-import {
-  isMember, isService, isElevated, hasOrgAccess,
-  getOrgId, getUserId, getUserRoles, getOrgRoles, getServiceScopes,
-  getScopeContext, getAncestorOrgIds, isOrgInScope,
-} from '@classytic/arc/scope';
-
-if (hasOrgAccess(scope))                               // member | service | elevated
-const branch = getScopeContext(scope, 'branchId');
-isOrgInScope(scope, 'acme-holding');                   // pure predicate (no elevated bypass)
+auth: { type: 'jwt', jwt: { secret, expiresIn: '15m' } }                   // arc JWT
+auth: { type: 'betterAuth', betterAuth: createBetterAuthAdapter({ auth }) } // Better Auth
+auth: { type: 'custom', plugin: myAuthPlugin }                              // any Fastify plugin
+auth: { type: 'authenticator', authenticate: async (req, reply) => { … } }  // ad-hoc fn
+auth: false                                                                 // internal services
 ```
 
-### Multi-level tenancy + parent-child org hierarchy
+Decorates `app.authenticate` / `app.optionalAuthenticate` / `app.authorize`.
 
-Populate `scope.context` and `scope.ancestorOrgIds` in your auth function (arc takes no position on the source — load from headers / JWT / BA session / your org table):
+**Better Auth** is arc's recommended path for SaaS with orgs. Kit overlays read whatever BA plugins you enabled (`organization`, `twoFactor`, `admin`, `bearer`, `apiKey` from `@better-auth/api-key`). Bulk-stub populate models with `registerBetterAuthStubs(mongoose, { plugins, extraCollections })`; per-resource overlay with `createBetterAuthOverlay({ auth, mongoose, collection })`. Sqlitekit is symmetric. Full recipes (multi-plugin matrix, API-key flow, write path) → [references/auth.md](references/auth.md).
 
-```typescript
-authFn: async (request) => {
-  const session = await myAuth.getSession(request);
-  const ancestors = await orgRepo.findAncestors(session.orgId);   // closest-first
-  request.scope = {
-    kind: 'member',
-    userId: session.userId,
-    userRoles: session.userRoles,
-    organizationId: session.orgId,
-    orgRoles: session.orgRoles,
-    context: { branchId: request.headers['x-branch-id'], projectId: request.headers['x-project-id'] },
-    ancestorOrgIds: ancestors.map(a => a.id),   // ['acme-eu', 'acme-holding']
-  };
-}
+## Authoritative gotchas
 
-// Gate routes by context dimensions / org hierarchy
-permissions: {
-  branchAdmin: allOf(requireOrgRole('admin'), requireScopeContext('branchId')),
-  euOnly: requireScopeContext('region', 'eu'),
-  list: requireOrgInScope((ctx) => ctx.request.params.orgId),
-}
-
-// Auto-filter resource queries across all dimensions
-defineResource({
-  name: 'job',
-  presets: [multiTenantPreset({
-    tenantFields: [
-      { field: 'organizationId', type: 'org' },
-      { field: 'branchId', contextKey: 'branchId' },
-      { field: 'projectId', contextKey: 'projectId' },
-    ],
-  })],
-});
-```
-
-Fail-closed: missing dimensions → 403 with the specific missing field name. **No automatic ancestor inheritance** — sibling subsidiaries don't see each other's data naturally.
-
-Full multi-tenancy guide → [references/multi-tenancy.md](references/multi-tenancy.md).
-
-## fieldRules — OpenAPI + AJV in one place
-
-| Flag | Effect |
-|---|---|
-| `systemManaged` | Strip from body, drop from `required[]`. Framework stamps the value. |
-| `preserveForElevated` | Elevated admins keep the field on ingest (cross-tenant writes). |
-| `immutable` / `immutableAfterCreate` | Omit from update body. |
-| `optional` | Strip from `required[]` without touching `properties`. |
-| `nullable` | Widen JSON-Schema `type` to include null. |
-| `hidden` | Block from response projection + OpenAPI. |
-| `minLength` / `maxLength` / `min` / `max` / `pattern` / `enum` | Map to AJV + OpenAPI. |
-| `description` | OpenAPI `description`. |
-
-Mongoose model-level constraints take precedence; `fieldRules` supplements what the model doesn't declare.
+- **Field-write reject (default).** Requests carrying non-writable fields → 403 with denied list. Opt into silent strip: `defineResource({ onFieldWriteDenied: 'strip' })`.
+- **multiTenant injects org on UPDATE.** Body `organizationId` is overwritten with caller's scope (closes tenant-hop).
+- **`request.user`** is `Record<string, unknown> | undefined`. Guard with `if (req.user)` on public routes.
+- **Arc reads singular `user.role`** (string, comma-separated, or array). Don't put a plural `roles` field on the model.
+- **`verifySignature(body, …)`** throws on parsed body — pass `req.rawBody`.
+- **MCP tools fail-closed.** A resource action without per-action perm + no `actionPermissions` + no `permissions.update` fallback → throws at tool generation. Declare `allowPublic()` to opt into unauthenticated.
+- **Better Auth roles.** BA stores `member.role = "admin,recruiter"` (comma-separated). Arc splits into `scope.orgRoles = ['admin', 'recruiter']`; `?role=admin` won't match — use `role[like]=admin`.
 
 ## routeGuards + defineGuard
 
-Apply guards to **every** route on a resource:
+Apply guards to **every** route on a resource (CRUD + custom + preset):
 
 ```typescript
 import { defineGuard } from '@classytic/arc/utils';
 
-// Typed guard — resolve once, extract anywhere
-const orgGuard = defineGuard({
-  name: 'org',
+const tenantGuard = defineGuard({
+  name: 'tenant',
   resolve: (req) => {
     const orgId = req.headers['x-org-id'] as string;
     if (!orgId) throw new Error('Missing x-org-id');
@@ -396,11 +299,11 @@ const orgGuard = defineGuard({
 
 defineResource({
   name: 'procurement',
-  routeGuards: [orgGuard.preHandler],
+  routeGuards: [tenantGuard.preHandler],
   routes: [{
     method: 'GET', path: '/summary', raw: true, permissions: requireAuth(),
     handler: async (req, reply) => {
-      const { orgId } = orgGuard.from(req);     // typed, no re-computation
+      const { orgId } = tenantGuard.from(req);
       reply.send({ orgId });
     },
   }],
@@ -409,243 +312,36 @@ defineResource({
 
 **Order:** auth → permissions → cache/idempotency → `routeGuards` → per-route `preHandler`.
 
-## Presets
-
-| Preset | Routes added | Config |
-|---|---|---|
-| `softDelete` | `GET /deleted`, `POST /:id/restore` | `{ deletedField }` |
-| `slugLookup` | `GET /slug/:slug` | `{ slugField }` |
-| `tree` | `GET /tree`, `GET /:parent/children` | `{ parentField }` |
-| `ownedByUser` | none (middleware) | `{ ownerField }` |
-| `multiTenant` | none (middleware) | `{ tenantField }` OR `{ tenantFields: TenantFieldSpec[] }` |
-| `audited` | none (middleware) | — |
-| `bulk` | `POST/PATCH/DELETE /bulk` | `{ operations?, maxCreateItems? }` |
-| `filesUpload` | `POST /upload`, `GET /:id`, `DELETE /:id` | `{ storage, sanitizeFilename?, allowedMimeTypes?, maxFileSize? }` |
-| `search` | `POST /search`, `/search-similar`, `/embed` | `{ repository?, search?, similar?, embed?, routes? }` |
-
-```typescript
-presets: ['softDelete', { name: 'multiTenant', tenantField: 'organizationId' }]
-```
-
-### tenantField — when to use, when to disable
-
-Default `'organizationId'` silently scopes queries to the caller's org. Correct for per-org resources, **wrong** for company-wide:
-
-```typescript
-defineResource({ name: 'invoice' });                                // → { organizationId: scope.orgId }
-defineResource({ name: 'account-type', tenantField: false });       // company-wide lookup
-defineResource({ name: 'workspace-item', tenantField: 'workspaceId' });
-```
-
-Use `tenantField: false` for lookup tables, platform settings, cross-org reports, single-tenant apps. **2.12 auto-inference:** if the Mongoose model has no `organizationId` path (and no other tenant field is configured), arc auto-infers `tenantField: false` instead of generating queries that filter on a non-existent column.
-
-### idField — custom primary key
-
-Default `'_id'`. Override for business identifiers (UUID, slug, `ORD-2026-0001`):
-
-```typescript
-defineResource({ name: 'job', adapter, idField: 'jobId' });
-// GET /jobs/job-5219f346-a4d → controller queries { jobId: 'job-5219f346-a4d' }
-```
-
-Auto-derived from `repository.idField` if your kit declares one. URL segment is **always** `:id` and `req.params.id` is **always** named `id` — `idField` controls the *lookup field*, not the URL parameter (Stripe / GitHub convention).
-
-**404 confusion pattern.** A 404 on `PATCH /agents/sadman` when `GET /agents/sadman` works isn't usually an `idField` bug — check whether your update permission returns `filters`. Arc merges those into the lookup (`{ slug: 'sadman', ...filters }`); an excluding filter returns null.
-
-### searchPreset (text + vector + embed)
-
-Backend-agnostic for Elasticsearch / OpenSearch / Algolia / Typesense / Atlas `$vectorSearch` / Pinecone / Qdrant.
-
-```typescript
-import { searchPreset } from '@classytic/arc/presets/search';
-
-// A — auto-wire from a repo with search/searchSimilar/embed methods
-searchPreset({ repository: productRepo, search: true, similar: true })
-
-// B — external backends
-searchPreset({
-  search: {
-    path: '/full-text',
-    schema: { body: z.object({ q: z.string().min(1) }) },
-    handler: (req) => elastic.search({ index: 'products', q: req.body.q }),
-  },
-  similar: { handler: (req) => pinecone.query({ vector: req.body.vector, topK: 10 }), mcp: false },
-})
-```
-
-Defaults: search/similar inherit `list` perms → `allowPublic()`. Embed → `requireAuth()`. Zod v4 schemas auto-convert. MCP tools namespaced as `{op}_{resource}`.
-
-## Adapters
-
-In arc 2.12 the cross-framework adapter contract lives in `@classytic/repo-core/adapter`. Every kit-specific adapter ships from its kit's `/adapter` subpath; arc has zero kit-bound adapters in `src/`.
-
-```typescript
-// Mongoose — from mongokit
-import { createMongooseAdapter } from '@classytic/mongokit/adapter';
-import { buildCrudSchemasFromModel } from '@classytic/mongokit';
-
-const adapter = createMongooseAdapter({
-  model: ProductModel,
-  repository: productRepo,
-  schemaGenerator: buildCrudSchemasFromModel,    // no cast needed
-});
-
-// Drizzle — from sqlitekit
-import { createDrizzleAdapter } from '@classytic/sqlitekit/adapter';
-import { buildCrudSchemasFromTable } from '@classytic/sqlitekit';
-
-createDrizzleAdapter({ table, repository, schemaGenerator: buildCrudSchemasFromTable });
-
-// Prisma — from prismakit
-import { createPrismaAdapter } from '@classytic/prismakit/adapter';
-```
-
-Custom kits implementing `DataAdapter<TDoc>` from `@classytic/repo-core/adapter` plug in identically. Kit factories accept `AdapterRepositoryInput<TDoc>` — kit-native repos plug in **without** `as RepositoryLike` casts.
-
-**Custom adapter** — implement `DataAdapter` / `MinimalRepo` from `@classytic/repo-core/adapter`:
-
-```typescript
-import type {
-  DataAdapter, RepositoryLike, AdapterRepositoryInput,
-} from '@classytic/repo-core/adapter';
-import type { MinimalRepo } from '@classytic/repo-core/repository';
-// MinimalRepo<TDoc>  = 5-method floor (getAll, getById, create, update, delete)
-// StandardRepo<TDoc> = MinimalRepo + optional batch ops, CAS, soft-delete, …
-// Arc feature-detects optional methods at call sites.
-```
-
-## Controllers
-
-`BaseController` is mixin-composed; declaration-merged interfaces thread `TDoc` through every CRUD + preset method.
-
-```typescript
-import { BaseController } from '@classytic/arc';
-import type { IRequestContext, IControllerResponse } from '@classytic/arc';
-
-class ProductController extends BaseController<Product> {
-  // When you pass your own controller, arc CANNOT thread tenantField /
-  // schemaOptions / idField / cache / onFieldWriteDenied into it. Forward
-  // them via super() and pass them to defineResource() too:
-  constructor(opts: { tenantField?: string | false; idField?: string } = {}) {
-    super(productRepo, { resourceName: 'product', ...opts });
-  }
-
-  async getFeatured(req: IRequestContext): Promise<IControllerResponse<Product[]>> {
-    const products = await this.repository.getAll({ filters: { isFeatured: true } });
-    return { data: products };
-  }
-}
-
-defineResource({ name: 'product', controller: new ProductController({ tenantField: '_id' }), tenantField: '_id' });
-```
-
-Presets that inject controller fields (slugLookup → slugField, softDelete, tree) only reach arc's auto-built `BaseController`. With a custom controller + such a preset, drop the preset OR extend `BaseController` so arc auto-builds it.
-
-**Slim CRUD-only base** (no soft-delete/tree/slug/bulk):
-
-```typescript
-import { BaseCrudController, SoftDeleteMixin, BulkMixin } from '@classytic/arc';
-class ReportController extends BaseCrudController<Report> {}
-class OrderController extends SoftDeleteMixin(BulkMixin(BaseCrudController)) {}
-```
-
-Mixin surface: `SoftDeleteMixin` · `TreeMixin` · `SlugMixin` · `BulkMixin`. Protected helpers on `BaseCrudController`: `meta(req)`, `getHooks(req)`, `tenantRepoOptions(req)`, `resolveRepoId(id, existing)`, `notFoundResponse(reason)`, `resolveCacheConfig(op)`, `cacheScope(req)`.
-
-`IRequestContext` = `{ params, query, body, user, headers, context, metadata, server }`.
-`IControllerResponse` = `{ success, data?, error?, status?, meta?, headers? }`.
-
-## Hooks
-
-Inline on resource — `ResourceHookContext` = `{ data, user?, meta? }`; `meta` has `id` and `existing` for update/delete:
-
-```typescript
-defineResource({
-  name: 'chat',
-  hooks: {
-    beforeCreate: async (ctx) => { ctx.data.slug = slugify(ctx.data.name); },
-    afterCreate: async (ctx) => { analytics.track('created', { id: ctx.data._id }); },
-    beforeUpdate: async (ctx) => { /* ctx.meta.existing has the pre-image */ },
-    afterUpdate: async (ctx) => { await invalidateCache(ctx.data._id); },
-    beforeDelete: async (ctx) => { if (ctx.data.isProtected) throw new Error('Cannot delete'); },
-    afterDelete: async (ctx) => { await cleanupFiles(ctx.meta?.id); },
-  },
-});
-```
-
-App-level (cross-resource):
-
-```typescript
-import { createHookSystem, beforeCreate, afterUpdate } from '@classytic/arc/hooks';
-
-const hooks = createHookSystem();
-beforeCreate(hooks, 'product', async (ctx) => { ctx.data.slug = slugify(ctx.data.name); });
-afterUpdate(hooks, 'product', async (ctx) => { await invalidateCache(ctx.result._id); });
-```
-
-## Pipeline
-
-```typescript
-import { guard, transform, intercept } from '@classytic/arc/pipeline';
-
-defineResource({
-  pipe: {
-    create: [
-      guard('verified', async (ctx) => ctx.user?.verified === true),
-      transform('inject', async (ctx) => { ctx.body.createdBy = ctx.user._id; }),
-    ],
-  },
-});
-```
-
 ## Query parsing
-
-Default parser handles filters, sort, select, populate, pagination.
 
 ```
 GET /products?page=2&limit=20&sort=-createdAt&select=name,price
 GET /products?price[gte]=100&status[in]=active,featured&search=keyword
-GET /products?after=<cursor_id>&limit=20                            # keyset pagination
-GET /products?populate=category
+GET /products?after=<cursor_id>&limit=20                           # keyset
 GET /products?populate[category][select]=name,slug
-GET /products?populate[category][match][isActive]=true
+GET /products?filter[status]=active&filter[price][gte]=100         # bracket envelope (2.16)
 ```
 
 Operators: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `nin`, `like`, `regex`, `exists`.
 
-**MongoKit `$lookup` joins:**
-
-```
-GET /products?lookup[cat][from]=categories&lookup[cat][localField]=categorySlug&lookup[cat][foreignField]=slug&lookup[cat][single]=true
-```
-
-**Custom parser (whitelists, MCP auto-derive):**
+**Whitelisted parser (MCP filter auto-derive):**
 
 ```typescript
 import { QueryParser } from '@classytic/mongokit';
 
 defineResource({
-  name: 'product',
-  adapter,
   queryParser: new QueryParser({
     allowedFilterFields: ['status', 'category', 'orgId'],
-    allowedSortFields: ['createdAt', 'price'],
-    allowedOperators: ['eq', 'gte', 'lte', 'in'],
+    allowedSortFields:   ['createdAt', 'price'],
+    allowedOperators:    ['eq', 'gte', 'lte', 'in'],
   }),
-  schemaOptions: {
-    query: { allowedPopulate: ['category', 'brand'], allowedLookups: ['categories', 'brands'] },
-  },
+  schemaOptions: { query: { allowedPopulate: ['category'], allowedLookups: ['categories'] } },
 });
 ```
 
-MCP auto-derives `filterableFields` from `queryParser`.
+## Aggregations
 
-## Aggregations — dashboards in declarative form
-
-Add `aggregations: { … }` to a resource and Arc registers `GET
-/{prefix}/aggregations/:name` per entry. Each runs a portable `$match
-→ $group → $project → $sort → $limit` pipeline against the kit's
-`repo.aggregate(req, options)` — same shape across mongokit /
-sqlitekit / prismakit, so dashboards work unchanged across backends.
+`GET /:prefix/aggregations/:name` per entry. Portable `$match → $group → $project → $sort → $limit` against `repo.aggregate(req, options)` — same shape across kits.
 
 ```typescript
 import { defineResource, defineAggregation } from '@classytic/arc';
@@ -655,7 +351,6 @@ defineResource({
   adapter,
   presets: [multiTenantPreset({ tenantField: 'organizationId' })],
   permissions: { list: canViewRevenue() },
-
   aggregations: {
     byPaymentMethod: defineAggregation({
       groupBy: 'method',
@@ -664,158 +359,123 @@ defineResource({
       cache: { staleTime: 60, swr: true, tags: ['revenue'] },
       permissions: canViewRevenue(),
     }),
-    byFlow: defineAggregation({
-      groupBy: 'flow',
-      measures: { total: 'sum:amount', count: 'count' },
-      cache: { staleTime: 60, swr: true, tags: ['revenue'] },
-      permissions: canViewRevenue(),
-    }),
     byDay: defineAggregation({
       dateBuckets: { day: { field: 'createdAt', interval: 'day' } },
       groupBy: 'flow',
       measures: { total: 'sum:amount', count: 'count' },
-      sort: { day: 1 },
       requireDateRange: { field: 'createdAt', maxRangeDays: 365 },
-      cache: { staleTime: 60, swr: true, tags: ['revenue'] },
       permissions: canViewRevenue(),
     }),
   },
 });
 ```
 
-**Tenant scope flows through the second arg, NOT the filter.** Arc is
-DB-agnostic — type-coercion (string → ObjectId for mongokit
-`fieldType: 'objectId'`, UUID/text for sqlitekit, etc.) belongs to the
-kit. Arc threads `tenantOptions` to `repo.aggregate(req, options)`;
-the kit's multi-tenant plugin reads `context.organizationId`, casts
-correctly, and merges into the request. Authors never inject the
-tenant key into `aggReq.filter` themselves.
+Safety guards on the declaration: `requireFilters`, `requireDateRange { field, maxRangeDays }`, `maxGroups`. Caller query-string filters compose with `groupBy` / measures. SWR + `tags` invalidation tie aggregations to CRUD writes. Every aggregation auto-exports as an MCP tool.
 
-**2.15.3 — `multiTenantPreset` now wires `/aggregations/:name`.** Pre-2.15.3
-the preset only scoped CRUD; aggregation routes leaked across orgs for any
-caller whose `scope.kind !== 'member'`. Adding `multiTenantPreset({ tenantField: 'organizationId' })`
-now emits an `aggregations` middleware slot alongside the five CRUD slots, so
-member callers see only their org and `kind: 'elevated'` callers WITHOUT a
-target org get `bypassTenant: true` (platform-admin cross-tenant dashboards).
-**Kit config note:** set `scope: true` (or `scope: { fieldType: 'objectId' }`)
-on revenue/order/etc. engines — the pre-2.15.2 advice to use `scope: false`
-"to avoid double-scoping with arc" is no longer correct; arc 2.15.2+
-deliberately leaves `aggReq.filter` clean and relies on the kit. Required
-peers: `@classytic/repo-core ≥ 0.4.1`, `@classytic/mongokit ≥ 3.13.2`,
-`@classytic/sqlitekit ≥ 0.3.1`.
+Tenant scope flows through `options` (second arg), NOT into `aggReq.filter`. The kit's multi-tenant plugin handles type coercion (string → ObjectId, UUID/text, etc.). **Aggregation-only resources** (`disableDefaultRoutes: true` + no controller) work — arc falls back to the adapter's repo. If aggregations exist without a repo AND without `materialized`, `defineResource()` throws at boot.
 
-**Caller filters via query string compose with `groupBy` / measures:**
+### `materialized` hook — escape hatch + footgun
 
+When a kit can't express your aggregation in the portable IR (`$graphLookup`, window functions, custom SQL), declare a `materialized` hook to own dispatch yourself:
+
+```typescript
+defineAggregation({
+  measures: { count: 'count' },
+  permissions: canViewRevenue(),
+  materialized: async (ctx) => {
+    // ctx = { filter, orgId, userId, requestId, query }
+    // ⚠️  ctx.filter contains ONLY the declaration filter + caller query string.
+    //     Tenant scope is in ctx.orgId, NOT in ctx.filter. Soft-delete is NOT merged.
+    //     Bypassing repo.aggregate() means bypassing the kit's hook pipeline.
+
+    // ✅ Right (mongokit) — route through repo.aggregatePipeline so the kit's
+    //    multi-tenant + soft-delete + audit hooks all run:
+    const rows = await orderRepo.aggregatePipeline(
+      [{ $group: { _id: '$flow', total: { $sum: '$amount' } } }],
+      { organizationId: ctx.orgId, userId: ctx.userId, requestId: ctx.requestId },
+    );
+    return { rows };
+
+    // ❌ Wrong — Model.aggregate(...) bypasses kit plugins; tenant + soft-delete
+    //    leak across orgs. Never call the driver directly in a materialized hook.
+  },
+});
 ```
-GET /api/transactions/aggregations/byPaymentMethod?status=verified
-GET /api/transactions/aggregations/byDay?createdAt[gte]=2026-01-01&createdAt[lt]=2026-02-01
-```
 
-**Safety guards on the declaration:**
-- `requireDateRange: { field, maxRangeDays }` — bounded range mandatory; kills accidental all-time scans
-- `requireFilters: ['orgId']` — mandatory scope keys
-- `maxGroups: 1000` — post-execution row cap; 422 on overflow
-
-**Cache invalidation:** writes through resource CRUD bump the
-matching tag. Aggregations cached with the same `tags` invalidate
-together. SWR mode serves stale immediately while revalidating in
-background.
-
-**MCP auto-export:** every aggregation surfaces as an MCP tool
-named `{resource}_aggregations_{name}` with the same permission gate
-and filter validation as the HTTP route.
-
-For backends without `repo.aggregate` (custom adapters), declare a
-`materialized` hook on the aggregation — Arc routes through it
-instead of the kit and returns the same `{ rows }` envelope.
+For sqlitekit / custom adapters without an `aggregatePipeline` equivalent, **you** must inject tenant + soft-delete clauses into the SQL before executing — `ctx.filter` is not sufficient. Prefer the portable `repo.aggregate(req, options)` path whenever the IR can express your shape.
 
 ## QueryCache
 
-TanStack Query-style server cache, stale-while-revalidate, auto-invalidation on mutations.
+TanStack-Query-style server cache with SWR + auto-invalidation on mutations:
 
 ```typescript
 const app = await createApp({ arcPlugins: { queryCache: true } });
 
 defineResource({
-  name: 'product',
   cache: {
-    staleTime: 30,
-    gcTime: 300,
-    tags: ['catalog'],
+    staleTime: 30, gcTime: 300, tags: ['catalog'],
     invalidateOn: { 'category.*': ['catalog'] },     // event pattern → tag targets
-    list: { staleTime: 60 },                          // per-operation override
+    list: { staleTime: 60 },
     byId: { staleTime: 10 },
   },
 });
 ```
 
-POST/PATCH/DELETE bumps resource version. Modes: `memory` (default) | `distributed` (requires `stores.queryCache: RedisCacheStore`). Response header: `x-cache: HIT | STALE | MISS`.
+POST/PATCH/DELETE bumps resource version. Response header: `x-cache: HIT | STALE | MISS`. `runtime: 'distributed'` requires `stores.queryCache: RedisCacheStore`.
 
 ## Events
 
-`createApp` auto-registers `eventPlugin` (default: `MemoryEventTransport`).
+CRUD events auto-emit: `{resource}.created` / `{resource}.updated` / `{resource}.deleted`. Manual publish:
 
 ```typescript
-const app = await createApp({
-  stores: { events: new RedisEventTransport(redis) },     // optional
-  arcPlugins: { events: { logEvents: true, retry: { maxRetries: 3, backoffMs: 1000 } } },
-});
-
 await app.events.publish('order.created', { orderId: '123' });
-await app.events.subscribe('order.*', async (event) => { ... });
+await app.events.subscribe('order.*', async (event) => { … });
 ```
 
-CRUD events auto-emit: `{resource}.created` / `{resource}.updated` / `{resource}.deleted`.
+Transports: Memory · Redis Pub/Sub (fire-and-forget) · Redis Streams (durable, consumer groups, DLQ). Event types live in `@classytic/primitives/events` (`createEvent`, `createChildEvent`, `matchEventPattern`, …); arc re-exports the runtime `MemoryEventTransport` only.
 
-**Transports:** Memory · Redis Pub/Sub (fire-and-forget) · Redis Streams (durable, at-least-once, consumer groups, DLQ).
+**Outbox** (at-least-once via transactional outbox):
 
-**EventMeta:** `id`, `timestamp`, optional `schemaVersion`, `correlationId`, `causationId`, `partitionKey`, `source`, `idempotencyKey`, `resource`, `resourceId`, `userId`, `organizationId`, `aggregate: { type, id }`. Import event types from `@classytic/primitives/events` (`EventMeta`, `DomainEvent`, `EventHandler`, `EventTransport`, `DeadLetteredEvent`, `PublishManyResult`, `createEvent`, `createChildEvent`, `matchEventPattern`); arc re-exports the runtime `MemoryEventTransport` only. Use `createChildEvent(parent, ...)` to inherit correlation/causation/source/idempotencyKey.
+```typescript
+const outbox = new EventOutbox({ repository: outboxRepo, transport });
+// Dev: { store: new MemoryOutboxStore(), transport }
+```
 
-Calling both `app.events.publish('order.placed', ...)` *and* a notification helper that internally publishes the same logical event triggers a one-shot dev-mode warning ("dual-publish"). Pick one path: manual publish OR `eventStrategy: 'auto'`.
+Full event recipes (retry, DLQ, dual-publish warnings, idempotency keys) → [references/events.md](references/events.md).
 
-**Event Outbox** — at-least-once via transactional outbox. Production: `new EventOutbox({ repository: outboxRepo, transport })` (multi-worker claim, session-threaded writes). Dev: `new EventOutbox({ store: new MemoryOutboxStore(), transport })`. `EventOutbox.store()` auto-maps `meta.idempotencyKey` → `dedupeKey`. `failurePolicy` centralises retry/DLQ.
+## Hooks
 
-Full event recipes → [references/events.md](references/events.md).
+Inline on resource. `ResourceHookContext` = `{ data, user?, meta? }`; `meta` has `id` and `existing` for update/delete.
+
+```typescript
+hooks: {
+  beforeCreate: async (ctx) => { ctx.data.slug = slugify(ctx.data.name); },
+  afterCreate:  async (ctx) => { analytics.track('created', { id: ctx.data._id }); },
+  beforeUpdate: async (ctx) => { /* ctx.meta.existing has the pre-image */ },
+  beforeDelete: async (ctx) => { if (ctx.data.isProtected) throw new Error('locked'); },
+}
+```
+
+App-level (cross-resource): `createHookSystem()` + `beforeCreate(hooks, 'product', fn)` from `@classytic/arc/hooks`.
 
 ## Errors
 
 ```typescript
 import { ArcError, NotFoundError, ValidationError, createDomainError } from '@classytic/arc';
 
-throw new NotFoundError('Product not found');                                       // 404
-throw createDomainError('SELF_REFERRAL', 'Cannot self-refer', 422, { field: 'referralCode' });
+throw new NotFoundError('Product');                                                // 404
+throw createDomainError('SELF_REFERRAL', 'Cannot self-refer', 422, { field });
 ```
 
-Resolution: `ArcError` → `.statusCode` (Fastify) → `.status` (MongoKit, http-errors) → user `errorMap` → Mongoose/MongoDB → 500. Any error with `.status` or `.statusCode` gets the correct HTTP response.
-
-`ArcError` implements the `HttpError` throwable contract from `@classytic/repo-core/errors` (`status` getter mirrors `statusCode`, `meta` getter mirrors `details`). Wire envelope: `{ code, message, status, meta?, correlationId? }` — HTTP status code is the success/error discriminator, no redundant `success` field. For non-Arc errors, `toErrorContract(err)` (from `@classytic/repo-core/errors`) serialises any `HttpError` to the canonical `ErrorContract` wire shape; `statusToErrorCode(status)` maps numeric status to canonical `ErrorCode`.
-
-**Class-based mappers:**
+Wire envelope: `{ code, message, status, meta?, correlationId? }`. HTTP status is the discriminator — no `success` field. Custom mappers:
 
 ```typescript
-const app = await createApp({
-  errorHandler: {
-    errorMappers: [{
-      type: AccountingError,
-      toResponse: (err) => ({ status: err.status, code: err.code, message: err.message }),
-    }],
-  },
-});
-```
-
-## Compensating transaction
-
-In-process rollback for multi-step operations (not a distributed saga — use Temporal / Streamline for that):
-
-```typescript
-import { withCompensation } from '@classytic/arc/utils';
-
-const result = await withCompensation('checkout', [
-  { name: 'reserve', execute: reserveStock, compensate: releaseStock },
-  { name: 'charge', execute: chargeCard, compensate: refundCard },
-  { name: 'notify', execute: sendEmail, fireAndForget: true },
-], { orderId });
-// result: { success, completedSteps, results, failedStep?, error?, compensationErrors? }
+errorHandler: {
+  errorMappers: [{
+    type: AccountingError,
+    toResponse: (err) => ({ status: err.status, code: err.code, message: err.message }),
+  }],
+}
 ```
 
 ## Testing
@@ -826,7 +486,7 @@ import { createTestApp, expectArc } from '@classytic/arc/testing';
 const ctx = await createTestApp({
   resources: [productResource],
   authMode: 'jwt',                  // 'jwt' | 'better-auth' | 'none'
-  connectMongoose: true,            // in-memory Mongo + Mongoose connect
+  connectMongoose: true,            // in-memory Mongo
 });
 ctx.auth.register('admin', { user: { id: '1', role: 'admin' }, orgId: 'org-1' });
 
@@ -836,34 +496,29 @@ const res = await ctx.app.inject({
   payload: { name: 'Widget' },
 });
 expectArc(res).ok().hidesField('password');
-
 await ctx.close();
 ```
 
-Three entry points: `createTestApp` (custom scenarios), `createHttpTestHarness` (~16 auto-generated CRUD/permission/validation tests per resource), `runStorageContract` (adapter conformance).
-
-Full testing recipes → [references/testing.md](references/testing.md).
+Three entry points: `createTestApp` (custom), `createHttpTestHarness` (~16 auto-generated CRUD/perm/validation tests per resource), `runStorageContract` (adapter conformance). → [references/testing.md](references/testing.md)
 
 ## CLI
 
-The bin is `arc` (registered by `@classytic/arc`). Outside an arc project use `npx @classytic/arc <cmd>`; inside one (devDep installed) bare `arc` resolves through `node_modules/.bin`.
-
 ```bash
-npx @classytic/arc init my-api --mongokit --better-auth --single --ts   # scaffold (also: --custom, --jwt, --multi, --js, --edge)
-npx @classytic/arc generate resource product                            # generate a resource (alias: arc g r product)
-npx @classytic/arc generate resource product --mcp                      # + MCP tools file
-npx @classytic/arc generate mcp analytics                               # standalone MCP tools file
-npx @classytic/arc docs ./openapi.json --entry ./dist/index.js          # emit OpenAPI
-npx @classytic/arc introspect --entry ./dist/index.js
-npx @classytic/arc describe ./dist/resources.js --json                  # JSON metadata for AI agents
-npx @classytic/arc doctor
+arc init my-api --mongokit --better-auth --ts                  # scaffold
+arc generate resource product                                  # alias: arc g r product
+arc generate resource product --mcp                            # + MCP tools file
+arc generate mcp analytics                                     # standalone MCP file
+arc docs ./openapi.json --entry ./dist/index.js                # emit OpenAPI
+arc introspect --entry ./dist/index.js
+arc describe ./dist/resources.js --json                        # JSON metadata
+arc doctor                                                     # diagnose env
 ```
 
 Set `"mcp": true` in `.arcrc` to always generate `.mcp.ts` alongside resources.
 
 ## MCP (AI agent tools)
 
-Resources auto-generate Model Context Protocol tools — same permissions, same field rules. Stateless by default (fresh server per request, scalable).
+Resources auto-generate Model Context Protocol tools — same permissions, same field rules. Stateless by default.
 
 ```typescript
 import { mcpPlugin } from '@classytic/arc/mcp';
@@ -874,109 +529,124 @@ await app.register(mcpPlugin, {
   exclude: ['credential'],
   overrides: { product: { operations: ['list', 'get'] } },
 });
-
-// Stateful — when you need server-initiated messages
-await app.register(mcpPlugin, { resources, stateful: true, sessionTtlMs: 600000 });
 ```
 
-Connect Claude CLI: `claude mcp add --transport http my-api http://localhost:3000/mcp`.
+**Per-resource opt-out:** `defineResource({ mcp: false })` — exclude a resource from MCP tool generation entirely. Useful for internal-admin or write-heavy resources where you don't want LLMs poking.
 
-**Auth modes** — `false` | `getAuth()` (Better Auth OAuth 2.1) | custom function:
+**Auth modes** — `false` | `getAuth()` (Better Auth OAuth 2.1) | custom function returning `{ userId, organizationId, roles }` (human) or `{ clientId, organizationId, scopes }` (service). `PermissionResult.filters` flow into MCP tools exactly like REST.
 
-```typescript
-// Human user
-auth: async (headers) => {
-  if (headers['x-api-key'] !== process.env.MCP_KEY) return null;
-  return { userId: 'bot', organizationId: 'org-1', roles: ['admin'] };
-},
+**Custom tools** — co-locate with resources (`order.mcp.ts`), wire via `extraTools`. **AI SDK bridge** — expose AI SDK `tool()` defs via `buildMcpToolsFromBridges([...])`.
 
-// Service / machine — produces kind: "service" scope
-auth: async (headers) => ({
-  clientId: 'ingestion-pipeline',
-  organizationId: 'org-1',
-  scopes: ['read:products', 'write:events'],
-}),
-```
+Connect Claude CLI: `claude mcp add --transport http my-api http://localhost:3000/mcp`. Full recipes → [references/mcp.md](references/mcp.md).
 
-`auth: false` → `ctx.user` null, `scope.kind: "public"`. `clientId` set → `kind: "service"` works with `requireServiceScope()`. `PermissionResult.filters` flow into MCP tools — same as REST.
+## Tenant cleanup (GDPR / SOX / HIPAA)
 
-**Custom tools** — co-locate with resources (`order.mcp.ts`), wire via `extraTools: [fulfillOrderTool]`. Generate: `arc generate resource order --mcp`.
-
-**AI SDK bridge** — expose AI SDK `tool()` definitions over MCP without duplicating glue:
+Per-resource strategy + one auth-lifecycle wire-up:
 
 ```typescript
-import { buildMcpToolsFromBridges, getUserId, hasOrg, type McpBridge } from '@classytic/arc/mcp';
-
-export const triggerJobBridge: McpBridge = {
-  name: 'trigger_job',
-  description: 'Start a job.',
-  inputSchema: { phase: z.enum(['investigate', 'fix']) },
-  annotations: { destructiveHint: true },
-  buildTool: (ctx) => buildTriggerJobTool(getUserId(ctx) ?? ''),
-  guard: (ctx) => (hasOrg(ctx) ? null : 'Organization scope required'),
-};
-
-await app.register(mcpPlugin, {
-  resources,
-  extraTools: buildMcpToolsFromBridges([triggerJobBridge]),
+defineResource({
+  name: 'invoice',
+  tenantField: 'organizationId',
+  onTenantDelete: {
+    strategy: { type: 'anonymize', fields: { customerName: '[REDACTED]', email: null } },
+    priority: 50, batchSize: 1000,
+  },
 });
+defineResource({ name: 'event',  onTenantDelete: { strategy: { type: 'hard' } } });
+defineResource({ name: 'ledger', onTenantDelete: { strategy: { type: 'skip', reason: 'SOX retention' } } });
+
+import { cascadeDeleteForOrganization, assertNoTenantData } from '@classytic/arc/registry';
+
+betterAuth.org.afterDelete = async ({ organizationId }) => {
+  const report = await cascadeDeleteForOrganization(fastify.arc.registry, {
+    organizationId, concurrency: 4, logger: fastify.log,
+  });
+  if (report.failures.length > 0) await alerting.fire({ report });
+};
 ```
 
-Full MCP recipes → [references/mcp.md](references/mcp.md).
+Strategies: `hard` · `soft` · `anonymize` (`fields` static or `(doc) => value`) · `skip` (`reason` mandatory). Resources without `onTenantDelete` are never touched. **Index `tenantField`** on every cascading resource or chunked SELECTs run O(n²). Compliance smoke: `assertNoTenantData(registry, { organizationId })`.
 
-## Audit per-resource opt-in
+## Enterprise auth (opt-in)
+
+| Capability | Surface | Reference |
+|---|---|---|
+| SCIM 2.0 provisioning (Okta / Azure AD / Google) | `@classytic/arc/scim` — `scimPlugin({ users, groups, bearer })` | [references/scim.md](references/scim.md) |
+| Agent mandates + DPoP (AP2 / x402 / MCP authz) | `@classytic/arc/permissions` — `requireAgentScope`, `requireMandate`, `requireDPoP` | [references/agent-auth.md](references/agent-auth.md) |
+| Auth-event audit bridge | `@classytic/arc/auth/audit` — `wireBetterAuthAudit({ events })` | [references/enterprise-auth.md](references/enterprise-auth.md) |
+
+Out of scope: SAML (use BA SAML plugin), session storage (BA `secondaryStorage`), DPoP crypto (one `jose.dpop.verify()` in your `authenticate`), device trust (Castle / Stytch).
+
+## Audit per-resource
 
 ```typescript
 await fastify.register(auditPlugin, { autoAudit: { perResource: true } });
 
-defineResource({ name: 'order', audit: true });
+defineResource({ name: 'order',   audit: true });
 defineResource({ name: 'payment', audit: { operations: ['delete'] } });
 defineResource({ name: 'product' });   // not audited
 
-// Manual custom() for MCP tools / read auditing
-app.post('/orders/:id/refund', async (req) => {
-  await app.audit.custom('order', req.params.id, 'refund', { reason }, { user });
-});
+// Manual (MCP tools / read auditing)
+await app.audit.custom('order', req.params.id, 'refund', { reason }, { user });
+```
+
+## Adapters
+
+Cross-framework adapter contract lives in `@classytic/repo-core/adapter`. Every kit-specific adapter ships from its kit's `/adapter` subpath; arc itself has zero kit-bound adapters.
+
+```typescript
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
+import { createDrizzleAdapter }  from '@classytic/sqlitekit/adapter';
+import { createPrismaAdapter }   from '@classytic/prismakit/adapter';
+
+import type { DataAdapter, RepositoryLike, AdapterRepositoryInput }
+  from '@classytic/repo-core/adapter';
+// MinimalRepo<TDoc>  — 5-method floor (getAll, getById, create, update, delete)
+// StandardRepo<TDoc> — MinimalRepo + optional batch ops, CAS, soft-delete, aggregate, …
+// Arc feature-detects optional methods at call sites; missing methods → 501.
+```
+
+Custom kits implementing `DataAdapter<TDoc>` plug in identically. Kit-native repos plug in **without** `as RepositoryLike` casts.
+
+## Controllers
+
+`BaseController` is mixin-composed. The auto-built controller covers every preset; you only need a custom one to add domain methods.
+
+```typescript
+import { BaseController, type IRequestContext, type IControllerResponse } from '@classytic/arc';
+
+class ProductController extends BaseController<Product> {
+  constructor(opts: { tenantField?: string | false; idField?: string } = {}) {
+    super(productRepo, { resourceName: 'product', ...opts });
+  }
+  async getFeatured(req: IRequestContext): Promise<IControllerResponse<Product[]>> {
+    return { data: await this.repository.getAll({ filters: { isFeatured: true } }) };
+  }
+}
+
+defineResource({ name: 'product', controller: new ProductController({ tenantField: '_id' }), tenantField: '_id' });
+```
+
+When you pass your own controller, arc **cannot** thread `tenantField` / `schemaOptions` / `idField` / `cache` / `onFieldWriteDenied` into it. Forward via `super()` AND pass to `defineResource()`. Presets that inject controller fields (slugLookup, softDelete, tree) only reach arc's auto-built `BaseController` — extend `BaseController` or drop the preset.
+
+**Slim mixins** (no soft-delete/tree/slug/bulk on by default):
+
+```typescript
+import { BaseCrudController, SoftDeleteMixin, BulkMixin, SlugMixin, TreeMixin } from '@classytic/arc';
+class OrderController extends SoftDeleteMixin(BulkMixin(BaseCrudController)) {}
 ```
 
 ## DX helpers
 
 ```typescript
 import type { ArcRequest } from '@classytic/arc';
-import { envelope, createDomainError } from '@classytic/arc';
-import { getOrgContext } from '@classytic/arc/scope';
-import { roles } from '@classytic/arc/permissions';
-
-// Typed request for raw routes — no `(req as any).user`
-handler: async (req: ArcRequest, reply) => { req.user?.id; req.scope; req.signal; }
-
-// Response envelope
-reply.send(envelope(data, { total: 100 }));
-
-// Canonical org extraction
-const { userId, organizationId, roles: userRoles, orgRoles } = getOrgContext(request);
-
-// Unified role check — platform AND org roles
-permissions: { create: roles('admin', 'editor'), delete: roles('admin') }
-```
-
-**Reply helpers** — opt-in via `createApp({ replyHelpers: true })`. Arc has no `{ success, data }` envelope: HTTP status discriminates, single-doc handlers `return doc` or `reply.send(doc)`, errors throw `ArcError` (the global handler serialises to `ErrorContract`). The two decorators cover the cases that DO need framework support:
-
-```typescript
-return reply.sendList({ method: 'offset', data, total, page, limit, pages, hasNext, hasPrev });
-return reply.sendList(canonicalListResult);                   // any kit-shaped paginated/array result
-return reply.stream(csvReadable, { contentType: 'text/csv', filename: 'export.csv' });
-```
-
-`reply.sendList()` accepts a bare `T[]` or any kit pagination result (`OffsetPaginationResult` / `KeysetPaginationResult` / `AggregatePaginationResult`) and routes through `toCanonicalList` from `@classytic/repo-core/pagination` so the server and the typed `@classytic/arc-next` client share one declaration — `method` as the discriminant cannot drift between them.
-
-**BigInt serialization** — `createApp({ serializeBigInt: true })` converts BigInt → Number in JSON.
-
-**Multipart body middleware** — opt-in file upload (no-op for JSON requests, safe to always add):
-
-```typescript
+import { envelope } from '@classytic/arc';
 import { multipartBody } from '@classytic/arc/middleware';
 
+// Typed request — no `(req as any).user`
+handler: async (req: ArcRequest, reply) => { req.user?.id; req.scope; req.signal; }
+
+// File upload — no-op for JSON requests, safe to always add
 defineResource({
   name: 'product',
   middlewares: { create: [multipartBody({ allowedMimeTypes: ['image/png'], maxFileSize: 5 * 1024 * 1024 })] },
@@ -987,121 +657,45 @@ defineResource({
     },
   },
 });
-```
 
-**SSE auth + streaming** — `preAuth` runs before auth (EventSource can't set headers); `raw: true` streams the response:
-
-```typescript
+// SSE — preAuth runs before auth (EventSource can't set headers); raw: true streams the response
 routes: [
   { preAuth: [(req) => { req.headers.authorization = `Bearer ${req.query.token}`; }] },
   { method: 'GET', path: '/stream', raw: true, handler: async (req, reply) => reply.send(stream) },
 ]
+
+// Per-resource opt-out of resourcePrefix (webhooks / admin routes)
+defineResource({ name: 'webhook', prefix: '/hooks', skipGlobalPrefix: true });
+
+// Reply helpers — opt-in via createApp({ replyHelpers: true })
+return reply.sendList({ method: 'offset', data, total, page, limit, pages, hasNext, hasPrev });
+return reply.stream(csvReadable, { contentType: 'text/csv', filename: 'export.csv' });
 ```
-
-**Per-resource opt-out of `resourcePrefix`** — for webhooks, admin routes:
-
-```typescript
-defineResource({ name: 'webhook', prefix: '/hooks', skipGlobalPrefix: true })
-// Registers at /hooks even with createApp({ resourcePrefix: '/api/v1' })
-```
-
-## Enterprise auth (2.13)
-
-Three opt-in surfaces close the procurement-gate gaps without forcing parallel infrastructure. Sessions / refresh / OAuth flows stay in Better Auth's hands.
-
-### SCIM 2.0 — IdP provisioning (`@classytic/arc/scim`)
-
-Auto-derived `/scim/v2/Users` + `/scim/v2/Groups` from existing arc resources. Okta / Azure AD / Google Workspace / JumpCloud / OneLogin out of the box. No shadow tables.
-
-```typescript
-import { scimPlugin } from '@classytic/arc/scim';
-
-await app.register(scimPlugin, {
-  users: { resource: userResource },
-  groups: { resource: orgResource },
-  bearer: process.env.SCIM_TOKEN,        // or: verify: async (req) => …
-});
-```
-
-Mounts `GET/POST/PUT/PATCH/DELETE /scim/v2/Users[/:id]`, same for `Groups`, plus `ServiceProviderConfig` / `ResourceTypes` / `Schemas` discovery. SCIM filter language → arc query DSL. RFC 7644 PatchOp translates to canonical operators (`$set`/`$unset`/`$push`/`$pull`) and flows through `repo.findOneAndUpdate(...)`; PUT goes through `repo.bulkWrite([{ replaceOne }])`. SCIM does **not** run arc's HTTP controller pipeline — audit / multi-tenant / field-policy compose at the kit-plugin layer (`repo.use(...)`) and fire identically for arc REST + SCIM because both surfaces hit the same repository methods. → [references/scim.md](references/scim.md).
-
-### Agent-auth helpers — DPoP + capability mandates
-
-For AI-agent flows on protected resources (AP2 / Stripe x402 / MCP authorization). Three new helpers in `@classytic/arc/permissions`:
-
-```typescript
-import { requireAgentScope, requireMandate, requireDPoP } from '@classytic/arc/permissions';
-
-defineResource({
-  name: 'invoice',
-  actions: {
-    pay: {
-      handler: payInvoice,
-      permissions: requireAgentScope({
-        capability: 'payment.charge',
-        scopes: ['payment.write'],
-        requireDPoP: true,                                  // RFC 9449 sender-constrained
-        audience: (ctx) => `invoice:${ctx.params?.id}`,    // mandate must bind to this resource
-        validateAmount: (ctx, m) => (ctx.data as { amount: number }).amount <= (m.cap ?? 0),
-      }),
-    },
-  },
-});
-```
-
-`RequestScope.service` gains optional `mandate` + `dpopJkt` fields. Your `authenticate` callback verifies the mandate JWT (one `jose.jwtVerify()` call) + DPoP proof (one `jose.dpop.verify()` call) and populates them. Arc validates *what's already proved* against the action — no peer-deps on `jose`. → [references/agent-auth.md](references/agent-auth.md).
-
-### Auth-event audit bridge (`@classytic/arc/auth/audit`)
-
-BA's `databaseHooks` + endpoint hooks routed through the existing `auditPlugin` — one canonical row shape for resource AND auth events. Single query for "everything user X did".
-
-```typescript
-import { wireBetterAuthAudit } from '@classytic/arc/auth/audit';
-
-const audit = wireBetterAuthAudit({
-  events: ['session.*', 'user.*', 'mfa.*', 'org.invite.*'],
-});
-
-const auth = betterAuth({
-  hooks: audit.hooks,                  // endpoint hooks (MFA, OAuth, password reset)
-  databaseHooks: audit.databaseHooks,  // sign-in/up/out via session.create/delete
-  // ...
-});
-
-const app = await createApp({ ... });
-audit.attach(app);                      // drains boot-time buffer + connects live logger
-```
-
-Buffered until `attach(app)` is called — works for hosts that build BA before Fastify. Manual `audit.emit({ name, subjectId, ... })` for non-BA flows (webhook signature failures, custom MFA).
-
-### What's NOT in arc 2.13
-
-SAML / SCIM-EnterpriseUser / device trust / SOC2 attestations / session storage. Reasons + workarounds → [references/enterprise-auth.md](references/enterprise-auth.md). Compliance control matrix → [`docs/compliance/{soc2,hipaa}.md`](../../docs/compliance/).
 
 ## Subpath imports
 
-The most common imports — full enumeration in [references/api-reference.md](references/api-reference.md).
-
 ```typescript
-import { defineResource, BaseController, allowPublic } from '@classytic/arc';
-import { createApp, loadResources } from '@classytic/arc/factory';
-import { createMongooseAdapter } from '@classytic/mongokit/adapter';     // or sqlitekit/adapter, prismakit/adapter
-import type { DataAdapter, RepositoryLike } from '@classytic/repo-core/adapter';
-import { getUserId, getOrgId, requireOrgId } from '@classytic/arc/scope';
-import { mcpPlugin } from '@classytic/arc/mcp';
-import { createTestApp, expectArc } from '@classytic/arc/testing';
+import { defineResource, BaseController, allowPublic }     from '@classytic/arc';
+import { createApp, loadResources }                        from '@classytic/arc/factory';
+import { createMongooseAdapter }                           from '@classytic/mongokit/adapter';
+import type { DataAdapter, RepositoryLike }                from '@classytic/repo-core/adapter';
+import { getUserId, getOrgId, requireOrgId }               from '@classytic/arc/scope';
+import { mcpPlugin }                                       from '@classytic/arc/mcp';
+import { createTestApp, expectArc }                        from '@classytic/arc/testing';
 ```
+
+Full subpath map → [references/api-reference.md](references/api-reference.md).
 
 ## References
 
 - **[api-reference](references/api-reference.md)** — full subpath import map (every plugin, helper, type)
-- **[auth](references/auth.md)** — JWT, Better Auth, API key, custom auth
-- **[scim](references/scim.md)** — SCIM 2.0 plugin (Okta / Azure AD / Google Workspace provisioning)
-- **[agent-auth](references/agent-auth.md)** — DPoP + capability mandates (AP2 / x402 / MCP authorization)
-- **[enterprise-auth](references/enterprise-auth.md)** — what's in vs out of the box for enterprise auth
-- **[events](references/events.md)** — Domain events, transports, retry, outbox
+- **[auth](references/auth.md)** — JWT, Better Auth, API key, custom auth, kit overlays
+- **[scim](references/scim.md)** — SCIM 2.0 plugin (Okta / Azure AD / Google Workspace)
+- **[agent-auth](references/agent-auth.md)** — DPoP + capability mandates (AP2 / x402 / MCP authz)
+- **[enterprise-auth](references/enterprise-auth.md)** — what's in vs out of the box
+- **[events](references/events.md)** — Transports, retry, outbox, idempotency
 - **[integrations](references/integrations.md)** — BullMQ jobs, WebSocket, EventGateway, Streamline, Webhooks
-- **[mcp](references/mcp.md)** — MCP tools, custom tools, Better Auth OAuth 2.1
-- **[multi-tenancy](references/multi-tenancy.md)** — Scope ladder, `tenantField`, `PermissionResult.scope`, API key auth
-- **[production](references/production.md)** — Health, audit, idempotency, tracing, metrics, versioning, SSE, QueryCache, bulk ops
-- **[testing](references/testing.md)** — Test app, mocks, data factories, in-memory MongoDB
+- **[mcp](references/mcp.md)** — Tool generation, custom tools, AI SDK bridges, Better Auth OAuth 2.1
+- **[multi-tenancy](references/multi-tenancy.md)** — Scope ladder, `tenantField`, parent-child orgs, API-key auth
+- **[production](references/production.md)** — Health, audit, idempotency, tracing, metrics, versioning, SSE, bulk ops
+- **[testing](references/testing.md)** — Test app, mocks, fixtures, in-memory Mongo

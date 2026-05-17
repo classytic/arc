@@ -104,7 +104,25 @@ const PLUGIN_REGISTRY: Record<
   },
 };
 
-/** Load a plugin from the registry with helpful error messages. */
+/**
+ * Load a plugin from the registry with helpful error messages.
+ *
+ * Required plugins throw if their package can't be resolved; optional
+ * plugins return `null` after logging a warning. Overloads expose the
+ * stronger return shape to callers so they don't need non-null assertions.
+ */
+export async function loadPlugin(
+  name: "helmet" | "cors" | "rateLimit" | "underPressure" | "sensible",
+  logger?: { warn: (msg: string) => void },
+): Promise<FastifyPlugin>;
+export async function loadPlugin(
+  name: "multipart" | "rawBody",
+  logger?: { warn: (msg: string) => void },
+): Promise<FastifyPlugin | null>;
+export async function loadPlugin(
+  name: string,
+  logger?: { warn: (msg: string) => void },
+): Promise<FastifyPlugin | null>;
 export async function loadPlugin(
   name: string,
   logger?: { warn: (msg: string) => void },
@@ -151,7 +169,7 @@ export async function registerSecurityPlugins(
 ): Promise<void> {
   // Helmet — security headers
   if (config.helmet !== false) {
-    const helmet = (await loadPlugin("helmet"))!;
+    const helmet = await loadPlugin("helmet");
     await fastify.register(helmet, (config.helmet ?? {}) as Record<string, unknown>);
     fastify.log.debug("Helmet (security headers) enabled");
   } else {
@@ -160,7 +178,7 @@ export async function registerSecurityPlugins(
 
   // CORS — cross-origin requests
   if (config.cors !== false) {
-    const cors = (await loadPlugin("cors"))!;
+    const cors = await loadPlugin("cors");
     const corsOptions = { ...(config.cors ?? {}) } as Record<string, unknown>;
 
     // Production CORS warning — also catches the env-derived `undefined`
@@ -198,7 +216,7 @@ export async function registerSecurityPlugins(
 
   // Rate limiting — DDoS protection
   if (config.rateLimit !== false) {
-    const rateLimit = (await loadPlugin("rateLimit"))!;
+    const rateLimit = await loadPlugin("rateLimit");
     const rateLimitOpts = buildRateLimitOpts(
       config.rateLimit ?? { max: 100, timeWindow: "1 minute" },
     );
@@ -242,14 +260,14 @@ export async function registerUtilityPlugins(
 
   // Under Pressure — health monitoring
   if (config.underPressure !== false) {
-    const underPressure = (await loadPlugin("underPressure"))!;
+    const underPressure = await loadPlugin("underPressure");
     await fastify.register(underPressure, config.underPressure ?? { exposeStatusRoute: true });
     fastify.log.debug("Health monitoring (under-pressure) enabled");
   }
 
   // Sensible — HTTP helpers
   if (config.sensible !== false) {
-    const sensible = (await loadPlugin("sensible"))!;
+    const sensible = await loadPlugin("sensible");
     await fastify.register(sensible);
     fastify.log.debug("Sensible (HTTP helpers) enabled");
   }
