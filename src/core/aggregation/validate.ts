@@ -69,8 +69,23 @@ export interface NormalizedAggregation {
     sort?: Record<string, 1 | -1>;
     limit?: number;
     topN?: AggTopN;
+    /**
+     * URL-driven limit policy. Present when the host declared
+     * `defaultLimit` (which opts the aggregation into reading
+     * `?limit=N` from the URL). Absent when the host uses the static
+     * `limit` form (or no limit at all).
+     */
+    limitPolicy?: { defaultLimit: number; maxLimit: number };
   };
 }
+
+/**
+ * Framework cap on URL-driven aggregation limits when the host opts
+ * in to `defaultLimit` without explicit `maxLimit`. Set to the same
+ * order of magnitude as a "large dashboard page" — bigger than every
+ * realistic grouped tile, smaller than "we returned the whole table."
+ */
+const AGG_FRAMEWORK_MAX_LIMIT = 1000;
 
 /**
  * Validate + normalize all aggregations on a resource. Throws on first
@@ -147,6 +162,10 @@ export function validateAggregations(
       validateTopNConfig(resourceName, name, config.topN, groupBy, measures, bucketAliases);
     }
 
+    validateLimitConfig(resourceName, name, config);
+
+    const limitPolicy = resolveLimitPolicy(config);
+
     out.push({
       name,
       base: config,
@@ -160,11 +179,92 @@ export function validateAggregations(
         sort: config.sort,
         limit: config.limit,
         topN: config.topN,
+        ...(limitPolicy ? { limitPolicy } : {}),
       },
     });
   }
 
   return out;
+}
+
+/**
+ * Validate `limit` / `defaultLimit` / `maxLimit` triad. Throws on
+ * misconfig at boot — boundary value, hosts see exactly what to fix.
+ */
+function validateLimitConfig(
+  resourceName: string,
+  aggName: string,
+  config: AggregationConfig,
+): void {
+  const hasStatic = config.limit !== undefined;
+  const hasDynamic = config.defaultLimit !== undefined;
+
+  if (hasStatic && hasDynamic) {
+    throw new ArcAggregationConfigError(
+      `Resource "${resourceName}" aggregation "${aggName}" sets both \`limit\` (static cap) and ` +
+        `\`defaultLimit\` (URL-driven cap). Pick one — static \`limit\` ignores the URL; ` +
+        `\`defaultLimit\` reads \`?limit=N\` and caps it at \`maxLimit\`.`,
+    );
+  }
+
+  // `maxLimit` is meaningful only with `defaultLimit`. Refuse it
+  // anywhere else (static-limit config OR no-limit config) — silently
+  // accepting it would suggest the URL cap is active when it isn't.
+  if (config.maxLimit !== undefined && !hasDynamic) {
+    throw new ArcAggregationConfigError(
+      `Resource "${resourceName}" aggregation "${aggName}" sets \`maxLimit\` without ` +
+        `\`defaultLimit\`. \`maxLimit\` only applies to URL-driven limits — set \`defaultLimit\` ` +
+        `or remove \`maxLimit\`.`,
+    );
+  }
+
+  if (hasStatic) {
+    if (!Number.isInteger(config.limit) || (config.limit as number) <= 0) {
+      throw new ArcAggregationConfigError(
+        `Resource "${resourceName}" aggregation "${aggName}" \`limit\` must be a positive integer ` +
+          `— got ${String(config.limit)}.`,
+      );
+    }
+  }
+
+  if (hasDynamic) {
+    if (!Number.isInteger(config.defaultLimit) || (config.defaultLimit as number) <= 0) {
+      throw new ArcAggregationConfigError(
+        `Resource "${resourceName}" aggregation "${aggName}" \`defaultLimit\` must be a positive ` +
+          `integer — got ${String(config.defaultLimit)}.`,
+      );
+    }
+    if (config.maxLimit !== undefined) {
+      if (!Number.isInteger(config.maxLimit) || (config.maxLimit as number) <= 0) {
+        throw new ArcAggregationConfigError(
+          `Resource "${resourceName}" aggregation "${aggName}" \`maxLimit\` must be a positive ` +
+            `integer — got ${String(config.maxLimit)}.`,
+        );
+      }
+      if ((config.maxLimit as number) < (config.defaultLimit as number)) {
+        throw new ArcAggregationConfigError(
+          `Resource "${resourceName}" aggregation "${aggName}" \`maxLimit\` (${config.maxLimit}) ` +
+            `is less than \`defaultLimit\` (${config.defaultLimit}). The ceiling must be ≥ the default.`,
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Resolve the URL-driven limit policy into a concrete `{ default, max }`
+ * pair. Returns `undefined` when the host uses the static `limit` form
+ * (or no limit at all) — the request handler reads the absence to know
+ * "do not parse `?limit=N` from the URL."
+ */
+function resolveLimitPolicy(
+  config: AggregationConfig,
+): { defaultLimit: number; maxLimit: number } | undefined {
+  if (config.defaultLimit === undefined) return undefined;
+  return {
+    defaultLimit: config.defaultLimit,
+    maxLimit: config.maxLimit ?? AGG_FRAMEWORK_MAX_LIMIT,
+  };
 }
 
 /**
@@ -181,11 +281,37 @@ export function adapterSupportsAggregate(repo: unknown): boolean {
   return typeof r.aggregate === "function";
 }
 
+/**
+ * Resolve the effective per-request `limit` — three cases:
+ *
+ *   1. Host declared static `limit` → URL `?limit` ignored, static wins.
+ *   2. Host declared `defaultLimit` → parse `?limit=N`, cap at
+ *      `maxLimit`, fall back to default on absent / invalid input.
+ *   3. Host declared neither → returns `undefined` (no limit applied,
+ *      preserves pre-2.16.1 behavior).
+ */
+function resolveAggRequestLimit(
+  normalized: NormalizedAggregation,
+  query: Record<string, unknown>,
+): number | undefined {
+  const policy = normalized.compiled.limitPolicy;
+  if (!policy) return normalized.compiled.limit;
+
+  const raw = query["limit"];
+  if (raw === undefined || raw === "") return policy.defaultLimit;
+
+  const parsed = typeof raw === "number" ? raw : Number.parseInt(String(raw), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return policy.defaultLimit;
+
+  return Math.min(Math.floor(parsed), policy.maxLimit);
+}
+
 /** Compile to canonical `AggRequest` for `repo.aggregate()` at request time. */
 export function compileAggRequest(
   normalized: NormalizedAggregation,
   callerFilter: AnyRecord,
   tenantOptions: AnyRecord,
+  query?: Record<string, unknown>,
 ): AggRequest {
   const baseFilter = normalized.compiled.filter ?? {};
 
@@ -216,6 +342,7 @@ export function compileAggRequest(
 
   const executionHints = buildExecutionHints(normalized.base);
   const cache = buildCacheOptions(normalized.base);
+  const limit = query ? resolveAggRequestLimit(normalized, query) : normalized.compiled.limit;
 
   const req: AggRequest = {
     measures: normalized.compiled.measures,
@@ -225,7 +352,7 @@ export function compileAggRequest(
     ...(normalized.compiled.dateBuckets ? { dateBuckets: normalized.compiled.dateBuckets } : {}),
     ...(normalized.compiled.having ? { having: normalized.compiled.having } : {}),
     ...(normalized.compiled.sort ? { sort: normalized.compiled.sort } : {}),
-    ...(normalized.compiled.limit !== undefined ? { limit: normalized.compiled.limit } : {}),
+    ...(limit !== undefined ? { limit } : {}),
     ...(normalized.compiled.topN ? { topN: normalized.compiled.topN } : {}),
     ...(executionHints ? { executionHints } : {}),
     ...(cache ? { cache } : {}),

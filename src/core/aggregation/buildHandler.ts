@@ -113,7 +113,12 @@ export async function executeAggregation(
 
   // ── Compile runtime AggRequest ───────────────────────────────────
   const callerFilter = extractCallerFilter(query);
-  const aggReq: AggRequest = compileAggRequest(normalized, callerFilter, tenantOptions);
+  // Pass the raw query through so `compileAggRequest` can read
+  // `?limit=N` when the aggregation declares URL-driven limits via
+  // `defaultLimit` / `maxLimit`. When neither is declared, the query
+  // arg is ignored and the static `config.limit` (if any) wins —
+  // backward-compatible with every aggregation defined before 2.17.
+  const aggReq: AggRequest = compileAggRequest(normalized, callerFilter, tenantOptions, query);
 
   // ── Materialized escape hatch ────────────────────────────────────
   if (config.materialized) {
@@ -425,8 +430,10 @@ function extractCallerFilter(query: Record<string, unknown>): AnyRecord {
 }
 
 /**
- * Map a kit-thrown error to the framework-agnostic execute response.
- * Detects two well-known signals:
+ * Map a kit-thrown error to the canonical `AggregationExecuteResponse`
+ * shape so the aggregation router can surface a structured failure
+ * (status + code + message) instead of leaking raw kit errors.
+ * Detects three signals:
  *   - "unsupported" / "not implemented" → 501 with upgrade hint
  *   - timeout markers → 504
  *   - everything else → 500

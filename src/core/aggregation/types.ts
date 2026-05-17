@@ -226,8 +226,41 @@ export interface AggregationConfig {
   /** Order grouped rows by groupBy field, measure alias, or joined-alias path. */
   sort?: Record<string, 1 | -1>;
 
-  /** Hard cap on result rows. Applied at the IR level (LIMIT / `$limit`). */
+  /**
+   * Static hard cap on result rows. Always applied at the IR level
+   * (LIMIT / `$limit`), regardless of URL params. Use when the
+   * aggregation has a fixed-size shape ("top 10 categories"). Mutually
+   * exclusive with `defaultLimit` / `maxLimit` — pick the static form
+   * OR the URL-driven form, not both.
+   */
   limit?: number;
+
+  /**
+   * URL-driven row limit — applied when the caller passes `?limit=N`.
+   * When set, the auto-route reads `query.limit`, parses it as a
+   * positive integer, caps it at `maxLimit` (or the framework default
+   * if `maxLimit` is unset), and writes the result into `AggRequest.limit`.
+   * When the caller omits `?limit`, this default applies.
+   *
+   * **DoS defense.** Auto-generated `/aggregations/:name` routes today
+   * have no upper bound on response size. A `groupBy: 'userId'` on a
+   * 10M-user table without `defaultLimit` returns a 10M-row JSON. Setting
+   * `defaultLimit: 100, maxLimit: 1000` bounds the response shape while
+   * letting power users request up to 1000 rows when they need them.
+   *
+   * Mutually exclusive with the static `limit` — boot error if both set.
+   * Setting `defaultLimit` without `maxLimit` uses the framework
+   * default cap (`AGG_FRAMEWORK_MAX_LIMIT = 1000`) — explicit is better.
+   */
+  defaultLimit?: number;
+
+  /**
+   * Hard ceiling for URL-driven `?limit=N`. Only meaningful when
+   * `defaultLimit` is set; ignored otherwise. Defaults to
+   * `AGG_FRAMEWORK_MAX_LIMIT` (1000) when omitted but `defaultLimit` is
+   * present. Boot validation: must be ≥ `defaultLimit`.
+   */
+  maxLimit?: number;
 
   /**
    * Top-N-per-group filter. Keeps only the top `limit` rows per

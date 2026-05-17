@@ -112,6 +112,11 @@
 // would create a second source of truth and force every kit + arc to
 // publish in lockstep.
 
+// Side-effect import — activates `FastifyInstance.arc?: ArcCore` augmentation
+// for any consumer touching the root barrel. See the file's header for the
+// "why" + the list of subpaths that mirror this activation.
+import "./types/fastify-augmentation.js";
+
 // Mixin extension interfaces — useful when typing custom mixin compositions
 export type {
   AggMeasureInput,

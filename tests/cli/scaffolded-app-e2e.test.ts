@@ -18,8 +18,15 @@
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { init } from "../../src/cli/commands/init.js";
+
+// Heavy `beforeAll`s — each describe block scaffolds a full project
+// (~50 template files via `init()`). See sibling file
+// `generated-app-verification.test.ts` for the full rationale; bumping
+// to 60s buys headroom under parallel vitest load on Windows without
+// masking real regressions.
+vi.setConfig({ hookTimeout: 60_000 });
 
 let testRoot: string;
 

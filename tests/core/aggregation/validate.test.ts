@@ -954,6 +954,105 @@ describe("validateAggregations — topN", () => {
   });
 });
 
+describe("validateAggregations — URL-driven limit (2.17)", () => {
+  const baseConfig = {
+    groupBy: "status",
+    measures: { count: "count" },
+    permissions: allowPublic(),
+  };
+
+  it("accepts `defaultLimit` alone — `maxLimit` defaults to framework cap", () => {
+    const [normalized] = validateAggregations(
+      "order",
+      { byStatus: { ...baseConfig, defaultLimit: 100 } },
+      undefined,
+    );
+    expect(normalized?.compiled.limitPolicy).toEqual({
+      defaultLimit: 100,
+      maxLimit: 1000, // AGG_FRAMEWORK_MAX_LIMIT
+    });
+  });
+
+  it("accepts `defaultLimit` + `maxLimit` together", () => {
+    const [normalized] = validateAggregations(
+      "order",
+      { byStatus: { ...baseConfig, defaultLimit: 50, maxLimit: 500 } },
+      undefined,
+    );
+    expect(normalized?.compiled.limitPolicy).toEqual({
+      defaultLimit: 50,
+      maxLimit: 500,
+    });
+  });
+
+  it("rejects both `limit` AND `defaultLimit` — mutually exclusive", () => {
+    expect(() =>
+      validateAggregations(
+        "order",
+        { byStatus: { ...baseConfig, limit: 10, defaultLimit: 100 } },
+        undefined,
+      ),
+    ).toThrow(/static cap.*URL-driven cap|Pick one/);
+  });
+
+  it("rejects `maxLimit` without `defaultLimit`", () => {
+    expect(() =>
+      validateAggregations("order", { byStatus: { ...baseConfig, maxLimit: 500 } }, undefined),
+    ).toThrow(/maxLimit.*defaultLimit/);
+  });
+
+  it("rejects `maxLimit < defaultLimit` — ceiling must be ≥ default", () => {
+    expect(() =>
+      validateAggregations(
+        "order",
+        { byStatus: { ...baseConfig, defaultLimit: 500, maxLimit: 100 } },
+        undefined,
+      ),
+    ).toThrow(/less than|maxLimit.*defaultLimit/);
+  });
+
+  it("rejects non-integer `defaultLimit`", () => {
+    expect(() =>
+      validateAggregations(
+        "order",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { byStatus: { ...baseConfig, defaultLimit: 1.5 as any } },
+        undefined,
+      ),
+    ).toThrow(/positive integer/);
+  });
+
+  it("rejects zero / negative `defaultLimit`", () => {
+    expect(() =>
+      validateAggregations("order", { byStatus: { ...baseConfig, defaultLimit: 0 } }, undefined),
+    ).toThrow(/positive integer/);
+    expect(() =>
+      validateAggregations("order", { byStatus: { ...baseConfig, defaultLimit: -1 } }, undefined),
+    ).toThrow(/positive integer/);
+  });
+
+  it("rejects non-integer `limit` (static cap path)", () => {
+    expect(() =>
+      validateAggregations(
+        "order",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { byStatus: { ...baseConfig, limit: 10.5 as any } },
+        undefined,
+      ),
+    ).toThrow(/positive integer/);
+  });
+
+  it("static `limit` produces no `limitPolicy` — URL is ignored at request time", () => {
+    const [normalized] = validateAggregations(
+      "order",
+      { byStatus: { ...baseConfig, limit: 25 } },
+      undefined,
+    );
+    expect(normalized?.compiled.limit).toBe(25);
+    expect(normalized?.compiled.limitPolicy).toBeUndefined();
+  });
+});
+
 describe("adapterSupportsAggregate", () => {
   it("returns true when repo has aggregate function", () => {
     const repo = { aggregate: () => Promise.resolve({ rows: [] }) };

@@ -1,6 +1,6 @@
 {
   "name": "@classytic/arc",
-  "version": "2.16.0",
+  "version": "2.16.1",
   "description": "Resource-oriented backend framework for Fastify - clean, minimal, powerful, tree-shakable",
   "type": "module",
   "exports": {
@@ -231,7 +231,7 @@
     "push": "classytic-push",
     "release:tag": "node -e \"require('child_process').execSync('npm run push -- v'+require('./package.json').version,{stdio:'inherit'})\"",
     "release": "npm run push -- main && npm run release:tag && npm publish",
-    "prepublishOnly": "npm run typecheck && npm run lint && npm run build && npm run test:ci && npm run smoke"
+    "prepublishOnly": "npm run typecheck && npm run lint && npm run build && npm run test:main && npm run smoke"
   },
   "engines": {
     "node": ">=22"
@@ -352,7 +352,7 @@
     "@classytic/mongokit": "^3.14.0",
     "@classytic/primitives": "^0.6.0",
     "@classytic/repo-core": "^0.5.0",
-    "@classytic/sqlitekit": "^0.4.0",
+    "@classytic/sqlitekit": "^0.5.0",
     "@classytic/streamline": "^2.3.3",
     "@fastify/cors": "^11.2.0",
     "@fastify/helmet": "^13.0.2",

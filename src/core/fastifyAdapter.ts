@@ -111,9 +111,13 @@ function applyFieldMask<T>(
 }
 
 /**
- * Create IRequestContext from Fastify request
- *
- * Extracts framework-agnostic context from Fastify-specific request object
+ * Project `FastifyRequest` into the curated `IRequestContext` shape that
+ * arc's controllers receive. This is a developer-facing facade, not a
+ * portability boundary — arc is Fastify-only. The projection lifts the
+ * fields tenant-scoped controllers reach for (`organizationId`,
+ * `teamId`, `scope`, `context`, server accessor) onto a flat, typed
+ * surface so handler code doesn't have to dig through Fastify's
+ * decorator surface or `req.metadata._scope` internals.
  */
 export function createRequestContext(req: FastifyRequest): IRequestContext {
   const reqWithExtras = req as RequestWithExtras;
@@ -233,16 +237,46 @@ function computeFieldCapabilities(
 }
 
 /**
- * Send IControllerResponse via Fastify reply
+ * Send a controller's `IControllerResponse` through Fastify's reply.
  *
- * Converts framework-agnostic response to Fastify response
- * Applies field masking if specified in request
+ * The `IControllerResponse<T>` envelope is arc's internal pipeline
+ * contract — it's how custom `status`, `meta`, `headers`, and field
+ * permissions thread from a handler through interceptors to the wire
+ * without each step having to touch `reply` directly. Not a portability
+ * abstraction (arc is Fastify-only); a pipeline-internal one.
+ *
+ * **Auto-envelope of bare returns.** Custom route handlers are
+ * expected to return the envelope shape so this function can apply
+ * field permissions, attach `fieldCaps`, and flatten paginated lists.
+ * A handler that returns raw `T` (array, plain object, primitive) used
+ * to silently produce a broken response — `response.data` was
+ * `undefined`, the body sent was `undefined`, and any declared
+ * `fields:` permission map was bypassed (the leak shape mentora
+ * flagged). 2.17 detects bare returns and wraps them into
+ * `{ data: response, status: 200 }` before the field-permission
+ * pipeline runs, so `fields:` applies to ALL custom routes whether the
+ * handler envelopes its return value or not. The envelope shape is
+ * still the canonical contract — auto-wrapping is a safety net, not
+ * an invitation to drop the envelope.
  */
 export function sendControllerResponse<T>(
   reply: FastifyReply,
   response: IControllerResponse<T>,
   request?: FastifyRequest,
 ): void {
+  // Auto-envelope: a bare return (no `.data` slot) gets wrapped so the
+  // field-permission + pagination flatten paths below see the canonical
+  // shape. Distinguishes an envelope with `data: undefined`/`null` (kept
+  // as-is — handler may want to send empty body) from a non-envelope
+  // value by checking for the presence of the `data` key.
+  if (
+    response === null ||
+    typeof response !== "object" ||
+    !Object.hasOwn(response as object, "data")
+  ) {
+    response = { data: response as unknown as T, status: 200 } as IControllerResponse<T>;
+  }
+
   // Extract field mask from request if available
   const reqWithExtras = request as RequestWithExtras | undefined;
   const fieldMaskConfig = reqWithExtras?.fieldMask;
@@ -390,18 +424,17 @@ export function sendControllerResponse<T>(
 }
 
 /**
- * Create Fastify route handler from IController method
- *
- * Wraps framework-agnostic controller method in Fastify-specific handler
+ * Bridge an `IController` method (`(ctx: IRequestContext) => Promise<IControllerResponse<T>>`)
+ * into a Fastify route handler. Translates between arc's curated request
+ * context surface and Fastify's request/reply, and routes the envelope
+ * through `sendControllerResponse` so the pipeline applies field
+ * permissions, status, and meta uniformly. Internal plumbing, not a
+ * portability layer — arc is Fastify-only.
  *
  * @example
  * ```typescript
  * const controller = new BaseController(repository);
- *
- * // Create Fastify handler
  * const listHandler = createFastifyHandler(controller.list.bind(controller));
- *
- * // Register route
  * fastify.get('/products', listHandler);
  * ```
  */

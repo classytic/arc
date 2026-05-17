@@ -50,7 +50,14 @@ export interface AssertNoTenantDataOptions {
 export interface TenantDataLeak {
   readonly resource: string;
   readonly tenantField: string;
-  readonly strategy: TenantPurgeStrategy["type"];
+  /**
+   * Full `TenantPurgeStrategy` discriminated union — not just `.type`.
+   * `anonymize` carries the field map; `custom` carries the handler
+   * descriptor; auditors get the actionable signal without re-resolving
+   * the resource definition. Narrow on `.strategy.type` for typed
+   * access.
+   */
+  readonly strategy: TenantPurgeStrategy;
   readonly expected: number;
   readonly actual: number;
   readonly reason?: string;
@@ -145,7 +152,7 @@ export async function assertNoTenantData(
       leaks.push({
         resource: r.name,
         tenantField,
-        strategy: strategy.type,
+        strategy,
         expected,
         actual,
       });

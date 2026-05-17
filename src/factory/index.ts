@@ -23,6 +23,22 @@
  * });
  */
 
+// Activate `FastifyInstance.arc?` augmentation for /factory consumers —
+// `createApp` returns an instance with `arc` populated; the type should
+// reflect that without forcing hosts to also import from /plugins.
+import "../types/fastify-augmentation.js";
+
+// Production-shaped sibling of `loadResources`. Directory scanning fails
+// for some hosts under tsx / vitest (Node `#path` subpath imports,
+// transitive `.js→.ts` resolution, top-level engine init); the glob form
+// sidesteps those paths. Re-exported here so compliance smokes find the
+// helper next to `loadResources` in autocomplete + docs — the canonical
+// source still lives in `src/testing/preloadResources.ts` and is also
+// available from `@classytic/arc/testing`.
+export {
+  preloadResources,
+  preloadResourcesAsync,
+} from "../testing/preloadResources.js";
 export { ArcFactory, createApp } from "./createApp.js";
 export type { FetchHandlerOptions } from "./edge.js";
 export { toFetchHandler } from "./edge.js";

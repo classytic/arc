@@ -60,11 +60,13 @@ export interface CascadeResourceReport {
    */
   readonly deletedCount: number;
   /**
-   * Strategy that actually ran for this resource — `'hard'` / `'soft'` /
-   * `'anonymize'` / `'skip'`. Audit consumers branch on this to answer
-   * "did data physically leave the system?".
+   * Full `TenantPurgeStrategy` that ran for this resource. Branch on
+   * `.strategy.type` (`'hard'` / `'soft'` / `'anonymize'` / `'skip'` /
+   * `'custom'`) to answer "did data physically leave the system?". The
+   * `skip` variant carries the mandatory `reason`; `anonymize` carries
+   * the field map; `custom` carries the handler descriptor.
    */
-  readonly strategy?: TenantPurgeStrategy["type"];
+  readonly strategy?: TenantPurgeStrategy;
   /**
    * Where the strategy came from — `'declared'` (host wrote
    * `onTenantDelete`) or `'disabled'` (filtered out before reaching
@@ -196,11 +198,17 @@ export function getCascadingResources(registry: ResourceRegistry): readonly stri
  * cascading resource. Use for audit dashboards that answer "what
  * happens to this resource on org-delete?" without grepping the
  * source.
+ *
+ * **Returns the full `TenantPurgeStrategy` discriminated union**, not
+ * just its `type` tag. The `skip` variant carries a required `reason`
+ * field — auditors need it to sign off on every "we deliberately don't
+ * purge this" entry. Anonymize carries the field map. Custom carries
+ * the handler reference. Narrow on `.strategy.type` for typed access.
  */
 export function getCascadingResourcesWithMetadata(registry: ResourceRegistry): readonly {
   name: string;
   tenantField: string;
-  strategy: TenantPurgeStrategy["type"];
+  strategy: TenantPurgeStrategy;
   source: ResolvedTenantPurge["source"];
   priority: number;
 }[] {
@@ -223,7 +231,7 @@ export function getCascadingResourcesWithMetadata(registry: ResourceRegistry): r
       return {
         name: r.name,
         tenantField,
-        strategy: r0.strategy.type,
+        strategy: r0.strategy,
         source: r0.source,
         priority: r0.priority,
       };

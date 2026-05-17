@@ -2,7 +2,8 @@
  * State Machine Utility
  *
  * Pure utility for validating state transitions in workflow systems.
- * Zero dependencies, framework-agnostic.
+ * Zero runtime dependencies — usable from any layer of arc (controllers,
+ * hooks, pipeline steps, tests).
  *
  * @example
  * const orderState = createStateMachine('Order', {

@@ -1,5 +1,11 @@
 /**
- * preloadResources — Vitest helper for static resource preloading
+ * preloadResources — static resource preloading via `import.meta.glob`.
+ *
+ * Available from two subpaths — pick whichever fits the caller's intent:
+ *   - `@classytic/arc/factory` — production-shaped sibling of `loadResources`
+ *     (use this when wiring compliance smokes against a host's `createApp`).
+ *   - `@classytic/arc/testing` — same export under the testing namespace
+ *     (use this from inside vitest setup files / unit-test fixtures).
  *
  * `loadResources()` works in production and most vitest setups, but it can fail
  * in two edge cases:

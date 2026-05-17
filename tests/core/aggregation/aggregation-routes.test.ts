@@ -111,6 +111,25 @@ describe("aggregation routes — end-to-end", () => {
             rows: [{ total: 999_000 }],
           }),
         }),
+
+        // URL-driven limit (DoS defense) — caller may pass ?limit=N,
+        // capped at maxLimit, defaults to defaultLimit when omitted.
+        byCustomer: defineAggregation({
+          groupBy: "customerId",
+          measures: { count: "count" },
+          permissions: allowPublic(),
+          defaultLimit: 100,
+          maxLimit: 500,
+        }),
+
+        // Static limit — URL ?limit=N must be ignored (this aggregation
+        // has a fixed shape; the host opted into a static cap).
+        topFive: defineAggregation({
+          groupBy: "status",
+          measures: { count: "count" },
+          permissions: allowPublic(),
+          limit: 5,
+        }),
       },
     });
 
@@ -239,6 +258,62 @@ describe("aggregation routes — end-to-end", () => {
     expect(filter.limit).toBeUndefined();
     expect(filter._count).toBeUndefined();
     expect(filter.status).toBe("pending");
+  });
+
+  describe("URL-driven limit (DoS defense — 2.17)", () => {
+    it("defaultLimit applies when caller omits ?limit", async () => {
+      aggregateStub.mockClear();
+      await app.inject({ method: "GET", url: "/orders/aggregations/byCustomer" });
+
+      const calledWith = aggregateStub.mock.calls[0][0];
+      expect(calledWith.limit).toBe(100); // defaultLimit
+    });
+
+    it("caller ?limit=N is honored when within bounds", async () => {
+      aggregateStub.mockClear();
+      await app.inject({ method: "GET", url: "/orders/aggregations/byCustomer?limit=50" });
+
+      expect(aggregateStub.mock.calls[0][0].limit).toBe(50);
+    });
+
+    it("caller ?limit=N is capped at maxLimit when over", async () => {
+      aggregateStub.mockClear();
+      await app.inject({ method: "GET", url: "/orders/aggregations/byCustomer?limit=99999" });
+
+      expect(aggregateStub.mock.calls[0][0].limit).toBe(500); // maxLimit
+    });
+
+    it("invalid ?limit (non-numeric, zero, negative) falls back to defaultLimit", async () => {
+      for (const bad of ["abc", "0", "-5", ""]) {
+        aggregateStub.mockClear();
+        await app.inject({
+          method: "GET",
+          url: `/orders/aggregations/byCustomer?limit=${bad}`,
+        });
+        expect(aggregateStub.mock.calls[0][0].limit).toBe(100);
+      }
+    });
+
+    it("static `limit` aggregations ignore ?limit — fixed-shape contract", async () => {
+      aggregateStub.mockClear();
+      await app.inject({ method: "GET", url: "/orders/aggregations/topFive?limit=999" });
+
+      // `limit: 5` is the static cap declared in config — URL override is ignored.
+      expect(aggregateStub.mock.calls[0][0].limit).toBe(5);
+    });
+
+    it("filter still strips `limit` — URL param is for paging only, not filtering", async () => {
+      aggregateStub.mockClear();
+      await app.inject({
+        method: "GET",
+        url: "/orders/aggregations/byCustomer?limit=200&customerId=c-1",
+      });
+
+      const call = aggregateStub.mock.calls[0][0];
+      expect(call.limit).toBe(200);
+      expect((call.filter as Record<string, unknown>).limit).toBeUndefined();
+      expect((call.filter as Record<string, unknown>).customerId).toBe("c-1");
+    });
   });
 
   it("requireFilters — 400 when caller doesn't supply the named filter", async () => {

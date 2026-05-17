@@ -55,7 +55,14 @@ export interface PurgeResourceOptions {
 export interface PurgeResourceOutcome {
   readonly resource: string;
   readonly tenantField: string;
-  readonly strategy: TenantPurgeStrategy["type"];
+  /**
+   * Full `TenantPurgeStrategy` discriminated union. Audit consumers
+   * narrow on `.strategy.type` for typed access — `skip` carries the
+   * mandatory `reason`, `anonymize` carries the field map, `custom`
+   * carries the handler descriptor. Pre-2.17 this was the `.type` tag
+   * only, which dropped the audit-critical `reason` field.
+   */
+  readonly strategy: TenantPurgeStrategy;
   readonly processed: number;
   readonly ok: boolean;
   readonly path: "purgeByField" | "legacy-deleteMany" | "skipped" | "unsupported";
@@ -88,7 +95,7 @@ export async function purgeResource(
     return {
       resource: resourceName,
       tenantField,
-      strategy: "skip",
+      strategy,
       processed: 0,
       ok: true,
       path: "skipped",
@@ -106,7 +113,12 @@ export async function purgeResource(
     return {
       resource: resourceName,
       tenantField,
-      strategy: result.strategy,
+      // Repo-core's `TenantPurgeResult.strategy` is the discriminant tag
+      // only — the full strategy (with `reason` / `fields` / handler
+      // descriptor) lives on the input we still have in scope. Surface
+      // that so audit consumers don't have to re-resolve from the
+      // resource definition.
+      strategy,
       processed: result.processed,
       ok: result.ok,
       path: "purgeByField",
@@ -121,7 +133,7 @@ export async function purgeResource(
     return {
       resource: resourceName,
       tenantField,
-      strategy: strategy.type,
+      strategy,
       processed: 0,
       ok: false,
       path: "unsupported",
@@ -140,7 +152,7 @@ export async function purgeResource(
     return {
       resource: resourceName,
       tenantField,
-      strategy: "hard",
+      strategy,
       processed: 0,
       ok: false,
       path: "unsupported",
@@ -170,7 +182,7 @@ export async function purgeResource(
     return {
       resource: resourceName,
       tenantField,
-      strategy: "hard",
+      strategy,
       processed,
       ok: true,
       path: "legacy-deleteMany",
@@ -180,7 +192,7 @@ export async function purgeResource(
     return {
       resource: resourceName,
       tenantField,
-      strategy: "hard",
+      strategy,
       processed: 0,
       ok: false,
       path: "legacy-deleteMany",

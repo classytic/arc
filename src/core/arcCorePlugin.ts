@@ -62,30 +62,11 @@ export interface ArcCore {
   plugins: Map<string, PluginMeta>;
 }
 
-declare module "fastify" {
-  interface FastifyInstance {
-    /**
-     * Arc core decorator. Optional because:
-     *
-     * 1. Consumers who import any `@classytic/arc/*` subpath get this module
-     *    augmentation merged into every `FastifyInstance` they see — even
-     *    instances on apps that never register {@link arcCorePlugin}. Making
-     *    it required would force those apps to assert or guard every
-     *    property access.
-     * 2. Hosts that extend `FastifyInstance` to narrow `arc` to their own
-     *    type (`interface X extends FastifyInstance { arc?: MyArc }`) were
-     *    previously blocked because non-optional `arc: ArcCore` conflicts
-     *    with the re-declaration. An optional field lets hosts re-declare
-     *    with a compatible subtype without fighting TS.
-     *
-     * Inside Arc's own code, any call site that runs *after* `arcCorePlugin`
-     * has registered treats this as non-null — see the call sites in
-     * `factory/registerAuth.ts` and `factory/createApp.ts` which assert
-     * with `fastify.arc!` or narrow explicitly.
-     */
-    arc?: ArcCore;
-  }
-}
+// `declare module "fastify" { FastifyInstance.arc?: ArcCore }` lives in
+// `src/types/fastify-augmentation.ts` so hosts that import from any
+// common arc subpath (root, /factory, /core, /plugins, /registry) see
+// `app.arc` without having to specifically reach for /plugins. See that
+// file for the full rationale + why `arc?` is optional.
 
 const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
   fastify: FastifyInstance,

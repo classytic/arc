@@ -71,7 +71,11 @@ describe("createMongooseAdapter — signature surface", () => {
       // Bypass TS to exercise the runtime guard — hosts on JS or with
       // `as any` casts should still get a helpful error.
       (createMongooseAdapter as unknown as (m: unknown) => unknown)(Model),
-    ).toThrow(/repository is required/);
+    ).toThrow(/repository.*required/i);
+    // Intent: the runtime error names `repository` and flags it as required.
+    // The exact wording is mongokit's concern — kept loose so a clarity
+    // edit on its side (e.g. "`repository` argument is required" → "missing
+    // `repository`") doesn't false-fail this test.
   });
 });
 

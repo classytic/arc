@@ -137,6 +137,23 @@ export interface RegistryEntry extends ResourceMetadata {
     readonly requireDateRange?: { field: string; maxRangeDays?: number };
     /** Whether the aggregation requires named filters — surfaced in docs. */
     readonly requireFilters?: readonly string[];
+    /**
+     * Static result-row cap (no URL override). Mutually exclusive with
+     * `defaultLimit` / `maxLimit`. Surfaced so OpenAPI docs can mention
+     * the fixed cap in the description.
+     */
+    readonly limit?: number;
+    /**
+     * URL-driven default limit (caller may pass `?limit=N`). When set,
+     * OpenAPI docs render `?limit` as a query parameter with this
+     * default and `maxLimit` as the maximum.
+     */
+    readonly defaultLimit?: number;
+    /**
+     * URL-driven limit ceiling (only meaningful with `defaultLimit`).
+     * OpenAPI docs render this as the `maximum` constraint on `?limit`.
+     */
+    readonly maxLimit?: number;
     /** MCP tool generation flag — `false` to skip, object for overrides. */
     readonly mcp?:
       | boolean

@@ -817,11 +817,35 @@ export interface ResourceConfig<TDoc = AnyRecord> {
   /**
    * Custom routes beyond CRUD. Presets also merge their routes here.
    *
-   * @example
+   * **Route handlers return `IControllerResponse<T>` shape** —
+   * `{ data, status?, meta?, headers? }`. Returning a bare value (array,
+   * object, primitive) is supported via auto-envelope (2.17+) but the
+   * explicit envelope is the canonical contract — declared `fields:`
+   * permissions, custom `status`, `meta`, and `headers` only work when
+   * you return the envelope. Set `raw: true` on a route to opt out of
+   * arc's pipeline entirely (custom streaming, SSE, manual `reply.send()`).
+   *
+   * **Path collisions with auto-CRUD are detected at `defineResource()` time.**
+   * If you declare a route that shares method+path with an auto-CRUD op
+   * (e.g. `POST /` collides with `create`), validation throws with the
+   * exact `disabledRoutes` line to add. Use one of:
+   *   - `disabledRoutes: ['create']` — suppress the auto-CRUD op
+   *   - `crud: { list: true, get: true }` — opt-in allow-list (preferred)
+   *   - `disableDefaultRoutes: true` — turn off all auto-CRUD on this resource
+   *
+   * @example Custom route alongside default CRUD:
    * ```typescript
    * routes: [
    *   { method: 'GET', path: '/stats', handler: 'getStats', permissions: auth() },
    *   { method: 'POST', path: '/webhook', handler: webhookFn, raw: true, permissions: auth() },
+   * ]
+   * ```
+   *
+   * @example Custom POST replacing the auto-CRUD `create`:
+   * ```typescript
+   * disabledRoutes: ['create'],
+   * routes: [
+   *   { method: 'POST', path: '/', handler: customCreate, permissions: requireAuth() },
    * ]
    * ```
    */

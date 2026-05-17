@@ -1,9 +1,11 @@
 /**
  * User-object helpers.
  *
- * Small, framework-agnostic utilities that operate on arc's `UserLike`
- * shape. Live in `@classytic/arc/utils` instead of `@classytic/arc/types`
- * so the types subpath can stay genuinely type-only (v2.11.0 cleanup).
+ * Small utilities that operate on arc's `UserLike` shape with no
+ * runtime dependencies — usable from controllers, hooks, scope
+ * resolvers, and tests. Live in `@classytic/arc/utils` instead of
+ * `@classytic/arc/types` so the types subpath can stay genuinely
+ * type-only (v2.11.0 cleanup).
  */
 
 import type { UserLike } from "../types/base.js";

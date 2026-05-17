@@ -177,6 +177,7 @@ export function validateResourceConfig(
 
   if (config.routes) {
     validateRoutes(config.routes, errors);
+    validateRouteCrudCollisions(config, errors);
   }
 
   return {
@@ -312,6 +313,65 @@ function validatePresetOptions(
           validOptions.length > 0
             ? `Valid options: ${validOptions.join(", ")}`
             : `Preset "${preset.name}" has no configurable options`,
+      });
+    }
+  }
+}
+
+/**
+ * Detect collisions between user-declared `routes:` entries and the
+ * auto-CRUD route table that `createCrudRouter` will register.
+ *
+ * Without this check, a custom `POST /` on the same prefix as auto-CRUD's
+ * `create` boots fine through `defineResource()` and only blows up at
+ * `app.register()` time with Fastify's opaque `FST_ERR_DUPLICATED_ROUTE`.
+ * That error doesn't mention `disabledRoutes` and doesn't distinguish
+ * "you collided with auto-CRUD" from "you collided with yourself" — so
+ * the consumer has to grep arc's source to discover the fix.
+ *
+ * We surface the fix in the error message, naming the conflicting op
+ * and the literal line to add.
+ *
+ * Honored config:
+ *   - `disableDefaultRoutes: true` → no auto-CRUD, no collisions possible
+ *   - `disabledRoutes: ['create']` → that op's path is free for custom use
+ *   - `updateMethod: 'PUT' | 'both'` → update slot covers PUT/PATCH accordingly
+ */
+function validateRouteCrudCollisions(config: ResourceConfig, errors: ConfigError[]): void {
+  if (config.disableDefaultRoutes) return;
+  if (!config.routes || config.routes.length === 0) return;
+
+  const updateMethod = config.updateMethod ?? "PATCH";
+  const updateMethods: readonly string[] =
+    updateMethod === "both" ? ["PUT", "PATCH"] : [updateMethod];
+
+  const disabled = new Set(config.disabledRoutes ?? []);
+  // Each CRUD slot maps to one or more (method, path) tuples. `update`
+  // expands to two tuples when `updateMethod: 'both'`.
+  const crudTable: ReadonlyArray<{
+    op: "list" | "get" | "create" | "update" | "delete";
+    method: string;
+    path: string;
+  }> = [
+    { op: "list", method: "GET", path: "/" },
+    { op: "get", method: "GET", path: "/:id" },
+    { op: "create", method: "POST", path: "/" },
+    ...updateMethods.map((m) => ({ op: "update" as const, method: m, path: "/:id" })),
+    { op: "delete", method: "DELETE", path: "/:id" },
+  ];
+
+  for (const [i, route] of config.routes.entries()) {
+    if (!route.method || !route.path) continue;
+    for (const crud of crudTable) {
+      if (disabled.has(crud.op)) continue;
+      if (route.method !== crud.method || route.path !== crud.path) continue;
+      errors.push({
+        field: `routes[${i}]`,
+        message: `Route ${route.method} ${route.path} collides with auto-CRUD "${crud.op}"`,
+        suggestion:
+          `Add \`disabledRoutes: ['${crud.op}']\` to suppress the auto-CRUD route, ` +
+          `or move your custom handler to a different path. ` +
+          `Set \`disableDefaultRoutes: true\` to disable all auto-CRUD on this resource.`,
       });
     }
   }
