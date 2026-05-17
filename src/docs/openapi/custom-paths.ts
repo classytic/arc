@@ -73,9 +73,10 @@ export function appendCustomRoutePaths(
 
     if (routeSchema?.response) {
       const responseSchemas = routeSchema.response as Record<string, unknown>;
+      const responses = extras.responses ?? {};
+      extras.responses = responses;
       for (const [statusCode, schema] of Object.entries(responseSchemas)) {
-        // biome-ignore lint/style/noNonNullAssertion: extras.responses is initialised above
-        extras.responses![statusCode] = {
+        responses[statusCode] = {
           description:
             ((schema as Record<string, unknown>).description as string) || `Response ${statusCode}`,
           content: {

@@ -21,6 +21,12 @@
  * ```
  */
 
+// Activate `FastifyInstance.arc?` augmentation — /plugins is the canonical
+// home for arc decorator types; we keep activation here too so the legacy
+// gating path (`import '@classytic/arc/plugins'` to see `app.arc`) keeps
+// working unchanged.
+import "../types/fastify-augmentation.js";
+
 export type { ArcCore, ArcCorePluginOptions, PluginMeta } from "../core/arcCorePlugin.js";
 // Arc core (instance-scoped hooks & registry)
 export {

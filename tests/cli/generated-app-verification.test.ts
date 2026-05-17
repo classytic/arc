@@ -15,8 +15,17 @@
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { init } from "../../src/cli/commands/init.js";
+
+// Heavy `beforeAll`s — each describe block scaffolds a full project
+// (~50 template files via `init()`). Under parallel vitest load on
+// Windows (slow concurrent fs.writeFile + AV scanning), the default
+// 30s hook timeout occasionally trips and skips the describe's tests.
+// 60s buys headroom without masking real regressions — a stuck hook
+// will still fail, just not at the threshold where load alone
+// triggers it.
+vi.setConfig({ hookTimeout: 60_000 });
 
 let testRoot: string;
 

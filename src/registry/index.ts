@@ -17,6 +17,9 @@
  * const stats = fastify.arc.registry.getStats();
  */
 
+// Activate `FastifyInstance.arc?` augmentation for /registry consumers.
+import "../types/fastify-augmentation.js";
+
 export {
   type AssertNoTenantDataOptions,
   type AssertNoTenantDataReport,

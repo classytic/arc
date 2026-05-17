@@ -158,7 +158,10 @@ describe("cascadeDeleteForOrganization — onTenantDelete path", () => {
     expect(adapter.purgeCalls[0].field).toBe("organizationId");
     expect(adapter.purgeCalls[0].value).toBe(ORG);
     expect(adapter.purgeCalls[0].strategy).toEqual({ type: "hard" });
-    expect(report.resources[0].strategy).toBe("hard");
+    // 2.17 — `strategy` is now the full discriminated union (was just the
+    // `.type` tag pre-2.17). Auditors need `reason` on skip / `fields`
+    // on anonymize — exposing the whole shape is the forcing function.
+    expect(report.resources[0].strategy).toEqual({ type: "hard" });
     expect(report.resources[0].path).toBe("purgeByField");
   });
 
@@ -178,7 +181,12 @@ describe("cascadeDeleteForOrganization — onTenantDelete path", () => {
     const report = await cascadeDeleteForOrganization(registry, { organizationId: ORG });
 
     expect(adapter.purgeCalls[0].strategy).toMatchObject({ type: "anonymize" });
-    expect(report.resources[0].strategy).toBe("anonymize");
+    // Full strategy surfaces in the report — `fields` map included so
+    // GDPR audit can verify which columns got anonymized.
+    expect(report.resources[0].strategy).toEqual({
+      type: "anonymize",
+      fields: { customerEmail: null },
+    });
     expect(report.resources[0].deletedCount).toBe(4); // processed, not physically deleted
     expect(adapter.rows).toBe(4); // rows survived
   });
@@ -199,7 +207,14 @@ describe("cascadeDeleteForOrganization — onTenantDelete path", () => {
     const report = await cascadeDeleteForOrganization(registry, { organizationId: ORG });
 
     expect(adapter.purgeCalls).toHaveLength(0);
-    expect(report.resources[0].strategy).toBe("skip");
+    // `reason` lands on both `.strategy.reason` (typed) and `.skipReason`
+    // (legacy convenience field). Auditors who narrow on `.strategy.type
+    // === 'skip'` get the typed access; the flat `skipReason` is the
+    // back-compat path for code that already destructured it.
+    expect(report.resources[0].strategy).toEqual({
+      type: "skip",
+      reason: "audit-retained-per-SOX",
+    });
     expect(report.resources[0].skipReason).toBe("audit-retained-per-SOX");
     expect(adapter.rows).toBe(7); // untouched
   });
@@ -263,10 +278,11 @@ describe("getCascadingResourcesWithMetadata", () => {
     const byName = Object.fromEntries(meta.map((m) => [m.name, m]));
 
     expect(meta).toHaveLength(2);
-    expect(byName.a.strategy).toBe("hard");
+    // 2.17 — `strategy` is the full discriminated union now, not just the tag.
+    expect(byName.a.strategy).toEqual({ type: "hard" });
     expect(byName.a.source).toBe("declared");
     expect(byName.a.priority).toBe(20);
-    expect(byName.b.strategy).toBe("anonymize");
+    expect(byName.b.strategy).toMatchObject({ type: "anonymize" });
     expect(byName.b.source).toBe("declared");
     expect(byName.c).toBeUndefined();
   });
@@ -308,9 +324,12 @@ describe("assertNoTenantData", () => {
 
     expect(audit.ok).toBe(false);
     expect(audit.leaks).toHaveLength(1);
+    // 2.17 — leak entries carry the full strategy union (was just `.type`
+    // pre-2.17). Auditors who narrow on `.strategy.type === 'skip'` get
+    // typed access to `reason` without re-resolving from the registry.
     expect(audit.leaks[0]).toMatchObject({
       resource: "log",
-      strategy: "hard",
+      strategy: { type: "hard" },
       expected: 0,
       actual: 4,
     });

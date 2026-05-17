@@ -16,7 +16,7 @@ import type { PermissionCheck } from "../../permissions/types.js";
 import type { RegistryEntry } from "../../types/index.js";
 import { createOperation, errorResponse } from "./operations.js";
 import { toOpenApiPath } from "./parameters.js";
-import type { PathItem, SchemaObject } from "./types.js";
+import type { Parameter, PathItem, SchemaObject } from "./types.js";
 
 /**
  * Emit one OpenAPI path entry per declared aggregation.
@@ -97,15 +97,7 @@ export function appendAggregationPaths(
       agg.summary ?? `Aggregation: ${agg.name}`,
       {
         description: descLines.join("\n"),
-        parameters: [
-          {
-            name: "querystring",
-            in: "query",
-            required: false,
-            schema: querystring as SchemaObject,
-            description: "Filter narrowing — composes with base filter + tenant scope.",
-          },
-        ],
+        parameters: buildAggregationParameters(agg, querystring as SchemaObject),
         responses: {
           "200": {
             description: "Aggregation result",
@@ -173,6 +165,53 @@ function normalizeGroupByForOpenApi(
 ): readonly string[] {
   if (!groupBy) return [];
   return typeof groupBy === "string" ? [groupBy] : groupBy;
+}
+
+/**
+ * Build the OpenAPI `parameters` array for an aggregation route.
+ *
+ * Always includes the filter-narrowing `querystring` slot. When the
+ * aggregation declares URL-driven paging (`defaultLimit`), adds an
+ * explicit `?limit` integer parameter with the declared default +
+ * maximum. Auto-generated FE clients pick the constraint up; humans
+ * reading the docs see the cap without reading source.
+ */
+function buildAggregationParameters(
+  agg: {
+    readonly limit?: number;
+    readonly defaultLimit?: number;
+    readonly maxLimit?: number;
+  },
+  querystring: SchemaObject,
+): Parameter[] {
+  const params: Parameter[] = [
+    {
+      name: "querystring",
+      in: "query",
+      required: false,
+      schema: querystring,
+      description: "Filter narrowing — composes with base filter + tenant scope.",
+    },
+  ];
+
+  if (agg.defaultLimit !== undefined) {
+    params.push({
+      name: "limit",
+      in: "query",
+      required: false,
+      schema: {
+        type: "integer",
+        minimum: 1,
+        default: agg.defaultLimit,
+        maximum: agg.maxLimit ?? 1000,
+      } as SchemaObject,
+      description:
+        `Result row cap. Default ${agg.defaultLimit}; values above ${agg.maxLimit ?? 1000} ` +
+        `are capped silently. Invalid values fall back to the default.`,
+    });
+  }
+
+  return params;
 }
 
 function setNestedSchemaProp(

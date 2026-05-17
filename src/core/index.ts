@@ -4,6 +4,9 @@
  * Base components for the Arc resource-oriented framework.
  */
 
+// Activate `FastifyInstance.arc?` augmentation for /core consumers.
+import "../types/fastify-augmentation.js";
+
 // Constants — single source of truth for defaults and magic values
 export * from "../constants.js";
 export type { AccessControlConfig } from "./AccessControl.js";

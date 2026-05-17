@@ -159,6 +159,12 @@ export class ResourceRegistry {
             lookupAliases: (entry.lookups ?? []).map((l) => l.as ?? l.from),
             requireDateRange: entry.requireDateRange,
             requireFilters: entry.requireFilters,
+            // 2.17 — surface the limit triad so OpenAPI docs can render
+            // the `?limit` query parameter with the correct default /
+            // maximum, and audit scripts know which aggs accept URL paging.
+            limit: entry.limit,
+            defaultLimit: entry.defaultLimit,
+            maxLimit: entry.maxLimit,
             mcp: entry.mcp,
           }))
         : undefined,

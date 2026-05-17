@@ -10,7 +10,8 @@ See [changelog/v2.md](changelog/v2.md) for the full v2 release history.
 
 ## 2.16
 
-See [changelog/v2.md#2160](changelog/v2.md#2160) — breaking-changes minor: removed dead `/org` subpath, hardened validation pipeline, fixed streamline + queryParser + MCP DX traps, bumped kit peer floors.
+- [2.16.1](changelog/v2.md#2161) — DX patch: boot-time CRUD/custom-route collision detection, auto-envelope of bare handler returns, full `TenantPurgeStrategy` (with `reason` / `fields` / handler) exposed on audit surfaces, `preloadResources` discoverable from `/factory`, `FastifyInstance.arc?` augmentation reaches every entry-point barrel.
+- [2.16.0](changelog/v2.md#2160) — breaking-changes minor: removed dead `/org` subpath, hardened validation pipeline, fixed streamline + queryParser + MCP DX traps, bumped kit peer floors.
 
 ## 2.15
 
