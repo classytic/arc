@@ -292,6 +292,16 @@ function parseInitOptions(rawArgs) {
         opts.edge = true;
         break;
 
+      case '--docker':
+        // 2.16 — Docker scaffolding is opt-in (frameworks don't dictate
+        // deployment). `--no-docker` skips even the interactive prompt.
+        opts.docker = true;
+        break;
+
+      case '--no-docker':
+        opts.docker = false;
+        break;
+
       case '--skip-install':
         opts.skipInstall = true;
         break;
@@ -342,6 +352,8 @@ INIT OPTIONS
   --ts, --typescript       Generate TypeScript (default)
   --js, --javascript       Generate JavaScript
   --edge, --serverless     Target Edge/Serverless environments
+  --docker                 Emit Dockerfile + docker-compose.yml (opt-in, 2.16)
+  --no-docker              Skip Docker scaffolding even in interactive mode
   --force, -f              Overwrite existing directory
   --skip-install           Skip npm install after scaffolding
 

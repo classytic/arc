@@ -41,6 +41,7 @@ export {
   getScopeContextMap,
   getServiceScopes,
   getTeamId,
+  getTenantFromRequest,
   getUserId,
   getUserRoles,
   hasOrgAccess,

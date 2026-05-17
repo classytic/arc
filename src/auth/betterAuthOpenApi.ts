@@ -113,8 +113,11 @@ function extractPathParams(
   const params: Array<{ name: string; in: "path"; required: true; schema: { type: string } }> = [];
   const matches = path.matchAll(/:(\w+)/g);
   for (const match of matches) {
+    // Group 1 is the captured `(\w+)` after `:`; non-null by regex shape.
+    const name = match[1];
+    if (!name) continue;
     params.push({
-      name: match[1]!,
+      name,
       in: "path",
       required: true,
       schema: { type: "string" },
@@ -420,8 +423,11 @@ function mergeUserFieldsIntoRequestBody(
   userFields: NonNullable<BetterAuthOpenApiOptions["userFields"]>,
   endpointPath: string,
 ): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const content = (requestBody as any)?.content?.["application/json"];
+  const content = (
+    requestBody as {
+      content?: Record<string, { schema?: Record<string, unknown> }>;
+    }
+  )?.content?.["application/json"];
   if (!content?.schema) return;
 
   const schema = content.schema as Record<string, unknown>;

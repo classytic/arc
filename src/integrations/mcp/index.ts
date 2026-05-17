@@ -43,6 +43,12 @@ export {
 } from "./aiSdkBridge.js";
 // Factory (Level 2)
 export { type AuthRef, createMcpServer, type McpServerInstance } from "./createMcpServer.js";
+// CRUD description helpers — public surface for function-form description
+// overrides (`descriptions: { list: (meta) => ... }`).
+export {
+  defaultCrudDescription,
+  resolveCrudDescription,
+} from "./crud-tools.js";
 export { type DefinePromptConfig, definePrompt } from "./definePrompt.js";
 // Builders — user-facing API for custom tools/prompts
 export { type DefineToolConfig, defineTool } from "./defineTool.js";
@@ -68,15 +74,35 @@ export {
   requireOrgId,
   requireRole,
 } from "./guards.js";
+// Non-HTTP controller invocation — shared pipeline for MCP tools, jobs,
+// workflow steps. Eliminates the synthetic-context shim every caller used
+// to reinvent.
+export {
+  buildRequestContext,
+  type InvokeControllerOptions,
+  invokeController,
+  type McpOperation,
+  mcpHandlerAdapter,
+} from "./invokeController.js";
 // Plugin (Level 1)
-export { mcpPlugin } from "./mcpPlugin.js";
+export { filterResourcesForMcp, mcpPlugin } from "./mcpPlugin.js";
 export { type ResourceToToolsConfig, resourceToTools } from "./resourceToTools.js";
+// Error/success helpers — re-exported so custom tools can produce the
+// canonical CallToolResult shape without depending on an internal subpath.
+export {
+  permissionDeniedResult,
+  toCallToolError,
+  toCallToolResult,
+  toCallToolSuccess,
+} from "./tool-helpers.js";
 
 // Types
 export type {
   BetterAuthHandler,
   CallToolResult,
   CreateMcpServerConfig,
+  CrudDescriptionMeta,
+  CrudDescriptionOverride,
   CrudOperation,
   McpAuthResolver,
   McpAuthResult,

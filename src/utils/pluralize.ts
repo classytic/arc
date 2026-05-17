@@ -66,7 +66,8 @@ export function pluralize(word: string): string {
   // Irregular — preserve original casing of first char
   if (IRREGULARS[lower]) {
     const plural = IRREGULARS[lower];
-    return word[0]! === word[0]?.toUpperCase()
+    const firstChar = word.charAt(0);
+    return firstChar === firstChar.toUpperCase()
       ? plural.charAt(0).toUpperCase() + plural.slice(1)
       : plural;
   }

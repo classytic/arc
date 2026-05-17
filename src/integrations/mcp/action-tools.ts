@@ -68,6 +68,13 @@ export function createActionToolHandler(
    * shape for `inputSchema` and the cost is negligible.
    */
   rawSchema?: Record<string, unknown>,
+  /**
+   * 2.15.5: when `true`, the action is mounted at the resource root
+   * (`POST /<prefix>/action`) and the MCP tool's input MUST NOT include
+   * an `id` field. The handler still receives `id: ""` for signature
+   * parity. Defaults to `false` (legacy behavior — id-bound).
+   */
+  idLess = false,
 ): ToolDefinition["handler"] {
   const ir = rawSchema ? normalizeSchemaIR(rawSchema) : undefined;
   const strict = ir ? shouldRejectAdditionalProperties(ir) : false;
@@ -75,7 +82,13 @@ export function createActionToolHandler(
   // reject unknown keys, matching HTTP AJV strict-mode semantics. The MCP
   // SDK's flat `inputSchema` can't express z.object().strict() on its own,
   // so strict enforcement lives here at the handler boundary.
-  const allowedKeys = strict && ir ? new Set(["id", ...Object.keys(ir.properties)]) : undefined;
+  //
+  // For id-less actions, `id` is NOT a legal key — the tool's input schema
+  // doesn't advertise one, so an agent passing it indicates a contract
+  // mismatch worth flagging.
+  const allowedBaseKeys = idLess ? [] : ["id"];
+  const allowedKeys =
+    strict && ir ? new Set([...allowedBaseKeys, ...Object.keys(ir.properties)]) : undefined;
 
   return async (input, ctx) => {
     const session = ctx.session;
@@ -125,7 +138,10 @@ export function createActionToolHandler(
       permResult?.scope,
     );
 
-    const id = typeof input.id === "string" ? input.id : "";
+    // Id-less actions don't carry an entity handle — pass `""` to the
+    // handler. Id-bound actions read `input.id` (the MCP tool advertises
+    // an `id` field for those).
+    const id = idLess ? "" : typeof input.id === "string" ? input.id : "";
     const { id: _discardId, ...data } = input;
 
     try {

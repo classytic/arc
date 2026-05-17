@@ -1,6 +1,6 @@
 {
   "name": "@classytic/arc",
-  "version": "2.15.4",
+  "version": "2.16.0",
   "description": "Resource-oriented backend framework for Fastify - clean, minimal, powerful, tree-shakable",
   "type": "module",
   "exports": {
@@ -47,14 +47,6 @@
     "./auth": {
       "types": "./dist/auth/index.d.mts",
       "default": "./dist/auth/index.mjs"
-    },
-    "./org": {
-      "types": "./dist/org/index.d.mts",
-      "default": "./dist/org/index.mjs"
-    },
-    "./org/types": {
-      "types": "./dist/org/types.d.mts",
-      "default": "./dist/org/types.mjs"
     },
     "./hooks": {
       "types": "./dist/hooks/index.d.mts",
@@ -227,8 +219,8 @@
     "lint:fix": "biome check --fix src/",
     "lint:all": "biome check src/ tests/",
     "test": "vitest run",
-    "test:main": "vitest run",
-    "test:perf": "node --expose-gc ./node_modules/vitest/vitest.mjs run --config vitest.perf.config.ts",
+    "test:main": "vitest run --no-file-parallelism",
+    "test:perf": "node --expose-gc ./node_modules/vitest/vitest.mjs run --config vitest.perf.config.ts --no-file-parallelism",
     "test:ci": "npm run test:main && npm run test:perf",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
@@ -245,8 +237,8 @@
     "node": ">=22"
   },
   "peerDependencies": {
-    "@classytic/primitives": ">=0.5.0",
-    "@classytic/repo-core": ">=0.4.1",
+    "@classytic/primitives": ">=0.6.0",
+    "@classytic/repo-core": ">=0.5.0",
     "@classytic/streamline": ">=2.3.3",
     "@fastify/cors": ">=11.0.0",
     "@fastify/helmet": ">=13.0.0",
@@ -349,18 +341,18 @@
   },
   "dependencies": {
     "fastify-plugin": "^5.0.1",
-    "qs": "^6.15.1",
+    "qs": "^6.15.2",
     "secure-json-parse": "^4.1.0"
   },
   "devDependencies": {
     "@better-auth/drizzle-adapter": "^1.6.9",
     "@better-auth/mongo-adapter": "^1.6.9",
-    "@biomejs/biome": "^2.4.11",
+    "@biomejs/biome": "^2.4.15",
     "@classytic/dev-tools": "^0.2.0",
-    "@classytic/mongokit": "^3.13.2",
-    "@classytic/primitives": "^0.4.0",
-    "@classytic/repo-core": "^0.4.1",
-    "@classytic/sqlitekit": "^0.3.1",
+    "@classytic/mongokit": "^3.14.0",
+    "@classytic/primitives": "^0.6.0",
+    "@classytic/repo-core": "^0.5.0",
+    "@classytic/sqlitekit": "^0.4.0",
     "@classytic/streamline": "^2.3.3",
     "@fastify/cors": "^11.2.0",
     "@fastify/helmet": "^13.0.2",
@@ -374,27 +366,28 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@opentelemetry/api": "^1.9.1",
     "@sinclair/typebox": "^0.34.0",
-    "@types/node": "^22.10.0",
-    "@types/qs": "^6.14.0",
+    "@types/node": "^22.19.19",
+    "@types/qs": "^6.15.1",
     "@vitest/coverage-v8": "^3.2.4",
     "ajv": "^8.18.0",
     "better-auth": "^1.6.9",
-    "better-sqlite3": "^12.9.0",
-    "bullmq": "^5.73.5",
+    "better-sqlite3": "^12.10.0",
+    "bullmq": "^5.76.9",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
-    "fast-check": "^4.6.0",
+    "fast-check": "^4.8.0",
+    "fastify": "^5.8.5",
     "fastify-raw-body": "^5.0.0",
     "ioredis": "^5.10.1",
     "jsonwebtoken": "^9.0.0",
-    "knip": "^6.4.1",
+    "knip": "^6.14.1",
     "mongodb": "^7.1.0",
     "mongodb-memory-server": "^11.0.1",
-    "mongoose": ">=9.4.1",
+    "mongoose": "^9.6.2",
     "tsdown": "^0.21.7",
     "typescript": "^6.0.2",
     "vitest": "^3.0.0",
-    "ws": "^8.0.0",
+    "ws": "^8.20.1",
     "zod": "^4.3.6"
   },
   "keywords": [

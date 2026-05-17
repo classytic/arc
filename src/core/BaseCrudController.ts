@@ -762,10 +762,15 @@ export class BaseCrudController<
     const qc = req.server?.queryCache;
     if (!cacheConfig || !qc) return null;
 
-    const version = await qc.getResourceVersion(this.resourceName!);
+    // `withListCache` only runs when `resolveCacheConfig` returned a config,
+    // which in turn requires a configured resourceName on the controller.
+    // Default to `"_unnamed"` if absent so the cache namespace stays distinct
+    // from the resource-keyed slots above.
+    const resourceName = this.resourceName ?? "_unnamed";
+    const version = await qc.getResourceVersion(resourceName);
     const { userId, orgId } = this.cacheScope(req);
     const key = buildQueryKey(
-      this.resourceName!,
+      resourceName,
       "list",
       version,
       options as Record<string, unknown>,
@@ -802,10 +807,12 @@ export class BaseCrudController<
     const qc = req.server?.queryCache;
     if (!cacheConfig || !qc) return null;
 
-    const version = await qc.getResourceVersion(this.resourceName!);
+    // See `withListCache` for the resourceName fallback rationale.
+    const resourceName = this.resourceName ?? "_unnamed";
+    const version = await qc.getResourceVersion(resourceName);
     const { userId, orgId } = this.cacheScope(req);
     const key = buildQueryKey(
-      this.resourceName!,
+      resourceName,
       "get",
       version,
       { id, ...(options as Record<string, unknown>) },

@@ -56,13 +56,22 @@ async function main() {
   }
   console.log('[ok] POST /api/v1/products → 201');
 
-  const id = create.json().data._id;
+  // arc default response shape: no-envelope. Single create → doc directly
+  // (or { data: doc } when envelope is enabled). Listings → { data: doc[], ... }.
+  const createBody = create.json();
+  const createdDoc = createBody.data ?? createBody;
+  if (!createdDoc?._id) {
+    throw new Error(`FAIL: POST response missing _id — ${JSON.stringify(createBody)}`);
+  }
 
   const list = await app.inject({ method: 'GET', url: '/api/v1/products' });
   if (list.statusCode !== 200) {
     throw new Error(`FAIL: GET /api/v1/products → ${list.statusCode}`);
   }
-  console.log(`[ok] GET /api/v1/products → 200, ${list.json().docs.length} item(s)`);
+  const listBody = list.json();
+  const listPayload = listBody.data ?? listBody;
+  const listItems = Array.isArray(listPayload) ? listPayload : (listPayload.data ?? []);
+  console.log(`[ok] GET /api/v1/products → 200, ${listItems.length} item(s)`);
 
   // Webhook (skipGlobalPrefix: true) — should be at root /hooks
   const hookList = await app.inject({ method: 'GET', url: '/hooks' });

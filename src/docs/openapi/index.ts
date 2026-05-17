@@ -150,17 +150,15 @@ export function buildOpenApiSpec(
     }
   }
 
-  // Merge external security schemes and schemas
-  const externalSecuritySchemes =
-    externalPaths?.reduce<Record<string, Record<string, unknown>>>(
-      (acc, ext) => ({ ...acc, ...ext.securitySchemes }),
-      {},
-    ) ?? {};
-  const externalSchemas =
-    externalPaths?.reduce<Record<string, Record<string, unknown>>>(
-      (acc, ext) => ({ ...acc, ...ext.schemas }),
-      {},
-    ) ?? {};
+  // Merge external security schemes and schemas. Mutate-into-accumulator
+  // (vs spread-rebuild on every reduce step) keeps this O(N) instead of
+  // O(N²) for large external-path arrays.
+  const externalSecuritySchemes: Record<string, Record<string, unknown>> = {};
+  const externalSchemas: Record<string, Record<string, unknown>> = {};
+  for (const ext of externalPaths ?? []) {
+    if (ext.securitySchemes) Object.assign(externalSecuritySchemes, ext.securitySchemes);
+    if (ext.schemas) Object.assign(externalSchemas, ext.schemas);
+  }
 
   return {
     openapi: "3.0.3",

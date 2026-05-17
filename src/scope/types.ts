@@ -274,6 +274,58 @@ export function getOrgId(scope: RequestScope): string | undefined {
 }
 
 /**
+ * Resolve the tenant (organization) id from an incoming Fastify request,
+ * walking the canonical sources in order: `request.scope` → `x-organization-id`
+ * header. Returns `{ organizationId, source }` so callers can log or branch
+ * on which path won.
+ *
+ * Use in custom handlers that bypass arc's auto-CRUD path (worker routes,
+ * batch importers, cross-engine subscribers) and therefore don't get the
+ * tenant injected by `BaseCrudController`. Bridges arc's HTTP shape to
+ * the mongokit/kit-side tenant context (e.g. `createTenantContext().run`).
+ *
+ * Header fallback is intentional: matches `resolveOrgFromHeader` semantics
+ * for hosts that select an org via header instead of session/scope. Don't
+ * reach for this when `getOrgId(scope)` alone is enough — for standard
+ * authenticated routes the scope is already authoritative.
+ *
+ * @example
+ * ```typescript
+ * import { getTenantFromRequest } from '@classytic/arc/scope';
+ * import { tenantContext } from './lib/mongokit.js';
+ *
+ * fastify.post('/statements/batch', async (req, reply) => {
+ *   const { organizationId } = getTenantFromRequest(req);
+ *   if (!organizationId) {
+ *     return reply.code(400).send({ error: 'organizationId required' });
+ *   }
+ *   await tenantContext.run({ tenantId: organizationId }, async () => {
+ *     await statementRepository.create(req.body);
+ *   });
+ * });
+ * ```
+ */
+export function getTenantFromRequest(
+  req: {
+    scope?: RequestScope;
+    headers: Record<string, string | string[] | undefined>;
+  },
+  options: { header?: string } = {},
+): { organizationId: string | undefined; source: "scope" | "header" | "none" } {
+  if (req.scope) {
+    const id = getOrgId(req.scope);
+    if (id) return { organizationId: id, source: "scope" };
+  }
+  const headerName = (options.header ?? "x-organization-id").toLowerCase();
+  const raw = req.headers[headerName];
+  const headerValue = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof headerValue === "string" && headerValue.length > 0) {
+    return { organizationId: headerValue, source: "header" };
+  }
+  return { organizationId: undefined, source: "none" };
+}
+
+/**
  * Get stable client identity from a service scope.
  *
  * Returns the `clientId` for machine-to-machine auth (API keys, service accounts),

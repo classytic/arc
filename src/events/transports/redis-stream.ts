@@ -305,8 +305,11 @@ export class RedisStreamTransport implements EventTransport {
       serialized,
     ];
 
-    // Use spread to call xadd with dynamic args
-    await (this.redis as any).xadd(...args);
+    // Use spread to call xadd with dynamic args. `ioredis`'s `xadd` is
+    // overloaded to dozens of positional shapes; route through a single
+    // narrowed call signature instead of leaking `any` to the caller.
+    type XaddCallable = (...args: (string | number)[]) => Promise<string | null>;
+    await (this.redis as unknown as { xadd: XaddCallable }).xadd(...args);
   }
 
   // -----------------------------------------------------------------------

@@ -511,17 +511,29 @@ permissions: { list: acl.canAction('product', 'read') }
 - Supports `*` wildcard for resource/action
 - Cache failures fail open to resolver
 
-## Org Guards
+## Org-Scoped Permission Checks
 
 ```typescript
-import { orgGuard, requireOrg, requireOrgRole } from '@classytic/arc/org';
+import { allowPublic, requireAuth, requireOrgRole } from '@classytic/arc/permissions';
 
-// Require org context
-fastify.get('/invoices', { preHandler: [fastify.authenticate, requireOrg()] }, handler);
-
-// Require specific org role
-fastify.post('/invoices', { preHandler: [fastify.authenticate, requireOrgRole('admin')] }, handler);
+// Resource-level permission check on the active org's member.role
+defineResource({
+  name: 'invoice',
+  permissions: {
+    list: requireAuth(),
+    create: requireOrgRole('admin', 'owner'),
+  },
+});
 ```
+
+The 2.16 release removed the legacy `@classytic/arc/org` REST plugin
+and its `orgGuard` / `requireOrg` middleware (zero verified consumers).
+The PermissionCheck variant — `requireOrgRole` from
+`@classytic/arc/permissions` — is the canonical path: it composes with
+`anyOf` / `allOf`, integrates with the resource pipeline, and reads
+`request.scope.orgRoles` (set by auth adapters). For preHandler-style
+org enforcement on custom routes outside a resource, build a one-line
+preHandler that throws if `getOrgId(request.scope)` is missing.
 
 ## Request Scope
 

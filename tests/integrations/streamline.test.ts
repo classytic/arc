@@ -202,6 +202,68 @@ describe("Streamline Integration Plugin", () => {
       expect(listRes.json()[0].id).toBe("orders");
     });
 
+    it("rejects /start with unknown top-level keys and a 422 + actionable message", async () => {
+      // The classic mistake: caller sends `{ orderId: '123' }` instead of
+      // wrapping in `{ input: { orderId: '123' } }`. Pre-2.16 this 400'd
+      // somewhere downstream with "Invalid Date" or similar. The envelope
+      // check inside `/start` catches it at the route boundary.
+      const wf = createMockWorkflow("orders");
+      app = Fastify({ logger: false });
+      await app.register(streamlinePlugin, { workflows: [wf], auth: false });
+      await app.ready();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/workflows/orders/start",
+        payload: { orderId: "123", amount: 99 },
+      });
+      expect(res.statusCode).toBe(422);
+      const body = res.json();
+      expect(body.code).toBe("arc.streamline.missing_input_envelope");
+      expect(body.message).toContain("'{ input: {...} }'");
+      expect(body.message).toContain("orderId");
+      // The mock workflow's start() should NOT have been called — the
+      // request never reaches the engine.
+      expect(wf.start).not.toHaveBeenCalled();
+    });
+
+    it("rejects /start with extra keys alongside an `input` envelope (422)", async () => {
+      // Caller put `meta` correctly but also smuggled `note` at the top
+      // level — surface that explicitly so the field doesn't get silently
+      // dropped on its way to the engine.
+      const wf = createMockWorkflow("orders");
+      app = Fastify({ logger: false });
+      await app.register(streamlinePlugin, { workflows: [wf], auth: false });
+      await app.ready();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/workflows/orders/start",
+        payload: { input: { orderId: "123" }, note: "stray" },
+      });
+      expect(res.statusCode).toBe(422);
+      const body = res.json();
+      expect(body.code).toBe("arc.streamline.unknown_envelope_keys");
+      expect(body.message).toContain("note");
+      expect(wf.start).not.toHaveBeenCalled();
+    });
+
+    it("accepts /start with no body (workflow with no input)", async () => {
+      // Some workflows are parameterless — the envelope check must not
+      // reject the empty-body case.
+      const wf = createMockWorkflow("ping");
+      app = Fastify({ logger: false });
+      await app.register(streamlinePlugin, { workflows: [wf], auth: false });
+      await app.ready();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/workflows/ping/start",
+      });
+      expect(res.statusCode).toBe(201);
+      expect(wf.start).toHaveBeenCalledTimes(1);
+    });
+
     it("should return 404 for unknown run", async () => {
       const wf = createMockWorkflow("wf1");
       app = Fastify({ logger: false });

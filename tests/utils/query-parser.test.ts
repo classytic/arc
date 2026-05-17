@@ -422,6 +422,58 @@ describe("ArcQueryParser", () => {
   });
 
   // ============================================================================
+  // Filtering — Bracket Envelope (?filter[foo]=X / ?filter[price][gte]=40)
+  // ============================================================================
+
+  describe("Filtering — Bracket envelope form (?filter[...])", () => {
+    it("accepts simple bracket-wrapped equality filters", () => {
+      // URL: ?filter[status]=active — qs parses to { filter: { status: 'active' } }
+      const result = parser.parse({ filter: { status: "active" } });
+      expect(result.filters).toEqual({ status: "active" });
+    });
+
+    it("accepts bracket-wrapped operator filters", () => {
+      // URL: ?filter[price][gte]=100&filter[price][lte]=500
+      const result = parser.parse({
+        filter: { price: { gte: "100", lte: "500" } },
+      });
+      expect(result.filters).toEqual({ price: { $gte: 100, $lte: 500 } });
+    });
+
+    it("accepts a mix of envelope and bare top-level filters", () => {
+      const result = parser.parse({
+        filter: { status: "active" },
+        priority: "high",
+      });
+      expect(result.filters).toEqual({ status: "active", priority: "high" });
+    });
+
+    it("bare top-level filter wins on key clash with envelope", () => {
+      // Deterministic precedence: ?status=closed&filter[status]=active → 'closed'
+      const result = parser.parse({
+        filter: { status: "active" },
+        status: "closed",
+      });
+      expect(result.filters).toEqual({ status: "closed" });
+    });
+
+    it("ignores `filter` when it is not a plain object", () => {
+      // `?filter=bogus` should be silently dropped (not treated as a filter
+      // field named "filter") since the param is reserved as the envelope.
+      const result = parser.parse({ filter: "bogus" });
+      expect(result.filters).toEqual({});
+    });
+
+    it("respects allowedFilterFields whitelist through the envelope path", () => {
+      const whitelisted = new ArcQueryParser({ allowedFilterFields: ["status"] });
+      const result = whitelisted.parse({
+        filter: { status: "active", secret: "leak" },
+      });
+      expect(result.filters).toEqual({ status: "active" });
+    });
+  });
+
+  // ============================================================================
   // Filtering — Regex Operators (like/contains/regex)
   // ============================================================================
 

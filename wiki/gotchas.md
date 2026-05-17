@@ -16,7 +16,7 @@
 
 5. **`select` is preserved as-is.** Never normalized to string — string/array/projection object all allowed. DB-agnostic by design. See [[core]].
 
-6. **Type-only subpaths produce `export {}` at runtime.** `./org/types`, `./integrations` — correct output. Don't add runtime exports to fill them. See [[types]].
+6. **Type-only subpaths produce `export {}` at runtime.** e.g. `./integrations` — correct output (interfaces erase). Don't add runtime exports to fill them. See [[types]].
 
 7. **Event publishing is fire-and-forget (`failOpen: true`).** Request succeeds even if publish fails. Use the outbox for guarantees. See [[events]].
 

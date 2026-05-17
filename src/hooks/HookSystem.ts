@@ -127,11 +127,20 @@ export class HookSystem {
       finalPriority = resourceOrOptions.priority ?? 10;
       dependsOn = resourceOrOptions.dependsOn;
     } else {
-      // Positional syntax: register(resource, operation, phase, handler, priority)
+      // Positional syntax: register(resource, operation, phase, handler, priority).
+      // The unified overload signature makes these arguments optional at the
+      // type level so the object-syntax callers don't need to pass them;
+      // guard explicitly so the wrong positional shape fails loudly instead
+      // of crashing inside `getKey()` with `undefined`.
+      if (operation === undefined || phase === undefined || handler === undefined) {
+        throw new TypeError(
+          "[Arc] HookSystem.register(): positional form requires (resource, operation, phase, handler). Pass an object literal for the named form.",
+        );
+      }
       resource = resourceOrOptions;
-      finalOperation = operation!;
-      finalPhase = phase!;
-      finalHandler = handler!;
+      finalOperation = operation;
+      finalPhase = phase;
+      finalHandler = handler;
       finalPriority = priority;
     }
 
@@ -151,8 +160,11 @@ export class HookSystem {
       dependsOn,
     };
 
-    const hooks = this.hooks.get(key)!;
+    // `this.hooks.set(key, [])` ran moments ago when missing — pull the
+    // freshly-inserted bucket without an assertion that biome rejects.
+    const hooks = this.hooks.get(key) ?? [];
     hooks.push(registration);
+    if (!this.hooks.has(key)) this.hooks.set(key, hooks);
 
     // Sort by priority (lower runs first) — topological sort done at execution time
     hooks.sort((a, b) => a.priority - b.priority);
@@ -235,7 +247,8 @@ export class HookSystem {
     let index = 0;
     const next = async (): Promise<T | undefined> => {
       if (index < allHooks.length) {
-        const hook = allHooks[index++]!;
+        const hook = allHooks[index++];
+        if (!hook) return execute();
         const ctx: HookContext<T> = {
           resource,
           operation,
@@ -394,7 +407,9 @@ export class HookSystem {
     const result: HookRegistration[] = [];
 
     for (const hook of hooks) {
-      if (inDegree.get(hook)! === 0) {
+      // `inDegree` is populated for every entry in `hooks` two loops above;
+      // `?? 0` is a safe default and treats any unseen entry as a root.
+      if ((inDegree.get(hook) ?? 0) === 0) {
         queue.push(hook);
       }
     }
@@ -403,13 +418,14 @@ export class HookSystem {
     queue.sort((a, b) => a.priority - b.priority);
 
     while (queue.length > 0) {
-      const current = queue.shift()!;
+      const current = queue.shift();
+      if (!current) break;
       result.push(current);
 
       if (current.name && dependents.has(current.name)) {
-        const deps = dependents.get(current.name)!;
+        const deps = dependents.get(current.name) ?? [];
         for (const dep of deps) {
-          const newDegree = inDegree.get(dep)! - 1;
+          const newDegree = (inDegree.get(dep) ?? 0) - 1;
           inDegree.set(dep, newDegree);
           if (newDegree === 0) {
             // Insert sorted by priority

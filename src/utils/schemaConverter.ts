@@ -51,9 +51,15 @@ let _toJSONSchema: ToJSONSchemaFn | null = null;
 import("zod")
   .then(({ z }) => {
     if (typeof z?.toJSONSchema === "function") {
+      // Zod's `toJSONSchema` is typed against its internal $ZodType. We
+      // accept any "schema-shaped" record at the arc boundary and re-cast
+      // through `unknown` so neither the schema nor the options bag leaks
+      // `any` outward — call site receives `Record<string, unknown>`.
       _toJSONSchema = (schema, opts) =>
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        z.toJSONSchema(schema as any, opts as any) as Record<string, unknown>;
+        z.toJSONSchema(
+          schema as unknown as Parameters<typeof z.toJSONSchema>[0],
+          opts as unknown as Parameters<typeof z.toJSONSchema>[1],
+        ) as Record<string, unknown>;
     }
   })
   .catch(() => {

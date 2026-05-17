@@ -498,7 +498,10 @@ describe("Permission filters flow into _policyFilters", () => {
       arguments: { title: "Should fail" },
     });
     expect((result as any).isError).toBe(true);
-    expect((result.content[0] as { text: string }).text).toContain("Permission denied");
+    // 2.15.5: canonical ErrorContract — session present + denial → arc.forbidden 403.
+    const denied = JSON.parse((result.content[0] as { text: string }).text);
+    expect(denied).toMatchObject({ code: "arc.forbidden", status: 403 });
+    expect(denied.message).toContain("Read-only access");
   });
 
   it("unauthenticated user denied by permission check", async () => {
@@ -513,7 +516,11 @@ describe("Permission filters flow into _policyFilters", () => {
 
     const result = await client.callTool({ name: "list_tasks", arguments: {} });
     expect((result as any).isError).toBe(true);
-    expect((result.content[0] as { text: string }).text).toContain("Permission denied");
+    // 2.15.5: no session + denial → arc.unauthorized 401.
+    expect(JSON.parse((result.content[0] as { text: string }).text)).toMatchObject({
+      code: "arc.unauthorized",
+      status: 401,
+    });
   });
 
   it("dynamic permission filters based on session user", async () => {

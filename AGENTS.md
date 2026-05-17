@@ -198,7 +198,7 @@ See [RELEASING.md](RELEASING.md) — canonical for every `@classytic/*` package.
 |------|-----------|---------|
 | fastify | **Yes** | Everything |
 | @classytic/primitives | **Yes** | Event types (`EventMeta`, `DomainEvent`, `EventTransport`, `createEvent`, ...) |
-| @classytic/repo-core | No | `RepositoryLike`, adapter contract (`/adapter`), canonical pagination / tenant / errors / schema-generator contracts |
+| @classytic/repo-core | **Yes** | `RepositoryLike`, adapter contract (`/adapter`), canonical pagination / tenant / errors / schema-generator contracts |
 | better-auth | No | Better Auth integration |
 | ioredis | No | Redis event transport, caching, sessions |
 | bullmq | No | Job-queue integration |
@@ -275,7 +275,7 @@ Adapters live in their owning kit, never in arc. Ship the adapter from `@classyt
 | `interface.ts` | Type-only contract | `src/events/interface.ts` |
 | `types.ts` | Shared type defs | `src/factory/types.ts` |
 | `*.test.ts` | Vitest test file | `tests/auth/token-revocation.test.ts` |
-| `*Plugin.ts` | Fastify plugin | `src/org/organizationPlugin.ts` |
+| `*Plugin.ts` | Fastify plugin | `src/audit/auditPlugin.ts` |
 | `*.d.ts` | Ambient declarations | `src/optional-peers.d.ts` |
 
 ---

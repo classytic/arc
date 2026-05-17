@@ -76,7 +76,11 @@ const websocketPluginImpl: FastifyPluginAsync<WebSocketPluginOptions> = async (
     await adapter.subscribe((room, message) => {
       if (room.startsWith("org:")) {
         const parts = room.split(":");
-        const orgId = parts[1]!;
+        // `room.startsWith("org:")` guarantees `parts[0] === "org"`; the
+        // adapter never publishes `org:` with an empty orgId because the
+        // publisher (`broadcastToOrgWithAdapter`) requires a non-empty id.
+        const orgId = parts[1];
+        if (!orgId) return;
         const actualRoom = parts.slice(2).join(":");
         rooms.broadcastToOrg(orgId, actualRoom, message);
       } else {
@@ -133,14 +137,18 @@ const websocketPluginImpl: FastifyPluginAsync<WebSocketPluginOptions> = async (
   // shape come from @fastify/websocket, which augments Fastify's route
   // shorthand via declaration merging. Arc doesn't take a typecheck-time
   // dep on that package (see ADR in types.ts), so the registration goes
-  // through a single narrowed `any` here. One boundary, documented.
-  //
-  // biome-ignore lint/suspicious/noExplicitAny: @fastify/websocket route
-  // signature — not worth a typecheck-time dependency on the peer package.
-  (fastify.get as any)(
+  // through a single narrowed overload here. One boundary, documented —
+  // the cast routes through `unknown` so neither the route options nor
+  // the handler shape leaks `any` outward.
+  type WsRouteRegistrar = (
+    path: string,
+    opts: { websocket: true },
+    handler: (socket: WsSocketLike, request: unknown) => unknown,
+  ) => void;
+  (fastify.get as unknown as WsRouteRegistrar)(
     path,
     { websocket: true },
-    async (socket: WsSocketLike, request: unknown) => {
+    async (socket, request) => {
       await handleConnection(ctx, socket, request);
     },
   );

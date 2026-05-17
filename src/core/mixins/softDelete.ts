@@ -12,7 +12,6 @@
  * ```
  */
 
-import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import type {
   AnyRecord,
   IControllerResponse,
@@ -21,6 +20,7 @@ import type {
   UserLike,
 } from "../../types/index.js";
 import { createError, ForbiddenError, NotFoundError } from "../../utils/errors.js";
+import { withRepoFeatures } from "../../utils/repoFeature.js";
 import type { BaseCrudController } from "../BaseCrudController.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: standard TS mixin Constructor pattern
@@ -39,12 +39,12 @@ export function SoftDeleteMixin<TBase extends Constructor<BaseCrudController>>(
     async getDeleted(
       req: IRequestContext,
     ): Promise<IControllerResponse<PaginationResult<AnyRecord>>> {
-      const repo = this.repository as RepositoryLike & {
+      const repo = withRepoFeatures<{
         getDeleted?: (
           params?: unknown,
           options?: unknown,
         ) => Promise<AnyRecord[] | PaginationResult<AnyRecord>>;
-      };
+      }>(this.repository);
       if (!repo.getDeleted) {
         throw createError(501, "Soft delete not implemented");
       }
@@ -62,11 +62,15 @@ export function SoftDeleteMixin<TBase extends Constructor<BaseCrudController>>(
     }
 
     async restore(req: IRequestContext): Promise<IControllerResponse<AnyRecord>> {
-      const repo = this.repository as RepositoryLike & {
+      const repo = withRepoFeatures<{
         restore?: (id: string) => Promise<AnyRecord | null>;
         getById: (id: string, options?: unknown) => Promise<AnyRecord | null>;
-      };
-      if (!repo.restore) {
+      }>(this.repository);
+      // Capture to a const so the arrow-function closure below sees a
+      // non-nullable signature without a `!` assertion. TS narrowing on
+      // `repo.restore` doesn't survive across the closure boundary.
+      const restore = repo.restore;
+      if (!restore) {
         throw createError(501, "Restore not implemented");
       }
 
@@ -114,8 +118,7 @@ export function SoftDeleteMixin<TBase extends Constructor<BaseCrudController>>(
       }
 
       const repoRestore = (): Promise<AnyRecord | null> =>
-        // biome-ignore lint/style/noNonNullAssertion: checked above
-        repo.restore!(repoId) as Promise<AnyRecord | null>;
+        restore(repoId) as Promise<AnyRecord | null>;
 
       let item: AnyRecord | null;
       if (hooks && this.resourceName) {

@@ -16,11 +16,39 @@ import type { PermissionCheck } from "../../permissions/types.js";
 import { executePipeline } from "../../pipeline/pipe.js";
 import type { PipelineConfig, PipelineContext } from "../../pipeline/types.js";
 import type { IControllerResponse } from "../../types/index.js";
-import { buildRequestContext } from "./buildRequestContext.js";
+import { buildRequestContext, type McpOperation } from "./buildRequestContext.js";
 import { evaluatePermission, permissionDeniedResult, toCallToolResult } from "./tool-helpers.js";
 import type { CallToolResult, ToolDefinition } from "./types.js";
 
 type ControllerMethod = (ctx: unknown) => Promise<IControllerResponse>;
+
+/**
+ * Pick the IRequestContext shape MCP should produce when invoking a
+ * custom route's handler. Mirrors the HTTP semantics of the route:
+ *
+ * | HTTP                           | MCP kind  | params  | body  | query |
+ * |--------------------------------|-----------|---------|-------|-------|
+ * | `GET /thing` (no :id)          | `list`    | -       | -     | input |
+ * | `GET /thing/:id`               | `get`     | { id }  | -     | input |
+ * | `POST /thing` (no :id)         | `create`  | -       | input | -     |
+ * | `PUT|PATCH /thing/:id`         | `update`  | { id }  | rest  | -     |
+ * | `DELETE /thing/:id`            | `delete`  | { id }  | -     | -     |
+ * | `POST /thing/:id` (any other)  | `update`  | { id }  | rest  | -     |
+ *
+ * Pre-2.15.5 every custom route used `update`/`create` regardless of method.
+ * That broke GET-route bridging the moment a handler read `ctx.query` — MCP
+ * stuffed the input into `ctx.body` instead and the handler returned empty.
+ * The `kind` mapping below is the single source of truth that keeps HTTP
+ * and MCP invocations producing the same `IRequestContext` shape.
+ */
+export function operationKindForRoute(method: string, hasId: boolean): McpOperation {
+  const upper = method.toUpperCase();
+  if (upper === "GET") return hasId ? "get" : "list";
+  if (upper === "DELETE") return "delete";
+  // POST without :id → create; POST/PUT/PATCH with :id → update.
+  if (hasId) return "update";
+  return "create";
+}
 
 /**
  * Options threaded through from the orchestrator so a custom-route MCP tool
@@ -106,7 +134,11 @@ export function createCustomRouteHandler(
     }
 
     try {
-      const kind = hasId ? "update" : "create";
+      // 2.15.5 — pick the IRequestContext shape based on HTTP method, not just
+      // presence of `:id`. GET routes route input through `query` so handlers
+      // that read `ctx.query` work without an explicit `mcpHandler`. See
+      // `operationKindForRoute` for the full table.
+      const kind = operationKindForRoute(route.method, hasId);
       const reqCtx = buildRequestContext(
         input,
         session,

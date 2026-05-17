@@ -373,9 +373,19 @@ export async function setupBetterAuthTestApp(
     signedUp[u.key] = { userId: res.userId, token: res.token, user: u };
   }
 
-  // 2. Creator creates the org.
-  const creator = creators[0]!;
-  const creatorRec = signedUp[creator.key]!;
+  // 2. Creator creates the org. `creators` was filtered to `isCreator === true`
+  // entries earlier; `creators[0]` exists by invariant, and every key already
+  // landed in `signedUp` during the previous loop.
+  const creator = creators[0];
+  if (!creator) {
+    throw new Error("[arc-testing] setupBetterAuthTestApp: no `isCreator: true` user supplied");
+  }
+  const creatorRec = signedUp[creator.key];
+  if (!creatorRec) {
+    throw new Error(
+      `[arc-testing] setupBetterAuthTestApp: creator '${creator.key}' missing from signed-up roster`,
+    );
+  }
   const orgRes = await helpers.createOrg(app, creatorRec.token, org);
   if (orgRes.statusCode >= 400 || !orgRes.orgId) {
     throw new Error(
@@ -390,7 +400,8 @@ export async function setupBetterAuthTestApp(
   for (const u of users) {
     if (u.isCreator === true) continue;
     if (!addMember) continue; // caller didn't configure membership — they'll wire manually
-    const rec = signedUp[u.key]!;
+    const rec = signedUp[u.key];
+    if (!rec) continue;
     const res = await addMember({
       app,
       creatorToken: creatorRec.token,

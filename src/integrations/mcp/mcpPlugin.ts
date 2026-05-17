@@ -104,15 +104,14 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
     throw new Error("zod is required for MCP tool schemas. Install it: npm install zod");
   }
 
-  // ── 2. Filter resources — include takes priority over exclude ──
-  let enabledResources: typeof options.resources;
-  if (options.include) {
-    const includeSet = new Set(options.include);
-    enabledResources = options.resources.filter((r) => includeSet.has(r.name));
-  } else {
-    const excludeSet = new Set(options.exclude ?? []);
-    enabledResources = options.resources.filter((r) => !excludeSet.has(r.name));
-  }
+  // ── 2. Filter resources — default-deny `expose` takes priority over
+  //                          the legacy `include` alias, which beats
+  //                          `exclude` (a default-allow opt-out). ──
+  const enabledResources = filterResourcesForMcp(options.resources, {
+    expose: options.expose,
+    include: options.include,
+    exclude: options.exclude,
+  });
 
   // ── 3. Generate tool definitions ──
   const overrides = options.overrides ?? {};
@@ -179,11 +178,17 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
     // ────────────────────────────────────────────────────────────
     // STATEFUL MODE — session-cached, reused across requests
     // ────────────────────────────────────────────────────────────
+    // `cache` is initialised in the stateful branch above; this `else`
+    // block is the stateful path, so the cache instance is guaranteed
+    // present — make that explicit instead of asserting non-null.
+    if (!cache) {
+      throw new Error("[Arc/MCP] Stateful session cache missing in stateful registration");
+    }
     registerStatefulRoutes(
       fastify,
       prefix,
       options,
-      cache!,
+      cache,
       createServerInstance,
       StreamableHTTPServerTransport,
     );
@@ -457,6 +462,73 @@ function registerStatefulRoutes(
     cache.remove(sessionId);
     reply.code(204).send();
   });
+}
+
+// ============================================================================
+// Resource filter (default-deny `expose` vs legacy `include`/`exclude`)
+// ============================================================================
+
+interface ResourceFilterInputs {
+  readonly expose?: readonly string[];
+  readonly include?: readonly string[];
+  readonly exclude?: readonly string[];
+}
+
+/**
+ * Resolve `expose` / `include` / `exclude` into the filtered resource list
+ * `mcpPlugin` should surface. Three mutually exclusive intents:
+ *
+ *  - `expose`: default-deny allowlist (preferred — new resources auto-deny).
+ *  - `include`: legacy alias for `expose`, kept for back-compat.
+ *  - `exclude`: default-allow opt-out (drift-prone — new resources auto-leak).
+ *
+ * Conflicting combinations throw with an actionable message so a host that
+ * accidentally mixed paradigms fails at boot instead of silently leaking or
+ * starving the LLM surface.
+ *
+ * **Local opt-out wins.** Any resource declared with
+ * `defineResource({ mcp: false })` is dropped FIRST, before any of the
+ * plugin-level allowlists/blocklists run. The opt-out is colocated with
+ * the resource definition, so adding a new "never-expose" resource is
+ * a single-file change instead of a host-wide blocklist update that
+ * drifts as the codebase grows.
+ *
+ * Exported so `mcp/testing.ts` and external test harnesses can apply the
+ * same precedence rules without duplicating them.
+ */
+export function filterResourcesForMcp<T extends { name: string; mcp?: boolean }>(
+  resources: readonly T[],
+  inputs: ResourceFilterInputs,
+): T[] {
+  const { expose, include, exclude } = inputs;
+
+  if (expose && include) {
+    throw new Error(
+      "mcpPlugin: pass either `expose` (preferred) or `include` (legacy alias), not both.",
+    );
+  }
+  if (expose && exclude) {
+    throw new Error(
+      "mcpPlugin: `expose` is default-deny — `exclude` is redundant. Drop `exclude` " +
+        "or switch to `include`/`exclude` for default-allow semantics.",
+    );
+  }
+
+  // 1. Per-resource opt-out (`defineResource({ mcp: false })`) — authoritative.
+  //    Filter these out first so the plugin-level lists only see eligible
+  //    resources; an `expose`/`include` allowlist that names an opted-out
+  //    resource still drops it. Treats `mcp: undefined` as "default allow".
+  const eligible = resources.filter((r) => r.mcp !== false);
+
+  // 2. Plugin-level selection over what remains.
+  const allow = expose ?? include;
+  if (allow) {
+    const allowSet = new Set(allow);
+    return eligible.filter((r) => allowSet.has(r.name));
+  }
+
+  const excludeSet = new Set(exclude ?? []);
+  return eligible.filter((r) => !excludeSet.has(r.name));
 }
 
 // ============================================================================

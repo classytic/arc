@@ -35,7 +35,6 @@ describe("Subpath resolution", () => {
     "@classytic/arc/presets",
     "@classytic/arc/schemas",
     "@classytic/arc/docs",
-    "@classytic/arc/org",
     "@classytic/arc/discovery",
     "@classytic/arc/audit",
     "@classytic/arc/plugins/response-cache",

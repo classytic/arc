@@ -40,7 +40,6 @@ import type { PermissionCheck } from "../permissions/types.js";
 import type { TestAuthProvider } from "./authSession.js";
 
 type CrudOp = "list" | "get" | "create" | "update" | "delete";
-type UpdateVerb = "PATCH" | "PUT";
 
 /**
  * An op is "protected" (should 401 without a token) unless the resource
@@ -133,7 +132,9 @@ export class HttpTestHarness<T = unknown> {
   }
 
   runCrud(): void {
-    const { resource, enabledRoutes, updateMethods } = this;
+    const resource = this.resource;
+    const enabledRoutes = this.enabledRoutes;
+    const updateMethods = this.updateMethods;
     let createdId: string | null = null;
 
     describe(`${resource.displayName} HTTP CRUD`, () => {
@@ -290,7 +291,9 @@ export class HttpTestHarness<T = unknown> {
   }
 
   runPermissions(): void {
-    const { resource, enabledRoutes, updateMethods } = this;
+    const resource = this.resource;
+    const enabledRoutes = this.enabledRoutes;
+    const updateMethods = this.updateMethods;
 
     // Only emit the unauthenticated-401 assertion for ops that are actually
     // protected (i.e. have a permission check and it's not `allowPublic`).
@@ -396,7 +399,8 @@ export class HttpTestHarness<T = unknown> {
   }
 
   runValidation(): void {
-    const { resource, enabledRoutes } = this;
+    const resource = this.resource;
+    const enabledRoutes = this.enabledRoutes;
     if (!enabledRoutes.has("create")) return;
 
     describe(`${resource.displayName} HTTP Validation`, () => {

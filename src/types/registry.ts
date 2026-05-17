@@ -5,7 +5,12 @@
 
 import type { PermissionCheck } from "../permissions/types.js";
 import "./base.js";
-import type { OpenApiSchemas, RateLimitConfig, ResourcePermissions } from "./resource.js";
+import type {
+  OpenApiSchemas,
+  RateLimitConfig,
+  ResolvedTenantPurge,
+  ResourcePermissions,
+} from "./resource.js";
 
 export interface ResourceMetadata {
   name: string;
@@ -41,6 +46,21 @@ export interface RegistryEntry extends ResourceMetadata {
   adapter?: { type: string; name: string } | null;
   events?: string[];
   disableDefaultRoutes?: boolean;
+  /**
+   * 2.15.5 — multi-tenant scoping field declared on the resource
+   * (defaults to `'organizationId'`; `false` for company-wide tables).
+   * Surfaced so introspection / cascade helpers can scope deletes
+   * without re-reading the resource definition.
+   */
+  tenantField?: string | false;
+  /**
+   * Resolved tenant-purge strategy — what arc actually runs when
+   * `cascadeDeleteForOrganization` fires for this resource. Computed
+   * at boot from the resource's `onTenantDelete` declaration. Surfaced
+   * here so introspection / audit scripts can answer "what happens on
+   * org-delete?" without re-reading the resource definition.
+   */
+  resolvedTenantPurge?: ResolvedTenantPurge;
   openApiSchemas?: OpenApiSchemas;
   registeredAt?: string;
   /** Field-level permissions metadata (for OpenAPI data) */
@@ -71,6 +91,14 @@ export interface RegistryEntry extends ResourceMetadata {
     readonly schema?: unknown;
     /** Per-action permission check (if different from resource-level `actionPermissions`) */
     readonly permissions?: PermissionCheck;
+    /**
+     * 2.15.5: mount point — `true` (default) for `POST /:id/action`,
+     * `false` for `POST /action` (resource-root, no `:id` path param).
+     * Consumed by registry enumeration, OpenAPI generation, and FE
+     * resource manifests so callers can pick the right URL without
+     * reading the action definition itself.
+     */
+    readonly id?: boolean;
     /** MCP tool generation flag — `false` to skip, object for overrides */
     readonly mcp?:
       | boolean

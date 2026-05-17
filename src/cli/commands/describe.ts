@@ -86,6 +86,32 @@ interface DescribedResource {
   schemaOptions?: RouteSchemaOptions;
   rateLimit?: RateLimitConfig | false;
   middlewares: string[];
+
+  /**
+   * 2.15.5+: multi-tenant + cascade metadata. Surfaced so audit scripts
+   * answering "what cascades on org-delete?" or "what scopes by org?"
+   * read from one source instead of grepping resource files. Mirrors
+   * the registry projection — same shape consumed by
+   * `getCascadingResources()` and `assertNoTenantData()`.
+   */
+  tenancy: {
+    tenantField: string | false | undefined;
+    /**
+     * Resolved purge strategy — what `cascadeDeleteForOrganization`
+     * actually runs (`hard` / `soft` / `anonymize` / `skip`) plus where
+     * the rule came from (`declared` / `inferred-soft` / `inferred-hard`
+     * / `disabled`).
+     */
+    purgeStrategy?: { type: string; source: string };
+  };
+
+  /**
+   * 2.16: configured primary-key field. Defaults to `_id`; hosts pin it
+   * to a domain handle (`slug`, `reportId`, `sku`) for non-Mongo schemas
+   * — the CLI surfaces it so generated code / tooling can compose
+   * `findOne` filters via the right key.
+   */
+  idField: string;
 }
 
 interface ActionDescription {
@@ -93,6 +119,13 @@ interface ActionDescription {
   description?: string;
   hasSchema: boolean;
   permission: PermissionDescription;
+  /**
+   * 2.15.5: mount preference — `true` (default) for `POST /<prefix>/:id/action`,
+   * `false` for `POST /<prefix>/action` (resource-root, no `:id`).
+   */
+  requiresId: boolean;
+  /** Mount-point URL suffix derived from `requiresId`. */
+  mount: "/:id/action" | "/action";
 }
 
 interface AggregationDescription {
@@ -305,16 +338,71 @@ function describeRoutes(resource: ResourceDefinition<unknown>): RouteDescription
     }
   }
 
-  // Custom routes
+  // Custom routes — recognize 2.16's `controllerMethod` field as well as
+  // the legacy string / function `handler`. Without this, a route declared
+  // with `controllerMethod: (c) => c.getStats` shows up as `operation:
+  // 'custom'` even though the function-ref form carries every bit of intent
+  // the string form did.
   for (const ar of resource.routes ?? []) {
+    const arWithRef = ar as typeof ar & {
+      controllerMethod?: (controller: unknown) => unknown;
+    };
+    let operation: string;
+    if (typeof ar.handler === "string") {
+      operation = ar.handler;
+    } else if (typeof arWithRef.controllerMethod === "function") {
+      // Function-ref form — use the explicit `operation` if declared,
+      // else fall back to the function's `name` (TS compiler usually
+      // preserves it for named arrows / methods).
+      operation = ar.operation ?? arWithRef.controllerMethod.name ?? "controllerMethod";
+    } else {
+      operation = ar.operation ?? "custom";
+    }
     routes.push({
       method: ar.method,
       path: `${resource.prefix}${ar.path}`,
-      operation: typeof ar.handler === "string" ? ar.handler : "custom",
+      operation,
       summary: ar.summary,
       description: ar.description,
       permission: describePermission(ar.permissions),
     });
+  }
+
+  // Action mounts — surface BOTH id-bound and id-less paths so the CLI
+  // output matches what the registry / OpenAPI / MCP emit. Pre-2.15.5
+  // there was only `/:id/action`; the resource-root mount lights up
+  // when at least one action declares `id: false`.
+  if (resource.actions && Object.keys(resource.actions).length > 0) {
+    const entries = Object.entries(resource.actions);
+    const hasIdBound = entries.some(([, e]) => typeof e === "function" || e.id !== false);
+    const hasIdLess = entries.some(([, e]) => typeof e !== "function" && e.id === false);
+    if (hasIdBound) {
+      routes.push({
+        method: "POST",
+        path: `${resource.prefix}/:id/action`,
+        operation: "action",
+      });
+    }
+    if (hasIdLess) {
+      routes.push({
+        method: "POST",
+        path: `${resource.prefix}/action`,
+        operation: "action",
+      });
+    }
+  }
+
+  // Aggregation routes (v2.13) — one GET path per declared aggregation.
+  // Earlier describe runs silently dropped these; now they appear in the
+  // wire surface alongside CRUD / actions.
+  if (resource.aggregations) {
+    for (const name of Object.keys(resource.aggregations)) {
+      routes.push({
+        method: "GET",
+        path: `${resource.prefix}/aggregations/${name}`,
+        operation: `aggregation:${name}`,
+      });
+    }
   }
 
   return routes;
@@ -354,18 +442,28 @@ function describeActions(
 ): ActionDescription[] {
   if (!actions) return [];
   return Object.entries(actions).map(([name, entry]) => {
+    // Function-shorthand actions are always id-bound (legacy default);
+    // only object-form definitions can opt out via `id: false`. Keep
+    // the projection identical to what `buildResourceManifest` /
+    // `RegistryEntry.actions` emit so AI agents / FE codegen reading
+    // from any of those surfaces see the same shape.
     if (typeof entry === "function") {
       return {
         name,
         hasSchema: false,
         permission: describePermission(fallback),
+        requiresId: true,
+        mount: "/:id/action",
       };
     }
+    const requiresId = entry.id !== false;
     return {
       name,
       description: entry.description,
       hasSchema: !!entry.schema,
       permission: describePermission(entry.permissions ?? fallback),
+      requiresId,
+      mount: requiresId ? "/:id/action" : "/action",
     };
   });
 }
@@ -455,6 +553,28 @@ export function describeResource(
       Object.keys(resource.schemaOptions ?? {}).length > 0 ? resource.schemaOptions : undefined,
     rateLimit: resource.rateLimit,
     middlewares: describeMiddlewares(resource.middlewares),
+
+    // Surface multi-tenant + cascade metadata. Reads `resolvedTenantPurge`
+    // (computed once at boot by `resolveTenantPurge`) so the CLI answer
+    // matches what `cascadeDeleteForOrganization` actually runs — no
+    // inference at the describe call site.
+    tenancy: {
+      tenantField: resource.tenantField,
+      ...(resource.resolvedTenantPurge
+        ? {
+            purgeStrategy: {
+              type: resource.resolvedTenantPurge.strategy.type,
+              source: resource.resolvedTenantPurge.source,
+            },
+          }
+        : {}),
+    },
+
+    // 2.16 — primary-key field. Defaults to `_id`. Hosts pin it via
+    // `idField: 'slug' | 'reportId' | …` for non-Mongo schemas; the CLI
+    // surfaces it so codegen reading describe() composes the right
+    // `findOne` filter.
+    idField: resource.idField ?? "_id",
   };
 }
 

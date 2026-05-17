@@ -159,7 +159,8 @@ export class MemoryCacheStore<TValue = unknown> implements CacheStore<TValue> {
     while (this.cache.size > this.maxEntries) {
       const oldestKey = this.cache.keys().next().value as string | undefined;
       if (!oldestKey) break;
-      const entry = this.cache.get(oldestKey)!;
+      const entry = this.cache.get(oldestKey);
+      if (!entry) break;
       this.removeEntry(oldestKey, entry);
       this._evictions++;
     }
@@ -170,7 +171,8 @@ export class MemoryCacheStore<TValue = unknown> implements CacheStore<TValue> {
     while (this.currentBytes > this.maxMemoryBytes && this.cache.size > 0) {
       const oldestKey = this.cache.keys().next().value as string | undefined;
       if (!oldestKey) break;
-      const entry = this.cache.get(oldestKey)!;
+      const entry = this.cache.get(oldestKey);
+      if (!entry) break;
       this.removeEntry(oldestKey, entry);
       this._evictions++;
       if (this.currentBytes <= target) break;

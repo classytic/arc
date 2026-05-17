@@ -2,7 +2,7 @@
 
 **Summary**: Composable resource modifiers. Attach one or more via `defineResource({ presets })`. Order matters when behaviors overlap.
 **Sources**: src/presets/.
-**Last updated**: 2026-04-21.
+**Last updated**: 2026-05-18.
 
 ---
 
@@ -11,7 +11,7 @@
 | Preset | Adds |
 |---|---|
 | `bulk` | Batch create/update/delete routes |
-| `softDelete` | `deletedAt` column + filtered queries |
+| `softDelete` | `GET /deleted` + `POST /:id/restore` routes; kit provides the `deletedAt` filter |
 | `ownedByUser` | Row-level filter on `userId` |
 | `slugLookup` | `/resource/:slug` in addition to `/:id` |
 | `tree` | Parent-child recursion (category trees etc.) |
@@ -24,6 +24,17 @@
 
 - Presets compose, but **order matters**. `softDelete + bulk` both modify DELETE — latest wins.
 - `tests/presets/preset-conflicts.test.ts` validates known conflicts. Always test combinations.
+
+## softDelete — kit responsibilities
+
+Arc's preset only adds the HTTP routes (`GET /deleted`, `POST /:id/restore`) and the `BaseCrudController` mixin that proxies them to `repo.getDeleted()` / `repo.restore()`. Every other piece — tombstone column, read-filter injection, hard-delete bypass, **and TTL auto-purge** — lives in the kit's soft-delete plugin. Wire the kit plugin on the repository, then attach `softDeletePreset()` to the resource. The two are independent and must agree on the column name.
+
+| Kit | Soft-delete + TTL wiring |
+|---|---|
+| `@classytic/mongokit` | One plugin: `softDeletePlugin({ ttlDays })`. Creates a real MongoDB TTL index with `partialFilterExpression: { deletedAt: { $type: 'date' } }` so only tombstoned rows are swept. Mongo's TTL monitor runs every ~60s. |
+| `@classytic/sqlitekit` | Two plugins. `softDeletePlugin()` handles tombstone + read filter. SQLite has no native TTL, so auto-purge ships as a separate `ttlPlugin({ field: 'deletedAt', expireAfterSeconds, mode })` with three modes: `scheduled` (setInterval sweep, default 60s, calls `.unref()` so it doesn't pin the event loop), `trigger` (`AFTER INSERT` SQL trigger prunes on writes, persistent across restarts), `lazy` (never deletes, just hides — pair with periodic `VACUUM`). `repo.sweepExpired()` exposed for Workers / Cron Triggers. |
+
+For consumer-level coverage, see [tests/integration/mongokit-soft-delete.test.ts](../tests/integration/mongokit-soft-delete.test.ts) (HTTP round-trip + TTL index assertions) and [tests/integration/presets-cross-kit.test.ts](../tests/integration/presets-cross-kit.test.ts) (sqlitekit parity).
 
 ## multiTenant hardening (v2.9)
 

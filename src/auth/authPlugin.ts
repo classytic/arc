@@ -72,7 +72,9 @@ function parseExpiresIn(input: string | undefined, defaultValue: number): number
   const match = /^(\d+)\s*([smhd])$/i.exec(input);
   if (!match) return defaultValue;
 
-  const value = parseInt(match[1]!, 10);
+  // Regex group 1 (`\d+`) always matches when `match` is non-null since the
+  // pattern requires the digit segment before the unit suffix.
+  const value = parseInt(match[1] ?? "0", 10);
   const unit = match[2]?.toLowerCase() ?? "s";
 
   const multipliers: Record<string, number> = { s: 1, m: 60, h: 3600, d: 86400 };

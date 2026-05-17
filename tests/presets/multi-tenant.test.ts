@@ -49,6 +49,18 @@ describe("multiTenant preset", () => {
       expect(result.middlewares?.delete).toBeDefined();
       expect(result.middlewares?.delete?.length).toBeGreaterThan(0);
     });
+
+    it("should emit a tenantScope slot for custom routes (filter + injection)", () => {
+      // The `tenantScope` slot is what arc reads when a `RouteDefinition`
+      // opts in via `tenantScope: true`. It mirrors the `update` slot —
+      // strict filter pins lookups to the caller's tenant and the
+      // injection middleware stamps the body so members can't hop their
+      // write to another tenant by spoofing the field.
+      const result = multiTenantPreset();
+      expect(result.middlewares?.tenantScope).toBeDefined();
+      // filter + injection = 2 entries (same shape `update` ships).
+      expect(result.middlewares?.tenantScope?.length).toBe(2);
+    });
   });
 
   describe("Custom options", () => {

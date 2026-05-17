@@ -115,7 +115,8 @@ export async function executePipeline(
   let chain: NextFunction = () => handler(currentCtx);
 
   for (let i = interceptors.length - 1; i >= 0; i--) {
-    const interceptor = interceptors[i]!;
+    const interceptor = interceptors[i];
+    if (!interceptor) continue;
     const next = chain;
     chain = () => interceptor.handler(currentCtx, next);
   }

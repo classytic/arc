@@ -1,8 +1,8 @@
 # Peer Dependencies
 
-**Summary**: Every integration is an optional peer dep and never bundled. Only `fastify` and `@classytic/primitives` are required. **Arc 2.12 is fully DB-agnostic** — every kit-specific adapter (Mongoose, Drizzle, Prisma) lives in its own kit, not arc. Arc consumes the adapter contract from `@classytic/repo-core/adapter`. Custom kits implementing `DataAdapter<TDoc>` plug in identically.
+**Summary**: Every integration is an optional peer dep and never bundled. `fastify`, `@classytic/primitives`, and `@classytic/repo-core` are required (arc imports the adapter / pagination / tenant / errors contracts from repo-core at runtime). Arc is fully DB-agnostic — every kit-specific adapter (Mongoose, Drizzle, Prisma) lives in its own kit, not arc. Arc consumes the adapter contract from `@classytic/repo-core/adapter`. Custom kits implementing `DataAdapter<TDoc>` plug in identically.
 **Sources**: package.json, tsdown.config.ts, AGENTS.md §7.
-**Last updated**: 2026-05-02.
+**Last updated**: 2026-05-18.
 
 ---
 
@@ -11,15 +11,15 @@
 | Peer | Min | Required? | Used by |
 |---|---|---|---|
 | fastify | >=5.0.0 | **Yes** | Everything |
-| @classytic/primitives | >=0.3.0 | **Yes** | Canonical event types (`EventMeta`, `DomainEvent`, `EventTransport`, ...) |
-| @classytic/repo-core | >=0.3.1 | No | `RepositoryLike`, adapter contract (`/adapter`), canonical pagination / tenant / errors / schema-generator contracts |
-| @classytic/streamline | >=2.0.0 | No | Streamline integration |
+| @classytic/primitives | >=0.6.0 | **Yes** | Canonical event types (`EventMeta`, `DomainEvent`, `EventTransport`, ...) |
+| @classytic/repo-core | >=0.5.0 | **Yes** | `RepositoryLike`, adapter contract (`/adapter`), canonical pagination / tenant / errors / schema-generator contracts |
+| @classytic/streamline | >=2.3.3 | No | Streamline integration |
 | better-auth | >=1.6.2 | No | Better Auth integration |
 | ioredis | >=5.0.0 | No | Redis events, cache, sessions |
 | bullmq | >=5.0.0 | No | Job queue |
 | @opentelemetry/* | various | No | Tracing plugin |
 
-**Removed in arc 2.12:** `@classytic/mongokit`, `@classytic/sqlitekit`, `mongoose`, `@prisma/client`. Every kit-specific adapter lives on the kit side. Hosts depend on whichever kit they use (`@classytic/mongokit@>=3.13.0` for the Mongoose adapter, `@classytic/sqlitekit@>=0.3.0` for the Drizzle adapter, `@classytic/prismakit@>=0.1.0` for the Prisma adapter) and import from the kit's `/adapter` subpath. The kit owns the driver peer dep, not arc. Arc 2.12 has zero kit- or driver-bound peers.
+**Kit-specific adapters live on the kit side.** Hosts depend on whichever kit they use (`@classytic/mongokit@>=3.14.0` for Mongoose, `@classytic/sqlitekit@>=0.4.0` for Drizzle, `@classytic/prismakit` for Prisma) and import from the kit's `/adapter` subpath. The kit owns the driver peer dep, not arc. Arc has zero kit- or driver-bound peers.
 
 ## Rules
 

@@ -44,6 +44,10 @@ export {
   createCrudRouter,
   createPermissionMiddleware,
 } from "./createCrudRouter.js";
+// `defineAction()` — typed action declaration. Captures the schema's
+// literal type so handler's `data` is `z.infer<typeof schema>` instead
+// of `Record<string, unknown>`. Drop-in object replacement (2.16).
+export { type DefineActionConfig, defineAction } from "./defineAction.js";
 export { defineResource, ResourceDefinition } from "./defineResource.js";
 export { defineResourceVariants } from "./defineResourceVariants.js";
 // Entity helpers — read `req.arc.idField` / `entityId` inside action and

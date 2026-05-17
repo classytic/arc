@@ -424,15 +424,19 @@ describe("aggregation routes — executionHints", () => {
 });
 
 describe("aggregation routes — adapter without aggregate()", () => {
-  let app: FastifyInstance;
-
   beforeAll(async () => {
     await setupTestDatabase();
+  });
 
+  afterAll(async () => {
+    await teardownTestDatabase();
+  });
+
+  it("throws ArcAggregationConfigError at boot (fail-fast, not 501 per request)", async () => {
+    // Pre-2.16 arc surfaced "adapter without aggregate" as a 501 at first
+    // request. 2.16 promotes this to a boot-time throw so the misconfig
+    // shows up during deploy, not the first dashboard hit in production.
     const Model = createMockModel("OrderNoAgg");
-    // Real mongokit Repository would ship aggregate, so build a thin
-    // wrapper that proxies the methods the controller needs but
-    // omits aggregate. Adapter feature-detect should return false.
     const baseRepo = createMockRepository(Model) as Record<string, unknown>;
     const repo: Record<string, unknown> = {
       idField: baseRepo.idField,
@@ -445,7 +449,7 @@ describe("aggregation routes — adapter without aggregate()", () => {
       deleteMany: baseRepo.deleteMany?.bind(baseRepo),
       claim: baseRepo.claim?.bind(baseRepo),
       claimVersion: baseRepo.claimVersion?.bind(baseRepo),
-      // NO aggregate property
+      // NO aggregate property — boot guard fires.
     };
 
     const resource = defineResource({
@@ -472,30 +476,16 @@ describe("aggregation routes — adapter without aggregate()", () => {
       },
     });
 
-    app = await createApp({
-      preset: "testing",
-      auth: false,
-      logger: false,
-      plugins: async (f) => {
-        await f.register(resource.toPlugin());
-      },
-    });
-    await app.ready();
-  });
-
-  afterAll(async () => {
-    await app?.close();
-    await teardownTestDatabase();
-  });
-
-  it("returns 501 when adapter doesn't ship aggregate()", async () => {
-    const res = await app.inject({
-      method: "GET",
-      url: "/orders-no-agg/aggregations/revenueByStatus",
-    });
-
-    expect(res.statusCode).toBe(501);
-    expect(JSON.parse(res.body).message).toMatch(/does not implement repo\.aggregate/);
+    await expect(
+      createApp({
+        preset: "testing",
+        auth: false,
+        logger: false,
+        plugins: async (f) => {
+          await f.register(resource.toPlugin());
+        },
+      }),
+    ).rejects.toThrow(/declares aggregations \[revenueByStatus\].*no repository/i);
   });
 });
 

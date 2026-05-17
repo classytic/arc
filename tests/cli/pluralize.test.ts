@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { pluralize } from "../../src/cli/utils/pluralize.js";
+import { pluralize } from "../../src/utils/pluralize.js";
 
 describe("pluralize", () => {
   // ============================================================================

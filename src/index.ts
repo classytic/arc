@@ -53,7 +53,6 @@
  * | `@classytic/arc/idempotency` | Idempotency — accepts any `RepositoryLike` directly |
  * | `@classytic/arc/idempotency/redis` | Redis idempotency store (non-repository backend) |
  * | `@classytic/arc/utils` | Utilities (errors, state machine, circuit breaker) |
- * | `@classytic/arc/org` | Organization/multi-tenant |
  * | `@classytic/arc/auth` | Authentication (JWT, Better Auth) |
  * | `@classytic/arc/testing` | Test utilities, mocks, TestHarness |
  * | `@classytic/arc/schemas` | TypeBox schema helpers |
@@ -141,6 +140,7 @@ export {
   BaseController,
   BaseCrudController,
   BulkMixin,
+  defineAction,
   defineAggregation,
   defineResource,
   defineResourceVariants,
@@ -348,10 +348,13 @@ export {
   UnauthorizedError,
   ValidationError,
 } from "./utils/errors.js";
-// DX helpers (v2.11.0: relocated to `/utils` as part of the `/types`
-// type-only cleanup — root re-exports for DX).
-export { getUserId } from "./utils/index.js";
-// handleRaw lives on @classytic/arc/utils only — not re-exported from root to preserve tree-shaking
+// `getUserId` is intentionally NOT re-exported from root. Two signatures
+// exist — `getUserId(user: UserLike)` on `@classytic/arc/utils` for raw
+// user objects, and `getUserId(scope: RequestScope)` on `@classytic/arc/scope`
+// for the canonical scope-based accessor. Import from the subpath that
+// matches the input shape so there is never any ambiguity at the call site.
+// `handleRaw` lives on `@classytic/arc/utils` only — not re-exported from root
+// to preserve tree-shaking.
 
 // ============================================================================
 // MOVED TO DEDICATED SUBPATHS (no longer re-exported from main barrel)

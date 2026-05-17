@@ -25,6 +25,7 @@ import type {
   UserLike,
 } from "../../types/index.js";
 import { createError } from "../../utils/errors.js";
+import { withRepoFeatures } from "../../utils/repoFeature.js";
 import type { BaseCrudController } from "../BaseCrudController.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: standard TS mixin Constructor pattern
@@ -44,9 +45,9 @@ export function BulkMixin<TBase extends Constructor<BaseCrudController>>(
 ): TBase & Constructor<BulkExt> {
   return class BulkController extends Base {
     async bulkCreate(req: IRequestContext): Promise<IControllerResponse<AnyRecord[]>> {
-      const repo = this.repository as unknown as {
+      const repo = withRepoFeatures<{
         createMany?: (items: unknown[], options?: unknown) => Promise<AnyRecord[]>;
-      };
+      }>(this.repository);
       if (!repo.createMany) {
         throw createError(501, "Repository does not support createMany");
       }
@@ -211,7 +212,7 @@ export function BulkMixin<TBase extends Constructor<BaseCrudController>>(
     async bulkUpdate(
       req: IRequestContext,
     ): Promise<IControllerResponse<{ matchedCount: number; modifiedCount: number }>> {
-      const repo = this.repository as unknown as {
+      const repo = withRepoFeatures<{
         updateMany?: (
           filter: Record<string, unknown>,
           data: Record<string, unknown>,
@@ -222,7 +223,7 @@ export function BulkMixin<TBase extends Constructor<BaseCrudController>>(
           acknowledged?: boolean;
           upsertedCount?: number;
         }>;
-      };
+      }>(this.repository);
       if (!repo.updateMany) {
         throw createError(501, "Repository does not support updateMany");
       }
@@ -294,12 +295,12 @@ export function BulkMixin<TBase extends Constructor<BaseCrudController>>(
      * fetch loop. Per-doc lifecycle hooks do NOT fire.
      */
     async bulkDelete(req: IRequestContext): Promise<IControllerResponse<{ deletedCount: number }>> {
-      const repo = this.repository as unknown as {
+      const repo = withRepoFeatures<{
         deleteMany?: (
           filter: Record<string, unknown>,
           options?: { mode?: "hard" | "soft"; [key: string]: unknown },
         ) => Promise<{ deletedCount: number; acknowledged?: boolean; soft?: boolean }>;
-      };
+      }>(this.repository);
       if (!repo.deleteMany) {
         throw createError(501, "Repository does not support deleteMany");
       }

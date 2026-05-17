@@ -353,6 +353,29 @@ export interface CreateAppOptions {
    * separately by `multipart.limits.fileSize`. (2.15.1)
    */
   bodyLimit?: number;
+  /**
+   * Maximum length of a single URL path parameter (in characters).
+   *
+   * 2.16 — Fastify's default is `100`, which silently 404s modern signed-
+   * token URLs: HMAC tracking tokens (~250 chars), JWT-in-URL, OAuth state
+   * parameters, password-reset / magic-link tokens, etc. Arc's default
+   * is **400** to match the everything-is-a-signed-token reality of
+   * production apps; hosts that need longer params can raise it further
+   * (`1024` for very long JWTs).
+   *
+   * Pass-through to Fastify's `maxParamLength` constructor option — see
+   * https://fastify.dev/docs/latest/Reference/Server/#maxparamlength.
+   *
+   * @example
+   * ```ts
+   * // App expects long HMAC tokens in the URL path
+   * createApp({ preset: 'production', maxParamLength: 1024 });
+   *
+   * // Constrain tighter than arc's default for audit reasons
+   * createApp({ preset: 'production', maxParamLength: 256 });
+   * ```
+   */
+  maxParamLength?: number;
 
   // ============================================
   // Authentication (New Clean API)

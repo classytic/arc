@@ -218,13 +218,37 @@ function classify(
   }
 
   // 3. Fastify schema-validation errors
-  const fastifyErr = error as FastifyError;
+  const fastifyErr = error as FastifyError & {
+    code?: string;
+    meta?: Record<string, unknown>;
+    statusCode?: number;
+  };
   if (Array.isArray(fastifyErr.validation)) {
+    // Honor a thrown error's own `message` / `code` / `meta` when present —
+    // arc internals (e.g. the action router's scoped-validation formatter)
+    // construct Fastify-shaped errors with a context-aware `arc.*` code
+    // and optional `meta.action`. Fastify's native validation throws
+    // carry `code: "FST_ERR_VALIDATION"`, which we DO want to map to the
+    // canonical `arc.validation_error` — only `arc.*`-prefixed codes
+    // signal arc-internal intent and bypass the default. Without this
+    // guard, the Fastify 5.8+ code change leaked the `FST_ERR_*` code
+    // into the public response envelope.
+    const arcInternalCode =
+      typeof fastifyErr.code === "string" && fastifyErr.code.startsWith("arc.")
+        ? fastifyErr.code
+        : undefined;
+    // Native Fastify validation messages ("body must have required property 'x'")
+    // belong in `details`, not the user-facing `message` — collapse them to the
+    // generic "Validation failed" line. Arc-internal validation errors set
+    // `arc.*` codes AND craft context-aware messages (action attribution etc.)
+    // we should preserve verbatim.
+    const message = arcInternalCode ? error.message || "Validation failed" : "Validation failed";
     return {
-      code: "arc.validation_error",
-      message: "Validation failed",
-      status: 400,
+      code: arcInternalCode ?? "arc.validation_error",
+      message,
+      status: typeof fastifyErr.statusCode === "number" ? fastifyErr.statusCode : 400,
       details: fastifyValidationDetails(fastifyErr),
+      ...(fastifyErr.meta ? { meta: fastifyErr.meta } : {}),
     };
   }
 
@@ -238,12 +262,12 @@ function classify(
   }
 
   // 5. Name-keyed map
-  if (error.name && ctx.errorMap[error.name]) {
-    const m = ctx.errorMap[error.name]!;
+  const namedMapping = error.name ? ctx.errorMap[error.name] : undefined;
+  if (namedMapping) {
     return {
-      code: m.code,
-      message: m.message ?? error.message,
-      status: m.statusCode,
+      code: namedMapping.code,
+      message: namedMapping.message ?? error.message,
+      status: namedMapping.statusCode,
     };
   }
 

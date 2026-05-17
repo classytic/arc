@@ -258,7 +258,6 @@ export function multipartBody(options: MultipartBodyOptions = {}): RouteHandlerM
     }
 
     // Replace req.body with parsed form fields + files
-    // biome-ignore lint: intentional mutation of request body for downstream handlers
     (request as unknown as Record<string, unknown>).body = body;
   };
 }

@@ -263,6 +263,13 @@ export function normalizeActionsToRouterConfig(
   >;
   actionPermissions: Record<string, PermissionCheck>;
   actionSchemas: Record<string, Record<string, unknown>>;
+  /**
+   * 2.15.5: names of actions declared with `id: false` — mount at
+   * `POST /<prefix>/action` instead of `POST /<prefix>/:id/action`.
+   * Function-shorthand actions are always treated as id-bound (legacy
+   * default); only object-form definitions can opt out.
+   */
+  idLessActionNames: readonly string[];
 } {
   const handlers: Record<
     string,
@@ -270,6 +277,7 @@ export function normalizeActionsToRouterConfig(
   > = {};
   const permissions: Record<string, PermissionCheck> = {};
   const schemas: Record<string, Record<string, unknown>> = {};
+  const idLessActionNames: string[] = [];
 
   for (const [name, entry] of Object.entries(actions)) {
     const explicit =
@@ -283,6 +291,7 @@ export function normalizeActionsToRouterConfig(
       const def = entry as ActionDefinition;
       handlers[name] = def.handler;
       if (def.schema) schemas[name] = def.schema as Record<string, unknown>;
+      if (def.id === false) idLessActionNames.push(name);
     }
 
     const effective = resolveActionPermission({
@@ -331,6 +340,7 @@ export function normalizeActionsToRouterConfig(
     actions: handlers,
     actionPermissions: permissions,
     actionSchemas: schemas,
+    idLessActionNames,
   };
 }
 
@@ -352,12 +362,25 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
     // Shared-state writes (registry, hooks, cache rules) target the ROOT
     // Fastify instance — `arc.hooks` is decorated once and inherited by
     // child encapsulation contexts. Key the idempotency guard by the
-    // root so multi-prefix mounts collapse to a single shared-state
+    // underlying Node HTTP server (shared across every encapsulation
+    // context) so multi-prefix mounts collapse to a single shared-state
     // registration. Routes register inside their own encapsulation pass
     // below — Fastify owns that isolation.
-    const sharedRoot = ((fastify as { server?: object }).server ?? fastify) as object;
+    const sharedRoot = fastify.server as unknown as object;
     const isFirstMount = !resource._sharedStateRegisteredOn.has(sharedRoot);
     if (isFirstMount) resource._sharedStateRegisteredOn.add(sharedRoot);
+
+    // Flush boot-time diagnostics through the host's Fastify logger.
+    // Collected by `validateDefineResourceConfig` at define-time (when
+    // no logger exists) and held on the resource until first mount.
+    // First-mount-only — second mounts at additional prefixes don't
+    // re-emit the same warnings.
+    if (isFirstMount && resource._diagnostics?.length) {
+      for (const diagnostic of resource._diagnostics) {
+        const level = diagnostic.severity === "info" ? "info" : "warn";
+        fastify.log?.[level]?.(diagnostic.message);
+      }
+    }
 
     const arc = (fastify as FastifyWithDecorators).arc;
     if (isFirstMount && arc?.registry && resource._registryMeta) {
@@ -392,14 +415,12 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
       }
     }
 
-    const registerRule = (fastify as unknown as Record<string, unknown>)
-      .registerCacheInvalidationRule;
-    if (isFirstMount && resource.cache?.invalidateOn && typeof registerRule === "function") {
+    // queryCachePlugin declares `registerCacheInvalidationRule` via module
+    // augmentation on `FastifyInstance` — typed access, no cast needed.
+    // Optional because the cache plugin is opt-in; skip silently when absent.
+    if (isFirstMount && resource.cache?.invalidateOn && fastify.registerCacheInvalidationRule) {
       for (const [pattern, tags] of Object.entries(resource.cache.invalidateOn)) {
-        (registerRule as (rule: { pattern: string; tags: string[] }) => void)({
-          pattern,
-          tags,
-        });
+        fastify.registerCacheInvalidationRule({ pattern, tags });
       }
     }
 
@@ -495,11 +516,49 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
         // so URL prefix flows through. Boot validation throws on misconfig
         // with the offending aggregation name in the message.
         if (resource.aggregations && Object.keys(resource.aggregations).length > 0) {
-          const { createAggregationRouter } = await import(
-            "../aggregation/createAggregationRouter.js"
-          );
-          const repoForAgg = (resource.controller as unknown as { repository?: unknown })
-            ?.repository;
+          // Two dynamic imports run in parallel so a resource with
+          // aggregations doesn't serialise two cold module loads. Both
+          // modules stay out of the hot path for resources without
+          // aggregations (most resources) — matches the actions slot.
+          const [
+            { createAggregationRouter },
+            { adapterSupportsAggregate, ArcAggregationConfigError },
+          ] = await Promise.all([
+            import("../aggregation/createAggregationRouter.js"),
+            import("../aggregation/validate.js"),
+          ]);
+          // Aggregation-only resources (`disableDefaultRoutes: true` + no
+          // user controller) used to silently 501 here — the controller
+          // wasn't built (controller.ts:50 returns undefined when there
+          // are no CRUD routes), so `controller.repository` was undefined
+          // and `adapterSupportsAggregate(undefined)` returned false. Fall
+          // back to `resource.repository` (which reads from the adapter
+          // directly) so the dispatch surface stays available even when
+          // there's no controller. Any aggregation that ships a
+          // `materialized` hook owns its own dispatch and doesn't need
+          // either — handled inside `executeAggregation`.
+          const repoForAgg =
+            (resource.controller as unknown as { repository?: unknown })?.repository ??
+            resource.repository;
+          // Boot-time guard: any aggregation without `materialized` MUST
+          // reach a repo that ships `aggregate()`. Loud failure at register
+          // beats a 501 at first dashboard request in production.
+          if (!adapterSupportsAggregate(repoForAgg)) {
+            const undispatchable = Object.entries(resource.aggregations)
+              .filter(([, cfg]) => !cfg.materialized)
+              .map(([name]) => name);
+            if (undispatchable.length > 0) {
+              throw new ArcAggregationConfigError(
+                `Resource '${resource.name}' declares aggregations [${undispatchable.join(
+                  ", ",
+                )}] but no repository implementing 'aggregate(req, options?)' is wired. ` +
+                  `Either (a) attach an adapter whose repo ships StandardRepo.aggregate ` +
+                  `(mongokit >= 3.13 / sqlitekit >= 0.3), (b) pass a custom controller ` +
+                  `exposing such a repository, or (c) declare 'materialized' on each ` +
+                  `aggregation so it dispatches through your own hook.`,
+              );
+            }
+          }
           // Aggregation handlers receive raw FastifyRequest. `tenantRepoOptions`
           // reads `req.metadata?._scope` and `req._tenantFields`, both of which
           // are projected by `createRequestContext()` from `req.scope` /

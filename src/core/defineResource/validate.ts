@@ -5,10 +5,25 @@
  * construction, or schema synthesis run. The goal is "any error
  * surfaced here points at exactly one user mistake" — preset/Phase 3+
  * errors carry less of a paper trail back to the source.
+ *
+ * Two failure modes:
+ *
+ *   1. Hard errors (`throw new Error(...)`) — config will never produce
+ *      a working resource. Surfaced synchronously at define-time so the
+ *      host sees the failure during module load, before any request
+ *      can hit a half-wired endpoint.
+ *
+ *   2. Non-fatal diagnostics — collected into a `ResourceDiagnostic[]`
+ *      and returned to the caller. `defineResource()` attaches them to
+ *      `ResourceDefinition._diagnostics`; `buildResourcePlugin` flushes
+ *      them through `fastify.log.warn` on first mount so the host's
+ *      configured logger handles them. The framework never reaches for
+ *      `console.*` directly outside of `src/cli/`.
  */
 
 import type { ActionDefinition, AnyRecord, ResourceConfig } from "../../types/index.js";
 import { assertValidConfig } from "../validateResourceConfig.js";
+import type { ResourceDiagnostic } from "./diagnostics.js";
 
 /**
  * CRUD op names — kept module-scope (vs allocated per `defineResource()`
@@ -18,12 +33,16 @@ import { assertValidConfig } from "../validateResourceConfig.js";
 const CRUD_OP_NAMES = new Set<string>(["create", "update", "delete", "list", "get"]);
 
 /**
- * Run the structural validation pipeline. Throws an `Error` with a
- * resource-named message on the first failure — `defineResource()`
- * surfaces it verbatim so hosts get a clear "fix this resource"
- * pointer.
+ * Run the structural validation pipeline.
+ *
+ * Throws synchronously on hard errors. Returns the (possibly empty)
+ * list of non-fatal diagnostics — defineResource attaches them to the
+ * resulting `ResourceDefinition` for the plugin layer to flush through
+ * `fastify.log.warn` on first mount.
  */
-export function validateDefineResourceConfig<TDoc>(config: ResourceConfig<TDoc>): void {
+export function validateDefineResourceConfig<TDoc>(
+  config: ResourceConfig<TDoc>,
+): ResourceDiagnostic[] {
   assertValidConfig(config as ResourceConfig<AnyRecord>, {
     skipControllerCheck: true,
   });
@@ -31,7 +50,7 @@ export function validateDefineResourceConfig<TDoc>(config: ResourceConfig<TDoc>)
   validatePermissionsShape(config);
   validateCustomRoutePermissions(config);
   validateActionsShape(config);
-  warnRedundantFieldRules(config);
+  return collectRedundantFieldRuleDiagnostics(config);
 }
 
 /** Permissions must be `PermissionCheck` functions, not arbitrary values. */
@@ -64,8 +83,7 @@ function validateCustomRoutePermissions<TDoc>(config: ResourceConfig<TDoc>): voi
 }
 
 /**
- * Surface common field-rule misconfigurations at boot — non-fatal,
- * just a `console.warn` so hosts notice and clean up.
+ * Surface common field-rule misconfigurations as boot-time diagnostics.
  *
  * Catches:
  *   1. `immutable: true` + `immutableAfterCreate: true` — `immutable`
@@ -76,37 +94,49 @@ function validateCustomRoutePermissions<TDoc>(config: ResourceConfig<TDoc>): voi
  *   3. `hidden: true` + `aggregable: false` — `hidden` already blocks
  *      aggregation; `aggregable: false` is redundant.
  *
- * NOT a hard error — write-rule overlap is harmless at runtime, just
- * noisy in code review.
+ * NOT hard errors — write-rule overlap is harmless at runtime, just
+ * noisy in code review. Returned as `ResourceDiagnostic[]` so the
+ * caller can route them through the host logger; never logged here.
  */
-function warnRedundantFieldRules<TDoc>(config: ResourceConfig<TDoc>): void {
+function collectRedundantFieldRuleDiagnostics<TDoc>(
+  config: ResourceConfig<TDoc>,
+): ResourceDiagnostic[] {
   const fieldRules = config.schemaOptions?.fieldRules;
-  if (!fieldRules) return;
+  if (!fieldRules) return [];
+
+  const diagnostics: ResourceDiagnostic[] = [];
   for (const [field, rule] of Object.entries(fieldRules)) {
     if (!rule) continue;
     const r = rule as Record<string, unknown>;
     if (r.immutable === true && r.immutableAfterCreate === true) {
-      // biome-ignore lint/suspicious/noConsole: dev-time DX hint
-      console.warn(
-        `[Arc] Resource '${config.name}' fieldRules.${field}: ` +
+      diagnostics.push({
+        severity: "warn",
+        code: "field-rule-redundant-immutable",
+        message:
+          `[Arc] Resource '${config.name}' fieldRules.${field}: ` +
           "`immutable: true` already implies `immutableAfterCreate: true` — drop the second flag.",
-      );
+      });
     }
     if (r.systemManaged === true && r.readonly === true) {
-      // biome-ignore lint/suspicious/noConsole: dev-time DX hint
-      console.warn(
-        `[Arc] Resource '${config.name}' fieldRules.${field}: ` +
+      diagnostics.push({
+        severity: "warn",
+        code: "field-rule-redundant-system-managed",
+        message:
+          `[Arc] Resource '${config.name}' fieldRules.${field}: ` +
           "`systemManaged` and `readonly` both strip writes — pick one (`systemManaged` is the canonical name).",
-      );
+      });
     }
     if (r.hidden === true && r.aggregable === false) {
-      // biome-ignore lint/suspicious/noConsole: dev-time DX hint
-      console.warn(
-        `[Arc] Resource '${config.name}' fieldRules.${field}: ` +
+      diagnostics.push({
+        severity: "warn",
+        code: "field-rule-redundant-hidden",
+        message:
+          `[Arc] Resource '${config.name}' fieldRules.${field}: ` +
           "`hidden: true` already blocks aggregation — `aggregable: false` is redundant.",
-      );
+      });
     }
   }
+  return diagnostics;
 }
 
 /**

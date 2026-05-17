@@ -26,7 +26,7 @@ import type { PermissionCheck } from "./types.js";
 /**
  * ResourcePermissions shape — matches the type in types/index.ts
  */
-interface ResourcePermissions<TDoc = any> {
+interface ResourcePermissions<TDoc = Record<string, unknown>> {
   list?: PermissionCheck<TDoc>;
   get?: PermissionCheck<TDoc>;
   create?: PermissionCheck<TDoc>;
@@ -34,13 +34,13 @@ interface ResourcePermissions<TDoc = any> {
   delete?: PermissionCheck<TDoc>;
 }
 
-type PermissionOverrides<TDoc = any> = Partial<ResourcePermissions<TDoc>>;
+type PermissionOverrides<TDoc = Record<string, unknown>> = Partial<ResourcePermissions<TDoc>>;
 
 /**
  * Merge a base preset with user overrides.
  * Overrides replace individual operations — undefined values don't clear them.
  */
-function withOverrides<TDoc = any>(
+function withOverrides<TDoc = Record<string, unknown>>(
   base: ResourcePermissions<TDoc>,
   overrides?: PermissionOverrides<TDoc>,
 ): ResourcePermissions<TDoc> {
@@ -53,7 +53,7 @@ function withOverrides<TDoc = any>(
  * Public read, authenticated write.
  * list + get = allowPublic(), create + update + delete = requireAuth()
  */
-export function publicRead<TDoc = any>(
+export function publicRead<TDoc = Record<string, unknown>>(
   overrides?: PermissionOverrides<TDoc>,
 ): ResourcePermissions<TDoc> {
   return withOverrides(
@@ -72,7 +72,7 @@ export function publicRead<TDoc = any>(
  * Public read, admin write.
  * list + get = allowPublic(), create + update + delete = requireRoles(['admin'])
  */
-export function publicReadAdminWrite<TDoc = any>(
+export function publicReadAdminWrite<TDoc = Record<string, unknown>>(
   roles: readonly string[] = ["admin"],
   overrides?: PermissionOverrides<TDoc>,
 ): ResourcePermissions<TDoc> {
@@ -91,7 +91,7 @@ export function publicReadAdminWrite<TDoc = any>(
 /**
  * All operations require authentication.
  */
-export function authenticated<TDoc = any>(
+export function authenticated<TDoc = Record<string, unknown>>(
   overrides?: PermissionOverrides<TDoc>,
 ): ResourcePermissions<TDoc> {
   return withOverrides(
@@ -110,7 +110,7 @@ export function authenticated<TDoc = any>(
  * All operations require specific roles.
  * @param roles - Required roles (user needs at least one). Default: ['admin']
  */
-export function adminOnly<TDoc = any>(
+export function adminOnly<TDoc = Record<string, unknown>>(
   roles: readonly string[] = ["admin"],
   overrides?: PermissionOverrides<TDoc>,
 ): ResourcePermissions<TDoc> {
@@ -134,7 +134,7 @@ export function adminOnly<TDoc = any>(
  * @param ownerField - Field containing owner ID (default: 'userId')
  * @param bypassRoles - Roles that bypass ownership check (default: ['admin'])
  */
-export function ownerWithAdminBypass<TDoc = any>(
+export function ownerWithAdminBypass<TDoc = Record<string, unknown>>(
   ownerField: Extract<keyof TDoc, string> | string = "userId",
   bypassRoles: readonly string[] = ["admin"],
   overrides?: PermissionOverrides<TDoc>,
@@ -155,7 +155,7 @@ export function ownerWithAdminBypass<TDoc = any>(
  * Full public access — no auth required for any operation.
  * Use sparingly (dev/testing, truly public APIs).
  */
-export function fullPublic<TDoc = any>(
+export function fullPublic<TDoc = Record<string, unknown>>(
   overrides?: PermissionOverrides<TDoc>,
 ): ResourcePermissions<TDoc> {
   return withOverrides(
@@ -174,7 +174,7 @@ export function fullPublic<TDoc = any>(
  * Read-only: list + get authenticated, write operations denied.
  * Useful for computed/derived resources.
  */
-export function readOnly<TDoc = any>(
+export function readOnly<TDoc = Record<string, unknown>>(
   overrides?: PermissionOverrides<TDoc>,
 ): ResourcePermissions<TDoc> {
   return withOverrides(
