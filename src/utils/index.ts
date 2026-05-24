@@ -98,6 +98,13 @@ export { simpleEqualityMatcher } from "./simpleEqualityMatcher.js";
 export type { StateMachine, TransitionConfig } from "./stateMachine.js";
 // State Machine
 export { createStateMachine } from "./stateMachine.js";
+// Streaming helpers — UI message streams (Vercel AI SDK, OpenAI SDK) → Fastify
+export type { PipeUIMessageStreamOptions } from "./streaming.js";
+export {
+  isReadableStream,
+  pipeUIMessageStreamToReply,
+  UI_MESSAGE_STREAM_HEADERS,
+} from "./streaming.js";
 export type { EventsDecorator } from "./typeGuards.js";
 // Type Guards
 export { hasEvents } from "./typeGuards.js";

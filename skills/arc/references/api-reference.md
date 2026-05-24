@@ -167,6 +167,8 @@ import {
 import {
   createStateMachine, CircuitBreaker, withCompensation, defineGuard,
   retry, queryParser,
+  // AI SDK / OpenAI streams → Fastify reply (no JsonToSseTransformStream boilerplate)
+  pipeUIMessageStreamToReply, UI_MESSAGE_STREAM_HEADERS, isReadableStream,
 } from '@classytic/arc/utils';
 import { defineMigration, MigrationRunner } from '@classytic/arc/migrations';
 import { Type, ArcListResponse } from '@classytic/arc/schemas';

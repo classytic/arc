@@ -24,6 +24,7 @@
  * ```
  */
 
+import sjson from "secure-json-parse";
 import type { SessionData, SessionStore } from "./sessionManager.js";
 
 // ============================================================================
@@ -80,9 +81,12 @@ export class RedisSessionStore implements SessionStore {
 
     let session: SessionData;
     try {
-      session = JSON.parse(raw) as SessionData;
+      // `sjson.parse` rejects `__proto__` / `constructor.prototype` keys — a
+      // poisoned session payload (anyone with Redis write access) can't pollute
+      // the global Object prototype here.
+      session = sjson.parse(raw) as SessionData;
     } catch {
-      // Corrupted data — clean up
+      // Corrupted or poisoned data — clean up
       await this.delete(sessionId);
       return null;
     }
@@ -118,10 +122,10 @@ export class RedisSessionStore implements SessionStore {
     const raw = await this.redis.get(this.prefix + sessionId);
     if (raw) {
       try {
-        const session = JSON.parse(raw) as SessionData;
+        const session = sjson.parse(raw) as SessionData;
         await this.redis.srem(this.userPrefix + session.userId, sessionId);
       } catch {
-        // Best effort — session data may be corrupted
+        // Best effort — session data may be corrupted or poisoned
       }
     }
 

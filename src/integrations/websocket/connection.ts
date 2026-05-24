@@ -20,6 +20,7 @@
  */
 
 import type { FastifyInstance } from "fastify";
+import sjson from "secure-json-parse";
 import { authenticateWebSocket } from "./auth.js";
 import type { RoomManager } from "./room-manager.js";
 import type { WebSocketClient, WebSocketMessage, WebSocketPluginOptions } from "./types.js";
@@ -145,7 +146,9 @@ export async function handleConnection(
 
     let msg: WebSocketMessage;
     try {
-      msg = JSON.parse(typeof raw === "string" ? raw : raw.toString()) as WebSocketMessage;
+      // `sjson.parse` blocks `__proto__` / `constructor.prototype` in untrusted
+      // client frames; any downstream `Object.assign(target, msg)` is safe.
+      msg = sjson.parse(typeof raw === "string" ? raw : raw.toString()) as WebSocketMessage;
     } catch {
       socket.send(JSON.stringify({ type: "error", error: "Invalid message format" }));
       return;

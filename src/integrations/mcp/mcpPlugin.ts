@@ -162,6 +162,32 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
   // ── 8. MCP HTTP routes ──
   const prefix = options.prefix ?? "/mcp";
 
+  // ── 8a. Loud warning when MCP is exposed with auth disabled ──
+  //
+  // `auth: false` is legitimate for stdio transports and local development,
+  // but a real-world incident pattern is: dev sets `auth: false` to skip
+  // OAuth setup, then exposes the same Fastify app through a public tunnel
+  // (Cloudflare Tunnel, ngrok, Tailscale Funnel). The MCP endpoint becomes
+  // a fully-anonymous remote CRUD surface across every resource registered
+  // — provider keys, multi-tenant data, action endpoints, all reachable by
+  // anyone who knows the URL. One unmissable WARN at every boot is cheap
+  // insurance; the host can silence it via their logger if they really
+  // intend the exposure (e.g. stdio mode, or `NODE_ENV=test`).
+  if (options.auth === false) {
+    const toolList = allTools
+      .map((t) => t.name)
+      .slice(0, 5)
+      .join(", ");
+    const more = allTools.length > 5 ? ` (+${allTools.length - 5} more)` : "";
+    fastify.log.warn(
+      `[arc/mcp] MCP server registered at "${prefix}" with auth DISABLED. ` +
+        `Anyone who can reach this URL has full access to ${allTools.length} ` +
+        `tools across ${enabledResources.length} resources: ${toolList}${more}. ` +
+        "Pass `auth: betterAuthInstance` or `auth: async (headers) => ...` to gate access. " +
+        "Safe only for stdio transports, local development, or explicitly-public read-only APIs.",
+    );
+  }
+
   // ── Health endpoint (both modes) — no MCP protocol needed ──
   fastify.get(`${prefix}/health`, async (_request, reply) => {
     reply.send({

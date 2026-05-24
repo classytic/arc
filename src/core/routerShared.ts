@@ -42,9 +42,19 @@ import type {
 
 import { requestContext } from "../context/requestContext.js";
 import { evaluateAndApplyPermission } from "../permissions/applyPermissionResult.js";
-import type { PermissionCheck, PermissionContext } from "../permissions/types.js";
+import {
+  applyFieldWritePermissions,
+  type FieldPermissionMap,
+  resolveEffectiveRoles,
+} from "../permissions/fields.js";
+import {
+  getUserRoles,
+  type PermissionCheck,
+  type PermissionContext,
+} from "../permissions/types.js";
 import { executePipeline } from "../pipeline/pipe.js";
 import type { PipelineConfig, PipelineContext, PipelineStep } from "../pipeline/types.js";
+import { isElevated, isMember, PUBLIC_SCOPE, type RequestScope } from "../scope/types.js";
 import type {
   FastifyWithDecorators,
   IControllerResponse,
@@ -53,7 +63,9 @@ import type {
   RequestWithExtras,
   UserLike,
 } from "../types/index.js";
-import { createError } from "../utils/errors.js";
+import { createError, ForbiddenError } from "../utils/errors.js";
+import type { FieldWriteDenialPolicy } from "./BodySanitizer.js";
+import { DEFAULT_FIELD_WRITE_DENIAL_POLICY } from "./BodySanitizer.js";
 import { createRequestContext, sendControllerResponse } from "./fastifyAdapter.js";
 
 // ============================================================================
@@ -601,4 +613,115 @@ function describeValue(v: unknown): string {
   if (typeof v === "function") return "a function (single handler — wrap in array)";
   if (Array.isArray(v)) return `an array of length ${v.length}`;
   return `${typeof v} (${JSON.stringify(v).slice(0, 80)})`;
+}
+
+// ============================================================================
+// Field-write permission enforcement (custom routes)
+// ============================================================================
+
+/**
+ * Build a preHandler that enforces field-write permissions on the request body.
+ *
+ * Auto-CRUD's create/update routes get this for free via `BodySanitizer.sanitize()`
+ * inside `BaseController`. Custom routes (`config.routes`, presets, action endpoints)
+ * never went through that path — so a host that declared
+ * `fields: { role: fields.writableBy(['admin']) }` and a custom
+ * `POST /users/promote` happily accepted `{ role: 'admin' }` from any caller.
+ *
+ * This preHandler closes that gap. It applies ONLY the `applyFieldWritePermissions`
+ * step — no `SYSTEM_FIELDS` strip, no `fieldRules` strip — because custom-route
+ * bodies don't necessarily mirror the resource's adapter shape, and we'd
+ * generate surprising 403s by enforcing rules tied to that shape.
+ *
+ * Returns `null` when the resource has no field permissions configured — the
+ * caller should then skip wiring it into the preHandler chain.
+ */
+export function buildFieldWritePreHandler(
+  fieldPermissions: FieldPermissionMap | undefined,
+  policy: FieldWriteDenialPolicy = DEFAULT_FIELD_WRITE_DENIAL_POLICY,
+): RouteHandlerMethod | null {
+  if (!fieldPermissions || Object.keys(fieldPermissions).length === 0) return null;
+
+  return async (request, _reply) => {
+    const body = (request as { body?: unknown }).body;
+    if (!body || typeof body !== "object" || Array.isArray(body)) return;
+
+    const scope = (request as { scope?: RequestScope }).scope ?? PUBLIC_SCOPE;
+    // Elevated scope (platform admin) bypasses field restrictions — consistent
+    // with `BodySanitizer.sanitize` and `requireOrgRole()`.
+    if (isElevated(scope)) return;
+
+    const globalRoles = getUserRoles((request as { user?: Record<string, unknown> }).user);
+    const orgRoles = isMember(scope) ? scope.orgRoles : [];
+    const effectiveRoles = resolveEffectiveRoles(globalRoles, orgRoles);
+
+    const { body: filtered, deniedFields } = applyFieldWritePermissions(
+      body as Record<string, unknown>,
+      fieldPermissions,
+      effectiveRoles,
+    );
+
+    if (deniedFields.length > 0 && policy === "reject") {
+      throw new ForbiddenError(
+        `Not permitted to write field${deniedFields.length === 1 ? "" : "s"}: ${deniedFields.join(", ")}`,
+      );
+    }
+
+    (request as { body: unknown }).body = filtered;
+  };
+}
+
+/**
+ * True for HTTP methods that carry a request body and should run the
+ * field-write preHandler. GET/DELETE/HEAD/OPTIONS skip enforcement.
+ */
+export function methodCarriesBody(method: string): boolean {
+  const m = method.toUpperCase();
+  return m === "POST" || m === "PUT" || m === "PATCH";
+}
+
+// ============================================================================
+// Route registration — duplicate detection wrapper
+// ============================================================================
+
+/**
+ * Register a route with friendly handling of `FST_ERR_DUPLICATED_ROUTE`.
+ *
+ * Boot-time `validateRouteCrudCollisions()` catches custom-route → auto-CRUD
+ * overlaps before Fastify ever runs, but a few cases still slip through to
+ * Fastify itself: two presets contributing the same `routes` entry, hosts
+ * mounting two resources at the same prefix, custom routes that share a
+ * URL with another plugin. Fastify's default message ("Method 'GET'
+ * already declared for route '/'") gives no hint at the resource-shaped
+ * fix — `disabledRoutes: ['list']` — so wrap it with one.
+ */
+export function tryRegisterRoute(
+  fastify: FastifyWithDecorators,
+  opts: Parameters<FastifyWithDecorators["route"]>[0],
+  context: { resourceName: string; op?: string },
+): void {
+  try {
+    fastify.route(opts);
+  } catch (err) {
+    const fastifyErr = err as { code?: string; message?: string };
+    if (fastifyErr?.code !== "FST_ERR_DUPLICATED_ROUTE") throw err;
+
+    const method = (opts as { method: string }).method;
+    const url = (opts as { url: string }).url;
+    const opHint = context.op ? ` (op: ${context.op})` : "";
+    const fixHint =
+      context.op && ["list", "get", "create", "update", "delete"].includes(context.op)
+        ? ` Suppress the auto-CRUD route with \`disabledRoutes: ['${context.op}']\`.`
+        : " If a custom route in `routes:` collides with auto-CRUD, add" +
+          " `disabledRoutes: ['list' | 'get' | 'create' | 'update' | 'delete']`" +
+          " to `defineResource()` to suppress the matching auto-CRUD route.";
+
+    const enhanced = new Error(
+      `[arc] Duplicate route ${method} ${url} on resource "${context.resourceName}"${opHint}.${fixHint}` +
+        ` Original: ${fastifyErr.message ?? "FST_ERR_DUPLICATED_ROUTE"}`,
+    );
+    (enhanced as { code?: string }).code = "FST_ERR_DUPLICATED_ROUTE";
+    (enhanced as { cause?: unknown }).cause = err;
+    throw enhanced;
+  }
 }

@@ -108,7 +108,21 @@ export class ResourceDefinition<TDoc = AnyRecord> {
   readonly updateMethod?: "PUT" | "PATCH" | "both";
   readonly pipe?: import("../../pipeline/types.js").PipelineConfig;
   readonly fields?: import("../../permissions/fields.js").FieldPermissionMap;
+  /**
+   * Policy for field-write denials — `'reject'` (default, secure) raises 403
+   * listing the denied fields; `'strip'` silently drops them. Honored by
+   * both `BodySanitizer` (auto-CRUD) and `buildFieldWritePreHandler`
+   * (custom routes) so the policy is consistent across all body-bearing
+   * routes for the resource.
+   */
+  readonly onFieldWriteDenied?: "reject" | "strip";
   readonly cache?: ResourceCacheConfig;
+
+  // ── Reference-data marker (2.17.0) — surfaced so introspection
+  //    (registry, OpenAPI docs, MCP tools) can hint "fetch all, cache
+  //    aggressively, no pagination UI". Set by the `referenceData: true`
+  //    shorthand on ResourceConfig.
+  readonly referenceData: boolean;
 
   // ── MCP integration ──
   /**
@@ -154,8 +168,37 @@ export class ResourceDefinition<TDoc = AnyRecord> {
    * `buildResourcePlugin` so the host's configured logger owns the
    * output — the framework never speaks to `console.*` from `src/`
    * outside of the CLI.
+   *
+   * Prefer the public {@link warnings} getter for programmatic access
+   * (CI fail-on-warnings, lint integrations) — it returns a frozen
+   * snapshot so callers can't accidentally mutate the diagnostic list.
    */
   _diagnostics?: ResourceDiagnostic[];
+
+  /**
+   * Public view of {@link _diagnostics} for programmatic consumption.
+   *
+   * Returns the collected define-time diagnostics for this resource.
+   * Empty when the resource validated cleanly. Useful for CI gates that
+   * want to fail the build on any non-fatal warning:
+   *
+   * @example
+   * ```ts
+   * import { orderResource } from './resources/order.resource.js';
+   * if (orderResource.warnings.length > 0) {
+   *   for (const w of orderResource.warnings) console.error(w.message);
+   *   process.exit(1);
+   * }
+   * ```
+   *
+   * **Scope.** Covers define-time only — diagnostics emitted at
+   * first-mount (e.g. `cache.invalidateOn` without `queryCachePlugin`)
+   * surface through `fastify.log.warn` instead and are not collected
+   * here; they require a Fastify instance to detect.
+   */
+  get warnings(): readonly ResourceDiagnostic[] {
+    return this._diagnostics ?? [];
+  }
 
   /**
    * Per-host idempotency guard used by `buildResourcePlugin` to
@@ -231,10 +274,19 @@ export class ResourceDefinition<TDoc = AnyRecord> {
     this.updateMethod = config.updateMethod;
     this.pipe = config.pipe;
     this.fields = config.fields;
+    this.onFieldWriteDenied = config.onFieldWriteDenied;
     this.cache = config.cache;
 
     // Default-allow for MCP — opt-out is explicit `mcp: false`.
     this.mcp = config.mcp !== false;
+
+    // `referenceData` is a thin marker — the actual defaults
+    // (read-only `crud`, fetch-all limits, aggressive cache) are
+    // expanded in `defineResource.ts` Phase 0 before we reach here.
+    // The flag itself surfaces so registry/MCP can label the resource
+    // in docs ("no pagination UI") without re-deriving from the
+    // expanded primitives.
+    this.referenceData = (config as { referenceData?: boolean }).referenceData === true;
 
     this.tenantField = config.tenantField;
     this.onTenantDelete = config.onTenantDelete;

@@ -41,8 +41,18 @@ export {
   buildMcpToolsFromBridges,
   type McpBridge,
 } from "./aiSdkBridge.js";
-// Factory (Level 2)
-export { type AuthRef, createMcpServer, type McpServerInstance } from "./createMcpServer.js";
+// Better Auth API-key → MCP resolver (2.17.1)
+export {
+  type CreateMcpAuthFromBetterAuthApiKeyOptions,
+  createMcpAuthFromBetterAuthApiKey,
+} from "./betterAuthApiKey.js";
+// Factory (Level 2) + collision resolution (2.17.1)
+export {
+  type AuthRef,
+  createMcpServer,
+  type McpServerInstance,
+  resolveToolCollisions,
+} from "./createMcpServer.js";
 // CRUD description helpers — public surface for function-form description
 // overrides (`descriptions: { list: (meta) => ... }`).
 export {

@@ -15,6 +15,7 @@ import { normalizePermissionResult } from "../../permissions/applyPermissionResu
 import type { PermissionCheck, PermissionResult } from "../../permissions/types.js";
 import type { IControllerResponse } from "../../types/index.js";
 import { isArcError } from "../../utils/errors.js";
+import { buildScope } from "./buildRequestContext.js";
 import type { CallToolResult, McpAuthResult } from "./types.js";
 
 /**
@@ -38,12 +39,26 @@ export async function evaluatePermission(
   if (!check) return null;
 
   const user = session ? { id: session.userId, _id: session.userId, ...session } : null;
+  // Thread the resolved scope through BOTH conventions arc reads from:
+  //   - `request.scope` — used by permission helpers (`requireOrgMembership()`,
+  //     `requireOrgRole()`) via `getRequestScope(req) = req.scope ?? PUBLIC_SCOPE`
+  //   - `request.metadata._scope` — used by controllers / repo / query layer
+  //     via `getControllerScope(req) = req.metadata?._scope ?? PUBLIC_SCOPE`
+  //
+  // Setting only one of these silently broke MCP permissions: HTTP paths
+  // populate both (auth adapters set `request.scope`; `buildRequestContext`
+  // sets `metadata._scope`), but the MCP `fakeRequest` here was setting
+  // neither — so every authenticated MCP call rejected as "Organization
+  // membership required" even when `session.organizationId` was present.
+  const scope = buildScope(session);
   const fakeRequest = {
     user,
     headers: {},
     params: {},
     query: {},
     body: input,
+    scope,
+    metadata: { _scope: scope },
   } as unknown as FastifyRequest;
 
   const result = await check({

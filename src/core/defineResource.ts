@@ -58,7 +58,7 @@
  */
 
 import type { DataAdapter } from "@classytic/repo-core/adapter";
-import type { AnyRecord, ResourceConfig } from "../types/index.js";
+import type { ActionsMap, AnyRecord, ResourceConfig } from "../types/index.js";
 import type { InternalResourceConfig } from "./defineResource/config.js";
 import { resolveOrAutoCreateController } from "./defineResource/controller.js";
 import type { ResourceDiagnostic } from "./defineResource/diagnostics.js";
@@ -88,17 +88,46 @@ import { validateDefineResourceConfig } from "./defineResource/validate.js";
  * `BaseController<TDoc extends AnyRecord>` actually requires it.
  * One internal boundary cast replaces N host-side casts.
  */
+/**
+ * Narrow overload: when the host passes an `actions: { ... }` literal, the
+ * returned `ResourceDefinition.actions` is typed as the exact captured map
+ * (not the wide `ActionsMap | undefined`). Without this overload, hosts that
+ * wrote `defineResource({ actions: { send: ..., receive: ... } })` saw
+ * `resource.actions` typed `ActionsMap | undefined` and got
+ * "'resource.actions' is possibly 'undefined'" on every `resource.actions.send`
+ * call. TS infers `TActions` from the object literal at the call site —
+ * no explicit generic needed.
+ */
+export function defineResource<TDoc, TActions extends ActionsMap>(
+  config: ResourceConfig<TDoc> & { actions: TActions },
+): ResourceDefinition<TDoc> & { readonly actions: TActions };
+/**
+ * Wide overload: no `actions` declared. `ResourceDefinition<TDoc>.actions`
+ * stays `ActionsMap | undefined` exactly as in pre-2.17.1 — no
+ * back-compat breakage for hosts that never touched actions.
+ */
+export function defineResource<TDoc = AnyRecord>(
+  config: ResourceConfig<TDoc>,
+): ResourceDefinition<TDoc>;
 export function defineResource<TDoc = AnyRecord>(
   config: ResourceConfig<TDoc>,
 ): ResourceDefinition<TDoc> {
-  // Phase 0 — normalise the 2.16 `crud:` allow-list into the canonical
+  // Phase 0 — expand resource-level shorthands BEFORE validation /
+  // CRUD-list resolution so every later phase observes the canonical
+  // shape. Order: `referenceData` first (sets `crud` / `cache` /
+  // limits), then `customRoutesOnly` (sets the three skip flags).
+  // Explicit narrow settings always win over shorthands.
+  const referenceExpanded = expandReferenceData(config);
+  const shorthandConfig = expandCustomRoutesOnly(referenceExpanded);
+
+  // Phase 0b — normalise the 2.16 `crud:` allow-list into the canonical
   // `disabledRoutes` / `disableDefaultRoutes` pair the rest of arc reads.
   // Lifted BEFORE validation so the validator sees the resolved shape:
   // `crud: false` looks like `disableDefaultRoutes: true` (no adapter
   // required) instead of "CRUD enabled but no adapter" (a confusing
   // false-positive error). Pure transformation — `config` itself stays
   // untouched; the rest of the pipeline reads the normalised copy.
-  const normalisedConfig = resolveCrudAllowList(config);
+  const normalisedConfig = resolveCrudAllowList(shorthandConfig);
 
   // Phase 1 — validate. Hard errors throw synchronously; non-fatal
   // diagnostics flow back as an array so they can be flushed through
@@ -189,6 +218,60 @@ export { ResourceDefinition } from "./defineResource/ResourceDefinition.js";
  * doesn't false-positive "Data adapter required when CRUD routes are
  * enabled" on a host that explicitly opted CRUD out.
  */
+/**
+ * Expand the `referenceData: true` shorthand. Reference data is the
+ * recurring "small static catalogue" shape (currencies, plans,
+ * pipeline stages, credential types) where callers want "fetch all"
+ * semantics and aggressive caching — pre-2.17.0 hosts hand-wired
+ * `crud` + `defaultLimit` + `maxLimit` + `cache` on every such
+ * resource. The shorthand pins canonical defaults; explicit narrow
+ * settings always win so a host can opt INTO mutations
+ * (`referenceData: true, crud: { list: true, get: true, create: true }`)
+ * or override the cache window without giving up the read-only +
+ * fetch-all defaults.
+ */
+function expandReferenceData<TDoc>(config: ResourceConfig<TDoc>): ResourceConfig<TDoc> {
+  if (config.referenceData !== true) return config;
+  return {
+    ...config,
+    // Read-only by default — reference data is mutated via migrations /
+    // admin tooling, not the public REST surface. Hosts that want
+    // mutations declare `crud` explicitly.
+    crud: config.crud ?? { list: true, get: true },
+    defaultLimit: config.defaultLimit ?? 1000,
+    maxLimit: config.maxLimit ?? 1000,
+    // Reference data is mostly static — 5 min fresh, 10 min GC window.
+    // Values are SECONDS per `ResourceCacheConfig`; no-op when
+    // `queryCachePlugin` isn't registered (first-mount diagnostic fires
+    // — same contract as a hand-written `cache:` block).
+    cache: config.cache ?? { staleTime: 300, gcTime: 600 },
+  };
+}
+
+/**
+ * Expand the `customRoutesOnly: true` shorthand into its three primitive
+ * flags. The shorthand exists because hosts wiring a "service resource"
+ * (custom routes only, no adapter, no auto-CRUD) had to remember to set
+ * `disableDefaultRoutes` + `skipValidation` + `skipRegistry` in lockstep —
+ * forgetting any one of them produced confusing errors ("controller
+ * required when CRUD routes are enabled" for a resource that ships none).
+ *
+ * Explicit narrow settings always win — the shorthand only fills in
+ * flags that were not set so power users can opt back into a specific
+ * primitive (`customRoutesOnly: true, skipRegistry: false` keeps OpenAPI
+ * docs while still skipping CRUD + validation).
+ */
+function expandCustomRoutesOnly<TDoc>(config: ResourceConfig<TDoc>): ResourceConfig<TDoc> {
+  if (config.customRoutesOnly !== true) return config;
+  return {
+    ...config,
+    customRoutesOnly: undefined,
+    disableDefaultRoutes: config.disableDefaultRoutes ?? true,
+    skipValidation: config.skipValidation ?? true,
+    skipRegistry: config.skipRegistry ?? true,
+  };
+}
+
 function resolveCrudAllowList<TDoc>(config: ResourceConfig<TDoc>): ResourceConfig<TDoc> {
   const { crud, disabledRoutes: legacyDisabled, disableDefaultRoutes: legacyDisableAll } = config;
   if (crud === undefined) return config;

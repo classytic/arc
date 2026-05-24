@@ -187,7 +187,14 @@ function expandOperatorKeys(input: Record<string, unknown>): Record<string, unkn
   return out;
 }
 
-function buildScope(auth: McpAuthResult | null): RequestScope {
+/**
+ * Resolve an `McpAuthResult` (or `null` for unauthenticated calls) into a
+ * canonical `RequestScope`. Exported so the MCP tool helpers can build the
+ * same scope when constructing the permission-check context, ensuring
+ * `requireOrgMembership()` / `requireOrgRole()` see the same auth shape on
+ * MCP that they see on HTTP.
+ */
+export function buildScope(auth: McpAuthResult | null): RequestScope {
   if (!auth) return { kind: "public" };
 
   // Service scope — machine-to-machine auth (clientId present, no human userId or userId is the client itself)

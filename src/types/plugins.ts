@@ -70,6 +70,13 @@ export interface CrudRouterOptions {
   schemaOptions?: RouteSchemaOptions;
   /** Field-level permissions (visibility, writability per role) */
   fields?: import("../permissions/fields.js").FieldPermissionMap;
+  /**
+   * Policy for handling fields the caller lacks write permission for.
+   * Auto-CRUD reads this via `BodySanitizer`; custom routes' field-write
+   * preHandler honors the same setting. Default: `'reject'` — silent
+   * stripping hides misconfigurations and real attacks.
+   */
+  onFieldWriteDenied?: "reject" | "strip";
   /** HTTP method for update routes. Default: 'PATCH' */
   updateMethod?: "PUT" | "PATCH" | "both";
   /**

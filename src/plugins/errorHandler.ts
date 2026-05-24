@@ -105,12 +105,67 @@ function fastifyValidationDetails(error: FastifyError): ErrorDetail[] {
     const path =
       v.instancePath?.replace(/^\//, "") ||
       (typeof missingProperty === "string" ? missingProperty : undefined);
+    // AJV `maximum` / `minimum` / `exclusiveMaximum` / `exclusiveMinimum`
+    // errors carry the bound under `params.limit` (a confusingly-named
+    // AJV field — it's the threshold, not the value that failed). Lift
+    // it onto `meta` so callers reading the detail can fix the request
+    // without parsing the human-readable `message`. This is the same
+    // information arc previously hid: a 400 on `?limit=200` against a
+    // resource capped at 100 used to surface only "Bad Request" with
+    // no machine-readable cap.
+    const meta: Record<string, unknown> = {};
+    if (
+      v.keyword === "maximum" ||
+      v.keyword === "minimum" ||
+      v.keyword === "exclusiveMaximum" ||
+      v.keyword === "exclusiveMinimum"
+    ) {
+      const bound = (v.params as { limit?: number } | undefined)?.limit;
+      if (typeof bound === "number") meta.bound = bound;
+    }
+    if (v.keyword === "enum") {
+      const allowed = (v.params as { allowedValues?: unknown[] } | undefined)?.allowedValues;
+      if (Array.isArray(allowed)) meta.allowedValues = allowed;
+    }
     return {
       ...(path ? { path } : {}),
       code: v.keyword ?? "invalid",
       message: v.message || "Invalid value",
+      ...(Object.keys(meta).length > 0 ? { meta } : {}),
     };
   });
+}
+
+/**
+ * Hoist a context-aware message + machine-readable `meta` for the
+ * common pagination-cap miss (`?limit=200` against a maxLimit=100
+ * resource). Pre-2.17.0 the wire envelope carried "Validation failed"
+ * + a detail with the AJV string; hosts had to grep the detail's
+ * message to surface the cap. Now the top-level message is
+ * "limit must be <= 100 (got 200)" AND `meta.cap` / `meta.received`
+ * are stamped on the contract for programmatic callers.
+ */
+function describePaginationCap(
+  error: FastifyError,
+  details: ErrorDetail[],
+): { message: string; meta: Record<string, unknown> } | null {
+  if (!Array.isArray(error.validation) || error.validation.length === 0) return null;
+  const v = error.validation.find(
+    (entry) =>
+      (entry.instancePath === "/limit" || entry.instancePath === "/page") &&
+      (entry.keyword === "maximum" || entry.keyword === "minimum"),
+  );
+  if (!v) return null;
+  const field = v.instancePath === "/limit" ? "limit" : "page";
+  const bound = (v.params as { limit?: number } | undefined)?.limit;
+  if (typeof bound !== "number") return null;
+  const detail = details.find((d) => d.path === field);
+  return {
+    message: detail?.message
+      ? `Query parameter '${field}' ${detail.message} (cap is ${bound})`
+      : `Query parameter '${field}' violates bound ${bound}`,
+    meta: { field, cap: bound },
+  };
 }
 
 /** Map Mongoose `ValidationError.errors` → canonical `ErrorDetail[]`. */
@@ -242,13 +297,24 @@ function classify(
     // generic "Validation failed" line. Arc-internal validation errors set
     // `arc.*` codes AND craft context-aware messages (action attribution etc.)
     // we should preserve verbatim.
-    const message = arcInternalCode ? error.message || "Validation failed" : "Validation failed";
+    const details = fastifyValidationDetails(fastifyErr);
+    // Hoist the pagination-cap case so the wire message names the cap
+    // — every host that hit "Bad Request" on `?limit=200` had to dig
+    // into details to learn the resource's maxLimit.
+    const paginationCap = arcInternalCode ? null : describePaginationCap(fastifyErr, details);
+    const message =
+      paginationCap?.message ??
+      (arcInternalCode ? error.message || "Validation failed" : "Validation failed");
+    const mergedMeta = {
+      ...(fastifyErr.meta ?? {}),
+      ...(paginationCap?.meta ?? {}),
+    };
     return {
       code: arcInternalCode ?? "arc.validation_error",
       message,
       status: typeof fastifyErr.statusCode === "number" ? fastifyErr.statusCode : 400,
-      details: fastifyValidationDetails(fastifyErr),
-      ...(fastifyErr.meta ? { meta: fastifyErr.meta } : {}),
+      details,
+      ...(Object.keys(mergedMeta).length > 0 ? { meta: mergedMeta } : {}),
     };
   }
 

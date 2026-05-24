@@ -30,6 +30,8 @@ declare module "bullmq" {
     constructor(name: string, opts?: Record<string, unknown>);
     add(name: string, data: unknown, opts?: Record<string, unknown>): Promise<{ id: string }>;
     getJobCounts(): Promise<Record<string, number>>;
+    /** Retrieve a job by ID within this queue's namespace. Returns undefined if not found or removed. */
+    getJob(id: string): Promise<Record<string, unknown> | undefined>;
     close(): Promise<void>;
   }
 

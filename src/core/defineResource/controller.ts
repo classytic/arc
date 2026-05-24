@@ -263,11 +263,22 @@ function buildBaseController<TDoc extends AnyRecord>(
     }
   }
 
+  // Resource-level `defaultLimit` / `maxLimit` (2.17.0) win over the
+  // parser-derived defaults so hosts can declare pagination shape
+  // inline without authoring a custom `queryParser`. Used by the
+  // `referenceData: true` shorthand to lift both caps to 1000 in one
+  // line.
+  const resourceConfigMaxLimit = (resolvedConfig as { maxLimit?: number }).maxLimit;
+  const resourceConfigDefaultLimit = (resolvedConfig as { defaultLimit?: number }).defaultLimit;
+
   const controller = new BaseController<TDoc>(repository, {
     resourceName: resolvedConfig.name,
     schemaOptions: resolvedConfig.schemaOptions,
     queryParser: qp,
-    maxLimit: maxLimitFromParser,
+    maxLimit: resourceConfigMaxLimit ?? maxLimitFromParser,
+    ...(resourceConfigDefaultLimit !== undefined
+      ? { defaultLimit: resourceConfigDefaultLimit }
+      : {}),
     tenantField: resolvedConfig.tenantField,
     idField: resolvedConfig.idField,
     ...(resolvedConfig.defaultSort !== undefined

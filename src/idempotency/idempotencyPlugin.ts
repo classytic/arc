@@ -128,6 +128,13 @@ declare module "fastify" {
 const HEADER_IDEMPOTENCY_REPLAYED = "x-idempotency-replayed";
 const HEADER_IDEMPOTENCY_KEY = "x-idempotency-key";
 
+/**
+ * Cap recursion depth in body fingerprinting. Real APIs almost never exceed
+ * ~10 levels; the cap is generous so well-formed payloads are unaffected,
+ * yet low enough to stop a `{"a":{"a":{...thousands deep...}}}` stack bomb.
+ */
+const MAX_FINGERPRINT_DEPTH = 32;
+
 const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
   fastify: FastifyInstance,
   opts: IdempotencyPluginOptions = {},
@@ -198,22 +205,34 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
   }
 
   /**
-   * Normalize body for consistent hashing (sort keys recursively)
+   * Normalize body for consistent hashing (sort keys recursively).
+   *
+   * Recursion is bounded by `MAX_FINGERPRINT_DEPTH` to defeat a deep-nesting
+   * DoS: an attacker who sends a 1 MB JSON body of nested `{"a":{"a":...}}`
+   * would otherwise blow the call stack inside this hot path. The cap
+   * exceeds any sensible API shape (real bodies are <10 levels deep) while
+   * still being well under V8's default stack budget. At the limit we
+   * substitute a sentinel string so the hash still differs from siblings
+   * but recursion stops — the request is fingerprinted as if everything
+   * beyond the cap were `"<truncated>"`.
    */
-  function normalizeBody(obj: unknown): unknown {
+  function normalizeBody(obj: unknown, depth = 0): unknown {
     if (obj === null || typeof obj !== "object") {
       return obj;
     }
+    if (depth >= MAX_FINGERPRINT_DEPTH) {
+      return "<truncated>";
+    }
 
     if (Array.isArray(obj)) {
-      return obj.map(normalizeBody);
+      return obj.map((item) => normalizeBody(item, depth + 1));
     }
 
     // Sort object keys
     const sorted: Record<string, unknown> = {};
     const keys = Object.keys(obj).sort();
     for (const key of keys) {
-      sorted[key] = normalizeBody((obj as Record<string, unknown>)[key]);
+      sorted[key] = normalizeBody((obj as Record<string, unknown>)[key], depth + 1);
     }
     return sorted;
   }

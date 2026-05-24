@@ -511,8 +511,42 @@ export interface RouteDefinition {
    * @default false
    */
   readonly tenantScope?: boolean;
-  /** SSE streaming mode */
+  /**
+   * SSE streaming mode. Two handler shapes work:
+   *
+   * - Write to `reply.raw` directly (NDJSON, custom SSE — historical contract).
+   * - Return a Web `ReadableStream` (Vercel AI SDK's `result.toUIMessageStream()`,
+   *   `fetch().body`, etc.). 2.17.1+ auto-pipes these through
+   *   `pipeUIMessageStreamToReply()` so each chunk is JSON-encoded into
+   *   an SSE `data:` frame and client-disconnect cancels the source.
+   *   Pre-2.17.1 this crashed with `chunk must be a string or Buffer`.
+   */
   readonly streamResponse?: boolean;
+  /**
+   * INTERNAL — marker stamped by built-in presets (softDelete, tree, …)
+   * onto routes they emit. Read by the MCP collision detector
+   * (`createMcpServer.resolveToolCollisions`) to attribute the route
+   * source ("preset:softDelete vs user `actions.restore`") and to
+   * auto-namespace the preset side when a user-authored tool legitimately
+   * shadows it. Not part of the public surface — hosts must not set this.
+   *
+   * @internal
+   */
+  readonly _presetSource?: string;
+  /**
+   * Apply the resource's `fields` (field-level write permissions) to this
+   * custom route's request body.
+   *
+   * Default: `true` for body-bearing methods (POST/PUT/PATCH), `false`
+   * otherwise. Set to `false` to opt out — handler accepts the body as
+   * supplied with no field-write filtering. The resource-level
+   * `onFieldWriteDenied: 'reject' | 'strip'` setting governs how denials
+   * are surfaced.
+   *
+   * `raw: true` routes ALWAYS bypass this — they've opted out of the
+   * pipeline entirely.
+   */
+  readonly fieldWrite?: boolean;
   /**
    * Fastify route schema. Each slot (`body`, `querystring`, `params`,
    * `headers`, `response[status]`) accepts a plain JSON Schema object
@@ -1020,6 +1054,86 @@ export interface ResourceConfig<TDoc = AnyRecord> {
   skipValidation?: boolean;
   /** Don't register in introspection */
   skipRegistry?: boolean;
+  /**
+   * Default `limit` value when the request omits `?limit=`. Default 20.
+   * Surfaced at the resource level (rather than only via a custom
+   * `queryParser`) so hosts can declare it inline next to the resource
+   * shape. Threads into both the auto-built controller's QueryResolver
+   * AND the OpenAPI listQuery schema.
+   *
+   * For "fetch all" reference data, prefer the `referenceData: true`
+   * shorthand below — it pins this AND `maxLimit` AND aggressive cache
+   * defaults in one declaration.
+   */
+  defaultLimit?: number;
+  /**
+   * URL-driven `limit` ceiling. Default 100. Requests with
+   * `?limit=N` above this cap fail validation with a 400 that names
+   * the cap (`Query parameter 'limit' must be <= 100 (got N)`,
+   * `meta.cap: 100` on the wire envelope) — 2.17.0+ surfaces the cap
+   * value programmatically so callers can self-correct.
+   */
+  maxLimit?: number;
+  /**
+   * Mark this resource as **reference data** — small, mostly-static rows
+   * (currencies, countries, plans, credentials, pipeline stages) that
+   * callers want to fetch all of at once and cache aggressively.
+   *
+   * Sets the following defaults (each only when the corresponding
+   * narrower flag is not explicitly set, so this stays composable):
+   *
+   *   - `crud: { list: true, get: true }` — read-only surface (reference
+   *     data is rarely mutated through the public API; mutate via
+   *     migrations / admin tools).
+   *   - `defaultLimit: 1000` — one request returns everything by default.
+   *   - `maxLimit: 1000` — same cap so explicit `?limit=` requests
+   *     don't have to know the resource is reference data.
+   *   - `cache: { staleTime: 300, gcTime: 600 }` — 5 min fresh / 10 min
+   *     GC window so reference data isn't refetched on every request
+   *     (values are seconds per `ResourceCacheConfig`). No-op without
+   *     `queryCachePlugin` — same contract as the manual `cache` field;
+   *     a first-mount diagnostic fires when the plugin is missing.
+   *
+   * Pre-2.17.0 hosts achieved this by sprinkling `defaultLimit: 1000` +
+   * a custom queryParser + a `cache:` block across every reference
+   * resource. The shorthand collapses that to one flag.
+   *
+   * @example
+   * ```ts
+   * defineResource({
+   *   name: 'credential-type',
+   *   adapter,
+   *   referenceData: true,
+   * });
+   * ```
+   */
+  referenceData?: boolean;
+  /**
+   * Shorthand for the "service resource" pattern — a resource that ships
+   * ONLY custom routes (no auto-CRUD, no adapter, no validation, no
+   * introspection registry entry). Setting `customRoutesOnly: true`
+   * is equivalent to the three-flag combo:
+   *
+   * ```ts
+   * { disableDefaultRoutes: true, skipValidation: true, skipRegistry: true }
+   * ```
+   *
+   * Each of those flags stays public — power users that need to opt OUT
+   * of one (e.g. `customRoutesOnly: true` + `skipRegistry: false` because
+   * a custom-routes-only resource still wants OpenAPI docs) can pass the
+   * narrow flag explicitly; explicit settings always win over the
+   * shorthand. The shorthand only fills in flags that were not set.
+   *
+   * @example
+   * ```ts
+   * defineResource({
+   *   name: 'health',
+   *   customRoutesOnly: true,
+   *   routes: [{ method: 'GET', path: '/ping', handler: () => ({ ok: true }) }],
+   * });
+   * ```
+   */
+  customRoutesOnly?: boolean;
   /**
    * Per-resource MCP opt-out.
    *
