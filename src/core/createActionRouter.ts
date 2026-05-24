@@ -87,6 +87,7 @@ import {
   resolvePipelineSteps,
   resolveRouterPluginMw,
   selectPluginMw,
+  tryRegisterRoute,
 } from "./routerShared.js";
 import { normalizeSchemaIR, schemaIRToJsonSchemaBranch } from "./schemaIR.js";
 
@@ -478,76 +479,80 @@ export function createActionRouter(
       }),
     ];
 
-    fastify.route({
-      method: "POST",
-      url: urlPath,
-      schema: routeSchema as FastifySchema,
-      // `attachValidation: true` parks AJV errors on `request.validationError`
-      // so the formatter above can re-throw with the matching action's scope.
-      attachValidation: true,
-      preHandler: preHandler.length > 0 ? (preHandler as preHandlerHookHandler[]) : undefined,
-      ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
-      handler: async (req: FastifyRequest, reply: FastifyReply) => {
-        const { action, ...data } = req.body as { action: string; [key: string]: unknown };
-        // For id-less mounts there's no `:id` param — pass empty string.
-        // Handlers declared with `id: false` are documented to receive `""`.
-        const id = hasId ? (req.params as { id: string }).id : "";
+    tryRegisterRoute(
+      fastify,
+      {
+        method: "POST",
+        url: urlPath,
+        schema: routeSchema as FastifySchema,
+        // `attachValidation: true` parks AJV errors on `request.validationError`
+        // so the formatter above can re-throw with the matching action's scope.
+        attachValidation: true,
+        preHandler: preHandler.length > 0 ? (preHandler as preHandlerHookHandler[]) : undefined,
+        ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
+        handler: async (req: FastifyRequest, reply: FastifyReply) => {
+          const { action, ...data } = req.body as { action: string; [key: string]: unknown };
+          // For id-less mounts there's no `:id` param — pass empty string.
+          // Handlers declared with `id: false` are documented to receive `""`.
+          const id = hasId ? (req.params as { id: string }).id : "";
 
-        // Layer per-request entity handle on top of the frozen resource
-        // meta (`idField` rides on the meta set once by `buildArcDecorator`).
-        // Skip for id-less routes — `entityId: ""` is useless and
-        // `getEntityQuery(req)` callers shouldn't see it.
-        if (hasId) {
-          const reqWithExtras = req as RequestWithExtras;
-          reqWithExtras.arc = {
-            ...(reqWithExtras.arc ?? {}),
-            entityId: id,
-          };
-        }
-
-        // `buildActionPermissionMw` has rejected invalid actions / denied
-        // permissions before we get here. The defensive fallback stays for
-        // hosts that bypass the preHandler chain (internal invocation).
-        const handler = wrappedHandlers.get(action);
-        if (!handler) {
-          throw createError(
-            400,
-            `Invalid action '${action}'. Valid actions: ${actionSubset.join(", ")}`,
-            { validActions: actionSubset },
-          );
-        }
-
-        try {
-          const response = await handler(id, data, req as RequestWithExtras);
-          return sendControllerResponse(reply, response, req);
-        } catch (error) {
-          if (onError) {
-            const { statusCode, error: errorMsg, code } = onError(error as Error, action, id);
-            throw createError(statusCode, errorMsg, code ? { code } : undefined);
+          // Layer per-request entity handle on top of the frozen resource
+          // meta (`idField` rides on the meta set once by `buildArcDecorator`).
+          // Skip for id-less routes — `entityId: ""` is useless and
+          // `getEntityQuery(req)` callers shouldn't see it.
+          if (hasId) {
+            const reqWithExtras = req as RequestWithExtras;
+            reqWithExtras.arc = {
+              ...(reqWithExtras.arc ?? {}),
+              entityId: id,
+            };
           }
 
-          const err = error as Record<string, unknown>;
-          const statusCode = (err.statusCode as number) || (err.status as number) || 500;
-          const errorCode = (err.code as string) || "ACTION_FAILED";
-
-          if (statusCode >= 500) {
-            req.log.error({ err: error, action, id }, "Action handler error");
+          // `buildActionPermissionMw` has rejected invalid actions / denied
+          // permissions before we get here. The defensive fallback stays for
+          // hosts that bypass the preHandler chain (internal invocation).
+          const handler = wrappedHandlers.get(action);
+          if (!handler) {
+            throw createError(
+              400,
+              `Invalid action '${action}'. Valid actions: ${actionSubset.join(", ")}`,
+              { validActions: actionSubset },
+            );
           }
 
-          if (
-            (error as { name?: string })?.name === "ArcError" ||
-            error instanceof Error === false
-          ) {
-            throw error;
+          try {
+            const response = await handler(id, data, req as RequestWithExtras);
+            return sendControllerResponse(reply, response, req);
+          } catch (error) {
+            if (onError) {
+              const { statusCode, error: errorMsg, code } = onError(error as Error, action, id);
+              throw createError(statusCode, errorMsg, code ? { code } : undefined);
+            }
+
+            const err = error as Record<string, unknown>;
+            const statusCode = (err.statusCode as number) || (err.status as number) || 500;
+            const errorCode = (err.code as string) || "ACTION_FAILED";
+
+            if (statusCode >= 500) {
+              req.log.error({ err: error, action, id }, "Action handler error");
+            }
+
+            if (
+              (error as { name?: string })?.name === "ArcError" ||
+              error instanceof Error === false
+            ) {
+              throw error;
+            }
+            throw createError(
+              statusCode,
+              (err.message as string) || `Failed to execute '${action}' action`,
+              { code: errorCode },
+            );
           }
-          throw createError(
-            statusCode,
-            (err.message as string) || `Failed to execute '${action}' action`,
-            { code: errorCode },
-          );
-        }
+        },
       },
-    });
+      { resourceName, op: `action${urlPath}` },
+    );
 
     fastify.log.debug(
       { actions: actionSubset, mount: urlPath, tag, resourceName },

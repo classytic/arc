@@ -46,6 +46,7 @@ export function resolveOpenApiSchemas<TDoc>(
     );
     openApiSchemas = cleanLegacyObjectIdParams(openApiSchemas, resolvedConfig.idField);
     openApiSchemas = layerQueryParserListQuery(openApiSchemas, resolvedConfig.queryParser);
+    openApiSchemas = applyResourcePaginationCaps(openApiSchemas, resolvedConfig);
     openApiSchemas = mergeUserOpenApiOverrides(openApiSchemas, resolvedConfig.openApiSchemas);
     if (openApiSchemas) openApiSchemas = convertOpenApiSchemas(openApiSchemas);
     return { module: resolvedConfig.module, openApiSchemas };
@@ -138,6 +139,49 @@ export function layerQueryParserListQuery(
   return {
     ...openApiSchemas,
     listQuery: querySchema as unknown as AnyRecord,
+  } as OpenApiSchemas;
+}
+
+/**
+ * Apply resource-level `defaultLimit` / `maxLimit` (2.17.0) onto the
+ * listQuery schema. Resource-level caps win over both the framework
+ * default and the parser-derived value because they're the most-explicit
+ * declaration — a host that wrote `defaultLimit: 1000` on the resource
+ * means "this resource specifically returns up to 1000", regardless of
+ * what the parser's default would have been. The `referenceData: true`
+ * shorthand lifts both to 1000 so reference-data resources don't need
+ * a custom queryParser just to get the caps right.
+ *
+ * Bootstraps a minimal listQuery slot when none exists (no queryParser
+ * registered, no adapter-generated schema) so the AJV layer still gets
+ * a `maximum:` and surfaces the cap in the 400 envelope via
+ * `errorHandler.describePaginationCap()` instead of producing the
+ * generic "Bad Request" we ate pre-2.17.0.
+ */
+export function applyResourcePaginationCaps<TDoc>(
+  openApiSchemas: OpenApiSchemas | undefined,
+  resolvedConfig: ResourceConfig<TDoc>,
+): OpenApiSchemas | undefined {
+  const cfg = resolvedConfig as { defaultLimit?: number; maxLimit?: number };
+  if (cfg.defaultLimit === undefined && cfg.maxLimit === undefined) return openApiSchemas;
+
+  const existing = openApiSchemas?.listQuery as AnyRecord | undefined;
+  const existingProps = (existing?.properties as AnyRecord | undefined) ?? {};
+  const existingLimit = (existingProps.limit as AnyRecord | undefined) ?? {
+    type: "integer",
+    minimum: 1,
+  };
+  const patchedLimit: AnyRecord = { ...existingLimit };
+  if (cfg.maxLimit !== undefined) patchedLimit.maximum = cfg.maxLimit;
+  if (cfg.defaultLimit !== undefined) patchedLimit.default = cfg.defaultLimit;
+
+  return {
+    ...openApiSchemas,
+    listQuery: {
+      type: "object",
+      ...(existing ?? {}),
+      properties: { ...existingProps, limit: patchedLimit },
+    },
   } as OpenApiSchemas;
 }
 

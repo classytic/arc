@@ -122,11 +122,30 @@ export default defineResource({
   actions: {
     approve: { handler: approveOrder, permissions: requireRoles(['admin']) },
   },
-  // mcp: false,    // opt out of MCP tool generation for this resource (2.16)
+  // mcp: false,    // opt out of MCP tool generation for this resource
 });
 ```
 
 Auto-generates: `GET /products`, `GET /products/:id`, `POST /products`, `PATCH /products/:id`, `DELETE /products/:id` + softDelete adds `GET /products/deleted`, `POST /products/:id/restore` + slugLookup adds `GET /products/by-slug/:slug` + custom routes + `POST /products/:id/action`.
+
+### Resource shorthands
+
+```typescript
+// Reference data — read-only list+get, fetch-all limits (1000), 5min/10min cache.
+defineResource({ name: 'currency', adapter, referenceData: true });
+
+// Service resource — custom routes only, no adapter, no auto-CRUD, no registry entry.
+defineResource({
+  name: 'health',
+  customRoutesOnly: true,
+  routes: [{ method: 'GET', path: '/ping', permissions: allowPublic(), handler: () => ({ ok: true }) }],
+});
+
+// Tune pagination caps inline (no custom queryParser needed).
+defineResource({ name: 'pipeline', adapter, defaultLimit: 200, maxLimit: 500 });
+```
+
+`?limit=` violations respond 400 with a cap-aware envelope: `message: "Query parameter 'limit' must be <= 500 (got 800) (cap is 500)"` plus `meta: { field: 'limit', cap: 500 }` so callers can self-correct without scraping the message.
 
 ---
 
@@ -243,7 +262,8 @@ Tree-shake by importing only the subpath you need:
 | `@classytic/arc/plugins` | Health, request-id, versioning, tracing, response-cache |
 | `@classytic/arc/integrations/jobs` | BullMQ job dispatcher |
 | `@classytic/arc/integrations/websocket` | WebSocket integration |
-| `@classytic/arc/mcp` | Model Context Protocol tools |
+| `@classytic/arc/mcp` | Model Context Protocol tools + `createMcpAuthFromBetterAuthApiKey` (Better Auth API-key resolver), `resolveToolCollisions` |
+| `@classytic/arc/utils` | `pipeUIMessageStreamToReply`, `UI_MESSAGE_STREAM_HEADERS` (Vercel AI SDK → Fastify reply); errors, query parser, circuit breaker |
 | `@classytic/arc/testing` | `createTestApp`, `expectArc`, `TestAuthProvider`, `createTestFixtures` |
 | `@classytic/arc/types` | Type-only barrel (zero runtime cost) |
 

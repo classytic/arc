@@ -14,6 +14,7 @@
  * await app.register(eventPlugin, { transport });
  */
 
+import sjson from "secure-json-parse";
 import type { DomainEvent, EventHandler, EventLogger, EventTransport } from "../EventTransport.js";
 
 // ---------------------------------------------------------------------------
@@ -74,7 +75,10 @@ function serialize(event: DomainEvent): string {
 }
 
 function deserialize(raw: string): DomainEvent {
-  return JSON.parse(raw, (key, value) => {
+  // Cross-service trust boundary: any service with Redis publish access can put
+  // bytes on this channel. `sjson.parse` rejects `__proto__` / `constructor.prototype`
+  // so a poisoned event payload can't pollute the consumer's Object prototype.
+  return sjson.parse(raw, (key, value) => {
     if (key === "timestamp" && typeof value === "string") return new Date(value);
     return value;
   }) as DomainEvent;

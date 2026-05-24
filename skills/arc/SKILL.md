@@ -134,6 +134,23 @@ export default defineResource({
 
 **Auto-generated:** `GET /`, `GET /:id`, `POST /`, `PATCH /:id`, `DELETE /:id`. Presets add their own routes (see table below).
 
+**Resource shorthands:**
+
+```typescript
+// "fetch-all" reference data — read-only crud (list+get), defaultLimit/maxLimit=1000,
+// cache { staleTime: 300, gcTime: 600 }. Explicit narrow flags still win.
+defineResource({ name: 'currency', adapter, referenceData: true });
+
+// Service resource — no adapter, no auto-CRUD, no validation, no registry entry.
+// Equivalent to disableDefaultRoutes + skipValidation + skipRegistry.
+defineResource({ name: 'health', customRoutesOnly: true, routes: [...] });
+
+// Resource-level pagination knobs (no custom queryParser needed):
+defineResource({ name: 'pipeline', adapter, defaultLimit: 200, maxLimit: 500 });
+```
+
+400s on `?limit=` violations include the cap: `message: "Query parameter 'limit' must be <= 500 (got 800) (cap is 500)"` + `meta: { field: 'limit', cap: 500 }`.
+
 ## fieldRules
 
 | Flag | Effect |
@@ -533,11 +550,36 @@ await app.register(mcpPlugin, {
 
 **Per-resource opt-out:** `defineResource({ mcp: false })` — exclude a resource from MCP tool generation entirely. Useful for internal-admin or write-heavy resources where you don't want LLMs poking.
 
-**Auth modes** — `false` | `getAuth()` (Better Auth OAuth 2.1) | custom function returning `{ userId, organizationId, roles }` (human) or `{ clientId, organizationId, scopes }` (service). `PermissionResult.filters` flow into MCP tools exactly like REST.
+**Auth modes** — `false` | `getAuth()` (Better Auth OAuth 2.1) | `createMcpAuthFromBetterAuthApiKey(getAuth(), { orgFromMetadata: true })` (BA API-key plugin — handles `referenceId`/`userId` fallback + `metadata.organizationId` extraction) | custom function returning `{ userId, organizationId, roles }` (human) or `{ clientId, organizationId, scopes }` (service). `PermissionResult.filters` flow into MCP tools exactly like REST.
+
+**Tool-name collisions** — preset vs user (e.g. `softDelete` route vs `actions.restore`) auto-namespace to `softdelete_restore_<resource>`; every other collision shape throws `ArcError('arc.mcp.tool_name_collision')` naming both sources.
 
 **Custom tools** — co-locate with resources (`order.mcp.ts`), wire via `extraTools`. **AI SDK bridge** — expose AI SDK `tool()` defs via `buildMcpToolsFromBridges([...])`.
 
 Connect Claude CLI: `claude mcp add --transport http my-api http://localhost:3000/mcp`. Full recipes → [references/mcp.md](references/mcp.md).
+
+### AI SDK streaming → Fastify
+
+`streamResponse: true` routes that return a Web `ReadableStream` (Vercel AI SDK's `result.toUIMessageStream()`, `fetch().body`) auto-pipe through `pipeUIMessageStreamToReply()` — no `JsonToSseTransformStream` boilerplate.
+
+```typescript
+import { streamText } from 'ai';
+
+defineResource({
+  name: 'chat',
+  customRoutesOnly: true,
+  routes: [{
+    method: 'POST', path: '/', streamResponse: true, raw: true,
+    permissions: requireAuth(),
+    handler: async (req) => {
+      const result = streamText({ model, messages: req.body.messages });
+      return result.toUIMessageStream();  // arc pipes it for you
+    },
+  }],
+});
+```
+
+For manual control: `import { pipeUIMessageStreamToReply, UI_MESSAGE_STREAM_HEADERS } from '@classytic/arc/utils'`. Client disconnect cancels the source stream (no zombie LLM spend).
 
 ## Tenant cleanup (GDPR / SOX / HIPAA)
 

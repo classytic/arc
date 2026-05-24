@@ -79,6 +79,14 @@ export interface JobDefinition<TData = unknown, TResult = unknown> {
   deadLetterQueue?: string;
   /** Repeat schedule — cron or interval. Requires explicit timezone for cron. */
   repeat?: JobRepeatOptions;
+  /**
+   * Arc-level semaphore: max simultaneous handler executions for this job type.
+   * Jobs that dequeue while all slots are full are held (state stays `active`)
+   * and appear as `throttled: true` in `GET /jobs/:id/status`.
+   * Distinct from BullMQ `concurrency` — use this when the constraint is a
+   * downstream resource (AI model rate limit, DB connection pool, external API).
+   */
+  maxConcurrent?: number;
 }
 
 export interface JobMeta {
@@ -100,6 +108,28 @@ export interface JobDispatchOptions {
   removeOnFail?: boolean | number;
   /** One-shot repeat override at dispatch time. Usually prefer `JobDefinition.repeat`. */
   repeat?: JobRepeatOptions;
+}
+
+/** Point-in-time snapshot of a single job. */
+export interface JobStatus {
+  id: string;
+  /** Registered job name (= queue name). */
+  name: string;
+  state: "waiting" | "active" | "completed" | "failed" | "delayed" | "unknown";
+  /** Progress reported by the handler via BullMQ `job.updateProgress()`. */
+  progress: number | Record<string, unknown>;
+  /** True when the job is dequeued by a worker but blocked on a `maxConcurrent` semaphore slot. */
+  throttled?: boolean;
+  /** Unix ms when the job was enqueued. */
+  timestamp?: number;
+  /** Unix ms when processing started. */
+  processedOn?: number;
+  /** Unix ms when the job finished (completed or failed). */
+  finishedOn?: number;
+  /** Failure message when `state === 'failed'`. */
+  failedReason?: string;
+  /** Handler return value when `state === 'completed'` (only present if removeOnComplete hasn't cleared the job). */
+  returnValue?: unknown;
 }
 
 export interface JobsPluginOptions {
@@ -129,6 +159,12 @@ export interface JobDispatcher {
   ): Promise<{ jobId: string }>;
   getQueue(name: string): unknown | null;
   getStats(): Promise<Record<string, QueueStats>>;
+  /**
+   * Fetch a point-in-time status snapshot for a job by its ID.
+   * Searches across all registered queues.
+   * Returns `null` if the job doesn't exist or has been removed by retention policy.
+   */
+  getStatus(jobId: string): Promise<JobStatus | null>;
   close(): Promise<void>;
 }
 
@@ -161,6 +197,42 @@ export function defineJob<TData = unknown, TResult = unknown>(
   definition: JobDefinition<TData, TResult>,
 ): JobDefinition<TData, TResult> {
   return definition;
+}
+
+// ============================================================================
+// Semaphore — arc-level concurrency cap per job type
+// ============================================================================
+
+class Semaphore {
+  private available: number;
+  private readonly waiters: Array<() => void> = [];
+
+  constructor(permits: number) {
+    this.available = permits;
+  }
+
+  get isFull(): boolean {
+    return this.available === 0;
+  }
+
+  acquire(): Promise<void> {
+    if (this.available > 0) {
+      this.available--;
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      this.waiters.push(resolve);
+    });
+  }
+
+  release(): void {
+    const next = this.waiters.shift();
+    if (next) {
+      next();
+    } else {
+      this.available++;
+    }
+  }
 }
 
 // ============================================================================
@@ -213,6 +285,8 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
   const queues = new Map<string, InstanceType<typeof Queue>>();
   const dlqQueues = new Map<string, InstanceType<typeof Queue>>();
   const workers = new Map<string, InstanceType<typeof Worker>>();
+  // Tracks which job IDs are currently held by a maxConcurrent semaphore (active but not yet executing).
+  const throttledJobs = new Map<string, Set<string>>();
 
   // Validate repeat configuration up-front so misconfigured jobs fail fast
   // instead of silently running on server-local time (DST drift hazard).
@@ -274,6 +348,10 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
 
     // Create worker with timeout support
     const jobTimeout = job.timeout ?? defaults.timeout;
+    const semaphore = job.maxConcurrent != null ? new Semaphore(job.maxConcurrent) : null;
+    const throttledSet: Set<string> = new Set();
+    throttledJobs.set(queueName, throttledSet);
+
     const worker = new Worker(
       queueName,
       async (bullJob: { id?: string; attemptsMade?: number; data?: unknown }) => {
@@ -283,24 +361,40 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
           timestamp: Date.now(),
         };
 
+        // Acquire semaphore slot before running the handler.
+        // Jobs that find all slots occupied wait here (state stays `active`
+        // in BullMQ but `throttled: true` in the status endpoint).
+        if (semaphore) {
+          if (semaphore.isFull) throttledSet.add(bullJob.id ?? "");
+          try {
+            await semaphore.acquire();
+          } finally {
+            throttledSet.delete(bullJob.id ?? "");
+          }
+        }
+
         // Apply job-level timeout if configured.
         // Clear the timer on success to avoid orphaned timers under load.
         let result: unknown;
-        if (jobTimeout) {
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          const timeoutPromise = new Promise<never>((_, reject) => {
-            timer = setTimeout(
-              () => reject(new Error(`Job '${queueName}' timed out after ${jobTimeout}ms`)),
-              jobTimeout,
-            );
-          });
-          try {
-            result = await Promise.race([job.handler(bullJob.data, meta), timeoutPromise]);
-          } finally {
-            clearTimeout(timer);
+        try {
+          if (jobTimeout) {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            const timeoutPromise = new Promise<never>((_, reject) => {
+              timer = setTimeout(
+                () => reject(new Error(`Job '${queueName}' timed out after ${jobTimeout}ms`)),
+                jobTimeout,
+              );
+            });
+            try {
+              result = await Promise.race([job.handler(bullJob.data, meta), timeoutPromise]);
+            } finally {
+              clearTimeout(timer);
+            }
+          } else {
+            result = await job.handler(bullJob.data, meta);
           }
-        } else {
-          result = await job.handler(bullJob.data, meta);
+        } finally {
+          semaphore?.release();
         }
 
         // Bridge completion event
@@ -452,6 +546,37 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
       return stats;
     },
 
+    async getStatus(jobId) {
+      for (const [name, queue] of queues) {
+        const job = await (
+          queue as unknown as { getJob(id: string): Promise<Record<string, unknown> | undefined> }
+        ).getJob(jobId);
+        if (!job) continue;
+
+        const state = (
+          typeof (job as { getState?: () => Promise<string> }).getState === "function"
+            ? await (job as { getState(): Promise<string> }).getState()
+            : "unknown"
+        ) as JobStatus["state"];
+
+        const throttled = throttledJobs.get(name)?.has(jobId) || undefined;
+
+        return {
+          id: jobId,
+          name,
+          state,
+          progress: (job.progress ?? 0) as number | Record<string, unknown>,
+          throttled: throttled === true ? true : undefined,
+          timestamp: (job.timestamp as number | undefined) ?? undefined,
+          processedOn: (job.processedOn as number | null | undefined) ?? undefined,
+          finishedOn: (job.finishedOn as number | null | undefined) ?? undefined,
+          failedReason: (job.failedReason as string | undefined) ?? undefined,
+          returnValue: (job.returnvalue as unknown) ?? undefined,
+        };
+      }
+      return null;
+    },
+
     async close() {
       // Pause workers first so they stop claiming new jobs before we tear
       // down connections. In-flight jobs get a chance to drain via the
@@ -488,6 +613,15 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
   fastify.get(`${prefix}/stats`, async () => {
     const stats = await dispatcher.getStats();
     return { success: true, data: stats };
+  });
+
+  fastify.get(`${prefix}/:id/status`, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const status = await dispatcher.getStatus(id);
+    if (!status) {
+      return reply.status(404).send({ success: false, error: "Job not found" });
+    }
+    return { success: true, data: status };
   });
 
   // Graceful shutdown

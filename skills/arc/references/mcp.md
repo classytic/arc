@@ -168,7 +168,27 @@ Arc → auth.api.getMcpSession({ headers }) → { userId, organizationId }
 Arc → BaseController scopes by org automatically
 ```
 
-### 3. Custom Auth Function (API key, gateway, static org)
+### 3. Better Auth API Key (machine clients, no OAuth dance)
+
+Hosts using Better Auth's `apiKey()` plugin should NOT hand-wire `verifyApiKey` — the helper handles the `referenceId` vs `userId` fallback, `metadata.organizationId` extraction, disabled / expired guards, and fail-closed exception handling.
+
+```typescript
+import { createMcpAuthFromBetterAuthApiKey } from '@classytic/arc/mcp';
+import { getAuth } from './auth.config.js';
+
+await app.register(mcpPlugin, {
+  resources,
+  auth: createMcpAuthFromBetterAuthApiKey(getAuth(), {
+    orgFromMetadata: true,              // reads key.metadata.organizationId (default)
+    // metadataOrgField: 'tenantId',    // if you stored it under a different key
+    // permissionScope: 'mcp',          // permissions[scope] → result.scopes (default 'mcp')
+  }),
+});
+```
+
+Header precedence: `Authorization: Bearer <key>` first, then `x-api-key`. Keys with neither `userId` nor `referenceId` are treated as service principals (`clientId = key.id`) — `RequestScope.kind` becomes `"service"`.
+
+### 4. Custom Auth Function (API key, gateway, static org)
 
 Pass an `McpAuthResolver` — a function that receives headers and returns identity:
 
@@ -241,6 +261,15 @@ auth resolver returns { userId: 'alice', organizationId: 'org-a' }
 ```
 
 Works with any `tenantField` (`organizationId`, `workspaceId`, `teamId`). Resources with `tenantField: false` are visible to all authenticated users.
+
+## Tool-Name Collisions
+
+`createMcpServer()` resolves duplicate tool names BEFORE the MCP SDK sees them — the SDK's native `Tool already registered` error gave zero source attribution.
+
+- **Preset vs user** → auto-namespace. `softDelete`'s `restore_post` becomes `softdelete_restore_post` when the user defines `actions.restore`; the user's tool keeps the canonical name.
+- **User vs user / preset vs preset / 3-way+** → typed throw: `ArcError('arc.mcp.tool_name_collision')` naming both `source` strings (`crud:post:list`, `action:post:approve`, `route:post:GET /export`, `preset:softDelete:post:restore`).
+
+`resolveToolCollisions(tools)` is exported from `@classytic/arc/mcp` for test harnesses that want to exercise collision behaviour without booting a server.
 
 ## Level 2 — Custom Tools
 

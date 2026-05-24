@@ -34,6 +34,7 @@
  */
 
 import type { RouteHandlerMethod } from "fastify";
+import sjson from "secure-json-parse";
 
 /** Parsed file from multipart form-data */
 export interface ParsedFile {
@@ -277,15 +278,17 @@ function tryParseValue(value: string): unknown {
     if (Number.isFinite(num)) return num;
   }
 
-  // Try JSON object/array
+  // Try JSON object/array — multipart text fields are attacker-controlled.
+  // `sjson.parse` rejects `__proto__` / `constructor.prototype` so a crafted
+  // field can't pollute the consumer's Object prototype on `Object.assign`.
   if (
     (value.startsWith("{") && value.endsWith("}")) ||
     (value.startsWith("[") && value.endsWith("]"))
   ) {
     try {
-      return JSON.parse(value);
+      return sjson.parse(value);
     } catch {
-      // Not valid JSON — return as string
+      // Not valid JSON or poisoning attempt — return as string
     }
   }
 

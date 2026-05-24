@@ -152,6 +152,7 @@ export function resourceToTools(
           adapterBodies,
         }),
         handler: createCrudHandler(op, controller, resource.name, resource.permissions),
+        source: `crud:${resource.name}:${op}`,
       });
     }
   }
@@ -253,11 +254,21 @@ export function resourceToTools(
 
     const toolName = prefix ? `${prefix}_${opName}_${resource.name}` : `${opName}_${resource.name}`;
 
+    // Tag preset-emitted routes (softDelete's `restore` / `listDeleted`,
+    // tree presets, etc.) distinctly from user-authored ones so the
+    // collision detector in `createMcpServer` can auto-namespace the
+    // preset side rather than crash the boot when a user `actions.restore`
+    // legitimately shadows the preset.
+    const routeSource = route._presetSource
+      ? `preset:${route._presetSource}:${resource.name}:${opName}`
+      : `route:${resource.name}:${route.method} ${route.path}`;
+
     tools.push({
       name: toolName,
       description: toolDescription,
       annotations: toolAnnotations,
       inputSchema: inputShape,
+      source: routeSource,
       handler: mcpHandler
         ? createMcpHandlerPassthrough(mcpHandler)
         : createCustomRouteHandler(
@@ -357,6 +368,7 @@ export function resourceToTools(
         description: String(description),
         annotations,
         inputSchema: inputShape,
+        source: `action:${resource.name}:${actionName}`,
         handler: createActionToolHandler(
           actionName,
           handler as (id: string, data: Record<string, unknown>, req: unknown) => Promise<unknown>,

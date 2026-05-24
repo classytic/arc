@@ -417,10 +417,65 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
 
     // queryCachePlugin declares `registerCacheInvalidationRule` via module
     // augmentation on `FastifyInstance` — typed access, no cast needed.
-    // Optional because the cache plugin is opt-in; skip silently when absent.
-    if (isFirstMount && resource.cache?.invalidateOn && fastify.registerCacheInvalidationRule) {
-      for (const [pattern, tags] of Object.entries(resource.cache.invalidateOn)) {
-        fastify.registerCacheInvalidationRule({ pattern, tags });
+    // The plugin is opt-in, so when it's not registered we WARN — silently
+    // dropping invalidation rules makes "why isn't my cache invalidating?"
+    // an hours-long debugging session for the host.
+    if (isFirstMount && resource.cache?.invalidateOn) {
+      if (fastify.registerCacheInvalidationRule) {
+        for (const [pattern, tags] of Object.entries(resource.cache.invalidateOn)) {
+          fastify.registerCacheInvalidationRule({ pattern, tags });
+        }
+      } else {
+        fastify.log?.warn?.(
+          `[Arc] Resource '${resource.name}' declares \`cache.invalidateOn\` but ` +
+            "`queryCachePlugin` is not registered. Cache-invalidation rules are silently " +
+            "ignored. Either register the plugin (`await fastify.register(queryCachePlugin, ...)`) " +
+            "or remove the `cache.invalidateOn` config to clean up the resource definition.",
+        );
+      }
+    }
+
+    // `audit: true` on a resource is consulted by `auditPlugin` in
+    // `perResource` mode. If the plugin isn't registered, the flag is dead
+    // config — warn so the host doesn't ship "audited" code that's actually
+    // emitting no audit events.
+    if (isFirstMount && resource.audit) {
+      const hasAuditPlugin =
+        fastify.hasDecorator("audit") &&
+        // `auditPlugin` installs a noop logger when the plugin is registered
+        // but the host disabled it. Treat that as "audit not actually running"
+        // so the warning fires for the same observable outcome.
+        typeof (fastify as { audit?: { create?: unknown } }).audit?.create === "function" &&
+        (fastify as { audit?: { _noop?: boolean } }).audit?._noop !== true;
+      if (!hasAuditPlugin) {
+        fastify.log?.warn?.(
+          `[Arc] Resource '${resource.name}' declares \`audit: ${JSON.stringify(resource.audit)}\` ` +
+            "but `auditPlugin` is not registered (or is registered with a noop logger). " +
+            "Audit events for this resource will NOT be recorded. Either register " +
+            "`auditPlugin` (`await fastify.register(auditPlugin, { store: ... })`) or " +
+            "remove the `audit` flag from the resource definition.",
+        );
+      }
+    }
+
+    // `events: {...}` declares CRUD-event schemas that auto-emit via
+    // `fastify.events.publish()` from `arcCorePlugin`'s post-hook. If
+    // `eventPlugin` isn't registered, `arcCorePlugin` silently skips emission
+    // (`if (!hasEvents(fastify)) return`) — the host's declared events never
+    // fire and downstream subscribers (analytics, audit, webhook fan-out) get
+    // nothing. Warn once at first mount.
+    if (isFirstMount && resource.events && Object.keys(resource.events).length > 0) {
+      const eventsDecor = (fastify as { events?: { publish?: unknown } }).events;
+      const hasEventPlugin = eventsDecor != null && typeof eventsDecor.publish === "function";
+      if (!hasEventPlugin) {
+        const eventNames = Object.keys(resource.events).join(", ");
+        fastify.log?.warn?.(
+          `[Arc] Resource '${resource.name}' declares events (${eventNames}) but ` +
+            "`eventPlugin` is not registered. The events will silently NOT be emitted " +
+            "on CRUD mutations. Either register the plugin " +
+            "(`await fastify.register(eventPlugin, { transport: ... })`) or remove " +
+            "the `events` declaration from the resource.",
+        );
       }
     }
 
@@ -473,6 +528,9 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
           updateMethod: resource.updateMethod,
           pipe: resource.pipe,
           fields: resource.fields,
+          // Honored by `buildFieldWritePreHandler` for custom routes —
+          // matches the auto-CRUD behaviour `BodySanitizer` already gives.
+          onFieldWriteDenied: resource.onFieldWriteDenied,
           // Surfaces on `req.arc.idField` via `buildArcDecorator` — see
           // `core/entityHelpers.ts` for the read-side helpers.
           idField: resource.idField,

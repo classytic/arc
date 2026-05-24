@@ -24,6 +24,7 @@
  * ```
  */
 
+import { ArcError } from "../../utils/errors.js";
 import type {
   CreateMcpServerConfig,
   McpAuthResult,
@@ -62,13 +63,93 @@ export async function createMcpServer(
   );
 
   if (config.tools) {
-    for (const tool of config.tools) registerTool(server, tool, authRef);
+    // Resolve duplicates BEFORE handing tools to the SDK. The MCP SDK
+    // throws an opaque `Tool already registered` error from deep inside
+    // `McpServer.registerTool` with no source attribution — every host
+    // that hit it (sniffer's `softDelete + actions.restore` collision is
+    // the canonical example) spent the same evening grepping for the
+    // duplicate name. arc now resolves the common case (preset vs user)
+    // automatically and throws a typed error naming BOTH sources for
+    // everything else.
+    const resolved = resolveToolCollisions(config.tools);
+    for (const tool of resolved) registerTool(server, tool, authRef);
   }
   if (config.prompts) {
     for (const prompt of config.prompts) registerPrompt(server, prompt);
   }
 
   return server as unknown as McpServerInstance;
+}
+
+// ============================================================================
+// Tool-name collision resolution
+// ============================================================================
+
+/**
+ * Detect and resolve duplicate MCP tool names across the assembled tool list.
+ *
+ * Two outcomes:
+ *
+ *  1. **Auto-namespace** — when one tool's `source` carries a `preset:<name>`
+ *     prefix and the other doesn't, the preset tool is renamed to
+ *     `<presetName>_<originalName>` (e.g. softDelete's `restore_post`
+ *     becomes `softdelete_restore_post` when the user defines
+ *     `actions.restore`). The user's tool wins the canonical name because
+ *     it's the more-specific intent.
+ *
+ *  2. **Typed throw** — every other collision (two user actions, two
+ *     custom routes, two presets) raises `ArcError('arc.mcp.tool_name_collision')`
+ *     naming both sources so the host's stack trace points at the
+ *     resource definitions, not the MCP SDK internals.
+ *
+ * Exported for the testing harness so collision behaviour can be exercised
+ * without a full server boot.
+ */
+export function resolveToolCollisions(tools: readonly ToolDefinition[]): ToolDefinition[] {
+  const byName = new Map<string, ToolDefinition[]>();
+  for (const t of tools) {
+    const list = byName.get(t.name);
+    if (list) list.push(t);
+    else byName.set(t.name, [t]);
+  }
+
+  const out: ToolDefinition[] = [];
+  for (const [name, list] of byName) {
+    const [first, second, ...rest] = list;
+    if (!first) continue; // unreachable — every map entry has ≥1 item
+    if (!second) {
+      out.push(first);
+      continue;
+    }
+
+    // Two-way collision — common case. Three-way+ falls through to throw
+    // because auto-resolution becomes ambiguous (which preset wins?).
+    if (rest.length === 0) {
+      const firstIsPreset = first.source?.startsWith("preset:") ?? false;
+      const secondIsPreset = second.source?.startsWith("preset:") ?? false;
+      if (firstIsPreset !== secondIsPreset) {
+        const preset = firstIsPreset ? first : second;
+        const user = firstIsPreset ? second : first;
+        const presetName = preset.source?.split(":")[1] ?? "preset";
+        const namespaced = `${presetName.toLowerCase()}_${name}`;
+        out.push({ ...preset, name: namespaced });
+        out.push(user);
+        continue;
+      }
+    }
+
+    throw new ArcError(
+      `MCP tool name '${name}' is registered by ${list.length} sources: ${list
+        .map((t) => t.source ?? "(unknown)")
+        .join(
+          ", ",
+        )}. Rename one of the sources (e.g. via 'actions.${name}' → 'actions.${name}V2', ` +
+        "or pass 'names: { [op]: \"custom_name\" }' in mcpPlugin overrides) so each tool has a unique name.",
+      { code: "arc.mcp.tool_name_collision", statusCode: 500 },
+    );
+  }
+
+  return out;
 }
 
 // ============================================================================

@@ -31,6 +31,7 @@
  * ```
  */
 
+import sjson from "secure-json-parse";
 import type {
   DeadLetteredEvent,
   DomainEvent,
@@ -830,7 +831,10 @@ function parseStreamFields(fields: string[]): DomainEvent | null {
   if (!eventType || !rawData) return null;
 
   try {
-    const parsed = JSON.parse(rawData, (key, value) => {
+    // Cross-service trust boundary — `sjson.parse` blocks `__proto__` /
+    // `constructor.prototype` keys so a poisoned stream entry can't pollute
+    // a consumer's Object prototype.
+    const parsed = sjson.parse(rawData, (key, value) => {
       // Revive the timestamp written via JSON.stringify in publish().
       if (key === "timestamp" && typeof value === "string") return new Date(value);
       return value;

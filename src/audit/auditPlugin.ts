@@ -458,6 +458,10 @@ function autoAuditGetOrgId(scope: unknown): string | undefined {
  */
 function createNoopLogger(): AuditLogger {
   const noop = async () => {};
+  // `_noop: true` is a non-API marker (not on `AuditLogger`) used by
+  // `buildResourcePlugin` to detect the "audit plugin registered but disabled"
+  // case and warn when a resource declares `audit: true`. The host's call
+  // sites use the public methods only.
   return {
     create: noop,
     update: noop,
@@ -466,7 +470,8 @@ function createNoopLogger(): AuditLogger {
     custom: noop,
     query: async () => [],
     purge: async () => 0,
-  };
+    _noop: true,
+  } as AuditLogger;
 }
 
 export default fp(auditPlugin, {

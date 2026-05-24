@@ -21,10 +21,20 @@
 ## Auth
 
 - `auth: getAuth()` — Better Auth OAuth 2.1 flow; populates `ctx.user` and [[request-scope]].
+- `auth: createMcpAuthFromBetterAuthApiKey(getAuth(), opts?)` (2.17.0) — Better Auth API-key plugin → MCP. Wraps `auth.api.verifyApiKey`, normalises `key.referenceId ?? key.userId → userId`, extracts org from `metadata.organizationId` (override `orgFromMetadata` for custom paths). Keys with neither user binding nor referenceId surface as service principals via `clientId`. Disabled/expired keys + verifier exceptions return null (fail-closed).
 - Custom function — returns `{ userId, organizationId, roles }` (human) or `{ clientId, organizationId, scopes }` (service).
 - `auth: false` — `ctx.user` is `null` (not `"anonymous"`). Permission guards still work correctly. See [[gotchas]] #17.
 
 Service-scope auth supported: machine tokens install `service` kind on scope — see [[request-scope]].
+
+## Tool-name collisions (2.17.0)
+
+`createMcpServer` resolves duplicate tool names BEFORE the MCP SDK sees them — the SDK's native `Tool already registered` error gave zero source attribution. Two outcomes:
+
+- **Preset vs user** — auto-namespaces the preset side. `softDelete` preset's `restore_<resource>` becomes `softdelete_restore_<resource>` when the user declares `actions.restore`; user's tool keeps the canonical name.
+- **Every other shape** (two user actions, two routes, two presets, three-way+) throws `ArcError('arc.mcp.tool_name_collision')` naming both sources. Stack trace points at resource definitions, not MCP SDK internals.
+
+Tool `source` strings: `crud:<resource>:<op>`, `action:<resource>:<name>`, `route:<resource>:<METHOD> <path>`, `preset:<presetName>:<resource>:<op>`.
 
 ## Permission parity
 

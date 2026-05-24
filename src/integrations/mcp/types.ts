@@ -98,6 +98,17 @@ export interface ToolDefinition<TSession = McpAuthResult> {
   outputSchema?: Record<string, z.ZodTypeAny>;
   annotations?: ToolAnnotations;
   handler: (input: Record<string, unknown>, ctx: ToolContext<TSession>) => Promise<CallToolResult>;
+  /**
+   * Origin label used by collision diagnostics — names BOTH the resource
+   * and the surface that produced this tool (`'crud:post:list'`,
+   * `'action:post:approve'`, `'route:post:GET /export'`,
+   * `'preset:softDelete:post:restore'`). When two tools share a name,
+   * `createMcpServer()` prints both labels so the host can see which
+   * surfaces collided without spelunking through the MCP SDK's stack
+   * trace. Optional — hand-written tools without a `source` simply
+   * appear as `'(unknown)'` in collision messages.
+   */
+  source?: string;
 }
 
 /** Output of definePrompt() — plain data, not yet registered */

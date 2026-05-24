@@ -30,14 +30,17 @@ import type {
 } from "../types/index.js";
 import { getDefaultCrudSchemas } from "../utils/responseSchemas.js";
 import { convertRouteSchema } from "../utils/schemaConverter.js";
+import { isReadableStream, pipeUIMessageStreamToReply } from "../utils/streaming.js";
 import { createCrudHandlers, createFastifyHandler } from "./fastifyAdapter.js";
 import {
   buildArcDecorator,
   buildAuthMiddleware,
   buildCrudPermissionMw,
+  buildFieldWritePreHandler,
   buildPipelineHandler,
   buildPreHandlerChain,
   buildRateLimitConfig,
+  methodCarriesBody,
   type PreHandlerHook,
   type RouteRateLimitConfig,
   type RouterPluginMw,
@@ -45,6 +48,7 @@ import {
   resolveRoutePreHandlers,
   resolveRouterPluginMw,
   selectPluginMw,
+  tryRegisterRoute,
 } from "./routerShared.js";
 
 // ============================================================================
@@ -75,6 +79,15 @@ function createCustomRoutes<TDoc = unknown>(
      * in that case `tenantScope: true` is a config bug and we throw.
      */
     tenantScopeMw?: readonly RouteHandlerMethod[];
+    /**
+     * Resource-level field permissions (`defineResource({ fields })`).
+     * When set + the route is body-bearing + `route.raw !== true` +
+     * `route.fieldWrite !== false`, a field-write preHandler is appended
+     * to the route's chain so custom routes match auto-CRUD's enforcement.
+     */
+    fieldPermissions?: import("../permissions/fields.js").FieldPermissionMap;
+    /** Resource-level `onFieldWriteDenied` policy (default: 'reject'). */
+    onFieldWriteDenied?: "reject" | "strip";
   },
 ): void {
   const {
@@ -86,6 +99,8 @@ function createCustomRoutes<TDoc = unknown>(
     pipeline,
     routeGuards,
     tenantScopeMw,
+    fieldPermissions,
+    onFieldWriteDenied,
   } = options;
 
   for (const route of routes) {
@@ -241,6 +256,21 @@ function createCustomRoutes<TDoc = unknown>(
       customPreHandlers.unshift(...(tenantScopeMw as RouteHandlerMethod[]));
     }
 
+    // Auto-apply resource-level field-write permissions on body-bearing
+    // custom routes. Auto-CRUD gets this for free via `BodySanitizer` inside
+    // `BaseController`; without this step a custom `POST /users/promote`
+    // bypassed `writableBy(['admin'])` rules and silently accepted
+    // restricted fields. `raw: true` opts out of the pipeline entirely;
+    // `fieldWrite: false` is the per-route escape hatch.
+    const shouldApplyFieldWrite =
+      route.raw !== true &&
+      (route as { fieldWrite?: boolean }).fieldWrite !== false &&
+      methodCarriesBody(route.method);
+    if (shouldApplyFieldWrite) {
+      const fieldWriteMw = buildFieldWritePreHandler(fieldPermissions, onFieldWriteDenied);
+      if (fieldWriteMw) customPreHandlers.push(fieldWriteMw);
+    }
+
     // preAuth runs BEFORE auth — for token promotion (e.g., EventSource ?token= → Authorization)
     const preAuthHandlers = (route as { preAuth?: PreHandlerHook[] }).preAuth ?? [];
 
@@ -254,24 +284,50 @@ function createCustomRoutes<TDoc = unknown>(
       customMws: customPreHandlers,
     });
 
-    // streamResponse: true → SSE headers + bypass Arc response wrapper
+    // streamResponse: true → SSE-style raw pipe. Two contracts:
+    //   1) Handler writes to `reply.raw` directly (NDJSON, custom SSE) —
+    //      arc just pre-sets SSE headers and gets out of the way. This is
+    //      the historical contract.
+    //   2) Handler RETURNS a Web `ReadableStream` (Vercel AI SDK's
+    //      `result.toUIMessageStream()`, raw `fetch().body`, etc.). Pre-2.17.1
+    //      this crashed with `chunk must be a string or Buffer` because
+    //      Fastify can't serialise structured chunks. arc now auto-detects
+    //      the stream and routes it through `pipeUIMessageStreamToReply()`,
+    //      which JSON-encodes each chunk into an SSE `data:` frame and
+    //      wires client-disconnect → stream.cancel(). Hosts get the
+    //      one-liner the framework should have shipped all along.
     const isStream = (route as { streamResponse?: boolean }).streamResponse === true;
 
-    fastify.route({
-      method: route.method,
-      url: route.path,
-      schema: schema as FastifySchema,
-      preHandler: preHandler.length > 0 ? (preHandler as preHandlerHookHandler[]) : undefined,
-      handler: isStream
-        ? async (request, reply) => {
-            reply.raw.setHeader("Content-Type", "text/event-stream");
-            reply.raw.setHeader("Cache-Control", "no-cache");
-            reply.raw.setHeader("Connection", "keep-alive");
-            return (handler as (req: unknown, rep: unknown) => unknown)(request, reply);
-          }
-        : handler,
-      ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
-    });
+    tryRegisterRoute(
+      fastify,
+      {
+        method: route.method,
+        url: route.path,
+        schema: schema as FastifySchema,
+        preHandler: preHandler.length > 0 ? (preHandler as preHandlerHookHandler[]) : undefined,
+        handler: isStream
+          ? async (request, reply) => {
+              reply.raw.setHeader("Content-Type", "text/event-stream");
+              reply.raw.setHeader("Cache-Control", "no-cache");
+              reply.raw.setHeader("Connection", "keep-alive");
+              const result = await (handler as (req: unknown, rep: unknown) => unknown)(
+                request,
+                reply,
+              );
+              // Auto-pipe a returned ReadableStream so AI-SDK callers don't
+              // hand-roll `JsonToSseTransformStream`. Handlers that already
+              // wrote to `reply.raw` return undefined / a value that isn't a
+              // stream — those keep working unchanged.
+              if (isReadableStream(result)) {
+                await pipeUIMessageStreamToReply(reply, result);
+              }
+              return result;
+            }
+          : handler,
+        ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
+      },
+      { resourceName, op: opName },
+    );
   }
 }
 
@@ -307,6 +363,7 @@ export function createCrudRouter<TDoc = unknown>(
     rateLimit,
     pipe: pipeline,
     fields: fieldPermissions,
+    onFieldWriteDenied,
     updateMethod = DEFAULT_UPDATE_METHOD,
     // Surfaces on `req.arc.idField` for every CRUD route — handlers
     // and downstream middleware compose `findOne` filters via
@@ -463,22 +520,26 @@ export function createCrudRouter<TDoc = unknown>(
         const summary =
           spec.op === "update" ? `${method === "PUT" ? "Replace" : "Update"} ${tag}` : spec.summary;
 
-        fastify.route({
-          method,
-          url: spec.url,
-          schema: buildSchema(
-            {
-              tags: [tag],
-              summary,
-              ...(spec.hasIdParams ? { params: idParamsSchema } : {}),
-            },
-            defaultSchemas[spec.op],
-            schemas[spec.op] as Record<string, unknown> | undefined,
-          ) as FastifySchema,
-          preHandler: preHandler.length > 0 ? (preHandler as preHandlerHookHandler[]) : undefined,
-          handler: handlers[spec.op],
-          ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
-        });
+        tryRegisterRoute(
+          fastify,
+          {
+            method,
+            url: spec.url,
+            schema: buildSchema(
+              {
+                tags: [tag],
+                summary,
+                ...(spec.hasIdParams ? { params: idParamsSchema } : {}),
+              },
+              defaultSchemas[spec.op],
+              schemas[spec.op] as Record<string, unknown> | undefined,
+            ) as FastifySchema,
+            preHandler: preHandler.length > 0 ? (preHandler as preHandlerHookHandler[]) : undefined,
+            handler: handlers[spec.op],
+            ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
+          },
+          { resourceName, op: spec.op },
+        );
       }
     }
   }
@@ -497,6 +558,8 @@ export function createCrudRouter<TDoc = unknown>(
       pipeline,
       routeGuards,
       tenantScopeMw,
+      fieldPermissions,
+      onFieldWriteDenied,
     });
   }
 }
