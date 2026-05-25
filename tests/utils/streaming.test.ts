@@ -121,7 +121,7 @@ describe("pipeUIMessageStreamToReply", () => {
     expect(removeCount).toBe(1);
   });
 
-  it("emits an SSE error frame and re-throws when the source throws", async () => {
+  it("emits an SSE error frame and ends the stream cleanly when the source throws", async () => {
     app = Fastify({ logger: false });
     app.get("/s", async (_req, reply) => {
       const stream = new ReadableStream({
@@ -133,14 +133,52 @@ describe("pipeUIMessageStreamToReply", () => {
           c.error(new Error("boom"));
         },
       });
-      // Don't propagate to Fastify (it's already flushed headers) — swallow here.
-      await pipeUIMessageStreamToReply(reply, stream).catch(() => undefined);
+      await pipeUIMessageStreamToReply(reply, stream);
     });
     await app.ready();
     const res = await app.inject({ method: "GET", url: "/s" });
     expect(res.body).toContain('data: {"first":true}');
     expect(res.body).toContain("event: error");
     expect(res.body).toContain("boom");
+  });
+
+  it("preserves plugin-contributed headers (CORS via @fastify/cors onSend hook)", async () => {
+    // Regression: the original `pipeUIMessageStreamToReply` wrote
+    // directly to `reply.raw` + `flushHeaders()`, which fired before
+    // Fastify's response lifecycle ran. @fastify/cors registers via
+    // `onSend`, so its `access-control-allow-origin` header never made
+    // it onto the wire on streaming routes. Browsers blocked the
+    // request with "No 'Access-Control-Allow-Origin' header is present"
+    // even though the same route returned CORS headers on its 4xx
+    // response (which fastify serialised through the normal path).
+    //
+    // The fix routes the stream through `reply.send(Readable.from(...))`
+    // so Fastify runs onSend before flushing — plugin headers survive.
+    app = Fastify({ logger: false });
+    const cors = (await import("@fastify/cors")).default;
+    await app.register(cors, { origin: "http://example.com", credentials: true });
+
+    app.get("/s", async (_req, reply) => {
+      const stream = new ReadableStream({
+        start(c) {
+          c.enqueue({ ok: true });
+          c.close();
+        },
+      });
+      await pipeUIMessageStreamToReply(reply, stream);
+    });
+    await app.ready();
+    const res = await app.inject({
+      method: "GET",
+      url: "/s",
+      headers: { origin: "http://example.com" },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["access-control-allow-origin"]).toBe("http://example.com");
+    expect(res.headers["access-control-allow-credentials"]).toBe("true");
+    expect(res.headers["content-type"]).toBe("text/event-stream");
+    expect(res.body).toContain('data: {"ok":true}');
   });
 });
 
