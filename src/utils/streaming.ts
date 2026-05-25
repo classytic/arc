@@ -16,6 +16,7 @@
  * with `UIMessageChunk` from the AI SDK without importing it.
  */
 
+import { Readable } from "node:stream";
 import type { FastifyReply } from "fastify";
 
 /**
@@ -90,28 +91,26 @@ export async function pipeUIMessageStreamToReply(
   options: PipeUIMessageStreamOptions = {},
 ): Promise<void> {
   const serialize = options.serialize ?? defaultSerialize;
-  const raw = reply.raw;
 
-  if (!raw.headersSent) {
-    const headers = options.headers ?? UI_MESSAGE_STREAM_HEADERS;
-    for (const [key, value] of Object.entries(headers)) {
-      raw.setHeader(key, value);
-    }
-    // `reply.statusCode` is always set by Fastify (defaults to 200), so no
-    // fallback needed — just mirror it onto the raw response.
-    raw.statusCode = reply.statusCode;
-    raw.flushHeaders?.();
+  // Set SSE headers via `reply.header()` so Fastify's response lifecycle
+  // (hooks like @fastify/cors's `onSend`) runs and merges its headers in.
+  // Writing to `reply.raw` directly with `raw.flushHeaders()` bypasses
+  // the onSend chain and silently drops cross-origin / auth / cookie
+  // headers contributed by plugins.
+  const headers = options.headers ?? UI_MESSAGE_STREAM_HEADERS;
+  for (const [key, value] of Object.entries(headers)) {
+    reply.header(key, value);
   }
 
+  // Wire client-disconnect → reader.cancel() so the upstream producer
+  // (LLM call, DB cursor) stops promptly instead of running to completion
+  // on a dead socket. Cache the listener ref so we can remove it from
+  // BOTH sources — leaking an abort listener on a long-lived
+  // `AbortSignal` would pin the closure indefinitely.
   const reader = stream.getReader();
-
-  // Wire client-disconnect to stream cancellation so the upstream
-  // producer (LLM call, DB cursor) stops promptly instead of running
-  // to completion on a dead socket. Cache the listener ref so we can
-  // remove it from BOTH sources in `finally` — leaking an abort listener
-  // on a long-lived `AbortSignal` (one tied to a request lifecycle
-  // longer than this stream) would pin the closure indefinitely.
+  let cancelled = false;
   const onAbort = () => {
+    cancelled = true;
     reader.cancel().catch(() => {
       /* already cancelled */
     });
@@ -119,39 +118,43 @@ export async function pipeUIMessageStreamToReply(
   reply.request.raw.once("close", onAbort);
   options.signal?.addEventListener("abort", onAbort, { once: true });
 
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      // Coalesce backpressure into a single await — `raw.write` returns
-      // false when the kernel buffer is full; pause until 'drain'.
-      const ok = raw.write(`data: ${serialize(value)}\n\n`);
-      if (!ok) await once(raw, "drain");
+  // Async iterable that yields SSE frames; `Readable.from()` wraps it as
+  // a Node stream Fastify can hand to `reply.send()`. Wrapping (vs writing
+  // to `reply.raw` directly) lets Fastify run its full response lifecycle
+  // — preSerialization → onSend → serializer — so plugin-contributed
+  // headers (CORS, security, cookies) survive on the wire.
+  async function* sseFrames(): AsyncGenerator<string, void, undefined> {
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        yield `data: ${serialize(value)}\n\n`;
+      }
+    } catch (err) {
+      // Surface as a final SSE error frame so the client sees a structured
+      // failure instead of a half-closed connection. Mirrors how Vercel AI
+      // SDK's reference servers handle pipe failures.
+      //
+      // We don't re-throw: `Readable.from()` would destroy the Node stream
+      // on a generator throw, which Fastify surfaces as
+      // "response destroyed before completion" — and the error frame
+      // wouldn't reach the wire. Emit + return cleanly instead.
+      if (!cancelled) {
+        yield `event: error\ndata: ${JSON.stringify({ message: String(err) })}\n\n`;
+      }
+    } finally {
+      reply.request.raw.removeListener("close", onAbort);
+      options.signal?.removeEventListener("abort", onAbort);
+      reader.releaseLock?.();
     }
-  } catch (err) {
-    // Surface as a final SSE error frame so the client sees a structured
-    // failure instead of a half-closed connection. Mirrors how Vercel AI
-    // SDK's reference servers handle pipe failures.
-    if (!raw.writableEnded) {
-      raw.write(`event: error\ndata: ${JSON.stringify({ message: String(err) })}\n\n`);
-    }
-    throw err;
-  } finally {
-    reply.request.raw.removeListener("close", onAbort);
-    options.signal?.removeEventListener("abort", onAbort);
-    if (!raw.writableEnded) raw.end();
-    reader.releaseLock?.();
   }
+
+  const nodeStream = Readable.from(sseFrames());
+  await reply.send(nodeStream);
 }
 
 function defaultSerialize(chunk: unknown): string {
   return typeof chunk === "string" ? chunk : JSON.stringify(chunk);
-}
-
-function once(emitter: NodeJS.WritableStream, event: string): Promise<void> {
-  return new Promise((resolve) => {
-    emitter.once(event, () => resolve());
-  });
 }
 
 /**
