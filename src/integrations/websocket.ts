@@ -42,9 +42,24 @@
  * This file is the public surface — re-exports what apps import.
  */
 
+// Public surface — keep tight. Internal helpers (SendQueue, DeadQueue,
+// EnvelopeWriter, safeAsync, createTruncator, derivePrincipal) are NOT
+// re-exported: hosts get them transitively through the plugin's
+// decorated `app.ws` API and the option types below. Custom backends
+// (Redis-backed pushRef stores, etc.) extend `PushRefStore` directly.
 export type { WebSocketAdapter } from "./websocket/adapter.js";
 export { LocalWebSocketAdapter } from "./websocket/adapter.js";
+export type { GeoPoint, GeoPublishOpts, GeoRoomOptions } from "./websocket/geo-room.js";
+export { GeoRoom } from "./websocket/geo-room.js";
 export { websocketPlugin } from "./websocket/plugin.js";
+export {
+  MemoryPushRefStore,
+  type Principal,
+  PushRefRegistry,
+  type PushRefRegistryOptions,
+  type PushRefStore,
+  type SerializedEntry,
+} from "./websocket/pushref-registry.js";
 export { RoomManager } from "./websocket/room-manager.js";
 export type {
   AuthResult,

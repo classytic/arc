@@ -121,7 +121,10 @@ describe("GET /jobs/:id/status", () => {
     const res = await app.inject({ method: "GET", url: "/jobs/does-not-exist/status" });
 
     expect(res.statusCode).toBe(404);
-    expect(res.json()).toMatchObject({ success: false, error: expect.stringMatching(/not found/i) });
+    expect(res.json()).toMatchObject({
+      success: false,
+      error: expect.stringMatching(/not found/i),
+    });
 
     await app.close();
   });
@@ -304,7 +307,11 @@ describe("maxConcurrent semaphore logic", () => {
     };
 
     // First job throws
-    await expect(runWithSemaphore(async () => { throw new Error("boom"); })).rejects.toThrow("boom");
+    await expect(
+      runWithSemaphore(async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
 
     // Slot must be free again — second job acquires immediately
     let secondStarted = false;

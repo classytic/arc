@@ -12,7 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   authenticateWebSocket,
   createCaptureReply,
-} from "../../src/integrations/websocket/auth.js";
+} from "../../../src/integrations/websocket/auth.js";
 
 // ============================================================================
 // createCaptureReply

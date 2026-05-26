@@ -12,7 +12,7 @@ import fastifyWebsocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import { RoomManager, websocketPlugin } from "../../src/integrations/websocket.js";
+import { RoomManager, websocketPlugin } from "../../../src/integrations/websocket.js";
 
 // ============================================================================
 // Helpers
@@ -491,10 +491,12 @@ describe("Heartbeat", () => {
     await app.listen({ port: 0, host: "127.0.0.1" });
 
     const { ws } = await connectWs(getPort(app));
-    const msgs = await collectMessages(ws, 3, 350);
-    const pings = msgs.filter((m) => m.type === "ping");
+    // Native RFC 6455 control frames — the `ws` client emits a `'ping'`
+    // event for every protocol-level ping and auto-replies with a pong.
+    const pings: Buffer[] = [];
+    ws.on("ping", (data) => pings.push(data));
+    await new Promise((r) => setTimeout(r, 350));
     expect(pings.length).toBeGreaterThanOrEqual(2);
-    expect(pings[0].timestamp).toBeDefined();
     ws.close();
   });
 

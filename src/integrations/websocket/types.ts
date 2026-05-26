@@ -7,6 +7,8 @@
  */
 
 import type { WebSocketAdapter } from "./adapter.js";
+import type { EnvelopeWriter } from "./envelope.js";
+import type { SendQueue } from "./send-queue.js";
 
 /**
  * A connected WebSocket client — one entry per TCP socket.
@@ -16,8 +18,31 @@ import type { WebSocketAdapter } from "./adapter.js";
  * the connection.
  */
 export interface WebSocketClient {
+  /**
+   * Transport-level connection ID (one per TCP socket). Stable for the
+   * lifetime of THIS connection only — a reconnect mints a new `id`.
+   */
   id: string;
-  socket: { send(data: string): void; close(): void; readyState: number };
+  /**
+   * Session reference — stable across reconnects, distinct from `userId`.
+   * One user with three browser tabs = three `pushRef`s, one `userId`.
+   * Routing layer keys off this for "send to THIS tab" semantics.
+   *
+   * Clients MAY supply their own pushRef via the `?pushRef=` query param
+   * on the upgrade URL (e.g. resumed reconnect); otherwise the server mints
+   * one at handshake time.
+   */
+  pushRef: string;
+  socket: {
+    send(data: string): void;
+    close(code?: number, reason?: string): void;
+    readyState: number;
+    bufferedAmount?: number;
+    /** RFC 6455 §5.5.2 ping control frame. Browsers auto-respond at the protocol layer. */
+    ping?(data?: unknown): void;
+    /** Immediate socket destroy — no Close frame, no flush. Use for zombies. */
+    terminate?(): void;
+  };
   subscriptions: Set<string>;
   userId?: string;
   organizationId?: string;
@@ -26,6 +51,26 @@ export interface WebSocketClient {
   /** OAuth scopes — present for service/machine-to-machine connections */
   scopes?: readonly string[];
   metadata?: Record<string, unknown>;
+  /**
+   * Outbound send queue — created at connect time, disposed on close.
+   * `RoomManager.send/sendRealtime` enqueue via this; the raw
+   * `client.socket.send()` path bypasses queue/coalesce/overflow policy
+   * and should only be used for the connection-lifecycle handshake.
+   */
+  queue?: SendQueue;
+  /**
+   * Sequence-numbered envelope writer + dead queue. Present iff the
+   * plugin was started with `messageEnvelope: 'seq'`. Critical sends are
+   * wrapped via this so the client can RESUME after reconnect.
+   */
+  envelope?: EnvelopeWriter;
+  /**
+   * Connection generation captured at claim time. The fence + CAS
+   * write paths use this — every release/persist passes it so the
+   * store can refuse stale writes from a connection that's been
+   * superseded by a newer claim on another node.
+   */
+  generation: number;
 }
 
 export interface WebSocketMessage {
@@ -108,4 +153,56 @@ export interface WebSocketPluginOptions {
    * ```
    */
   adapter?: WebSocketAdapter;
+  /**
+   * Outbound message wire format.
+   *   - `'raw'` (default): write payloads as-is — no envelope, no replay.
+   *   - `'seq'`: wrap every critical send in `{seq, t, msg}`. The dead
+   *     queue of the last N envelopes is owned by the **PushRefRegistry**
+   *     (per-pushRef / per-session, NOT per-connection) so a client
+   *     reconnecting under the same pushRef within `pushRefTtlMs` can
+   *     RESUME via `{type:'resume', lastSeq}` and replay missed messages
+   *     across the disconnect — not just within a single socket.
+   *
+   * Opt-in to preserve compatibility with existing clients. Set to
+   * `'seq'` for chat, ride-status, payment flows — anything where a
+   * message lost mid-disconnect is a real bug.
+   */
+  messageEnvelope?: "raw" | "seq";
+  /** Dead queue size (per pushRef) when `messageEnvelope: 'seq'`. Defaults to 128. */
+  deadQueueSize?: number;
+  /**
+   * Time (ms) a released pushRef stays in the registry waiting for a
+   * reconnect to RESUME against its envelope + dead queue. Past this
+   * window the entry is GC'd. Default `60_000` (60 s) — typical mobile
+   * lock-screen + carrier-handoff reconnect window.
+   */
+  pushRefTtlMs?: number;
+  /**
+   * Hard cap on pushRef registry entries. When full, the longest-inactive
+   * entry is evicted to make room. Default `10_000` — sized for a single
+   * Node process supporting tens of thousands of concurrent users with
+   * tab-level granularity.
+   */
+  pushRefMaxEntries?: number;
+  /**
+   * Maximum bytes per outbound frame. Payloads exceeding this are
+   * replaced with a `{type:'truncated', originalBytes, hint}` placeholder
+   * so a misbehaving server-side emitter can't pin socket buffers across
+   * the fleet. Default `5 * 1024 * 1024` (5 MiB) — same as n8n's
+   * `relayViaPubSub` ceiling. Hosts may tighten for low-bandwidth tiers.
+   */
+  maxOutboundBytes?: number;
+  /**
+   * Optional external store for cross-instance pushRef state. When
+   * provided, the envelope + dead queue survive reconnects to ANY node
+   * in the cluster (not just the originator). See
+   * `@classytic/arc/integrations/websocket-pushref-redis` for the
+   * Redis-backed implementation.
+   *
+   * Without this, the in-memory registry is per-process — fine for
+   * single-node deployments OR sticky-session load balancing, but a
+   * client reconnecting through a different node loses dead-queue
+   * state.
+   */
+  pushRefStore?: import("./pushref-registry.js").PushRefStore;
 }

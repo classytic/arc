@@ -1,11 +1,10 @@
 /**
  * Single source of truth for scaffolded project dependencies.
  *
- * Versions are pinned to the floor each subsystem requires — peer-dep
- * minimums on Arc, kit minimums (mongokit ≥ 3.11, repo-core ≥ 0.2,
- * mongoose ≥ 9.4.1), and major-version stable for the rest. The carets
- * allow minor + patch upgrades without breaking arc's contract, while
- * preventing the silent breakage of `@latest` on a kit floor bump.
+ * Versions track the published npm latest — bump here when a new release
+ * ships. The carets allow minor + patch upgrades without breaking arc's
+ * contract, while preventing the silent breakage of `@latest` on a floor
+ * bump.
  *
  * Used by both `packageJsonTemplate` (declares the deps in the generated
  * `package.json` so `npm install` works without a pre-pass) and
@@ -21,9 +20,9 @@ export const SCAFFOLD_DEP_VERSIONS = {
   // pagination, adapter contract, and filter helpers from there).
   // `@classytic/primitives` is REQUIRED for events.
   core: {
-    "@classytic/arc": "^2.13.0",
+    "@classytic/arc": "^2.17.2",
     "@classytic/primitives": "^0.6.0",
-    "@classytic/repo-core": "^0.4.2",
+    "@classytic/repo-core": "^0.5.0",
     "@fastify/cors": "^11.2.0",
     "@fastify/helmet": "^13.0.2",
     "@fastify/rate-limit": "^10.3.0",
@@ -34,37 +33,38 @@ export const SCAFFOLD_DEP_VERSIONS = {
   },
   // Auth presets — picked by `config.auth`
   authJwt: {
-    "@fastify/jwt": "^10.0.0",
-    bcryptjs: "^3.0.0",
+    "@fastify/jwt": "^10.1.0",
+    bcryptjs: "^3.0.3",
   },
   authBetterAuth: {
-    "better-auth": "^1.6.9",
+    "better-auth": "^1.6.11",
     // mongodb 7 — mongoose 9 ships bson@7, so the top-level mongodb peer
     // must also use bson@7 or BA's mongo-adapter throws
     // `BSONVersionError: bson types must be from bson 7.x.x` on every
     // user/org write.
-    mongodb: "^7.1.0",
+    mongodb: "^7.2.0",
   },
   authBetterAuthApiKey: {
-    "@better-auth/api-key": "^1.6.9",
+    "@better-auth/api-key": "^1.6.11",
   },
   // Adapter presets — picked by `config.adapter`. The kit ships its own
   // arc-compatible adapter at `<kit>/adapter` (arc 2.12+); the kit owns
   // the driver peer (mongoose for mongokit, etc.).
   adapterMongokit: {
-    "@classytic/mongokit": "^3.13.0",
-    mongoose: "^9.6.1",
+    "@classytic/mongokit": "^3.14.0",
+    mongoose: "^9.6.2",
   },
   // Dev tooling — common to every project
   devCommon: {
     "mongodb-memory-server": "^11.1.0",
-    "pino-pretty": "^13.0.0",
-    vitest: "^4.1.5",
+    "pino-pretty": "^13.1.3",
+    vitest: "^4.1.7",
   },
   devTypescript: {
+    // @types/node tracks Node.js major — pin to 22 to match arc's >=22 requirement
     "@types/node": "^22.10.0",
-    tsx: "^4.21.0",
-    typescript: "^5.7.2",
+    tsx: "^4.22.3",
+    typescript: "^6.0.3",
   },
   // Type definitions — paired with their runtime dep
   typesJwt: {

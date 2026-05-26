@@ -92,7 +92,15 @@ export function normalizeSchemaIR(raw: Record<string, unknown> | undefined): Sch
 
   const properties =
     (converted.properties as Record<string, Record<string, unknown>> | undefined) ?? {};
-  const required = Array.isArray(converted.required) ? (converted.required as string[]) : [];
+
+  // Zod v4's `z.toJSONSchema()` emits fields with `.default()` as `required`
+  // (because defaults make fields conceptually always-present from Zod's view).
+  // At the AJV layer this is wrong: callers can omit the field and expect the
+  // default to be applied at the handler layer. Strip any required entry whose
+  // property carries a `default` so AJV treats omitted-with-default as valid.
+  const rawRequired = Array.isArray(converted.required) ? (converted.required as string[]) : [];
+  const required = rawRequired.filter((field) => !("default" in (properties[field] ?? {})));
+
   const additionalProperties = converted.additionalProperties as
     | boolean
     | Record<string, unknown>
@@ -118,6 +126,13 @@ export function normalizeSchemaIR(raw: Record<string, unknown> | undefined): Sch
  * reach AJV intact, so HTTP validation rejects unknown fields before the
  * handler runs. This closes the bug where the documented strict-mode
  * escape hatch silently no-opped because normalization dropped the flag.
+ *
+ * `default` is stripped from each property schema. Zod v4's `z.toJSONSchema()`
+ * emits `default` for `.default()` fields, but AJV with `useDefaults: true`
+ * cannot apply defaults inside `oneOf` branches and throws a strict-mode error
+ * (`strict mode: default is ignored for: <path>`). Runtime defaults are applied
+ * by Zod parsing at the handler layer anyway, so the keyword is a no-op for AJV.
+ * The OpenAPI doc path uses a separate `openapi-3.0` target and is unaffected.
  */
 export function schemaIRToJsonSchemaBranch(
   ir: SchemaIR,
@@ -126,10 +141,15 @@ export function schemaIRToJsonSchemaBranch(
     required?: readonly string[];
   } = {},
 ): Record<string, unknown> {
-  const mergedProperties = {
-    ...(extras.properties ?? {}),
-    ...ir.properties,
-  };
+  const mergedProperties: Record<string, Record<string, unknown>> = {};
+  for (const [key, prop] of Object.entries({ ...(extras.properties ?? {}), ...ir.properties })) {
+    if (typeof prop === "object" && prop !== null && "default" in prop) {
+      const { default: _dropped, ...rest } = prop as Record<string, unknown>;
+      mergedProperties[key] = rest;
+    } else {
+      mergedProperties[key] = prop as Record<string, unknown>;
+    }
+  }
   const mergedRequired = [
     ...(extras.required ?? []),
     ...ir.required.filter((f) => !(extras.required ?? []).includes(f)),

@@ -24,6 +24,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { eventPlugin } from "../../src/events/eventPlugin.js";
+import { installEnvSandbox, withEnv } from "../_helpers/env-sandbox.js";
 
 let app: FastifyInstance;
 let warnSpy: ReturnType<typeof vi.spyOn>;
@@ -150,31 +151,36 @@ describe("dual-publish detector — duplicate still publishes", () => {
 });
 
 describe("dual-publish detector — default behaviour", () => {
+  // Snapshot + restore NODE_ENV around EVERY test in this block — a manual
+  // restore at the end of each `it` leaks the mutation if any `expect()`
+  // between the set and the restore throws. The detector default branches
+  // on NODE_ENV and so does the error-handler's stack-trace default; a
+  // leak here cascades into every later test in the run.
+  installEnvSandbox(["NODE_ENV"]);
+
   it("warns by default when NODE_ENV is not production", async () => {
-    const original = process.env.NODE_ENV;
-    process.env.NODE_ENV = "development";
-    app = Fastify();
-    await app.register(eventPlugin); // no explicit warnOnDuplicate
-    await app.ready();
+    await withEnv({ NODE_ENV: "development" }, async () => {
+      app = Fastify();
+      await app.register(eventPlugin); // no explicit warnOnDuplicate
+      await app.ready();
 
-    await app.events.publish("order:placed", { id: 1 }, { correlationId: "req_1" });
-    await app.events.publish("order:placed", { id: 1 }, { correlationId: "req_1" });
+      await app.events.publish("order:placed", { id: 1 }, { correlationId: "req_1" });
+      await app.events.publish("order:placed", { id: 1 }, { correlationId: "req_1" });
 
-    expect(findDuplicateWarning()).toBeDefined();
-    process.env.NODE_ENV = original;
+      expect(findDuplicateWarning()).toBeDefined();
+    });
   });
 
   it("stays silent by default in production", async () => {
-    const original = process.env.NODE_ENV;
-    process.env.NODE_ENV = "production";
-    app = Fastify();
-    await app.register(eventPlugin);
-    await app.ready();
+    await withEnv({ NODE_ENV: "production" }, async () => {
+      app = Fastify();
+      await app.register(eventPlugin);
+      await app.ready();
 
-    await app.events.publish("order:placed", { id: 1 }, { correlationId: "req_1" });
-    await app.events.publish("order:placed", { id: 1 }, { correlationId: "req_1" });
+      await app.events.publish("order:placed", { id: 1 }, { correlationId: "req_1" });
+      await app.events.publish("order:placed", { id: 1 }, { correlationId: "req_1" });
 
-    expect(findDuplicateWarning()).toBeUndefined();
-    process.env.NODE_ENV = original;
+      expect(findDuplicateWarning()).toBeUndefined();
+    });
   });
 });

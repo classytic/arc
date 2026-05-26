@@ -84,6 +84,7 @@ export default defineConfig({
     "src/integrations/streamline.ts",
     "src/integrations/websocket.ts",
     "src/integrations/websocket-redis.ts",
+    "src/integrations/websocket-pushref-redis.ts",
     "src/integrations/jobs.ts",
     "src/integrations/event-gateway.ts",
     "src/integrations/webhooks.ts",
@@ -126,6 +127,9 @@ export default defineConfig({
       // Fastify plugins (all optional peer deps)
       /^@fastify\//,
       "fastify-raw-body",
+
+      // Geo (optional — websocket geo-room subpath only)
+      "h3-js",
 
       // Schema
       "@sinclair/typebox",

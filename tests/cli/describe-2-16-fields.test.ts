@@ -162,9 +162,7 @@ describe("arc describe — 2.16 fields", () => {
 
   it("enumerates aggregation routes (v2.13) alongside CRUD + actions", async () => {
     const out = await runDescribe(FULL_2_16_RESOURCE);
-    const aggRoute = out.resources[0].routes.find((r) =>
-      r.operation.startsWith("aggregation:"),
-    );
+    const aggRoute = out.resources[0].routes.find((r) => r.operation.startsWith("aggregation:"));
     expect(aggRoute).toEqual({
       method: "GET",
       path: "/invoices/aggregations/revenueByMonth",

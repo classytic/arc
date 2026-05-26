@@ -13,7 +13,7 @@ import {
   LocalWebSocketAdapter,
   RoomManager,
   type WebSocketAdapter,
-} from "../../src/integrations/websocket.js";
+} from "../../../src/integrations/websocket.js";
 
 // ============================================================================
 // Mock adapter that simulates Redis pub/sub backplane

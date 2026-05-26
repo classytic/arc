@@ -477,6 +477,52 @@ export interface EventOutboxOptions {
    * on next poll) — legacy behaviour, unchanged.
    */
   readonly failurePolicy?: OutboxFailurePolicy;
+  /**
+   * Unit-of-Work session provider (AsyncLocalStorage integration).
+   *
+   * When set, `store()` calls this to get the active DB session and uses
+   * it as `OutboxWriteOptions.session` — **only when the caller has not
+   * already passed an explicit `options.session`**. This eliminates the
+   * boilerplate of threading the transaction handle from the controller
+   * through every service layer down to the outbox call site.
+   *
+   * Wire up with arc's `transactionContext`:
+   * ```typescript
+   * import { transactionContext } from '@classytic/arc/context';
+   *
+   * const outbox = new EventOutbox({
+   *   store: myOutboxStore,
+   *   sessionProvider: () => transactionContext.get(),
+   * });
+   *
+   * // In your service layer — session is auto-picked up:
+   * await transactionContext.run(mongooseSession, async () => {
+   *   await orders.insertOne(order, { session: mongooseSession });
+   *   await outbox.store(orderCreatedEvent); // no session arg needed
+   * });
+   * ```
+   */
+  readonly sessionProvider?: () => unknown;
+  /**
+   * W3C Trace Context provider.
+   *
+   * When set, `store()` calls this and merges the returned headers into
+   * `OutboxWriteOptions.headers` — only when `traceparent` is not already
+   * present in the caller-supplied headers. Downstream relay workers can
+   * then forward the headers to the transport, preserving the distributed
+   * trace tree across service boundaries.
+   *
+   * Wire up with arc's `getTraceHeaders`:
+   * ```typescript
+   * import { getTraceHeaders } from '@classytic/arc/context';
+   *
+   * const outbox = new EventOutbox({
+   *   store: myOutboxStore,
+   *   traceContextProvider: getTraceHeaders,
+   * });
+   * ```
+   */
+  readonly traceContextProvider?: () => Record<string, string> | undefined;
 }
 
 export class EventOutbox {
@@ -487,6 +533,8 @@ export class EventOutbox {
   private readonly _leaseMs: number;
   private readonly _onError?: OutboxRelayErrorHandler;
   private readonly _usePublishMany: boolean;
+  private readonly _sessionProvider?: () => unknown;
+  private readonly _traceContextProvider?: () => Record<string, string> | undefined;
   private readonly _failurePolicy?: OutboxFailurePolicy;
   /**
    * In-process attempt counter per event id. Accurate within this relay
@@ -519,6 +567,8 @@ export class EventOutbox {
     this._onError = opts.onError;
     this._usePublishMany = opts.usePublishMany ?? true;
     this._failurePolicy = opts.failurePolicy;
+    this._sessionProvider = opts.sessionProvider;
+    this._traceContextProvider = opts.traceContextProvider;
   }
 
   /** Unique consumer ID used for lease ownership when the store supports claims */
@@ -549,16 +599,41 @@ export class EventOutbox {
       throw new InvalidOutboxEventError("event.meta.id is required");
     }
 
+    // Build effective options, auto-injecting from providers only when the
+    // caller hasn't supplied an explicit value. `undefined` is preserved
+    // unless at least one injection or enrichment actually adds something —
+    // this keeps the contract stable for custom stores that distinguish
+    // `undefined` from `{}`.
+    let effective: OutboxWriteOptions | undefined = options;
+
+    // Auto-inject DB session from UoW provider (explicit session always wins).
+    if (effective?.session === undefined && this._sessionProvider) {
+      const autoSession = this._sessionProvider();
+      if (autoSession !== undefined) {
+        effective = { ...(effective ?? {}), session: autoSession };
+      }
+    }
+
+    // Auto-inject W3C trace headers (explicit traceparent always wins).
+    if (!effective?.headers?.["traceparent"] && this._traceContextProvider) {
+      const traceHeaders = this._traceContextProvider();
+      if (traceHeaders && Object.keys(traceHeaders).length > 0) {
+        effective = {
+          ...(effective ?? {}),
+          headers: { ...traceHeaders, ...(effective?.headers ?? {}) },
+        };
+      }
+    }
+
     // Auto-map event.meta.idempotencyKey → OutboxWriteOptions.dedupeKey when
     // the caller hasn't set one. Closes the common footgun where the event
     // carries an idempotency hint but the outbox persists duplicates because
     // the caller forgot to pass it twice.
-    const effectiveOptions: OutboxWriteOptions | undefined =
-      options?.dedupeKey === undefined && event.meta.idempotencyKey
-        ? { ...(options ?? {}), dedupeKey: event.meta.idempotencyKey }
-        : options;
+    if (effective?.dedupeKey === undefined && event.meta.idempotencyKey) {
+      effective = { ...(effective ?? {}), dedupeKey: event.meta.idempotencyKey };
+    }
 
-    await this._store.save(event, effectiveOptions);
+    await this._store.save(event, effective);
   }
 
   private _reportError(kind: OutboxRelayErrorKind, error: unknown, event?: DomainEvent): void {

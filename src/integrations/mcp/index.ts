@@ -96,6 +96,12 @@ export {
 } from "./invokeController.js";
 // Plugin (Level 1)
 export { filterResourcesForMcp, mcpPlugin } from "./mcpPlugin.js";
+export {
+  type DispatchOptions,
+  dispatchRealtimeToolCall,
+  type RealtimeToolCall,
+  type RealtimeToolResponse,
+} from "./realtimeBridge.js";
 export { type ResourceToToolsConfig, resourceToTools } from "./resourceToTools.js";
 // Error/success helpers — re-exported so custom tools can produce the
 // canonical CallToolResult shape without depending on an internal subpath.

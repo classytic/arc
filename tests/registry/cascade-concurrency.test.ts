@@ -27,11 +27,7 @@ const ORG = "test-org";
  * Stub adapter — records start + finish timestamps so concurrency
  * tests can verify "ran in parallel" via overlapping intervals.
  */
-function makeAdapter(opts: {
-  name: string;
-  delayMs?: number;
-  seedRows?: number;
-}) {
+function makeAdapter(opts: { name: string; delayMs?: number; seedRows?: number }) {
   const delayMs = opts.delayMs ?? 0;
   let rows = opts.seedRows ?? 3;
   const intervals: Array<{ name: string; start: number; finish: number }> = [];
@@ -45,11 +41,7 @@ function makeAdapter(opts: {
     },
     repository: {
       purgeByField: vi.fn(
-        async (
-          _field: string,
-          _value: unknown,
-          strategy: { type: string; reason?: string },
-        ) => {
+        async (_field: string, _value: unknown, strategy: { type: string; reason?: string }) => {
           const start = Date.now();
           if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
           const finish = Date.now();
@@ -106,9 +98,15 @@ describe("cascade concurrency", () => {
     const b = makeAdapter({ name: "b", delayMs: 30 });
     const c = makeAdapter({ name: "c", delayMs: 30 });
     const registry = new ResourceRegistry();
-    registry.register(buildResource({ name: "a", adapter: a, onTenantDelete: { strategy: { type: "hard" } } }));
-    registry.register(buildResource({ name: "b", adapter: b, onTenantDelete: { strategy: { type: "hard" } } }));
-    registry.register(buildResource({ name: "c", adapter: c, onTenantDelete: { strategy: { type: "hard" } } }));
+    registry.register(
+      buildResource({ name: "a", adapter: a, onTenantDelete: { strategy: { type: "hard" } } }),
+    );
+    registry.register(
+      buildResource({ name: "b", adapter: b, onTenantDelete: { strategy: { type: "hard" } } }),
+    );
+    registry.register(
+      buildResource({ name: "c", adapter: c, onTenantDelete: { strategy: { type: "hard" } } }),
+    );
 
     await cascadeDeleteForOrganization(registry, { organizationId: ORG });
 
@@ -122,9 +120,15 @@ describe("cascade concurrency", () => {
     const b = makeAdapter({ name: "b", delayMs: 50 });
     const c = makeAdapter({ name: "c", delayMs: 50 });
     const registry = new ResourceRegistry();
-    registry.register(buildResource({ name: "a", adapter: a, onTenantDelete: { strategy: { type: "hard" } } }));
-    registry.register(buildResource({ name: "b", adapter: b, onTenantDelete: { strategy: { type: "hard" } } }));
-    registry.register(buildResource({ name: "c", adapter: c, onTenantDelete: { strategy: { type: "hard" } } }));
+    registry.register(
+      buildResource({ name: "a", adapter: a, onTenantDelete: { strategy: { type: "hard" } } }),
+    );
+    registry.register(
+      buildResource({ name: "b", adapter: b, onTenantDelete: { strategy: { type: "hard" } } }),
+    );
+    registry.register(
+      buildResource({ name: "c", adapter: c, onTenantDelete: { strategy: { type: "hard" } } }),
+    );
 
     const t0 = Date.now();
     await cascadeDeleteForOrganization(registry, { organizationId: ORG, concurrency: 3 });
@@ -146,10 +150,34 @@ describe("cascade concurrency", () => {
 
     const registry = new ResourceRegistry();
     // Register late ones FIRST to prove priority controls order, not registration.
-    registry.register(buildResource({ name: "late1", adapter: late1, onTenantDelete: { strategy: { type: "hard" }, priority: 50 } }));
-    registry.register(buildResource({ name: "late2", adapter: late2, onTenantDelete: { strategy: { type: "hard" }, priority: 50 } }));
-    registry.register(buildResource({ name: "early1", adapter: early1, onTenantDelete: { strategy: { type: "hard" }, priority: 10 } }));
-    registry.register(buildResource({ name: "early2", adapter: early2, onTenantDelete: { strategy: { type: "hard" }, priority: 10 } }));
+    registry.register(
+      buildResource({
+        name: "late1",
+        adapter: late1,
+        onTenantDelete: { strategy: { type: "hard" }, priority: 50 },
+      }),
+    );
+    registry.register(
+      buildResource({
+        name: "late2",
+        adapter: late2,
+        onTenantDelete: { strategy: { type: "hard" }, priority: 50 },
+      }),
+    );
+    registry.register(
+      buildResource({
+        name: "early1",
+        adapter: early1,
+        onTenantDelete: { strategy: { type: "hard" }, priority: 10 },
+      }),
+    );
+    registry.register(
+      buildResource({
+        name: "early2",
+        adapter: early2,
+        onTenantDelete: { strategy: { type: "hard" }, priority: 10 },
+      }),
+    );
 
     await cascadeDeleteForOrganization(registry, { organizationId: ORG, concurrency: 4 });
 
@@ -179,18 +207,31 @@ describe("cascade checkpoint resume", () => {
         writes.push({ ...next, completedResources: [...next.completedResources] });
       },
     };
-    return { checkpoint, get state() { return state; }, writes };
+    return {
+      checkpoint,
+      get state() {
+        return state;
+      },
+      writes,
+    };
   }
 
   it("writes state after each successful resource", async () => {
     const a = makeAdapter({ name: "a", seedRows: 2 });
     const b = makeAdapter({ name: "b", seedRows: 3 });
     const registry = new ResourceRegistry();
-    registry.register(buildResource({ name: "a", adapter: a, onTenantDelete: { strategy: { type: "hard" } } }));
-    registry.register(buildResource({ name: "b", adapter: b, onTenantDelete: { strategy: { type: "hard" } } }));
+    registry.register(
+      buildResource({ name: "a", adapter: a, onTenantDelete: { strategy: { type: "hard" } } }),
+    );
+    registry.register(
+      buildResource({ name: "b", adapter: b, onTenantDelete: { strategy: { type: "hard" } } }),
+    );
 
     const cp = makeCheckpoint();
-    await cascadeDeleteForOrganization(registry, { organizationId: ORG, checkpoint: cp.checkpoint });
+    await cascadeDeleteForOrganization(registry, {
+      organizationId: ORG,
+      checkpoint: cp.checkpoint,
+    });
 
     expect(cp.state?.completedResources.sort()).toEqual(["a", "b"]);
     // One write per resource — the cascade persisted after each.
@@ -201,8 +242,12 @@ describe("cascade checkpoint resume", () => {
     const a = makeAdapter({ name: "a", seedRows: 2 });
     const b = makeAdapter({ name: "b", seedRows: 3 });
     const registry = new ResourceRegistry();
-    registry.register(buildResource({ name: "a", adapter: a, onTenantDelete: { strategy: { type: "hard" } } }));
-    registry.register(buildResource({ name: "b", adapter: b, onTenantDelete: { strategy: { type: "hard" } } }));
+    registry.register(
+      buildResource({ name: "a", adapter: a, onTenantDelete: { strategy: { type: "hard" } } }),
+    );
+    registry.register(
+      buildResource({ name: "b", adapter: b, onTenantDelete: { strategy: { type: "hard" } } }),
+    );
 
     // Prior run completed 'a'. Resume should skip it.
     const cp = makeCheckpoint({ completedResources: ["a"] });
