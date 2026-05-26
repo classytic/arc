@@ -56,6 +56,52 @@ describe("streamResponse auto-pipe", () => {
     expect(res.body).toContain('data: {"type":"finish"}');
   });
 
+  it("does NOT double-send the returned stream (regression for ERR_HTTP_HEADERS_SENT)", async () => {
+    // Regression: in the original 2.17.1 wiring, the wrapper did
+    //   `await pipeUIMessageStreamToReply(reply, result); return result;`
+    // — the helper sends the response via `reply.send(...)`, then
+    // returning `result` (the original ReadableStream) made Fastify try
+    // to send it AGAIN, crashing with ERR_HTTP_HEADERS_SENT on the
+    // second turn (the first turn often appeared fine because Fastify
+    // tolerated the duplicate before the headers had flushed).
+    //
+    // Two sequential requests on the same app catch this — the second
+    // surfaces the headers-already-sent error if `return reply` is
+    // missing.
+    const resource = defineResource({
+      name: "ds",
+      customRoutesOnly: true,
+      routes: [
+        {
+          method: "POST",
+          path: "/s",
+          raw: true,
+          streamResponse: true,
+          permissions: allowPublic(),
+          handler: async () =>
+            new ReadableStream<unknown>({
+              start(c) {
+                c.enqueue({ ok: true });
+                c.close();
+              },
+            }),
+        },
+      ],
+    });
+
+    app = Fastify({ logger: false });
+    await app.register(resource.toPlugin());
+    await app.ready();
+
+    const first = await app.inject({ method: "POST", url: "/dss/s" });
+    expect(first.statusCode).toBe(200);
+    expect(first.body).toContain('data: {"ok":true}');
+
+    const second = await app.inject({ method: "POST", url: "/dss/s" });
+    expect(second.statusCode).toBe(200);
+    expect(second.body).toContain('data: {"ok":true}');
+  });
+
   it("leaves direct reply.raw handlers untouched (back-compat)", async () => {
     const resource = defineResource({
       name: "log",

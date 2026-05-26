@@ -99,7 +99,7 @@ const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
     requestContext.storage.run(store, done);
   });
 
-  // Populate user/org after auth middleware runs (user isn't set during onRequest)
+  // Populate user/org/traceContext after auth middleware + all onRequest hooks run.
   fastify.addHook("preHandler", (request, _reply, done) => {
     const store = requestContext.get();
     if (store) {
@@ -111,6 +111,12 @@ const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
           : request.scope?.kind === "elevated"
             ? request.scope.organizationId
             : undefined;
+      // W3C Trace Context — set by requestIdPlugin if propagateTraceContext is enabled
+      const tc = req.traceContext as { traceparent?: string; tracestate?: string } | undefined;
+      if (tc?.traceparent) {
+        store.traceparent = tc.traceparent;
+        if (tc.tracestate) store.tracestate = tc.tracestate;
+      }
     }
     done();
   });

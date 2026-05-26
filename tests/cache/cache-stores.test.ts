@@ -1,14 +1,32 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryCacheStore } from "../../src/cache/memory.js";
 import { type RedisCacheClient, RedisCacheStore } from "../../src/cache/redis.js";
 
 describe("Cache Stores", () => {
   describe("MemoryCacheStore", () => {
+    // Same track/afterEach pattern as memory-production.test.ts —
+    // `await store.close()` inside the test body leaks the cleanup
+    // interval if any earlier `expect()` throws. Routing close through
+    // afterEach is leak-proof under failure.
+    const stores: MemoryCacheStore<unknown>[] = [];
+    const track = <T>(store: MemoryCacheStore<T>): MemoryCacheStore<T> => {
+      stores.push(store as MemoryCacheStore<unknown>);
+      return store;
+    };
+    afterEach(async () => {
+      while (stores.length) {
+        const s = stores.pop();
+        if (s) await s.close();
+      }
+    });
+
     it("enforces hard maxEntries and evicts LRU", async () => {
-      const store = new MemoryCacheStore<string>({
-        maxEntries: 2,
-        defaultTtlSeconds: 10,
-      });
+      const store = track(
+        new MemoryCacheStore<string>({
+          maxEntries: 2,
+          defaultTtlSeconds: 10,
+        }),
+      );
 
       await store.set("a", "A");
       await store.set("b", "B");
@@ -21,8 +39,6 @@ describe("Cache Stores", () => {
       expect(await store.get("a")).toBe("A");
       expect(await store.get("b")).toBeUndefined();
       expect(await store.get("c")).toBe("C");
-
-      await store.close();
     });
 
     it("expires values by TTL", async () => {
@@ -30,31 +46,31 @@ describe("Cache Stores", () => {
       // entry expires almost immediately. Using seconds as the unit means
       // sub-second TTLs are fractional — that's fine, the underlying
       // `setTimeout`/`Date.now()` math is in ms either way.
-      const store = new MemoryCacheStore<string>({
-        defaultTtlSeconds: 0.005,
-      });
+      const store = track(
+        new MemoryCacheStore<string>({
+          defaultTtlSeconds: 0.005,
+        }),
+      );
 
       await store.set("short", "value");
       expect(await store.get("short")).toBe("value");
 
       await new Promise((resolve) => setTimeout(resolve, 15));
       expect(await store.get("short")).toBeUndefined();
-
-      await store.close();
     });
 
     it("skips oversized entries safely", async () => {
       const warn = vi.fn();
-      const store = new MemoryCacheStore<string>({
-        maxEntryBytes: 1024,
-        logger: { warn, error: vi.fn() },
-      });
+      const store = track(
+        new MemoryCacheStore<string>({
+          maxEntryBytes: 1024,
+          logger: { warn, error: vi.fn() },
+        }),
+      );
 
       await store.set("big", "x".repeat(5000));
       expect(await store.get("big")).toBeUndefined();
       expect(warn).toHaveBeenCalled();
-
-      await store.close();
     });
   });
 

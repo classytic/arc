@@ -16,8 +16,7 @@ import { filterResourcesForMcp } from "../../../src/integrations/mcp/mcpPlugin.j
 
 type Resource = { name: string; mcp?: boolean };
 
-const r = (name: string, mcp?: boolean): Resource =>
-  mcp === undefined ? { name } : { name, mcp };
+const r = (name: string, mcp?: boolean): Resource => (mcp === undefined ? { name } : { name, mcp });
 
 describe("filterResourcesForMcp", () => {
   describe("default (no plugin-level selection)", () => {
@@ -89,15 +88,15 @@ describe("filterResourcesForMcp", () => {
 
   describe("error states", () => {
     it("throws when both `expose` and `include` are supplied", () => {
-      expect(() =>
-        filterResourcesForMcp([r("a")], { expose: ["a"], include: ["a"] }),
-      ).toThrowError(/either `expose` .* or `include`/);
+      expect(() => filterResourcesForMcp([r("a")], { expose: ["a"], include: ["a"] })).toThrowError(
+        /either `expose` .* or `include`/,
+      );
     });
 
     it("throws when `expose` is combined with `exclude`", () => {
-      expect(() =>
-        filterResourcesForMcp([r("a")], { expose: ["a"], exclude: ["b"] }),
-      ).toThrowError(/`expose` is default-deny/);
+      expect(() => filterResourcesForMcp([r("a")], { expose: ["a"], exclude: ["b"] })).toThrowError(
+        /`expose` is default-deny/,
+      );
     });
   });
 });

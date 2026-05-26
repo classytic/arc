@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import { RoomManager } from "../../src/integrations/websocket.js";
+import { RoomManager } from "../../../src/integrations/websocket.js";
 
 describe("WebSocket — Token re-validation", () => {
   it("RoomManager should support removing a client programmatically", () => {

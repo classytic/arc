@@ -1,0 +1,24 @@
+# Local smoke-test dependencies — boot a Redis broker so the dual-mode
+# smoke can exercise the cross-instance pushRef path. Used by:
+#
+#   docker compose -f docker-compose.smoke.yml up -d
+#   ARC_WS_SMOKE_REDIS_URL=redis://localhost:6390 npm run test:smoke:redis
+#   docker compose -f docker-compose.smoke.yml down
+#
+# Non-standard port (6390) so this never clashes with a developer's own
+# local Redis running on 6379. Eviction policy MUST be `noeviction` —
+# arc's pushref registry depends on the broker NOT silently dropping
+# active sessions under memory pressure.
+version: "3.9"
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: arc-smoke-redis
+    command: ["redis-server", "--maxmemory-policy", "noeviction", "--appendonly", "no"]
+    ports:
+      - "6390:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 1s
+      retries: 5

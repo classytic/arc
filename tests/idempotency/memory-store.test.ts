@@ -4,13 +4,28 @@ import { MemoryIdempotencyStore } from "../../src/idempotency/stores/memory.js";
 
 describe("MemoryIdempotencyStore", () => {
   let store: MemoryIdempotencyStore;
+  // Tests that build a second store inline (e.g. for capacity-eviction
+  // cases) register it here so afterEach closes it even when an
+  // `expect()` throws — otherwise the store's cleanup `setInterval`
+  // leaks into later tests under fake timers / order-dependent suites.
+  const extraStores: MemoryIdempotencyStore[] = [];
+  const track = (s: MemoryIdempotencyStore): MemoryIdempotencyStore => {
+    extraStores.push(s);
+    return s;
+  };
 
   beforeEach(() => {
     store = new MemoryIdempotencyStore({ cleanupIntervalMs: 60000 });
   });
 
   afterEach(async () => {
+    // `close()` is idempotent (guards on `cleanupInterval !== null`),
+    // so the in-test close() in the "close" describe doesn't conflict.
     await store.close();
+    while (extraStores.length) {
+      const s = extraStores.pop();
+      if (s) await s.close();
+    }
   });
 
   describe("get/set", () => {
@@ -40,14 +55,15 @@ describe("MemoryIdempotencyStore", () => {
     });
 
     it("evicts oldest entries when at max capacity", async () => {
-      const smallStore = new MemoryIdempotencyStore({ maxEntries: 3, cleanupIntervalMs: 60000 });
+      const smallStore = track(
+        new MemoryIdempotencyStore({ maxEntries: 3, cleanupIntervalMs: 60000 }),
+      );
       for (let i = 0; i < 5; i++) {
         await smallStore.set(`key-${i}`, createIdempotencyResult(200, {}, {}, 60000));
       }
       // Should have evicted some entries
       const stats = smallStore.getStats();
       expect(stats.results).toBeLessThanOrEqual(5);
-      await smallStore.close();
     });
   });
 

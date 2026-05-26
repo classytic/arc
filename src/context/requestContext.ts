@@ -47,6 +47,18 @@ export interface RequestStore {
   resourceName?: string;
   /** Request start time (for timing) */
   startTime: number;
+  /**
+   * W3C Trace Context traceparent header (RFC 9457 / W3C Recommendation).
+   * Format: `00-<trace-id>-<parent-id>-<flags>` (e.g. `00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01`).
+   * Populated by `requestIdPlugin` when the header is present and valid.
+   */
+  traceparent?: string;
+  /**
+   * W3C Trace Context tracestate header.
+   * Vendor-specific, comma-separated `key=value` pairs.
+   * Populated by `requestIdPlugin` when the header is present.
+   */
+  tracestate?: string;
   /** Additional context — extensible by app */
   [key: string]: unknown;
 }
@@ -90,3 +102,30 @@ export const requestContext = {
    */
   storage,
 };
+
+/**
+ * Returns the W3C Trace Context headers (`traceparent`, `tracestate`) from
+ * the current request context as a plain `Record<string, string>`, suitable
+ * for passing to `OutboxWriteOptions.headers` or forwarding to downstream
+ * HTTP clients.
+ *
+ * Returns `undefined` when called outside a request scope or when no trace
+ * context was propagated by the upstream caller.
+ *
+ * @example
+ * ```typescript
+ * // Propagate trace context through the outbox so downstream consumers
+ * // can stitch together distributed traces.
+ * const traceHeaders = getTraceHeaders();
+ * await outbox.store(event, { headers: traceHeaders });
+ * ```
+ */
+export function getTraceHeaders(): Record<string, string> | undefined {
+  const store = requestContext.get();
+  if (!store) return undefined;
+
+  const headers: Record<string, string> = {};
+  if (store.traceparent) headers["traceparent"] = store.traceparent;
+  if (store.tracestate) headers["tracestate"] = store.tracestate;
+  return Object.keys(headers).length > 0 ? headers : undefined;
+}

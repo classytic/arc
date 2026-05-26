@@ -307,6 +307,10 @@ function createCustomRoutes<TDoc = unknown>(
         preHandler: preHandler.length > 0 ? (preHandler as preHandlerHookHandler[]) : undefined,
         handler: isStream
           ? async (request, reply) => {
+              // Pre-set SSE headers via `reply.raw` so handlers that write
+              // to `reply.raw` directly (the legacy pattern) keep working.
+              // `pipeUIMessageStreamToReply` re-applies them via
+              // `reply.header()` for the auto-pipe branch — Fastify dedupes.
               reply.raw.setHeader("Content-Type", "text/event-stream");
               reply.raw.setHeader("Cache-Control", "no-cache");
               reply.raw.setHeader("Connection", "keep-alive");
@@ -320,6 +324,12 @@ function createCustomRoutes<TDoc = unknown>(
               // stream — those keep working unchanged.
               if (isReadableStream(result)) {
                 await pipeUIMessageStreamToReply(reply, result);
+                // Return `reply` (not `result`) — the helper already called
+                // `reply.send()`, so propagating the original ReadableStream
+                // would make Fastify try to send it a SECOND time and crash
+                // with ERR_HTTP_HEADERS_SENT. Returning `reply` signals
+                // "response is owned; do not touch."
+                return reply;
               }
               return result;
             }

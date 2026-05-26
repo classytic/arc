@@ -239,7 +239,13 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     // contract, override is intentional, no need to bark at boot.
     allowErrorHandlerOverride: true,
     routerOptions: {
-      querystringParser: (str: string) => qs.parse(str),
+      querystringParser: (str: string) =>
+        qs.parse(str, {
+          depth: 5,
+          parameterLimit: 100,
+          arrayLimit: 20,
+          allowPrototypes: false,
+        }),
       // 2.16 — Fastify 5.8+ moved maxParamLength under `routerOptions`
       // (the top-level option is deprecated, emits FSTDEP022). Default 400
       // overrides Fastify's stock 100 so modern signed-token URLs

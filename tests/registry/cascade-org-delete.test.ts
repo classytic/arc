@@ -41,12 +41,7 @@ interface DeleteManyCall {
  * the filter the cascade sent. Returns a configurable deletedCount so we
  * can verify the report rolls them up.
  */
-function stubAdapter(opts: {
-  name: string;
-  type?: string;
-  deletedCount?: number;
-  throws?: Error;
-}) {
+function stubAdapter(opts: { name: string; type?: string; deletedCount?: number; throws?: Error }) {
   const calls: DeleteManyCall[] = [];
   return {
     type: opts.type ?? "mongoose",

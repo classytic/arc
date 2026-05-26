@@ -49,6 +49,7 @@ describe("Public API Contract", () => {
       "./integrations/streamline",
       "./integrations/webhooks",
       "./integrations/websocket",
+      "./integrations/websocket-pushref-redis",
       "./integrations/websocket-redis",
       "./logger",
       "./mcp",

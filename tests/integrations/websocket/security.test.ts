@@ -9,7 +9,7 @@ import fastifyWebsocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import { websocketPlugin } from "../../src/integrations/websocket.js";
+import { websocketPlugin } from "../../../src/integrations/websocket.js";
 
 // ============================================================================
 // Helpers

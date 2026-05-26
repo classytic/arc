@@ -182,14 +182,22 @@ describe("loadResources()", () => {
       `,
     );
 
-    (globalThis as any).__boomLoadCount = 0;
-    const resources = await loadResources(throwDir);
-    expect(resources.length).toBe(0);
-    // Must be exactly 1 — not retried, not 0 (skipped)
-    expect((globalThis as any).__boomLoadCount).toBe(1);
-
-    // Clean up
-    rm(throwDir, { recursive: true, force: true });
+    // Use `globalThis` as the side-channel between this test process and
+    // the dynamically-imported fixture (the fixture has no other handle
+    // back into the test). Wrap in try/finally so a failed assertion
+    // never leaks the marker into later tests reading `globalThis`.
+    type GlobalWithMarker = typeof globalThis & { __boomLoadCount?: number };
+    const g = globalThis as GlobalWithMarker;
+    g.__boomLoadCount = 0;
+    try {
+      const resources = await loadResources(throwDir);
+      expect(resources.length).toBe(0);
+      // Must be exactly 1 — not retried, not 0 (skipped)
+      expect(g.__boomLoadCount).toBe(1);
+    } finally {
+      delete g.__boomLoadCount;
+      rm(throwDir, { recursive: true, force: true });
+    }
   });
 
   // ── Error scenarios with isolated tmp dirs ──
