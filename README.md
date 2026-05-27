@@ -7,10 +7,10 @@ Fastify 5+ | Node.js 22+ | ESM only
 ```bash
 npm install @classytic/arc fastify
 
-# Security defaults createApp() loads (each opt-out via `cors: false` etc.)
+# Security defaults `createApp()` can load as optional peers
 npm install @fastify/cors @fastify/helmet @fastify/rate-limit @fastify/under-pressure @fastify/sensible
 
-# Storage adapter — pick one (kits ship their own adapters under `/adapter`)
+# Storage adapter — pick one kit (kits ship their own adapters under `/adapter`)
 npm install @classytic/mongokit mongoose             # MongoDB → @classytic/mongokit/adapter
 # OR @classytic/sqlitekit drizzle-orm better-sqlite3 # → @classytic/sqlitekit/adapter
 # OR @classytic/prismakit @prisma/client             # → @classytic/prismakit/adapter
@@ -315,7 +315,7 @@ arc doctor                                       # diagnose env
 - **Skill** for AI agents: `npx skills add classytic/arc` — wires arc into Claude Code / agentic flows.
 - **Concept reference**: [wiki/index.md](wiki/index.md) — short, interlinked pages.
 - **Guides**: [docs/](docs/) — getting-started, framework-extension, production-ops, testing, ecosystem.
-- **Release notes**: [changelog/v2.md](changelog/v2.md).
+- **Release notes**: [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
