@@ -933,7 +933,16 @@ export interface ResourceConfig<TDoc = AnyRecord> {
    * ```
    */
   aggregations?: import("../core/aggregation/types.js").AggregationsMap;
-  disableCrud?: boolean;
+  /**
+   * Turn off ALL auto-CRUD routes for this resource (custom `routes` /
+   * `actions` / `aggregations` still mount). The canonical kill-switch —
+   * `crud: false` is its declarative equivalent.
+   *
+   * Note: there is no `disableCrud` alias. A short-lived `disableCrud`
+   * field shipped in the type but was never read by the router, so it
+   * silently no-opped — removed in 2.18.0 so the only kill-switch is the
+   * one that actually works.
+   */
   disableDefaultRoutes?: boolean;
   /** Specific routes to disable (negative-form opt-out). */
   disabledRoutes?: CrudRouteKey[];

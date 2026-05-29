@@ -75,11 +75,11 @@ Resolution happens in [`applyPresets`](../../src/core/defineResource.ts) before 
 
 Every adapter's `generateSchemas(schemaOptions, context)` receives the post-inject `schemaOptions`:
 
-- `createMongooseAdapter` with mongokit's `buildCrudSchemasFromModel` — [`src/adapters/mongoose.ts`](../../src/adapters/mongoose.ts) forwards `schemaOptions` to the kit, then calls `mergeFieldRuleConstraints` to layer portable constraints (`minLength`, `enum`, `nullable`, etc.) onto the kit's output.
-- `createDrizzleAdapter` — same pattern.
-- Built-in mongoose fallback — walks `fieldRules` inline and applies the same constraints.
+- `createMongooseAdapter` (from `@classytic/mongokit/adapter`) forwards `schemaOptions` to the kit's `buildCrudSchemasFromModel`, then `mergeFieldRuleConstraints` layers portable constraints (`minLength`, `enum`, `nullable`, etc.) onto the kit's output.
+- `createDrizzleAdapter` (from `@classytic/sqlitekit/adapter`) — same pattern.
+- Custom adapters implementing `DataAdapter<TDoc>` — same contract.
 
-`mergeFieldRuleConstraints` in [`src/adapters/field-rule-helpers.ts`](../../src/adapters/field-rule-helpers.ts) is **post-processing only**: it walks `createBody` / `updateBody` / `response` and fills gaps. Existing kit constraints always win. Note what it does **not** do: `systemManaged` metadata itself isn't applied here — it's consulted at stage 4 and at request time.
+`mergeFieldRuleConstraints` (now in `@classytic/repo-core/schema` since 2.12) is **post-processing only**: it walks `createBody` / `updateBody` / `response` and fills gaps. Existing kit constraints always win. Note what it does **not** do: `systemManaged` metadata itself isn't applied here — it's consulted at stage 4 and at request time.
 
 **Debug step**: if a custom adapter doesn't forward `schemaOptions` to its schema generator, `mergeFieldRuleConstraints` never sees the tenant rule. Symptom: `fieldRules` appears in `resolvedConfig` but not in the generated OpenAPI. Fix by accepting `schemaOptions` as the first parameter of `generateSchemas`, forwarding to the kit, and calling `mergeFieldRuleConstraints(generated, schemaOptions)`.
 
@@ -129,7 +129,7 @@ Fifteen lines of `console.log` at each stage will isolate the break in under fiv
 
 ## Related
 
-- [Org module](../getting-started/org.mdx) — the user-facing setup guide
+- [Presets — multiTenant](../getting-started/presets.mdx#multitenant) — the user-facing setup guide
 - [Factory and app bootstrap](./factory.mdx) — preset ordering
 - [Custom adapters — Field Rules](../framework-extension/custom-adapters.mdx#field-rules--shaping-kit-generated-schemas) — `systemManaged` decision table
 - [CHANGELOG `systemManaged` fields stripped from body-schema required](../../CHANGELOG.md) — the historical incident that drove stage 4

@@ -134,12 +134,15 @@ function validateDistributedRuntime(options: CreateAppOptions): string[] {
   const deferredWarnings: string[] = [];
   if (options.runtime !== "distributed") return deferredWarnings;
 
-  const missing: string[] = [];
+  // Each entry carries the config key the host must set AND a concrete
+  // hint, so the thrown error points at the exact fix instead of just
+  // naming what's absent.
+  const missing: Array<{ key: string; hint: string }> = [];
 
   // Events transport — always required for distributed
   const events = options.stores?.events;
   if (!events || MEMORY_STORE_NAMES.has(events.name)) {
-    missing.push("events transport");
+    missing.push({ key: "stores.events", hint: "a Redis Streams or pub/sub transport" });
   }
 
   // Cache store — only when caching is enabled. An adapter without a
@@ -148,14 +151,17 @@ function validateDistributedRuntime(options: CreateAppOptions): string[] {
   if (options.arcPlugins?.caching) {
     const cache = options.stores?.cache;
     if (!cache || (cache.name !== undefined && MEMORY_STORE_NAMES.has(cache.name))) {
-      missing.push("cache store");
+      missing.push({ key: "stores.cache", hint: "a Redis-backed cache adapter" });
     }
   }
 
   // Idempotency store — warn when memory-backed or absent
   const idempotency = options.stores?.idempotency;
   if (idempotency && MEMORY_STORE_NAMES.has(idempotency.name)) {
-    missing.push("idempotency store (memory-backed in distributed mode)");
+    missing.push({
+      key: "stores.idempotency",
+      hint: "a Redis/MongoDB store (currently memory-backed → instance-local)",
+    });
   } else if (!idempotency) {
     deferredWarnings.push(
       "runtime: 'distributed' — no idempotency store configured. " +
@@ -169,15 +175,16 @@ function validateDistributedRuntime(options: CreateAppOptions): string[] {
   if (options.arcPlugins?.queryCache) {
     const qc = options.stores?.queryCache;
     if (!qc || (qc.name !== undefined && MEMORY_STORE_NAMES.has(qc.name))) {
-      missing.push("queryCache store");
+      missing.push({ key: "stores.queryCache", hint: "a Redis-backed query-cache adapter" });
     }
   }
 
   if (missing.length > 0) {
+    const lines = missing.map((m) => `  • ${m.key.padEnd(20)} → ${m.hint}`).join("\n");
     throw new Error(
-      `[Arc] runtime: 'distributed' requires Redis/durable adapters.\n` +
-        `Missing: ${missing.join(", ")}.\n` +
-        `Provide Redis-backed stores or use runtime: 'memory' for development.`,
+      "[Arc] runtime: 'distributed' requires durable (Redis/MongoDB) adapters, not memory.\n\n" +
+        `Missing:\n${lines}\n\n` +
+        "Fix: pass durable adapters under `stores`, or use runtime: 'memory' for single-instance dev.",
     );
   }
 

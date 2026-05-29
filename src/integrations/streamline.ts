@@ -317,6 +317,18 @@ export const STREAMLINE_TERMINAL_EVENTS = [
   "workflow:cancelled",
 ] as const;
 
+/**
+ * Terminal run STATUSES (distinct from the terminal EVENT names above).
+ * Mirrors streamline's `isTerminalState()` — a run in one of these will
+ * emit no further bus events, so the SSE handler sends its snapshot and
+ * closes immediately rather than holding a connection open on a dead run.
+ */
+export const TERMINAL_RUN_STATUSES = new Set<string>([
+  "done",
+  "failed",
+  "cancelled",
+]);
+
 // ============================================================================
 // Plugin Implementation
 // ============================================================================
@@ -821,13 +833,23 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
             "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache",
             Connection: "keep-alive",
+            // Defeat proxy buffering (nginx) so events aren't held back.
+            "X-Accel-Buffering": "no",
           });
+          // Flush the head IMMEDIATELY. Without this, Node holds the response
+          // head until the first body write — and since we only write on a
+          // live bus event, a subscriber connecting during a long-running
+          // step (or after the run already finished) would receive zero bytes
+          // and its EventSource `onopen` would never fire. Flushing here makes
+          // the connection observably open the instant it's accepted.
+          reply.raw.flushHeaders();
 
           // Stream every streamline bus event — run-scoped filter applied
           // per-event. Terminal events auto-close the stream.
           const terminalEvents = new Set<string>(STREAMLINE_TERMINAL_EVENTS);
           const listeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
           let closed = false;
+          let heartbeat: ReturnType<typeof setInterval> | undefined;
 
           const send = (event: string, data: unknown) => {
             if (closed) return;
@@ -842,6 +864,7 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
           const cleanup = () => {
             if (closed) return;
             closed = true;
+            if (heartbeat) clearInterval(heartbeat);
             for (const { event, fn } of listeners) {
               wf.container?.eventBus.off(event, fn);
             }
@@ -852,6 +875,36 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
               // Already ended
             }
           };
+
+          // Snapshot-on-connect: emit the current run document as the first
+          // event so a subscriber that joins mid-run (or after a step has
+          // already transitioned) sees the live state instead of waiting for
+          // the NEXT transition — which may be seconds away, or never come.
+          send("workflow:snapshot", run);
+
+          // If the run is ALREADY terminal at connect time, no further bus
+          // events will fire for it — send the snapshot (above) and close,
+          // so a late subscriber doesn't hang forever waiting on a dead run.
+          const runStatus = (run as { status?: string }).status;
+          if (runStatus && TERMINAL_RUN_STATUSES.has(runStatus)) {
+            cleanup();
+            return;
+          }
+
+          // Heartbeat comment every 15s. Keeps the connection alive through
+          // idle-timeout proxies and lets the client tell "connected but
+          // quiet" (long step) apart from "dead". SSE comments (`:`-prefixed)
+          // are ignored by EventSource, so this is invisible to consumers.
+          // `unref` so the timer never keeps the process alive on its own.
+          heartbeat = setInterval(() => {
+            if (closed) return;
+            try {
+              reply.raw.write(`: ping\n\n`);
+            } catch {
+              cleanup();
+            }
+          }, 15_000);
+          (heartbeat as { unref?: () => void }).unref?.();
 
           for (const eventName of STREAMLINE_BUS_EVENTS) {
             const fn = (payload: unknown) => {

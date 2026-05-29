@@ -33,7 +33,7 @@ describe("distributed runtime validation", () => {
         rateLimit: false,
         underPressure: false,
       }),
-    ).rejects.toThrow(/events transport/);
+    ).rejects.toThrow(/stores\.events/);
   });
 
   it("should throw when events transport is memory-backed", async () => {
@@ -54,7 +54,35 @@ describe("distributed runtime validation", () => {
         rateLimit: false,
         underPressure: false,
       }),
-    ).rejects.toThrow(/events transport/);
+    ).rejects.toThrow(/stores\.events/);
+  });
+
+  it("names the exact config key + a fix hint for every missing store", async () => {
+    // The error must be prescriptive: name the `stores.<key>` to set AND
+    // point at the canonical fix, not just list what's absent. Caching is
+    // enabled so both events + cache are reported in one throw.
+    let message = "";
+    try {
+      await createApp({
+        runtime: "distributed",
+        auth: false,
+        logger: false,
+        helmet: false,
+        cors: false,
+        rateLimit: false,
+        underPressure: false,
+        arcPlugins: { caching: true },
+      });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain("stores.events");
+    expect(message).toContain("stores.cache");
+    // Per-key hint + the actionable "Fix:" line.
+    expect(message).toContain("pub/sub transport");
+    expect(message).toContain("Redis-backed cache adapter");
+    expect(message).toMatch(/Fix:.*stores/s);
+    expect(message).toContain("runtime: 'memory'");
   });
 
   it("should NOT require cache store when caching plugin is disabled", async () => {
@@ -88,7 +116,7 @@ describe("distributed runtime validation", () => {
         underPressure: false,
         arcPlugins: { caching: true },
       }),
-    ).rejects.toThrow(/cache store/);
+    ).rejects.toThrow(/stores\.cache/);
   });
 
   it("should NOT block startup without idempotency store (warns via fastify.log)", async () => {

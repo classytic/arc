@@ -19,7 +19,15 @@ await app.register(mcpPlugin, {
 });
 ```
 
-This auto-generates up to 5 tools per resource: `list_{plural}`, `get_{name}`, `create_{name}`, `update_{name}`, `delete_{name}`.
+This auto-generates up to 5 CRUD tools per resource. Tool handlers call `BaseController` — the **same pipeline as REST**, so auth, org-scoping, hooks, field permissions, and cache all apply identically.
+
+| Tool | Input | Annotations |
+|------|-------|-------------|
+| `list_{plural}` | Pagination + filterable fields | `readOnlyHint: true` |
+| `get_{name}` | `{ id }` | `readOnlyHint: true` |
+| `create_{name}` | Required + optional fields from `fieldRules` | `destructiveHint: false` |
+| `update_{name}` | `{ id }` + optional fields | `destructiveHint: true, idempotentHint: true` |
+| `delete_{name}` | `{ id }` | `destructiveHint: true, idempotentHint: true` |
 
 Connect an AI agent:
 

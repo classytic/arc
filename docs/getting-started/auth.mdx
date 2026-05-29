@@ -160,7 +160,7 @@ const app = await createApp({
 4. Splits roles: `"admin,recruiter"` → `['admin', 'recruiter']`
 5. Sets `request.scope`: `{ kind: 'member', organizationId, orgRoles: string[] }`
 
-See [Org Module](./org) for multi-tenant setup.
+See [Org Module](./presets#multitenant) for multi-tenant setup.
 
 ### Mongoose Populate with Better Auth Collections
 
@@ -341,7 +341,7 @@ The `service` kind covers API-key / machine-to-machine auth (your custom
 auth check installs it via `PermissionResult.scope`). `context` and
 `ancestorOrgIds` are populated by your auth function for app-defined
 tenancy dimensions and parent-child org hierarchies — see the
-[Org Module guide](./org) for the full surface.
+[Org Module guide](./presets#multitenant) for the full surface.
 
 ## Role Hierarchy
 
@@ -370,5 +370,5 @@ hierarchy.includes(['admin'], 'staff');        // → true
 ## See Also
 
 - [Permissions](./permissions) — Advanced permission patterns
-- [Org Module](./org) — Multi-tenant organization scoping
+- [Org Module](./presets#multitenant) — Multi-tenant organization scoping
 - [Core](./core) — Request context, query parsing, controllers

@@ -557,6 +557,67 @@ describe("Streamline Integration Plugin", () => {
       expect(sse.body).toContain(run1._id);
       expect(sse.body).not.toContain(run2._id);
     });
+
+    it("flushes head + sends a snapshot on connect with ZERO bus events (regression: 0-byte stream)", async () => {
+      // Before the fix, the handler wrote the head but never flushed it and
+      // only wrote on a live bus event — so connecting during a quiet/long
+      // step (or after completion) yielded an empty body and the client's
+      // EventSource `onopen` never fired. The snapshot + flushHeaders make
+      // the stream observably alive the instant it connects.
+      const wf = createMockWorkflow("sse-snapshot");
+      const run = await wf.start({}); // status: 'running' (non-terminal)
+
+      app = Fastify({ logger: false });
+      await app.register(streamlinePlugin, {
+        workflows: [wf],
+        auth: false,
+        enableStreaming: true,
+      });
+      await app.listen({ port: 0 });
+      const port = (app.server.address() as { port: number }).port;
+
+      // Emit NOTHING. A short read window proves bytes arrive on connect.
+      const sse = await fetchSSE(
+        `http://127.0.0.1:${port}/workflows/sse-snapshot/runs/${run._id}/stream`,
+        200,
+      );
+
+      expect(sse.statusCode).toBe(200);
+      expect(sse.body).toContain("event: workflow:snapshot");
+      expect(sse.body).toContain(run._id);
+    });
+
+    it("snapshots then closes immediately for an already-terminal run", async () => {
+      // A subscriber that joins after the run finished must not hang: the
+      // handler sends the snapshot and ends the response (no future events
+      // will ever fire for a terminal run).
+      const wf = createMockWorkflow("sse-terminal");
+      const run = await wf.start({});
+      run.status = "done"; // terminal at connect time
+
+      app = Fastify({ logger: false });
+      await app.register(streamlinePlugin, {
+        workflows: [wf],
+        auth: false,
+        enableStreaming: true,
+      });
+      await app.listen({ port: 0 });
+      const port = (app.server.address() as { port: number }).port;
+
+      const t0 = Date.now();
+      const sse = await fetchSSE(
+        `http://127.0.0.1:${port}/workflows/sse-terminal/runs/${run._id}/stream`,
+        1500,
+      );
+      const elapsed = Date.now() - t0;
+
+      expect(sse.statusCode).toBe(200);
+      expect(sse.body).toContain("event: workflow:snapshot");
+      expect(sse.body).toContain('"status":"done"');
+      // Resolved via the server ending the response, NOT the 1500ms read
+      // timeout — proves the terminal-on-connect close path fired.
+      expect(elapsed).toBeLessThan(1000);
+    });
   });
 
   // ---------- Permissions ----------
