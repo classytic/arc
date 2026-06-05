@@ -820,6 +820,48 @@ describe("Streamline Integration Plugin", () => {
       expect(getByIdCalls[0]?.options).toEqual({ tenantId: "org-7" });
     });
 
+    it("works with a real (this-using) repository — does not call methods unbound [regression]", async () => {
+      // The handler used to destructure `repo.getById` / `repo.delete` and call
+      // them detached. The vi.fn mocks above are arrow-bound, so the bug hid.
+      // A real mongokit `Repository`'s methods use `this` (`this._buildContext`)
+      // and throw "Cannot read properties of undefined" when called unbound —
+      // reproduced here with a plain `this`-using object.
+      const wf = createMockWorkflow("orders");
+      const repo = {
+        _live: true,
+        async getById(id: string) {
+          return this._live ? { _id: id } : null; // bare `this.` → throws if unbound
+        },
+        async delete(_id: string) {
+          return this._live ? { acknowledged: true } : null;
+        },
+        async getAll() {
+          return { data: [], total: 0 };
+        },
+      };
+      wf.container = {
+        eventBus: { on() {}, off() {} },
+        repository: repo as never,
+      };
+
+      app = Fastify({ logger: false });
+      await app.register(streamlinePlugin, { workflows: [wf], auth: false });
+      await app.ready();
+
+      const start = await app.inject({
+        method: "POST",
+        url: "/workflows/orders/start",
+        payload: { input: {} },
+      });
+      const runId = start.json()._id as string;
+
+      const del = await app.inject({
+        method: "DELETE",
+        url: `/workflows/orders/runs/${runId}`,
+      });
+      expect(del.statusCode).toBe(204); // 500 ("…reading '_live'") before the bind fix
+    });
+
     it("returns 404 for a cross-tenant runId (no existence leak)", async () => {
       // Row belongs to org-A; caller is from org-B. Even though the runId
       // is correct AND the run physically exists, the tenant-scoped

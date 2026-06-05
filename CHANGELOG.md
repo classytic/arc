@@ -10,6 +10,7 @@ See [changelog/v2.md](changelog/v2.md) for the full v2 release history.
 
 ## 2.18
 
+- [2.18.2](changelog/v2.md#2182) — fix streamline DELETE route 500 (`Cannot read properties of undefined`) caused by unbound `delete`/`getById` repo method calls.
 - [2.18.1](changelog/v2.md#2181) — remove phantom `disableCrud` type stub, `runtime: 'distributed'` error now names exact `stores.<key>` + fix hint, `TERMINAL_RUN_STATUSES` exported from `@classytic/arc/integrations/streamline`.
 - [2.18.0](changelog/v2.md#2180) — durable WebSocket envelope + ack/replay (pushRef-registry, send-queue, dead-queue, outbound-truncate, safe-async), new `RedisPushRefStore` subpath for cross-instance pushRef state, H3-based **geo-room** spatial subscription manager (`h3-js` peer), `runInTransaction()` AsyncLocalStorage Unit-of-Work hook so kit adapters can thread DB sessions without per-function plumbing, **MCP realtime tool bridge** dispatching LiveKit/Gemini/OpenAI `LiveServerToolCall` frames through the existing MCP tool registry, request-id trace-context propagation, additional outbox provider tests. **Cleanup:** removed the phantom `disableCrud` flag from `defineResource` — it shipped in the type but was never read by the router, so it silently no-opped; `disableDefaultRoutes` (or `crud: false`) is the canonical kill-switch. **DX:** `runtime: 'distributed'` validation error now names the exact `stores.<key>` to set plus a per-key fix hint, instead of only listing what's absent.
 

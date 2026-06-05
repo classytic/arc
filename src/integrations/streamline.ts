@@ -701,8 +701,13 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
     // Both methods required: the tenant-scoped pre-flight is the load-
     // bearing security gate, so a repo that ships `delete` without
     // `getById` is structurally incomplete and the route stays unmounted.
-    const repoDeleteFn = deleteRepo?.delete;
-    const repoGetByIdFn = deleteRepo?.getById;
+    //
+    // Bind to the repo: these are mongokit `Repository` instance methods that
+    // use `this` (`this._buildContext`, the tenant-filter plugin, cache). Pulled
+    // off the object and called detached, `this` is `undefined` and the handler
+    // 500s with "Cannot read properties of undefined (reading '_buildContext')".
+    const repoDeleteFn = deleteRepo?.delete?.bind(deleteRepo);
+    const repoGetByIdFn = deleteRepo?.getById?.bind(deleteRepo);
     if (repoDeleteFn && repoGetByIdFn) {
       fastify.delete(
         `${routePrefix}/runs/:runId`,
