@@ -25,7 +25,7 @@ import { buildQueryKey } from "../cache/keys.js";
 import type { QueryCacheConfig } from "../cache/QueryCache.js";
 import { DEFAULT_ID_FIELD, DEFAULT_LIMIT, DEFAULT_TENANT_FIELD } from "../constants.js";
 import type { HookSystem } from "../hooks/HookSystem.js";
-import { getOrgId as getOrgIdFromScope, isElevated } from "../scope/types.js";
+import { getOrgId as getOrgIdFromScope } from "../scope/types.js";
 import type {
   AnyRecord,
   ArcInternalMetadata,
@@ -38,16 +38,35 @@ import type {
   RouteSchemaOptions,
   UserLike,
 } from "../types/index.js";
-import { createError, ForbiddenError, NotFoundError } from "../utils/errors.js";
+import { createError, ForbiddenError } from "../utils/errors.js";
 import { scheduleBackground } from "../utils/runtime.js";
 import { getUserId } from "../utils/userHelpers.js";
 import { AccessControl, type FetchDenialReason } from "./AccessControl.js";
 import { BodySanitizer, type FieldWriteDenialPolicy } from "./BodySanitizer.js";
+import {
+  buildCacheEnvelope,
+  buildNotFoundError,
+  buildTenantRepoOptions,
+  deriveCacheScope,
+  executeAfterHook,
+  executeHookedOp,
+  type HookedOpContext,
+  resolveMutationRepoId,
+  resolveOpCacheConfig,
+} from "./crud/requestPipeline.js";
+import {
+  isExistsResultTruthy,
+  matchResourceVerb,
+  runCountVerb,
+  runDistinctVerb,
+  runExistsVerb,
+} from "./crud/resourceVerbs.js";
 import { isFieldReadable } from "./fieldRulePredicates.js";
 
-// Type primitives + override utility types live in `controllerTypes.ts`
-// to keep this file focused on runtime code. Re-exported so existing
-// `import { ListResult, CacheStatus } from './BaseCrudController.js'`
+// Type primitives, override utility types, and the controller-options
+// interfaces live in `controllerTypes.ts` to keep this file focused on
+// runtime code. Re-exported so existing
+// `import { ListResult, BaseControllerOptions } from './BaseCrudController.js'`
 // sites keep working unchanged.
 export type {
   ArcControllerLike,
@@ -56,101 +75,20 @@ export type {
   ArcGetResult,
   ArcListResult,
   ArcUpdateResult,
+  BaseControllerOptions,
   CacheStatus,
+  ControllerConfigurableOptions,
+  ControllerConstructionOptions,
   ListResult,
 } from "./controllerTypes.js";
 
-import type { CacheStatus, ListResult } from "./controllerTypes.js";
+import type {
+  BaseControllerOptions,
+  CacheStatus,
+  ControllerConfigurableOptions,
+  ListResult,
+} from "./controllerTypes.js";
 import { getDefaultQueryParser, QueryResolver } from "./QueryResolver.js";
-
-// ============================================================================
-// Controller Options
-// ============================================================================
-
-/**
- * Construction-only options — fields that participate in the
- * controller's mixin composition / hook identity and **cannot** be
- * re-tuned post-construction via `configure()`. Pass these once at
- * construction; if they need to change, build a new controller.
- *
- * Layer split (2.15.0): keeping this distinct from the configurable
- * surface makes the layer explicit at compile time — `configure()`
- * can't accept these, so accidental "I'll re-name the resource at
- * runtime" calls fail to typecheck.
- */
-export interface ControllerConstructionOptions {
-  /** Resource name for hook execution (e.g., 'product' → 'product.created'). */
-  resourceName?: string;
-}
-
-/**
- * Configurable options — fields arc can forward post-construction via
- * `BaseController.configure(opts)`. `defineResource()` calls
- * `configure()` automatically when a user-supplied controller exposes
- * the method, so resource-level options reach the controller without a
- * `super(repo, { ... })` dance. Everything except `resourceName` /
- * `repository` lives here.
- *
- * Each field maps 1:1 to a resource-level option on `defineResource()`:
- * the resource is the public-API source of truth, this interface is
- * the controller-internal surface arc forwards into.
- */
-export interface ControllerConfigurableOptions {
-  /** Schema options for field sanitization. */
-  schemaOptions?: RouteSchemaOptions;
-  /**
-   * Query parser instance.
-   * Default: Arc built-in query parser (adapter-agnostic).
-   * Swap in MongoKit QueryParser, pgkit parser, etc.
-   */
-  queryParser?: QueryParserInterface;
-  /** Maximum limit for pagination (default: 100). */
-  maxLimit?: number;
-  /** Default limit for pagination (default: 20). */
-  defaultLimit?: number;
-  /**
-   * Default sort applied when the request doesn't specify one.
-   *   - `string` (default: `'-createdAt'`) — Mongo `-field` DESC convention.
-   *   - `false` — disable the default sort entirely (SQL/Drizzle resources
-   *     without a `createdAt` column).
-   */
-  defaultSort?: string | false;
-  /**
-   * Field name used for multi-tenant scoping (default: 'organizationId').
-   * Override to match your schema: 'workspaceId', 'tenantId', 'teamId', etc.
-   * Set to `false` to disable org filtering for platform-universal resources.
-   */
-  tenantField?: string | false;
-  /**
-   * Primary key field name (default: '_id'). Auto-derives from the repo's
-   * own `idField` when unset.
-   */
-  idField?: string;
-  /**
-   * Custom filter matching for policy enforcement.
-   * Provided by the DataAdapter for non-MongoDB databases (SQL, etc.).
-   */
-  matchesFilter?: (item: unknown, filters: Record<string, unknown>) => boolean;
-  /** Cache configuration for the resource. */
-  cache?: ResourceCacheConfig;
-  /** Internal preset fields map (slug, tree, etc.). */
-  presetFields?: { slugField?: string; parentField?: string };
-  /**
-   * Policy for requests that include fields the caller can't write.
-   * - `'reject'` (default): 403 with denied field names.
-   * - `'strip'`: legacy silent-drop.
-   */
-  onFieldWriteDenied?: FieldWriteDenialPolicy;
-}
-
-/**
- * Full constructor options — union of construction-only + configurable.
- * The constructor accepts everything; `configure()` accepts only
- * `ControllerConfigurableOptions`.
- */
-export interface BaseControllerOptions
-  extends ControllerConstructionOptions,
-    ControllerConfigurableOptions {}
 
 // ============================================================================
 // Base CRUD Controller â€” core + list/get/create/update/delete only
@@ -395,96 +333,20 @@ export class BaseCrudController<
   }
 
   /**
-   * Build the canonical repo-options bag from the Fastify request.
-   *
-   * Forwards the cross-kit canonical set (see repo-core's
-   * `STANDARD_REPO_OPTION_KEYS`) into every CRUD repo call so kit
-   * plugins (multi-tenant, audit, audit-trail, observability) get
-   * what they need without per-resource wiring:
-   *
-   * - **Tenant scope** â€” `[tenantField]: orgId` from `RequestScope`.
-   *   Plugin-scoped repos (mongokit's `multiTenantPlugin`) read tenant
-   *   scope from the TOP of the options bag, not `data.organizationId`.
-   *   Without this stamping, a tenant-scoped repo throws "Missing
-   *   'organizationId' in context" even when arc has injected the
-   *   tenant into the request body.
-   *   Multi-field tenancy from `_tenantFields` (populated by
-   *   `multiTenantPreset`) is merged in.
-   *
-   * - **Audit attribution** â€” `userId` + `user` from the authenticated
-   *   actor. Mongokit's audit-log / audit-trail plugins read these
-   *   into the `who` column; sqlitekit's audit plugin reads the same
-   *   names. No host-side forwarding needed.
-   *
-   * - **Trace correlation** â€” `requestId` from Fastify's request id
-   *   for stitching logs / events / downstream calls.
-   *
-   * - **`session` is intentionally NOT auto-set.** Sessions are tied
-   *   to explicit transaction scopes the controller doesn't manage;
-   *   pass `session` inline at the call site when running inside a
-   *   `withTransaction` helper.
+   * Build the canonical repo-options bag (tenant scope, audit
+   * attribution, trace correlation) from the Fastify request. Full
+   * contract + rationale on `buildTenantRepoOptions` in
+   * `crud/requestPipeline.ts` — this delegate exists so host overrides
+   * and duck-typed consumers (aggregation router, MCP bridge) keep the
+   * same `protected` entry point.
    *
    * Method kept named `tenantRepoOptions` for back-compat with hosts
    * that spread `...this.tenantRepoOptions(req)` (10+ call sites in
-   * arc, plus host overrides). The bag has always grown over time â€”
+   * arc, plus host overrides). The bag has always grown over time —
    * hosts that don't want audit forwarding never read those keys.
    */
   protected tenantRepoOptions(req: IRequestContext): AnyRecord {
-    const cached = (req as IRequestContext & { _tenantRepoOptions?: AnyRecord })._tenantRepoOptions;
-    if (cached) return cached;
-
-    const out: AnyRecord = {};
-    const arcContext = this.meta(req);
-    const scope = arcContext?._scope;
-
-    // 1. Tenant scope â€” primary tenantField + multi-field preset overrides.
-    if (this.tenantField) {
-      const orgId = scope ? getOrgIdFromScope(scope) : undefined;
-      if (orgId) out[this.tenantField] = orgId;
-    }
-
-    const presetFields = (req as IRequestContext & { _tenantFields?: AnyRecord })._tenantFields;
-    if (presetFields && typeof presetFields === "object") {
-      for (const [key, value] of Object.entries(presetFields)) {
-        if (value != null && out[key] == null) out[key] = value;
-      }
-    }
-
-    // 1b. Elevated bypass (2.15.3) â€” when the caller is acting in an
-    //     elevated capacity (platform admin via `x-arc-scope: platform`)
-    //     AND no specific tenant target was resolved (no `tenantField`
-    //     value in `out`), forward `bypassTenant: true` so kits with
-    //     `multiTenantPlugin({ required: true })` skip the tenant guard.
-    //     Without this, elevated cross-org reads (e.g. /super/* admin
-    //     dashboards aggregating across tenants) 500 with "Missing
-    //     'organizationId' in context". Elevated callers WITH a target
-    //     org keep the org filter â€” impersonation semantics are still
-    //     scoped, only true cross-tenant queries bypass.
-    if (this.tenantField && out[this.tenantField] == null && scope && isElevated(scope)) {
-      out.bypassTenant = true;
-    }
-
-    // 2. Audit attribution â€” `userId` (canonical id) and `user` (full
-    //    actor object). Both are part of `STANDARD_REPO_OPTION_KEYS`.
-    const userId = getUserId(req.user as UserLike | undefined);
-    if (userId) out.userId = userId;
-
-    if (req.user) out.user = req.user;
-
-    // 3. Trace correlation â€” Fastify's per-request id.
-    const requestId = (req as { id?: string }).id;
-    if (requestId) out.requestId = requestId;
-
-    // Freeze the cached bag so accidental mutation in one call site
-    // (e.g. a mixin that splats `...this.tenantRepoOptions(req)` and
-    // then mutates the source) can't pollute every later read within
-    // the same request. Callers always re-spread into a fresh object
-    // before passing to the repo, so the freeze never blocks legit
-    // composition; it only guards against the bug class where someone
-    // forgets the spread and writes directly to the cached reference.
-    Object.freeze(out);
-    (req as IRequestContext & { _tenantRepoOptions?: AnyRecord })._tenantRepoOptions = out;
-    return out;
+    return buildTenantRepoOptions(req, this.tenantField, this.meta(req));
   }
 
   /** Extract typed Arc internal metadata from request */
@@ -498,22 +360,13 @@ export class BaseCrudController<
   }
 
   /**
-   * Resolve the repository primary key for mutation calls.
-   *
-   * When the resource declares a custom `idField` (slug, jobId, UUID), the
-   * default behavior is to translate the route id â†’ the fetched doc's `_id`
-   * because most Mongo repositories key mutation methods off `_id`.
-   *
-   * Exception: if the repo exposes a matching `idField` property (e.g.
-   * MongoKit's `new Repository(Model, [], {}, { idField: 'id' })`), the
-   * repo handles lookup itself â€” pass the route id through unchanged.
+   * Resolve the repository primary key for mutation calls. Translates a
+   * custom route `idField` (slug, jobId, UUID) to the fetched doc's `_id`
+   * unless the repo declares a matching `idField` of its own — see
+   * `resolveMutationRepoId` in `crud/requestPipeline.ts`.
    */
   protected resolveRepoId(id: string, existing: AnyRecord | null): string {
-    if (this.idField === DEFAULT_ID_FIELD) return id;
-    if (!existing) return id;
-    const repoIdField = (this.repository as RepositoryLike).idField;
-    if (repoIdField && repoIdField === this.idField) return id;
-    return String(existing[DEFAULT_ID_FIELD] ?? id);
+    return resolveMutationRepoId(id, existing, this.idField, this.repository as RepositoryLike);
   }
 
   /**
@@ -557,27 +410,12 @@ export class BaseCrudController<
    * `details.code` set by the global error handler.
    */
   protected throwNotFound(reason: FetchDenialReason | null = "NOT_FOUND"): never {
-    const code = reason ?? "NOT_FOUND";
-    const resource = this.resourceName ?? "Resource";
-    const err = new NotFoundError(resource);
-    (err as unknown as { details: Record<string, unknown> }).details = {
-      ...(err.details ?? {}),
-      code,
-    };
-    throw err;
+    throw buildNotFoundError(reason, this.resourceName);
   }
 
   /** Resolve cache config for a specific operation, merging per-op overrides */
   protected resolveCacheConfig(operation: "list" | "byId"): QueryCacheConfig | null {
-    const cfg = this._cacheConfig;
-    if (!cfg || cfg.disabled) return null;
-
-    const opOverride = cfg[operation];
-    return {
-      staleTime: opOverride?.staleTime ?? cfg.staleTime ?? 0,
-      gcTime: opOverride?.gcTime ?? cfg.gcTime ?? 60,
-      tags: cfg.tags,
-    };
+    return resolveOpCacheConfig(this._cacheConfig, operation);
   }
 
   /**
@@ -589,24 +427,12 @@ export class BaseCrudController<
     userId?: string;
     orgId?: string;
   } {
-    const userId = getUserId(req.user as UserLike | undefined);
-    const orgId = this.tenantField
-      ? (() => {
-          const arcContext = this.meta(req);
-          const scope = arcContext?._scope;
-          return scope ? getOrgIdFromScope(scope) : undefined;
-        })()
-      : undefined;
-    return { userId, orgId };
+    return deriveCacheScope(req, this.tenantField, this.meta(req));
   }
 
   /** Shared `x-cache` response envelope builder. */
   protected cacheResponse<T>(data: T, cacheStatus: CacheStatus): IControllerResponse<T> {
-    return {
-      data,
-      status: 200,
-      headers: { "x-cache": cacheStatus },
-    };
+    return buildCacheEnvelope(data, cacheStatus);
   }
 
   /** Required route-id helper shared by get/update/delete. Throws on missing id. */
@@ -624,7 +450,7 @@ export class BaseCrudController<
    * or `null` — every truthy non-null shape collapses to `true`.
    */
   protected isExistsTruthy(result: unknown): boolean {
-    return result !== null && result !== false && result !== undefined;
+    return isExistsResultTruthy(result);
   }
 
   // ============================================================================
@@ -633,9 +459,8 @@ export class BaseCrudController<
   //
   // The before / around / after sandwich was duplicated 3× across the write
   // methods with subtle variations (meta shape, conditional `executeAfter`,
-  // delete passing `existing` instead of the result). Extracted into two
-  // thin helpers so each variation maps to a knob at the call site instead
-  // of a copy-pasted block:
+  // delete passing `existing` instead of the result). Each variation maps
+  // to a knob at the call site instead of a copy-pasted block:
   //
   //   - `runHookedOpUntilResult` runs `executeBefore` + `executeAround`,
   //     returns the result OR a `BEFORE_*_HOOK_ERROR` response.
@@ -647,24 +472,27 @@ export class BaseCrudController<
   // between the around-phase and the after-phase, without the helper
   // having to model every combination.
   //
+  // The phase implementations live in `crud/requestPipeline.ts`
+  // (`executeHookedOp` / `executeAfterHook`); these protected delegates
+  // assemble the hook context from the controller's own (overridable)
+  // accessors so subclass overrides of `getHooks` / `meta` still apply.
+
+  /** Assemble the per-request hook context from the protected accessors. */
+  private hookOpContext(req: IRequestContext): HookedOpContext {
+    return {
+      hooks: this.getHooks(req),
+      resourceName: this.resourceName,
+      arcContext: this.meta(req),
+      user: req.user as UserLike | undefined,
+    };
+  }
 
   /**
    * Run `executeBefore` then `executeAround` (or just the executor if no
    * hooks are wired). Returns the around-phase result directly. Throws an
    * `ArcError` (status 400, code `BEFORE_<OP>_HOOK_ERROR`) when the
-   * before-hook fails — the global error handler emits the canonical
-   * `ErrorContract` shape.
-   *
-   * The caller runs `executeAfter` separately via `runAfterHook` — typically
-   * after success-checking the result (delete checks `isDeleteSuccess`,
-   * update checks `if (!item)`).
-   *
-   * **Knobs:**
-   *   - `meta` — passed verbatim into `executeBefore` / `executeAround` opts.
-   *   - `pipeProcessedData` (default `true`) — whether `executeBefore`'s
-   *     return value flows into `executeAround` as the data parameter.
-   *     Set `false` for delete (current behaviour: discards before's
-   *     return, passes original input to around).
+   * before-hook fails. Full contract on `executeHookedOp` in
+   * `crud/requestPipeline.ts`.
    */
   protected async runHookedOpUntilResult<TInput, TResult>(
     req: IRequestContext,
@@ -676,58 +504,7 @@ export class BaseCrudController<
     },
     executor: (processed: TInput) => Promise<TResult>,
   ): Promise<TResult> {
-    const hooks = this.getHooks(req);
-    const user = req.user as UserLike | undefined;
-    const arcContext = this.meta(req);
-    const hookOpts: Record<string, unknown> = {
-      user,
-      context: arcContext,
-      ...(args.meta ? { meta: args.meta } : {}),
-    };
-    const pipeProcessed = args.pipeProcessedData !== false;
-
-    // Phase 1: before. Failures funnel through a canonical
-    // `BEFORE_<OP>_HOOK_ERROR` ArcError so the global error handler emits
-    // the same code/shape consumers pattern-match on.
-    let processedData = args.input;
-    if (hooks && this.resourceName) {
-      try {
-        const beforeReturn = await hooks.executeBefore(
-          this.resourceName,
-          args.op,
-          args.input as AnyRecord,
-          hookOpts,
-        );
-        if (pipeProcessed) processedData = beforeReturn as TInput;
-      } catch (err) {
-        throw createError(400, "Hook execution failed", {
-          code: `BEFORE_${args.op.toUpperCase()}_HOOK_ERROR`,
-          message: (err as Error).message,
-        });
-      }
-    }
-
-    // Phase 2: around (wraps the executor) OR raw executor when no hooks.
-    // `executeAround<T>` collapses the data + result type into a single
-    // generic — pass `<unknown>` so an `AnyRecord`-shaped input can ride
-    // alongside a `TResult`-shaped executor return without a type clash.
-    // Cast the result back to `TResult` at the boundary; matches the
-    // pattern the original `delete()` path used (`executeAround<unknown>`).
-    let result: TResult;
-    if (hooks && this.resourceName) {
-      const around = await hooks.executeAround<unknown>(
-        this.resourceName,
-        args.op,
-        processedData as unknown,
-        () => executor(processedData) as Promise<unknown>,
-        hookOpts,
-      );
-      result = around as TResult;
-    } else {
-      result = await executor(processedData);
-    }
-
-    return result;
+    return executeHookedOp(this.hookOpContext(req), args, executor);
   }
 
   /**
@@ -742,15 +519,7 @@ export class BaseCrudController<
     data: AnyRecord,
     meta?: Record<string, unknown>,
   ): Promise<void> {
-    const hooks = this.getHooks(req);
-    if (!hooks || !this.resourceName) return;
-    const user = req.user as UserLike | undefined;
-    const arcContext = this.meta(req);
-    await hooks.executeAfter(this.resourceName, op, data, {
-      user,
-      context: arcContext,
-      ...(meta ? { meta } : {}),
-    });
+    return executeAfterHook(this.hookOpContext(req), op, data, meta);
   }
 
   /** Cached `list()` flow with SWR semantics. Returns null when cache is disabled. */
@@ -871,35 +640,25 @@ export class BaseCrudController<
    * Resource-dispatch verbs router. Returns `null` when the request is
    * a regular list query, otherwise returns the dispatch promise.
    *
-   * Verbs (mutually exclusive â€” first match wins):
-   *   - `?_count=true` â†’ `{ count: number }` via `repo.count()`
-   *   - `?_distinct=field` â†’ `unknown[]` via `repo.distinct(field)`
-   *   - `?_exists=true` â†’ `{ exists: boolean }` via `repo.exists()`
+   * Verbs (mutually exclusive — first match wins):
+   *   - `?_count=true` → `{ count: number }` via `repo.count()`
+   *   - `?_distinct=field` → `unknown[]` via `repo.distinct(field)`
+   *   - `?_exists=true` → `{ exists: boolean }` via `repo.exists()`
    *
    * All verbs share the resolved filter (parsed query + policy filters
    * + tenant scope). Adapters that don't ship the underlying repo
    * method get a `501` so failures surface loudly instead of falling
-   * back to a full table scan.
+   * back to a full table scan. Matching + repo invocation live in
+   * `crud/resourceVerbs.ts`.
    */
   protected dispatchResourceVerb(
     req: IRequestContext,
   ): Promise<IControllerResponse<unknown>> | null {
-    const query = req.query as Record<string, unknown> | undefined;
-    if (!query) return null;
-
-    const isTruthyFlag = (value: unknown): boolean =>
-      value !== undefined && value !== "" && value !== "false" && value !== false;
-
-    if (isTruthyFlag(query._count)) return this.dispatchCount(req);
-
-    const distinctField = query._distinct;
-    if (typeof distinctField === "string" && distinctField.length > 0) {
-      return this.dispatchDistinct(req, distinctField);
-    }
-
-    if (isTruthyFlag(query._exists)) return this.dispatchExists(req);
-
-    return null;
+    const verb = matchResourceVerb(req.query as Record<string, unknown> | undefined);
+    if (!verb) return null;
+    if (verb.kind === "count") return this.dispatchCount(req);
+    if (verb.kind === "distinct") return this.dispatchDistinct(req, verb.field);
+    return this.dispatchExists(req);
   }
 
   /** Resolve filter + tenant/audit options for a dispatch verb. */
@@ -916,26 +675,15 @@ export class BaseCrudController<
     };
   }
 
-  /** `?_count=true` â†’ `repo.count(filter)` */
+  /** `?_count=true` → `repo.count(filter)` */
   protected async dispatchCount(
     req: IRequestContext,
   ): Promise<IControllerResponse<{ count: number }>> {
-    const repo = this.repository as Record<string, unknown>;
-    if (typeof repo.count !== "function") {
-      throw createError(
-        501,
-        "_count is not supported: the resource's storage adapter does not implement repo.count()",
-      );
-    }
-    const { filter, options } = this.resolveDispatchScope(req);
-    const count = (await (repo.count as (f: AnyRecord, o: AnyRecord) => Promise<number>)(
-      filter,
-      options,
-    )) as number;
-    return { data: { count }, status: 200 };
+    const data = await runCountVerb(this.repository, () => this.resolveDispatchScope(req));
+    return { data, status: 200 };
   }
 
-  /** `?_distinct=field` â†’ `repo.distinct(field, filter)` */
+  /** `?_distinct=field` → `repo.distinct(field, filter)` */
   protected async dispatchDistinct(
     req: IRequestContext,
     field: string,
@@ -946,39 +694,21 @@ export class BaseCrudController<
         `_distinct field "${field}" is not allowed (hidden or system-managed)`,
       );
     }
-    const repo = this.repository as Record<string, unknown>;
-    if (typeof repo.distinct !== "function") {
-      throw createError(
-        501,
-        "_distinct is not supported: the resource's storage adapter does not implement repo.distinct()",
-      );
-    }
-    const { filter, options } = this.resolveDispatchScope(req);
-    const values = (await (
-      repo.distinct as (f: string, q: AnyRecord, o: AnyRecord) => Promise<unknown[]>
-    )(field, filter, options)) as unknown[];
+    const values = await runDistinctVerb(this.repository, field, () =>
+      this.resolveDispatchScope(req),
+    );
     return { data: values, status: 200 };
   }
 
-  /** `?_exists=true` â†’ `repo.exists(filter)` */
+  /** `?_exists=true` → `repo.exists(filter)` */
   protected async dispatchExists(
     req: IRequestContext,
   ): Promise<IControllerResponse<{ exists: boolean }>> {
-    const repo = this.repository as Record<string, unknown>;
-    if (typeof repo.exists !== "function") {
-      throw createError(
-        501,
-        "_exists is not supported: the resource's storage adapter does not implement repo.exists()",
-      );
-    }
-    const { filter, options } = this.resolveDispatchScope(req);
     // `exists` per StandardRepo can return `boolean | { _id } | null`.
     // Normalize to `{ exists: boolean }` so the wire shape is stable
-    // regardless of which return form the kit picked.
-    const result = (await (repo.exists as (f: AnyRecord, o: AnyRecord) => Promise<unknown>)(
-      filter,
-      options,
-    )) as unknown;
+    // regardless of which return form the kit picked. Collapse via the
+    // (overridable) `isExistsTruthy` so subclass truthiness rules apply.
+    const result = await runExistsVerb(this.repository, () => this.resolveDispatchScope(req));
     return { data: { exists: this.isExistsTruthy(result) }, status: 200 };
   }
 

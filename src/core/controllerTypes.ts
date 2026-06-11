@@ -12,6 +12,9 @@
  *   `ArcCreateResult` / `ArcUpdateResult` / `ArcDeleteResult`) — let
  *   subclass authors override base CRUD methods without restating the
  *   full response envelope shape.
+ * - **Controller options** (`ControllerConstructionOptions` /
+ *   `ControllerConfigurableOptions` / `BaseControllerOptions`) — the
+ *   construction-only vs `configure()`-able split (2.15.0).
  *
  * Re-exported verbatim from `BaseCrudController.ts` so existing
  * `import { ListResult, CacheStatus } from './BaseCrudController.js'`
@@ -22,6 +25,12 @@ import type {
   KeysetPaginationResult,
   OffsetPaginationResult,
 } from "@classytic/repo-core/pagination";
+import type {
+  QueryParserInterface,
+  ResourceCacheConfig,
+  RouteSchemaOptions,
+} from "../types/index.js";
+import type { FieldWriteDenialPolicy } from "./BodySanitizer.js";
 
 /**
  * Union of every return shape repo-core's `MinimalRepo.getAll()` is
@@ -120,3 +129,92 @@ export type ArcUpdateResult<TCtrl extends ArcControllerLike> = ReturnType<TCtrl[
 
 /** Return type of the controller's `delete` method. See {@link ArcListResult}. */
 export type ArcDeleteResult<TCtrl extends ArcControllerLike> = ReturnType<TCtrl["delete"]>;
+
+// ============================================================================
+// Controller Options
+// ============================================================================
+
+/**
+ * Construction-only options — fields that participate in the
+ * controller's mixin composition / hook identity and **cannot** be
+ * re-tuned post-construction via `configure()`. Pass these once at
+ * construction; if they need to change, build a new controller.
+ *
+ * Layer split (2.15.0): keeping this distinct from the configurable
+ * surface makes the layer explicit at compile time — `configure()`
+ * can't accept these, so accidental "I'll re-name the resource at
+ * runtime" calls fail to typecheck.
+ */
+export interface ControllerConstructionOptions {
+  /** Resource name for hook execution (e.g., 'product' → 'product.created'). */
+  resourceName?: string;
+}
+
+/**
+ * Configurable options — fields arc can forward post-construction via
+ * `BaseController.configure(opts)`. `defineResource()` calls
+ * `configure()` automatically when a user-supplied controller exposes
+ * the method, so resource-level options reach the controller without a
+ * `super(repo, { ... })` dance. Everything except `resourceName` /
+ * `repository` lives here.
+ *
+ * Each field maps 1:1 to a resource-level option on `defineResource()`:
+ * the resource is the public-API source of truth, this interface is
+ * the controller-internal surface arc forwards into.
+ */
+export interface ControllerConfigurableOptions {
+  /** Schema options for field sanitization. */
+  schemaOptions?: RouteSchemaOptions;
+  /**
+   * Query parser instance.
+   * Default: Arc built-in query parser (adapter-agnostic).
+   * Swap in MongoKit QueryParser, pgkit parser, etc.
+   */
+  queryParser?: QueryParserInterface;
+  /** Maximum limit for pagination (default: 100). */
+  maxLimit?: number;
+  /** Default limit for pagination (default: 20). */
+  defaultLimit?: number;
+  /**
+   * Default sort applied when the request doesn't specify one.
+   *   - `string` (default: `'-createdAt'`) — Mongo `-field` DESC convention.
+   *   - `false` — disable the default sort entirely (SQL/Drizzle resources
+   *     without a `createdAt` column).
+   */
+  defaultSort?: string | false;
+  /**
+   * Field name used for multi-tenant scoping (default: 'organizationId').
+   * Override to match your schema: 'workspaceId', 'tenantId', 'teamId', etc.
+   * Set to `false` to disable org filtering for platform-universal resources.
+   */
+  tenantField?: string | false;
+  /**
+   * Primary key field name (default: '_id'). Auto-derives from the repo's
+   * own `idField` when unset.
+   */
+  idField?: string;
+  /**
+   * Custom filter matching for policy enforcement.
+   * Provided by the DataAdapter for non-MongoDB databases (SQL, etc.).
+   */
+  matchesFilter?: (item: unknown, filters: Record<string, unknown>) => boolean;
+  /** Cache configuration for the resource. */
+  cache?: ResourceCacheConfig;
+  /** Internal preset fields map (slug, tree, etc.). */
+  presetFields?: { slugField?: string; parentField?: string };
+  /**
+   * Policy for requests that include fields the caller can't write.
+   * - `'reject'` (default): 403 with denied field names.
+   * - `'strip'`: legacy silent-drop.
+   */
+  onFieldWriteDenied?: FieldWriteDenialPolicy;
+}
+
+/**
+ * Full constructor options — union of construction-only + configurable.
+ * The constructor accepts everything; `configure()` accepts only
+ * `ControllerConfigurableOptions`.
+ */
+export interface BaseControllerOptions
+  extends ControllerConstructionOptions,
+    ControllerConfigurableOptions {}
