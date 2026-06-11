@@ -500,6 +500,9 @@ export class RedisStreamTransport implements EventTransport {
     // new loop spawns while we're still in `XREADGROUP BLOCK`. After that
     // BLOCK returns we'll see the bumped generation and exit cleanly even
     // though `running` is back to true under the NEW loop.
+    // Consecutive poll-error counter — drives the jittered backoff below.
+    // Loop-local on purpose: each loop instance starts with a clean window.
+    let pollErrorAttempts = 0;
     while (this.running && this.generation === myGen) {
       try {
         // Phase 1: Claim pending entries from dead consumers (crash recovery)
@@ -507,11 +510,18 @@ export class RedisStreamTransport implements EventTransport {
 
         // Phase 2: Read new messages
         await this.readNewMessages();
+
+        // Healthy iteration — reset the backoff window.
+        pollErrorAttempts = 0;
       } catch (err) {
         if (this.running && this.generation === myGen) {
+          pollErrorAttempts++;
           this.logger.error("[RedisStreamTransport] Poll error:", err);
-          // Brief pause before retrying on error
-          await this.sleep(1000);
+          // Exponential backoff with full jitter before retrying. A fixed
+          // delay would make every consumer that observed the same Redis
+          // blip retry in lockstep — a synchronized reconnect stampede.
+          // Resets to the base window on the next successful poll.
+          await this.sleep(fullJitterBackoffMs(pollErrorAttempts));
         }
       }
     }
@@ -543,13 +553,16 @@ export class RedisStreamTransport implements EventTransport {
 
   private async claimPending(): Promise<void> {
     try {
-      // Check for pending entries across all consumers that have been idle
+      // Check for pending entries across all consumers that have been idle.
+      // The window scales with batchSize (floor 10) — a hardcoded 10 capped
+      // crash-recovery throughput at 10 entries per poll regardless of how
+      // large the configured read batch was.
       const pending = await this.redis.xpending(
         this.stream,
         this.group,
         "-",
         "+",
-        10, // Check up to 10 pending entries
+        Math.max(this.batchSize, 10),
       );
 
       if (!pending || pending.length === 0) return;
@@ -815,6 +828,35 @@ export class RedisStreamTransport implements EventTransport {
 // ---------------------------------------------------------------------------
 // Module-level helpers — pure, no transport state
 // ---------------------------------------------------------------------------
+
+/** Poll-error backoff tuning — see {@link fullJitterBackoffMs}. */
+const POLL_ERROR_BACKOFF_BASE_MS = 1000;
+const POLL_ERROR_BACKOFF_MAX_MS = 30_000;
+const POLL_ERROR_BACKOFF_FLOOR_MS = 100;
+
+/**
+ * Exponential backoff with full jitter for poll-error retries.
+ *
+ * The delay is drawn uniformly from the capped exponential window
+ * `[floor, min(max, base * 2^(attempt-1))]` — the AWS "full jitter"
+ * strategy. Full jitter decorrelates a fleet of consumers that all observed
+ * the same Redis blip; the small floor keeps a near-zero draw from
+ * hot-spinning the loop while Redis is hard-down.
+ *
+ * Sibling of `exponentialBackoff()` in `src/events/outbox.ts`, which is a
+ * PUBLIC store-author helper with additive jitter and `Date` (retryAt)
+ * semantics. Deliberately not shared: the two have different jitter models
+ * and audiences, and coupling them would hang this internal tuning off the
+ * public API surface.
+ *
+ * @param attempt 1-indexed consecutive poll-error count (reset on success)
+ * @param random injectable for deterministic tests; defaults to `Math.random`
+ */
+function fullJitterBackoffMs(attempt: number, random: () => number = Math.random): number {
+  const exp = POLL_ERROR_BACKOFF_BASE_MS * 2 ** (Math.max(1, Math.floor(attempt)) - 1);
+  const capped = Math.min(POLL_ERROR_BACKOFF_MAX_MS, exp);
+  return POLL_ERROR_BACKOFF_FLOOR_MS + random() * (capped - POLL_ERROR_BACKOFF_FLOOR_MS);
+}
 
 /**
  * Convert a thrown value into the `DeadLetteredEvent.error` shape — message
