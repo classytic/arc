@@ -305,15 +305,16 @@ describe("SCIM 2.0 plugin — real @classytic/sqlitekit SqliteRepository", () =>
   });
 
   // ────────────────────────────────────────────────────────────────────
-  // 6. PATCH $push on JSON column — sqlitekit must reject; SCIM 400
+  // 6. PATCH $push on JSON column — sqlitekit 0.6+ applies it natively
   // ────────────────────────────────────────────────────────────────────
   //
-  // sqlitekit doesn't support $push/$pull on JSON-encoded text columns
-  // through `findOneAndUpdate` (the operator-shaped path). arc's SCIM
-  // plugin catches the throw and surfaces a 400 with `scimType:
-  // "invalidValue"` instead of silently dropping the operation.
+  // sqlitekit 0.6 implements Mongo-style array operators ($push/$pull)
+  // over JSON-encoded TEXT columns via json_insert/json_each rewrites
+  // (capabilities.arrayOperators). The same SCIM `add` that 0.5 rejected
+  // (arc surfaced the kit throw as a 400 invalidValue) now succeeds and
+  // appends to the stored JSON array.
 
-  it("PATCH add to a JSON-encoded column surfaces a 400 invalidValue", async () => {
+  it("PATCH add to a JSON-encoded column appends via sqlitekit array operators", async () => {
     await setup.repo.create({
       id: "u_finn",
       email: "finn@acme.com",
@@ -334,9 +335,13 @@ describe("SCIM 2.0 plugin — real @classytic/sqlitekit SqliteRepository", () =>
         ],
       },
     });
-    expect(res.statusCode).toBe(400);
-    const body = res.json();
-    expect(body.schemas).toContain("urn:ietf:params:scim:api:messages:2.0:Error");
-    expect(body.scimType).toBe("invalidValue");
+    expect(res.statusCode).toBe(200);
+
+    const row = setup.db.prepare("SELECT tags FROM users WHERE id = ?").get("u_finn") as {
+      tags: string;
+    };
+    const tags = JSON.parse(row.tags) as string[];
+    expect(tags).toContain("alpha");
+    expect(tags).toContain("beta");
   });
 });

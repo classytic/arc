@@ -61,7 +61,10 @@ import type { CacheStatus } from "../controllerTypes.js";
  *   names. No host-side forwarding needed.
  *
  * - **Trace correlation** — `requestId` from Fastify's request id
- *   for stitching logs / events / downstream calls.
+ *   for stitching logs / events / downstream calls, plus `traceId`
+ *   (the 32-hex W3C trace id, canonical repo-option key since
+ *   repo-core 0.6) when the requestId plugin validated an incoming
+ *   `traceparent` header.
  *
  * - **`session` is intentionally NOT auto-set.** Sessions are tied
  *   to explicit transaction scopes the controller doesn't manage;
@@ -116,6 +119,16 @@ export function buildTenantRepoOptions(
   // 3. Trace correlation — Fastify's per-request id.
   const requestId = (req as { id?: string }).id;
   if (requestId) out.requestId = requestId;
+
+  // 3b. W3C trace id — `traceparent` is `version-traceid-parentid-flags`,
+  //     already validated by the requestId plugin before it decorates
+  //     `request.traceContext`; the 32-hex trace id is segment two.
+  const traceparent = (req as { traceContext?: { traceparent?: string } }).traceContext
+    ?.traceparent;
+  if (traceparent) {
+    const traceId = traceparent.split("-")[1];
+    if (traceId) out.traceId = traceId;
+  }
 
   // Freeze the cached bag so accidental mutation in one call site
   // (e.g. a mixin that splats `...this.tenantRepoOptions(req)` and

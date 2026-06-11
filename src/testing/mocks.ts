@@ -84,6 +84,22 @@ export function createMockRepository<T extends AnyRecord = AnyRecord>(
     claim: vi.fn().mockResolvedValue(null),
     claimVersion: vi.fn().mockResolvedValue(null),
 
+    // Required on `StandardRepo` as of repo-core 0.6 — kits declare what
+    // they implement. The mock is honest: every flag is false because the
+    // default mock ships none of those surfaces (no count/exists/distinct/
+    // aggregate/transactions). Tests that mock such methods should override
+    // `capabilities` alongside them.
+    capabilities: {
+      transactions: false,
+      nestedTransactions: false,
+      upsert: false,
+      duplicateKeyError: false,
+      distinct: false,
+      aggregate: false,
+      getOrCreate: false,
+      countAndExists: false,
+    },
+
     // Optional preset methods
     getBySlug: vi.fn().mockResolvedValue(null),
     getDeleted: vi.fn().mockResolvedValue([]),
