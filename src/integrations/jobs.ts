@@ -489,6 +489,14 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
   // of serialized JSON so the dispatch call stays observable in logs.
   const JOB_PAYLOAD_WARN_BYTES = 100 * 1024;
 
+  // Definition lookup for dispatch() — a Map replaces the previous O(n)
+  // Array.find on every dispatch. First definition wins on duplicate names,
+  // matching Array.find semantics exactly.
+  const jobDefsByName = new Map<string, JobDefinition>();
+  for (const job of jobs) {
+    if (!jobDefsByName.has(job.name)) jobDefsByName.set(job.name, job);
+  }
+
   // Dispatcher interface
   const dispatcher: JobDispatcher = {
     async dispatch(name, data, opts = {}) {
@@ -512,7 +520,7 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
         // don't fail dispatch here, let BullMQ surface the real error.
       }
 
-      const jobDef = jobs.find((j) => j.name === name);
+      const jobDef = jobDefsByName.get(name);
       const bullJob = await queue.add(name, data, {
         delay: opts.delay,
         priority: opts.priority,

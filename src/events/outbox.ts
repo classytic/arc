@@ -53,6 +53,17 @@ export { MemoryOutboxStore };
 /** Default outbox retention — delivered events older than this are eligible for purge */
 const DEFAULT_OUTBOX_RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const DEFAULT_LEASE_MS = 30_000;
+/**
+ * Hard cap on the in-process attempt-counter map. Entries are cleared on
+ * local ack and on dead-letter, but an event that fails HERE and is later
+ * acked by a DIFFERENT relay worker (lease expiry → reclaim) never drains
+ * locally — without a cap the map grows for the life of the process in
+ * multi-worker deployments. Eviction is oldest-write-first; evicting an
+ * entry only resets its non-authoritative in-process count (the documented
+ * contract already says counts reset on restart — durable counts live in
+ * the store).
+ */
+const MAX_TRACKED_ATTEMPTS = 10_000;
 
 /**
  * **Terminology (v2.8.1+):**
@@ -539,8 +550,11 @@ export class EventOutbox {
   /**
    * In-process attempt counter per event id. Accurate within this relay
    * process; resets on restart. Populated as failures occur and cleared on
-   * successful ack or dead-letter transition. For durable authoritative
-   * counts, apps can query the store directly inside {@link OutboxFailurePolicy}.
+   * successful ack or dead-letter transition; additionally hard-capped at
+   * {@link MAX_TRACKED_ATTEMPTS} (oldest-write evicted first) so events
+   * resolved by another relay worker can't accumulate forever. For durable
+   * authoritative counts, apps can query the store directly inside
+   * {@link OutboxFailurePolicy}.
    */
   private readonly _attempts = new Map<string, number>();
 
@@ -799,7 +813,15 @@ export class EventOutbox {
         // failure = attempts: 1, second = 2, etc. Cleared on ack or when the
         // event is dead-lettered (terminal state).
         const attempts = (this._attempts.get(event.meta.id) ?? 0) + 1;
+        // delete-then-set keeps actively-failing ids at the tail of the
+        // Map's insertion order, so the cap below evicts the STALEST entry
+        // (most likely already acked by another worker after lease expiry).
+        this._attempts.delete(event.meta.id);
         this._attempts.set(event.meta.id, attempts);
+        if (this._attempts.size > MAX_TRACKED_ATTEMPTS) {
+          const oldest = this._attempts.keys().next().value;
+          if (oldest !== undefined) this._attempts.delete(oldest);
+        }
 
         let failOpts: OutboxFailOptions = { consumerId: this._consumerId };
         if (this._failurePolicy) {

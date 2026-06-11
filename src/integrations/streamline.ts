@@ -323,11 +323,7 @@ export const STREAMLINE_TERMINAL_EVENTS = [
  * emit no further bus events, so the SSE handler sends its snapshot and
  * closes immediately rather than holding a connection open on a dead run.
  */
-export const TERMINAL_RUN_STATUSES = new Set<string>([
-  "done",
-  "failed",
-  "cancelled",
-]);
+export const TERMINAL_RUN_STATUSES = new Set<string>(["done", "failed", "cancelled"]);
 
 // ============================================================================
 // Plugin Implementation

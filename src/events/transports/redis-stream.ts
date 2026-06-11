@@ -206,6 +206,17 @@ export interface RedisStreamTransportOptions {
 // Transport
 // ---------------------------------------------------------------------------
 
+/**
+ * Hard cap on the failure-context map. Entries are deleted on local ack and
+ * on DLQ write, but a message that fails HERE and is later acked or
+ * dead-lettered by a DIFFERENT consumer in the group never gets cleared
+ * locally — without a cap the map grows for the life of the process in
+ * multi-consumer deployments. Eviction is oldest-first (Map insertion
+ * order); an evicted entry only degrades the eventual DLQ envelope to the
+ * existing cross-consumer fallback message, never loses the event itself.
+ */
+const MAX_FAILURE_CONTEXT_ENTRIES = 1024;
+
 export class RedisStreamTransport implements EventTransport {
   readonly name = "redis-stream";
 
@@ -246,9 +257,10 @@ export class RedisStreamTransport implements EventTransport {
    * Last-seen failure context per message id, populated when an in-process
    * handler throws in {@link processEntry}. Consumed (and cleared) by
    * {@link moveToDlq} so the dead-letter envelope carries the actual error
-   * message instead of opaque "reclaimed without context". Bounded by
-   * `maxRetries × consumer-throughput` — entries are deleted on ack and
-   * on DLQ write, so the map naturally drains.
+   * message instead of opaque "reclaimed without context". Entries are
+   * deleted on ack and on DLQ write; messages resolved by ANOTHER consumer
+   * never drain locally, so the map is additionally hard-capped at
+   * {@link MAX_FAILURE_CONTEXT_ENTRIES} with oldest-first eviction.
    */
   private failureContext = new Map<
     string,
@@ -399,6 +411,9 @@ export class RedisStreamTransport implements EventTransport {
     // if `running` is racing with a new subscribe().
     this.generation++;
     this.handlers.clear();
+    // Failure bookkeeping is only meaningful while the poll loop is alive —
+    // release the retained error/stack strings on close.
+    this.failureContext.clear();
 
     // Two-phase shutdown:
     //   1. Race the in-flight `XREADGROUP BLOCK` against `closeTimeoutMs`.
@@ -624,6 +639,10 @@ export class RedisStreamTransport implements EventTransport {
     // map closes the "reclaimed without error context" hole noted in 2.11.3.
     const now = new Date();
     const prior = this.failureContext.get(messageId);
+    // delete-then-set keeps actively-failing ids at the tail of the Map's
+    // insertion order, so the cap below always evicts the STALEST entry
+    // (most likely already resolved by another consumer in the group).
+    this.failureContext.delete(messageId);
     this.failureContext.set(messageId, {
       error: lastError
         ? toErrorRecord(lastError)
@@ -633,6 +652,10 @@ export class RedisStreamTransport implements EventTransport {
       attempts: (prior?.attempts ?? 0) + 1,
       handlerName: lastHandlerName ?? prior?.handlerName,
     });
+    if (this.failureContext.size > MAX_FAILURE_CONTEXT_ENTRIES) {
+      const oldest = this.failureContext.keys().next().value;
+      if (oldest !== undefined) this.failureContext.delete(oldest);
+    }
     // Leave unacked — pending claim picks it up after claimTimeoutMs.
   }
 

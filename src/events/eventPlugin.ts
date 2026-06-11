@@ -181,7 +181,7 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
   // Map ordering preserves insertion → cheap eviction by walking from the
   // front when the head entry is older than the window.
   const DUP_WINDOW_MS = 5_000;
-  const recentPublishes: Map<string, number> = warnOnDuplicate ? new Map() : new Map();
+  const recentPublishes = new Map<string, number>();
   const evictExpiredPublishes = (now: number): void => {
     if (recentPublishes.size === 0) return;
     for (const [key, timestamp] of recentPublishes) {
