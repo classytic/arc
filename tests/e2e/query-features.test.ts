@@ -309,13 +309,18 @@ describe("Offset pagination", () => {
 describe("Keyset pagination", () => {
   it("cursor-based with _id sort (no overlap)", async () => {
     await seed();
-    // Keyset/cursor pagination works best with _id-based ordering
-    const page1 = await get("/articles?limit=3");
+    // Keyset cursors need a TOTAL order. The default `-createdAt` sort is
+    // non-total here: seed() creates all 5 articles within the same
+    // millisecond on a fast run, so tied rows come back in arbitrary order
+    // and `after=<data[2]._id>` can point past the whole dataset (flaked in
+    // CI with 0 rows on page 2). Sort by `_id` explicitly — unique, so the
+    // cursor walk is deterministic.
+    const page1 = await get("/articles?limit=3&sort=_id");
     const body1 = page1.json();
     expect(body1.data.length).toBe(3);
 
     const lastId = body1.data[2]._id;
-    const page2 = await get(`/articles?limit=3&after=${lastId}`);
+    const page2 = await get(`/articles?limit=3&sort=_id&after=${lastId}`);
     expect(page2.statusCode).toBe(200);
     const body2 = page2.json();
     expect(body2.data.length).toBe(2); // 5 total - 3 on page 1 = 2
