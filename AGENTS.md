@@ -64,7 +64,7 @@ These rules are non-negotiable. Violating them breaks users, the build, or the d
 | No DB driver imports anywhere in arc | Every kit-specific adapter (Mongoose, Drizzle, Prisma, …) lives in its kit's `/adapter` subpath. Arc has zero kit-bound adapters. |
 | No `any`; `unknown` defaults stay | Type safety at boundaries. `as unknown as X` only as last resort. |
 | No `@ts-ignore` | Fix the type. |
-| No default exports | Named exports only; knip enforces. **Documented exception**: Fastify plugin entry files (`auditPlugin`, `authPlugin`, `eventPlugin`, `idempotencyPlugin`, `introspectionPlugin`) MAY `export default fp(plugin, …)` so `app.register(import('@classytic/arc/<plugin>'))` resolves via Node's import-default semantics. Each plugin ALSO ships a named export for hosts that prefer named imports. |
+| No default exports | Named exports only; knip enforces. **Documented exception**: Fastify plugin entry files (`fp()`-wrapped plugin entries — grep `export default fp` for the authoritative list) MAY `export default fp(plugin, …)` so `app.register(import('@classytic/arc/<subpath>'))` resolves via Node's import-default semantics. Each plugin ALSO ships a named export for hosts that prefer named imports. |
 | No ESM+CJS dual package | ESM-only, intentionally. CJS hosts use dynamic `import()`. |
 | No enums | `as const` objects or string literal unions. |
 | No new dependencies without need | Check Node.js built-ins first. Add to `tsdown.config.ts neverBundle` if peer. |

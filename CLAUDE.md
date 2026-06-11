@@ -37,7 +37,7 @@ See [RELEASING.md](RELEASING.md) — canonical commit/push/publish steps for eve
 - **No DB driver imports anywhere in arc** — kit-specific adapters live in their kits (`@classytic/<kit>/adapter`). arc is DB-agnostic.
 - **No `any`** — use `unknown`; `as unknown as X` is a last resort, not a shortcut.
 - **No `@ts-ignore`** — fix the type.
-- **No default exports** — named exports only (knip enforces). **Documented exception**: Fastify plugin entry files (`auditPlugin`, `authPlugin`, `eventPlugin`, `idempotencyPlugin`, `introspectionPlugin`) MAY `export default fp(plugin, …)` so `app.register(import('@classytic/arc/<plugin>'))` resolves via Node's import-default semantics. Each of those files ALSO ships a named export for hosts that prefer named imports. Non-plugin code follows the rule strictly.
+- **No default exports** — named exports only (knip enforces). **Documented exception**: Fastify plugin entry files MAY `export default fp(plugin, …)` so `app.register(import('@classytic/arc/<subpath>'))` resolves via Node's import-default semantics. The exception is the *class* of `fp()`-wrapped plugin entries (auth, audit, events, plugins/*, scope/elevation, scim, docs, registry, idempotency, webhooks, core/arcCorePlugin — grep `export default fp` for the authoritative list), not a fixed name list. Each of those files ALSO ships a named export for hosts that prefer named imports. Non-plugin code follows the rule strictly.
 - **No bundling peer deps** — check `tsdown.config.ts` `deps.neverBundle`.
 - **No enums** — `as const` objects or string literal unions.
 - **Prefer Node.js built-ins** — `node:crypto`, `structuredClone()`, `URL` over third-party equivalents.

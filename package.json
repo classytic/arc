@@ -237,7 +237,7 @@
     "push": "classytic-push",
     "release:tag": "node -e \"require('child_process').execSync('npm run push -- v'+require('./package.json').version,{stdio:'inherit'})\"",
     "release": "npm run push -- main && npm run release:tag && npm publish",
-    "prepublishOnly": "npm run typecheck && npm run lint && npm run build && npm run test:main && npm run smoke"
+    "prepublishOnly": "npm run typecheck && npm run lint && npm run build && npm run test:ci && npm run smoke"
   },
   "engines": {
     "node": ">=22"

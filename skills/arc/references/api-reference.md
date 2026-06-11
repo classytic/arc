@@ -183,7 +183,7 @@ import type { ArcRequest, IRequestContext, IControllerResponse } from '@classyti
 
 ## Notes
 
-- **No default exports** outside Fastify plugin entry files (`auditPlugin`, `authPlugin`, `eventPlugin`, `idempotencyPlugin`, `introspectionPlugin`).
+- **No default exports** outside Fastify plugin entry files (`fp()`-wrapped plugin entries — grep `export default fp` in src/ for the authoritative list).
 - **Type-only subpaths** produce `export {}` at runtime — interfaces are erased.
 - **Adapters live in kits**, not arc. Arc 2.12+ ships zero kit-bound adapters.
 - **Event types live in `@classytic/primitives/events`**, not `@classytic/arc/events`. Arc re-exports the runtime `MemoryEventTransport` only.

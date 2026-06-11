@@ -146,6 +146,15 @@ export class BaseCrudController<
   protected _matchesFilter?: (item: unknown, filters: Record<string, unknown>) => boolean;
   protected _presetFields: { slugField?: string; parentField?: string } = {};
   protected _cacheConfig?: ResourceCacheConfig;
+  /**
+   * Retained construction-time values so partial `configure()` rebuilds
+   * (e.g. `configure({ schemaOptions })`) reuse them instead of silently
+   * falling back to the sub-component defaults (`-createdAt` sort,
+   * `reject` write-denial) — `defaultSort: false` matters for kits
+   * without a `createdAt` column, `strip` for legacy write semantics.
+   */
+  protected _defaultSort?: string | false;
+  protected _onFieldWriteDenied?: FieldWriteDenialPolicy;
 
   constructor(repository: TRepository, options: BaseControllerOptions = {}) {
     this.repository = repository;
@@ -163,6 +172,8 @@ export class BaseCrudController<
     this._matchesFilter = options.matchesFilter;
     if (options.cache) this._cacheConfig = options.cache;
     if (options.presetFields) this._presetFields = options.presetFields;
+    this._defaultSort = options.defaultSort;
+    this._onFieldWriteDenied = options.onFieldWriteDenied;
 
     this.accessControl = new AccessControl({
       tenantField: this.tenantField,
@@ -171,13 +182,13 @@ export class BaseCrudController<
     });
     this.bodySanitizer = new BodySanitizer({
       schemaOptions: this.schemaOptions,
-      onFieldWriteDenied: options.onFieldWriteDenied,
+      onFieldWriteDenied: this._onFieldWriteDenied,
     });
     this.queryResolver = new QueryResolver({
       queryParser: this.queryParser,
       maxLimit: this.maxLimit,
       defaultLimit: this.defaultLimit,
-      defaultSort: options.defaultSort,
+      defaultSort: this._defaultSort,
       schemaOptions: this.schemaOptions,
       tenantField: this.tenantField,
     });
@@ -244,8 +255,6 @@ export class BaseCrudController<
     let rebuildAccessControl = false;
     let rebuildBodySanitizer = false;
     let rebuildQueryResolver = false;
-    let bodySanitizerOnFieldWriteDenied: FieldWriteDenialPolicy | undefined;
-    let resolverDefaultSort: string | false | undefined;
 
     if (options.tenantField !== undefined) {
       this.tenantField = options.tenantField;
@@ -266,7 +275,7 @@ export class BaseCrudController<
       rebuildQueryResolver = true;
     }
     if (options.onFieldWriteDenied !== undefined) {
-      bodySanitizerOnFieldWriteDenied = options.onFieldWriteDenied;
+      this._onFieldWriteDenied = options.onFieldWriteDenied;
       rebuildBodySanitizer = true;
     }
     if (options.queryParser !== undefined) {
@@ -281,7 +290,7 @@ export class BaseCrudController<
       rebuildQueryResolver = true;
     }
     if (options.defaultSort !== undefined) {
-      resolverDefaultSort = options.defaultSort;
+      this._defaultSort = options.defaultSort;
       rebuildQueryResolver = true;
     }
     if (options.cache !== undefined) {
@@ -301,7 +310,7 @@ export class BaseCrudController<
     if (rebuildBodySanitizer) {
       this.bodySanitizer = new BodySanitizer({
         schemaOptions: this.schemaOptions,
-        onFieldWriteDenied: bodySanitizerOnFieldWriteDenied,
+        onFieldWriteDenied: this._onFieldWriteDenied,
       });
     }
     if (rebuildQueryResolver) {
@@ -313,7 +322,7 @@ export class BaseCrudController<
         queryParser: this.queryParser,
         maxLimit: this.maxLimit,
         defaultLimit: this.defaultLimit,
-        defaultSort: resolverDefaultSort,
+        defaultSort: this._defaultSort,
         schemaOptions: this.schemaOptions,
         tenantField: this.tenantField,
       });
