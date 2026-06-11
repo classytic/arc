@@ -307,6 +307,22 @@ export const STREAMLINE_BUS_EVENTS = [
 ] as const;
 
 /**
+ * Non-durable streaming frames from streamline >= 2.6's `ctx.stream(frame)`
+ * (LLM tokens, percent-complete, live previews).
+ *
+ * Delivered on the SSE endpoint ONLY — deliberately excluded from
+ * `STREAMLINE_BUS_EVENTS` / `bridgeBusEvents` because frames are
+ * high-frequency, at-most-once UI traffic, not domain events: republishing
+ * every token onto arc's Redis/Kafka transport would flood it. Subscribers
+ * that genuinely want frames on the transport can bridge
+ * `streamline:step.stream` from streamline's own arc-shape transport.
+ *
+ * On streamline < 2.6 the subscription is a structural no-op (the bus never
+ * emits the event) — no version gate needed.
+ */
+export const STREAMLINE_STREAM_EVENTS = ["step:stream"] as const;
+
+/**
  * Workflow events that should auto-close an SSE stream when observed.
  * Recovered / waiting / resumed / retry / compensating are NOT terminal —
  * the run is still active after them.
@@ -420,25 +436,39 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
 
   // ============ Per-run handlers and tenant scope ============
   //
-  // streamline 2.3.3's per-run methods (`engine.get`, `engine.cancel`,
+  // streamline's per-run engine methods (`engine.get`, `engine.cancel`,
   // `engine.resume`, `engine.execute`, `engine.pause`, `engine.rewindTo`,
   // `engine.waitFor`) do NOT accept a tenant-options argument — they walk
   // the cache and call `repository.getById(runId)` without forwarding
-  // tenant scope. With `multiTenant.strict: true`, the tenant-filter
-  // plugin throws "missing tenantId" and per-run requests 500.
+  // tenant scope.
   //
-  // Until streamline grows tenant-aware overloads (`wf.cancel(runId, {
-  // tenantId, bypassTenant })`, etc.), hosts running multi-tenant should
-  // either (a) configure `multiTenant.strict: false` or (b) set
-  // `staticTenantId` on the container. Arc enforces tenant ownership at
-  // the HTTP boundary on the DELETE handler via `repository.getById` —
-  // see the DELETE block below — and the GET-runs list handler already
-  // forwards tenant scope. Other engine-driven endpoints (cancel, resume,
-  // execute, pause, rewind, wait) inherit streamline's current
-  // limitation; they SHOULD become tenant-scoped once the streamline
-  // surface accepts the option.
+  // Arc therefore enforces tenant OWNERSHIP at the HTTP boundary: when a
+  // `tenantResolver` is configured (and the request isn't bypassing), every
+  // per-run route below first does a tenant-scoped `repository.getById`
+  // pre-flight. A runId belonging to another tenant gets a clean 404 —
+  // identical to "doesn't exist", so cross-tenant probing leaks nothing.
+  // Without a `tenantResolver` (single-tenant / staticTenantId deployments)
+  // the pre-flight is skipped and behavior is unchanged.
   for (const [id, wf] of registry) {
     const routePrefix = `${routeScope}/${id}`;
+
+    // Tenant-ownership pre-flight for per-run routes. Bound to the repo —
+    // mongokit Repository methods use `this` (tenant-filter plugin, cache);
+    // called detached they 500 on `this._buildContext`.
+    const visibilityRepo = wf.container?.repository as
+      | { getById?: (id: string, opts?: Record<string, unknown>) => Promise<unknown> }
+      | undefined;
+    const visibilityGetById = visibilityRepo?.getById?.bind(visibilityRepo);
+    const assertRunVisible = async (request: FastifyRequest, runId: string): Promise<void> => {
+      if (!visibilityGetById) return; // structural repo without getById — preserve old behavior
+      const tenantOpts = resolveTenantOpts(request);
+      // Only enforce when the request actually carries tenant scope. Bypass
+      // requests are cross-tenant by declaration; tenantless deployments
+      // (no tenantResolver) keep the pre-2.18 behavior byte-for-byte.
+      if (tenantOpts.bypassTenant || tenantOpts.tenantId === undefined) return;
+      const existing = await visibilityGetById(runId, { tenantId: tenantOpts.tenantId });
+      if (!existing) throw new NotFoundError("Workflow run", runId);
+    };
 
     // POST /:workflowId/start — Start a new workflow run
     fastify.post(`${routePrefix}/start`, { preHandler: authPreHandler }, async (request, reply) => {
@@ -594,6 +624,7 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
           throw new ForbiddenError();
         }
         const { runId } = request.params as { runId: string };
+        await assertRunVisible(request, runId);
         const run = await wf.get(runId);
         if (!run) {
           throw new NotFoundError("Workflow run", runId);
@@ -615,6 +646,7 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
           throw new ForbiddenError();
         }
         const { runId } = request.params as { runId: string };
+        await assertRunVisible(request, runId);
         const { payload } = (request.body ?? {}) as { payload?: unknown };
         const run = await wf.resume(runId, payload);
 
@@ -643,6 +675,7 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
           throw new ForbiddenError();
         }
         const { runId } = request.params as { runId: string };
+        await assertRunVisible(request, runId);
         const run = await wf.cancel(runId);
 
         if (bridgeEvents && fastify.events?.publish) {
@@ -666,6 +699,7 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
       { preHandler: authPreHandler },
       async (request, _reply) => {
         const { runId } = request.params as { runId: string };
+        await assertRunVisible(request, runId);
         const run = await wf.engine.execute(runId);
         return run;
       },
@@ -744,6 +778,7 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
             throw new ForbiddenError();
           }
           const { runId } = request.params as { runId: string };
+          await assertRunVisible(request, runId);
           const { timeout } = (request.query ?? {}) as { timeout?: string };
           const timeoutMs = timeout ? Number.parseInt(timeout, 10) : 30000;
           const run = await wf.engine.waitFor?.(runId, {
@@ -761,6 +796,7 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
         { preHandler: authPreHandler },
         async (request, _reply) => {
           const { runId } = request.params as { runId: string };
+          await assertRunVisible(request, runId);
           const run = await wf.engine.pause?.(runId);
           return run;
         },
@@ -774,6 +810,7 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
         { preHandler: authPreHandler },
         async (request, _reply) => {
           const { runId } = request.params as { runId: string };
+          await assertRunVisible(request, runId);
           const { stepId } = (request.body ?? {}) as { stepId: string };
           if (!stepId) {
             throw createError(400, "stepId is required");
@@ -825,6 +862,7 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
           }
 
           const { runId } = request.params as { runId: string };
+          await assertRunVisible(request, runId);
           const run = await wf.get(runId);
           if (!run) {
             throw new NotFoundError("Workflow run", runId);
@@ -907,7 +945,10 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
           }, 15_000);
           (heartbeat as { unref?: () => void }).unref?.();
 
-          for (const eventName of STREAMLINE_BUS_EVENTS) {
+          // Lifecycle/telemetry events PLUS live `ctx.stream()` frames
+          // (streamline >= 2.6; structural no-op on older versions). Frames
+          // are SSE-only by design — see STREAMLINE_STREAM_EVENTS.
+          for (const eventName of [...STREAMLINE_BUS_EVENTS, ...STREAMLINE_STREAM_EVENTS]) {
             const fn = (payload: unknown) => {
               const p = payload as { runId?: string; [k: string]: unknown };
               // Engine telemetry events (engine:error, scheduler:*) can

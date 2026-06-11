@@ -967,3 +967,186 @@ describe("Streamline Integration Plugin", () => {
     });
   });
 });
+
+// ============================================================================
+// v2.18: streamline 2.6 surface — SSE stream frames + tenant-scoped per-run
+// ============================================================================
+
+describe("SSE delivers ctx.stream frames (streamline >= 2.6)", () => {
+  let app: FastifyInstance;
+
+  afterEach(async () => {
+    await app?.close().catch(() => {});
+  });
+
+  it("forwards step:stream frames on the SSE endpoint, run-scoped", async () => {
+    const wf = createMockWorkflow("ai");
+    app = Fastify({ logger: false });
+    await app.register(streamlinePlugin, {
+      workflows: [wf],
+      auth: false,
+      enableStreaming: true,
+    });
+    await app.ready();
+    await app.listen({ port: 0 });
+    const port = (app.server.address() as { port: number }).port;
+
+    const run = await wf.start({ prompt: "hi" });
+
+    const ssePromise = fetchSSE(`http://localhost:${port}/workflows/ai/runs/${run._id}/stream`);
+    await new Promise((r) => setTimeout(r, 60));
+
+    // Frame for THIS run — must be delivered.
+    (wf.container!.eventBus as EventEmitter).emit("step:stream", {
+      runId: run._id,
+      stepId: "generate",
+      seq: 0,
+      frame: { token: "hel" },
+    });
+    // Frame for ANOTHER run — must be filtered out.
+    (wf.container!.eventBus as EventEmitter).emit("step:stream", {
+      runId: "other-run",
+      stepId: "generate",
+      seq: 0,
+      frame: { token: "nope" },
+    });
+
+    const { body } = await ssePromise;
+    expect(body).toContain("event: step:stream");
+    expect(body).toContain('"token":"hel"');
+    expect(body).not.toContain('"token":"nope"');
+  });
+
+  it("does NOT republish step:stream onto arc's transport via bridgeBusEvents", async () => {
+    const wf = createMockWorkflow("ai");
+    const published: string[] = [];
+    app = Fastify({ logger: false });
+    app.decorate("events", {
+      publish: vi.fn(async (topic: string) => {
+        published.push(topic);
+      }),
+    });
+    await app.register(streamlinePlugin, {
+      workflows: [wf],
+      auth: false,
+      bridgeBusEvents: true,
+    });
+    await app.ready();
+
+    (wf.container!.eventBus as EventEmitter).emit("step:stream", {
+      runId: "r1",
+      stepId: "s1",
+      seq: 0,
+      frame: { token: "x" },
+    });
+    (wf.container!.eventBus as EventEmitter).emit("step:completed", {
+      runId: "r1",
+      stepId: "s1",
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Lifecycle events bridge; high-frequency frames deliberately don't.
+    expect(published).toContain("workflow.ai.step:completed");
+    expect(published.some((t) => t.includes("step:stream"))).toBe(false);
+  });
+});
+
+describe("tenant-scoped per-run pre-flight (cross-tenant 404)", () => {
+  let app: FastifyInstance;
+
+  afterEach(async () => {
+    await app?.close().catch(() => {});
+  });
+
+  /** Mock workflow whose repository.getById respects tenant scope. */
+  function createTenantWorkflow(ownerTenant: string) {
+    const wf = createMockWorkflow("billing");
+    const baseGet = wf.get as ReturnType<typeof vi.fn>;
+    wf.container!.repository = {
+      getAll: vi.fn(async () => ({ data: [] })),
+      // Tenant-scoped read: only the owning tenant sees the run.
+      getById: vi.fn(async (id: string, opts?: Record<string, unknown>) => {
+        if (opts?.tenantId !== undefined && opts.tenantId !== ownerTenant) return null;
+        return (await baseGet(id)) as WorkflowRunLike | null;
+      }),
+    };
+    return wf;
+  }
+
+  it("returns 404 on every per-run route for a foreign tenant, 200 for the owner", async () => {
+    const wf = createTenantWorkflow("org-a");
+    app = Fastify({ logger: false });
+    await app.register(streamlinePlugin, {
+      workflows: [wf],
+      auth: false,
+      tenantResolver: (req) => req.headers["x-org"] as string | undefined,
+    });
+    await app.ready();
+
+    const run = await wf.start({});
+
+    const perRunRoutes: Array<{ method: "GET" | "POST"; url: string; payload?: unknown }> = [
+      { method: "GET", url: `/workflows/billing/runs/${run._id}` },
+      { method: "POST", url: `/workflows/billing/runs/${run._id}/resume`, payload: {} },
+      { method: "POST", url: `/workflows/billing/runs/${run._id}/cancel` },
+      { method: "POST", url: `/workflows/billing/runs/${run._id}/execute` },
+      { method: "POST", url: `/workflows/billing/runs/${run._id}/pause` },
+      {
+        method: "POST",
+        url: `/workflows/billing/runs/${run._id}/rewind`,
+        payload: { stepId: "step1" },
+      },
+    ];
+
+    // Foreign tenant: clean 404 on every route (no existence leak).
+    for (const r of perRunRoutes) {
+      const res = await app.inject({
+        method: r.method,
+        url: r.url,
+        headers: { "x-org": "org-b" },
+        ...(r.payload !== undefined ? { payload: r.payload } : {}),
+      });
+      expect(res.statusCode, `${r.method} ${r.url} (foreign tenant)`).toBe(404);
+    }
+
+    // Owning tenant: pre-flight passes, handlers run.
+    const ownerGet = await app.inject({
+      method: "GET",
+      url: `/workflows/billing/runs/${run._id}`,
+      headers: { "x-org": "org-a" },
+    });
+    expect(ownerGet.statusCode).toBe(200);
+    expect(ownerGet.json()._id).toBe(run._id);
+  });
+
+  it("skips the pre-flight when no tenantResolver is configured (behavior unchanged)", async () => {
+    const wf = createTenantWorkflow("org-a");
+    app = Fastify({ logger: false });
+    await app.register(streamlinePlugin, { workflows: [wf], auth: false });
+    await app.ready();
+
+    const run = await wf.start({});
+    const res = await app.inject({ method: "GET", url: `/workflows/billing/runs/${run._id}` });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("bypassTenant requests skip the ownership gate (admin path)", async () => {
+    const wf = createTenantWorkflow("org-a");
+    app = Fastify({ logger: false });
+    await app.register(streamlinePlugin, {
+      workflows: [wf],
+      auth: false,
+      tenantResolver: (req) => req.headers["x-org"] as string | undefined,
+      bypassTenantResolver: (req) => req.headers["x-admin"] === "1",
+    });
+    await app.ready();
+
+    const run = await wf.start({});
+    const res = await app.inject({
+      method: "GET",
+      url: `/workflows/billing/runs/${run._id}`,
+      headers: { "x-org": "org-b", "x-admin": "1" },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+});
