@@ -180,15 +180,33 @@ const ssePlugin: FastifyPluginAsync<SSEOptions> = async (
     },
   };
 
-  // Add auth preHandler if required — fail-closed: throw if decorator missing
+  // Auth preHandler (fail-closed). Resolve `fastify.authenticate` LAZILY at request
+  // time rather than capturing it now: arc's factory registers the SSE plugin (with
+  // the rest of `arcPlugins`) BEFORE the auth plugin, so the decorator can be absent
+  // when this plugin loads yet present once the app is ready. Capturing it here threw
+  // "authenticate is not registered" for every auth setup. The `onReady` assertion
+  // keeps it fail-closed — a genuinely missing auth plugin still errors, but at boot
+  // (after all plugins have registered), not before auth has had its turn.
   if (requireAuth) {
-    if (!fastify.hasDecorator("authenticate")) {
-      throw new Error(
-        "[arc-sse] requireAuth is true but fastify.authenticate is not registered. " +
-          "Register an auth plugin before SSE, or set requireAuth: false.",
-      );
-    }
-    routeOpts.preHandler = fastify.authenticate;
+    routeOpts.preHandler = (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+      const authenticate = fastify.authenticate as
+        | ((req: FastifyRequest, rep: FastifyReply) => Promise<void>)
+        | undefined;
+      if (typeof authenticate !== "function") {
+        // onReady guards against this; fail closed if somehow reached at runtime.
+        void reply.code(401).send({ error: "Unauthorized" });
+        return Promise.resolve();
+      }
+      return authenticate(request, reply);
+    };
+    fastify.addHook("onReady", async () => {
+      if (!fastify.hasDecorator("authenticate")) {
+        throw new Error(
+          "[arc-sse] requireAuth is true but no `authenticate` decorator was registered " +
+            "by the time the app was ready. Register an auth plugin, or set requireAuth: false.",
+        );
+      }
+    });
   }
 
   fastify.route(routeOpts);

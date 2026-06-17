@@ -76,19 +76,41 @@ describe("SSE Auth Enforcement", () => {
     } catch {}
   });
 
-  it("throws when requireAuth is true but authenticate decorator is missing", async () => {
+  it("throws (fail-closed) at ready when requireAuth is true but authenticate is never registered", async () => {
     app = Fastify({ logger: false });
     await app.register(eventPlugin);
 
     let threw = false;
     try {
       await app.register(ssePlugin, { requireAuth: true });
-      await app.ready();
+      await app.ready(); // assertion now runs in an onReady hook (after all plugins)
     } catch (err: any) {
       threw = true;
-      expect(err.message).toContain("fastify.authenticate is not registered");
+      expect(err.message).toContain("Register an auth plugin");
     }
     expect(threw).toBe(true);
+  });
+
+  it("is registration-order independent: authenticate decorated AFTER SSE still works", async () => {
+    // Regression for the arc factory bug: `arcPlugins` (incl. SSE) registers BEFORE
+    // `registerAuth`, so `fastify.authenticate` is absent when SSE loads. The auth
+    // decorator must be resolved LAZILY (at request time), asserted at onReady — not
+    // captured at registration (which threw for every auth setup).
+    app = Fastify({ logger: false });
+    await app.register(eventPlugin);
+    // SSE first (as arc's factory does), auth decorator AFTER.
+    await app.register(ssePlugin, { requireAuth: true, heartbeat: 60000 });
+    app.decorate("authenticate", async (request: any, reply: any) => {
+      if (!request.headers.authorization) reply.code(401).send({ error: "Unauthorized" });
+    });
+    await app.ready(); // must NOT throw (the old code threw here)
+
+    // Unauthenticated → 401 via the lazily-resolved preHandler (proves the route is
+    // wired with auth despite auth being decorated AFTER the plugin). We don't inject
+    // an AUTHENTICATED request here — it would hijack the socket into an open SSE
+    // stream and never return (the streaming path is covered by the org-scoped tests).
+    const denied = await app.inject({ method: "GET", url: "/events/stream" });
+    expect(denied.statusCode).toBe(401);
   });
 
   it("requireAuth: false + no authenticate decorator works fine", async () => {
