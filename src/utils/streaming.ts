@@ -17,7 +17,7 @@
  */
 
 import { Readable } from "node:stream";
-import type { FastifyReply } from "fastify";
+import type { FastifyReply, FastifyRequest } from "fastify";
 
 /**
  * Canonical SSE headers for AI-SDK-style UI message streams.
@@ -155,6 +155,66 @@ export async function pipeUIMessageStreamToReply(
 
 function defaultSerialize(chunk: unknown): string {
   return typeof chunk === "string" ? chunk : JSON.stringify(chunk);
+}
+
+// ============================================================================
+// SSE auth + CORS helpers (browser EventSource ergonomics)
+// ============================================================================
+
+/**
+ * Promote a stream auth token from the query string into the `Authorization`
+ * header, in place, so the standard `fastify.authenticate` decorator can read it.
+ *
+ * Why: the browser `EventSource` (and `WebSocket`) API **cannot set request
+ * headers** — there is no header channel on the constructor. So arc-next's
+ * `buildStreamUrl` (bearer mode) appends the token as `?token=<jwt>` on stream
+ * URLs. Server auth reads the `Authorization` header, so without this promotion
+ * EVERY browser SSE/WS stream is 401 in bearer mode (cookie mode is unaffected —
+ * arc-next omits the query token there and relies on the cookie).
+ *
+ * Safe by construction:
+ * - No-op when an `Authorization` header is already present → normal `fetch`
+ *   requests (which send the header) are never touched.
+ * - The token still goes through full authentication downstream, so a forged or
+ *   stale value simply 401s. This only relocates WHERE the bearer is read from;
+ *   it grants no trust on its own.
+ *
+ * Parsed from `request.raw.url` (not `request.query`) so it's robust to route
+ * querystring schemas that would otherwise strip an undeclared `token` param.
+ *
+ * @param queryParam name of the query parameter carrying the token (default `token`).
+ */
+export function promoteStreamTokenToHeader(request: FastifyRequest, queryParam = "token"): void {
+  if (request.headers.authorization) return;
+  const url = request.raw.url ?? "";
+  const q = url.indexOf("?");
+  if (q < 0) return;
+  const token = new URLSearchParams(url.slice(q + 1)).get(queryParam);
+  if (token) request.headers.authorization = `Bearer ${token}`;
+}
+
+/**
+ * Collect the CORS / `Vary` headers a plugin (e.g. `@fastify/cors`, whose default
+ * `onRequest` hook runs BEFORE the route handler) has already set on the reply, so
+ * a hijacked SSE handler that writes straight to `reply.raw.writeHead(...)` can
+ * merge them onto the raw response.
+ *
+ * Why: `reply.hijack()` + `reply.raw.writeHead()` bypass Fastify's `onSend`
+ * serialization, which is where reply-level headers reach the wire. A cross-origin
+ * `EventSource` therefore receives no `Access-Control-Allow-Origin` and the browser
+ * blocks the (authenticated) stream. Re-emitting the already-computed CORS headers
+ * honors the host's configured policy (origin allowlist, credentials) rather than
+ * re-deriving it. Returns lowercased header names suitable for `writeHead`.
+ */
+export function forwardedStreamHeaders(reply: FastifyReply): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(reply.getHeaders())) {
+    if (value == null) continue;
+    if (key.startsWith("access-control-") || key === "vary") {
+      out[key] = Array.isArray(value) ? value.join(", ") : String(value);
+    }
+  }
+  return out;
 }
 
 /**

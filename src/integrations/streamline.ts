@@ -41,6 +41,7 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
 import { createError, ForbiddenError, NotFoundError } from "../utils/errors.js";
+import { forwardedStreamHeaders, promoteStreamTokenToHeader } from "../utils/streaming.js";
 
 // ============================================================================
 // Types (defined here so we don't import streamline at module level — keeps
@@ -855,7 +856,17 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
     if (enableStreaming && wf.container?.eventBus) {
       fastify.get(
         `${routePrefix}/runs/:runId/stream`,
-        { preHandler: authPreHandler },
+        {
+          // Browser EventSource can't send headers — arc-next passes the bearer as
+          // `?token=`. Promote it into the Authorization header BEFORE auth runs so
+          // the stream authenticates in bearer mode (no-op when a header is present).
+          preHandler: [
+            async (request: FastifyRequest) => {
+              promoteStreamTokenToHeader(request);
+            },
+            ...authPreHandler,
+          ],
+        },
         async (request, reply) => {
           if (!(await checkPerm("get", request))) {
             throw new ForbiddenError();
@@ -874,6 +885,10 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
             Connection: "keep-alive",
             // Defeat proxy buffering (nginx) so events aren't held back.
             "X-Accel-Buffering": "no",
+            // Carry over CORS / Vary headers @fastify/cors set on the reply — the
+            // raw writeHead bypasses Fastify's onSend chain, so a cross-origin
+            // EventSource would otherwise get no Access-Control-Allow-Origin.
+            ...forwardedStreamHeaders(reply),
           });
           // Flush the head IMMEDIATELY. Without this, Node holds the response
           // head until the first body write — and since we only write on a

@@ -101,8 +101,10 @@ export { createStateMachine } from "./stateMachine.js";
 // Streaming helpers — UI message streams (Vercel AI SDK, OpenAI SDK) → Fastify
 export type { PipeUIMessageStreamOptions } from "./streaming.js";
 export {
+  forwardedStreamHeaders,
   isReadableStream,
   pipeUIMessageStreamToReply,
+  promoteStreamTokenToHeader,
   UI_MESSAGE_STREAM_HEADERS,
 } from "./streaming.js";
 export type { EventsDecorator } from "./typeGuards.js";

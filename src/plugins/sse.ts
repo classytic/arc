@@ -24,6 +24,7 @@ import type { DomainEvent } from "../events/EventTransport.js";
 import { arcLog } from "../logger/index.js";
 import type { RequestScope } from "../scope/types.js";
 import { getOrgId, PUBLIC_SCOPE } from "../scope/types.js";
+import { forwardedStreamHeaders, promoteStreamTokenToHeader } from "../utils/streaming.js";
 
 const log = arcLog("sse");
 
@@ -40,6 +41,13 @@ export interface SSEOptions {
   orgScoped?: boolean;
   /** Custom event filter function */
   filter?: (event: DomainEvent<unknown>, request: FastifyRequest) => boolean;
+  /**
+   * Query parameter that carries the bearer token for browser `EventSource`
+   * clients (which cannot send an `Authorization` header). Promoted into the
+   * header before auth. Default `'token'` — matches arc-next's `buildStreamUrl`.
+   * Set `null` to disable promotion (e.g. cookie-only auth).
+   */
+  tokenQueryParam?: string | null;
 }
 
 // ============================================================================
@@ -57,6 +65,7 @@ const ssePlugin: FastifyPluginAsync<SSEOptions> = async (
     heartbeat = 30000,
     orgScoped = false,
     filter: customFilter,
+    tokenQueryParam = "token",
   } = opts;
 
   // Check that events plugin is registered
@@ -96,12 +105,17 @@ const ssePlugin: FastifyPluginAsync<SSEOptions> = async (
       // 1. Tell Fastify we are taking over the socket
       reply.hijack();
 
-      // Set SSE headers and flush immediately so clients detect the connection
+      // Set SSE headers and flush immediately so clients detect the connection.
+      // Merge any CORS / Vary headers @fastify/cors already set (its default
+      // `onRequest` hook runs before this handler) — `writeHead` on the raw socket
+      // bypasses Fastify's onSend chain, which is where those headers would
+      // otherwise reach the wire, so a cross-origin EventSource would get blocked.
       reply.raw.writeHead(200, {
         "content-type": "text/event-stream",
         "cache-control": "no-cache",
         connection: "keep-alive",
         "x-accel-buffering": "no", // Disable nginx buffering
+        ...forwardedStreamHeaders(reply),
       });
       reply.raw.flushHeaders();
 
@@ -189,6 +203,10 @@ const ssePlugin: FastifyPluginAsync<SSEOptions> = async (
   // (after all plugins have registered), not before auth has had its turn.
   if (requireAuth) {
     routeOpts.preHandler = (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+      // Browser EventSource can't send an Authorization header — arc-next passes
+      // the bearer as `?token=`. Promote it into the header so `authenticate`
+      // (header-based) can validate the stream. No-op when a header is present.
+      if (tokenQueryParam) promoteStreamTokenToHeader(request, tokenQueryParam);
       const authenticate = fastify.authenticate as
         | ((req: FastifyRequest, rep: FastifyReply) => Promise<void>)
         | undefined;

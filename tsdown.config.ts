@@ -114,50 +114,23 @@ export default defineConfig({
     __ARC_VERSION__: JSON.stringify(version),
   },
   deps: {
+    // arc bundles NOTHING from node_modules — every dependency, peer
+    // dependency (required + optional), and dev-only integration stays
+    // external. This is the single source of truth for "never bundle a
+    // peer": it externalizes by resolved path, so it cannot drift from
+    // package.json and needs no hand-maintained allowlist. New peers are
+    // covered automatically.
+    skipNodeModulesBundle: true,
+
+    // Belt-and-suspenders for workspace/linked deps that resolve OUTSIDE
+    // node_modules during local dev (monorepo symlinks) — scoped roots +
+    // their subpaths.
     neverBundle: [
-      // Core
-      "fastify",
-      "fastify-plugin",
-      "qs",
-
-      // Database
-      "mongoose",
       /^@classytic\//,
-
-      // Fastify plugins (all optional peer deps)
       /^@fastify\//,
-      "fastify-raw-body",
-
-      // Geo (optional — websocket geo-room subpath only)
-      "h3-js",
-
-      // Schema
-      "@sinclair/typebox",
-
-      // Auth
-      "better-auth",
-
-      // Redis
-      "ioredis",
-
-      // Observability
       /^@opentelemetry\//,
-      "pino-pretty",
-
-      // Job queue
-      "bullmq",
-
-      // Testing (dev only)
-      "vitest",
-      /^mongodb-memory-server/,
-
-      // Validation
-      "zod",
-      /^zod\//,
-
-      // MCP
-      "@modelcontextprotocol/sdk",
       /^@modelcontextprotocol\//,
+      /^zod\//,
     ],
   },
 });
