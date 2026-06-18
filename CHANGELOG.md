@@ -10,6 +10,8 @@ See [changelog/v2.md](changelog/v2.md) for the full v2 release history.
 
 ## 2.18
 
+- [2.18.5](changelog/v2.md#2185) — adopt mongokit 3.16.1 PATCH-safety fix (update-body default stripping; e2e regression proving no PATCH default-injection) + production-grade `arc init` scaffold (typed Zod env, health/onClose, biome+CI).
+- [2.18.4](changelog/v2.md#2184) — SSE lazy-auth fix.
 - [2.18.3](changelog/v2.md#2183) — ecosystem sync (repo-core 0.6 / mongokit 3.16 / sqlitekit 0.6), `traceId` repo-option forwarding, BullMQ repeatable-schedule reconciliation, jittered Streams backoff + batch-scaled recovery, `configure()` rebuild state-loss fix, multi-node diagnostic-map leak fixes, internal refactor sweep (middlewares/crud/normalize splits), `prepublishOnly` runs `test:ci`.
 - [2.18.2](changelog/v2.md#2182) — fix streamline DELETE route 500 (`Cannot read properties of undefined`) caused by unbound `delete`/`getById` repo method calls.
 - [2.18.1](changelog/v2.md#2181) — remove phantom `disableCrud` type stub, `runtime: 'distributed'` error now names exact `stores.<key>` + fix hint, `TERMINAL_RUN_STATUSES` exported from `@classytic/arc/integrations/streamline`.

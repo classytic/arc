@@ -20,7 +20,7 @@ export const SCAFFOLD_DEP_VERSIONS = {
   // pagination, adapter contract, and filter helpers from there).
   // `@classytic/primitives` is REQUIRED for events.
   core: {
-    "@classytic/arc": "^2.18.3",
+    "@classytic/arc": "^2.18.5",
     "@classytic/primitives": "^0.6.0",
     "@classytic/repo-core": "^0.6.0",
     "@fastify/cors": "^11.2.0",
@@ -54,7 +54,7 @@ export const SCAFFOLD_DEP_VERSIONS = {
   // arc-compatible adapter at `<kit>/adapter` (arc 2.12+); the kit owns
   // the driver peer (mongoose for mongokit, etc.).
   adapterMongokit: {
-    "@classytic/mongokit": "^3.16.0",
+    "@classytic/mongokit": "^3.16.1",
     mongoose: "^9.6.2",
   },
   // Dev tooling — common to every project
