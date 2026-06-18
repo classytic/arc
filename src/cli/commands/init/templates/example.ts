@@ -297,11 +297,14 @@ export function exampleTestTemplate(config: ProjectConfig): string {
 
 import { describe, it, beforeAll, afterAll } from 'vitest';
 import { createTestApp, expectArc } from '@classytic/arc/testing';
-import type { TestAppContext } from '@classytic/arc/testing';
-import { exampleResource } from '../src/resources/example/example.js';
+import type { TestAppContext${ts ? ", TestAuthProvider" : ""} } from '@classytic/arc/testing';
+import exampleResource from '../src/resources/example/example.resource.js';
 
 describe('Example Resource', () => {
   let ctx${ts ? ": TestAppContext" : ""};
+  // Narrowed once below — \`authMode: 'jwt'\` guarantees a provider, but
+  // ctx.auth is typed optional, so bind it instead of asserting at every use.
+  let auth${ts ? ": TestAuthProvider" : ""};
 
   beforeAll(async () => {
     ctx = await createTestApp({
@@ -309,9 +312,12 @@ describe('Example Resource', () => {
       authMode: 'jwt',
 ${config.adapter === "mongokit" ? "      connectMongoose: true,\n" : ""}    });
 
+    if (!ctx.auth) throw new Error('Test auth provider was not configured');
+    auth = ctx.auth;
+
     // Arc's permission engine reads singular user.role — string,
     // comma-separated string, or array all normalise via getUserRoles().
-    ctx.auth${ts ? "!" : ""}.register('admin', {
+    auth.register('admin', {
       user: { id: '1', role: 'admin' },
       orgId: 'org-1',
     });
@@ -340,7 +346,7 @@ ${config.adapter === "mongokit" ? "      connectMongoose: true,\n" : ""}    });
       const res = await ctx.app.inject({
         method: 'POST',
         url: '/examples',
-        headers: ctx.auth${ts ? "!" : ""}.as('admin').headers,
+        headers: auth.as('admin').headers,
         payload: { name: 'Test Example' },
       });
       expectArc(res).ok();

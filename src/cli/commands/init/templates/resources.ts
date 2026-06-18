@@ -8,8 +8,6 @@ import type { ProjectConfig } from "../types.js";
 
 export function resourcesIndexTemplate(config: ProjectConfig): string {
   const ts = config.typescript;
-  const typeImport = ts ? "import type { FastifyInstance } from 'fastify';\n" : "";
-  const appType = ts ? ": FastifyInstance" : "";
 
   const authImports =
     config.auth === "jwt"
@@ -32,11 +30,12 @@ import { authResource, userProfileResource } from './auth/auth.resource.js';
   return `/**
  * Resources Registry
  *
- * Central registry for all API resources.
- * All resources are mounted under /api prefix via Fastify scoping.
+ * Central array of every API resource. Passed to \`createApp({ resources })\`
+ * in app.${ts ? "ts" : "js"}, which mounts each one under the configured
+ * resourcePrefix (/api) — add a resource by importing it and listing it here.
  */
 
-${typeImport}${authImports}
+${authImports}
 // App resources
 import exampleResource from './example/example.resource.js';
 
@@ -49,19 +48,6 @@ import exampleResource from './example/example.resource.js';
 export const resources = [
 ${authResources}exampleResource,
 ]${ts ? " as const" : ""};
-
-/**
- * Register all resources with the app under a common prefix.
- * Fastify scoping ensures all routes are mounted at /api/*.
- * The apiPrefix option in openApiPlugin keeps OpenAPI docs in sync.
- */
-export async function registerResources(app${appType}, prefix = '/api')${ts ? ": Promise<void>" : ""} {
-  await app.register(async (scope) => {
-    for (const resource of resources) {
-      await scope.register(resource.toPlugin());
-    }
-  }, { prefix });
-}
 `;
 }
 

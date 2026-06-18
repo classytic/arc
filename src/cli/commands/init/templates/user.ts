@@ -83,18 +83,13 @@ userSchema.index({ 'organizations.organizationId': 1 });
 
   const userType = ts
     ? `
-const PLATFORM_ROLES = ['user', 'admin', 'superadmin'] as const;
-type PlatformRole = typeof PLATFORM_ROLES[number];
-
-/**
- * Comma-separated list of platform roles (Better Auth admin-plugin convention).
- * Single role: 'admin'. Multiple: 'admin,trainer'. Arc's permission engine
- * normalises both forms via getUserRoles() — see @classytic/arc/scope.
- */
 type User = {
   name: string;
   email: string;
   password: string;
+  // Platform role(s), Better Auth admin-plugin convention: a single role
+  // ('admin') or a comma-separated list ('admin,trainer'). Arc's permission
+  // engine normalises both forms via getUserRoles() — see @classytic/arc/scope.
   role: string;${
     config.tenant === "multi"
       ? `
@@ -118,7 +113,7 @@ type UserMethods = {
 };
 
 export type UserDocument = HydratedDocument<User, UserMethods>;
-export type UserModel = Model<User, {}, UserMethods>;
+export type UserModel = Model<User, Record<string, never>, UserMethods>;
 `
     : "";
 
@@ -128,7 +123,7 @@ export type UserModel = Model<User, {}, UserMethods>;
  */
 
 import bcrypt from 'bcryptjs';
-import mongoose${ts ? ", { type HydratedDocument, type Model, type Types }" : ""} from 'mongoose';
+import mongoose${ts ? `, { type HydratedDocument, type Model${config.tenant === "multi" ? ", type Types" : ""} }` : ""} from 'mongoose';
 ${orgRoles}
 const { Schema } = mongoose;
 ${orgInterface}${userType}

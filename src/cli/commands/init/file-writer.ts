@@ -20,6 +20,8 @@ import {
   betterAuthSetupTemplate,
 } from "./templates/auth.js";
 import {
+  biomeTemplate,
+  ciWorkflowTemplate,
   configTemplate,
   envDevTemplate,
   envExampleTemplate,
@@ -95,6 +97,9 @@ export async function createProjectStructure(
     ".env.example": envExampleTemplate(config),
     ".env.dev": envDevTemplate(config),
     "README.md": readmeTemplate(config),
+    // Quality tooling — lint/format + CI wired out of the box
+    "biome.json": biomeTemplate(),
+    ".github/workflows/ci.yml": ciWorkflowTemplate(config),
   };
 
   // TypeScript config

@@ -145,13 +145,14 @@ import { getAuth } from './auth.js';
  */
 
 ${typeImport}import config from '#config/index.js';
-import { createApp, loadResources } from '@classytic/arc/factory';
-${betterAuthImport}
+import { createApp } from '@classytic/arc/factory';
+${config.adapter === "mongokit" ? "import mongoose from 'mongoose';\n" : ""}${betterAuthImport}
 // App-specific plugins
 import { registerPlugins } from '#plugins/index.js';
 
-// Resource registry
-import { resources, registerResources } from '#resources/index.js';
+// Resource registry — createApp({ resources }) mounts each one under the
+// resourcePrefix below; no manual registration loop needed.
+import { resources } from '#resources/index.js';
 
 /**
  * Create a fully configured app instance
@@ -176,7 +177,28 @@ export async function createAppInstance()${ts ? ": Promise<FastifyInstance>" : "
     trustProxy: true,
     arcPlugins: {
       metrics: config.env === 'production',  // Prometheus /_metrics endpoint
-    },
+${
+  config.adapter === "mongokit"
+    ? `      // Readiness probe (/_health/ready) reports DOWN until Mongo connects —
+      // K8s / load balancers hold traffic until the app can actually serve.
+      health: {
+        checks: [
+          { name: 'mongodb', check: () => mongoose.connection.readyState === 1 },
+        ],
+      },
+`
+    : ""
+}    },${
+    config.adapter === "mongokit"
+      ? `
+    // Drain the DB connection on shutdown. Arc's gracefulShutdown (on by
+    // default) calls app.close() on SIGTERM/SIGINT, which runs this hook —
+    // no manual signal handlers needed.
+    onClose: async () => {
+      await mongoose.disconnect();
+    },`
+      : ""
+  }
   });
 
   // Register app-specific plugins (explicit dependency injection)
@@ -243,7 +265,7 @@ for (const file of candidates) {
   if (existsSync(file)) {
     // override: false means earlier files take priority (first loaded wins)
     dotenv.config({ path: file, override: false });
-    loaded.push(file.split(/[\\\\/]/).pop()${ts ? "!" : ""});
+    loaded.push(file.split(/[\\\\/]/).pop() ?? file);
   }
 }
 

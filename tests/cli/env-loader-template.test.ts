@@ -126,15 +126,23 @@ describe("config/index.ts template", () => {
     expect(content).toContain("interface AppConfig");
   });
 
-  it("should read PORT from env with default", async () => {
+  it("should validate env with Zod and fail fast", async () => {
     const content = await readText(path.join(projectPath, "src/config/index.ts"));
-    expect(content).toContain("process.env.PORT");
+    expect(content).toContain("import { z } from 'zod'");
+    expect(content).toContain("EnvSchema");
+    expect(content).toContain("safeParse(process.env)");
+    expect(content).toContain("process.exit(1)");
+  });
+
+  it("should coerce PORT with a default", async () => {
+    const content = await readText(path.join(projectPath, "src/config/index.ts"));
+    expect(content).toContain("PORT: z.coerce.number");
     expect(content).toContain("8040");
   });
 
-  it("should read HOST from env with default", async () => {
+  it("should default HOST", async () => {
     const content = await readText(path.join(projectPath, "src/config/index.ts"));
-    expect(content).toContain("process.env.HOST");
+    expect(content).toContain("HOST: z.string");
     expect(content).toContain("0.0.0.0");
   });
 

@@ -10,7 +10,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { createProjectStructure, printSuccessMessage } from "./file-writer.js";
 import { gatherConfig } from "./options.js";
-import { detectPackageManager, installDependencies } from "./postinstall.js";
+import { detectPackageManager, formatProject, installDependencies } from "./postinstall.js";
 import type { InitOptions } from "./types.js";
 
 export type { DependencyManifest, InitOptions, PackageManager, ProjectConfig } from "./types.js";
@@ -77,6 +77,8 @@ export async function init(options: InitOptions = {}): Promise<void> {
   if (!options.skipInstall) {
     console.log("\n📥 Installing dependencies...\n");
     await installDependencies(projectPath, config, packageManager);
+    // Normalize to Biome house style so `npm run lint` is green on first run.
+    await formatProject(projectPath, packageManager);
   }
 
   // Print success message

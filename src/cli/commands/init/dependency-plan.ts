@@ -30,6 +30,9 @@ export const SCAFFOLD_DEP_VERSIONS = {
     "@fastify/under-pressure": "^9.0.3",
     dotenv: "^17.4.2",
     fastify: "^5.8.5",
+    // Typed, fail-fast environment validation in src/config/index.ts.
+    // Also arc's own validation peer — one schema dialect across the stack.
+    zod: "^4.3.6",
   },
   // Auth presets — picked by `config.auth`
   authJwt: {
@@ -56,6 +59,8 @@ export const SCAFFOLD_DEP_VERSIONS = {
   },
   // Dev tooling — common to every project
   devCommon: {
+    // Biome = formatter + linter in one, zero-config. `npm run lint`.
+    "@biomejs/biome": "^2.4.15",
     "mongodb-memory-server": "^11.1.0",
     "pino-pretty": "^13.1.3",
     vitest: "^4.1.7",

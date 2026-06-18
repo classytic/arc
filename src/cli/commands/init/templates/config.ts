@@ -17,7 +17,16 @@ export function packageJsonTemplate(config: ProjectConfig): string {
   // get a package.json with zero deps. See `resolveScaffoldDependencies`.
   const { dependencies, devDependencies } = resolveScaffoldDependencies(config);
 
-  const scripts: Record<string, string> = config.typescript
+  // Quality scripts shared across every variant. `typecheck` is TS-only.
+  const qualityScripts: Record<string, string> = {
+    lint: "biome check src/",
+    format: "biome check --write src/",
+    ...(config.typescript ? { typecheck: "tsc --noEmit" } : {}),
+    test: "vitest run",
+    "test:watch": "vitest",
+  };
+
+  const runScripts: Record<string, string> = config.typescript
     ? config.edge
       ? {
           dev: "tsx watch src/index.ts",
@@ -25,15 +34,11 @@ export function packageJsonTemplate(config: ProjectConfig): string {
           start: "node dist/index.js",
           deploy: "wrangler deploy",
           "deploy:dev": "wrangler dev",
-          test: "vitest run",
-          "test:watch": "vitest",
         }
       : {
           dev: "tsx watch src/index.ts",
           build: "tsc",
           start: "node dist/index.js",
-          test: "vitest run",
-          "test:watch": "vitest",
         }
     : config.edge
       ? {
@@ -41,15 +46,13 @@ export function packageJsonTemplate(config: ProjectConfig): string {
           start: "node src/index.js",
           deploy: "wrangler deploy",
           "deploy:dev": "wrangler dev",
-          test: "vitest run",
-          "test:watch": "vitest",
         }
       : {
           dev: "node --watch src/index.js",
           start: "node src/index.js",
-          test: "vitest run",
-          "test:watch": "vitest",
         };
+
+  const scripts: Record<string, string> = { ...runScripts, ...qualityScripts };
 
   // Subpath imports — point at the COMPILED output so production
   // (`node dist/index.js`) can resolve `#alias/*.js` correctly.
@@ -67,24 +70,21 @@ export function packageJsonTemplate(config: ProjectConfig): string {
   //   tsx watch src/index.ts  → tsconfig paths   → ./src/*
   //   node dist/index.js      → package imports  → ./dist/*
   //   vitest                  → vite resolve.alias → ./src/*
+  // One alias per scaffolded dir — kept in lock step with tsconfig#paths
+  // and vitest#resolve.alias. Add a line here (and in those two) when you
+  // introduce a new top-level dir like `src/services`.
   const imports: Record<string, string> = config.typescript
     ? {
         "#config/*": "./dist/config/*",
         "#shared/*": "./dist/shared/*",
         "#resources/*": "./dist/resources/*",
         "#plugins/*": "./dist/plugins/*",
-        "#services/*": "./dist/services/*",
-        "#lib/*": "./dist/lib/*",
-        "#utils/*": "./dist/utils/*",
       }
     : {
         "#config/*": "./src/config/*",
         "#shared/*": "./src/shared/*",
         "#resources/*": "./src/resources/*",
         "#plugins/*": "./src/plugins/*",
-        "#services/*": "./src/services/*",
-        "#lib/*": "./src/lib/*",
-        "#utils/*": "./src/utils/*",
       };
 
   return JSON.stringify(
@@ -149,7 +149,7 @@ export function vitestConfigTemplate(config: ProjectConfig): string {
   const srcDir = config.typescript ? "./src" : "./src";
 
   return `import { defineConfig } from 'vitest/config';
-import { resolve } from 'path';
+import { resolve } from 'node:path';
 
 export default defineConfig({
   test: {
@@ -175,6 +175,7 @@ node_modules/
 # Build
 dist/
 *.js.map
+*.tsbuildinfo
 
 # Environment (local overrides — never commit secrets)
 .env.local
@@ -198,6 +199,63 @@ npm-debug.log*
 
 # Test coverage
 coverage/
+`;
+}
+
+/**
+ * Biome config — formatter + linter in one. Mirrors arc's own defaults
+ * (2-space indent, double quotes, organize-imports on) so generated code
+ * and the framework share a house style. `npm run lint` / `npm run format`.
+ */
+export function biomeTemplate(): string {
+  return `${JSON.stringify(
+    {
+      $schema: "https://biomejs.dev/schemas/2.4.15/schema.json",
+      vcs: { enabled: true, clientKind: "git", useIgnoreFile: true },
+      files: { ignoreUnknown: true },
+      formatter: { enabled: true, indentStyle: "space", indentWidth: 2, lineWidth: 100 },
+      assist: { actions: { source: { organizeImports: "on" } } },
+      linter: { enabled: true, rules: { recommended: true } },
+      javascript: { formatter: { quoteStyle: "double", semicolons: "always" } },
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+/**
+ * GitHub Actions CI — install, typecheck, lint, test on push + PR.
+ * The quality gate every team re-adds by hand; ship it wired.
+ */
+export function ciWorkflowTemplate(config: ProjectConfig): string {
+  const typecheckStep = config.typescript
+    ? `      - name: Typecheck
+        run: npm run typecheck
+`
+    : "";
+
+  return `name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci
+${typecheckStep}      - name: Lint
+        run: npm run lint
+      - name: Test
+        run: npm test
 `;
 }
 
@@ -468,27 +526,61 @@ docker-compose up -d
 
 export function configTemplate(config: ProjectConfig): string {
   const ts = config.typescript;
+  const isBetterAuth = config.auth === "better-auth";
+  const isMongo = config.adapter === "mongokit";
+  const isMulti = config.tenant === "multi";
 
-  const authTypeBlock =
-    config.auth === "better-auth"
-      ? `
+  // ── Zod env schema fields (conditional on the chosen presets) ──
+  const authSchemaFields = isBetterAuth
+    ? `  BETTER_AUTH_SECRET: z
+    .string()
+    .min(32, 'BETTER_AUTH_SECRET must be at least 32 characters')
+    .default('dev-secret-change-in-production-min-32-chars'),
+  FRONTEND_URL: z.string().url().default('http://localhost:3000'),`
+    : `  JWT_SECRET: z
+    .string()
+    .min(32, 'JWT_SECRET must be at least 32 characters')
+    .default('dev-secret-change-in-production-min-32'),
+  JWT_EXPIRES_IN: z.string().default('7d'),`;
+
+  const dbSchemaField = isMongo
+    ? `\n  MONGODB_URI: z.string().min(1).default('mongodb://localhost:27017/${config.name}'),`
+    : "";
+
+  const orgSchemaField = isMulti ? `\n  ORG_HEADER: z.string().default('x-organization-id'),` : "";
+
+  // Production must never boot on the bundled dev secret.
+  const secretVar = isBetterAuth ? "BETTER_AUTH_SECRET" : "JWT_SECRET";
+  const prodGuard = `  .superRefine((env, ctx) => {
+    if (env.NODE_ENV === 'production' && env.${secretVar}.startsWith('dev-secret')) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['${secretVar}'],
+        message:
+          'Set a strong ${secretVar} in production — the bundled dev default is not allowed.',
+      });
+    }
+  })`;
+
+  // ── AppConfig interface (TS only) ──
+  const authTypeBlock = isBetterAuth
+    ? `
   betterAuth: {
     secret: string;
   };
   frontend: {
     url: string;
   };`
-      : `
+    : `
   jwt: {
     secret: string;
     expiresIn: string;
   };`;
 
-  let typeDefinition = "";
-  if (ts) {
-    typeDefinition = `
+  const typeDefinition = ts
+    ? `
 export interface AppConfig {
-  env: string;
+  env: 'development' | 'production' | 'test';
   isDev: boolean;
   isProd: boolean;
   server: {
@@ -501,14 +593,14 @@ export interface AppConfig {
     allowedHeaders: string[];
     credentials: boolean;
   };${
-    config.adapter === "mongokit"
+    isMongo
       ? `
   database: {
     uri: string;
   };`
       : ""
   }${
-    config.tenant === "multi"
+    isMulti
       ? `
   org: {
     header: string;
@@ -516,70 +608,101 @@ export interface AppConfig {
       : ""
   }
 }
-`;
-  }
+`
+    : "";
 
-  const authConfigBlock =
-    config.auth === "better-auth"
-      ? `
+  // ── config object built from the VALIDATED env ──
+  const authConfigBlock = isBetterAuth
+    ? `
   betterAuth: {
-    secret: process.env.BETTER_AUTH_SECRET || 'dev-secret-change-in-production-min-32-chars',
+    secret: env.BETTER_AUTH_SECRET,
   },
 
   frontend: {
-    url: process.env.FRONTEND_URL || 'http://localhost:3000',
+    url: env.FRONTEND_URL,
   },`
-      : `
+    : `
   jwt: {
-    secret: process.env.JWT_SECRET || 'dev-secret-change-in-production-min-32',
-    expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+    secret: env.JWT_SECRET,
+    expiresIn: env.JWT_EXPIRES_IN,
   },`;
+
+  const dbConfigBlock = isMongo
+    ? `
+  database: {
+    uri: env.MONGODB_URI,
+  },
+`
+    : "";
+
+  const orgConfigBlock = isMulti
+    ? `
+  org: {
+    header: env.ORG_HEADER,
+  },
+`
+    : "";
 
   return `/**
  * Application Configuration
  *
- * All config is loaded from environment variables.
- * ENV file is loaded by config/env.ts (imported first in entry points).
+ * Environment variables are validated with Zod at startup. A missing or
+ * malformed var fails fast here with a clear message — instead of surfacing
+ * as a confusing runtime error on the first request. ENV files are loaded
+ * by config/env.${ts ? "ts" : "js"} (imported first in the entry points).
  */
+
+import { z } from 'zod';
+
+// Normalize NODE_ENV to the three canonical values the rest of the app
+// reasons about (matches the env loader's prod/dev/test aliasing).
+const NodeEnv = z.preprocess((v) => {
+  const s = String(v ?? '').toLowerCase();
+  if (s === 'prod' || s === 'production') return 'production';
+  if (s === 'test' || s === 'qa') return 'test';
+  return 'development';
+}, z.enum(['development', 'production', 'test']));
+
+const EnvSchema = z
+  .object({
+    NODE_ENV: NodeEnv,
+    PORT: z.coerce.number().int().positive().default(8040),
+    HOST: z.string().min(1).default('0.0.0.0'),
+    CORS_ORIGINS: z.string().default('http://localhost:3000'),
+${authSchemaFields}${dbSchemaField}${orgSchemaField}
+  })
+${prodGuard};
+
+const parsed = EnvSchema.safeParse(process.env);
+if (!parsed.success) {
+  const lines = parsed.error.issues
+    .map((i) => \`  - \${i.path.join('.') || '(root)'}: \${i.message}\`)
+    .join('\\n');
+  console.error(\`Invalid environment configuration:\\n\${lines}\`);
+  process.exit(1);
+}
+
+const env = parsed.data;
 ${typeDefinition}
 const config${ts ? ": AppConfig" : ""} = {
-  env: process.env.NODE_ENV || 'development',
-  isDev: (process.env.NODE_ENV || 'development') !== 'production',
-  isProd: process.env.NODE_ENV === 'production',
+  env: env.NODE_ENV,
+  isDev: env.NODE_ENV !== 'production',
+  isProd: env.NODE_ENV === 'production',
 
   server: {
-    port: parseInt(process.env.PORT || '8040', 10),
-    host: process.env.HOST || '0.0.0.0',
+    port: env.PORT,
+    host: env.HOST,
   },
 ${authConfigBlock}
 
   cors: {
     // '*' = allow all origins (true), otherwise comma-separated list
-    origins:
-      process.env.CORS_ORIGINS === '*'
-        ? true
-        : (process.env.CORS_ORIGINS || 'http://localhost:3000').split(','),
+    origins: env.CORS_ORIGINS === '*' ? true : env.CORS_ORIGINS.split(','),
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'x-organization-id', 'x-request-id'],
     credentials: true,
   },
-${
-  config.adapter === "mongokit"
-    ? `
-  database: {
-    uri: process.env.MONGODB_URI || 'mongodb://localhost:27017/${config.name}',
-  },
-`
-    : ""
-}${
-  config.tenant === "multi"
-    ? `
-  org: {
-    header: process.env.ORG_HEADER || 'x-organization-id',
-  },
-`
-    : ""
-}};
+${dbConfigBlock}${orgConfigBlock}};
 
 export default config;
 `;

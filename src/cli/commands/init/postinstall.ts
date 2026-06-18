@@ -76,6 +76,42 @@ export async function installDependencies(
 }
 
 /**
+ * Normalize the freshly-scaffolded tree to Biome's house style so the
+ * shipped `npm run lint` (= `biome check`) is green on first run and the
+ * generated code matches the framework's formatting.
+ *
+ * Best-effort: runs the project-local Biome (installed as a devDep) via the
+ * package manager's exec. Swallows failure — a formatting hiccup must never
+ * fail `init`. Only call this when dependencies were installed (otherwise
+ * there is no Biome binary to invoke).
+ */
+export async function formatProject(projectPath: string, pm: PackageManager): Promise<void> {
+  console.log(`  Formatting project...`);
+  try {
+    await runCommand(
+      `${getExecPrefix(pm)} biome check --write --no-errors-on-unmatched .`,
+      projectPath,
+    );
+  } catch {
+    // Non-fatal — the user can run `npm run format` themselves.
+  }
+}
+
+/** Package-manager `exec` prefix for running a project-local binary. */
+function getExecPrefix(pm: PackageManager): string {
+  switch (pm) {
+    case "pnpm":
+      return "pnpm exec";
+    case "yarn":
+      return "yarn";
+    case "bun":
+      return "bunx";
+    default:
+      return "npx";
+  }
+}
+
+/**
  * Get the plain `install` command for a package manager. Reads the declared
  * dependencies from the project's `package.json`.
  */
