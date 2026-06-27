@@ -10,6 +10,7 @@ import type {
   CrudSchemas,
   MiddlewareConfig,
   RateLimitConfig,
+  ResourceExtensions,
   ResourcePermissions,
   RouteDefinition,
   RouteSchemaOptions,
@@ -93,4 +94,11 @@ export interface CrudRouterOptions {
    * re-reading resource config. Defaults to `_id`.
    */
   idField?: string;
+  /**
+   * Resource-level plugin extensions (`defineResource({ extensions })`).
+   * Stamped onto every registered route's Fastify `config.arcExtensions`
+   * so request-time plugins (encryption, …) read their typed slice without
+   * re-resolving which resource a route belongs to. See `ResourceExtensions`.
+   */
+  extensions?: ResourceExtensions;
 }

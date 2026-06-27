@@ -26,6 +26,7 @@ One-line hooks per page. Load only what you need.
 - [hooks](hooks.md) — `HookSystem` before/after lifecycle
 - [cache](cache.md) — `QueryCache`, SWR, scope-aware keys
 - [plugins](plugins.md) — built-in plugins + the onSend race rule (v2.10.2)
+- [encryption](encryption.md) — Application-Layer Encryption (ALE): full-body JWE (`jose`) or field-level AES-GCM, opted in via the `extensions` hatch
 - [presets](presets.md) — bulk, softDelete, ownedByUser, multiTenant, etc.
 - [mcp](mcp.md) — Model Context Protocol tool generation
 

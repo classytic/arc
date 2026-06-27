@@ -2,13 +2,39 @@
  * Per-route rate-limit config for @fastify/rate-limit.
  */
 
-import type { RateLimitConfig } from "../../types/index.js";
+import type { RateLimitConfig, ResourceExtensions } from "../../types/index.js";
 
 /**
  * HTTP methods for which Fastify's rate-limit plugin applies per-route config.
  */
 export interface RouteRateLimitConfig {
   rateLimit: { max: number; timeWindow: string } | false;
+}
+
+/**
+ * Build the per-route Fastify `config` object shared by the CRUD, custom, and
+ * action routers. Two independent concerns ride on `routeOptions.config`:
+ *   - `config.rateLimit`     — read by `@fastify/rate-limit`.
+ *   - `config.arcExtensions` — read by arc plugins (encryption, …) at request
+ *     time, sourced from `defineResource({ extensions })`.
+ *
+ * Returns `{}` (no `config` key) when neither is present, so routes without
+ * either stay config-free and the spread is a genuine no-op. Both fields are
+ * optional in the return type, so no cast is needed when only one is set.
+ */
+export function buildRouteConfig(
+  rateLimitConfig: RouteRateLimitConfig | undefined,
+  extensions: ResourceExtensions | undefined,
+): {
+  config?: { rateLimit?: RouteRateLimitConfig["rateLimit"]; arcExtensions?: ResourceExtensions };
+} {
+  if (!rateLimitConfig && !extensions) return {};
+  return {
+    config: {
+      ...(rateLimitConfig ?? {}),
+      ...(extensions ? { arcExtensions: extensions } : {}),
+    },
+  };
 }
 
 /**

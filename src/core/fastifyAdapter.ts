@@ -441,10 +441,20 @@ export function sendControllerResponse<T>(
 export function createFastifyHandler<T>(
   controllerMethod: (req: IRequestContext) => Promise<IControllerResponse<T>>,
 ) {
-  return async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  return async (req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const requestContext = createRequestContext(req);
     const response = await controllerMethod(requestContext);
     sendControllerResponse(reply, response, req);
+    // Return the reply to signal "response owned — don't auto-send the
+    // handler's resolved value." Without this, Fastify resolves the async
+    // handler with `undefined` while the `reply.send()` pipeline is still
+    // in flight; a genuinely-async `preSerialization`/`onSend` hook (e.g.
+    // payload encryption via jose) then yields the event loop and Fastify
+    // flushes an empty body first, producing `ERR_HTTP_HEADERS_SENT` when
+    // the real serialized body tries to write. Returning `reply` is the
+    // documented Fastify contract for handlers that call `reply.send()`
+    // themselves.
+    return reply;
   };
 }
 

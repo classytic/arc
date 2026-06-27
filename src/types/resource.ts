@@ -776,6 +776,50 @@ export interface ResourcePermissions {
   delete?: PermissionCheck;
 }
 
+/**
+ * Plugin extension namespace — arc's typed escape hatch for attaching
+ * declarative, per-resource config that **plugins** read at request time.
+ *
+ * This interface is intentionally **empty in core**. Each optional plugin
+ * augments it via TypeScript declaration merging to register its own typed
+ * slice — exactly the model Fastify uses for `FastifyInstance` decorators.
+ * A host that never installs a plugin never sees its key; a host that does
+ * gets full autocomplete + compile-time checking on the matching
+ * `extensions` block, and a typo (`extensions: { encyrption: … }`) is a
+ * type error rather than a silent no-op.
+ *
+ * **The "React for backend" composition model.** `defineResource()` is the
+ * declarative component, `extensions` is its typed props bag, and plugins
+ * are the providers that consume those props at the framework boundary.
+ * Adding a cross-cutting capability becomes *additive* — a plugin ships a
+ * subpath + a one-line `declare module` augmentation, with no new
+ * first-class `ResourceConfig` field and no core release per feature.
+ *
+ * Arc threads the declared `extensions` onto every generated route's
+ * Fastify `config` (see `createCrudRouter`), so a plugin reads its slice
+ * at request time via `request.routeOptions.config.arcExtensions` without
+ * re-deriving which resource a route belongs to.
+ *
+ * @example A plugin registers its slice (in `@classytic/arc/encryption`)
+ * ```ts
+ * declare module "@classytic/arc/types" {
+ *   interface ResourceExtensions {
+ *     encryption?: import("@classytic/arc/encryption").EncryptionDirective;
+ *   }
+ * }
+ * ```
+ *
+ * @example A host declares it on a resource
+ * ```ts
+ * defineResource({
+ *   name: "payment",
+ *   extensions: { encryption: { mode: "fields", fields: ["cardNumber", "cvv"] } },
+ * });
+ * ```
+ */
+// biome-ignore lint/suspicious/noEmptyInterface: declaration-merge target — plugins augment their typed slice via `declare module`. An index signature would defeat the strong-contract guarantee (only registered keys are valid).
+export interface ResourceExtensions {}
+
 export interface ResourceConfig<TDoc = AnyRecord> {
   name: string;
   displayName?: string;
@@ -1201,4 +1245,24 @@ export interface ResourceConfig<TDoc = AnyRecord> {
    * ```
    */
   audit?: boolean | { operations?: ("create" | "update" | "delete")[] };
+  /**
+   * Typed plugin-extension namespace — declarative per-resource config that
+   * arc plugins read at request time. Empty by default; each installed
+   * plugin augments {@link ResourceExtensions} with its own typed slice via
+   * `declare module`. See {@link ResourceExtensions} for the full rationale
+   * and the "React for backend" composition model.
+   *
+   * Threaded onto every generated route's Fastify `config` as
+   * `config.arcExtensions`, so a plugin reads its slice via
+   * `request.routeOptions.config.arcExtensions` without a resource lookup.
+   *
+   * @example
+   * ```ts
+   * defineResource({
+   *   name: "payment",
+   *   extensions: { encryption: { mode: "fields", fields: ["cardNumber"] } },
+   * });
+   * ```
+   */
+  extensions?: ResourceExtensions;
 }

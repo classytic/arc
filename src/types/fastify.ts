@@ -100,3 +100,16 @@ export type MiddlewareHandler = (
   request: RequestWithExtras,
   reply: FastifyReply,
 ) => Promise<unknown>;
+
+/**
+ * Route-config augmentation — arc stamps `defineResource({ extensions })`
+ * onto every generated route's Fastify `config` under `arcExtensions`, so
+ * plugins read their typed slice at request time via
+ * `request.routeOptions.config.arcExtensions` without re-resolving which
+ * resource a route belongs to. Type-only; see `ResourceExtensions`.
+ */
+declare module "fastify" {
+  interface FastifyContextConfig {
+    arcExtensions?: import("./resource.js").ResourceExtensions;
+  }
+}

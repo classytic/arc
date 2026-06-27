@@ -73,6 +73,7 @@ import type {
   IControllerResponse,
   RateLimitConfig,
   RequestWithExtras,
+  ResourceExtensions,
   RouteSchemaOptions,
 } from "../types/index.js";
 import { createError } from "../utils/errors.js";
@@ -84,6 +85,7 @@ import {
   buildAuthMiddlewareForPermissions,
   buildPreHandlerChain,
   buildRateLimitConfig,
+  buildRouteConfig,
   resolvePipelineSteps,
   resolveRouterPluginMw,
   selectPluginMw,
@@ -194,6 +196,14 @@ export interface ActionRouterConfig {
   readonly rateLimit?: RateLimitConfig | false;
 
   /**
+   * Resource-level plugin extensions (`defineResource({ extensions })`),
+   * stamped onto the action route's `config.arcExtensions` so request-time
+   * plugins (encryption, …) read their typed slice — same wiring CRUD +
+   * custom routes get. See `ResourceExtensions`.
+   */
+  readonly extensions?: ResourceExtensions;
+
+  /**
    * Names of actions that should mount at the resource root
    * (`POST /<prefix>/action`) instead of `POST /<prefix>/:id/action`.
    *
@@ -244,6 +254,7 @@ export function createActionRouter(
     pipeline,
     rateLimit,
     idLessActionNames = [],
+    extensions,
   } = config;
 
   const allActionNames = Object.keys(actions);
@@ -489,7 +500,7 @@ export function createActionRouter(
         // so the formatter above can re-throw with the matching action's scope.
         attachValidation: true,
         preHandler: preHandler.length > 0 ? (preHandler as preHandlerHookHandler[]) : undefined,
-        ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
+        ...buildRouteConfig(rateLimitConfig, extensions),
         handler: async (req: FastifyRequest, reply: FastifyReply) => {
           const { action, ...data } = req.body as { action: string; [key: string]: unknown };
           // For id-less mounts there's no `:id` param — pass empty string.
@@ -522,7 +533,13 @@ export function createActionRouter(
 
           try {
             const response = await handler(id, data, req as RequestWithExtras);
-            return sendControllerResponse(reply, response, req);
+            sendControllerResponse(reply, response, req);
+            // Return the reply (not the void result) so Fastify treats the
+            // response as owned and doesn't race an async serialization hook
+            // — same contract as `createFastifyHandler`. Without this, an
+            // async `preSerialization` (payload encryption) flushes an empty
+            // body first → ERR_HTTP_HEADERS_SENT.
+            return reply;
           } catch (error) {
             if (onError) {
               const { statusCode, error: errorMsg, code } = onError(error as Error, action, id);

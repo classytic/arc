@@ -61,5 +61,9 @@ export {
   resolveRouterPluginMw,
   selectPluginMw,
 } from "./middlewares/pluginMw.js";
-export { buildRateLimitConfig, type RouteRateLimitConfig } from "./middlewares/rateLimit.js";
+export {
+  buildRateLimitConfig,
+  buildRouteConfig,
+  type RouteRateLimitConfig,
+} from "./middlewares/rateLimit.js";
 export { tryRegisterRoute } from "./middlewares/registerRoute.js";

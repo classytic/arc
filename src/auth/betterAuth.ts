@@ -209,11 +209,32 @@ function toFetchRequest(request: FastifyRequest): Request {
     }
   }
 
-  return new Request(url, {
+  const init: RequestInit = {
     method: request.method,
     headers,
     body,
+  };
+  const fetchRequest = new Request(url, init);
+
+  // Better Auth (>= 1.6.21) parses the request body and THEN calls
+  // `ctx.request.clone()` on the same request — e.g. sign-up.mjs hands a clone
+  // to `sendVerificationEmail`. undici throws `TypeError: unusable` when cloning
+  // a request whose body stream was already consumed (better-call reads the body
+  // off the original request unless the endpoint opts into `cloneRequest`),
+  // surfacing as intermittent signup 500s under concurrency. This bridge fully
+  // owns the request and captures its complete init (method/headers/body — a
+  // string or Buffer, always re-usable), so clone() reconstructs from that init:
+  // one consistent path, safe whether or not the body was already read, and it
+  // leaves the original request untouched for any further reads.
+  Object.defineProperty(fetchRequest, "clone", {
+    configurable: true,
+    writable: true,
+    value(): Request {
+      return new Request(url, init);
+    },
   });
+
+  return fetchRequest;
 }
 
 /**

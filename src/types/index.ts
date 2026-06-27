@@ -174,6 +174,7 @@ export type {
   ResolvedTenantPurge,
   ResourceCacheConfig,
   ResourceConfig,
+  ResourceExtensions,
   ResourceHookContext,
   ResourceHooks,
   ResourcePermissions,

@@ -534,6 +534,9 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
           // Surfaces on `req.arc.idField` via `buildArcDecorator` — see
           // `core/entityHelpers.ts` for the read-side helpers.
           idField: resource.idField,
+          // Stamp resource extensions onto every route's `config.arcExtensions`
+          // so request-time plugins (encryption, …) read their typed slice.
+          extensions: resource.extensions,
         });
 
         // Register first-class actions (v2.8) — after CRUD routes, inside
@@ -566,6 +569,9 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
             routeGuards: resource.routeGuards,
             pipeline: resource.pipe,
             rateLimit: resource.rateLimit,
+            // Stamp resource extensions onto the action route's
+            // `config.arcExtensions` — parity with CRUD + custom routes.
+            extensions: resource.extensions,
           });
         }
 

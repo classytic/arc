@@ -57,6 +57,10 @@ export default defineConfig({
     "src/idempotency/index.ts",
     "src/idempotency/redis.ts",
 
+    // Encryption — Application-Layer Encryption (JWE via optional `jose` peer
+    // + field-level AES-256-GCM via node:crypto)
+    "src/encryption/index.ts",
+
     // Docs
     "src/docs/index.ts",
 

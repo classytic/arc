@@ -37,6 +37,7 @@ import type {
   ResolvedTenantPurge,
   ResourceCacheConfig,
   ResourceConfig,
+  ResourceExtensions,
   ResourceMetadata,
   ResourcePermissions,
   RouteDefinition,
@@ -117,6 +118,13 @@ export class ResourceDefinition<TDoc = AnyRecord> {
    */
   readonly onFieldWriteDenied?: "reject" | "strip";
   readonly cache?: ResourceCacheConfig;
+
+  // ── Plugin extensions — typed declarative per-resource config that
+  //    plugins consume at request time (encryption, future cross-cutting
+  //    features). Frozen so post-define mutation can't silently rewire a
+  //    plugin's behaviour. Threaded onto route `config.arcExtensions` by
+  //    `createCrudRouter`. See `ResourceExtensions` for the contract.
+  readonly extensions?: ResourceExtensions;
 
   // ── Reference-data marker (2.17.0) — surfaced so introspection
   //    (registry, OpenAPI docs, MCP tools) can hint "fetch all, cache
@@ -276,6 +284,12 @@ export class ResourceDefinition<TDoc = AnyRecord> {
     this.fields = config.fields;
     this.onFieldWriteDenied = config.onFieldWriteDenied;
     this.cache = config.cache;
+
+    // Freeze a fresh shell so the registered surface can't be re-pointed
+    // post-define; the host's original `extensions` object stays mutable.
+    this.extensions = config.extensions
+      ? (Object.freeze({ ...config.extensions }) as ResourceExtensions)
+      : undefined;
 
     // Default-allow for MCP — opt-out is explicit `mcp: false`.
     this.mcp = config.mcp !== false;

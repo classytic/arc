@@ -26,6 +26,7 @@ import type {
   IController,
   IControllerResponse,
   IRequestContext,
+  ResourceExtensions,
   RouteDefinition,
 } from "../types/index.js";
 import { getDefaultCrudSchemas } from "../utils/responseSchemas.js";
@@ -40,6 +41,7 @@ import {
   buildPipelineHandler,
   buildPreHandlerChain,
   buildRateLimitConfig,
+  buildRouteConfig,
   methodCarriesBody,
   type PreHandlerHook,
   type RouteRateLimitConfig,
@@ -88,6 +90,12 @@ function createCustomRoutes<TDoc = unknown>(
     fieldPermissions?: import("../permissions/fields.js").FieldPermissionMap;
     /** Resource-level `onFieldWriteDenied` policy (default: 'reject'). */
     onFieldWriteDenied?: "reject" | "strip";
+    /**
+     * Resource-level plugin extensions (`defineResource({ extensions })`).
+     * Stamped onto each custom route's `config.arcExtensions` so plugins
+     * (encryption, …) read their typed slice at request time.
+     */
+    extensions?: ResourceExtensions;
   },
 ): void {
   const {
@@ -101,6 +109,7 @@ function createCustomRoutes<TDoc = unknown>(
     tenantScopeMw,
     fieldPermissions,
     onFieldWriteDenied,
+    extensions,
   } = options;
 
   for (const route of routes) {
@@ -334,7 +343,7 @@ function createCustomRoutes<TDoc = unknown>(
               return result;
             }
           : handler,
-        ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
+        ...buildRouteConfig(rateLimitConfig, extensions),
       },
       { resourceName, op: opName },
     );
@@ -379,6 +388,9 @@ export function createCrudRouter<TDoc = unknown>(
     // and downstream middleware compose `findOne` filters via
     // `getEntityQuery(req)` without re-reading resource config.
     idField,
+    // Plugin extensions stamped onto every route's `config.arcExtensions`
+    // so request-time plugins (encryption, …) read their typed slice.
+    extensions,
   } = options;
 
   const rateLimitConfig = buildRateLimitConfig(rateLimit);
@@ -546,7 +558,7 @@ export function createCrudRouter<TDoc = unknown>(
             ) as FastifySchema,
             preHandler: preHandler.length > 0 ? (preHandler as preHandlerHookHandler[]) : undefined,
             handler: handlers[spec.op],
-            ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
+            ...buildRouteConfig(rateLimitConfig, extensions),
           },
           { resourceName, op: spec.op },
         );
@@ -570,6 +582,7 @@ export function createCrudRouter<TDoc = unknown>(
       tenantScopeMw,
       fieldPermissions,
       onFieldWriteDenied,
+      extensions,
     });
   }
 }
