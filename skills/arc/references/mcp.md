@@ -50,6 +50,8 @@ Resource `actions` (v2.8) also auto-generate MCP tools — each action becomes a
 
 Tool handlers call `BaseController` — same pipeline as REST (auth, org-scoping, hooks, field permissions, cache).
 
+**Query params on generated tools (2.20):** `list_*` accepts `page`/`limit` (offset) **and** `cursor` (keyset, stable under concurrent inserts — when set, `page` is ignored), plus `sort`/`search`/`select`/`populate`. `get_*` accepts `select` for field projection alongside `id`. Both mirror REST exactly (same `QueryResolver`).
+
 ### McpPluginOptions
 
 | Option | Type | Default | Description |

@@ -14,7 +14,7 @@
  * passes with the fixed kit — it fails against 3.16.0.
  */
 
-import { Repository, buildCrudSchemasFromModel } from "@classytic/mongokit";
+import { buildCrudSchemasFromModel, Repository } from "@classytic/mongokit";
 import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import type { FastifyInstance } from "fastify";
 import mongoose from "mongoose";

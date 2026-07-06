@@ -379,7 +379,7 @@ describe('ReportController', () => {
 
 ## Pattern 3: Mixins vs. `routes` — which one for preset-shaped endpoints?
 
-Arc ships four preset mixins (`SlugMixin`, `TreeMixin`, `SoftDeleteMixin`, `BulkMixin`) that auto-generate routes when the repository implements the corresponding methods (`getBySlug`, `getTree` / `getChildren`, `getDeleted` / `restore`, `bulkCreate` / etc.). You can also write the same endpoints by hand via `routes: [{ path: '/by-slug/:slug', raw: true, handler }]`.
+Arc ships four preset mixins (`SlugMixin`, `TreeMixin`, `SoftDeleteMixin`, `BulkMixin`) that auto-generate routes when the repository implements the corresponding methods (`getBySlug`, `getTree` / `getChildren`, `getDeleted` / `restore`, `bulkCreate` / etc.). You can also write the same endpoints by hand via `routes: [{ path: '/slug/:slug', raw: true, handler }]`.
 
 These two paths produce the same URL from a user's perspective but look completely different in the resource file — and there's a **silent hazard** if you mix them. Pick one per endpoint.
 
@@ -387,7 +387,7 @@ These two paths produce the same URL from a user's perspective but look complete
 
 | Need | Use |
 |------|------|
-| Slug lookup (`/by-slug/:slug`) on a repo with `getBySlug` | `SlugMixin` + `BaseCrudController` subclass |
+| Slug lookup (`/slug/:slug`) on a repo with `getBySlug` | `SlugMixin` + `BaseCrudController` subclass |
 | Slug lookup with custom body (joins, projections, extra auth) | `routes: [{ path: '/slug/:slug', raw: true, handler }]` + **delete `adapter.getBySlug`** |
 | Soft-delete endpoints (`/deleted`, `/:id/restore`) | `SoftDeleteMixin` + repo implements `getDeleted` + `restore` |
 | Tree traversal (`/tree`, `/:parent/children`) | `TreeMixin` + repo implements `getTree` + `getChildren` |
@@ -396,7 +396,7 @@ These two paths produce the same URL from a user's perspective but look complete
 
 ### ⚠️ URL collisions silently disable mixins
 
-If a resource declares `routes: [{ path: '/by-slug/:slug', ... }]` AND composes `SlugMixin`, the `routes` entry wins — Fastify mounts it first, and the mixin's auto-generated route never reaches the router. The `repo.getBySlug` method still exists, but no HTTP path invokes it: it's unreachable code living on the adapter.
+If a resource declares `routes: [{ path: '/slug/:slug', ... }]` AND composes `SlugMixin`, the `routes` entry wins — Fastify mounts it first, and the mixin's auto-generated route never reaches the router. The `repo.getBySlug` method still exists, but no HTTP path invokes it: it's unreachable code living on the adapter.
 
 This is the most common cause of "dead repository methods" in arc codebases. Before the 2.11.x decision table existed, a production refactor left ~185 LOC of `getBySlug` / `getTree` / `getChildren` boilerplate on a `createMongooseAdapter` wrapper that hadn't been exercised for weeks — the resource file used hand-rolled `routes:` entries that took precedence. After the table was added, the same refactor shrinks to ~40 LOC of genuine domain logic.
 

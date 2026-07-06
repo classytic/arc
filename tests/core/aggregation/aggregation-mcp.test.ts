@@ -9,7 +9,10 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { defineAggregation } from "../../../src/core/aggregation/index.js";
+import { defineResource } from "../../../src/core/defineResource.js";
 import { buildAggregationTools } from "../../../src/integrations/mcp/aggregation-tools.js";
+import { resourceToTools } from "../../../src/integrations/mcp/resourceToTools.js";
+import type { McpAuthResult } from "../../../src/integrations/mcp/types.js";
 import { allowPublic, requireRoles } from "../../../src/permissions/index.js";
 
 function makeStubRepo() {
@@ -204,6 +207,65 @@ describe("MCP — aggregation tool generation", () => {
     expect(req.filter).toMatchObject({ status: "delivered" });
     expect(req.filter?.organizationId).toBeUndefined();
     expect(tenantOptions?.organizationId).toBe("org-1");
+  });
+
+  it("REAL projection path: resourceToTools threads tenant scope from a FLAT McpAuthResult (2.20 fix)", async () => {
+    // Regression for a cross-tenant leak: the projection inside
+    // `resourceToTools` used to read `session.scope.organizationId` /
+    // `session.user.id` — a shape mcpPlugin never produces (ctx.session is
+    // the FLAT McpAuthResult). Both reads were always undefined, so
+    // aggregations ran tenant-unscoped (or 500ed on fail-closed kits).
+    // This test goes through the real resourceToTools path with the real
+    // session shape and asserts the tenant bag reaches repo.aggregate.
+    const aggregate = vi.fn().mockResolvedValue({ rows: [] });
+    const repository = {
+      getAll: vi.fn().mockResolvedValue({ data: [], total: 0 }),
+      getById: vi.fn().mockResolvedValue(null),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+      aggregate,
+    };
+    const resource = defineResource({
+      name: "order",
+      adapter: { type: "mock", name: "mock", repository } as never,
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
+      },
+      aggregations: {
+        revenueByStatus: defineAggregation({
+          groupBy: "status",
+          measures: { count: "count" },
+          permissions: allowPublic(),
+        }),
+      },
+    });
+
+    const tools = resourceToTools(resource);
+    const aggTool = tools.find((t) => t.name === "aggregation_revenueByStatus_order");
+    expect(aggTool).toBeDefined();
+
+    // The REAL runtime session shape — flat McpAuthResult, no .scope/.user.
+    const session: McpAuthResult = {
+      userId: "u-1",
+      organizationId: "org-1",
+      roles: ["admin"],
+    };
+    const result = await aggTool?.handler?.(
+      { filter: {} },
+      // biome-ignore lint/suspicious/noExplicitAny: tool ctx for test
+      { session, log: () => Promise.resolve() } as any,
+    );
+
+    expect(result?.isError).toBeFalsy();
+    expect(aggregate).toHaveBeenCalledTimes(1);
+    const [, tenantOptions] = aggregate.mock.calls[0] ?? [];
+    expect(tenantOptions?.organizationId).toBe("org-1");
+    expect(tenantOptions?.userId).toBe("u-1");
   });
 
   it("denies the call when permissions check fails", async () => {

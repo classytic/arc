@@ -25,9 +25,11 @@ export async function gatherConfig(options: InitOptions): Promise<ProjectConfig>
   const question = (prompt: string): Promise<string> =>
     new Promise((resolve) => rl.question(prompt, resolve));
 
-  // Non-interactive mode: if a project name was provided via args, skip prompts
-  // and use defaults for any unspecified options
-  const nonInteractive = !!options.name;
+  // Non-interactive mode: a name via args OR a non-TTY stdin (CI, piped) both
+  // mean "don't prompt". Without the TTY guard, `arc init` with flags but no
+  // name would block forever on `readline.question` in CI (stdin never
+  // supplies an answer) — fall back to defaults instead of hanging.
+  const nonInteractive = !!options.name || !process.stdin.isTTY;
 
   try {
     // Project name

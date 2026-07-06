@@ -13,8 +13,8 @@
  *     const client = new AnalyticsClient(opts.apiKey);
  *     fastify.decorate('analytics', client);
  *   },
- *   forResource: (resourceConfig, opts) => {
- *     // Per-resource: return hooks, middleware, or routes
+ *   forResource: (opts) => {
+ *     // Per-resource: return hooks, middleware, or routes from the plugin's opts
  *     return {
  *       hooks: [{
  *         operation: 'create', phase: 'after', priority: 100,
@@ -72,10 +72,15 @@ export interface CreatePluginDefinition<
   forRoot?: (fastify: FastifyInstance, opts: TRootOpts) => void | Promise<void>;
 
   /**
-   * Per-resource configuration function. Called for each resource that uses this plugin.
-   * Returns hooks, routes, middlewares, etc. to merge into the resource config.
+   * Per-resource configuration function. Called (via `plugin.forResource(opts)`)
+   * to PRODUCE a partial resource config — hooks, routes, middlewares — that the
+   * host spreads into `defineResource(...)`. It receives only the plugin's own
+   * `opts`: the resource does not exist yet at this call site, so it cannot be
+   * inspected here (that was a false promise pre-2.20; the unused `resourceConfig`
+   * parameter is removed). For behavior that must vary by resource, key off the
+   * plugin's `opts` the host passes per resource.
    */
-  forResource?: (resourceConfig: AnyRecord, opts: TResourceOpts) => PluginResourceResult;
+  forResource?: (opts: TResourceOpts) => PluginResourceResult;
 }
 
 export interface ArcPlugin<
@@ -137,7 +142,7 @@ export function createPlugin<
       if (!definition.forResource) {
         return {};
       }
-      return definition.forResource({} as AnyRecord, (opts ?? {}) as TResourceOpts);
+      return definition.forResource((opts ?? {}) as TResourceOpts);
     },
   };
 }

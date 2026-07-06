@@ -20,9 +20,11 @@ import { z } from "zod";
 import {
   normalizeSchemaIR,
   schemaIRToJsonSchemaBranch,
-  schemaIRToZodShape,
   shouldRejectAdditionalProperties,
 } from "../../src/core/schemaIR.js";
+// Zod adapter lives in its own module so createActionRouter's static import
+// of schemaIR.ts never touches zod (optional peer — see schemaIRZod.ts).
+import { schemaIRToZodShape } from "../../src/core/schemaIRZod.js";
 
 // ============================================================================
 // normalizeSchemaIR — Zod input

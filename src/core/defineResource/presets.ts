@@ -22,6 +22,7 @@ import { applyPresets } from "../../presets/index.js";
 import type { ResourceConfig } from "../../types/index.js";
 import { autoInjectTenantFieldRules } from "../schemaOptions.js";
 import type { InternalResourceConfig } from "./config.js";
+import type { ResourceDiagnostic } from "./diagnostics.js";
 
 /**
  * Run the Phase 3 pipeline: clone → apply presets → infer tenant
@@ -124,4 +125,51 @@ function inferTenantFieldFromAdapter<TDoc>(config: InternalResourceConfig<TDoc>)
 export function computeHasCrudRoutes<TDoc>(config: ResourceConfig<TDoc>): boolean {
   const disabled = new Set(config.disabledRoutes ?? []);
   return !config.disableDefaultRoutes && CRUD_OPERATIONS.some((op) => !disabled.has(op));
+}
+
+const WRITE_OPERATIONS = new Set<string>(["create", "update", "delete"]);
+
+/**
+ * Public-by-omission CRUD diagnostic (post-preset).
+ *
+ * An omitted CRUD permission mounts the route with NO permission
+ * middleware at all — unlike custom routes and actions, which fail boot
+ * without one. That asymmetry silently shipped unauthenticated writes
+ * (`permissions: readOnly()` pre-2.20 being the canonical victim).
+ *
+ * Runs against `resolvedConfig` — never the raw user config — so
+ * permissions injected by presets (ownedByUser, multiTenant policy
+ * wiring, ...) count as gates and don't false-positive.
+ *
+ * Severity ladder:
+ *   - `warn` when any enabled WRITE op (create/update/delete) is ungated —
+ *     this is real exposure the host must acknowledge.
+ *   - `info` when only reads are ungated — public catalogs
+ *     (`referenceData: true`) are a legitimate shape, but the host should
+ *     still state intent with `permissions.fullPublic()` / `allowPublic()`.
+ */
+export function collectUngatedCrudDiagnostics<TDoc>(
+  config: InternalResourceConfig<TDoc>,
+): ResourceDiagnostic[] {
+  if (config.disableDefaultRoutes) return [];
+  const disabled = new Set(config.disabledRoutes ?? []);
+  const permissions = (config.permissions ?? {}) as Record<string, unknown>;
+  const ungated = CRUD_OPERATIONS.filter(
+    (op) => !disabled.has(op) && typeof permissions[op] !== "function",
+  );
+  if (ungated.length === 0) return [];
+
+  const hasUngatedWrite = ungated.some((op) => WRITE_OPERATIONS.has(op));
+  return [
+    {
+      severity: hasUngatedWrite ? "warn" : "info",
+      code: "crud-public-by-omission",
+      message:
+        `[Arc] Resource '${config.name}' mounts ${ungated.length} CRUD route(s) with no permission gate: ${ungated.join(", ")}.\n` +
+        `An omitted permission mounts the route WITHOUT auth. State intent explicitly:\n` +
+        `  permissions: permissions.fullPublic()     // intentionally public\n` +
+        `  permissions: permissions.authenticated()  // require auth on every op\n` +
+        `  permissions: { ${ungated[0]}: requireAuth(), ... }  // per-operation`,
+    },
+  ];
 }

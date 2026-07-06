@@ -73,6 +73,10 @@ preAuth → arcDecorator → authMw → permissionMw → pluginMw → routeGuard
 
 See [[removed]] for the list of public action-router APIs retired in v2.9.
 
+## Per-route rate limit (2.20)
+
+`RouteDefinition.rateLimit?: RateLimitConfig | false` overrides the resource/app default for one custom endpoint (`{ max, timeWindow }` to tighten, `false` to never throttle, omit to inherit). Each custom route is its own Fastify route, so the override rides `config.rateLimit` cleanly — same primitive as aggregations. **Actions do NOT get a per-action limit**: they share one `POST /:id/action` mount, where Fastify's per-route limit can't distinguish them, so they inherit the resource limit — throttle a specific action by promoting it to a `routes:` entry (documented on `ActionDefinition`). Requires `@fastify/rate-limit` (arc's factory wires it).
+
 ## Write-side field permissions (v2.9) + systemManaged strip (v2.11)
 
 `BodySanitizer` rejects writes to denied fields with `ForbiddenError` listing them. Opt into silent strip via `onFieldWriteDenied: 'strip'`. Rationale: surface misconfigurations instead of hiding them. See [[gotchas]] #11.

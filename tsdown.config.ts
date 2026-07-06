@@ -8,6 +8,7 @@ export default defineConfig({
     // Core
     "src/index.ts",
     "src/core/index.ts",
+    "src/sync/changelog.ts",
     "src/types/index.ts",
     "src/types/storage.ts",
     "src/permissions/index.ts",

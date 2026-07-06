@@ -60,8 +60,30 @@ if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
 
 const [command, subcommand, ...rest] = args;
 
+// Per-command usage — `arc <command> --help` prints this instead of falling
+// through to the command (where `--help` was mistaken for an argument).
+const COMMAND_ALIASES = { new: 'init', g: 'generate', i: 'introspect', desc: 'describe', d: 'docs' };
+const COMMAND_HELP = {
+  init: 'Usage: arc init [name] [--jwt|--better-auth] [--mongokit|--custom] [--api-key]\n            [--multi|--single] [--js] [--edge] [--docker|--no-docker] [--skip-install] [--force]\n  Scaffold a new arc project (prompts when run in a TTY without a name).',
+  generate: 'Usage: arc generate <resource|controller|model|repository|schemas|mcp> <name> [--mcp]\n  Aliases: g; types r/c/m/repo/s. Name must be kebab-case (letters, digits, hyphens).',
+  introspect: 'Usage: arc introspect <entry-file>\n  Print a human-readable summary of the resources an entry file exports.',
+  describe: 'Usage: arc describe <entry-file> [--json] [--pretty] [--entry <file>]\n  Describe resources; --json emits machine output for AI agents.',
+  docs: 'Usage: arc docs <entry-file> [output.json] [--entry <file>]\n  Export the generated OpenAPI document.',
+  doctor: 'Usage: arc doctor\n  Diagnose common arc setup issues (exit 1 on hard failures).',
+};
+
 async function main() {
   try {
+    // `arc <command> --help` / `-h` → command-specific usage, exit 0.
+    const canonicalCommand = COMMAND_ALIASES[command] ?? command;
+    if (
+      COMMAND_HELP[canonicalCommand] &&
+      [subcommand, ...rest].some((a) => a === '--help' || a === '-h')
+    ) {
+      console.log(COMMAND_HELP[canonicalCommand]);
+      return;
+    }
+
     switch (command) {
       case 'init':
       case 'new':
@@ -309,6 +331,21 @@ function parseInitOptions(rawArgs) {
       case '--force':
       case '-f':
         opts.force = true;
+        break;
+
+      case '--help':
+      case '-h':
+        // Handled by the per-command help short-circuit in main(); ignore here.
+        break;
+
+      default:
+        // Surface typos instead of silently scaffolding with defaults — a
+        // dropped `--jwt` / `--mongokit` would change the whole project. Warn
+        // (non-fatal, to stderr) rather than error, since a scaffolder should
+        // stay forgiving.
+        if (arg.startsWith('-')) {
+          console.error(`Warning: unknown flag "${arg}" (ignored). Run "arc init --help".`);
+        }
         break;
     }
   }

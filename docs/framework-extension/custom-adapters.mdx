@@ -148,7 +148,7 @@ The simplest adapter just wraps a repository:
 
 ```typescript
 import { defineResource } from "@classytic/arc";
-import type { DataAdapter } from "@classytic/arc/adapters";
+import type { DataAdapter } from "@classytic/repo-core/adapter";
 
 // Your repository (any implementation)
 class UserRepository {
@@ -195,7 +195,7 @@ defineResource({
 
 ```typescript
 import { PrismaClient } from "@prisma/client";
-import type { DataAdapter, SchemaMetadata } from "@classytic/arc/adapters";
+import type { DataAdapter, SchemaMetadata } from "@classytic/repo-core/adapter";
 
 const prisma = new PrismaClient();
 
@@ -377,7 +377,7 @@ defineResource({
 import { drizzle } from "drizzle-orm/node-postgres";
 import { eq, and } from "drizzle-orm";
 import { users } from "./schema";
-import type { DataAdapter } from "@classytic/arc/adapters";
+import type { DataAdapter } from "@classytic/repo-core/adapter";
 
 const db = drizzle(process.env.DATABASE_URL);
 
@@ -471,7 +471,7 @@ const userAdapter = createDrizzleAdapter({
 
 ```typescript
 import initSqlJs from "sql.js";
-import type { DataAdapter } from "@classytic/arc/adapters";
+import type { DataAdapter } from "@classytic/repo-core/adapter";
 
 const SQL = await initSqlJs();
 const db = new SQL.Database();
@@ -571,7 +571,7 @@ const sqliteAdapter: DataAdapter = {
 ### Use Type Inference Helpers
 
 ```typescript
-import type { InferMongooseDoc, InferRepoDoc } from "@classytic/arc/adapters";
+import type { InferMongooseDoc, InferRepoDoc } from "@classytic/mongokit/adapter";
 
 // Infer document type from model
 const ProductModel = mongoose.model("Product", productSchema);
@@ -586,16 +586,6 @@ const adapter = createMongooseAdapter({
   model: ProductModel,
   repository: productRepo,
 });
-```
-
-### Create Type-Safe Options
-
-```typescript
-import { createAdapterOptions } from "@classytic/arc/adapters";
-
-// Runtime validation + type inference
-const options = createAdapterOptions(ProductModel, productRepo);
-// TypeScript infers ProductDocument automatically
 ```
 
 ---

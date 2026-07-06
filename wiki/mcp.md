@@ -2,7 +2,7 @@
 
 **Summary**: Model Context Protocol integration — auto-generates AI tool schemas from `defineResource()` configs. Tools enforce same permissions as REST.
 **Sources**: src/integrations/mcp/.
-**Last updated**: 2026-05-18.
+**Last updated**: 2026-07-06.
 
 ---
 
@@ -13,6 +13,15 @@
 - `defineTool(...)`, `definePrompt(...)` — custom tools/prompts alongside auto-generated ones.
 - `buildMcpToolsFromBridges([...])` — expose AI SDK `tool()` defs over MCP without duplicating glue.
 - Stateless (default) and stateful modes; session cache for stateful.
+
+## Tool input schemas — REST parity (2.20)
+
+Auto-generated tools advertise the same query capabilities the REST layer exposes; both flow through `QueryResolver`, so the tool schema is the only thing that had to catch up:
+
+- **list** — `page`/`limit` (offset) **and** `cursor` (keyset, stable under concurrent inserts; when set, `page` is ignored), plus `sort`, `search`, `select`, `populate`. Keyset paging was already in repo-core + mongokit + REST; 2.20 surfaces it on the tool.
+- **get** — `select` field projection alongside `id` (same `select` semantics as list). `delete` stays id-only.
+
+Schema lives in `input-schema.ts` (`buildInputSchema`) + the shared `PAGINATION_SHAPE`/`PROJECTION_FIELD` in `fieldRulesToZod.ts`.
 
 ## Per-resource opt-out (2.16)
 

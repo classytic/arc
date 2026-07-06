@@ -6,6 +6,7 @@
 
 import type { FastifyInstance } from "fastify";
 import type { ResourceLike } from "./loadResources.js";
+import { orderModules, resolveModule } from "./module.js";
 import type { FastifyPlugin } from "./shared.js";
 import type { CreateAppOptions } from "./types.js";
 
@@ -46,15 +47,29 @@ async function registerOne(
 }
 
 /**
- * Execute the full resource lifecycle:
- * 1. plugins()                   — infra (DB, data, webhooks)
- * 2. bootstrap[]                 — domain init (singletons, event handlers)
- * 3. resources factory (if any)  — resolved AFTER bootstrap, so engine-backed
+ * Execute the full resource lifecycle. The module graph is resolved + ordered
+ * by `dependsOn` (stable topological sort) once, up FRONT — before any
+ * side-effecting plugin — so a bad graph fails fast with no half-initialised
+ * infra. Every phase below iterates that order; each module phase runs BEFORE
+ * its app-level counterpart:
+ *
+ * 1.  resolve + orderModules     — validate the graph (dup names, missing/self
+ *                                  deps, cycles fail fast) BEFORE side effects
+ * 2.  plugins()                  — app infra (DB, data, webhooks)
+ * 3.  module.plugins             — module infra, dependsOn order, before bootstraps
+ * 4a. module.bootstrap           — engine init (return value → arc.modules[name])
+ * 4b. bootstrap[]                — app-level domain init
+ * 5.  resources factory (if any) — resolved AFTER bootstrap, so engine-backed
  *                                  adapters can `await ensureEngine()` and pass
  *                                  live models/repos into `defineResource(...)`
- * 4. resources[]                 — register each (split by prefix)
- * 5. afterResources()            — post-registration wiring
- * 6. onReady/onClose             — lifecycle hooks
+ * 5b. module resources           — RESOLVED after the app factory, but PREPENDED
+ *                                  so they REGISTER before app resources (two
+ *                                  orderings, both intentional — see §5b)
+ * 6.  module.afterResources → afterResources()  — post-registration wiring
+ * 7.  onReady                    — lifecycle hook
+ * 7b. onClose                    — module.onClose (reverse composition order)
+ *                                  THEN app onClose, in ONE hook so module
+ *                                  teardown runs before shared infra closes.
  */
 export async function registerResources(
   fastify: FastifyInstance,
@@ -72,13 +87,81 @@ export async function registerResources(
     if (config.strictResourceDir === undefined) config = { ...config, strictResourceDir: true };
   }
 
-  // ── 1. Custom plugins (infra) ──
+  // ── 1. Resolve + validate the module graph FIRST — before any side-effecting
+  // plugin runs. Resolving thunks (dynamic imports) and the stable topological
+  // sort (`orderModules`) is where duplicate names, missing/self deps, and
+  // dependency cycles fail fast. Doing it up front means a broken composition
+  // root aborts BEFORE `config.plugins` connects a DB / registers a webhook /
+  // opens Redis — no half-initialised infra on a bad module set.
+  //
+  // A thunk is where a conditional `import()` fires (region packs, tier
+  // gating), so unselected packs are never evaluated. `dependsOn` orders
+  // COMPOSITION, not import — every thunk resolves here regardless of edges.
+  // Every phase below iterates this one ordered list. (see wiki/modules.md)
+  const resolvedModuleInputs = await Promise.all(
+    (config.modules ?? []).map((m) => resolveModule(m)),
+  );
+  const modules = orderModules(resolvedModuleInputs);
+
+  // ── 2. App plugins (infra: DB, data, webhooks) ──
   if (config.plugins) {
     await config.plugins(fastify);
     fastify.log.debug("Custom plugins registered");
   }
 
-  // ── 2. Bootstrap (domain init) ──
+  // ── 3. Module plugins (infra) — ordered, AFTER app `plugins()` (so module
+  // infra can build on app foundations like a DB connection) and BEFORE any
+  // module bootstrap. The module-level analog of the app plugins slot; a
+  // dependency's plugins run first (dependsOn order), so a decorator it
+  // installs is available to dependents' plugins.
+  for (const m of modules) {
+    if (!m.plugins) continue;
+    try {
+      await m.plugins(fastify);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`[arc] module "${m.name}" plugins() threw: ${msg}`, { cause: err });
+    }
+  }
+
+  // ── 4. Bootstrap (domain init) — module bootstraps (dependsOn order) then
+  // app-level, so app-level init can depend on a module's live engine. A module
+  // bootstrap failure is fail-fast (wrapped with the module name).
+  for (const m of modules) {
+    if (!m.bootstrap) continue;
+    let exported: unknown;
+    try {
+      // A bootstrap return value is the module's PUBLIC EXPORT — recorded at
+      // `fastify.arc.modules[name]` so later modules (dependsOn order = init
+      // order) can wire cross-module ports without a DI container. (wiki/modules.md)
+      exported = await m.bootstrap(fastify);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`[arc] module "${m.name}" bootstrap threw: ${msg}`, { cause: err });
+    }
+    if (exported !== undefined) {
+      const arc = fastify.arc;
+      if (!arc) {
+        // arcCorePlugin always decorates `fastify.arc` before this phase runs;
+        // if it hasn't, the module's public export would vanish silently —
+        // the opposite of the fail-fast contract. Throw, don't guard.
+        throw new Error(
+          `[arc] module "${m.name}" returned a public export but fastify.arc is not decorated — arcCorePlugin must register first.`,
+        );
+      }
+      // Null-proto map: a module named "__proto__" would corrupt a plain
+      // object (the assignment sets the prototype, not an own key); a null
+      // prototype makes every module name a plain own property.
+      if (!arc.modules) arc.modules = Object.create(null) as Record<string, unknown>;
+      arc.modules[m.name] = exported;
+    }
+  }
+  if (modules.length) {
+    // Ordered by dependsOn — the log doubles as the resolved composition order.
+    fastify.log.debug(
+      `${modules.length} module(s) composed (in dependency order): ${modules.map((m) => m.name).join(" → ")}`,
+    );
+  }
   if (config.bootstrap?.length) {
     for (const init of config.bootstrap) {
       await init(fastify);
@@ -86,7 +169,7 @@ export async function registerResources(
     fastify.log.debug(`${config.bootstrap.length} bootstrap function(s) executed`);
   }
 
-  // ── 3. Resolve resources factory (if supplied) ──
+  // ── 5. Resolve resources factory (if supplied) ──
   //
   // A `resources` function form runs AFTER bootstrap so engine-backed
   // adapters can await their dependencies before `defineResource(...)` is
@@ -170,6 +253,41 @@ export async function registerResources(
     }
     resolvedResources = discovered;
   }
+
+  // ── 5b. Module resources ──
+  //
+  // TWO distinct orderings, deliberately different — both documented so neither
+  // surprises a maintainer:
+  //   • RESOLUTION order: app `resources`/`resourceDir` resolve FIRST (above),
+  //     THEN module resource factories run here. This keeps the app-factory's
+  //     semantics (e.g. `resources: []` suppressing discovery) untouched, and
+  //     both run post-bootstrap so factories receive live engines.
+  //   • REGISTRATION order: module resources are PREPENDED, so they register
+  //     (routes mounted, dedup, prefix-split) BEFORE app resources — matching
+  //     the "modules before app-level in every phase" contract users rely on.
+  // A module resource is not special-cased; it flows the SAME registration path
+  // below as an app resource.
+  if (modules.length) {
+    const moduleResources: ResourceLike[] = [];
+    for (const m of modules) {
+      if (!m.resources) continue;
+      try {
+        const rs = typeof m.resources === "function" ? await m.resources(fastify) : m.resources;
+        moduleResources.push(...rs);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `[arc] module "${m.name}" resources factory threw: ${msg}. ` +
+            "Check the module's bootstrap ran and its adapters received booted engines.",
+          { cause: err },
+        );
+      }
+    }
+    if (moduleResources.length) {
+      resolvedResources = [...moduleResources, ...(resolvedResources ?? [])];
+    }
+  }
+
   if (resolvedResources && resolvedResources.length > 0) {
     // Detect duplicate resource names early — a common mistake with loadResources + manual array
     const seen = new Set<string>();
@@ -256,23 +374,55 @@ export async function registerResources(
     fastify.log.warn(`0 resources registered${prefix}${scanned}${hints}`);
   }
 
-  // ── 4. After resources ──
+  // ── 6. After resources — modules (dependsOn order) first, then app-level ──
+  //
+  // Module post-wiring runs before app-level `afterResources`, so the app-level
+  // hook can wire across modules once every module's routes are mounted. Errors
+  // are wrapped with the module name — same fail-fast diagnostics as the
+  // plugins / bootstrap / resources phases (so "which module?" is never lost).
+  for (const m of modules) {
+    if (!m.afterResources) continue;
+    try {
+      await m.afterResources(fastify);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`[arc] module "${m.name}" afterResources() threw: ${msg}`, { cause: err });
+    }
+  }
   if (config.afterResources) {
     await config.afterResources(fastify);
     fastify.log.debug("afterResources hook executed");
   }
 
-  // ── 5. Lifecycle hooks ──
+  // ── 7. Lifecycle hooks ──
   if (config.onReady) {
     const onReady = config.onReady;
     fastify.addHook("onReady", async () => {
       await onReady(fastify);
     });
   }
-  if (config.onClose) {
-    const onClose = config.onClose;
+
+  // ── 7b. Teardown — module `onClose` (reverse composition order) THEN app
+  // `onClose`, in ONE hook.
+  //
+  // Fastify runs `onClose` hooks LIFO (reverse registration). A separate
+  // module-teardown hook + a separate app-onClose hook would therefore fire in
+  // the WRONG order (app first, then modules) — the opposite of the documented
+  // contract, and unsafe because app onClose typically closes shared infra
+  // (DB/Redis) that module teardown still needs to flush outboxes / drain
+  // queues. Combining them makes the order explicit and independent of how many
+  // other close hooks exist. Registering this hook LAST also means it fires
+  // BEFORE the infra plugins registered back in `config.plugins` (their onClose
+  // was registered early → runs late under LIFO) — so both module teardown AND
+  // app onClose see live infra, and the underlying connections close last.
+  const closers = modules.filter((m) => m.onClose).reverse();
+  const appOnClose = config.onClose;
+  if (closers.length || appOnClose) {
     fastify.addHook("onClose", async () => {
-      await onClose(fastify);
+      for (const m of closers) {
+        await m.onClose?.(fastify);
+      }
+      if (appOnClose) await appOnClose(fastify);
     });
   }
 }

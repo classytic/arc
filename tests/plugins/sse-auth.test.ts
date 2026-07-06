@@ -76,7 +76,11 @@ function fetchSSEWithHeaders(
         settled = true;
         res.destroy();
         req.destroy();
-        resolve({ statusCode: res.statusCode!, headers: res.headers as Record<string, string>, body });
+        resolve({
+          statusCode: res.statusCode!,
+          headers: res.headers as Record<string, string>,
+          body,
+        });
       }, timeoutMs);
       res.on("data", (chunk) => {
         body += chunk.toString();
@@ -85,7 +89,11 @@ function fetchSSEWithHeaders(
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve({ statusCode: res.statusCode!, headers: res.headers as Record<string, string>, body });
+          resolve({
+            statusCode: res.statusCode!,
+            headers: res.headers as Record<string, string>,
+            body,
+          });
         }
       });
       res.on("error", (err) => {

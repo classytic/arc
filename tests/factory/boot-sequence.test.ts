@@ -402,9 +402,12 @@ describe("loadResources — logger fallback to arcLog", () => {
     const dir = join(TMP, "noop");
     mkdirSync(dir, { recursive: true });
 
+    // Side-effect import — a named-but-unused import gets tree-shaken away
+    // by the transform pipeline (vite 8.1+/rolldown) and never executes, so
+    // the fixture would "load fine". A bare import always executes and fails.
     writeFileSync(
       join(dir, "broken.resource.ts"),
-      "import { nope } from '@nonexistent/pkg';\nexport default { name: 'broken', toPlugin: () => () => {} };\n",
+      "import '@nonexistent/pkg';\nexport default { name: 'broken', toPlugin: () => () => {} };\n",
     );
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});

@@ -7,7 +7,9 @@ Resources, controllers, and routing fundamentals.
 The primary API for defining resources.
 
 ```typescript
-import { defineResource, createMongooseAdapter, allowPublic, requireRoles } from '@classytic/arc';
+import { defineResource, allowPublic, requireRoles } from '@classytic/arc';
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
+import { createApp } from '@classytic/arc/factory';
 
 const productResource = defineResource({
   // Required
@@ -63,9 +65,15 @@ const productResource = defineResource({
   disableDefaultRoutes: false, // When true, only custom `routes` are mounted
 });
 
-// Register with Fastify
-await fastify.register(productResource.toPlugin());
+// Register via the app factory (canonical)
+const app = await createApp({
+  resources: [productResource],
+});
 ```
+
+> **Mounting into an existing Fastify app** (brownfield escape hatch): if you can't use
+> `createApp`, a resource still exposes `productResource.toPlugin()` for
+> `fastify.register()`. New apps should use `createApp({ resources })`.
 
 ## Controllers
 
@@ -246,7 +254,8 @@ The default parser handles standard REST patterns with security built-in:
 For MongoDB apps, swap in MongoKit's QueryParser for $lookup joins, advanced populate, and keyset pagination:
 
 ```typescript
-import { defineResource, createMongooseAdapter } from '@classytic/arc';
+import { defineResource } from '@classytic/arc';
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
 import { QueryParser } from '@classytic/mongokit';
 
 const productResource = defineResource({

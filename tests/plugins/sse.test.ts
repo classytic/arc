@@ -51,6 +51,21 @@ function fetchSSE(
       });
       res.on("error", (err) => {
         clearTimeout(timer);
+        // fastify 5.9 force-closes active connections on `close()`, so a
+        // server shutdown mid-stream surfaces here as `aborted`/ECONNRESET
+        // instead of a graceful `end`. The response (status + headers)
+        // already arrived — treat the drop as a normal stream end so the
+        // "cleans up on server close" test asserts server behavior, not
+        // the client's socket-teardown flavor.
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "ECONNRESET" || err.message === "aborted") {
+          resolve({
+            statusCode: res.statusCode ?? 0,
+            headers: res.headers as Record<string, string>,
+            body,
+          });
+          return;
+        }
         reject(err);
       });
     });

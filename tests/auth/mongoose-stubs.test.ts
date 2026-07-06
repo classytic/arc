@@ -213,9 +213,12 @@ describe("registerBetterAuthStubs (mongokit/better-auth) — registration behavi
     const UserModel = mongoose.models.user as mongoose.Model<Record<string, unknown>>;
 
     // Insert a doc shaped like a real BA user — fields not in the schema
-    // should still round-trip because strict is off.
+    // should still round-trip because strict is off. mongokit 3.18 stubs
+    // keep the default ObjectId `_id` (matching BA's mongo adapter), so
+    // the fixture uses an ObjectId, not a string id.
+    const userId = new mongoose.Types.ObjectId();
     const doc = await UserModel.create({
-      _id: "usr_abc123",
+      _id: userId,
       name: "Alice",
       email: "alice@example.com",
       emailVerified: true,
@@ -223,7 +226,7 @@ describe("registerBetterAuthStubs (mongokit/better-auth) — registration behavi
       createdAt: new Date(),
     });
     expect(doc.toObject()).toMatchObject({
-      _id: "usr_abc123",
+      _id: userId,
       name: "Alice",
       email: "alice@example.com",
       role: "admin,recruiter",
@@ -243,9 +246,15 @@ describe("registerBetterAuthStubs — populate() integration", () => {
     // 2. Simulate Better Auth writing a user via its native mongo driver.
     //    BA would do this via @better-auth/mongo-adapter — we shortcut by
     //    inserting directly into the same collection ('user') the stub points at.
+    //
+    //    mongokit 3.18 contract: stubs keep the DEFAULT ObjectId `_id`
+    //    SchemaType because BA's mongo adapter stores ObjectId `_id`s —
+    //    fixtures must seed ObjectIds (string ids like "usr_alice" no
+    //    longer cast; that was pinning a pre-3.18 stub shape BA never used).
+    const aliceId = new mongoose.Types.ObjectId();
     const userCollection = mongoose.connection.db?.collection("user");
     await userCollection.insertOne({
-      _id: "usr_alice" as unknown as never,
+      _id: aliceId as unknown as never,
       name: "Alice",
       email: "alice@example.com",
       emailVerified: true,
@@ -256,14 +265,14 @@ describe("registerBetterAuthStubs — populate() integration", () => {
     const PostSchema = new mongoose.Schema({
       _id: { type: String },
       title: String,
-      authorId: { type: String, ref: "user" },
+      authorId: { type: mongoose.Schema.Types.ObjectId, ref: "user" },
     });
     const Post = mongoose.model("Post", PostSchema);
 
     await Post.create({
       _id: "post_1",
       title: "Hello world",
-      authorId: "usr_alice",
+      authorId: aliceId,
     });
 
     // 4. The whole point: populate() should resolve against the BA collection.
@@ -272,7 +281,7 @@ describe("registerBetterAuthStubs — populate() integration", () => {
 
     expect(populated).toBeTruthy();
     expect(populated?.authorId).toMatchObject({
-      _id: "usr_alice",
+      _id: aliceId,
       name: "Alice",
       email: "alice@example.com",
     });
@@ -282,8 +291,9 @@ describe("registerBetterAuthStubs — populate() integration", () => {
     registerBetterAuthStubs(mongoose, { usePlural: true });
 
     // Insert into the pluralized 'users' collection (matching usePlural: true)
+    const bobId = new mongoose.Types.ObjectId();
     await mongoose.connection.db?.collection("users").insertOne({
-      _id: "usr_bob" as unknown as never,
+      _id: bobId as unknown as never,
       name: "Bob",
       email: "bob@example.com",
     });
@@ -291,13 +301,13 @@ describe("registerBetterAuthStubs — populate() integration", () => {
     const PostSchema = new mongoose.Schema({
       _id: { type: String },
       title: String,
-      authorId: { type: String, ref: "users" },
+      authorId: { type: mongoose.Schema.Types.ObjectId, ref: "users" },
     });
     const Post = mongoose.model("Post", PostSchema);
 
-    await Post.create({ _id: "post_2", title: "Plural test", authorId: "usr_bob" });
+    await Post.create({ _id: "post_2", title: "Plural test", authorId: bobId });
 
     const populated = await Post.findById("post_2").populate("authorId").lean();
-    expect(populated?.authorId).toMatchObject({ _id: "usr_bob", name: "Bob" });
+    expect(populated?.authorId).toMatchObject({ _id: bobId, name: "Bob" });
   });
 });

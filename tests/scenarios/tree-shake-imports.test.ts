@@ -64,7 +64,7 @@ describe("Tree-Shakable Imports", () => {
       expect(core.BaseController).toBeTypeOf("function");
     });
 
-    it("@classytic/arc/adapters exports mongoose adapter", async () => {
+    it("@classytic/mongokit/adapter exports mongoose adapter", async () => {
       const adapters = await import("@classytic/mongokit/adapter");
       expect(adapters.createMongooseAdapter).toBeTypeOf("function");
     });

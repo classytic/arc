@@ -257,11 +257,19 @@ describe("Permission Presets", () => {
       expect(await checkGranted(perms.get, authed)).toBe(true);
     });
 
-    it("should not define create/update/delete", () => {
+    it("should DENY create/update/delete for everyone — even admins (2.20 fix)", async () => {
+      // Pre-2.20, readOnly() left writes UNDEFINED — and an undefined CRUD
+      // permission mounts the route with no gate at all, i.e. readOnly()
+      // shipped unauthenticated writes. Writes must now carry explicit deny.
       const perms = readOnly();
-      expect(perms.create).toBeUndefined();
-      expect(perms.update).toBeUndefined();
-      expect(perms.delete).toBeUndefined();
+      const unauthed = makeCtx({ user: null });
+      const admin = makeCtx({ user: { id: "u1", role: ["admin"] } });
+
+      for (const check of [perms.create, perms.update, perms.delete]) {
+        expect(check).toBeTypeOf("function");
+        expect(await checkGranted(check, unauthed)).toBe(false);
+        expect(await checkGranted(check, admin)).toBe(false);
+      }
     });
 
     it("should accept overrides", async () => {

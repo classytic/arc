@@ -26,8 +26,7 @@ function resolverDefaultSort(controller: BaseCrudController): string | undefined
 }
 
 function sanitizerPolicy(controller: BaseCrudController): string {
-  return (controller.bodySanitizer as unknown as { onFieldWriteDenied: string })
-    .onFieldWriteDenied;
+  return (controller.bodySanitizer as unknown as { onFieldWriteDenied: string }).onFieldWriteDenied;
 }
 
 describe("configure() retains construction-time defaultSort / onFieldWriteDenied", () => {

@@ -16,7 +16,7 @@
 
 import { z } from "zod";
 import type { ResourceDefinition } from "../../core/defineResource.js";
-import { type FieldRuleEntry, fieldRulesToZod } from "./fieldRulesToZod.js";
+import { type FieldRuleEntry, fieldRulesToZod, PROJECTION_FIELD } from "./fieldRulesToZod.js";
 import { jsonSchemaToZodShape } from "./jsonSchemaToZod.js";
 import type { CrudOperation } from "./types.js";
 
@@ -47,7 +47,10 @@ export function buildInputSchema(
     case "list":
       return fieldRulesToZod(fieldRules, { mode: "list", ...opts });
     case "get":
-      return getIdShape();
+      // `select` projection — the controller's `getById` honors it exactly as
+      // list does (both resolve through QueryResolver). `delete` deliberately
+      // stays id-only (nothing to project).
+      return { ...getIdShape(), select: PROJECTION_FIELD };
     case "create": {
       if (!fieldRules && opts.adapterBodies?.createBody) {
         const shape = jsonSchemaToZodShape(

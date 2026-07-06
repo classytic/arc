@@ -63,6 +63,9 @@ describe("Public API Contract", () => {
       "./plugins/response-cache",
       "./plugins/tracing",
       "./presets",
+      // approval + involvement were extracted to @classytic/arc-approval /
+      // @classytic/arc-involvement (arc-ecosystem workspace) BEFORE 2.20
+      // published — the subpaths never shipped. See ecosystem-extraction.md.
       "./presets/files-upload",
       "./presets/search",
       "./presets/tenant",
@@ -70,6 +73,8 @@ describe("Public API Contract", () => {
       "./schemas",
       "./scim",
       "./scope",
+      // 2.20: 19-line re-export of repo-core's ./sync change-log contract.
+      "./sync",
       "./testing",
       "./testing/storage",
       "./types",
@@ -113,7 +118,10 @@ describe("Public API Contract", () => {
         subpath: "@classytic/arc/core",
         symbols: ["createCrudRouter", "defineResource"],
       },
-      { subpath: "@classytic/arc/factory", symbols: ["createApp"] },
+      {
+        subpath: "@classytic/arc/factory",
+        symbols: ["createApp", "defineModule", "getModuleExports", "orderModules", "resolveModule"],
+      },
       {
         subpath: "@classytic/arc/cache",
         symbols: ["MemoryCacheStore", "RedisCacheStore"],

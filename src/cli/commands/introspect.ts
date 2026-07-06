@@ -23,19 +23,27 @@ export async function introspect(args: string[]): Promise<void> {
 
   const entryPath = args[0];
   if (!entryPath) {
-    console.log("Usage: arc introspect <entry-file>\n");
-    console.log("Where entry-file exports your defineResource() results.");
-    console.log("Example: arc introspect ./src/resources.js");
-    return;
+    // Missing required arg → exit non-zero (parity with `docs` / `describe`);
+    // the top-level handler prints to stderr and sets exit 1, so CI/scripts
+    // detect the failure instead of a false success.
+    throw new Error(
+      "Missing entry-file argument\n" +
+        "Usage: arc introspect <entry-file>\n" +
+        "Where entry-file exports your defineResource() results.\n" +
+        "Example: arc introspect ./src/resources.js",
+    );
   }
 
   const { registry, registered } = await loadResourcesFromEntry(entryPath);
 
   if (registered === 0) {
-    console.log("No resource definitions found in entry file.");
-    console.log("\nMake sure your file exports defineResource() results:");
-    console.log("  export const productResource = defineResource({ ... });");
-    return;
+    // Zero resources found is a failure for a discovery command → exit 1
+    // (same as `docs` / `describe`), not a silent success.
+    throw new Error(
+      `No resource definitions found in "${entryPath}".\n` +
+        "Make sure the file exports defineResource() results:\n" +
+        "  export const productResource = defineResource({ ... });",
+    );
   }
 
   const resources: RegistryEntry[] = registry.getAll();

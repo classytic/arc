@@ -10,10 +10,14 @@
  * This is a SEPARATE subpath import — only loaded when explicitly used:
  *   import { streamlinePlugin } from '@classytic/arc/integrations/streamline';
  *
- * Requires: @classytic/streamline (peer dependency, >= 2.3.0) — uses the
+ * Requires: @classytic/streamline (peer dependency, >= 2.7.0) — uses the
  * v2.3 surface: `StartOptions.tenantId/bypassTenant`,
  * `WorkflowError implements HttpError`, `resumeHook` fail-closed
  * validation, strict-concurrency `ConcurrencyLimitReachedError` (status 429).
+ * v2.7 additions surfaced here: `cancel(runId, { reason })` and
+ * `pause(runId, { reason })` forward an operator reason (persisted on the
+ * run + echoed in the `workflow:cancelled` / `workflow:paused` events), and
+ * `workflow:paused` is bridged/streamed like every other lifecycle event.
  *
  * @example
  * ```typescript
@@ -72,8 +76,10 @@ export interface WorkflowLike {
     start(input: unknown, options?: WorkflowStartOptions): Promise<WorkflowRunLike>;
     execute(runId: string): Promise<WorkflowRunLike>;
     resume(runId: string, payload?: unknown): Promise<WorkflowRunLike>;
-    cancel(runId: string): Promise<WorkflowRunLike>;
-    pause?(runId: string): Promise<WorkflowRunLike>;
+    // streamline >= 2.7: optional `{ reason }` persisted on the run + echoed
+    // in the workflow:cancelled event. Optional arg — pre-2.7 engines ignore it.
+    cancel(runId: string, options?: { reason?: string }): Promise<WorkflowRunLike>;
+    pause?(runId: string, options?: { reason?: string }): Promise<WorkflowRunLike>;
     rewindTo?(runId: string, stepId: string): Promise<WorkflowRunLike>;
     get(runId: string): Promise<WorkflowRunLike | null>;
     waitFor?(runId: string, options?: { timeout?: number }): Promise<WorkflowRunLike>;
@@ -81,7 +87,7 @@ export interface WorkflowLike {
   };
   start(input: unknown, options?: WorkflowStartOptions): Promise<WorkflowRunLike>;
   resume(runId: string, payload?: unknown): Promise<WorkflowRunLike>;
-  cancel(runId: string): Promise<WorkflowRunLike>;
+  cancel(runId: string, options?: { reason?: string }): Promise<WorkflowRunLike>;
   get(runId: string): Promise<WorkflowRunLike | null>;
   shutdown?(): void;
   /** Streamline container for event bridging + repository access (streamline >=2.1) */
@@ -158,6 +164,12 @@ export interface WorkflowRunLike {
    * toward dead-letter.
    */
   recoveryAttempts?: number;
+  /**
+   * Streamline >= 2.7 — operator-supplied cancellation reason, set when
+   * `cancel(runId, { reason })` was called. Absent on runs cancelled without
+   * a reason or under older streamline. Surfaced so dashboards can show WHY.
+   */
+  cancellationReason?: string;
 }
 
 /**
@@ -194,7 +206,7 @@ export interface StreamlinePluginOptions {
    *   - Step events: started, completed, failed, waiting, skipped,
    *     retry-scheduled, compensated
    *   - Workflow lifecycle: started, completed, failed, waiting, resumed,
-   *     cancelled, recovered, retry, compensating
+   *     cancelled, recovered, retry, compensating, paused (>= 2.7)
    *   - Engine telemetry: engine:error, scheduler:error,
    *     scheduler:circuit-open
    *
@@ -301,6 +313,8 @@ export const STREAMLINE_BUS_EVENTS = [
   "workflow:recovered",
   "workflow:retry",
   "workflow:compensating",
+  // streamline >= 2.7 operator pause (NON-terminal — the run resumes after).
+  "workflow:paused",
   // Engine telemetry
   "engine:error",
   "scheduler:error",
@@ -677,13 +691,21 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
         }
         const { runId } = request.params as { runId: string };
         await assertRunVisible(request, runId);
-        const run = await wf.cancel(runId);
+        // streamline >= 2.7: forward an optional operator reason (persisted on
+        // the run + echoed in the workflow:cancelled event). Absent → undefined,
+        // which pre-2.7 engines ignore.
+        const { reason: cancelReason } = (request.body ?? {}) as { reason?: string };
+        const run = await wf.cancel(
+          runId,
+          cancelReason !== undefined ? { reason: cancelReason } : undefined,
+        );
 
         if (bridgeEvents && fastify.events?.publish) {
           try {
             await fastify.events.publish(`workflow.${id}.cancelled`, {
               runId: run._id,
               workflowId: id,
+              ...(cancelReason !== undefined ? { reason: cancelReason } : {}),
             });
           } catch (err) {
             fastify.log.warn({ err, workflowId: id }, "Failed to publish workflow.cancelled event");
@@ -798,7 +820,12 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
         async (request, _reply) => {
           const { runId } = request.params as { runId: string };
           await assertRunVisible(request, runId);
-          const run = await wf.engine.pause?.(runId);
+          // streamline >= 2.7: optional operator reason, same shape as cancel.
+          const { reason: pauseReason } = (request.body ?? {}) as { reason?: string };
+          const run = await wf.engine.pause?.(
+            runId,
+            pauseReason !== undefined ? { reason: pauseReason } : undefined,
+          );
           return run;
         },
       );

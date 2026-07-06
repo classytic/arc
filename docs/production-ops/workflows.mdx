@@ -310,9 +310,9 @@ import { createApp, toFetchHandler } from '@classytic/arc/factory';
 
 const app = await createApp({
   preset: 'edge',
-  auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
+  auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET ?? 'dev-secret-change-in-production' } },
+  resources: [productResource],
 });
-await app.register(productResource.toPlugin());
 ```
 
 **Cloudflare Workers:**

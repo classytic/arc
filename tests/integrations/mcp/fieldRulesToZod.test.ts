@@ -98,6 +98,16 @@ describe("fieldRulesToZod", () => {
       expect(shape.search).toBeDefined();
     });
 
+    it("exposes `cursor` for keyset pagination (2.20) — optional string", () => {
+      // repo-core + mongokit + arc REST already support keyset paging
+      // (`?after=`/`?cursor=`); the MCP list tool now advertises it too.
+      const shape = fieldRulesToZod(rules, { mode: "list" });
+      expect(shape.cursor).toBeDefined();
+      const cursor = shape.cursor as z.ZodTypeAny;
+      expect(cursor.safeParse("opaque-cursor-token").success).toBe(true);
+      expect(cursor.safeParse(undefined).success).toBe(true); // optional
+    });
+
     it("exposes select and populate for projection + nested ref hydration", () => {
       const shape = fieldRulesToZod(rules, { mode: "list" });
       expect(shape.select).toBeDefined();

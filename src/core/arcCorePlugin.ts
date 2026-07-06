@@ -60,6 +60,16 @@ export interface ArcCore {
   externalOpenApiPaths: ExternalOpenApiPaths[];
   /** Registered plugins for introspection */
   plugins: Map<string, PluginMeta>;
+  /**
+   * Module public exports — `bootstrap()` return values keyed by module name
+   * (see `src/factory/module.ts`). Read via `getModuleExports(fastify, name)`:
+   * augment `ArcModuleRegistry` once and the name infers the export type;
+   * otherwise pass it inline. `Partial<ArcModuleRegistry>` gives augmented
+   * apps typed direct access (`fastify.arc.modules.order`), while the
+   * `Record<string, unknown>` intersection keeps un-augmented reads open.
+   * Populated lazily by `registerResources` — absent until a module exports.
+   */
+  modules?: Partial<import("../factory/module.js").ArcModuleRegistry> & Record<string, unknown>;
 }
 
 // `declare module "fastify" { FastifyInstance.arc?: ArcCore }` lives in

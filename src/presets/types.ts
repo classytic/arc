@@ -215,13 +215,27 @@ export type IAuditedPreset = never;
  * }
  * ```
  */
+/** Preset name → controller contract. Lookup table for {@link IPresetController}. */
+interface PresetControllerContracts<TDoc> {
+  softDelete: ISoftDeleteController<TDoc>;
+  slugLookup: ISlugLookupController<TDoc>;
+  tree: ITreeController<TDoc>;
+}
+
+/**
+ * Collapse a union into an intersection. The pre-2.20 implementation used a
+ * distributive conditional, so `IPresetController<T, 'softDelete' | 'tree'>`
+ * produced a UNION of contracts — which a class cannot `implements`; the
+ * documented multi-preset example didn't compile. An indexed lookup over the
+ * union followed by this fold yields the intersection the example promises.
+ */
+type UnionToIntersection<U> = (U extends unknown ? (x: U) => void : never) extends (
+  x: infer I,
+) => void
+  ? I
+  : never;
+
 export type IPresetController<
   TDoc = unknown,
-  TPresets extends "softDelete" | "slugLookup" | "tree" | never = never,
-> = TPresets extends "softDelete"
-  ? ISoftDeleteController<TDoc>
-  : TPresets extends "slugLookup"
-    ? ISlugLookupController<TDoc>
-    : TPresets extends "tree"
-      ? ITreeController<TDoc>
-      : unknown;
+  TPresets extends keyof PresetControllerContracts<TDoc> = never,
+> = UnionToIntersection<PresetControllerContracts<TDoc>[TPresets]>;

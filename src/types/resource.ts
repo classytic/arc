@@ -548,6 +548,25 @@ export interface RouteDefinition {
    */
   readonly fieldWrite?: boolean;
   /**
+   * Per-route rate limit. A custom route is its own Fastify route, so this
+   * overrides the resource-level `rateLimit` for THIS endpoint only:
+   *
+   *   - omitted                → inherit the resource-level limit (or app default)
+   *   - `false`                → disable rate limiting on this route
+   *   - `{ max, timeWindow }`  → apply this specific limit
+   *
+   * Requires `@fastify/rate-limit` registered (arc's factory wires it by
+   * default). Use for an expensive `/export` or an auth-sensitive `/reset`
+   * that needs a tighter cap than the resource's read-heavy CRUD, or `false`
+   * on an internal health/webhook route that must not be throttled.
+   *
+   * Note: this is per-route because each custom route is a distinct endpoint.
+   * `actions` share ONE `POST /:id/action` mount by design, so a per-ACTION
+   * limit can't be expressed here — throttle a specific action by promoting
+   * it to a dedicated `routes:` entry, or rely on the resource-level limit.
+   */
+  readonly rateLimit?: RateLimitConfig | false;
+  /**
    * Fastify route schema. Each slot (`body`, `querystring`, `params`,
    * `headers`, `response[status]`) accepts a plain JSON Schema object
    * **or** a Zod v4 schema — Arc auto-converts via `convertRouteSchema`.
@@ -591,7 +610,15 @@ export type ActionHandlerFn = (
   req: RequestWithExtras,
 ) => Promise<unknown>;
 
-/** Full action configuration with handler, permissions, and schema. */
+/**
+ * Full action configuration with handler, permissions, and schema.
+ *
+ * Rate limiting is intentionally NOT per-action: every action shares one
+ * `POST /:id/action` (or `POST /action`) mount, so Fastify's per-route limit
+ * can't distinguish them. Actions inherit the resource-level `rateLimit`; to
+ * throttle a specific operation, promote it to a `routes:` entry (which
+ * supports `RouteDefinition.rateLimit`).
+ */
 export interface ActionDefinition {
   readonly handler: ActionHandlerFn;
   /** Per-action permission (overrides resource-level `actionPermissions`) */

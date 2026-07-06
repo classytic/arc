@@ -52,7 +52,10 @@ const app = await createApp({
   },
 });
 
-// Via plugins callback (full Fastify control)
+// Brownfield escape hatch — mounting into an existing Fastify app.
+// `resource.toPlugin()` exists for hosts that can't hand registration to
+// createApp (legacy apps, custom mounting). NOT the default path — new
+// apps should pass `resources` and let the factory register them.
 const app = await createApp({
   plugins: async (fastify) => {
     await fastify.register(productResource.toPlugin());
@@ -446,10 +449,7 @@ const app = await createApp({
     await mongoose.disconnect();
     await redis.quit();
   },
-  plugins: async (fastify) => {
-    await fastify.register(productResource.toPlugin());
-    await fastify.register(orderResource.toPlugin());
-  },
+  resources: [productResource, orderResource],
 });
 ```
 

@@ -121,7 +121,8 @@ export const productRepository = new ProductRepository();
 
 **src/modules/product/product.resource.ts**
 ```typescript
-import { defineResource, createMongooseAdapter, allowPublic, requireRoles } from '@classytic/arc';
+import { defineResource, allowPublic, requireRoles } from '@classytic/arc';
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
 import { Product } from './product.model.js';
 import { productRepository } from './product.repository.js';
 import { productController } from './product.controller.js';
@@ -165,17 +166,14 @@ async function bootstrap() {
   await mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/my-api');
   console.log('Connected to MongoDB');
 
-  // Create Arc app
+  // Create Arc app — resources are registered by the factory
   const app = await createApp({
     preset: 'development', // or 'production'
     auth: {
       type: 'jwt',
       jwt: { secret: process.env.JWT_SECRET || 'dev-secret-change-in-production' },
     },
-    plugins: async (fastify) => {
-      // Register resources
-      await fastify.register(productResource.toPlugin());
-    },
+    resources: [productResource],
   });
 
   // Start server
@@ -431,11 +429,8 @@ const app = await createApp({
     },
   },
 
-  // Plugins
-  plugins: async (fastify) => {
-    await fastify.register(productResource.toPlugin());
-    await fastify.register(orderResource.toPlugin());
-  },
+  // Resources
+  resources: [productResource, orderResource],
 });
 ```
 
@@ -446,7 +441,8 @@ const app = await createApp({
 For SaaS applications with organization isolation:
 
 ```typescript
-import { defineResource, createMongooseAdapter, requireAuth } from '@classytic/arc';
+import { defineResource, requireAuth } from '@classytic/arc';
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
 
 export const invoiceResource = defineResource({
   name: 'invoice',

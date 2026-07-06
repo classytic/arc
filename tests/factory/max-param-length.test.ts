@@ -73,8 +73,9 @@ describe("createApp — maxParamLength (2.16)", () => {
   });
 
   it("honors a tighter explicit override — hosts can clamp below the default", async () => {
-    // Auditors may want a tighter limit. 200 chars max → a 250-char
-    // token fails with 404 (Fastify rejects before routing).
+    // Auditors may want a tighter limit. An oversized param is rejected
+    // before routing: fastify <5.9 answered 404, >=5.9 answers 414
+    // (URI Too Long — the more precise status).
     const app = await createApp({
       preset: "development",
       auth: false,
@@ -88,12 +89,12 @@ describe("createApp — maxParamLength (2.16)", () => {
       },
     });
     try {
-      // 100-char param exceeds the tightened 50-char limit → 404.
+      // 100-char param exceeds the tightened 50-char limit → rejected.
       const res = await app.inject({
         method: "GET",
         url: `/short/${"a".repeat(100)}`,
       });
-      expect(res.statusCode).toBe(404);
+      expect([404, 414]).toContain(res.statusCode);
     } finally {
       await app.close();
     }

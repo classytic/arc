@@ -332,11 +332,10 @@ describe("loadResources — tsconfig path aliases (expected failures)", () => {
   it("resource using @/ alias fails but does not crash loadResources", async () => {
     mkdirSync(dir, { recursive: true });
 
-    // Resource using tsconfig alias — this CANNOT resolve at runtime
-    writeFileSync(
-      join(dir, "broken.resource.ts"),
-      resource("broken", "import { something } from '@/utils/helper';"),
-    );
+    // Resource using tsconfig alias — this CANNOT resolve at runtime.
+    // Side-effect import form: a named-but-unused import is tree-shaken by
+    // the transform pipeline (vite 8.1+/rolldown) and never executes.
+    writeFileSync(join(dir, "broken.resource.ts"), resource("broken", "import '@/utils/helper';"));
 
     const warnSpy = vi.fn();
 
@@ -354,10 +353,7 @@ describe("loadResources — tsconfig path aliases (expected failures)", () => {
   it("resource using ~/ alias fails gracefully", async () => {
     mkdirSync(dir, { recursive: true });
 
-    writeFileSync(
-      join(dir, "tilde.resource.ts"),
-      resource("tilde", "import { config } from '~/config';"),
-    );
+    writeFileSync(join(dir, "tilde.resource.ts"), resource("tilde", "import '~/config';"));
 
     const warnSpy = vi.fn();
 
@@ -380,11 +376,8 @@ describe("loadResources — tsconfig path aliases (expected failures)", () => {
       resource("good", "import { OK } from './helper.js';"),
     );
 
-    // Invalid resource with tsconfig alias
-    writeFileSync(
-      join(dir, "bad.resource.ts"),
-      resource("bad", "import { nope } from '@lib/nope';"),
-    );
+    // Invalid resource with tsconfig alias (side-effect import — see above)
+    writeFileSync(join(dir, "bad.resource.ts"), resource("bad", "import '@lib/nope';"));
 
     const warnSpy = vi.fn();
 

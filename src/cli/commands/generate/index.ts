@@ -37,6 +37,21 @@ export async function generate(type: string | undefined, args: string[]): Promis
     );
   }
 
+  // Validate the name BEFORE it touches the filesystem or a code template.
+  // It flows into `join(cwd, "src/resources", name)` and into PascalCase TS
+  // identifiers, so an unvalidated name is both a path-traversal sink
+  // (`../../evil` escapes the project tree) and an invalid-code source
+  // (dots/slashes/spaces produce garbage identifiers). A single kebab-ish
+  // pattern with no path separators or dots closes both: a letter followed by
+  // letters, digits, or hyphens.
+  if (!/^[A-Za-z][A-Za-z0-9-]*$/.test(name)) {
+    throw new Error(
+      `Invalid name "${name}". Use kebab-case: a letter followed by letters, ` +
+        "digits, or hyphens (e.g. 'product', 'order-line'). No slashes, dots, " +
+        "spaces, or path segments.",
+    );
+  }
+
   // Convert kebab-case to PascalCase (e.g., org-profile → OrgProfile)
   const capitalizedName = toPascalCase(name);
   // Keep original kebab-case for file names (e.g., org-profile)

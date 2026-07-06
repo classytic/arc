@@ -65,7 +65,11 @@ import type { ResourceDiagnostic } from "./defineResource/diagnostics.js";
 import { wireHooks } from "./defineResource/hooks.js";
 import { resolveIdField } from "./defineResource/idField.js";
 import { normalizeResourceConfig } from "./defineResource/normalizeConfig.js";
-import { applyPresetsAndAutoInject, computeHasCrudRoutes } from "./defineResource/presets.js";
+import {
+  applyPresetsAndAutoInject,
+  collectUngatedCrudDiagnostics,
+  computeHasCrudRoutes,
+} from "./defineResource/presets.js";
 import {
   type ResolvedResourceConfig,
   ResourceDefinition,
@@ -141,6 +145,13 @@ export function defineResource<TDoc = AnyRecord>(
   // Phase 3 — apply presets + auto-inject tenant-field rules
   const resolvedConfig = applyPresetsAndAutoInject<TDoc>(configWithId);
   const hasCrudRoutes = computeHasCrudRoutes(resolvedConfig);
+
+  // Post-preset diagnostic: CRUD ops that will mount with NO permission
+  // gate (public-by-omission). Must read `resolvedConfig` — presets may
+  // inject permissions, and flagging those would be a false positive.
+  if (!normalisedConfig.skipValidation) {
+    diagnostics = diagnostics.concat(collectUngatedCrudDiagnostics(resolvedConfig));
+  }
 
   // Phase 4 — reuse user controller or auto-create BaseController.
   // Internal cast widens TDoc to satisfy BaseController's bound; safe

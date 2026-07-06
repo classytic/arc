@@ -18,8 +18,11 @@ Arc solves this by:
 These imports work everywhere — Lambda, Vercel, Cloud Run, Docker, VPS:
 
 ```typescript
-// Core (defineResource + adapters + permissions + errors)
-import { defineResource, createMongooseAdapter, allowPublic } from '@classytic/arc';
+// Core (defineResource + permissions + errors)
+import { defineResource, allowPublic } from '@classytic/arc';
+
+// Adapters ship from their kits, not arc (kit owns the driver dep)
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
 
 // Permissions (pure functions)
 import { requireRoles, allOf, anyOf } from '@classytic/arc/permissions';

@@ -60,20 +60,43 @@ export interface FieldRuleEntry {
 }
 
 // ============================================================================
+// Shared field-shape building blocks
+// ============================================================================
+
+/**
+ * Projection (`select`) field — reused by the list shape AND the single-entity
+ * `get` shape. The controller honors `select` on `getById` identically to list
+ * (both flow through `QueryResolver.resolve`), so exposing it on `get` gives an
+ * MCP agent the same field-projection it already has on list.
+ */
+export const PROJECTION_FIELD: z.ZodTypeAny = z
+  .string()
+  .optional()
+  .describe(
+    "Comma-separated field list to project (e.g. 'name,price'). Prefix with '-' to exclude (e.g. '-description').",
+  );
+
+// ============================================================================
 // Static pagination fields (shared across all list schemas)
 // ============================================================================
 
 const PAGINATION_SHAPE: Record<string, z.ZodTypeAny> = {
-  page: z.number().int().min(1).optional().describe("Page number (1-based)"),
+  page: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe("Page number (1-based). Ignored when `cursor` is set."),
   limit: z.number().int().min(1).max(100).optional().describe("Items per page (max 100)"),
-  sort: z.string().optional().describe("Sort field, prefix with - for descending"),
-  search: z.string().optional().describe("Full-text search query"),
-  select: z
+  cursor: z
     .string()
     .optional()
     .describe(
-      "Comma-separated field list to project (e.g. 'name,price'). Prefix with '-' to exclude (e.g. '-description').",
+      "Opaque keyset cursor from a previous page's `next`. Pass it to fetch the following page; when set, `page` is ignored (cursor/keyset pagination — stable under concurrent inserts).",
     ),
+  sort: z.string().optional().describe("Sort field, prefix with - for descending"),
+  search: z.string().optional().describe("Full-text search query"),
+  select: PROJECTION_FIELD,
   populate: z
     .string()
     .optional()

@@ -343,7 +343,13 @@ function createCustomRoutes<TDoc = unknown>(
               return result;
             }
           : handler,
-        ...buildRouteConfig(rateLimitConfig, extensions),
+        // Per-route rate limit overrides the resource default for THIS
+        // endpoint (custom routes are individual Fastify routes). `undefined`
+        // inherits the resource-level config; `false` disables; object applies.
+        ...buildRouteConfig(
+          route.rateLimit !== undefined ? buildRateLimitConfig(route.rateLimit) : rateLimitConfig,
+          extensions,
+        ),
       },
       { resourceName, op: opName },
     );

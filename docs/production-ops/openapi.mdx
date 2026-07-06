@@ -199,34 +199,43 @@ await fastify.register(scalarPlugin, {
 ## Full Example
 
 ```typescript
-import Fastify from 'fastify';
+import { createApp } from '@classytic/arc/factory';
 import { openApiPlugin, scalarPlugin } from '@classytic/arc/docs';
-import { authPlugin } from '@classytic/arc/auth';
 
-const fastify = Fastify();
+const app = await createApp({
+  preset: 'production',
+  auth: {
+    type: 'jwt',
+    jwt: { secret: process.env.JWT_SECRET ?? 'dev-secret-change-in-production' },
+  },
 
-// Auth first (for protected docs)
-await fastify.register(authPlugin);
+  // Infra plugins run after Arc core (auth) but before resources
+  plugins: async (fastify) => {
+    // OpenAPI spec (auto-detects MongoKit)
+    await fastify.register(openApiPlugin, {
+      title: 'BigBoss Store API',
+      version: '2.0.0',
+      description: 'Multi-tenant e-commerce platform',
+      serverUrl: process.env.API_URL,
+    });
 
-// OpenAPI spec (auto-detects MongoKit)
-await fastify.register(openApiPlugin, {
-  title: 'BigBoss Store API',
-  version: '2.0.0',
-  description: 'Multi-tenant e-commerce platform',
-  serverUrl: process.env.API_URL,
+    // Interactive docs
+    await fastify.register(scalarPlugin, {
+      path: '/docs',
+      theme: 'dark',
+    });
+  },
+
+  // Resources registered by the factory
+  resources: [productResource, categoryResource],
 });
 
-// Interactive docs
-await fastify.register(scalarPlugin, {
-  path: '/docs',
-  theme: 'dark',
-});
-
-// Register resources...
-await fastify.register(productResource.toPlugin());
-await fastify.register(categoryResource.toPlugin());
-
-await fastify.listen({ port: 3000 });
+await app.listen({ port: 3000 });
 // Docs at http://localhost:3000/docs
 // Spec at http://localhost:3000/_docs/openapi.json
 ```
+
+> **Mounting into an existing Fastify app** (brownfield escape hatch): if you're adding
+> Arc docs to a pre-existing Fastify app you can still register everything manually —
+> `authPlugin`, `openApiPlugin`, `scalarPlugin`, then each `resource.toPlugin()`.
+> New apps should use `createApp` as above.

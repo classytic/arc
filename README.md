@@ -126,7 +126,7 @@ export default defineResource({
 });
 ```
 
-Auto-generates: `GET /products`, `GET /products/:id`, `POST /products`, `PATCH /products/:id`, `DELETE /products/:id` + softDelete adds `GET /products/deleted`, `POST /products/:id/restore` + slugLookup adds `GET /products/by-slug/:slug` + custom routes + `POST /products/:id/action`.
+Auto-generates: `GET /products`, `GET /products/:id`, `POST /products`, `PATCH /products/:id`, `DELETE /products/:id` + softDelete adds `GET /products/deleted`, `POST /products/:id/restore` + slugLookup adds `GET /products/slug/:slug` + custom routes + `POST /products/:id/action`.
 
 ### Resource shorthands
 

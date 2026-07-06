@@ -81,7 +81,7 @@ export function registerSchemaResources(
                 name: r.name,
                 displayName: r.displayName,
                 operations: getOps(r, overrides?.[r.name]?.operations),
-                fields: r.schemaOptions?.fieldRules ?? {},
+                fields: visibleFieldRules(r.schemaOptions?.fieldRules),
                 filterableFields: (schemaOpts?.filterableFields as string[]) ?? [],
                 presets: r._appliedPresets ?? [],
               },
@@ -93,6 +93,25 @@ export function registerSchemaResources(
       }),
     );
   }
+}
+
+/**
+ * Strip `hidden: true` / `systemManaged: true` entries before serializing —
+ * the schema-discovery resource must not re-expose exactly what
+ * `fieldRulesToZod` strips from tool input schemas (tenant keys, internal
+ * scoring fields, ...). Same visibility rule, one discovery surface.
+ */
+function visibleFieldRules(
+  fieldRules: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (!fieldRules) return {};
+  const out: Record<string, unknown> = {};
+  for (const [name, rule] of Object.entries(fieldRules)) {
+    const flags = (rule ?? {}) as { hidden?: boolean; systemManaged?: boolean };
+    if (flags.hidden === true || flags.systemManaged === true) continue;
+    out[name] = rule;
+  }
+  return out;
 }
 
 function getOps(r: ResourceDefinition, override?: CrudOperation[]): CrudOperation[] {

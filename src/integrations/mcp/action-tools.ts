@@ -13,11 +13,8 @@
  */
 
 import type { z } from "zod";
-import {
-  normalizeSchemaIR,
-  schemaIRToZodShape,
-  shouldRejectAdditionalProperties,
-} from "../../core/schemaIR.js";
+import { normalizeSchemaIR, shouldRejectAdditionalProperties } from "../../core/schemaIR.js";
+import { schemaIRToZodShape } from "../../core/schemaIRZod.js";
 import type { PermissionCheck } from "../../permissions/types.js";
 import type { ResourcePermissions } from "../../types/index.js";
 import { buildRequestContext } from "./buildRequestContext.js";

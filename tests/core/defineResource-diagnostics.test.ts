@@ -21,6 +21,20 @@ import { defineResource } from "../../src/core/defineResource.js";
 import { allowPublic } from "../../src/permissions/index.js";
 import type { DataAdapter } from "../../src/types/index.js";
 
+/**
+ * Every CRUD op explicitly gated — keeps the `crud-public-by-omission`
+ * diagnostic (2.20) out of tests that assert OTHER diagnostic counts.
+ */
+function fullyGated() {
+  return {
+    list: allowPublic(),
+    get: allowPublic(),
+    create: allowPublic(),
+    update: allowPublic(),
+    delete: allowPublic(),
+  };
+}
+
 function noopAdapter(): DataAdapter {
   return {
     type: "mock",
@@ -60,7 +74,7 @@ describe("defineResource — boot-time diagnostics", () => {
     const resource = defineResource({
       name: "clean",
       adapter: noopAdapter(),
-      permissions: { list: allowPublic(), get: allowPublic() },
+      permissions: fullyGated(),
       schemaOptions: {
         fieldRules: {
           slug: { immutable: true },
@@ -76,7 +90,7 @@ describe("defineResource — boot-time diagnostics", () => {
     const resource = defineResource({
       name: "redundant-immutable",
       adapter: noopAdapter(),
-      permissions: { list: allowPublic(), get: allowPublic() },
+      permissions: fullyGated(),
       schemaOptions: {
         fieldRules: {
           slug: { immutable: true, immutableAfterCreate: true },
@@ -95,7 +109,7 @@ describe("defineResource — boot-time diagnostics", () => {
     const resource = defineResource({
       name: "redundant-system-managed",
       adapter: noopAdapter(),
-      permissions: { list: allowPublic(), get: allowPublic() },
+      permissions: fullyGated(),
       schemaOptions: {
         fieldRules: {
           status: { systemManaged: true, readonly: true },
@@ -111,7 +125,7 @@ describe("defineResource — boot-time diagnostics", () => {
     const resource = defineResource({
       name: "redundant-hidden",
       adapter: noopAdapter(),
-      permissions: { list: allowPublic(), get: allowPublic() },
+      permissions: fullyGated(),
       schemaOptions: {
         fieldRules: {
           secret: { hidden: true, aggregable: false },
@@ -127,7 +141,7 @@ describe("defineResource — boot-time diagnostics", () => {
     const resource = defineResource({
       name: "multi",
       adapter: noopAdapter(),
-      permissions: { list: allowPublic(), get: allowPublic() },
+      permissions: fullyGated(),
       schemaOptions: {
         fieldRules: {
           slug: { immutable: true, immutableAfterCreate: true },
@@ -152,7 +166,7 @@ describe("defineResource — boot-time diagnostics", () => {
     const resource = defineResource({
       name: "logged",
       adapter: noopAdapter(),
-      permissions: { list: allowPublic(), get: allowPublic() },
+      permissions: fullyGated(),
       schemaOptions: {
         fieldRules: {
           slug: { immutable: true, immutableAfterCreate: true },
@@ -194,5 +208,141 @@ describe("defineResource — boot-time diagnostics", () => {
     expect(consoleWarn).not.toHaveBeenCalled();
 
     await app.close();
+  });
+
+  // --------------------------------------------------------------------------
+  // crud-public-by-omission (2.20)
+  // --------------------------------------------------------------------------
+
+  describe("crud-public-by-omission", () => {
+    function byOmission(resource: {
+      _diagnostics?: { code: string; severity: string; message: string }[];
+    }) {
+      return resource._diagnostics?.filter((d) => d.code === "crud-public-by-omission") ?? [];
+    }
+
+    it("warns when a resource mounts all CRUD with no permissions at all", () => {
+      const resource = defineResource({ name: "wideopen", adapter: noopAdapter() });
+      const diags = byOmission(resource);
+      expect(diags).toHaveLength(1);
+      expect(diags[0]?.severity).toBe("warn");
+      for (const op of ["list", "get", "create", "update", "delete"]) {
+        expect(diags[0]?.message).toContain(op);
+      }
+      expect(consoleWarn).not.toHaveBeenCalled();
+    });
+
+    it("warns when only reads are gated (ungated writes = real exposure)", () => {
+      const resource = defineResource({
+        name: "readsonly-gated",
+        adapter: noopAdapter(),
+        permissions: { list: allowPublic(), get: allowPublic() },
+      });
+      const diags = byOmission(resource);
+      expect(diags).toHaveLength(1);
+      expect(diags[0]?.severity).toBe("warn");
+      expect(diags[0]?.message).toContain("create, update, delete");
+      expect(diags[0]?.message).not.toMatch(/gate: list/);
+    });
+
+    it("downgrades to info when only reads are ungated (public catalog shape)", () => {
+      const resource = defineResource({
+        name: "catalog",
+        adapter: noopAdapter(),
+        permissions: {
+          create: allowPublic(),
+          update: allowPublic(),
+          delete: allowPublic(),
+        },
+      });
+      const diags = byOmission(resource);
+      expect(diags).toHaveLength(1);
+      expect(diags[0]?.severity).toBe("info");
+      expect(diags[0]?.message).toContain("list, get");
+    });
+
+    it("referenceData: true without permissions is info-level (reads only mount)", () => {
+      const resource = defineResource({
+        name: "currencies",
+        adapter: noopAdapter(),
+        referenceData: true,
+      });
+      const diags = byOmission(resource);
+      expect(diags).toHaveLength(1);
+      expect(diags[0]?.severity).toBe("info");
+    });
+
+    it("stays silent when every enabled op is gated", () => {
+      const resource = defineResource({
+        name: "gated",
+        adapter: noopAdapter(),
+        permissions: fullyGated(),
+      });
+      expect(byOmission(resource)).toHaveLength(0);
+    });
+
+    it("stays silent when the ungated ops are disabled routes", () => {
+      const resource = defineResource({
+        name: "reads-with-disabled-writes",
+        adapter: noopAdapter(),
+        permissions: { list: allowPublic(), get: allowPublic() },
+        disabledRoutes: ["create", "update", "delete"],
+      });
+      expect(byOmission(resource)).toHaveLength(0);
+    });
+
+    it("middleware-only presets do NOT count as gates (ownedByUser sans auth is still public)", () => {
+      // ownedByUser injects ownership MIDDLEWARE, not permission checks —
+      // and the ownership check no-ops for anonymous requests (`if (!user)
+      // return`). Without an auth permission the write routes are still
+      // publicly reachable, so the diagnostic must keep warning.
+      const resource = defineResource({
+        name: "owned",
+        adapter: noopAdapter(),
+        presets: ["ownedByUser"],
+      });
+      const diags = byOmission(resource);
+      expect(diags).toHaveLength(1);
+      expect(diags[0]?.severity).toBe("warn");
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // filter-field-reserved-name (2.20)
+  // --------------------------------------------------------------------------
+
+  describe("filter-field-reserved-name", () => {
+    function reservedDiags(resource: {
+      _diagnostics?: { code: string; severity: string; message: string }[];
+    }) {
+      return resource._diagnostics?.filter((d) => d.code === "filter-field-reserved-name") ?? [];
+    }
+
+    it("warns when a filterable field name collides with a reserved query param", () => {
+      // Empirically these fields are unfilterable (the query parser consumes
+      // the names) — see tests/e2e/reserved-field-name-collision.test.ts.
+      const resource = defineResource({
+        name: "gadget",
+        adapter: noopAdapter(),
+        permissions: fullyGated(),
+        schemaOptions: { filterableFields: ["code", "cursor", "page", "color"] },
+      });
+      const diags = reservedDiags(resource);
+      expect(diags).toHaveLength(1);
+      expect(diags[0]?.severity).toBe("warn");
+      expect(diags[0]?.message).toContain("cursor");
+      expect(diags[0]?.message).toContain("page");
+      expect(diags[0]?.message).not.toContain("color"); // non-reserved not listed
+    });
+
+    it("stays silent when no filterable field collides with a reserved name", () => {
+      const resource = defineResource({
+        name: "clean-filters",
+        adapter: noopAdapter(),
+        permissions: fullyGated(),
+        schemaOptions: { filterableFields: ["code", "color", "status"] },
+      });
+      expect(reservedDiags(resource)).toHaveLength(0);
+    });
   });
 });

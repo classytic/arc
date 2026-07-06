@@ -591,4 +591,45 @@ describe("resourceToTools", () => {
       expect(result.content[0].text).toContain("Connection lost");
     });
   });
+
+  describe("input schema — cursor pagination + get projection (2.20)", () => {
+    it("list tool advertises `cursor` for keyset pagination (offset still available)", () => {
+      const tools = resourceToTools(mockResource());
+      const list = tools.find((t) => t.name === "list_products")!;
+      expect(list.inputSchema).toHaveProperty("cursor");
+      expect(list.inputSchema).toHaveProperty("page"); // offset path unchanged
+      expect(list.inputSchema).toHaveProperty("limit");
+    });
+
+    it("get tool advertises `select` projection alongside id", () => {
+      const tools = resourceToTools(mockResource());
+      const get = tools.find((t) => t.name === "get_product")!;
+      expect(get.inputSchema).toHaveProperty("id");
+      expect(get.inputSchema).toHaveProperty("select");
+    });
+
+    it("delete tool stays id-only — no projection", () => {
+      const tools = resourceToTools(mockResource());
+      const del = tools.find((t) => t.name === "delete_product")!;
+      expect(del.inputSchema).toHaveProperty("id");
+      expect(del.inputSchema).not.toHaveProperty("select");
+    });
+
+    it("get tool routes `select` through to the controller query (honored by getById)", async () => {
+      const resource = mockResource();
+      const tools = resourceToTools(resource);
+      const get = tools.find((t) => t.name === "get_product")!;
+
+      await get.handler(
+        { id: "abc", select: "name,price" },
+        // biome-ignore lint/suspicious/noExplicitAny: minimal MCP ctx for test
+        { session: { userId: "u1" }, log: vi.fn().mockResolvedValue(undefined), extra: {} } as any,
+      );
+
+      const ctx = (resource.controller as any).get.mock.calls[0][0];
+      expect(ctx.params.id).toBe("abc");
+      // `select` rides in query — QueryResolver forwards it to getById(id, { select }).
+      expect(ctx.query.select).toBe("name,price");
+    });
+  });
 });

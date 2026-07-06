@@ -706,6 +706,16 @@ routes: [
   { method: 'GET', path: '/stream', raw: true, handler: async (req, reply) => reply.send(stream) },
 ]
 
+// Per-route rate limit (2.20) — overrides the resource/app default for ONE endpoint.
+// `false` = never throttle, object = tighten, omit = inherit. Custom routes only;
+// actions share one POST /:id/action mount, so throttle an action by making it a route.
+routes: [
+  { method: 'POST', path: '/export', handler: 'export', permissions: requireAuth(),
+    rateLimit: { max: 5, timeWindow: '1 minute' } },
+  { method: 'GET', path: '/health', handler: 'health', permissions: allowPublic(),
+    rateLimit: false },
+]
+
 // Per-resource opt-out of resourcePrefix (webhooks / admin routes)
 defineResource({ name: 'webhook', prefix: '/hooks', skipGlobalPrefix: true });
 

@@ -312,6 +312,16 @@ describe("arc generate — error handling", () => {
     await expect(generate("unknown", ["foo"])).rejects.toThrow("Unknown type");
   });
 
+  it("rejects path-traversal + invalid names (S1 security fix)", async () => {
+    // The name flows into join(cwd, 'src/resources', name) and into TS
+    // identifiers — traversal or non-identifier chars must be rejected BEFORE
+    // any file write. (Valid-name acceptance is covered by the generation
+    // tests above.)
+    for (const bad of ["../../evil", "../escape", "a/b", "foo.bar", "foo bar", "-leading", "1num"]) {
+      await expect(generate("resource", [bad])).rejects.toThrow(/Invalid name/);
+    }
+  });
+
   it("should skip existing files on resource generation", async () => {
     const projectDir = path.join(testRoot, "gen-skip");
     await fs.mkdir(path.join(projectDir, "src/resources/existing"), {

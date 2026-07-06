@@ -8,6 +8,14 @@ Detailed release notes now live under [changelog/](changelog/). This root file s
 
 See [changelog/v2.md](changelog/v2.md) for the full v2 release history.
 
+## 2.20
+
+- [2.20.0](changelog/v2.md#2200) — domain **modules** (`defineModule` / `ArcModule<TExports>` / typed `getModuleExports`, thunk-of-dynamic-import lazy packs, **`dependsOn` stable topological composition order** with fail-fast cycle/missing/self/duplicate detection via `orderModules`, augmentable `ArcModuleRegistry` for cast-free `getModuleExports`), security-defaults wave (`readOnly()` write-deny, `crud-public-by-omission` diagnostic, MCP session-hijack + MCP aggregation tenant-scope fixes), approval/involvement presets extracted to `@classytic/arc-approval` / `@classytic/arc-involvement` pre-publish (subpaths never shipped), zod made truly optional for `actions:`, `check:peer-skew` release gate, un-driftable `arc init` pins, `./sync` subpath, peer floors primitives `>=0.9.0` / repo-core `>=0.7.0`.
+
+## 2.19
+
+- [2.19.0](changelog/v2.md#2190) — Application-Layer Encryption subpath (`/encryption`: JWE via lazy `jose`, field-level AES-256-GCM via `node:crypto`, `KeyProvider` + `kid` rotation), typed `ResourceExtensions` plugin hatch, better-auth `clone()` fix.
+
 ## 2.18
 
 - [2.18.5](changelog/v2.md#2185) — adopt mongokit 3.16.1 PATCH-safety fix (update-body default stripping; e2e regression proving no PATCH default-injection) + production-grade `arc init` scaffold (typed Zod env, health/onClose, biome+CI).

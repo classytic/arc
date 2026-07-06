@@ -20,12 +20,15 @@
 import { z } from "zod";
 import { resolveActionPermission } from "../../core/actionPermissions.js";
 import type { ResourceDefinition } from "../../core/defineResource.js";
-import { normalizeSchemaIR, schemaIRToZodShape } from "../../core/schemaIR.js";
+import { normalizeSchemaIR } from "../../core/schemaIR.js";
+import { schemaIRToZodShape } from "../../core/schemaIRZod.js";
 import type { PermissionCheck } from "../../permissions/types.js";
+import { getOrgId, getUserId } from "../../scope/types.js";
 import type { ResourcePermissions, RouteDefinition } from "../../types/index.js";
 import { pluralize } from "../../utils/pluralize.js";
 import { convertActionSchemaToZod, createActionToolHandler } from "./action-tools.js";
 import { buildAggregationTools } from "./aggregation-tools.js";
+import { buildScope } from "./buildRequestContext.js";
 import {
   ALL_CRUD_OPS,
   CRUD_ANNOTATIONS,
@@ -44,6 +47,7 @@ import { createMcpController } from "./tool-helpers.js";
 import type {
   CallToolResult,
   CrudOperation,
+  McpAuthResult,
   McpResourceConfig,
   ToolAnnotations,
   ToolDefinition,
@@ -394,29 +398,34 @@ export function resourceToTools(
   // applies — `executeAggregation` is the single source of truth.
   if (resource.aggregations && Object.keys(resource.aggregations).length > 0) {
     const repoForAgg = (resource.controller as unknown as { repository?: unknown })?.repository;
-    // MCP doesn't have a Fastify request, so build the tenant
-    // options bag from the session directly. The session already
-    // carries auth state; we project it into the same shape
+    // MCP doesn't have a Fastify request, so build the tenant options bag
+    // from the session directly, projected into the same shape
     // `BaseCrudController.tenantRepoOptions(req)` produces.
+    //
+    // The session here is the FLAT `McpAuthResult` (userId / organizationId /
+    // clientId at top level) — the shape `mcpPlugin` actually threads through
+    // `ctx.session`. Pre-2.20 this read `session.scope.organizationId` /
+    // `session.user.id`, a shape that never exists at runtime: both reads
+    // were always undefined, so mongokit multi-tenant hosts got a 500 on
+    // every MCP aggregation ("Missing 'organizationId' in context") and
+    // hosts without a fail-closed tenant plugin ran aggregations
+    // TENANT-UNSCOPED — a cross-tenant leak. `buildScope` is the canonical
+    // McpAuthResult → RequestScope projection; reuse its accessors.
     const buildOptionsFromSession = (session: unknown): Record<string, unknown> => {
-      const s = session as
-        | {
-            user?: Record<string, unknown>;
-            scope?: { kind?: string; organizationId?: string; userId?: string };
-            requestId?: string;
-          }
-        | undefined;
+      const auth = (session ?? null) as McpAuthResult | null;
+      const scope = buildScope(auth);
       const out: Record<string, unknown> = {};
-      const orgId = s?.scope?.organizationId;
+      const orgId = getOrgId(scope);
       if (orgId) {
         // Default tenantField is 'organizationId' — match
         // BaseCrudController's stamping convention.
         out.organizationId = orgId;
       }
-      const userId = s?.scope?.userId ?? (s?.user?.id as string | undefined);
+      const userId = getUserId(scope);
       if (userId) out.userId = userId;
-      if (s?.user) out.user = s.user;
-      if (s?.requestId) out.requestId = s.requestId;
+      if (auth?.userId) {
+        out.user = { id: auth.userId, roles: auth.roles ?? [], orgRoles: auth.orgRoles ?? [] };
+      }
       return out;
     };
 

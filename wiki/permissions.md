@@ -2,7 +2,7 @@
 
 **Summary**: v2.10 split the `permissions/` module into `core`, `scope`, `dynamic`. Public import path `@classytic/arc/permissions` is unchanged.
 **Sources**: src/permissions/.
-**Last updated**: 2026-05-18.
+**Last updated**: 2026-07-05.
 
 ---
 
@@ -39,6 +39,20 @@ denyAll('reason')          // always 403
 | `requireTeamMembership` | member | Team membership |
 
 Full matrix: `docs/getting-started/permissions.mdx`.
+
+## CRUD public-by-omission (2.20)
+
+An omitted CRUD permission mounts the route with **no gate** (unlike custom
+routes/actions, which fail boot). Two 2.20 changes close the trap:
+
+- `readOnly()` now returns explicit `denyAll` for create/update/delete — pre-2.20
+  it left them undefined, i.e. **unauthenticated writes**.
+- New boot diagnostic `crud-public-by-omission` (post-preset, reads
+  `resolvedConfig`): `warn` when ungated WRITE ops mount, `info` when only reads
+  are ungated (public catalogs / `referenceData`). Silence it by stating intent —
+  `permissions.fullPublic()`, `permissions.authenticated()`, or per-op checks.
+  Middleware-only presets (ownedByUser) do NOT count as gates: ownership checks
+  no-op for anonymous callers.
 
 ## Field-write denial (v2.9)
 

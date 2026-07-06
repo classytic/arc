@@ -35,7 +35,7 @@ const app = await createApp({
 
 ```typescript
 import { defineResource } from '@classytic/arc/core';
-import { createMongooseAdapter } from '@classytic/arc/adapters';
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
 import { allowPublic, requireRoles } from '@classytic/arc/permissions';
 
 export const userResource = defineResource({
@@ -112,7 +112,7 @@ npx vitest run examples/full-app/tests/
 
 ```typescript
 import { defineResource } from '@classytic/arc/core';
-import { createMongooseAdapter } from '@classytic/arc/adapters';
+import { createMongooseAdapter } from '@classytic/mongokit/adapter';
 import { permissions } from '@classytic/arc/permissions';
 
 const todoResource = defineResource({

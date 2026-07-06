@@ -137,8 +137,8 @@ export const analytics = createPlugin<AnalyticsRootOptions, AnalyticsResourceOpt
       });
     },
 
-    // Called per resource — returns hooks/routes/middleware
-    forResource: (resourceConfig, opts) => {
+    // Called per resource — returns hooks/routes/middleware from the plugin's opts
+    forResource: (opts) => {
       if (!opts.trackEvents) return {};
 
       return {
@@ -552,7 +552,7 @@ For connecting **any database or ORM** to Arc. See the full guide at [custom-ada
 ### Minimal Interface
 
 ```typescript
-import type { DataAdapter } from '@classytic/arc/adapters';
+import type { DataAdapter } from '@classytic/repo-core/adapter';
 import type { StandardRepo } from '@classytic/repo-core/repository';
 
 export function createSupabaseAdapter(options: {

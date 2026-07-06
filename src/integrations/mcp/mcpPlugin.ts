@@ -189,10 +189,22 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
   }
 
   // ── Health endpoint (both modes) — no MCP protocol needed ──
-  fastify.get(`${prefix}/health`, async (_request, reply) => {
+  //
+  // Liveness stays unauthenticated (k8s probes carry no credentials), but
+  // the ENUMERATION half (tool names, resource/session counts) is withheld
+  // from anonymous callers when auth is configured — it mapped the entire
+  // tool surface to anyone who could reach the URL.
+  fastify.get(`${prefix}/health`, async (request, reply) => {
+    const liveness = { status: "ok", mode: stateful ? "stateful" : "stateless" };
+    if (options.auth) {
+      const authResult = await resolveMcpAuth(
+        request.headers as Record<string, string | undefined>,
+        options.auth,
+      );
+      if (!authResult) return reply.send(liveness);
+    }
     reply.send({
-      status: "ok",
-      mode: stateful ? "stateful" : "stateless",
+      ...liveness,
       tools: allTools.length,
       resources: enabledResources.length,
       toolNames: allTools.map((t) => t.name),
@@ -359,9 +371,22 @@ function registerStatefulRoutes(
     opts: Record<string, unknown>,
   ) => SessionEntry["transport"] & { sessionId: string | undefined },
 ): void {
-  /** Check if the requesting principal owns the session */
+  /**
+   * Check if the requesting principal owns the session. FAIL-CLOSED:
+   *
+   *   - `authResult === null` (failed/absent credentials) NEVER owns a
+   *     session — pre-2.20 this returned `true`, so an unauthenticated
+   *     caller with a leaked `Mcp-Session-Id` could attach to the victim's
+   *     SSE stream, terminate the session, and (via the auth-snapshot
+   *     refresh) wipe `entry.auth` to null — after which ANY principal
+   *     passed ownership and took over the session.
+   *   - `entry.auth === null` under configured auth is equally a deny:
+   *     POST 401s before creating a session, so an auth-mode session always
+   *     has an owner snapshot; a missing one means corrupted state.
+   */
   function isSessionOwner(entry: SessionEntry, authResult: McpAuthResult | null): boolean {
-    if (!options.auth || !entry.auth || !authResult) return true;
+    if (!options.auth) return true;
+    if (!authResult || !entry.auth) return false;
     const prev = entry.auth;
     // Compare all identity fields — prevents session confusion between
     // different service clients in the same org, and between human/machine principals.
@@ -444,14 +469,18 @@ function registerStatefulRoutes(
     if (!entry) return reply.code(403).send({ error: "Unauthorized" });
 
     // Re-verify auth — prevent session hijacking via stolen session ID.
-    // Also refresh `entry.auth` + `entry.authRef.current` so server-initiated
-    // messages from tool handlers see the latest identity (e.g. if the
-    // caller's roles changed between POST and GET).
+    // Failed credentials get an explicit 401 (mirror of POST) BEFORE the
+    // ownership check, and the auth snapshot is only ever refreshed with a
+    // verified non-null identity — overwriting it with null was the wipe
+    // that let a follow-up principal take over the session.
     if (options.auth) {
       const authResult = await resolveMcpAuth(
         request.headers as Record<string, string | undefined>,
         options.auth,
       );
+      if (!authResult) {
+        return reply.code(401).send({ error: "Unauthorized" });
+      }
       if (!isSessionOwner(entry, authResult)) {
         return reply.code(403).send({ error: "Unauthorized" });
       }
@@ -472,12 +501,16 @@ function registerStatefulRoutes(
     if (!entry) return reply.code(204).send();
 
     // Verify the requester owns the session before termination.
-    // Refresh auth snapshot to keep parity with POST/GET semantics.
+    // Failed credentials 401 first (mirror of POST/GET); the snapshot is
+    // only refreshed with a verified non-null identity.
     if (options.auth) {
       const authResult = await resolveMcpAuth(
         request.headers as Record<string, string | undefined>,
         options.auth,
       );
+      if (!authResult) {
+        return reply.code(401).send({ error: "Unauthorized" });
+      }
       if (!isSessionOwner(entry, authResult)) {
         return reply.code(403).send({ error: "Unauthorized" });
       }

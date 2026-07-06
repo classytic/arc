@@ -1,16 +1,28 @@
 /**
  * Single source of truth for scaffolded project dependencies.
  *
- * Versions track the published npm latest — bump here when a new release
- * ships. The carets allow minor + patch upgrades without breaking arc's
- * contract, while preventing the silent breakage of `@latest` on a floor
- * bump.
+ * Two layers keep the scaffold from ever contradicting the arc release
+ * that ships it:
+ *
+ *   1. The static table below — tracks published npm latest, bumped on
+ *      release. Serves as the offline fallback.
+ *   2. A runtime overlay from arc's OWN package.json (version + declared
+ *      peer floors). The 2.20.0 review found the static pins had drifted
+ *      (`arc ^2.18.5` + `primitives ^0.6.0` while arc 2.20 peers demand
+ *      >=0.9.0 → ERESOLVE on the first `arc init` a new user runs).
+ *      Deriving from the installed package.json makes that class of
+ *      breakage structurally impossible: the scaffold always pins the
+ *      arc version actually running and ranges that satisfy its peers.
  *
  * Used by both `packageJsonTemplate` (declares the deps in the generated
  * `package.json` so `npm install` works without a pre-pass) and
  * `installDependencies` (runs the package manager's `install` against
  * the declared ranges). One source — no drift.
  */
+
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { DependencyManifest, ProjectConfig } from "./types.js";
 
@@ -20,9 +32,9 @@ export const SCAFFOLD_DEP_VERSIONS = {
   // pagination, adapter contract, and filter helpers from there).
   // `@classytic/primitives` is REQUIRED for events.
   core: {
-    "@classytic/arc": "^2.18.5",
-    "@classytic/primitives": "^0.6.0",
-    "@classytic/repo-core": "^0.6.0",
+    "@classytic/arc": "^2.20.0",
+    "@classytic/primitives": "^0.9.1",
+    "@classytic/repo-core": "^0.7.0",
     "@fastify/cors": "^11.2.0",
     "@fastify/helmet": "^13.0.2",
     "@fastify/rate-limit": "^10.3.0",
@@ -77,6 +89,79 @@ export const SCAFFOLD_DEP_VERSIONS = {
   },
 } as const;
 
+interface OwnPackageJson {
+  name?: string;
+  version?: string;
+  peerDependencies?: Record<string, string>;
+}
+
+/**
+ * Locate arc's own package.json by walking up from the executing file.
+ * A path walk (vs `require.resolve('@classytic/arc/package.json')`) works
+ * regardless of bundle chunk layout and of package.json not being in the
+ * exports map. Returns undefined when not found — callers fall back to
+ * the static table.
+ */
+function readOwnPackageJson(): OwnPackageJson | undefined {
+  try {
+    let dir = dirname(fileURLToPath(import.meta.url));
+    for (let depth = 0; depth < 6; depth++) {
+      const candidate = join(dir, "package.json");
+      if (existsSync(candidate)) {
+        const parsed = JSON.parse(readFileSync(candidate, "utf8")) as OwnPackageJson;
+        if (parsed.name === "@classytic/arc") return parsed;
+      }
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch {
+    // Unreadable/corrupt package.json — static fallback covers it.
+  }
+  return undefined;
+}
+
+/** First x.y.z triple in a range string, or undefined. */
+function parseFloor(range: string): [number, number, number] | undefined {
+  const m = /(\d+)\.(\d+)\.(\d+)/.exec(range);
+  if (!m) return undefined;
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+function floorLessThan(a: [number, number, number], b: [number, number, number]): boolean {
+  if (a[0] !== b[0]) return a[0] < b[0];
+  if (a[1] !== b[1]) return a[1] < b[1];
+  return a[2] < b[2];
+}
+
+/**
+ * Overlay live truth from arc's own package.json onto the static pins:
+ *   - `@classytic/arc` pins the exact running version (`^<version>`).
+ *   - Any scaffolded dep that is also an arc peer gets raised to `^<peer
+ *     floor>` when the static pin's floor is BELOW the declared peer floor
+ *     (never lowered — static pins may legitimately be ahead of the floor).
+ */
+function overlayLiveArcVersions(dependencies: Record<string, string>): void {
+  const own = readOwnPackageJson();
+  if (!own) return;
+
+  if (own.version && dependencies["@classytic/arc"]) {
+    dependencies["@classytic/arc"] = `^${own.version}`;
+  }
+
+  const peers = own.peerDependencies ?? {};
+  for (const [name, staticRange] of Object.entries(dependencies)) {
+    const peerRange = peers[name];
+    if (!peerRange) continue;
+    const peerFloor = parseFloor(peerRange);
+    const staticFloor = parseFloor(staticRange);
+    if (!peerFloor || !staticFloor) continue;
+    if (floorLessThan(staticFloor, peerFloor)) {
+      dependencies[name] = `^${peerFloor.join(".")}`;
+    }
+  }
+}
+
 /**
  * Resolve the dependency manifest for a scaffold configuration.
  *
@@ -106,6 +191,8 @@ export function resolveScaffoldDependencies(config: ProjectConfig): DependencyMa
   if (config.typescript) {
     Object.assign(devDependencies, SCAFFOLD_DEP_VERSIONS.devTypescript);
   }
+
+  overlayLiveArcVersions(dependencies);
 
   return {
     dependencies: sortByKey(dependencies),

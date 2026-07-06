@@ -17,7 +17,12 @@ import { executePipeline } from "../../pipeline/pipe.js";
 import type { PipelineConfig, PipelineContext } from "../../pipeline/types.js";
 import type { IControllerResponse } from "../../types/index.js";
 import { buildRequestContext, type McpOperation } from "./buildRequestContext.js";
-import { evaluatePermission, permissionDeniedResult, toCallToolResult } from "./tool-helpers.js";
+import {
+  evaluatePermission,
+  permissionDeniedResult,
+  toCallToolError,
+  toCallToolResult,
+} from "./tool-helpers.js";
 import type { CallToolResult, ToolDefinition } from "./types.js";
 
 type ControllerMethod = (ctx: unknown) => Promise<IControllerResponse>;
@@ -202,8 +207,10 @@ export function createCustomRouteHandler(
       }
       return toCallToolResult(await method(reqCtx));
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
+      // Canonical error contract — same shape CRUD/action/aggregation tools
+      // emit. Raw `Error: ${msg}` strings lost ArcError code/status and
+      // leaked internal messages to MCP clients (routes had drifted).
+      return toCallToolError(err instanceof Error ? err : new Error(String(err)));
     }
   };
 }
@@ -220,8 +227,8 @@ export function createMcpHandlerPassthrough(
     try {
       return await mcpHandler(input);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
+      // Same canonical contract as the pipeline-backed handlers above.
+      return toCallToolError(err instanceof Error ? err : new Error(String(err)));
     }
   };
 }

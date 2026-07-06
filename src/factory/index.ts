@@ -49,6 +49,15 @@ export {
   type ResourceModule,
 } from "./loadResources.js";
 export {
+  type ArcModule,
+  type ArcModuleInput,
+  type ArcModuleRegistry,
+  defineModule,
+  getModuleExports,
+  orderModules,
+  resolveModule,
+} from "./module.js";
+export {
   developmentPreset,
   edgePreset,
   getPreset,

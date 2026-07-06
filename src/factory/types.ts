@@ -726,6 +726,57 @@ export interface CreateAppOptions {
   // ============================================
 
   /**
+   * Domain modules — compose whole domains into the app, one entry each.
+   *
+   * Where a `resources` entry is a single route group, a module is a self-
+   * contained domain package's full contribution (engine init + resources +
+   * post-wiring) bundled as one `ArcModule`. A package exports
+   * `createXModule(deps): ArcModule`; the host lists it here instead of hand-
+   * threading the package's pieces across `bootstrap` / `resources` /
+   * `afterResources`.
+   *
+   * Modules are pure sugar over the existing lifecycle — each expands into the
+   * SAME phases, in `dependsOn` order, running BEFORE the app-level entry in
+   * every phase:
+   * ```
+   * app plugins()  → modules[].plugins         (infra registration)
+   * modules[].bootstrap      → options.bootstrap
+   * modules[].resources      → options.resources / resourceDir  (see note ↓)
+   * modules[].afterResources → options.afterResources
+   * modules[].onClose (REVERSE order) → options.onClose   (one hook; see below)
+   * ```
+   * RESOURCES — two orderings, both intentional: app `resources`/`resourceDir`
+   * RESOLVE first (semantics untouched), but module resources REGISTER first
+   * (prepended, so their routes mount ahead of app resources). Teardown runs
+   * module `onClose` (reverse composition order) then app `onClose` in a single
+   * close hook, so module teardown (flush outboxes, drain queues, close a
+   * module-owned connection) sees live shared infra — the app/plugin
+   * connections close last. Module resources flow through arc's normal
+   * registration (prefix, dedup, docs, audit) — they are not special-cased.
+   *
+   * Entries may be eager modules, promises, or **thunks of dynamic imports**
+   * (the `next/dynamic` idea, backend-shaped) — thunks resolve once at boot,
+   * so region/tier-gated packs are only imported when selected:
+   *
+   * @example
+   * ```ts
+   * const taxPack = region === 'BD'
+   *   ? () => import('@classytic/bd-tax/module').then((m) => m.createBdTaxModule(deps))
+   *   : () => import('@classytic/us-tax/module').then((m) => m.createUsTaxModule(deps));
+   *
+   * const app = await createApp({
+   *   resourcePrefix: '/api/v1',
+   *   modules: [accountingModule({ permissions }), taxPack],
+   *   resources: [healthResource], // app-local resources still compose alongside
+   * });
+   * ```
+   *
+   * See `wiki/modules.md` for the full design (authoring convention, events/
+   * outbox integration, microservices path).
+   */
+  modules?: ReadonlyArray<import("./module.js").ArcModuleInput>;
+
+  /**
    * Resources to register automatically. Accepts two shapes:
    *
    *   1. **Array** — each resource's `.toPlugin()` is called and registered.

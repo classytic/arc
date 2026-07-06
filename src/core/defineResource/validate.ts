@@ -50,7 +50,55 @@ export function validateDefineResourceConfig<TDoc>(
   validatePermissionsShape(config);
   validateCustomRoutePermissions(config);
   validateActionsShape(config);
-  return collectRedundantFieldRuleDiagnostics(config);
+  return [
+    ...collectRedundantFieldRuleDiagnostics(config),
+    ...collectReservedFilterNameDiagnostics(config),
+  ];
+}
+
+/**
+ * Query-string param names arc's `QueryParser` reserves for
+ * pagination/projection (`q.after ?? q.cursor` is the keyset cursor). A
+ * document field with one of these names can never be filtered via the query
+ * string — the parser consumes the name before it reaches the filter map — and
+ * the same reservation flows into the MCP list-tool schema. Silent pre-2.20;
+ * now surfaced.
+ */
+const RESERVED_QUERY_PARAMS = new Set<string>([
+  "page",
+  "limit",
+  "cursor",
+  "after",
+  "sort",
+  "search",
+  "select",
+  "populate",
+]);
+
+/**
+ * Warn when a declared filterable field's NAME collides with a reserved query
+ * param. Verified empirically (tests/e2e/reserved-field-name-collision.test.ts):
+ * a field named `cursor`/`page` is silently unfilterable. Boot diagnostic, not
+ * a hard error — the resource still works, the field just isn't query-filterable.
+ */
+function collectReservedFilterNameDiagnostics<TDoc>(
+  config: ResourceConfig<TDoc>,
+): ResourceDiagnostic[] {
+  const filterable = config.schemaOptions?.filterableFields;
+  if (!filterable) return [];
+  const collisions = filterable.filter((f) => RESERVED_QUERY_PARAMS.has(f));
+  if (collisions.length === 0) return [];
+  return [
+    {
+      severity: "warn",
+      code: "filter-field-reserved-name",
+      message:
+        `[Arc] Resource '${config.name}': filterable field(s) [${collisions.join(", ")}] collide with reserved ` +
+        "query params (page, limit, cursor, after, sort, search, select, populate). The query parser consumes " +
+        "these names for pagination/projection, so filtering by them via the query string — and via the MCP list " +
+        "tool — will NOT work. Rename the field(s), or drop them from `filterableFields` if the collision is intended.",
+    },
+  ];
 }
 
 /** Permissions must be `PermissionCheck` functions, not arbitrary values. */

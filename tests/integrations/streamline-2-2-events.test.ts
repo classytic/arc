@@ -119,6 +119,12 @@ describe("v2.11.0 — STREAMLINE_BUS_EVENTS constant covers streamline 2.2's ful
     );
   });
 
+  it("includes streamline >= 2.7 workflow:paused (bridged, but NOT terminal — run resumes)", () => {
+    expect(STREAMLINE_BUS_EVENTS).toContain("workflow:paused");
+    // A pause is not the end of the run — the SSE stream must stay open.
+    expect(STREAMLINE_TERMINAL_EVENTS).not.toContain("workflow:paused" as never);
+  });
+
   it("terminal-events list is a proper subset of bus-events, limited to the 3 streams should auto-close on", () => {
     expect(STREAMLINE_TERMINAL_EVENTS).toEqual([
       "workflow:completed",

@@ -32,6 +32,7 @@ import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
 import { allowPublic } from "../../src/permissions/index.js";
+import { gc, measureHeapMedian } from "../_helpers/heap.js";
 
 interface IItem {
   sku: string;
@@ -98,36 +99,8 @@ afterAll(async () => {
   await mongoServer.stop();
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Force GC if available, otherwise yield to the microtask queue. */
-async function gc(): Promise<void> {
-  if (typeof globalThis.gc === "function") {
-    globalThis.gc();
-    // Run twice to give the gc a chance to clean up GC artifacts
-    await new Promise((r) => setTimeout(r, 10));
-    globalThis.gc();
-  }
-  // Yield so any pending microtasks finish
-  await new Promise((r) => setImmediate(r));
-}
-
-function heapUsedMB(): number {
-  return process.memoryUsage().heapUsed / 1024 / 1024;
-}
-
-/** Measure heap median across N samples to filter out GC noise. */
-async function measureHeapMedian(samples: number): Promise<number> {
-  const readings: number[] = [];
-  for (let i = 0; i < samples; i++) {
-    await gc();
-    readings.push(heapUsedMB());
-  }
-  readings.sort((a, b) => a - b);
-  return readings[Math.floor(readings.length / 2)] ?? 0;
-}
+// Heap helpers (`gc`, `measureHeapMedian`) come from `tests/_helpers/heap.ts`
+// so every perf test measures identically.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests

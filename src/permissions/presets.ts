@@ -20,7 +20,14 @@
  * ```
  */
 
-import { allowPublic, anyOf, requireAuth, requireOwnership, requireRoles } from "./core.js";
+import {
+  allowPublic,
+  anyOf,
+  denyAll,
+  requireAuth,
+  requireOwnership,
+  requireRoles,
+} from "./core.js";
 import type { PermissionCheck } from "./types.js";
 
 /**
@@ -173,6 +180,11 @@ export function fullPublic<TDoc = Record<string, unknown>>(
 /**
  * Read-only: list + get authenticated, write operations denied.
  * Useful for computed/derived resources.
+ *
+ * Writes carry an explicit `denyAll` check — an omitted CRUD permission
+ * mounts the route with NO gate (public-by-omission), so leaving
+ * create/update/delete undefined here would expose unauthenticated writes.
+ * Hosts that disable write routes entirely (`disabledRoutes`) are unaffected.
  */
 export function readOnly<TDoc = Record<string, unknown>>(
   overrides?: PermissionOverrides<TDoc>,
@@ -181,6 +193,9 @@ export function readOnly<TDoc = Record<string, unknown>>(
     {
       list: requireAuth(),
       get: requireAuth(),
+      create: denyAll("Write operations are disabled on this read-only resource"),
+      update: denyAll("Write operations are disabled on this read-only resource"),
+      delete: denyAll("Write operations are disabled on this read-only resource"),
     },
     overrides,
   );
