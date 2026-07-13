@@ -8,7 +8,7 @@
     "outDir": "./dist",
     "rootDir": "./src",
 
-    // Strict type checking (maximum safety — TS 6 default is strict:true)
+    // Strict type checking (maximum safety — strict:true is the TS 6/7 default)
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
@@ -27,7 +27,7 @@
     "sourceMap": false,
     "noEmit": true,
 
-    // Types — TS 6 changed default to [] (no longer auto-discovers @types/*)
+    // Types — TS 6/7 default is [] (no longer auto-discovers @types/*)
     "types": ["node", "qs"],
 
     // Other

@@ -164,29 +164,51 @@ describe("Scenario: Accounting App", () => {
     expect(res.json().data.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("short date strings (2026-01-15) pass Fastify validation", async () => {
-    // After removing format: "date-time" from Date type, both short dates and
-    // ISO datetimes should pass Fastify validation. Mongoose handles parsing.
+  it("Date fields enforce ISO date-time at Fastify once schemas generate (mongokit 3.21 default)", async () => {
+    // HISTORY: pre-mongokit-3.21 this fixture wired NO schemaGenerator, so
+    // the adapter returned null schemas and Fastify validated nothing —
+    // short dates slipped through to Mongoose and this test asserted that
+    // accident as "arc removed format: date-time" (that removal applied to
+    // arc's OWN fallback generator, deleted in 2.12). With mongokit's
+    // generator on by default, Date fields emit `format: 'date-time'` —
+    // mongokit's long-standing contract that every explicit-generator host
+    // already runs. Short dates now fail FAST at the Fastify layer.
+    // Hosts that want date-only input use mongokit's `dateAs: 'date'`, or
+    // opt out entirely with `schemaGenerator: false`.
     const res = await app.inject({
       method: "POST",
       url: "/journal-entries",
       payload: { description: "Short date", date: "2026-06-15", organizationId: "org-1" },
     });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe("arc.validation_error");
+  });
+
+  it("full ISO date-time strings pass Fastify validation", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/journal-entries",
+      payload: {
+        description: "ISO date",
+        date: "2026-06-15T00:00:00.000Z",
+        organizationId: "org-1",
+      },
+    });
     expect(res.statusCode).toBe(201);
   });
 
-  it("invalid date strings fail at Mongoose level, not Fastify", async () => {
+  it("invalid date strings fail fast at Fastify (format), not deep in Mongoose", async () => {
+    // Same 3.21 shift as above: garbage dates are now caught at the
+    // validation boundary with a machine-readable contract instead of
+    // surfacing as a Mongoose CastError after the request reached the
+    // controller. Fail-fast at the edge is the desired production behavior.
     const res = await app.inject({
       method: "POST",
       url: "/journal-entries",
       payload: { description: "Bad date", date: "not-a-date", organizationId: "org-1" },
     });
-    // Should fail — but as a Mongoose/DB error, not Fastify VALIDATION_ERROR
-    expect(res.statusCode).toBeGreaterThanOrEqual(400);
-    if (res.statusCode === 400) {
-      const body = res.json();
-      expect(body.code).not.toBe("arc.validation_error");
-    }
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe("arc.validation_error");
   });
 
   it("date range filter works", async () => {

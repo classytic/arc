@@ -807,13 +807,21 @@ export interface ResourcePermissions {
  * Plugin extension namespace — arc's typed escape hatch for attaching
  * declarative, per-resource config that **plugins** read at request time.
  *
- * This interface is intentionally **empty in core**. Each optional plugin
- * augments it via TypeScript declaration merging to register its own typed
+ * **External** plugins augment it via TypeScript declaration merging
+ * (`declare module "@classytic/arc/types"`) to register their own typed
  * slice — exactly the model Fastify uses for `FastifyInstance` decorators.
- * A host that never installs a plugin never sees its key; a host that does
- * gets full autocomplete + compile-time checking on the matching
+ * The host gets full autocomplete + compile-time checking on the matching
  * `extensions` block, and a typo (`extensions: { encyrption: … }`) is a
  * type error rather than a silent no-op.
+ *
+ * **First-party** slices (arc's own subpath plugins) are declared inline
+ * below with type-only imports instead of `declare module`. Not a style
+ * choice: arc bundles its declarations, and a relative module augmentation
+ * (`declare module "../types/resource.js"`) survives bundling as an
+ * unresolvable specifier — the merge silently never happens for consumers,
+ * so the key would be a compile ERROR downstream while working inside this
+ * repo. Inline declaration is bundler-proof; the type-only import is erased
+ * at runtime, so the plugin stays fully opt-in.
  *
  * **The "React for backend" composition model.** `defineResource()` is the
  * declarative component, `extensions` is its typed props bag, and plugins
@@ -827,11 +835,11 @@ export interface ResourcePermissions {
  * at request time via `request.routeOptions.config.arcExtensions` without
  * re-deriving which resource a route belongs to.
  *
- * @example A plugin registers its slice (in `@classytic/arc/encryption`)
+ * @example An external plugin package registers its slice
  * ```ts
  * declare module "@classytic/arc/types" {
  *   interface ResourceExtensions {
- *     encryption?: import("@classytic/arc/encryption").EncryptionDirective;
+ *     myPlugin?: import("my-arc-plugin").MyPluginDirective;
  *   }
  * }
  * ```
@@ -844,8 +852,16 @@ export interface ResourcePermissions {
  * });
  * ```
  */
-// biome-ignore lint/suspicious/noEmptyInterface: declaration-merge target — plugins augment their typed slice via `declare module`. An index signature would defeat the strong-contract guarantee (only registered keys are valid).
-export interface ResourceExtensions {}
+export interface ResourceExtensions {
+  /**
+   * Encrypt this resource's responses — full-body JWE or specific fields.
+   * Read at request time by `@classytic/arc/encryption`'s `encryptionPlugin`
+   * from `request.routeOptions.config.arcExtensions.encryption`; inert (and
+   * dependency-free — the import is type-only) unless that plugin is
+   * registered.
+   */
+  encryption?: import("../encryption/types.js").EncryptionDirective;
+}
 
 export interface ResourceConfig<TDoc = AnyRecord> {
   name: string;

@@ -117,8 +117,19 @@ export function buildGeneratedCrudSchemas(
     for (const [op, customSchema] of Object.entries(customSchemas)) {
       const key = op as keyof CrudSchemas;
       const converted = convertRouteSchema(customSchema as Record<string, unknown>);
+      // Part-level layering (2.21 fix): each schema PART the host customises
+      // (body / params / querystring / response) REPLACES the generated part
+      // wholesale — a body schema is a complete wire contract, not a patch.
+      // Generated parts the custom schema does NOT touch survive, which is
+      // the documented intent (custom `body` must not erase generated
+      // `params`). The previous `deepMergeSchemas` here UNIONED `required[]`
+      // arrays, so a custom body describing a DIFFERENT wire shape (legacy
+      // controllers mapping public bodies onto kernel models) still demanded
+      // the model's required fields — dormant while adapters had no schema
+      // generator, detonated when mongokit 3.21 turned generation on by
+      // default (28 production resources).
       schemas[key] = schemas[key]
-        ? deepMergeSchemas(schemas[key] as AnyRecord, converted as AnyRecord)
+        ? { ...(schemas[key] as AnyRecord), ...(converted as AnyRecord) }
         : (converted as AnyRecord);
     }
   }

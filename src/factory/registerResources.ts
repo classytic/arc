@@ -6,7 +6,7 @@
 
 import type { FastifyInstance } from "fastify";
 import type { ResourceLike } from "./loadResources.js";
-import { orderModules, resolveModule } from "./module.js";
+import { type ArcModule, orderModules, resolveModule } from "./module.js";
 import type { FastifyPlugin } from "./shared.js";
 import type { CreateAppOptions } from "./types.js";
 
@@ -74,6 +74,7 @@ async function registerOne(
 export async function registerResources(
   fastify: FastifyInstance,
   config: CreateAppOptions,
+  preResolvedModules?: readonly ArcModule[],
 ): Promise<void> {
   // v2.11 — production preset defaults `strictResources` + `strictResourceDir`
   // to `true`. Field report: a stale `dist/` registered 17 ghost
@@ -98,10 +99,14 @@ export async function registerResources(
   // gating), so unselected packs are never evaluated. `dependsOn` orders
   // COMPOSITION, not import — every thunk resolves here regardless of edges.
   // Every phase below iterates this one ordered list. (see wiki/modules.md)
-  const resolvedModuleInputs = await Promise.all(
-    (config.modules ?? []).map((m) => resolveModule(m)),
-  );
-  const modules = orderModules(resolvedModuleInputs);
+  //
+  // 2.21 — `createApp` pre-resolves the graph even earlier (before security
+  // plugins / the error handler, so module-shipped `errorMappers` can merge)
+  // and passes it in; thunks then fire exactly once. Resolving here remains
+  // for direct callers of `registerResources` (tests, embedded hosts).
+  const modules =
+    preResolvedModules ??
+    orderModules(await Promise.all((config.modules ?? []).map((m) => resolveModule(m))));
 
   // ── 2. App plugins (infra: DB, data, webhooks) ──
   if (config.plugins) {

@@ -51,8 +51,11 @@ jobs:
         env:
           MONGO_URI: mongodb://localhost:27017/test
 
-      - name: Smoke test
+      - name: Smoke test (incl. consumer install + typecheck + e2e)
         run: npm run smoke
+        env:
+          SMOKE_CONSUMER: "1"
+          MONGO_URI: mongodb://localhost:27017/arc_consumer_smoke
 
       - name: MCP E2E
         run: node scripts/mcp-e2e.mjs

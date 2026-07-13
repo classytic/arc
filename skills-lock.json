@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "fastify-best-practices": {
+      "source": "mcollina/skills",
+      "sourceType": "github",
+      "skillPath": "skills/fastify/SKILL.md",
+      "computedHash": "269924684709b8c6f50a569ef988e66031efb822ef92cba6c8dfa160e54ed4d4"
+    },
+    "visa-best-practices": {
+      "source": "visa/ai",
+      "sourceType": "github",
+      "skillPath": "skills/visa-best-practices/SKILL.md",
+      "computedHash": "df1b997df5f77eac147f96fc75191c4898caaf110ab38f062b308b8d33709201"
+    }
+  }
+}

@@ -142,6 +142,7 @@ export type {
 // Core — defineResource, controller split (v2.11.0)
 // ============================================================================
 export {
+  type AdapterLike,
   BaseController,
   BaseCrudController,
   BulkMixin,
@@ -150,7 +151,10 @@ export {
   defineResource,
   defineResourceVariants,
   getControllerScope,
+  mergeResourceConfig,
   ResourceDefinition,
+  type ResourceSeams,
+  type SeamedResourceConfig,
   SlugMixin,
   SoftDeleteMixin,
   TreeMixin,

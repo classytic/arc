@@ -243,11 +243,25 @@ describe("Type Inference & DX", () => {
       // present in both shapes (createBody) so the test stays meaningful.
     });
 
-    it("generateSchemas returns null when no schemaGenerator is wired", () => {
+    it("generateSchemas defaults to mongokit's generator when none is wired (mongokit 3.21)", () => {
       const repo = new Repository<IProduct>(ProductModel);
       const adapter = new MongooseAdapter({ model: ProductModel, repository: repo });
-      // No fallback in 2.12 — null is the documented return when the host
-      // hasn't wired a generator. CLI scaffolds wire mongokit automatically.
+      // mongokit 3.21 made the adapter correct-by-default: omitting
+      // `schemaGenerator` now means `buildCrudSchemasFromModel`, not null —
+      // an audited production host had 28 adapters silently shipping null
+      // OpenAPI bodies from the old default.
+      const schemas = adapter.generateSchemas() as Record<string, unknown> | null;
+      expect(schemas).not.toBeNull();
+      expect(schemas).toHaveProperty("createBody");
+    });
+
+    it("generateSchemas returns null only with an explicit schemaGenerator: false opt-out", () => {
+      const repo = new Repository<IProduct>(ProductModel);
+      const adapter = new MongooseAdapter({
+        model: ProductModel,
+        repository: repo,
+        schemaGenerator: false,
+      });
       expect(adapter.generateSchemas()).toBeNull();
     });
   });

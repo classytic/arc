@@ -341,6 +341,14 @@ const ENDPOINT_TO_EVENT: ReadonlyArray<{ test: RegExp; phase: "before" | "after"
     // API keys
     { test: /\/api-key\/create\b/, phase: "after", name: "apikey.create" },
     { test: /\/api-key\/delete\b/, phase: "after", name: "apikey.delete" },
+    // Session — Better Auth (verified through 1.6.23) revokes the sign-out
+    // session through a path that BYPASSES `databaseHooks.session.delete`,
+    // so the route hook is the reliable carrier for the documented
+    // `session.delete` = sign-out event. Admin/remote revocation flows still
+    // go through the adapter and fire the database hook. If a future BA
+    // release routes sign-out through the adapter again, remove this entry
+    // or hosts will see two rows per sign-out.
+    { test: /\/sign-out\b/, phase: "after", name: "session.delete" },
   ];
 
 function classifyEndpoint(

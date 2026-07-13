@@ -95,6 +95,47 @@ no decorators, no reflect-metadata, no provider tokens, no injector. Deps are
 a typed object; "exports" are the package's public API (JS modules already
 encapsulate — no runtime exports map).
 
+### Typed seams + merge (2.21) — the cast-free assembly recipe
+
+Type host-facing per-resource override bundles as `ResourceSeams` (or a
+`Pick<ResourceSeams, ...>` allow-list) and compose with `mergeResourceConfig`
+— both from `@classytic/arc`. This kills the `as never` tax module authors
+paid when assembling `defineResource` configs from injected parts (a real
+module carried 15+ casts in <200 lines), and makes every module's
+"defaults + host seams" merge identical: top-level arrays concat, plain
+objects merge recursively (nested arrays replace), instances last-win. The
+`adapter` seam slot is widened via `AdapterLike` (the `ControllerLike`
+pattern) so doc-type-erased boundaries accept any kit adapter without casts:
+
+```ts
+export interface CatalogSeams { product?: ResourceSeams; category?: ResourceSeams }
+
+function buildResource(key: Key, seams?: ResourceSeams) {
+  return defineResource(
+    mergeResourceConfig(
+      {
+        name: key,
+        prefix: DEFAULTS[key].prefix,
+        audit: true,
+        permissions: permissionMatrix({ read: deps.view, write: deps.manage }),
+      },
+      seams,
+    ),
+  );
+}
+// Presence-driven mounting stays a plain loop — the tables (MODEL_FOR,
+// DEFAULTS) are domain content, not boilerplate; arc deliberately ships no
+// resourcesFromEngine() wrapper for them.
+```
+
+### Module-shipped error mappers (2.21)
+
+`defineModule({ errorMappers: [shippingErrorMapper] })` — merged into the
+app's error handler at boot, AFTER host-declared mappers (host keeps
+priority). Composing a module is now sufficient for its domain errors to
+cross the wire as mapped contracts; the composition root no longer lists
+every domain package's error classes.
+
 ## Dynamic modules (the next/dynamic idea, backend-shaped)
 
 The thunk-of-import is the contract — lazy AND analyzable:

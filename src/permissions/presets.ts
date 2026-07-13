@@ -134,6 +134,48 @@ export function adminOnly<TDoc = Record<string, unknown>>(
 }
 
 /**
+ * Arbitrary-gate CRUD matrix — the generalization every host and arc-*
+ * module hand-rolls as `{ list: view, get: view, create: manage, ... }`.
+ *
+ * Unlike the fixed presets above, the gates are caller-supplied
+ * `PermissionCheck`s, so ANY combinator plugs in — org roles, ownership,
+ * `anyOf(...)`, service scopes, custom async checks. `delete` defaults to
+ * the `write` gate.
+ *
+ * @example
+ * ```typescript
+ * // Two-gate (view/manage) — the arc-* module convention:
+ * permissionMatrix({ read: requireAuth(), write: requireOrgRole('manager') })
+ *
+ * // Three-gate with a stricter delete:
+ * permissionMatrix({
+ *   read: allowPublic(),
+ *   write: requireOrgRole('manager'),
+ *   delete: requireOrgRole('owner'),
+ * })
+ * ```
+ */
+export function permissionMatrix<TDoc = Record<string, unknown>>(
+  gates: {
+    read: PermissionCheck<TDoc>;
+    write: PermissionCheck<TDoc>;
+    delete?: PermissionCheck<TDoc>;
+  },
+  overrides?: PermissionOverrides<TDoc>,
+): ResourcePermissions<TDoc> {
+  return withOverrides(
+    {
+      list: gates.read,
+      get: gates.read,
+      create: gates.write,
+      update: gates.write,
+      delete: gates.delete ?? gates.write,
+    },
+    overrides,
+  );
+}
+
+/**
  * Owner-scoped with admin bypass.
  * list = auth (scoped to owner), get = auth, create = auth,
  * update + delete = ownership check with admin bypass.

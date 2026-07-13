@@ -96,15 +96,19 @@ describe("buildGeneratedCrudSchemas", () => {
     );
   });
 
-  it("customSchemas layers per-slot on top of auto-gen (touched slots merge, untouched stay)", () => {
+  it("customSchemas layers per-slot on top of auto-gen (touched PARTS replace, untouched stay)", () => {
     // Post-2.12 contract: declaring `customSchemas.create` no longer
     // wholesale-disables generated `get`/`update`/`delete`/`params`
-    // schemas. The auto-gen runs unconditionally; customSchemas
-    // deep-merges per slot on top.
+    // schemas. The auto-gen runs unconditionally; customSchemas layers
+    // per slot on top.
     //
-    // Merge precedence: deep-merged shapes (customSchemas wins on
-    // primitive collisions, properties union). Untouched slots keep
-    // their adapter-derived contents intact.
+    // 2.21 precedence change: a customised schema PART (body/params/...)
+    // REPLACES the generated part wholesale — a body schema is a complete
+    // wire contract, not a patch. The pre-2.21 deep-merge unioned
+    // `required[]`/properties across two DIFFERENT wire shapes, which
+    // 400'd every legacy-wire create once mongokit 3.21 turned generated
+    // schemas on by default (caught live on 28 production resources).
+    // Parts the custom schema does NOT touch keep their auto-gen intact.
     const openApi = {
       createBody: {
         type: "object",
@@ -132,10 +136,10 @@ describe("buildGeneratedCrudSchemas", () => {
 
     const result = buildGeneratedCrudSchemas(openApi, customSchemas);
     const createBody = result?.create?.body as { properties?: Record<string, unknown> };
-    // Touched slot — deep-merged: both `name` (auto-gen) and `extra`
-    // (custom) survive.
-    expect(createBody.properties).toHaveProperty("name");
+    // Touched PART — custom body replaces the generated body wholesale:
+    // only the custom contract's fields remain.
     expect(createBody.properties).toHaveProperty("extra");
+    expect(createBody.properties).not.toHaveProperty("name");
 
     // Untouched slots — keep auto-gen verbatim. Pre-fix this would
     // have been undefined because `customSchemas.create` triggered a

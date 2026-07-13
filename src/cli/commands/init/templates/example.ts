@@ -299,7 +299,17 @@ import { describe, it, beforeAll, afterAll } from 'vitest';
 import { createTestApp, expectArc } from '@classytic/arc/testing';
 import type { TestAppContext${ts ? ", TestAuthProvider" : ""} } from '@classytic/arc/testing';
 import exampleResource from '../src/resources/example/example.resource.js';
-
+${
+  config.tenant === "multi"
+    ? `
+// Valid ObjectId hex — the example model types organizationId and createdBy
+// as ObjectId (createdBy is auto-stamped from the caller's user id).
+const TEST_ORG_ID = '64f000000000000000000001';
+const MANAGER_ID = '64f0000000000000000000a1';
+const STAFF_ID = '64f0000000000000000000a2';
+`
+    : ""
+}
 describe('Example Resource', () => {
   let ctx${ts ? ": TestAppContext" : ""};
   // Narrowed once below — \`authMode: 'jwt'\` guarantees a provider, but
@@ -314,17 +324,77 @@ ${config.adapter === "mongokit" ? "      connectMongoose: true,\n" : ""}    });
 
     if (!ctx.auth) throw new Error('Test auth provider was not configured');
     auth = ctx.auth;
-
+${
+  config.tenant === "multi"
+    ? `
+    // Arc's JWT auth builds a MEMBER scope straight from token claims —
+    // \`organizationId\` + \`orgRoles\` land on \`request.scope\`. The org-staff
+    // permission set reads those org roles; the tenant preset filters and
+    // stamps rows by the org id.
+    auth.register('manager', {
+      user: { id: MANAGER_ID, role: 'user', organizationId: TEST_ORG_ID, orgRoles: ['manager'] },
+      orgId: TEST_ORG_ID,
+    });
+    auth.register('staff', {
+      user: { id: STAFF_ID, role: 'user', organizationId: TEST_ORG_ID, orgRoles: ['staff'] },
+      orgId: TEST_ORG_ID,
+    });
+`
+    : `
     // Arc's permission engine reads singular user.role — string,
     // comma-separated string, or array all normalise via getUserRoles().
+    // The id must be ObjectId-shaped: the example model's createdBy is an
+    // ObjectId, auto-stamped from the caller's user id.
     auth.register('admin', {
-      user: { id: '1', role: 'admin' },
-      orgId: 'org-1',
+      user: { id: '64f0000000000000000000ad', role: 'admin' },
+    });
+`
+}  });
+
+  afterAll(() => ctx.close());
+${
+  config.tenant === "multi"
+    ? `
+  describe('GET /examples', () => {
+    it('should reject unauthenticated listing (org-staff gated)', async () => {
+      const res = await ctx.app.inject({ method: 'GET', url: '/examples' });
+      expectArc(res).unauthorized();
+    });
+
+    it('should list for an org member (rows scoped to their org)', async () => {
+      const res = await ctx.app.inject({
+        method: 'GET',
+        url: '/examples',
+        headers: auth.as('staff').headers,
+      });
+      expectArc(res).ok().paginated();
     });
   });
 
-  afterAll(() => ctx.close());
+  describe('POST /examples', () => {
+    it('should require authentication', async () => {
+      const res = await ctx.app.inject({
+        method: 'POST',
+        url: '/examples',
+        payload: { name: 'Test Example' },
+      });
+      expectArc(res).unauthorized();
+    });
 
+    it('should create for an org manager — organizationId stamped server-side', async () => {
+      const res = await ctx.app.inject({
+        method: 'POST',
+        url: '/examples',
+        headers: auth.as('manager').headers,
+        // No organizationId in the body — the tenant preset injects it from
+        // the caller's scope (the field is systemManaged in the schema).
+        payload: { name: 'Test Example' },
+      });
+      expectArc(res).ok(201);
+    });
+  });
+`
+    : `
   describe('GET /examples', () => {
     it('should return a list of examples (public)', async () => {
       const res = await ctx.app.inject({ method: 'GET', url: '/examples' });
@@ -349,9 +419,11 @@ ${config.adapter === "mongokit" ? "      connectMongoose: true,\n" : ""}    });
         headers: auth.as('admin').headers,
         payload: { name: 'Test Example' },
       });
-      expectArc(res).ok();
+      expectArc(res).ok(201);
     });
   });
+`
+}
 
   // Add more tests as needed:
   // - GET /examples/:id         (expectArc(res).ok().hasData({ name: '...' }))

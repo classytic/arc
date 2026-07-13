@@ -12,7 +12,7 @@
 npx tsc --noEmit                                     # Typecheck (strict)
 npx biome check src/ --diagnostic-level=error        # Lint (Biome only)
 npx vitest run tests/<path>/<file>.test.ts           # Targeted test — ALWAYS prefer this
-npm run test:main                                    # Main suite (excludes perf)
+npm run test:main                                    # Main suite (excludes perf; ws suites auto-serialized via vitest projects — ~40s wall)
 npm run test:perf                                    # Isolated perf/leak suite (--expose-gc)
 npm run test:ci                                      # Main + perf — CI/release only
 ```

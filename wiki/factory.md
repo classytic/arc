@@ -2,7 +2,7 @@
 
 **Summary**: `createApp` is the main entry point. It builds a Fastify instance, registers resources, wires plugins, and returns the app.
 **Sources**: src/factory/.
-**Last updated**: 2026-04-25 (loadResources `context` + factory-export support; `silent` removed — 2.11.1).
+**Last updated**: 2026-07-13 (`beforeBoot` slot + `loadResources` path `filter` — 2.21).
 
 ---
 
@@ -19,6 +19,12 @@ const app = await createApp({
   cors, logger, openapi, mcp,
 });
 ```
+
+## `beforeBoot` — pre-everything hook (2.21)
+
+`createApp({ beforeBoot: async () => connectDatabase(), ... })` is awaited BEFORE arc does anything: no Fastify instance, no module-thunk resolution, no resource imports yet. The canonical slot for the DB connection and anything module-EVAL-time code depends on (engines registering Mongoose models at import → eager `createIndex` → `buffering timed out` when the connection isn't open). Replaces the hand-orchestrated `await connectDatabase()` + dynamic-import ordering tricks hosts carried in composition roots. Runs after option validation; cleanup stays in `onClose`.
+
+Module graph resolution (thunk imports + `dependsOn` topo-sort) is hoisted right after it — pure, fail-fast, and it lets module-shipped `errorMappers` merge into the error handler (see [[modules]]).
 
 ## Resource loading
 
@@ -56,6 +62,10 @@ resources: async () => {
 ```
 
 Detection is `typeof default === 'function'` — `defineResource()` returns a class instance (`typeof === 'object'`), so the two shapes are unambiguous. Async factories awaited; thrown / non-resource returns reported via the injected logger as a distinct "factory failure" diagnostic.
+
+### `loadResources({ filter })` — path gate before import (2.21)
+
+`filter: (absolutePath) => boolean` runs on every discovered file BEFORE import — gated files' modules never evaluate (top-level engine construction of disabled features never fires). This is the one-callback replacement for the feature-flag → resource-dir manifest tiered hosts hand-roll. Distinct from `include`/`exclude`, which match resource NAMES after import.
 
 ### Logging — inject a logger, omit for silent (v2.11.1)
 

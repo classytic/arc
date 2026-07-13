@@ -2,7 +2,7 @@
 
 **Summary**: v2.10 split the `permissions/` module into `core`, `scope`, `dynamic`. Public import path `@classytic/arc/permissions` is unchanged.
 **Sources**: src/permissions/.
-**Last updated**: 2026-07-05.
+**Last updated**: 2026-07-13 (`permissionMatrix` preset — 2.21).
 
 ---
 
@@ -116,6 +116,10 @@ Typed against the resource's `TDoc`, composes with other validations, fails with
 ## Dynamic matrix
 
 `permissions/dynamic.ts` computes permissions at runtime from a matrix config, with per-node cache and cross-node invalidation. Use when roles/permissions are DB-backed.
+
+## `permissionMatrix` (2.21) — arbitrary-gate CRUD matrix
+
+`permissionMatrix({ read, write, delete? }, overrides?)` maps `read` → list/get, `write` → create/update; `delete` defaults to `write`. Gates are any `PermissionCheck` (org roles, ownership, `anyOf`, async) — unlike the fixed role-based presets, it's the generalization every host and arc-* module hand-rolled as a 5-line `{ list: view, get: view, ... }` map. Composes with `overrides` like every other preset.
 
 ## Removed in v2.10
 - `@classytic/arc/policies` — pluggable policy engine; `permissions/` covers every documented use case. See [[removed]].

@@ -158,6 +158,37 @@ describe("loadResources()", () => {
     expect(resources.length).toBe(0);
   });
 
+  // ── filter: path-level gate, runs BEFORE import (2.21) ──
+
+  it("filter gates files by path before import — gated modules never evaluate", async () => {
+    const seen: string[] = [];
+    const resources = await loadResources(FIXTURE_DIR, {
+      filter: (absolutePath) => {
+        seen.push(absolutePath);
+        // Gate off the order/ directory — the feature-flag manifest pattern.
+        return !/[\\/]order[\\/]/.test(absolutePath);
+      },
+    });
+    expect(resources.length).toBe(1);
+    expect((resources[0] as { name: string }).name).toBe("product");
+    // The gate saw every discovered file (absolute paths), including gated ones.
+    expect(seen.some((p) => /order\.resource\.mjs$/.test(p))).toBe(true);
+    expect(seen.every((p) => p.includes("__fixtures_lr__"))).toBe(true);
+  });
+
+  it("filter that gates everything returns an empty array", async () => {
+    const resources = await loadResources(FIXTURE_DIR, { filter: () => false });
+    expect(resources.length).toBe(0);
+  });
+
+  it("filter composes with include/exclude (filter first, then name matching)", async () => {
+    const resources = await loadResources(FIXTURE_DIR, {
+      filter: (p) => !/[\\/]order[\\/]/.test(p),
+      exclude: ["product"],
+    });
+    expect(resources.length).toBe(0); // order gated by path, product excluded by name
+  });
+
   // ── Module evaluation errors: single attempt, no double-execution ──
 
   it("module that throws during evaluation is imported exactly once", async () => {

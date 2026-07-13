@@ -76,6 +76,17 @@ export {
   default as requestIdPlugin,
   requestIdPlugin as requestIdPluginFn,
 } from "./requestId.js";
+export type {
+  ScheduleDefinition,
+  ScheduleLockLike,
+  SchedulesPluginOptions,
+  ScheduleStats,
+} from "./schedules.js";
+// Recurring in-process jobs with optional multi-replica leader safety
+export {
+  default as schedulesPlugin,
+  schedulesPlugin as schedulesPluginFn,
+} from "./schedules.js";
 export type { SSEOptions } from "./sse.js";
 // Server-Sent Events
 export {

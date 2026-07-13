@@ -57,6 +57,9 @@ export {
   UnauthorizedError,
   ValidationError,
 } from "./errors.js";
+// Filter dialects — retarget the parser's emitted operator vocabulary
+export type { FilterDialect } from "./filter-dialect.js";
+export { MONGO_DIALECT, NEUTRAL_DIALECT } from "./filter-dialect.js";
 // Raw handler wrapper
 export { handleRaw } from "./handleRaw.js";
 export type { ArcQueryParserOptions } from "./queryParser.js";

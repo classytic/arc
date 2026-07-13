@@ -11,8 +11,12 @@ import { createApp, loadResources } from '@classytic/arc/factory';
 import { auditPlugin, MemoryAuditStore } from '@classytic/arc/audit';
 
 async function main() {
-  const mongo = await MongoMemoryServer.create();
-  await mongoose.connect(mongo.getUri());
+  // CI provides a mongod service via MONGO_URI; locally we boot an in-memory
+  // server (first run downloads a mongod binary — avoided on CI).
+  const mongo = process.env.MONGO_URI ? undefined : await MongoMemoryServer.create();
+  const mongoUri = process.env.MONGO_URI ?? mongo?.getUri();
+  if (!mongoUri) throw new Error('FAIL: no mongo URI available');
+  await mongoose.connect(mongoUri);
   console.log('[ok] mongo connected');
 
   const auditStore = new MemoryAuditStore();
@@ -34,7 +38,6 @@ async function main() {
     plugins: async (fastify) => {
       await fastify.register(auditPlugin, {
         enabled: true,
-        stores: [],
         customStores: [auditStore],
         autoAudit: { perResource: true },
       });
@@ -131,11 +134,11 @@ async function main() {
 
   await app.close();
   await mongoose.disconnect();
-  await mongo.stop();
+  await mongo?.stop();
 
   console.log('');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log('  ALL CHECKS PASSED — arc 2.6.2 works');
+  console.log('  ALL CHECKS PASSED — consumer smoke OK');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 }
 

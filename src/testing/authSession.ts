@@ -202,7 +202,11 @@ export function createJwtAuthProvider(
           `[jwt] app.jwt.sign() is unavailable — register @fastify/jwt before calling createJwtAuthProvider.`,
         );
       }
-      return jwt.sign(config.user);
+      // Arc's authPlugin defaults to `strictTokenType: true`, which rejects
+      // tokens without `type: "access"` (v2.9). Stamp it so provider-minted
+      // tokens pass arc's own gate out of the box; an explicit `type` on the
+      // user payload still wins (e.g. testing the rejection path itself).
+      return jwt.sign({ type: "access", ...config.user });
     },
   });
 }

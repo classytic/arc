@@ -119,6 +119,7 @@ export {
   authenticated,
   fullPublic,
   ownerWithAdminBypass,
+  permissionMatrix,
   publicRead,
   publicReadAdminWrite,
   readOnly,

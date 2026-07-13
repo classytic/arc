@@ -142,8 +142,10 @@ describe("audit bridge — real better-auth integration", () => {
     // a sign-up, BA isn't routing through our hooks at all.
     const userCreateOriginal = bridge.databaseHooks.user.create.after;
     const sessionCreateOriginal = bridge.databaseHooks.session.create.after;
+    const sessionDeleteOriginal = bridge.databaseHooks.session.delete?.after;
     let userCreateCalls = 0;
     let sessionCreateCalls = 0;
+    let sessionDeleteCalls = 0;
     bridge.databaseHooks.user.create.after = async (u) => {
       userCreateCalls++;
       return userCreateOriginal(u);
@@ -152,9 +154,16 @@ describe("audit bridge — real better-auth integration", () => {
       sessionCreateCalls++;
       return sessionCreateOriginal(s);
     };
+    if (sessionDeleteOriginal && bridge.databaseHooks.session.delete) {
+      bridge.databaseHooks.session.delete.after = async (s) => {
+        sessionDeleteCalls++;
+        return sessionDeleteOriginal(s);
+      };
+    }
     (bridge as unknown as { _testCalls: () => Record<string, number> })._testCalls = () => ({
       userCreateCalls,
       sessionCreateCalls,
+      sessionDeleteCalls,
     });
 
     const auth = betterAuth({
@@ -319,20 +328,14 @@ describe("audit bridge — real better-auth integration", () => {
   }, 30_000);
 
   // ─────────────────────────────────────────────────────────────────
-  // Known limitation — BA's `queueAfterTransactionHook` uses an
-  // AsyncLocalStorage that doesn't drain when arc-core (which has its own
-  // request-context ALS) is registered on the same Fastify instance. The
-  // bridge contract is proven by:
-  //   - Control test (above): BA fires databaseHooks when wired directly
-  //   - Control B test (above): BA fires bridge.databaseHooks when wired alone
-  //   - tests/auth/audit-bridge.test.ts: full synthetic-hook coverage
-  //
-  // The combined-app integration tests below currently skip pending an
-  // upstream BA fix or an arc-core opt-out for AsyncLocalStorage on the
-  // BA-handled path. Everything else in the bridge is fully tested.
+  // These two combined-app tests were skipped through better-auth <=1.6.19:
+  // BA's `queueAfterTransactionHook` AsyncLocalStorage didn't drain when
+  // arc-core (which has its own request-context ALS) shared the Fastify
+  // instance. The drain works as of better-auth 1.6.23, so they run again.
+  // The control tests above pin the standalone behaviour either way.
   // ─────────────────────────────────────────────────────────────────
 
-  it.skip("sign-up flow → session.create row appears in audit store", async () => {
+  it("sign-up flow → session.create row appears in audit store", async () => {
     const signUpRes = await app.inject({
       method: "POST",
       url: "/api/auth/sign-up/email",
@@ -377,7 +380,12 @@ describe("audit bridge — real better-auth integration", () => {
     expect(bridge.getStats().dispatchFailures).toBe(0);
   }, 30_000);
 
-  it.skip("sign-out flow → session.delete row appears in audit store", async () => {
+  // BA (verified through 1.6.23) revokes the sign-out session through a path
+  // that bypasses `databaseHooks.session.delete` (instrumented counter stays
+  // 0 while the create hooks fire and drain fine). The bridge therefore
+  // carries sign-out on the ENDPOINT hook (`/sign-out` → `session.delete` in
+  // ENDPOINT_TO_EVENT) — this test pins that carrier end-to-end.
+  it("sign-out flow → session.delete row appears in audit store", async () => {
     // Sign up + capture cookies
     const signUpRes = await app.inject({
       method: "POST",
@@ -395,11 +403,14 @@ describe("audit bridge — real better-auth integration", () => {
     await new Promise((r) => setTimeout(r, 10));
     auditRows.length = 0; // reset for the sign-out assertion
 
-    // Sign out
+    // Sign out — Fastify rejects a JSON content-type with an EMPTY body
+    // (FST_ERR_CTP_EMPTY_JSON_BODY → 400), so send an explicit empty object;
+    // better-auth ignores the body on this endpoint.
     const signOutRes = await app.inject({
       method: "POST",
       url: "/api/auth/sign-out",
       headers: { cookie: cookies, "content-type": "application/json" },
+      payload: {},
     });
     expect(signOutRes.statusCode).toBe(200);
 
@@ -413,6 +424,14 @@ describe("audit bridge — real better-auth integration", () => {
     const sessionDeleteRows = auditRows.filter(
       (r) => r.metadata?.customAction === "session.delete",
     );
+    // Diagnostic parity with the sign-up test — surface BA hook-call counts
+    // so a BA behaviour change is obvious in the failure message.
+    if (sessionDeleteRows.length === 0) {
+      const calls = (bridge as unknown as { _testCalls: () => Record<string, number> })._testCalls();
+      throw new Error(
+        `session.delete audit row missing. BA hook-call counts: ${JSON.stringify(calls)}. bridge stats: ${JSON.stringify(bridge.getStats())}. auditRows: ${JSON.stringify(auditRows.map((r) => r.metadata?.customAction))}`,
+      );
+    }
     expect(sessionDeleteRows.length).toBeGreaterThanOrEqual(1);
   }, 30_000);
 });

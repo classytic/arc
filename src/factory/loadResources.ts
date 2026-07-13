@@ -150,6 +150,31 @@ export interface LoadResourcesOptions<TContext = unknown> {
    */
   include?: string[];
   /**
+   * Path-level gate, called for every discovered file BEFORE it is imported.
+   * Return `false` to skip the file entirely — its module never evaluates,
+   * so top-level side effects (engine construction, model registration) of
+   * gated-off features never fire. That's the difference from
+   * `include`/`exclude`, which match resource NAMES after import.
+   *
+   * The feature-flag → resource-dir manifest every tiered SaaS host carries
+   * becomes one callback:
+   *
+   * ```ts
+   * await loadResources(import.meta.url, {
+   *   filter: (path) => {
+   *     if (path.includes(`${sep}loyalty${sep}`)) return isFeatureEnabled('loyalty');
+   *     if (path.includes(`${sep}pos${sep}`)) return isFeatureEnabled('pos');
+   *     return true;
+   *   },
+   * });
+   * ```
+   *
+   * Receives the ABSOLUTE file path. Gating everything is legitimate — the
+   * result is an empty array (interacts with `strictResourceDir` like any
+   * other empty discovery).
+   */
+  filter?: (absolutePath: string) => boolean;
+  /**
    * Optional logger override for diagnostics. When omitted, warnings flow
    * through arc's standard logger (`arcLog('loadResources')`) — same path
    * as every other arc-internal warning, controlled by `ARC_SUPPRESS_WARNINGS=1`
@@ -201,14 +226,16 @@ export async function loadResources<TContext = unknown>(
   dir: string,
   options: LoadResourcesOptions<TContext> = {},
 ): Promise<ResourceLike[]> {
-  const { suffix = ".resource", recursive = true, exclude, include } = options;
+  const { suffix = ".resource", recursive = true, exclude, include, filter } = options;
   // Accept import.meta.url (file:// URL) — resolve to its parent directory
   const resolvedDir = dir.startsWith("file://") ? dirname(fileURLToPath(dir)) : dir;
   const absDir = resolve(resolvedDir);
   const pattern = new RegExp(`${escapeRegex(suffix)}\\.(ts|js|mts|mjs)$`);
 
-  const files = await collectFiles(absDir, pattern, recursive);
-  files.sort(); // deterministic registration order (alphabetical)
+  const discovered = await collectFiles(absDir, pattern, recursive);
+  discovered.sort(); // deterministic registration order (alphabetical)
+  // Path-level gate runs BEFORE import — gated files' modules never evaluate.
+  const files = filter ? discovered.filter((f) => filter(f)) : discovered;
 
   const includeSet = include ? new Set(include) : null;
   const excludeSet = exclude ? new Set(exclude) : null;

@@ -32,11 +32,17 @@ One-line hooks per page. Load only what you need.
 - [mcp](mcp.md) — Model Context Protocol tool generation
 
 ## Quality
+- [schema-pipeline](schema-pipeline.md) — how validation + OpenAPI/MCP schemas assemble; the 2.21 part-level precedence rule; which knob for which situation
 - [testing](testing.md) — test mapping, harness, never-run-full-suite rule
 - [gotchas](gotchas.md) — numbered trap list (fail-closed, at-least-once, etc.)
 - [security](security.md) — checklist when touching auth/perms/data
 
 ## API lifecycle
 - [removed](removed.md) — APIs removed per version, with replacements (so agents don't reach for ghosts)
+
+## Records
+Execution/decision records — point-in-time, not living docs.
+- [record-dependson-completion](record-dependson-completion.md) — dependsOn module-ordering primitive, completion report (2.20, 2026-07-06)
+- [record-ecosystem-extraction](record-ecosystem-extraction.md) — approval + involvement extraction to `arc-ecosystem` before the 2.20 publish (rationale + execution)
 
 > **Release notes live elsewhere.** Wiki pages document how arc works *now*; for historical changes see [`/changelog/v2.md`](../changelog/v2.md) at the repo root, or the curated [`/CHANGELOG.md`](../CHANGELOG.md) entry pointer.

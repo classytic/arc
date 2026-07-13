@@ -7,8 +7,6 @@
  * route matcher. See {@link encryptionPlugin}.
  */
 
-import type { EncryptionDirective } from "./types.js";
-
 export { default, encryptionPlugin } from "./encryptionPlugin.js";
 export {
   decryptField,
@@ -29,17 +27,9 @@ export type {
   KeyProvider,
 } from "./types.js";
 
-// Register the typed `encryption` slice on arc's resource-extension contract.
-// Declaration-merging onto the module where `ResourceExtensions` is declared
-// makes `defineResource({ extensions: { encryption: { … } } })` fully typed
-// for any host that imports this subpath — and a typo a compile error.
-declare module "../types/resource.js" {
-  interface ResourceExtensions {
-    /**
-     * Encrypt this resource's responses — full-body JWE or specific fields.
-     * Threaded to request time on
-     * `request.routeOptions.config.arcExtensions.encryption`.
-     */
-    encryption?: EncryptionDirective;
-  }
-}
+// The typed `encryption` slice on `ResourceExtensions` is declared inline in
+// `src/types/resource.ts` (type-only import), NOT via `declare module` here:
+// a relative module augmentation does not survive d.ts bundling — the
+// specifier comes out unresolvable in dist and the merge silently never
+// happens for consumers. External plugins (separate packages) augment
+// `declare module "@classytic/arc/types"` instead, which bundles fine.

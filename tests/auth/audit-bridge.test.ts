@@ -116,6 +116,20 @@ describe("wireBetterAuthAudit — endpoint hooks (MFA, OAuth, password reset)", 
     expect(s.rows[0]?.metadata?.customAction).toBe("org.create");
   });
 
+  it("classifies /sign-out after-hook as 'session.delete' (endpoint carrier)", async () => {
+    // BA (through 1.6.23) revokes the sign-out session WITHOUT firing
+    // `databaseHooks.session.delete`, so the endpoint hook is the carrier
+    // for the documented `session.delete` = sign-out event.
+    await s.bridge.hooks.after({
+      path: "/sign-out",
+      method: "POST",
+      context: { session: { user: { id: "u1" }, activeOrganizationId: "org_acme" } },
+    });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(s.rows[0]?.metadata?.customAction).toBe("session.delete");
+    expect(s.rows[0]?.userId).toBe("u1");
+  });
+
   it("ignores endpoints we don't classify (no row written)", async () => {
     await s.bridge.hooks.after({
       path: "/some/random/endpoint",

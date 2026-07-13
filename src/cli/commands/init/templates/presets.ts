@@ -133,120 +133,42 @@ export default presets;
 
 export function flexibleMultiTenantPresetTemplate(config: ProjectConfig): string {
   const ts = config.typescript;
-  const typeAnnotations = ts
+  const imports = ts
     ? `
-import { getOrgId, isElevated, isMember } from '@classytic/arc/scope';
-import type { RequestScope } from '@classytic/arc/scope';
+import { multiTenantPreset } from '@classytic/arc/presets/tenant';
 
 interface FlexibleMultiTenantOptions {
   tenantField?: string;
 }
-
-interface PresetMiddlewares {
-  list: ((request: any, reply: any) => Promise<void>)[];
-  get: ((request: any, reply: any) => Promise<void>)[];
-  create: ((request: any, reply: any) => Promise<void>)[];
-  update: ((request: any, reply: any) => Promise<void>)[];
-  delete: ((request: any, reply: any) => Promise<void>)[];
-}
-
-interface Preset {
-  [key: string]: unknown;
-  name: string;
-  middlewares: PresetMiddlewares;
-}
 `
     : `
-const { getOrgId, isElevated, isMember } = require('@classytic/arc/scope');
+const { multiTenantPreset } = require('@classytic/arc/presets/tenant');
 `;
 
   return `/**
  * Flexible Multi-Tenant Preset
  *
- * Smarter tenant filtering that works with public + authenticated routes.
+ * Thin wrapper around arc's built-in 'multiTenantPreset' with public reads:
  *
- * Philosophy:
- * - No org scope → No filtering (public data, all orgs)
- * - Org scope present → Filter by org
- * - Elevated scope → No filter (platform admin sees all)
+ * - list/get WITHOUT org context → allowed through unfiltered (public data)
+ * - org context present → rows filtered + stamped to the caller's org
+ * - elevated (platform admin) → unfiltered, cross-tenant
+ * - create/update fail closed without org context, and update overwrites any
+ *   client-supplied tenant field (no cross-tenant document hops)
  *
- * Uses request.scope (RequestScope) from Arc's scope system.
- */
-${typeAnnotations}
-/**
- * Create flexible tenant filter middleware.
- * Only filters when org context is present.
- */
-function createFlexibleTenantFilter(tenantField${ts ? ": string" : ""}) {
-  return async (request${ts ? ": any" : ""}, reply${ts ? ": any" : ""}) => {
-    const scope${ts ? ": RequestScope" : ""} = request.scope ?? { kind: 'public' };
-
-    // Elevated scope — platform admin sees all, no filter
-    if (isElevated(scope)) {
-      request.log?.debug?.({ msg: 'Elevated scope — no tenant filter' });
-      return;
-    }
-
-    // Member scope — filter by org
-    if (isMember(scope)) {
-      request.query = request.query ?? {};
-      request.query._policyFilters = {
-        ...(request.query._policyFilters ?? {}),
-        [tenantField]: scope.organizationId,
-      };
-      request.log?.debug?.({ msg: 'Tenant filter applied', orgId: scope.organizationId, tenantField });
-      return;
-    }
-
-    // Public / authenticated — no org context, show all data (public routes)
-    request.log?.debug?.({ msg: 'No org context — showing all data' });
-  };
-}
-
-/**
- * Create tenant injection middleware.
- * Injects tenant ID into request body on create.
- */
-function createTenantInjection(tenantField${ts ? ": string" : ""}) {
-  return async (request${ts ? ": any" : ""}, reply${ts ? ": any" : ""}) => {
-    const scope${ts ? ": RequestScope" : ""} = request.scope ?? { kind: 'public' };
-    const orgId = getOrgId(scope);
-
-    // Fail-closed: Require orgId for create operations
-    if (!orgId) {
-      return reply.code(403).send({
-        error: 'Organization context required to create resources',
-        code: 'arc.org_required',
-      });
-    }
-
-    if (request.body) {
-      request.body[tenantField] = orgId;
-    }
-  };
-}
-
-/**
- * Flexible Multi-Tenant Preset
+ * The built-in preset also registers 'systemManaged' field rules for the
+ * tenant field, so generated request schemas never demand it in the body —
+ * the server stamps it from the caller's scope instead. Don't hand-roll
+ * tenant middleware: without those field rules Fastify's validation rejects
+ * creates before injection can run.
  *
- * @param options.tenantField - Field name in database (default: 'organizationId')
+ * Want members-only reads? Drop 'allowPublic' below, or use
+ * 'multiTenantPreset({ tenantField })' directly on the resource.
  */
-export function flexibleMultiTenantPreset(options${ts ? ": FlexibleMultiTenantOptions = {}" : " = {}"})${ts ? ": Preset" : ""} {
+${imports}
+export function flexibleMultiTenantPreset(options${ts ? ": FlexibleMultiTenantOptions = {}" : " = {}"}) {
   const { tenantField = 'organizationId' } = options;
-
-  const tenantFilter = createFlexibleTenantFilter(tenantField);
-  const tenantInjection = createTenantInjection(tenantField);
-
-  return {
-    name: 'flexibleMultiTenant',
-    middlewares: {
-      list: [tenantFilter],
-      get: [tenantFilter],
-      create: [tenantInjection],
-      update: [tenantFilter],
-      delete: [tenantFilter],
-    },
-  };
+  return multiTenantPreset({ tenantField, allowPublic: ['list', 'get'] });
 }
 
 export default flexibleMultiTenantPreset;

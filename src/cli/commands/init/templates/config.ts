@@ -130,6 +130,9 @@ export function tsconfigTemplate(): string {
         declarationMap: true,
         sourceMap: true,
         resolveJsonModule: true,
+        // TS 6/7 no longer auto-discover @types/* — without this, @types/node
+        // globals (process, Buffer, NodeJS.*) vanish from the scaffold.
+        types: ["node"],
         paths: {
           "#shared/*": ["./src/shared/*"],
           "#resources/*": ["./src/resources/*"],

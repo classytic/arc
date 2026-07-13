@@ -35,6 +35,7 @@ import {
 } from "../constants.js";
 import { arcLog } from "../logger/index.js";
 import type { ParsedQuery, PopulateOption, QueryParserInterface } from "../types/index.js";
+import { type FilterDialect, MONGO_DIALECT } from "./filter-dialect.js";
 
 const log = arcLog("queryParser");
 
@@ -86,6 +87,13 @@ export interface ArcQueryParserOptions {
    * Also used by MCP to enrich list tool descriptions.
    */
   allowedOperators?: string[];
+  /**
+   * Datastore dialect for the EMITTED filter shape (operator tokens +
+   * case-insensitive expression). Defaults to `MONGO_DIALECT`. Pass
+   * `NEUTRAL_DIALECT` (or a custom one) to retarget the operator vocabulary
+   * without writing a full `QueryParserInterface`.
+   */
+  dialect?: FilterDialect;
 }
 
 /**
@@ -133,23 +141,19 @@ export class ArcQueryParser implements QueryParserInterface {
   /** Allowed operators (used by MCP for operator descriptions) */
   readonly allowedOperators?: readonly string[];
 
-  /** Supported filter operators */
-  private readonly operators: Record<string, string> = {
-    eq: "$eq",
-    ne: "$ne",
-    gt: "$gt",
-    gte: "$gte",
-    lt: "$lt",
-    lte: "$lte",
-    in: "$in",
-    nin: "$nin",
-    like: "$regex",
-    contains: "$regex",
-    regex: "$regex",
-    exists: "$exists",
-  };
+  /**
+   * Datastore dialect — owns the store-specific operator tokens + the
+   * case-insensitive modifier. Defaults to Mongo (backward-compatible).
+   */
+  private readonly dialect: FilterDialect;
+
+  /** Supported filter operators (neutral name → emitted token), from the dialect. */
+  private get operators(): Readonly<Record<string, string>> {
+    return this.dialect.operators;
+  }
 
   constructor(options: ArcQueryParserOptions = {}) {
+    this.dialect = options.dialect ?? MONGO_DIALECT;
     this.maxLimit = options.maxLimit ?? MAX_LIMIT;
     this.defaultLimit = options.defaultLimit ?? DEFAULT_LIMIT;
     this.maxRegexLength = options.maxRegexLength ?? MAX_REGEX_LENGTH;
@@ -442,27 +446,27 @@ export class ArcQueryParser implements QueryParserInterface {
       const allKnownOperators = operatorKeys.every((op) => this.operators[op]);
 
       if (allOperators && operatorKeys.length > 0) {
-        // All operators known and allowed — convert: { gte: '40', lte: '100' } → { $gte: 40, $lte: 100 }
-        const mongoFilters: Record<string, unknown> = {};
+        // All operators known and allowed — convert via the dialect:
+        // { gte: '40', lte: '100' } → { $gte: 40, $lte: 100 } (Mongo default).
+        const fieldOps: Record<string, unknown> = {};
         let needsCaseInsensitive = false;
         for (const [op, opValue] of Object.entries(operatorObj)) {
-          const mongoOp = this.operators[op];
-          if (mongoOp) {
-            mongoFilters[mongoOp] = this.parseFilterValue(opValue, op);
-            // v2.10.9 — `contains` / `like` promise case-insensitive
-            // matching in their OpenAPI descriptions. Emit `$options: 'i'`
-            // so the engine honors that promise. `regex` stays
-            // caller-controlled. See the bracket-notation path below
-            // for the companion stamp.
+          const token = this.operators[op];
+          if (token) {
+            fieldOps[token] = this.parseFilterValue(opValue, op);
+            // v2.10.9 — `contains` / `like` promise case-insensitive matching
+            // in their OpenAPI descriptions. The dialect expresses that (Mongo:
+            // `$options: 'i'`). `regex` stays caller-controlled. See the
+            // bracket-notation path below for the companion stamp.
             if (op === "contains" || op === "like") {
               needsCaseInsensitive = true;
             }
           }
         }
         if (needsCaseInsensitive) {
-          mongoFilters.$options = "i";
+          Object.assign(fieldOps, this.dialect.caseInsensitiveModifier());
         }
-        filters[key] = mongoFilters;
+        filters[key] = fieldOps;
         return;
       }
 
@@ -485,25 +489,23 @@ export class ArcQueryParser implements QueryParserInterface {
       (!this._allowedOperators || this._allowedOperators.has(operator))
     ) {
       // Operator filter: status[ne]=deleted → { status: { $ne: 'deleted' } }
-      const mongoOp = this.operators[operator];
+      const token = this.operators[operator];
       const parsedValue = this.parseFilterValue(value, operator);
 
       if (!filters[fieldName]) {
         filters[fieldName] = {};
       }
       const fieldFilter = filters[fieldName] as Record<string, unknown>;
-      fieldFilter[mongoOp] = parsedValue;
+      fieldFilter[token] = parsedValue;
 
-      // v2.10.9 — `contains` and `like` advertise case-insensitive
-      // matching in their OpenAPI descriptions ("Contains substring
-      // (case-insensitive)" / "Pattern match (case-insensitive)") but
-      // previously emitted `{ $regex: pattern }` without `$options`,
-      // so Mongo evaluated them case-sensitively. The `regex` operator
-      // is left untouched — callers supplying a raw regex pattern
-      // control flags themselves (and can still use `[contains]` or
-      // `[like]` if they want the documented case-insensitive shape).
+      // v2.10.9 — `contains` and `like` advertise case-insensitive matching in
+      // their OpenAPI descriptions ("Contains substring (case-insensitive)" /
+      // "Pattern match (case-insensitive)"). The dialect expresses that shape
+      // (Mongo: `$options: 'i'`). The `regex` operator is left untouched —
+      // callers supplying a raw regex pattern control flags themselves (and can
+      // still use `[contains]` / `[like]` for the documented case-insensitive shape).
       if (operator === "contains" || operator === "like") {
-        fieldFilter.$options = "i";
+        Object.assign(fieldFilter, this.dialect.caseInsensitiveModifier());
       }
     } else if (!operator) {
       // Direct equality: status=active → { status: 'active' }

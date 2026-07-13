@@ -2,7 +2,7 @@
 
 **Summary**: Built-in Fastify plugins that augment arc apps. All opt-in via `createApp({ plugins })` except a few that auto-register.
 **Sources**: src/plugins/.
-**Last updated**: 2026-04-21.
+**Last updated**: 2026-07-13 (`schedulesPlugin` — 2.21).
 
 ---
 
@@ -19,8 +19,13 @@
 | `metrics` | Prometheus/OTel metric emission |
 | `sse` | Server-Sent Events transport |
 | `gracefulShutdown` | Drains connections on SIGTERM |
+| `schedules` | Recurring in-process jobs (2.21) — see below |
 
 Also: `audit`, `idempotency`, `organization`, `mcp`, `jobs` (all in separate modules).
+
+## `schedulesPlugin` (2.21) — recurring jobs without Redis
+
+Interval-based (`every` ms) job loop with optional multi-replica leader safety via any ecosystem `LockAdapter` (`@classytic/mongokit/lock`, sqlitekit, repo-core memory). No overlap by construction (timeout chain, next tick after run settles); fail-open per tick (throwing handler logged, loop survives); lease deliberately NOT released after a run so other replicas skip the same window; timers unref'd + cleared on close with in-flight runs awaited. `fastify.getScheduleStats()` exposes runs/failures/skippedByLock. Deliberately NOT cron-expression-based — calendar semantics belong to the BullMQ `jobs` integration. Replaces the hand-rolled cron registry + mongo lock layer production hosts grow.
 
 ## The onSend race rule (v2.10.2)
 

@@ -17,7 +17,7 @@ Resource-oriented backend framework on Fastify. One `defineResource()` call → 
 npx tsc --noEmit                                  # Typecheck
 npx biome check src/ --diagnostic-level=error     # Lint (Biome, no ESLint/Prettier)
 npx vitest run tests/path/to/file.test.ts         # Targeted test — preferred during dev
-npm run test:main                                 # Main suite (excludes perf)
+npm run test:main                                 # Main suite (excludes perf; ws files auto-serialized via vitest projects)
 npm run test:ci                                   # Release gate — main + isolated perf
 npm run build                                     # tsdown → dist/
 npm run smoke                                     # CLI + subpath imports
@@ -96,6 +96,10 @@ Non-obvious design choices that won't be caught by tests. Release-tagged changes
 Arc's boot order is **fixed** (do not reorder; do not skip slots):
 
 ```
+0. beforeBoot()               ← pre-everything (DB connect; runs before module
+                                thunks resolve and before Fastify exists) — 2.21
+0.5 module graph resolve      ← thunks import + topo-sort (pure; fail-fast);
+                                module errorMappers merge into the error handler
 1. Arc core (security, auth, events)
 2. plugins()                  ← infra (DB, SSE, docs)
 3. bootstrap[]                ← domain init (engines, singletons)
@@ -128,4 +132,5 @@ Arc's boot order is **fixed** (do not reorder; do not skip slots):
 - [CHANGELOG.md](CHANGELOG.md) — release history + migration notes
 - [v3.md](v3.md) — v3 design notes
 - [wiki/](wiki/) — concept pages; loaded on demand
+- [skills/](skills/) — `arc`, `arc-code-review`, `arc-module-publishing` are arc's own, shipped in the npm package (`files`). `fastify-best-practices` + `visa-best-practices` are dev-only junctions into `.agents/skills/` (managed by `npx skills`, pinned in `skills-lock.json`); `npm pack` doesn't follow junctions, so they never ship.
 - [knip.config.ts](knip.config.ts) · [biome.json](biome.json) · [tsdown.config.ts](tsdown.config.ts) · [vitest.config.ts](vitest.config.ts)

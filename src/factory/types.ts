@@ -938,6 +938,33 @@ export interface CreateAppOptions {
   strictResources?: boolean;
 
   /**
+   * Pre-boot hook — awaited BEFORE arc does anything else: before the
+   * Fastify instance exists, before module thunks resolve, before resource
+   * discovery imports a single host file.
+   *
+   * The canonical slot for the DB connection and anything that
+   * module-EVAL-time code depends on. Engines that register Mongoose models
+   * at import time (top-level `createXEngine(...)`) trigger eager
+   * `createIndex()` calls from schema plugins — if the connection isn't
+   * open yet those buffer and die with `buffering timed out`. Hosts used to
+   * hand-orchestrate this with `await connectDatabase()` + dynamic
+   * `await import(...)` tricks before calling `createApp`; with `beforeBoot`
+   * the ordering is arc's contract instead:
+   *
+   * ```ts
+   * const app = await createApp({
+   *   beforeBoot: async () => { await connectDatabase(); },
+   *   modules: [() => import('#modules/accounting.js')], // thunks resolve AFTER beforeBoot
+   *   resources: async () => [...],
+   * });
+   * ```
+   *
+   * Runs after option validation (config bugs fail fast without touching
+   * the DB). Cleanup stays host-owned — pair with `onClose`.
+   */
+  beforeBoot?: () => void | Promise<void>;
+
+  /**
    * Custom plugin registration — runs after Arc core (security, auth, events)
    * but before `bootstrap` and `resources`.
    *

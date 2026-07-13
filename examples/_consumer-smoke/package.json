@@ -4,14 +4,18 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "tsx src/index.ts"
+    "test": "tsc --noEmit && tsx src/index.ts"
   },
   "dependencies": {
     "@classytic/arc": "file:../..",
-    "@classytic/mongokit": "^3.14.0",
+    "@classytic/mongokit": "^3.21.0",
     "fastify": "^5.0.0",
     "mongoose": "^9.0.0",
     "mongodb-memory-server": "^10.0.0",
     "tsx": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^7.0.2"
   }
 }

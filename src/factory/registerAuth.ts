@@ -6,6 +6,7 @@
  */
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { ErrorMapper } from "../plugins/errorHandler.js";
 import { PUBLIC_SCOPE } from "../scope/types.js";
 import type { CreateAppOptions } from "./types.js";
 
@@ -118,18 +119,30 @@ export async function registerElevation(
 
 /**
  * Register error handler plugin (opt-out).
+ *
+ * `moduleErrorMappers` — mappers shipped by composed arc modules
+ * (`defineModule({ errorMappers })`), appended AFTER host-declared mappers
+ * so host config keeps priority. Collected by `createApp` from the
+ * pre-resolved module graph.
  */
 export async function registerErrorHandler(
   fastify: FastifyInstance,
   config: CreateAppOptions,
   trackPlugin: PluginTracker,
+  moduleErrorMappers?: readonly ErrorMapper[],
 ): Promise<void> {
   if (config.errorHandler === false) return;
   const { errorHandlerPlugin } = await import("../plugins/errorHandler.js");
-  const errorOpts =
+  let errorOpts =
     typeof config.errorHandler === "object"
       ? config.errorHandler
       : { includeStack: config.preset !== "production" };
+  if (moduleErrorMappers && moduleErrorMappers.length > 0) {
+    errorOpts = {
+      ...errorOpts,
+      errorMappers: [...(errorOpts.errorMappers ?? []), ...moduleErrorMappers],
+    };
+  }
   await fastify.register(errorHandlerPlugin, errorOpts);
   trackPlugin("arc-error-handler", errorOpts as Record<string, unknown>);
   fastify.log.debug("Arc error handler enabled");

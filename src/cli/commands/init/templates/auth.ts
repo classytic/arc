@@ -230,20 +230,13 @@ import { betterAuth } from 'better-auth';
 ${[mongoImport, pluginImports, stubsImport].filter(Boolean).join("\n")}
 import config from '#config/index.js';
 
-let _auth${ts ? ": ReturnType<typeof betterAuth> | null" : ""} = null;
-
-/**
- * Get the Better Auth instance (lazy singleton)
- *
- * Must be called AFTER database connection is established.
- */
-export function getAuth()${ts ? ": ReturnType<typeof betterAuth>" : ""} {
-  if (process.env.NODE_ENV === 'production' && !process.env.BETTER_AUTH_SECRET) {
-    throw new Error('BETTER_AUTH_SECRET is required in production (min 32 chars)');
-  }
-
-  if (!_auth) {
-    _auth = betterAuth({
+// Factory keeps the CONCRETE betterAuth({...}) instantiation as the source
+// of truth for the instance type — annotating with the wide
+// \`Auth<BetterAuthOptions>\` (aka \`ReturnType<typeof betterAuth>\`) does not
+// typecheck because Better Auth's \`Auth<T>\` is generic over the exact
+// options object.
+function createAuth() {
+  return betterAuth({
       secret: config.betterAuth.secret,
       baseURL: process.env.BETTER_AUTH_URL || \`http://localhost:\${config.server.port}\`,
       basePath: '/api/auth',
@@ -284,6 +277,26 @@ ${orgPluginUsage}
         enabled: process.env.NODE_ENV === 'production',
       },
     });
+}
+
+let _auth${ts ? ": ReturnType<typeof createAuth> | null" : ""} = null;
+
+/**
+ * Get the Better Auth instance (lazy singleton)
+ *
+ * Must be called AFTER database connection is established.
+ */
+export function getAuth()${ts ? ": ReturnType<typeof createAuth>" : ""} {
+  if (process.env.NODE_ENV === 'production' && !process.env.BETTER_AUTH_SECRET) {
+    throw new Error('BETTER_AUTH_SECRET is required in production (min 32 chars)');
+  }
+
+  // Narrow through a local — assigning the module-level \`_auth\` directly
+  // would lose the non-null narrowing across the calls below.
+  let auth = _auth;
+  if (!auth) {
+    auth = createAuth();
+    _auth = auth;
 ${
   useStubs
     ? `
@@ -295,7 +308,7 @@ ${
     : ""
 }  }
 
-  return _auth;
+  return auth;
 }
 
 export default getAuth;
@@ -440,6 +453,9 @@ export async function getUserProfile(request${ts ? ": FastifyRequest" : ""}, rep
   try {
     const requestUser = (request${ts ? " as unknown as { user?: { _id?: string; id?: string } }" : ""}).user;
     const userId = requestUser?._id || requestUser?.id;
+    if (!userId) {
+      return reply.code(401).send({ error: 'Authentication required', code: 'arc.unauthorized' });
+    }
     const user = await userRepository.getById(userId);
 
     if (!user) {
@@ -460,6 +476,9 @@ export async function updateUserProfile(request${ts ? ": FastifyRequest" : ""}, 
   try {
     const requestUser = (request${ts ? " as unknown as { user?: { _id?: string; id?: string } }" : ""}).user;
     const userId = requestUser?._id || requestUser?.id;
+    if (!userId) {
+      return reply.code(401).send({ error: 'Authentication required', code: 'arc.unauthorized' });
+    }
     const updates${ts ? ": Record<string, unknown>" : ""} = { ...request.body${ts ? " as Record<string, unknown>" : ""} };
 
     // Prevent updating protected fields — auth-managed only
@@ -591,11 +610,14 @@ export function authTestTemplate(config: ProjectConfig): string {
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-${config.adapter === "mongokit" ? "import mongoose from 'mongoose';\n" : ""}import { createAppInstance } from '../src/app.js';
+${config.adapter === "mongokit" ? "import mongoose from 'mongoose';\nimport { MongoMemoryServer } from 'mongodb-memory-server';\n" : ""}import { createAppInstance } from '../src/app.js';
 ${ts ? "import type { FastifyInstance } from 'fastify';\n" : ""}
+// Resources mount under the app's resourcePrefix (see src/app.${ts ? "ts" : "js"}).
+const API = '/api';
+
 describe('Auth', () => {
   let app${ts ? ": FastifyInstance" : ""};
-  const testUser = {
+${config.adapter === "mongokit" ? `  let mongo${ts ? ": MongoMemoryServer | undefined" : ""};\n` : ""}  const testUser = {
     name: 'Test User',
     email: 'test@example.com',
     password: 'password123',
@@ -604,9 +626,15 @@ describe('Auth', () => {
   beforeAll(async () => {
 ${
   config.adapter === "mongokit"
-    ? `    const testDbUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/${config.name}-test';
-    await mongoose.connect(testDbUri);
-    // Clean up test data
+    ? `    // In-memory MongoDB — no local mongod required. Set MONGODB_URI to use
+    // a real instance instead (e.g. a CI service container).
+    let uri = process.env.MONGODB_URI;
+    if (!uri) {
+      mongo = await MongoMemoryServer.create();
+      uri = mongo.getUri();
+    }
+    await mongoose.connect(uri);
+    // Clean up test data (matters when MONGODB_URI points at a shared DB)
     await mongoose.connection.collection('users').deleteMany({ email: testUser.email });
 `
     : ""
@@ -619,29 +647,31 @@ ${
 ${
   config.adapter === "mongokit"
     ? `    await mongoose.connection.collection('users').deleteMany({ email: testUser.email });
+    await app.close();
     await mongoose.connection.close();
+    await mongo?.stop();
 `
-    : ""
-}    await app.close();
-  });
+    : `    await app.close();
+`
+}  });
 
   describe('POST /auth/register', () => {
     it('should register a new user', async () => {
       const response = await app.inject({
         method: 'POST',
-        url: '/auth/register',
+        url: \`\${API}/auth/register\`,
         payload: testUser,
       });
 
       expect(response.statusCode).toBe(201);
       const body = JSON.parse(response.body);
-      expect(body.success).toBe(true);
+      expect(body.message).toBeDefined();
     });
 
     it('should reject duplicate email', async () => {
       const response = await app.inject({
         method: 'POST',
-        url: '/auth/register',
+        url: \`\${API}/auth/register\`,
         payload: testUser,
       });
 
@@ -653,13 +683,13 @@ ${
     it('should login with valid credentials', async () => {
       const response = await app.inject({
         method: 'POST',
-        url: '/auth/login',
+        url: \`\${API}/auth/login\`,
         payload: { email: testUser.email, password: testUser.password },
       });
 
       expect(response.statusCode).toBe(200);
       const body = JSON.parse(response.body);
-      expect(body.success).toBe(true);
+      expect(body.user).toBeDefined();
       expect(body.accessToken).toBeDefined();
       expect(body.refreshToken).toBeDefined();
     });
@@ -667,7 +697,7 @@ ${
     it('should reject invalid credentials', async () => {
       const response = await app.inject({
         method: 'POST',
-        url: '/auth/login',
+        url: \`\${API}/auth/login\`,
         payload: { email: testUser.email, password: 'wrongpassword' },
       });
 
@@ -679,7 +709,7 @@ ${
     it('should require authentication', async () => {
       const response = await app.inject({
         method: 'GET',
-        url: '/users/me',
+        url: \`\${API}/users/me\`,
       });
 
       expect(response.statusCode).toBe(401);

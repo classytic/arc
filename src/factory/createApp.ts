@@ -42,6 +42,7 @@ import Fastify, {
 } from "fastify";
 import qs from "qs";
 import { arcLog } from "../logger/index.js";
+import { orderModules, resolveModule } from "./module.js";
 import { getPreset } from "./presets.js";
 import { registerArcCore, registerArcPlugins } from "./registerArcPlugins.js";
 import {
@@ -198,7 +199,7 @@ function validateDistributedRuntime(options: CreateAppOptions): string[] {
  *
  * Boot order:
  * ```
- * 0. Logger, validation, preset merge
+ * 0. Logger, validation → beforeBoot() (DB connect etc.), preset merge
  * 1. Create Fastify instance
  * 2. Security plugins (Helmet, CORS, Rate Limit) — opt-out
  * 3. Utility plugins (Under Pressure, Sensible, Multipart, Raw Body)
@@ -223,10 +224,30 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   validateAuthOptions(options);
   const deferredWarnings = validateDistributedRuntime(options);
 
+  // ── 0.5 Pre-boot hook — DB connection etc. Runs after option validation
+  // (config bugs fail fast without touching infrastructure) and before
+  // ANYTHING else: no Fastify instance, no module resolution, no resource
+  // imports have happened yet. See `CreateAppOptions.beforeBoot`.
+  if (options.beforeBoot) {
+    await options.beforeBoot();
+  }
+
   // ── 1. Merge preset + create Fastify ──
 
   const presetConfig = options.preset ? getPreset(options.preset) : {};
   const config: CreateAppOptions = { ...presetConfig, ...options };
+
+  // ── 1.5 Resolve + order the module graph — pure work (dynamic imports +
+  // stable topological sort), hoisted BEFORE any side-effecting phase: a
+  // broken composition root (dup name, missing/self dep, cycle) now aborts
+  // before security plugins or the DB-touching app plugins run. Hoisting
+  // also lets module-shipped `errorMappers` merge into the error handler,
+  // which registers at phase 6 — long before the old resolution point
+  // inside registerResources. Thunks fire exactly once, here.
+  const resolvedModules = orderModules(
+    await Promise.all((config.modules ?? []).map((m) => resolveModule(m))),
+  );
+  const moduleErrorMappers = resolvedModules.flatMap((m) => m.errorMappers ?? []);
 
   const fastify: FastifyInstance = Fastify({
     logger: resolveLoggerConfig(config.logger),
@@ -346,10 +367,10 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   decorateRequestScope(fastify);
   await registerAuth(fastify, config, trackPlugin);
   await registerElevation(fastify, config, trackPlugin);
-  await registerErrorHandler(fastify, config, trackPlugin);
+  await registerErrorHandler(fastify, config, trackPlugin, moduleErrorMappers);
 
   // ── 7–11. Resources lifecycle (plugins → bootstrap → resources → after → hooks) ──
-  await registerResources(fastify, config);
+  await registerResources(fastify, config, resolvedModules);
 
   // ── Reply helpers (opt-in) ──
   if (config.replyHelpers) {

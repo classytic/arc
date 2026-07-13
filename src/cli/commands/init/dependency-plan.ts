@@ -33,8 +33,10 @@ export const SCAFFOLD_DEP_VERSIONS = {
   // `@classytic/primitives` is REQUIRED for events.
   core: {
     "@classytic/arc": "^2.20.0",
-    "@classytic/primitives": "^0.9.1",
-    "@classytic/repo-core": "^0.7.0",
+    // 0.x carets never float across minors (^0.9.1 can't resolve 0.11.x),
+    // so these MUST track published latest, not just arc's peer floors.
+    "@classytic/primitives": "^0.11.0",
+    "@classytic/repo-core": "^0.8.0",
     "@fastify/cors": "^11.2.0",
     "@fastify/helmet": "^13.0.2",
     "@fastify/rate-limit": "^10.3.0",
@@ -66,7 +68,8 @@ export const SCAFFOLD_DEP_VERSIONS = {
   // arc-compatible adapter at `<kit>/adapter` (arc 2.12+); the kit owns
   // the driver peer (mongoose for mongokit, etc.).
   adapterMongokit: {
-    "@classytic/mongokit": "^3.16.1",
+    // 3.21+ — adapter defaults schemaGenerator to buildCrudSchemasFromModel
+    "@classytic/mongokit": "^3.21.0",
     mongoose: "^9.6.2",
   },
   // Dev tooling — common to every project
@@ -81,7 +84,10 @@ export const SCAFFOLD_DEP_VERSIONS = {
     // @types/node tracks Node.js major — pin to 22 to match arc's >=22 requirement
     "@types/node": "^22.10.0",
     tsx: "^4.22.3",
-    typescript: "^6.0.3",
+    // TS 7 = the Go-native compiler (GA 2026-07); type-checking is identical
+    // to 6.0 but ~10x faster. Scaffolds only use `tsc` (no compiler-API tools),
+    // so hosts get the speedup with zero migration surface.
+    typescript: "^7.0.2",
   },
   // Type definitions — paired with their runtime dep
   typesJwt: {
@@ -174,6 +180,10 @@ export function resolveScaffoldDependencies(config: ProjectConfig): DependencyMa
 
   if (config.auth === "better-auth") {
     Object.assign(dependencies, SCAFFOLD_DEP_VERSIONS.authBetterAuth);
+    // The generated test suite uses arc's turnkey test auth
+    // (`createTestApp({ authMode: 'jwt' })`), which signs test tokens via
+    // @fastify/jwt — needed as a DEV dep even when runtime auth is BA.
+    devDependencies["@fastify/jwt"] = SCAFFOLD_DEP_VERSIONS.authJwt["@fastify/jwt"];
     if (config.apiKey) {
       Object.assign(dependencies, SCAFFOLD_DEP_VERSIONS.authBetterAuthApiKey);
     }

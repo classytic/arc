@@ -46,6 +46,7 @@
  */
 
 import type { FastifyInstance } from "fastify";
+import type { ErrorMapper } from "../plugins/errorHandler.js";
 import type { ResourceLike } from "./loadResources.js";
 
 export interface ArcModule<TExports = unknown> {
@@ -99,6 +100,27 @@ export interface ArcModule<TExports = unknown> {
    * inside `bootstrap` still works — this slot just makes the two distinct.
    */
   plugins?: (fastify: FastifyInstance) => void | Promise<void>;
+
+  /**
+   * Domain error mappers this module ships (see `defineErrorMapper`). Merged
+   * into the app's error handler at boot, AFTER any host-declared mappers —
+   * host config keeps priority; module mappers follow in composition order.
+   *
+   * Closes the "composition root must know every domain's error classes"
+   * coupling: before this slot, adding `@classytic/arc-shipping` meant
+   * remembering to also register its `ShippingError` mapper in the host's
+   * `errorHandler.errorMappers` — forget it and the domain error crossed the
+   * wire as an opaque 500. Now the module carries its own mapper:
+   *
+   * ```ts
+   * defineModule({
+   *   name: 'shipping',
+   *   errorMappers: [shippingErrorMapper],
+   *   ...
+   * })
+   * ```
+   */
+  readonly errorMappers?: readonly ErrorMapper[];
 
   /**
    * Domain init — runs in the `bootstrap` phase (after all `plugins`, before

@@ -20,7 +20,7 @@ export function createAdapterTemplate(config: ProjectConfig): string {
 
 import { createMongooseAdapter } from '@classytic/mongokit/adapter';
 import { buildCrudSchemasFromModel } from '@classytic/mongokit';
-${ts ? "import type { Model } from 'mongoose';\nimport type { Repository } from '@classytic/mongokit';" : ""}
+${ts ? "import type { DataAdapter } from '@classytic/repo-core/adapter';\nimport type { Model } from 'mongoose';\nimport type { Repository } from '@classytic/mongokit';" : ""}
 
 /**
  * Create a MongoKit-powered adapter for a resource.
@@ -33,7 +33,10 @@ ${ts ? "import type { Model } from 'mongoose';\nimport type { Repository } from 
 export function createAdapter${ts ? "<TDoc = unknown>" : ""}(
   model${ts ? ": Model<TDoc>" : ""},
   repository${ts ? ": Repository<TDoc>" : ""}
-) {
+)${ts ? ": DataAdapter<TDoc>" : ""} {
+  // Explicit return type keeps the declaration portable — under pnpm's
+  // non-hoisted layout the inferred type references mongokit's internal
+  // paths and tsc fails with TS2742/TS2883.
   return createMongooseAdapter({
     model,
     repository,

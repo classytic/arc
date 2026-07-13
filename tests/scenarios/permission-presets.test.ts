@@ -14,6 +14,7 @@ import {
   authenticated,
   fullPublic,
   ownerWithAdminBypass,
+  permissionMatrix,
   publicRead,
   publicReadAdminWrite,
   readOnly,
@@ -296,6 +297,54 @@ describe("Permission Presets", () => {
       // Other operations unchanged
       const unauthed = makeCtx({ user: null });
       expect(await checkGranted(perms.list, unauthed)).toBe(false);
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // permissionMatrix
+  // --------------------------------------------------------------------------
+
+  describe("permissionMatrix()", () => {
+    it("maps read → list/get and write → create/update; delete defaults to write", () => {
+      const read = allowPublic();
+      const write = requireRoles(["manager"]);
+      const perms = permissionMatrix({ read, write });
+      expect(perms.list).toBe(read);
+      expect(perms.get).toBe(read);
+      expect(perms.create).toBe(write);
+      expect(perms.update).toBe(write);
+      expect(perms.delete).toBe(write);
+    });
+
+    it("honors an explicit delete gate", async () => {
+      const perms = permissionMatrix({
+        read: allowPublic(),
+        write: requireRoles(["manager"]),
+        delete: requireRoles(["owner"]),
+      });
+      const manager = makeCtx({ user: { id: "u1", role: ["manager"] } });
+      expect(await checkGranted(perms.update, manager)).toBe(true);
+      expect(await checkGranted(perms.delete, manager)).toBe(false);
+      const owner = makeCtx({ user: { id: "u2", role: ["owner"] } });
+      expect(await checkGranted(perms.delete, owner)).toBe(true);
+    });
+
+    it("accepts arbitrary async checks (not just role combinators)", async () => {
+      const customGate: PermissionCheck = async (ctx) =>
+        ctx.user?.id === "vip" ? true : { granted: false, reason: "not vip" };
+      const perms = permissionMatrix({ read: customGate, write: customGate });
+      expect(await checkGranted(perms.list, makeCtx({ user: { id: "vip", role: [] } }))).toBe(true);
+      expect(await checkGranted(perms.list, makeCtx({ user: { id: "u9", role: [] } }))).toBe(false);
+    });
+
+    it("composes with overrides like every other preset", () => {
+      const read = allowPublic();
+      const perms = permissionMatrix(
+        { read, write: requireRoles(["manager"]) },
+        { list: requireRoles(["auditor"]) },
+      );
+      expect(perms.list).not.toBe(read); // overridden
+      expect(perms.get).toBe(read); // untouched
     });
   });
 });
