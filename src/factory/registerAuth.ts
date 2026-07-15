@@ -8,7 +8,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ErrorMapper } from "../plugins/errorHandler.js";
 import { PUBLIC_SCOPE } from "../scope/types.js";
-import type { CreateAppOptions } from "./types.js";
+import type { CreateAppOptions } from "./types/index.js";
 
 type PluginTracker = (name: string, opts?: Record<string, unknown>) => void;
 
@@ -53,7 +53,14 @@ export async function registerAuth(
 
   switch (authConfig.type) {
     case "betterAuth": {
-      const { plugin, openapi } = authConfig.betterAuth;
+      // Thunk form (2.22) resolves HERE — after `beforeBoot` — so adapters
+      // needing a live DB (BA's mongodbAdapter) never force hosts into
+      // connect-before-createApp ordering.
+      const adapter =
+        typeof authConfig.betterAuth === "function"
+          ? await authConfig.betterAuth()
+          : authConfig.betterAuth;
+      const { plugin, openapi } = adapter;
       await fastify.register(plugin);
       trackPlugin("auth-better-auth");
       // arcCorePlugin is registered earlier in registerArcPlugins → arc is live here.

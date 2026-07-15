@@ -1,33 +1,60 @@
 /**
- * PreHandler chain composition — the canonical preHandler order plus the
- * resolver that turns `RouteDefinition.preHandler` into a flat array.
+ * Route hook composition — the canonical lifecycle placement of every arc
+ * middleware ingredient, plus the resolver that turns
+ * `RouteDefinition.preHandler` into a flat array.
  *
- * Canonical preHandler order (CRUD + Actions must agree):
+ * Canonical order (CRUD + Actions + Aggregations must agree), split across
+ * TWO Fastify lifecycle stages (2.22):
  *
- *   preAuth → arcDecorator → authMw → permissionMw → pluginMw → routeGuards → customMws
+ *   onRequest:  preAuth → arcDecorator → authMw
+ *   preHandler: permissionMw → pluginMw → routeGuards → customMws
+ *
+ * WHY the split: Fastify parses the body and runs schema validation BETWEEN
+ * onRequest and preHandler. Auth belongs at `onRequest` (the Fastify
+ * best-practice placement) so unauthenticated requests are rejected with a
+ * 401 BEFORE arc pays body-parse + AJV cost for them — and before a 400
+ * validation error leaks schema shape to anonymous callers (schema-probing
+ * surface). Everything auth needs exists at onRequest: headers, cookies,
+ * params, query. Everything body-shaped stays at preHandler: permission
+ * checks (may read parsed data), idempotency (fingerprints the body),
+ * response-cache (keys on the authed user), field-write filters, and
+ * host middlewares.
  */
 
-import type { preHandlerHookHandler, RouteHandlerMethod } from "fastify";
+import type { onRequestHookHandler, preHandlerHookHandler, RouteHandlerMethod } from "fastify";
 
 import type { FastifyWithDecorators } from "../../types/index.js";
 
 /**
- * Fastify 5.8+ tightened preHandler hook types. `RouteHandlerMethod` returns
- * `unknown` but preHandler expects `void | Promise<unknown>`. This alias bridges
+ * Fastify 5.8+ tightened hook types. `RouteHandlerMethod` returns
+ * `unknown` but hooks expect `void | Promise<unknown>`. This alias bridges
  * the gap — all arc middleware conforms at runtime.
  */
 export type PreHandlerHook = preHandlerHookHandler | RouteHandlerMethod;
 
+/** The two route-level hook arrays every arc router registers. */
+export interface RouteHookChains {
+  /** `preAuth → arcDecorator → authMw` — headers/cookies/params only; body does not exist yet. */
+  onRequest: PreHandlerHook[];
+  /** `permissionMw → pluginMw → routeGuards → customMws` — body-aware stage. */
+  preHandler: PreHandlerHook[];
+}
+
 /**
- * Compose preHandler[] in the canonical order. Every null/undefined entry is
- * dropped. Keeps CRUD and Action routers from accidentally ordering the same
- * ingredients differently (regression risk: cache before auth → user-scoped
- * cache keys leak across users).
+ * Compose the route-level `onRequest` + `preHandler` arrays in the canonical
+ * order. Every null/undefined entry is dropped. Keeps the three routers from
+ * accidentally ordering the same ingredients differently (regression risk:
+ * cache before auth → user-scoped cache keys leak across users; auth after
+ * body parse → anonymous schema probing).
  *
- * Canonical order:
- *   preAuth → arcDecorator → authMw → permissionMw → pluginMw → routeGuards → customMws
+ * onRequest constraints (Fastify lifecycle): `request.body` is undefined —
+ * everything placed there must be header/cookie/param/query-driven. arc's
+ * `authenticate` / `optionalAuthenticate` qualify by contract (Bearer
+ * header, session cookie, api-key header); `preAuth` handlers exist
+ * precisely to promote query tokens into headers (SSE `?token=`); the arc
+ * decorator stamps static route metadata.
  */
-export function buildPreHandlerChain(parts: {
+export function buildRouteHooks(parts: {
   preAuth?: ReadonlyArray<PreHandlerHook | null | undefined>;
   arcDecorator: RouteHandlerMethod;
   authMw?: RouteHandlerMethod | null;
@@ -35,16 +62,35 @@ export function buildPreHandlerChain(parts: {
   pluginMw?: RouteHandlerMethod | null;
   routeGuards?: ReadonlyArray<RouteHandlerMethod | null | undefined>;
   customMws?: ReadonlyArray<PreHandlerHook | null | undefined>;
-}): PreHandlerHook[] {
-  return [
-    ...(parts.preAuth ?? []),
-    parts.arcDecorator,
-    parts.authMw ?? null,
-    parts.permissionMw ?? null,
-    parts.pluginMw ?? null,
-    ...(parts.routeGuards ?? []),
-    ...(parts.customMws ?? []),
-  ].filter(Boolean) as PreHandlerHook[];
+}): RouteHookChains {
+  return {
+    onRequest: [...(parts.preAuth ?? []), parts.arcDecorator, parts.authMw ?? null].filter(
+      Boolean,
+    ) as PreHandlerHook[],
+    preHandler: [
+      parts.permissionMw ?? null,
+      parts.pluginMw ?? null,
+      ...(parts.routeGuards ?? []),
+      ...(parts.customMws ?? []),
+    ].filter(Boolean) as PreHandlerHook[],
+  };
+}
+
+/**
+ * Spread helper — turns `RouteHookChains` into the two Fastify route-option
+ * fields, omitting empty arrays so routes without middleware stay
+ * option-free (Fastify skips absent hooks faster than empty arrays).
+ */
+export function routeHookOptions(hooks: RouteHookChains): {
+  onRequest?: onRequestHookHandler[];
+  preHandler?: preHandlerHookHandler[];
+} {
+  return {
+    ...(hooks.onRequest.length > 0 ? { onRequest: hooks.onRequest as onRequestHookHandler[] } : {}),
+    ...(hooks.preHandler.length > 0
+      ? { preHandler: hooks.preHandler as preHandlerHookHandler[] }
+      : {}),
+  };
 }
 
 /**

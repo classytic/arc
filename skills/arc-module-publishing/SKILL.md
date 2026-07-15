@@ -11,7 +11,8 @@ description: |
   writing a defineModule() or an action preset, or preparing an arc module for npm publish.
   Triggers: publish arc module, arc package, arc ecosystem, defineModule, ArcModule, arc
   plugin package, arc action preset, extract domain to package, arc-approval, arc-involvement,
-  peer dependencies arc, tsdown arc package, arc module conventions, classytic publish.
+  peer dependencies arc, tsdown arc package, arc module conventions, classytic publish,
+  mergeResourceConfig, ResourceSeams, kernel-typed engine port, module errorMappers.
 license: MIT
 metadata:
   author: Classytic

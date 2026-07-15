@@ -67,7 +67,9 @@ const app = await createApp({
 await app.listen({ port: 8040, host: '0.0.0.0' });
 ```
 
-**Boot order (fixed):** `plugins` → `bootstrap[]` → `resources` → `afterResources` → `onReady`.
+**Boot order (fixed):** `beforeBoot` → modules resolve → `plugins` → `bootstrap[]` → `resources` → `afterResources` → `onReady`.
+
+`beforeBoot()` (2.21) runs before Fastify exists and before module thunks / resource files import — connect the DB there instead of dynamic-import ordering hacks.
 
 For async-booted engines, pass `resources` as a factory so it runs after `bootstrap[]`:
 
@@ -78,22 +80,19 @@ resources: async (fastify) => {
 }
 ```
 
-`loadResources(import.meta.url)` resolves `src/` in dev and `dist/` in prod. Use `loadResources(import.meta.url, { context: { engine } })` to thread engine handles into `(ctx) => defineResource(...)` default exports.
+`loadResources(import.meta.url)` resolves `src/` in dev and `dist/` in prod. Use `loadResources(import.meta.url, { context: { engine } })` to thread engine handles into `(ctx) => defineResource(...)` default exports. `{ filter: (absPath) => boolean }` (2.21) gates files BEFORE they're imported — feature-flag manifests become one callback.
 
 ## defineResource()
 
 ```typescript
 import { defineResource, allowPublic, requireRoles, requireAuth } from '@classytic/arc';
 import { createMongooseAdapter } from '@classytic/mongokit/adapter';
-import { buildCrudSchemasFromModel } from '@classytic/mongokit';
 
 export default defineResource({
   name: 'product',
-  adapter: createMongooseAdapter({
-    model: ProductModel,
-    repository: productRepo,
-    schemaGenerator: buildCrudSchemasFromModel,
-  }),
+  // mongokit >=3.21 defaults schemaGenerator to buildCrudSchemasFromModel;
+  // pass `schemaGenerator: false` to opt out.
+  adapter: createMongooseAdapter({ model: ProductModel, repository: productRepo }),
 
   presets: ['softDelete', 'slugLookup', { name: 'multiTenant', tenantField: 'organizationId' }],
 
@@ -495,6 +494,8 @@ errorHandler: {
 }
 ```
 
+Modules ship their own via `defineModule({ errorMappers })` (2.21) — merged into the app handler at boot; host-level mappers keep priority.
+
 ## Testing
 
 ```typescript
@@ -625,12 +626,17 @@ Out of scope: SAML (use BA SAML plugin), session storage (BA `secondaryStorage`)
 await fastify.register(auditPlugin, { autoAudit: { perResource: true } });
 
 defineResource({ name: 'order',   audit: true });
+defineResource({ name: 'invoice', history: true });   // 2.22: injects GET /:id/history from audit rows; implies audit: true (gate: update→get→requireAuth; override via { permissions, limit })
 defineResource({ name: 'payment', audit: { operations: ['delete'] } });
 defineResource({ name: 'product' });   // not audited
 
 // Manual (MCP tools / read auditing)
 await app.audit.custom('order', req.params.id, 'refund', { reason }, { user });
 ```
+
+## Usage counters + plan limits (2.22)
+
+`@classytic/arc/usage` — `usagePlugin` decorates `fastify.usage` with per-actor, per-UTC-month counters (`record`/`summary`/`period`/`actorOf`; actor chain org → user → client → ip). Auto-tracks `api.requests` (default on) + `api.egress.bytes` (opt-in); recording is fail-safe (a throwing `UsageStore` never fails a request; `MemoryUsageStore` built in, Redis/kit backends are ~5 lines). Pair with `createApp({ rateLimit: { plan: { resolve, limits: { free: { max: 60 }, enterprise: false }, default: 'free' } } })` for per-plan ceilings — `false` = unlimited, unknown/throwing resolvers fall back to `default` then global `max`, and buckets follow the tenant key chain by default. Caveat: the limiter runs before route auth, so `resolve` sees the raw request.
 
 ## Adapters
 

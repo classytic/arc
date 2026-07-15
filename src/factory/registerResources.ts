@@ -8,7 +8,7 @@ import type { FastifyInstance } from "fastify";
 import type { ResourceLike } from "./loadResources.js";
 import { type ArcModule, orderModules, resolveModule } from "./module.js";
 import type { FastifyPlugin } from "./shared.js";
-import type { CreateAppOptions } from "./types.js";
+import type { CreateAppOptions } from "./types/index.js";
 
 type ResourcesFactory = (
   fastify: FastifyInstance,
@@ -22,10 +22,17 @@ function isResourcesFactory(value: CreateAppOptions["resources"]): value is Reso
 async function registerOne(
   parent: FastifyInstance,
   resource: import("./loadResources.js").ResourceLike,
+  mountRoutes?: boolean,
 ): Promise<void> {
   const name = resource.name ?? "unknown";
   try {
-    await parent.register(resource.toPlugin() as FastifyPlugin);
+    // `arcMountRoutes: false` (worker role, 2.23) — the resource plugin
+    // registers shared runtime state (registry/hooks/cache rules) and
+    // returns before any route mounts. See wiki/factory.md § createWorker.
+    await parent.register(
+      resource.toPlugin() as FastifyPlugin,
+      mountRoutes === false ? { arcMountRoutes: false } : {},
+    );
   } catch (err) {
     const rawMsg = err instanceof Error ? err.message : String(err);
     // Underlying ArcError messages already start with `Resource "name"
@@ -259,6 +266,32 @@ export async function registerResources(
     resolvedResources = discovered;
   }
 
+  // ── 5a. Module ownership — drop app forks a module supersedes ──
+  //
+  // A module declares `owns: [...names]` for the app-level resources it
+  // authoritatively provides (see `ArcModule.owns`). Any app resource of that
+  // name is DROPPED here, so the module's own version (prepended at 5b) is the
+  // one that registers — the host keeps NO hand-maintained "which resources did
+  // modules take over" filter set. Read STATICALLY off each module (no factory
+  // resolution), so it's free of boot-order coupling and works whether a
+  // module's `resources` is an array or a post-bootstrap factory.
+  if (modules.length && resolvedResources && resolvedResources.length > 0) {
+    const owned = new Set<string>();
+    for (const m of modules) {
+      for (const name of m.owns ?? []) owned.add(name);
+    }
+    if (owned.size > 0) {
+      const before = resolvedResources.length;
+      resolvedResources = resolvedResources.filter((r) => !(r.name != null && owned.has(r.name)));
+      const dropped = before - resolvedResources.length;
+      if (dropped > 0) {
+        fastify.log.debug(
+          `[arc] ${dropped} app resource(s) superseded by module owns() — the module version registers instead`,
+        );
+      }
+    }
+  }
+
   // ── 5b. Module resources ──
   //
   // TWO distinct orderings, deliberately different — both documented so neither
@@ -330,7 +363,7 @@ export async function registerResources(
 
     // Root resources (skipGlobalPrefix: true) register directly
     for (const resource of root) {
-      await registerOne(fastify, resource);
+      await registerOne(fastify, resource, config.mountRoutes);
     }
 
     // Prefixed resources register under resourcePrefix (or root if no prefix)
@@ -339,14 +372,14 @@ export async function registerResources(
         await fastify.register(
           async (scoped) => {
             for (const resource of prefixed) {
-              await registerOne(scoped, resource);
+              await registerOne(scoped, resource, config.mountRoutes);
             }
           },
           { prefix: config.resourcePrefix },
         );
       } else {
         for (const resource of prefixed) {
-          await registerOne(fastify, resource);
+          await registerOne(fastify, resource, config.mountRoutes);
         }
       }
     }

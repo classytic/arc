@@ -18,7 +18,8 @@
  * @example
  * ```typescript
  * import { betterAuth } from 'better-auth';
- * import { organization, twoFactor } from 'better-auth/plugins';
+ * import { organization } from 'better-auth/plugins/organization';
+ * import { twoFactor } from 'better-auth/plugins/two-factor';
  * import { wireBetterAuthAudit } from '@classytic/arc/auth/audit';
  *
  * const audit = wireBetterAuthAudit({

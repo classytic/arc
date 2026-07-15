@@ -32,7 +32,7 @@
 
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastify";
 import type { ResourceDefinition } from "../core/defineResource.js";
-import type { AuthOption, CreateAppOptions } from "../factory/types.js";
+import type { AuthOption, CreateAppOptions } from "../factory/types/index.js";
 import {
   createBetterAuthProvider,
   createJwtAuthProvider,

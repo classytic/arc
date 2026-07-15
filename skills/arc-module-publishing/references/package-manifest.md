@@ -38,8 +38,10 @@ optional-peer typing pattern. Values below are the real shapes shipped by
   },
 
   // CONTRACTS — what the host must provide. `>=`, never `^`.
+  // Floor >=2.21.0 if you use ResourceSeams / mergeResourceConfig / permissionMatrix /
+  // schedulesPlugin / errorMappers — declare the floor that matches the APIs you import.
   "peerDependencies": {
-    "@classytic/arc": ">=2.20.0",
+    "@classytic/arc": ">=2.21.0",
     "@classytic/primitives": ">=0.9.0"
   },
 
@@ -52,7 +54,7 @@ optional-peer typing pattern. Values below are the real shapes shipped by
 
   // TEST versions — pin with ^, floor >= each peer floor. Not shipped.
   "devDependencies": {
-    "@classytic/arc": "^2.20.0",
+    "@classytic/arc": "^2.21.0",
     "@classytic/primitives": "^0.9.1",
     "@biomejs/biome": "^2.5.2",
     "@types/node": "^22.19.21",

@@ -15,7 +15,7 @@
  * field assignment.
  */
 
-import type { OnTenantDeleteConfig, ResolvedTenantPurge } from "../types/resource.js";
+import type { OnTenantDeleteConfig, ResolvedTenantPurge } from "../types/resource/index.js";
 
 /**
  * Minimal config slice the resolver reads. Typed structurally rather than

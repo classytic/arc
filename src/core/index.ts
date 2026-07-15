@@ -51,7 +51,6 @@ export {
 // literal type so handler's `data` is `z.infer<typeof schema>` instead
 // of `Record<string, unknown>`. Drop-in object replacement (2.16).
 export { type DefineActionConfig, defineAction } from "./defineAction.js";
-export { defineResource, ResourceDefinition } from "./defineResource.js";
 // Programmatic resource assembly — typed seam bundles + the canonical
 // slot-aware merge for module authors (arc-* packs). Kills the `as never`
 // tax at the module boundary; see seams.ts for the merge semantics.
@@ -61,6 +60,7 @@ export {
   type ResourceSeams,
   type SeamedResourceConfig,
 } from "./defineResource/seams.js";
+export { defineResource, ResourceDefinition } from "./defineResource.js";
 export { defineResourceVariants } from "./defineResourceVariants.js";
 // Entity helpers — read `req.arc.idField` / `entityId` inside action and
 // custom-route handlers without re-reading resource config. Use

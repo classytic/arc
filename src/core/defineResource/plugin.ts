@@ -39,7 +39,7 @@ import type {
   RequestWithExtras,
   ResourceConfig,
 } from "../../types/index.js";
-import { convertRouteSchema } from "../../utils/schemaConverter.js";
+import { convertRouteSchema, ensureSchemaConverter } from "../../utils/schemaConverter.js";
 import { hasEvents } from "../../utils/typeGuards.js";
 import { resolveActionPermission } from "../actionPermissions.js";
 import { createCrudRouter } from "../createCrudRouter.js";
@@ -369,7 +369,14 @@ export function normalizeActionsToRouterConfig(
  * Fastify instance via `resource._sharedStateRegisteredOn`.
  */
 export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): FastifyPluginAsync {
-  return async function resourcePlugin(fastify, _opts): Promise<void> {
+  return async function resourcePlugin(fastify, opts): Promise<void> {
+    // Zod converter readiness — the converter resolves zod via a lazy
+    // dynamic import; await it here (the single choke point in front of
+    // customSchemas layering, custom routes, AND action schemas) so a
+    // host's Zod schemas can never race the import and slip through
+    // unconverted at boot.
+    await ensureSchemaConverter();
+
     // Shared-state writes (registry, hooks, cache rules) target the ROOT
     // Fastify instance — `arc.hooks` is decorated once and inherited by
     // child encapsulation contexts. Key the idempotency guard by the
@@ -488,6 +495,16 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
             "the `events` declaration from the resource.",
         );
       }
+    }
+
+    // Worker-role seam (2.23, `mountRoutes: false`): everything ABOVE this
+    // line is shared runtime state (registry metadata + adapter, hooks,
+    // cache-invalidation rules, boot diagnostics) that headless processes
+    // need — tenant-purge cascade and per-resource audit read the registry
+    // at runtime. Everything BELOW is the HTTP surface. See
+    // wiki/factory.md § createWorker.
+    if ((opts as { arcMountRoutes?: boolean } | undefined)?.arcMountRoutes === false) {
+      return;
     }
 
     await fastify.register(

@@ -79,7 +79,26 @@ await fastify.register(auditPlugin, {
   enabled: true,
   repository: new Repository(AuditModel),
 });
-// TTL / retention owned by your DB (TTL index on `timestamp`, cron DELETE, etc.)
+// ── Retention (audit rows ARE `history: true` timelines — prune together) ──
+// Option A (zero code, Mongo): TTL index — the DB does it server-side.
+//   AuditSchema.index({ timestamp: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 365 });
+// Option B (built-in, single instance): retention: { maxAgeMs, purgeIntervalMs }.
+// Option C (multi-replica, RECOMMENDED): purgeIntervalMs: 0 + a schedulesPlugin
+//   entry calling fastify.audit.purge(cutoff) — leader-safe, jittered, observable.
+//   (The built-in timer runs on EVERY replica — idempotent but wasteful.)
+//
+// ── Indexes (kit territory — the audit model is yours) ──
+// Mongo: TTL index above + compound for the history timeline:
+//   AuditSchema.index({ resource: 1, documentId: 1, timestamp: -1 });
+// SQL kits: index (resource, document_id, timestamp) + the kit's ttl/sweep plugin.
+//
+// ── Rich search (admin audit-log UI) ──
+// audit.query() is deliberately narrow. For full repo-core filter/sort/keyset
+// power + MCP tools, mount the audit repo AS a read-only resource:
+//   defineResource({ name: 'audit-log', crud: { list: true, get: true },
+//     adapter: { repository: auditRepo },
+//     queryParser: new QueryParser({ allowedFilterFields: ['resource','documentId','userId','action','organizationId'] }),
+//     permissions: { list: requireRoles(['auditor']), get: requireRoles(['auditor']) } });
 
 // Usage
 await fastify.audit.create('product', product._id, product, request.auditContext);
@@ -452,7 +471,30 @@ Production preset: `maxEventLoopDelay: 3000` (avoids false 503s on Render/Railwa
 
 ## CORS
 
-Production warns (not throws) when origin missing. `origin: '*'` from env is allowed. Smart CORS auto-converts `credentials: true` + `origin: '*'` to `origin: true`.
+Production warns (not throws) when origin missing. `origin: '*'` from env is allowed. Smart CORS auto-converts `credentials: true` + `origin: '*'` to `origin: true`, and (2.22) auto-merges arc's protocol headers (`x-organization-id`, `x-arc-scope`, `x-request-id`) into any host-declared `allowedHeaders` allow-list — hosts never enumerate framework internals.
+
+### Mobile apps (Capacitor / Ionic / React Native webviews)
+
+Arc needs no special mode — mobile is a CORS + auth-transport recipe:
+
+```typescript
+cors: {
+  // Webview origins alongside your web domains. Also add these to
+  // Better Auth's trustedOrigins when using BA.
+  origin: [...webOrigins, 'https://localhost', 'capacitor://localhost'],
+  credentials: true,
+  // Optional allow-list — arc's own headers auto-merge (2.22); you only
+  // list YOUR custom ones. Omit entirely to use reflection mode.
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  // BA bearer plugin returns the fresh session token in this RESPONSE
+  // header — without exposing it, cross-origin JS cannot READ it and
+  // app login dies silently. The one mobile knob arc can't infer.
+  exposedHeaders: ['set-auth-token'],
+},
+trustProxy: true,   // webviews arrive through your LB/tunnel
+```
+
+Native (non-webview) HTTP clients send no `Origin` header — CORS doesn't apply to them at all; bearer auth just works.
 
 ## Metrics Plugin
 

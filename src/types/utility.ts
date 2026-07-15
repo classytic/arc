@@ -6,7 +6,7 @@
 import type { DataAdapter } from "@classytic/repo-core/adapter";
 import type { StandardRepo } from "@classytic/repo-core/repository";
 import type { IController } from "./handlers.js";
-import type { ResourceConfig } from "./resource.js";
+import type { ResourceConfig } from "./resource/index.js";
 
 /**
  * Infer document type from a `DataAdapter` or `ResourceConfig`. Smart

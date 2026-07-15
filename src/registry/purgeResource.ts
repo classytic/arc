@@ -14,7 +14,7 @@ import type {
   TenantPurgeResult,
   TenantPurgeStrategy,
 } from "@classytic/repo-core/repository";
-import type { ResolvedTenantPurge } from "../types/resource.js";
+import type { ResolvedTenantPurge } from "../types/resource/index.js";
 
 /**
  * Capability sniffing on the adapter repository. Listed in priority order:

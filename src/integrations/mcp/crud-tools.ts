@@ -93,6 +93,9 @@ export function defaultCrudDescription(
       if (queryMeta?.sortableFields?.length) {
         parts.push(`Sortable fields: ${queryMeta.sortableFields.join(", ")}.`);
       }
+      parts.push(
+        "Set _count: true for a count-only result, _exists: true for a boolean existence check, or _distinct: '<field>' for distinct values — all honor the same filters.",
+      );
       return parts.join(" ");
     }
     case "get":

@@ -101,6 +101,32 @@ export interface BetterAuthAdapterOptions {
    * When true, includes the actual error message for debugging.
    */
   exposeAuthErrors?: boolean;
+
+  /**
+   * Per-route rate limit for the Better Auth catch-all (`/api/auth/*`),
+   * applied via `@fastify/rate-limit`'s route config (requires the
+   * limiter to be registered, which createApp does by default).
+   *
+   * Credential endpoints deserve a tighter bucket than the global limit
+   * (brute-force / credential-stuffing surface), BUT the same catch-all
+   * also serves Better Auth's chatty `get-session` heartbeat — so arc
+   * ships NO default here; a forced strict limit (the classic "5/min on
+   * /login") would 429 every SPA that polls sessions. Pick a ceiling that
+   * covers your session-poll cadence, or key the bucket smarter:
+   *
+   * @example
+   * ```ts
+   * createBetterAuthAdapter({
+   *   auth,
+   *   // simple ceiling over the whole auth surface
+   *   rateLimit: { max: 60, timeWindow: '1 minute' },
+   * });
+   *
+   * // OR keep the global limiter but exempt the heartbeat:
+   * createApp({ rateLimit: { max: 100, skipPaths: ['/api/auth/get-session'] } });
+   * ```
+   */
+  rateLimit?: { max: number; timeWindow: string | number } | false;
 }
 
 export interface BetterAuthAdapterResult {
@@ -686,22 +712,32 @@ export function createBetterAuthAdapter(
   // ========================================
 
   const betterAuthPlugin: FastifyPluginAsync = async (fastify: FastifyInstance) => {
-    // Register catch-all route for Better Auth endpoints
-    fastify.all(`${normalizedBase}/*`, async (request: FastifyRequest, reply: FastifyReply) => {
-      try {
-        const fetchRequest = toFetchRequest(request);
-        const fetchResponse = await auth.handler(fetchRequest);
-        await sendFetchResponse(fetchResponse, reply);
-      } catch (err) {
-        // Throw ArcError so the centralized errorHandlerPlugin handles it
-        // with consistent envelope, logging, requestId, stack traces, etc.
-        throw new ArcError("Authentication service error", {
-          code: "AUTH_SERVICE_ERROR",
-          statusCode: 500,
-          cause: err instanceof Error ? err : new Error(String(err)),
-        });
-      }
-    });
+    // Register catch-all route for Better Auth endpoints. `rateLimit`
+    // (adapter option) stamps @fastify/rate-limit's per-route config so
+    // credential endpoints can run a tighter bucket than the global limit.
+    const routeOpts =
+      options.rateLimit && typeof options.rateLimit === "object"
+        ? { config: { rateLimit: options.rateLimit } }
+        : {};
+    fastify.all(
+      `${normalizedBase}/*`,
+      routeOpts,
+      async (request: FastifyRequest, reply: FastifyReply) => {
+        try {
+          const fetchRequest = toFetchRequest(request);
+          const fetchResponse = await auth.handler(fetchRequest);
+          await sendFetchResponse(fetchResponse, reply);
+        } catch (err) {
+          // Throw ArcError so the centralized errorHandlerPlugin handles it
+          // with consistent envelope, logging, requestId, stack traces, etc.
+          throw new ArcError("Authentication service error", {
+            code: "AUTH_SERVICE_ERROR",
+            statusCode: 500,
+            cause: err instanceof Error ? err : new Error(String(err)),
+          });
+        }
+      },
+    );
 
     // Decorate fastify with authenticate functions
     if (!fastify.hasDecorator("authenticate")) {
@@ -709,6 +745,17 @@ export function createBetterAuthAdapter(
     }
     if (!fastify.hasDecorator("optionalAuthenticate")) {
       fastify.decorate("optionalAuthenticate", optionalAuthenticate);
+    }
+
+    // Declare the request properties the authenticate handlers assign
+    // (`req.user`, `req.session`) so per-request writes don't mutate the
+    // request shape. Guarded: `user` is also decorated by @fastify/jwt when
+    // arc JWT auth is active on the same instance.
+    if (!fastify.hasRequestDecorator("user")) {
+      fastify.decorateRequest("user", undefined);
+    }
+    if (!fastify.hasRequestDecorator("session")) {
+      fastify.decorateRequest("session", undefined);
     }
 
     // Auto-extract OpenAPI from auth.api if not already set

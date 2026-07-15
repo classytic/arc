@@ -121,6 +121,60 @@ export function arcLog(module: string): ArcLogger {
   };
 }
 
+/**
+ * Minimal structural slice of a pino-style logger (`fastify.log`). Each
+ * level accepts `(msg)` or `(mergeObject, msg)` — the pino calling
+ * convention, which differs from console's variadic `(...args)`.
+ */
+export interface PinoLike {
+  debug: (obj: unknown, msg?: string) => void;
+  info: (obj: unknown, msg?: string) => void;
+  warn: (obj: unknown, msg?: string) => void;
+  error: (obj: unknown, msg?: string) => void;
+}
+
+/**
+ * Bridge an `ArcLogWriter` onto a pino-style logger (`fastify.log`).
+ *
+ * arcLog call sites use the console convention — positional args like
+ * `log.warn("message", { userId })` — which pino would silently drop
+ * (extra args are printf interpolation values there). The bridge folds
+ * string args into the message, merges object args into the pino merge
+ * object, and maps `Error` instances to `{ err }` so pino's error
+ * serializer applies.
+ *
+ * `createApp` installs this automatically so arc-internal warnings flow
+ * through the host's transports, level, and redaction config.
+ */
+export function createPinoWriter(logger: PinoLike): ArcLogWriter {
+  const emit =
+    (level: keyof PinoLike) =>
+    (...args: unknown[]): void => {
+      const parts: string[] = [];
+      let merge: Record<string, unknown> | undefined;
+      for (const arg of args) {
+        if (typeof arg === "string") {
+          parts.push(arg);
+        } else if (arg instanceof Error) {
+          merge = { ...(merge ?? {}), err: arg };
+        } else if (arg !== null && typeof arg === "object") {
+          merge = { ...(merge ?? {}), ...(arg as Record<string, unknown>) };
+        } else {
+          parts.push(String(arg));
+        }
+      }
+      const msg = parts.join(" ");
+      if (merge) logger[level](merge, msg);
+      else logger[level](msg);
+    };
+  return {
+    debug: emit("debug"),
+    info: emit("info"),
+    warn: emit("warn"),
+    error: emit("error"),
+  };
+}
+
 // ============================================================================
 // Internals
 // ============================================================================

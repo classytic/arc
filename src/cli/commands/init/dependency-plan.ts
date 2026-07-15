@@ -147,6 +147,87 @@ function floorLessThan(a: [number, number, number], b: [number, number, number])
  *     floor>` when the static pin's floor is BELOW the declared peer floor
  *     (never lowered — static pins may legitimately be ahead of the floor).
  */
+// ── Registry-latest overlay (2.22) ─────────────────────────────────────
+//
+// Best practice for scaffolds: new apps start on the LATEST STABLE of every
+// dependency, not on the floors the shipping arc release happened to pin.
+// `primeLatestScaffoldVersions()` (called once by `init`, network-parallel,
+// hard timeout) fills a cache; the sync resolver overlays it with guards:
+//
+//   - never a downgrade
+//   - never a prerelease (`latest` dist-tag only, `-` rejected belt+braces)
+//   - never a MAJOR cross for third-party packages (the scaffold's tested
+//     major wins — an untested zod/fastify major must not land silently)
+//   - `@classytic/*` floats freely (we own the compat story; this also
+//     solves the 0.x-caret-never-floats maintenance burden for our own kits)
+//
+// Offline / registry failure / test runs → cache stays empty → identical
+// pre-2.22 behavior (static table + live-arc overlay).
+
+const latestCache = new Map<string, string>();
+
+/** Test hook — deterministic overlay without network. */
+export function __setLatestVersionsForTest(entries: Record<string, string> | null): void {
+  latestCache.clear();
+  if (entries) for (const [k, v] of Object.entries(entries)) latestCache.set(k, v);
+}
+
+function allScaffoldPackageNames(): string[] {
+  const names = new Set<string>();
+  for (const group of Object.values(SCAFFOLD_DEP_VERSIONS)) {
+    for (const name of Object.keys(group)) names.add(name);
+  }
+  return [...names];
+}
+
+export async function primeLatestScaffoldVersions(options?: {
+  timeoutMs?: number;
+  registry?: string;
+}): Promise<{ resolved: number; total: number }> {
+  const timeoutMs = options?.timeoutMs ?? 3500;
+  const registry = (
+    options?.registry ??
+    process.env.npm_config_registry ??
+    "https://registry.npmjs.org"
+  ).replace(/\/$/, "");
+  const names = allScaffoldPackageNames();
+
+  const results = await Promise.allSettled(
+    names.map(async (name) => {
+      const res = await fetch(`${registry}/${name}/latest`, {
+        signal: AbortSignal.timeout(timeoutMs),
+        headers: { accept: "application/json" },
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      const body = (await res.json()) as { version?: string };
+      if (typeof body.version === "string" && /^\d+\.\d+\.\d+$/.test(body.version)) {
+        latestCache.set(name, body.version);
+      }
+    }),
+  );
+  return { resolved: latestCache.size, total: results.length };
+}
+
+function parseBareVersion(v: string): [number, number, number] | undefined {
+  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(v);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : undefined;
+}
+
+function applyLatestOverlay(dependencies: Record<string, string>): void {
+  if (latestCache.size === 0) return;
+  for (const [name, currentRange] of Object.entries(dependencies)) {
+    const latest = latestCache.get(name);
+    if (!latest || latest.includes("-")) continue;
+    const latestV = parseBareVersion(latest);
+    const currentFloor = parseFloor(currentRange);
+    if (!latestV || !currentFloor) continue;
+    if (!floorLessThan(currentFloor, latestV)) continue; // no downgrade / no-op
+    const crossesMajor = latestV[0] !== currentFloor[0];
+    if (crossesMajor && !name.startsWith("@classytic/")) continue; // tested major wins
+    dependencies[name] = `^${latest}`;
+  }
+}
+
 function overlayLiveArcVersions(dependencies: Record<string, string>): void {
   const own = readOwnPackageJson();
   if (!own) return;
@@ -202,6 +283,10 @@ export function resolveScaffoldDependencies(config: ProjectConfig): DependencyMa
     Object.assign(devDependencies, SCAFFOLD_DEP_VERSIONS.devTypescript);
   }
 
+  // Order matters: latest overlay first, peer-floor overlay LAST — so even
+  // when the registry was unreachable, peers still lift stale statics.
+  applyLatestOverlay(dependencies);
+  applyLatestOverlay(devDependencies);
   overlayLiveArcVersions(dependencies);
 
   return {

@@ -97,6 +97,25 @@ const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
     plugins: new Map<string, PluginMeta>(),
   });
 
+  // Declare every request property arc's permission/preset middlewares
+  // assign per-request (see the `declare module "fastify"` block in
+  // src/types/base.ts). Undeclared writes mutate the request object's
+  // hidden class at runtime — a V8 deopt on hot paths. `undefined` initial
+  // values are safe for reference types: middlewares assign fresh
+  // per-request objects, never mutate a shared default.
+  const POLICY_REQUEST_FIELDS = [
+    "_policyFilters",
+    "_ownershipCheck",
+    "fieldMask",
+    "policyMetadata",
+    "document",
+  ] as const;
+  for (const field of POLICY_REQUEST_FIELDS) {
+    if (!fastify.hasRequestDecorator(field)) {
+      fastify.decorateRequest(field, undefined);
+    }
+  }
+
   // Request context via AsyncLocalStorage — zero-cost per request.
   // storage.run(store, done) wraps the ENTIRE remaining request lifecycle
   // so any code in the call stack can access user/org/requestId.

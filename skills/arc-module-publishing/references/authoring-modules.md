@@ -129,6 +129,11 @@ export const accountingModule = (deps: AccountingDeps) =>
 
     afterResources: (f) => { /* cross-resource event subscriptions the module owns */ },
     onClose: (f) => { /* stop timers, flush outbox, destroy engine */ },
+
+    errorMappers: [{                    // 2.21 — domain error → wire envelope, merged into the
+      type: AccountingError,            // host's error handler at boot (host mappers keep priority)
+      toResponse: (err) => ({ status: err.status, code: err.code, message: err.message }),
+    }],
   });
 ```
 
@@ -197,6 +202,56 @@ A package exports **one** `createXModule` factory. To compose several domains, p
 packages (or several subpath exports) and let the host list them — don't return an array of
 modules from one factory. The host owns the flat `modules:` list and its ordering; keep that
 control theirs.
+
+### Resource assembly — kernel-typed ports + `mergeResourceConfig` (2.21 standard)
+
+Two rules kill the `as never` tax that plagued pre-2.21 module packages:
+
+**1. Type the engine port with the KERNEL's own bags.** The kernel is already your peer, so
+indexing its exported engine type adds zero coupling — and its truths (optional sub-module
+members, literal unions) flow into your resource builders:
+
+```ts
+import type { CatalogEngine } from "@classytic/catalog";
+
+export interface CatalogEngineLike {          // structural — any conforming engine composes
+  models: CatalogEngine["models"];
+  repositories: CatalogEngine["repositories"];
+}
+```
+
+Never re-declare the bags as `Record<string, unknown>` — that's what forced every
+`createMongooseAdapter(engine.models.X as never, ...)` cast.
+
+**2. Merge base config + host seams with `mergeResourceConfig`, not hand-rolled spreads.**
+Expose your per-resource override surface as projections of arc's `ResourceSeams` and let
+arc's slot-aware merge do assembly — arrays CONCAT (host routes append, never clobber),
+plain objects deep-merge, class instances (queryParser, adapter) last-win, `undefined`
+never overwrites, `as const` readonly host tables are accepted:
+
+```ts
+import { defineResource, mergeResourceConfig, type ResourceSeams } from "@classytic/arc";
+import { permissionMatrix } from "@classytic/arc/permissions";
+
+export interface ProductSeams {               // your public seam names, arc's slot types
+  extraRoutes?: ResourceSeams["routes"];
+  extraActions?: ResourceSeams["actions"];
+  cache?: ResourceSeams["cache"];
+}
+
+defineResource(mergeResourceConfig(
+  {
+    name: "product",
+    adapter: createMongooseAdapter({ model: models.Product, repository: repositories.product }),
+    permissions: permissionMatrix({ read: deps.permissions.view, write: deps.permissions.manage }),
+  },
+  { routes: cfg.extraRoutes, actions: cfg.extraActions, cache: cfg.cache },
+));
+```
+
+The only casts left in a well-formed package are documented boundaries: wire-body narrowing
+in action handlers (`data as { role: PartyRole }` — narrow to the KERNEL's union, not
+`string`) and hydrated-vs-lean id widening at a kernel bridge. Anything else is a smell.
 
 ---
 

@@ -70,6 +70,23 @@ export async function init(options: InitOptions = {}): Promise<void> {
   const packageManager = detectPackageManager();
   console.log(`Using package manager: ${packageManager}\n`);
 
+  // Resolve latest STABLE versions from the registry so new apps start
+  // current (guarded: no downgrades, no prereleases, no third-party major
+  // crosses — see dependency-plan.ts). Offline/timeout → pinned fallbacks.
+  // Skipped under test runners for determinism.
+  if (!process.env.VITEST && process.env.ARC_INIT_OFFLINE !== "1") {
+    const { primeLatestScaffoldVersions } = await import("./dependency-plan.js");
+    const { resolved, total } = await primeLatestScaffoldVersions().catch(() => ({
+      resolved: 0,
+      total: 0,
+    }));
+    console.log(
+      resolved > 0
+        ? `Resolved ${resolved}/${total} dependency versions from npm (latest stable)\n`
+        : "Registry unreachable — using pinned fallback versions\n",
+    );
+  }
+
   // Create project structure (without dependencies in package.json)
   await createProjectStructure(projectPath, config);
 

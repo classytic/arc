@@ -9,7 +9,7 @@
  */
 
 import type { FastifyInstance } from "fastify";
-import type { CreateAppOptions } from "./types.js";
+import type { CreateAppOptions } from "./types/index.js";
 
 type PluginTracker = (name: string, opts?: Record<string, unknown>) => void;
 

@@ -14,7 +14,7 @@ import type {
   ResourcePermissions,
   RouteDefinition,
   RouteSchemaOptions,
-} from "./resource.js";
+} from "./resource/index.js";
 
 export interface GracefulShutdownOptions {
   timeout?: number;

@@ -171,6 +171,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     });
     fastify.decorateRequest("idempotencyKey", undefined);
     fastify.decorateRequest("idempotencyReplayed", false);
+    fastify.decorateRequest("_idempotencyFullKey", undefined);
     fastify.log?.debug?.("Idempotency plugin disabled");
     return;
   }
@@ -179,6 +180,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
 
   fastify.decorateRequest("idempotencyKey", undefined);
   fastify.decorateRequest("idempotencyReplayed", false);
+  fastify.decorateRequest("_idempotencyFullKey", undefined);
 
   /**
    * Check if this request should use idempotency

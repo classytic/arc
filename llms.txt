@@ -1,0 +1,39 @@
+# @classytic/arc
+
+> Resource-oriented backend framework for Fastify. One `defineResource()` call =
+> REST + validation + auth + permissions + events + caching + OpenAPI + MCP tools.
+> DB-agnostic via @classytic/repo-core adapter kits (mongokit, sqlitekit, prismakit).
+
+IMPORTANT for coding agents: hand-rolling is a bug in arc apps. Before writing any
+route, validation, pagination, auth check, cron, queue worker, counter, or audit
+code, check whether arc provides it — it almost certainly does:
+
+- CRUD routes            → defineResource({ name, adapter, permissions })
+- Role/ownership checks  → @classytic/arc/permissions (requireRoles, requireOwnership, permissionMatrix, requireQuota)
+- Identity/tenant access → @classytic/arc/scope (getUserId, requireOrgId — never read scope fields directly)
+- Body/response schemas  → schemaOptions.fieldRules (customSchemas when wire ≠ model)
+- Query filter/sort/page → the resource queryParser (allow-listed) + keyset cursors
+- Soft delete/slug/tree/bulk/files/search → presets: [...]
+- Recurring jobs         → schedulesPlugin (@classytic/arc/plugins; LockAdapter leader safety)
+- Durable queues         → @classytic/arc/integrations/jobs (BullMQ/Redis) or @classytic/streamline (Mongo)
+- Headless worker process→ createWorker(sameOptions) (@classytic/arc/factory)
+- Usage counters/quotas  → @classytic/arc/usage (usagePlugin, requireQuota) + rateLimit.plan
+- Audit + record history → audit: true, history: true on the resource
+- Idempotency            → @classytic/arc/idempotency
+- Events/outbox/webhooks → @classytic/arc/events, integrations/webhooks
+- AI/MCP tools           → generated from every resource (incl. _count/_exists/_distinct list verbs)
+- App boot               → createApp({ beforeBoot: connectDatabase, ... }) — DB connect goes IN beforeBoot
+
+## Docs (inside this package)
+
+- skills/arc/SKILL.md — full framework guide (boot, defineResource, presets, auth, testing)
+- skills/arc/references/api-reference.md — every subpath import
+- skills/arc-code-review/references/arc-cheatsheet.md — hand-rolled-code → arc-feature map
+- skills/arc-code-review/SKILL.md — audit workflow for existing codebases
+
+## Conventions that bite
+
+- request.user is undefined on public routes — guard it.
+- Custom endpoints go in the resource's routes:/actions: (inherit auth/OpenAPI/MCP);
+  bare fastify.get() bypasses everything.
+- mongokit >=3.21 defaults schemaGenerator; schemaGenerator: false kills OpenAPI+MCP bodies.

@@ -2,18 +2,30 @@
  * Request ID Plugin
  *
  * Propagates request IDs for distributed tracing.
- * - Accepts incoming x-request-id header
+ * - Accepts incoming x-request-id header (sanitized)
  * - Generates UUID if not provided
- * - Attaches to request.id and response header
+ * - Echoes the id on the response header + W3C trace-context propagation
+ *
+ * ID RESOLUTION LIVES AT THE SERVER LEVEL, NOT HERE. Fastify binds
+ * `request.log = logger.child({ reqId: request.id })` at request
+ * construction — before any hook runs — so an id assigned inside a hook
+ * never reaches the logs. `createApp` therefore wires
+ * {@link createRequestIdGenerator} into Fastify's `genReqId` option, and
+ * this plugin simply adopts `request.id`. Standalone registration on a
+ * bare Fastify instance falls back to the legacy in-hook resolution
+ * (header echo / UUID), with the documented limitation that
+ * `request.log`'s `reqId` binding predates the overwrite — pass
+ * `genReqId: createRequestIdGenerator()` to `Fastify()` to fix that.
  *
  * @example
- * import { requestIdPlugin } from '@classytic/arc';
+ * import { requestIdPlugin, createRequestIdGenerator } from '@classytic/arc';
  *
+ * const fastify = Fastify({ genReqId: createRequestIdGenerator() });
  * await fastify.register(requestIdPlugin);
  *
- * // In handlers, access via request.id
  * fastify.get('/', async (request) => {
- *   console.log(request.id); // UUID
+ *   request.log.info('traced');   // carries the same reqId as the header
+ *   return { id: request.id };
  * });
  */
 
@@ -47,6 +59,38 @@ declare module "fastify" {
     traceContext?: { traceparent: string; tracestate?: string };
   }
 }
+
+/**
+ * Sanitize an incoming request-id header value: max 128 chars, alphanumeric
+ * plus dashes/underscores/dots/colons only. Returns `undefined` for anything
+ * else (crafted values could pollute logs or response headers). Array values
+ * (repeated headers) are rejected outright — a client sending multiple
+ * request-id headers is not tracing in good faith.
+ */
+export function sanitizeRequestId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 && trimmed.length <= 128 && /^[\w.:-]+$/.test(trimmed)
+    ? trimmed
+    : undefined;
+}
+
+/**
+ * Build a Fastify `genReqId` function: adopt a sanitized incoming request-id
+ * header, or generate one. Wire this into the `Fastify()` constructor so
+ * `request.id`, `request.log`'s `reqId` binding, and the echoed response
+ * header all agree — `createApp` does this automatically.
+ */
+export function createRequestIdGenerator(
+  opts: Pick<RequestIdOptions, "header" | "generator"> = {},
+): (req: { headers: Record<string, string | string[] | undefined> }) => string {
+  const { header = "x-request-id", generator = randomUUID } = opts;
+  const headerName = header.toLowerCase();
+  return (req) => sanitizeRequestId(req.headers[headerName]) ?? generator();
+}
+
+/** Fastify's default request ids are `req-<base36 counter>`. */
+const FASTIFY_DEFAULT_ID = /^req-[0-9a-z]+$/;
 
 /** W3C traceparent format: `version-traceid-parentid-flags` */
 const TRACEPARENT_RE = /^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/i;
@@ -91,7 +135,7 @@ const requestIdPlugin: FastifyPluginAsync<RequestIdOptions> = async (
     fastify.decorateRequest("traceContext", undefined);
   }
 
-  // Assign request ID + set response header on each request.
+  // Echo the request ID + propagate trace context on each request.
   //
   // The `reply.header()` call is intentionally in onRequest, NOT onSend.
   // An async onSend hook races with Fastify's onSendEnd → safeWriteHead
@@ -103,16 +147,24 @@ const requestIdPlugin: FastifyPluginAsync<RequestIdOptions> = async (
   // preSerialization would be skipped. The header is queued and
   // flushed with the response; no race window.
   fastify.addHook("onRequest", async (request, reply) => {
-    const incomingId = request.headers[header];
-    // Sanitize incoming ID: max 128 chars, alphanumeric + dashes/underscores/dots only.
-    // Rejects crafted values that could pollute logs or headers.
-    const sanitized = typeof incomingId === "string" ? incomingId.trim() : "";
-    const isValid = sanitized.length > 0 && sanitized.length <= 128 && /^[\w.:-]+$/.test(sanitized);
-    const requestId = isValid ? sanitized : generator();
+    const incoming = sanitizeRequestId(request.headers[header]);
+    let requestId = String(request.id);
 
-    // Set on request object (Fastify's native id)
-    (request as { id: string }).id = requestId;
-    // Set on our decorated property
+    // Under createApp, `genReqId` (createRequestIdGenerator) already
+    // resolved `request.id` from the same header/sanitizer, so both
+    // branches below are no-ops and — critically — `request.log`'s
+    // `reqId` binding matches the echoed header. They fire only for
+    // STANDALONE registration on a bare Fastify instance, preserving the
+    // legacy contract (sanitized header echoed, UUID otherwise) with the
+    // documented limitation that the log binding predates the overwrite.
+    if (incoming && incoming !== requestId) {
+      requestId = incoming;
+    } else if (!incoming && FASTIFY_DEFAULT_ID.test(requestId)) {
+      requestId = generator();
+    }
+    if (requestId !== request.id) {
+      (request as { id: string }).id = requestId;
+    }
     request.requestId = requestId;
 
     if (setResponseHeader) {

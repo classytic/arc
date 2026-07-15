@@ -21,13 +21,6 @@
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
 
-// Plugin-local augmentation for HTTP metrics timing
-declare module "fastify" {
-  interface FastifyRequest {
-    _startTime?: number;
-  }
-}
-
 export interface HealthCheck {
   /** Name of the dependency */
   name: string;
@@ -304,14 +297,13 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
     });
   }
 
-  // Collect HTTP metrics
+  // Collect HTTP metrics. Timing comes from Fastify's own
+  // `reply.elapsedTime` — no onRequest hook, no per-request property
+  // assignment (an undeclared write on every request mutates the request
+  // object's shape on the hottest path; metrics.ts uses the same source).
   if (collectHttpMetrics) {
-    fastify.addHook("onRequest", async (request) => {
-      request._startTime = Date.now();
-    });
-
-    fastify.addHook("onResponse", async (request, reply) => {
-      const duration = Date.now() - (request._startTime ?? Date.now());
+    fastify.addHook("onResponse", async (_request, reply) => {
+      const duration = reply.elapsedTime;
 
       // Track by status code bucket (2xx, 3xx, 4xx, 5xx)
       const statusBucket = `${Math.floor(reply.statusCode / 100)}xx`;

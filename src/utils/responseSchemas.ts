@@ -30,9 +30,8 @@ export { errorContractSchema, errorDetailSchema };
 export interface JsonSchema {
   /**
    * Optional because JSON Schema allows top-level combinator-only schemas
-   * (`{ oneOf: [...] }`, `{ anyOf: [...] }`, `{ allOf: [...] }`) — see
-   * `listResponse()`, which emits a `oneOf` of the four canonical list
-   * shapes with no top-level `type`.
+   * (`{ oneOf: [...] }`, `{ anyOf: [...] }`, `{ allOf: [...] }`) — hosts
+   * may pass such schemas anywhere a `JsonSchema` is accepted.
    */
   type?: string | string[];
   properties?: Record<string, JsonSchema | AnyRecord>;
@@ -80,27 +79,50 @@ export const paginationSchema: JsonSchema = {
 // post-2.13 cleanup.
 
 /**
- * List response schema — full union of every wire shape `toCanonicalList`
- * can emit. Hosts who know their endpoint only ever produces one variant
- * can pin to a narrower helper:
+ * List response schema — accepts every wire shape `toCanonicalList` can
+ * emit. Hosts who know their endpoint only ever produces one variant can
+ * pin to a narrower helper (sharper OpenAPI docs, same serializer speed):
  *   - `offsetListResponse(item)` — `{ method: 'offset', data, page, limit, total, pages, hasNext, hasPrev }`
  *   - `keysetListResponse(item)` — `{ method: 'keyset', data, limit, hasMore, next: string|null }`
  *   - `aggregateListResponse(item)` — `{ method: 'aggregate', ...offset fields }`
  *   - `bareListResponse(item)` — `{ data }`
  *
- * The default `listResponse(item)` is the union (`oneOf`) of all four so
- * Fastify validation accepts any canonical kit shape — pre-2.13 this only
- * modelled offset and rejected keyset/aggregate/bare lists at the
- * response-schema gate.
+ * SHAPE: one merged permissive object, NOT a `oneOf` union (2.22). The
+ * pre-2.22 union was semantically identical on the wire — every variant is
+ * `additionalProperties: true` and the property definitions never conflict
+ * (`next` only exists on keyset, the offset counters only on offset/
+ * aggregate; fast-json-stringify skips undefined optionals) — but
+ * fast-json-stringify implements top-level `oneOf` by running full AJV
+ * validation PER RESPONSE to pick the branch, on the hottest route of
+ * every arc app. The merge keeps the exact bytes (pinned by
+ * `tests/utils/list-response-serialization.test.ts`) and drops the
+ * per-response branch validation. Only `data` is required — the one field
+ * all four variants share.
  */
 export function listResponse(itemSchema: JsonSchema): JsonSchema {
   return {
-    oneOf: [
-      offsetListResponse(itemSchema),
-      keysetListResponse(itemSchema),
-      aggregateListResponse(itemSchema),
-      bareListResponse(itemSchema),
-    ],
+    type: "object",
+    properties: {
+      method: {
+        type: "string",
+        description:
+          "Pagination method discriminant — 'offset' | 'keyset' | 'aggregate'; absent on bare lists.",
+        example: "offset",
+      },
+      data: { type: "array", items: itemSchema },
+      // offset / aggregate counters
+      page: { type: "integer", example: 1 },
+      limit: { type: "integer", example: 20 },
+      total: { type: "integer", example: 100 },
+      pages: { type: "integer", example: 5 },
+      hasNext: { type: "boolean", example: false },
+      hasPrev: { type: "boolean", example: false },
+      // keyset cursor fields
+      hasMore: { type: "boolean" },
+      next: { type: ["string", "null"], description: "Cursor token for the next page, or null." },
+    },
+    required: ["data"],
+    additionalProperties: true,
   };
 }
 

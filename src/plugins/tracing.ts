@@ -236,10 +236,20 @@ async function tracingPlugin(fastify: FastifyInstance, options: TracingOptions =
   // Add tracer to request
   fastify.decorateRequest("tracer", undefined);
 
-  // Create span for each HTTP request
-  fastify.addHook("onRequest", async (request: FastifyRequest, _reply: FastifyReply) => {
+  // Create span for each HTTP request.
+  //
+  // CALLBACK-STYLE HOOK ON PURPOSE — the one legitimate use of the `done`
+  // signature (same pattern as arcCorePlugin's requestContext hook):
+  // `context.with(ctx, fn)` keeps the OTel context active only for the
+  // synchronous duration of `fn`, so passing `done` as `fn` continues the
+  // ENTIRE remaining request lifecycle inside the context. The previous
+  // async version called `context.with(ctx, () => {})` — active for an
+  // empty arrow function, dead by the next line — so `trace.getActiveSpan()`
+  // and auto-instrumented child spans never saw the request span.
+  fastify.addHook("onRequest", (request: FastifyRequest, _reply: FastifyReply, done) => {
     // Sampling
     if (Math.random() > sampleRate) {
+      done();
       return;
     }
 
@@ -258,10 +268,8 @@ async function tracingPlugin(fastify: FastifyInstance, options: TracingOptions =
     // Store span in request for child spans
     request.tracer = { tracer, currentSpan: span };
 
-    // Set active context
-    otelContext.with(otelTrace.setSpan(otelContext.active(), span), () => {
-      // Context is now active for this request
-    });
+    // Continue the request lifecycle WITHIN the active span context.
+    otelContext.with(otelTrace.setSpan(otelContext.active(), span), done);
   });
 
   // End span after response

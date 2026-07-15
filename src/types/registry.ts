@@ -10,7 +10,7 @@ import type {
   RateLimitConfig,
   ResolvedTenantPurge,
   ResourcePermissions,
-} from "./resource.js";
+} from "./resource/index.js";
 
 export interface ResourceMetadata {
   name: string;

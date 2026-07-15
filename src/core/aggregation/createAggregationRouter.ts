@@ -35,9 +35,10 @@ import { createError, ForbiddenError, UnauthorizedError } from "../../utils/erro
 import {
   buildArcDecorator,
   buildAuthMiddleware,
-  buildPreHandlerChain,
   buildRateLimitConfig,
+  buildRouteHooks,
   resolveRouterPluginMw,
+  routeHookOptions,
   selectPluginMw,
 } from "../routerShared.js";
 import { buildAggregationHandler } from "./buildHandler.js";
@@ -207,7 +208,9 @@ function registerOne(
   const pluginMwAll = resolveRouterPluginMw(fastify, /* resourceHasQueryCache */ false);
   const pluginMw = selectPluginMw("GET", pluginMwAll);
 
-  const preHandler = buildPreHandlerChain({
+  // Auth runs at onRequest (2.22 — before query/body validation cost for
+  // anonymous callers); permission + tenant middlewares stay at preHandler.
+  const hooks = buildRouteHooks({
     arcDecorator,
     authMw,
     permissionMw,
@@ -245,7 +248,7 @@ function registerOne(
     method: "GET",
     url: `/aggregations/${name}`,
     schema: routeSchema as FastifySchema,
-    preHandler: preHandler.length > 0 ? (preHandler as preHandlerHookHandler[]) : undefined,
+    ...routeHookOptions(hooks),
     ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
     handler: async (req: FastifyRequest, reply: FastifyReply) => {
       try {

@@ -71,16 +71,21 @@ export {
 // Reply helpers (response envelope decorators)
 export { replyHelpersPlugin } from "./replyHelpers.js";
 export type { RequestIdOptions } from "./requestId.js";
-// Request ID for distributed tracing
+// Request ID for distributed tracing. `createRequestIdGenerator` is the
+// server-level half: wire it into `Fastify({ genReqId })` (createApp does
+// this automatically) so request.id, the request.log reqId binding, and
+// the echoed x-request-id header all agree.
 export {
+  createRequestIdGenerator,
   default as requestIdPlugin,
   requestIdPlugin as requestIdPluginFn,
+  sanitizeRequestId,
 } from "./requestId.js";
 export type {
   ScheduleDefinition,
   ScheduleLockLike,
-  SchedulesPluginOptions,
   ScheduleStats,
+  SchedulesPluginOptions,
 } from "./schedules.js";
 // Recurring in-process jobs with optional multi-replica leader safety
 export {

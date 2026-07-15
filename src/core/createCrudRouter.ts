@@ -39,9 +39,9 @@ import {
   buildCrudPermissionMw,
   buildFieldWritePreHandler,
   buildPipelineHandler,
-  buildPreHandlerChain,
   buildRateLimitConfig,
   buildRouteConfig,
+  buildRouteHooks,
   methodCarriesBody,
   type PreHandlerHook,
   type RouteRateLimitConfig,
@@ -49,6 +49,7 @@ import {
   resolvePipelineSteps,
   resolveRoutePreHandlers,
   resolveRouterPluginMw,
+  routeHookOptions,
   selectPluginMw,
   tryRegisterRoute,
 } from "./routerShared.js";
@@ -283,7 +284,7 @@ function createCustomRoutes<TDoc = unknown>(
     // preAuth runs BEFORE auth — for token promotion (e.g., EventSource ?token= → Authorization)
     const preAuthHandlers = (route as { preAuth?: PreHandlerHook[] }).preAuth ?? [];
 
-    const preHandler = buildPreHandlerChain({
+    const hooks = buildRouteHooks({
       preAuth: preAuthHandlers,
       arcDecorator,
       authMw: buildAuthMiddleware(fastify, route.permissions),
@@ -313,7 +314,7 @@ function createCustomRoutes<TDoc = unknown>(
         method: route.method,
         url: route.path,
         schema: schema as FastifySchema,
-        preHandler: preHandler.length > 0 ? (preHandler as preHandlerHookHandler[]) : undefined,
+        ...routeHookOptions(hooks),
         handler: isStream
           ? async (request, reply) => {
               // Pre-set SSE headers via `reply.raw` so handlers that write
@@ -525,7 +526,7 @@ export function createCrudRouter<TDoc = unknown>(
 
       const permission = permissions[spec.op];
 
-      const preHandler = buildPreHandlerChain({
+      const hooks = buildRouteHooks({
         arcDecorator,
         authMw: buildAuthMiddleware(fastify, permission),
         permissionMw: buildCrudPermissionMw(permission, resourceName, spec.op),
@@ -562,7 +563,7 @@ export function createCrudRouter<TDoc = unknown>(
               defaultSchemas[spec.op],
               schemas[spec.op] as Record<string, unknown> | undefined,
             ) as FastifySchema,
-            preHandler: preHandler.length > 0 ? (preHandler as preHandlerHookHandler[]) : undefined,
+            ...routeHookOptions(hooks),
             handler: handlers[spec.op],
             ...buildRouteConfig(rateLimitConfig, extensions),
           },

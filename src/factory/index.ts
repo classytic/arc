@@ -40,6 +40,12 @@ export {
   preloadResourcesAsync,
 } from "../testing/preloadResources.js";
 export { ArcFactory, createApp } from "./createApp.js";
+export type {
+  ArcWorker,
+  CreateWorkerOptions,
+  WorkerHealthOptions,
+} from "./createWorker.js";
+export { createWorker } from "./createWorker.js";
 export type { FetchHandlerOptions } from "./edge.js";
 export { toFetchHandler } from "./edge.js";
 export {
@@ -74,4 +80,4 @@ export type {
   MultipartOptions,
   RawBodyOptions,
   UnderPressureOptions,
-} from "./types.js";
+} from "./types/index.js";

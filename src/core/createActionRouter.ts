@@ -83,11 +83,12 @@ import {
   buildActionPipelineHandler,
   buildArcDecorator,
   buildAuthMiddlewareForPermissions,
-  buildPreHandlerChain,
   buildRateLimitConfig,
   buildRouteConfig,
+  buildRouteHooks,
   resolvePipelineSteps,
   resolveRouterPluginMw,
+  routeHookOptions,
   selectPluginMw,
   tryRegisterRoute,
 } from "./routerShared.js";
@@ -479,16 +480,20 @@ export function createActionRouter(
       throw scopedError;
     };
 
-    const preHandler = [
-      actionValidationFormatter,
-      ...buildPreHandlerChain({
-        arcDecorator,
-        authMw,
-        permissionMw,
-        pluginMw: selectPluginMw("POST", pluginMw),
-        routeGuards,
-      }),
-    ];
+    // Auth (+ arc decorator) run at onRequest — BEFORE body parsing and AJV,
+    // so unauthenticated callers get a 401 without paying validation cost or
+    // learning the action schema from 400s. The validation formatter stays
+    // FIRST in preHandler: `attachValidation` parks AJV errors at the
+    // preValidation stage (after onRequest), so by preHandler time the
+    // formatter sees them — and only authenticated callers reach it.
+    const hooks = buildRouteHooks({
+      arcDecorator,
+      authMw,
+      permissionMw,
+      pluginMw: selectPluginMw("POST", pluginMw),
+      routeGuards,
+    });
+    const preHandler = [actionValidationFormatter, ...hooks.preHandler];
 
     tryRegisterRoute(
       fastify,
@@ -499,7 +504,7 @@ export function createActionRouter(
         // `attachValidation: true` parks AJV errors on `request.validationError`
         // so the formatter above can re-throw with the matching action's scope.
         attachValidation: true,
-        preHandler: preHandler.length > 0 ? (preHandler as preHandlerHookHandler[]) : undefined,
+        ...routeHookOptions({ onRequest: hooks.onRequest, preHandler }),
         ...buildRouteConfig(rateLimitConfig, extensions),
         handler: async (req: FastifyRequest, reply: FastifyReply) => {
           const { action, ...data } = req.body as { action: string; [key: string]: unknown };

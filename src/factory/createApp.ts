@@ -41,7 +41,9 @@ import Fastify, {
   type FastifyServerOptions,
 } from "fastify";
 import qs from "qs";
-import { arcLog } from "../logger/index.js";
+import { arcLog, configureArcLogger, createPinoWriter } from "../logger/index.js";
+import { createRequestIdGenerator } from "../plugins/requestId.js";
+import { parseJsonBody } from "../utils/jsonBody.js";
 import { orderModules, resolveModule } from "./module.js";
 import { getPreset } from "./presets.js";
 import { registerArcCore, registerArcPlugins } from "./registerArcPlugins.js";
@@ -53,7 +55,7 @@ import {
 } from "./registerAuth.js";
 import { registerResources } from "./registerResources.js";
 import { registerSecurityPlugins, registerUtilityPlugins } from "./registerSecurity.js";
-import type { CreateAppOptions } from "./types.js";
+import type { CreateAppOptions } from "./types/index.js";
 
 // ── Constants ──
 
@@ -217,7 +219,6 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   // ── 0. Logger + validation ──
 
   if (options.debug !== undefined && options.debug !== false) {
-    const { configureArcLogger } = await import("../logger/index.js");
     configureArcLogger({ debug: options.debug });
   }
 
@@ -249,12 +250,32 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   );
   const moduleErrorMappers = resolvedModules.flatMap((m) => m.errorMappers ?? []);
 
+  const resolvedLogger = resolveLoggerConfig(config.logger);
+
   const fastify: FastifyInstance = Fastify({
-    logger: resolveLoggerConfig(config.logger),
+    logger: resolvedLogger,
+    // Request-id resolution belongs at the SERVER level, not in a hook:
+    // Fastify binds `request.log = logger.child({ reqId: request.id })` at
+    // request construction, BEFORE any onRequest hook runs — an id assigned
+    // in a hook never reaches the logs. `genReqId` adopts a sanitized
+    // incoming `x-request-id` (≤128 chars, [\w.:-]) or generates a UUID;
+    // the requestId plugin echoes it on the response header and handles
+    // W3C trace-context propagation.
+    genReqId: createRequestIdGenerator(),
     trustProxy: config.trustProxy ?? false,
     pluginTimeout: config.pluginTimeout ?? 10_000,
     // Honour an explicit override; Fastify's default (1 MiB) applies otherwise.
     ...(config.bodyLimit !== undefined ? { bodyLimit: config.bodyLimit } : {}),
+    // Server timeout knobs — pass-throughs only. Arc deliberately ships no
+    // defaults here: Node ≥18 already bounds slow-loris (headersTimeout
+    // ~60s, requestTimeout 300s), and an opinionated requestTimeout would
+    // 408 legitimate slow uploads while SSE/streaming responses are
+    // unaffected either way. See the JSDoc on each option.
+    ...(config.requestTimeout !== undefined ? { requestTimeout: config.requestTimeout } : {}),
+    ...(config.connectionTimeout !== undefined
+      ? { connectionTimeout: config.connectionTimeout }
+      : {}),
+    ...(config.keepAliveTimeout !== undefined ? { keepAliveTimeout: config.keepAliveTimeout } : {}),
     // Arc deliberately replaces Fastify 5's default error handler with the
     // canonical ErrorContract converter (see plugins/errorHandler.ts).
     // Fastify 5 emits FSTWRN004 when `setErrorHandler` runs in a scope
@@ -302,6 +323,19 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     },
   });
 
+  // Route arc's internal logger (`arcLog`) through the host's pino instance
+  // so framework warnings inherit the app's transports, level, AND redaction
+  // — the console fallback bypassed all three. `logger: false` keeps the
+  // console fallback: silent apps still surface arc warnings somewhere.
+  // Last-created app wins the (global) writer; hosts that need a custom
+  // writer call `configureArcLogger({ writer })` AFTER createApp.
+  if (resolvedLogger !== false) {
+    configureArcLogger({
+      ...(options.debug !== undefined && options.debug !== false ? { debug: options.debug } : {}),
+      writer: createPinoWriter(fastify.log),
+    });
+  }
+
   for (const warning of deferredWarnings) {
     fastify.log.warn(warning);
   }
@@ -321,17 +355,18 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   // Fix empty JSON body on DELETE/GET requests.
   // Some clients send Content-Type: application/json with no body on DELETE/GET.
   // Fastify's default parser rejects this (FST_ERR_CTP_EMPTY_JSON_BODY).
-  // We override to treat empty bodies as undefined, while preserving Fastify's
-  // prototype poisoning protection via secure-json-parse.
-  const sjp = await import("secure-json-parse");
+  // `parseJsonBody` treats empty bodies as undefined, keeps Fastify's
+  // prototype-poisoning protection (secure-json-parse), and decorates parse
+  // failures with `statusCode: 400` — Fastify forwards parser errors to the
+  // error handler verbatim, so an undecorated SyntaxError would surface as a
+  // 500 `arc.internal_error` for client-sent bad JSON.
   fastify.removeContentTypeParser("application/json");
   fastify.addContentTypeParser(
     "application/json",
     { parseAs: "string" },
     (_req: FastifyRequest, body: string, done: (err: Error | null, body?: unknown) => void) => {
-      if (!body || body.length === 0) return done(null, undefined);
       try {
-        done(null, sjp.parse(body));
+        done(null, parseJsonBody(body));
       } catch (err) {
         done(err as Error);
       }

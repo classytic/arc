@@ -51,6 +51,19 @@ export interface ErrorMapper<T extends Error = Error> {
 export interface ErrorHandlerOptions {
   /** Include `meta.stack` on the wire (defaults to `NODE_ENV !== 'production'`). */
   includeStack?: boolean;
+  /**
+   * Ship the raw `error.message` of UNCLASSIFIED 500s on the wire
+   * (defaults to `NODE_ENV !== 'production'`).
+   *
+   * Only the `arc.internal_error` fallback is affected — an unclassified
+   * throw carries whatever some driver/library put in the message (connection
+   * strings, file paths, SQL fragments), which must not reach clients in
+   * production. Deliberate 5xx contracts are untouched: `ArcError` /
+   * domain-coded throws (`payment.gateway.timeout`, …) keep their message
+   * because the thrower chose it for the client. The raw message is always
+   * logged via `request.log.error({ err })` regardless of this flag.
+   */
+  exposeInternalMessages?: boolean;
   /** Custom callback fired for every error — log to Sentry / Datadog / etc. */
   onError?: (error: Error, request: FastifyRequest) => void | Promise<void>;
   /** Map by `error.name` string. Lower priority than `errorMappers`. */
@@ -186,6 +199,7 @@ async function errorHandlerPluginFn(
   const isProduction = process.env.NODE_ENV === "production";
   const {
     includeStack = !isProduction,
+    exposeInternalMessages = !isProduction,
     onError,
     errorMap = {},
     errorMappers = [],
@@ -216,19 +230,47 @@ async function errorHandlerPluginFn(
       };
 
       const status = wire.status ?? 500;
+      // Unclassified 500s carry whatever a driver/library put in the
+      // message — never wire that in production. Deliberate 5xx contracts
+      // (domain-coded ArcErrors) keep their message; the raw one is logged
+      // below either way. See `ErrorHandlerOptions.exposeInternalMessages`.
+      if (status >= 500 && wire.code === "arc.internal_error" && !exposeInternalMessages) {
+        wire.message = "Internal Server Error";
+      }
       if (status >= 500) {
         request.log.error({ err: error, status }, "Server error");
       } else if (status >= 400) {
         request.log.warn({ err: error, status }, "Client error");
       }
-      // Log cause chain for ArcErrors that wrap a downstream exception.
+      // Log cause chain for ArcErrors that wrap a downstream exception —
+      // at the severity of the response itself (a 404 wrapping a lookup
+      // miss is not an `error`-level event; a 500 wrapping a driver crash is).
       if (isArcError(error) && error.cause) {
-        request.log.error({ cause: error.cause }, "Error cause chain");
+        const causeLevel = status >= 500 ? "error" : "warn";
+        request.log[causeLevel]({ cause: error.cause }, "Error cause chain");
       }
 
       return reply.status(status).send(wire);
     },
   );
+}
+
+/**
+ * Is `code` a caller-defined DOMAIN error code that is safe to surface on the
+ * wire, as opposed to a framework/runtime code that must never leak?
+ *
+ * Rejects Fastify internals (`FST_*`) and Node system errnos (`ECONNREFUSED`,
+ * `ENOENT`, …). Domain codes in the wild use separators (`PURCHASE_NOT_FOUND`,
+ * `access.forbidden`) so they pass; a bare all-caps single word that collides
+ * with the Node-errno shape (e.g. `EXPIRED`) is conservatively treated as a
+ * runtime code — use a separatored code (`TOKEN_EXPIRED`) to surface it, or
+ * throw via `createDomainError` which bypasses this heuristic entirely.
+ */
+function isDomainErrorCode(code: unknown): code is string {
+  if (typeof code !== "string" || code.length === 0) return false;
+  if (code.startsWith("FST_")) return false; // Fastify internal (FST_ERR_*)
+  if (/^E[A-Z]{2,}$/.test(code)) return false; // Node errno (ECONNREFUSED, ENOENT)
+  return true;
 }
 
 /**
@@ -318,10 +360,17 @@ function classify(
     };
   }
 
-  // 4. Fastify errors with a numeric statusCode
+  // 4. Fastify-style errors with a numeric statusCode. Honor an explicit
+  // DOMAIN code the thrower attached — e.g.
+  // `Object.assign(new Error(msg), { statusCode: 404, code: 'PURCHASE_NOT_FOUND' })`
+  // — so it reaches the client like `createDomainError` does, instead of being
+  // silently replaced by the generic `arc.<status>`. Framework/runtime codes
+  // (Fastify `FST_*`, Node errnos like `ECONNREFUSED`) are NEVER surfaced —
+  // they carry no client contract. See `isDomainErrorCode`.
   if (typeof fastifyErr.statusCode === "number") {
+    const domainCode = isDomainErrorCode(fastifyErr.code) ? fastifyErr.code : undefined;
     return {
-      code: statusToArcCode(fastifyErr.statusCode),
+      code: domainCode ?? statusToArcCode(fastifyErr.statusCode),
       message: error.message || "Error",
       status: fastifyErr.statusCode,
     };

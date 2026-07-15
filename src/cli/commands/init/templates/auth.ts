@@ -156,8 +156,8 @@ import { mongodbAdapter } from '@better-auth/mongo-adapter';`
     : "";
 
   const pluginImports = [
-    useOrg ? `import { organization } from 'better-auth/plugins';` : "",
-    useBearer ? `import { bearer } from 'better-auth/plugins';` : "",
+    useOrg ? `import { organization } from 'better-auth/plugins/organization';` : "",
+    useBearer ? `import { bearer } from 'better-auth/plugins/bearer';` : "",
     useApiKey ? `import { apiKey } from '@better-auth/api-key';` : "",
   ]
     .filter(Boolean)

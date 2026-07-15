@@ -1,242 +1,16 @@
 /**
- * Types for createApp factory
+ * `CreateAppOptions` — the full configuration surface of `createApp()`:
+ * environment, stores, auth, security, arc plugins, resources, lifecycle.
  */
 
-import type {
-  FastifyInstance,
-  FastifyPluginAsync,
-  FastifyReply,
-  FastifyRequest,
-  FastifyServerOptions,
-} from "fastify";
-
-// These types are inlined to avoid forcing consumers to install optional peer deps.
-// @fastify/cors, @fastify/helmet, @fastify/rate-limit are optional — their types
-// should not leak into our declaration files.
-type CorsOptions = Record<string, unknown> & {
-  origin?: unknown;
-  credentials?: boolean;
-  methods?: string[];
-  allowedHeaders?: string[];
-};
-type HelmetOptions = Record<string, unknown>;
-type RateLimitOpts = Record<string, unknown> & {
-  max?: number;
-  timeWindow?: string | number;
-  /**
-   * Path patterns to exempt from rate limiting. Supports exact match
-   * (`/health`) or prefix match with trailing `*` (`/api/auth/*`).
-   *
-   * Implemented by synthesising a `@fastify/rate-limit` `allowList`
-   * function. When combined with a user-supplied `allowList`, both
-   * are OR-ed together (path OR ip/custom match skips the limit).
-   *
-   * Use this for endpoints that are hit frequently but independently
-   * of user traffic — session heartbeat, webhooks, health probes.
-   */
-  skipPaths?: string[];
-};
-
-import type { CacheStore } from "../cache/interface.js";
-import type { ExternalOpenApiPaths } from "../docs/externalPaths.js";
-import type { EventTransport } from "../events/EventTransport.js";
-import type { IdempotencyStore } from "../idempotency/stores/interface.js";
-import type { ElevationOptions } from "../scope/elevation.js";
-import type { Authenticator } from "../types/index.js";
-
-// ============================================================================
-// Auth Strategy Types (Discriminated Union with `type` field)
-// ============================================================================
-
-/**
- * Arc's built-in JWT auth
- *
- * Registers @fastify/jwt, wires up `fastify.authenticate`, and
- * exposes `fastify.auth` helpers (issueTokens, verifyRefreshToken).
- *
- * @example
- * ```typescript
- * const app = await createApp({
- *   auth: {
- *     type: 'jwt',
- *     jwt: { secret: process.env.JWT_SECRET },
- *   },
- * });
- *
- * // With custom authenticator
- * const app = await createApp({
- *   auth: {
- *     type: 'jwt',
- *     jwt: { secret: process.env.JWT_SECRET },
- *     authenticate: async (request, { jwt }) => {
- *       const token = request.headers.authorization?.split(' ')[1];
- *       if (!token) return null;
- *       const decoded = jwt.verify(token);
- *       return userRepo.findById(decoded.id);
- *     },
- *   },
- * });
- * ```
- */
-export interface JwtAuthOption {
-  type: "jwt";
-
-  /**
-   * JWT configuration (optional but recommended)
-   * If provided, jwt utilities are available in authenticator context
-   */
-  jwt?: {
-    /** JWT secret (required for JWT features) */
-    secret: string;
-    /** Access token expiry (default: '15m') */
-    expiresIn?: string;
-    /** Refresh token secret (defaults to main secret) */
-    refreshSecret?: string;
-    /** Refresh token expiry (default: '7d') */
-    refreshExpiresIn?: string;
-    /** Additional @fastify/jwt sign options */
-    sign?: Record<string, unknown>;
-    /** Additional @fastify/jwt verify options */
-    verify?: Record<string, unknown>;
-  };
-
-  /**
-   * Custom authenticator function (recommended)
-   *
-   * Arc calls this for non-public routes.
-   * Return user object to authenticate, null/undefined to reject.
-   *
-   * If not provided and jwt.secret is set, uses default jwtVerify.
-   */
-  authenticate?: Authenticator;
-
-  /**
-   * Custom auth failure handler
-   * Customize the 401 response when authentication fails
-   */
-  onFailure?: (request: FastifyRequest, reply: FastifyReply, error?: Error) => void | Promise<void>;
-
-  /**
-   * Expose detailed auth error messages in 401 responses.
-   * When false (default), returns generic "Authentication required".
-   * When true, includes the actual error message for debugging.
-   * Decoupled from log level — set explicitly per environment.
-   */
-  exposeAuthErrors?: boolean;
-
-  /**
-   * Property name to store user on request (default: 'user')
-   */
-  userProperty?: string;
-
-  /**
-   * Token revocation check — called after JWT verification.
-   * Return `true` to reject the token (fail-closed: errors also reject).
-   *
-   * @example
-   * ```typescript
-   * isRevoked: async (decoded) => {
-   *   return revokedTokens.has(decoded.jti as string);
-   * },
-   * ```
-   */
-  isRevoked?: (decoded: Record<string, unknown>) => boolean | Promise<boolean>;
-}
-
-/**
- * Better Auth adapter integration
- *
- * When provided, Arc registers the Better Auth plugin (which sets up
- * auth routes and decorates fastify.authenticate) and skips Arc's
- * built-in JWT auth setup entirely.
- *
- * @example
- * ```typescript
- * import { createBetterAuthAdapter } from '@classytic/arc-better-auth';
- *
- * const app = await createApp({
- *   auth: { type: 'betterAuth', betterAuth: createBetterAuthAdapter({ auth: myBetterAuth }) },
- * });
- * ```
- */
-export interface BetterAuthOption {
-  type: "betterAuth";
-  /** Better Auth adapter — pass the result of createBetterAuthAdapter() */
-  betterAuth: { plugin: FastifyPluginAsync; openapi?: ExternalOpenApiPaths };
-}
-
-/**
- * Custom auth plugin — full control over authentication setup
- *
- * The plugin is registered directly on the Fastify instance.
- * It must decorate `fastify.authenticate` for protected routes to work.
- *
- * @example
- * ```typescript
- * const app = await createApp({
- *   auth: {
- *     type: 'custom',
- *     plugin: async (fastify) => {
- *       fastify.decorate('authenticate', async (request, reply) => { ... });
- *     },
- *   },
- * });
- * ```
- */
-export interface CustomPluginAuthOption {
-  type: "custom";
-  /** Custom Fastify plugin that sets up authentication */
-  plugin: FastifyPluginAsync;
-}
-
-/**
- * Custom authenticator function — lightweight alternative to a full plugin
- *
- * Arc decorates `fastify.authenticate` with this function directly.
- * No JWT setup, no Arc auth plugin — just your function.
- *
- * @example
- * ```typescript
- * const app = await createApp({
- *   auth: {
- *     type: 'authenticator',
- *     authenticate: async (request, reply) => {
- *       const session = await validateSession(request);
- *       if (!session) reply.code(401).send({ error: 'Unauthorized' });
- *       request.user = session.user;
- *     },
- *   },
- * });
- * ```
- */
-export interface CustomAuthenticatorOption {
-  type: "authenticator";
-  /** Authenticate function — decorates fastify.authenticate directly */
-  authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
-  /**
-   * Optional authenticate function for public routes.
-   * If not provided, Arc auto-generates one by wrapping `authenticate` and
-   * intercepting 401/403 responses so unauthenticated requests proceed as public.
-   * Provide this if your authenticator has side effects that shouldn't run on public routes.
-   */
-  optionalAuthenticate?: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
-}
-
-/**
- * All supported auth configuration shapes
- *
- * - `false` — Disable authentication entirely
- * - `JwtAuthOption` — Arc's built-in JWT auth (`type: 'jwt'`)
- * - `BetterAuthOption` — Better Auth adapter integration (`type: 'betterAuth'`)
- * - `CustomPluginAuthOption` — Your own Fastify auth plugin (`type: 'custom'`)
- * - `CustomAuthenticatorOption` — A bare authenticate function (`type: 'authenticator'`)
- */
-export type AuthOption =
-  | false
-  | JwtAuthOption
-  | BetterAuthOption
-  | CustomPluginAuthOption
-  | CustomAuthenticatorOption;
+import type { FastifyInstance, FastifyServerOptions } from "fastify";
+import type { CacheStore } from "../../cache/interface.js";
+import type { EventTransport } from "../../events/EventTransport.js";
+import type { IdempotencyStore } from "../../idempotency/stores/interface.js";
+import type { ElevationOptions } from "../../scope/elevation.js";
+import type { AuthOption } from "./auth.js";
+import type { MultipartOptions, RawBodyOptions, UnderPressureOptions } from "./plugin-options.js";
+import type { CorsOptions, HelmetOptions, RateLimitOpts } from "./security.js";
 
 /**
  * CreateApp Options
@@ -284,8 +58,19 @@ export interface CreateAppOptions {
   // Environment & Logging
   // ============================================
 
-  /** Environment preset: 'production', 'development', 'testing', or 'edge' */
-  preset?: "production" | "development" | "testing" | "edge";
+  /** Environment preset: 'production', 'development', 'testing', 'edge', or 'worker' */
+  preset?: "production" | "development" | "testing" | "edge" | "worker";
+
+  /**
+   * Route-mounting switch (2.23) — the worker-role primitive. `false`
+   * registers every resource's shared runtime state (registry metadata +
+   * adapter, hooks, cache-invalidation rules) WITHOUT mounting any routes,
+   * so headless processes keep tenant-purge cascade, per-resource audit,
+   * and events metadata intact. Set by `preset: 'worker'` /
+   * `createWorker()`; hosts composing a custom worker shape may set it
+   * directly. Default: true (routes mount).
+   */
+  mountRoutes?: boolean;
 
   /**
    * Runtime profile for store backends.
@@ -337,11 +122,54 @@ export interface CreateAppOptions {
    */
   debug?: boolean | string;
 
-  /** Trust proxy headers (X-Forwarded-For, etc.) */
-  trustProxy?: boolean;
+  /**
+   * Trust proxy headers (X-Forwarded-For, etc.). Pass-through to Fastify's
+   * `trustProxy` server option — all its forms are supported, not just the
+   * boolean:
+   *
+   * - `true` — trust ALL proxies (only safe when the app is never directly
+   *   reachable; a spoofed `X-Forwarded-For` otherwise forges `request.ip`,
+   *   which feeds rate-limit keys and audit logs)
+   * - `1` — trust exactly one hop (typical single LB / reverse proxy)
+   * - `'10.0.0.0/8'` / `['10.0.0.0/8', '172.16.0.0/12']` — trust only these
+   *   CIDR ranges
+   *
+   * @example
+   * ```ts
+   * createApp({ preset: 'production', trustProxy: 1 });          // one LB hop
+   * createApp({ preset: 'production', trustProxy: '10.0.0.0/8' }); // VPC proxies
+   * ```
+   */
+  trustProxy?: boolean | string | string[] | number;
 
   /** Fastify plugin/onReady timeout in ms (default: 10_000). Raise for slow boot work (index materialisation, WAL replay, external warm-up). */
   pluginTimeout?: number;
+
+  /**
+   * Max time in ms the server waits to RECEIVE an entire request
+   * (headers + body). Pass-through to Fastify's `requestTimeout` (Node's
+   * `server.requestTimeout`). Default `0` defers to Node's own 300s bound
+   * — slow-loris requests are already cut off there, so arc doesn't
+   * override; tighten (e.g. `30_000`) for APIs that never accept slow
+   * uploads. Response duration (SSE, streaming) is NOT affected.
+   */
+  requestTimeout?: number;
+
+  /**
+   * Max time in ms to establish a connection before the socket is
+   * destroyed. Pass-through to Fastify's `connectionTimeout` (Node's
+   * `server.timeout`). Default `0` = no limit (Node's `headersTimeout`
+   * ~60s still bounds idle pre-request sockets).
+   */
+  connectionTimeout?: number;
+
+  /**
+   * Keep-alive idle timeout in ms (Node's `server.keepAliveTimeout`,
+   * default 72_000). MUST be longer than the idle timeout of any load
+   * balancer in front of the app (ALB default 60s) or the LB reuses
+   * sockets the server just closed → intermittent 502s.
+   */
+  keepAliveTimeout?: number;
 
   /**
    * Maximum JSON body size in bytes. Pass-through to Fastify's
@@ -531,7 +359,7 @@ export interface CreateAppOptions {
      * }
      * ```
      */
-    health?: boolean | import("../plugins/health.js").HealthOptions;
+    health?: boolean | import("../../plugins/health.js").HealthOptions;
     /** Graceful shutdown handling (default: true) */
     gracefulShutdown?: boolean;
     /** Emit events for CRUD operations (default: true) */
@@ -563,34 +391,34 @@ export interface CreateAppOptions {
      * });
      * ```
      */
-    events?: Omit<import("../events/eventPlugin.js").EventPluginOptions, "transport"> | boolean;
+    events?: Omit<import("../../events/eventPlugin.js").EventPluginOptions, "transport"> | boolean;
     /**
      * Caching headers (ETag + Cache-Control). Default: false (opt-in).
      * Set to true for defaults, or pass CachingOptions for fine control.
      */
-    caching?: import("../plugins/caching.js").CachingOptions | boolean;
+    caching?: import("../../plugins/caching.js").CachingOptions | boolean;
     /**
      * SSE event streaming. Default: false (opt-in).
      * Set to true for defaults, or pass SSEOptions for fine control.
      * Requires emitEvents to be enabled (or events plugin registered).
      */
-    sse?: import("../plugins/sse.js").SSEOptions | boolean;
+    sse?: import("../../plugins/sse.js").SSEOptions | boolean;
     /**
      * QueryCache — TanStack Query-inspired server cache with SWR.
      * Default: false (opt-in). Set to true for memory store defaults.
      * Requires per-resource `cache` config on defineResource().
      */
-    queryCache?: import("../cache/queryCachePlugin.js").QueryCachePluginOptions | boolean;
+    queryCache?: import("../../cache/queryCachePlugin.js").QueryCachePluginOptions | boolean;
     /**
      * Metrics endpoint (Prometheus-compatible). Default: false (opt-in).
      * Set to true for defaults (/_metrics), or pass MetricsOptions for custom path/prefix.
      */
-    metrics?: import("../plugins/metrics.js").MetricsOptions | boolean;
+    metrics?: import("../../plugins/metrics.js").MetricsOptions | boolean;
     /**
      * API versioning (header or prefix-based). Default: false (opt-in).
      * Pass VersioningOptions to enable.
      */
-    versioning?: import("../plugins/versioning.js").VersioningOptions;
+    versioning?: import("../../plugins/versioning.js").VersioningOptions;
   };
 
   /**
@@ -619,7 +447,7 @@ export interface CreateAppOptions {
    * into a consistent JSON envelope. Enabled by default.
    * Set to false to disable, or pass ErrorHandlerOptions for fine control.
    */
-  errorHandler?: import("../plugins/errorHandler.js").ErrorHandlerOptions | false;
+  errorHandler?: import("../../plugins/errorHandler.js").ErrorHandlerOptions | false;
 
   /**
    * Custom AJV keywords to allow in route schemas.
@@ -774,7 +602,7 @@ export interface CreateAppOptions {
    * See `wiki/modules.md` for the full design (authoring convention, events/
    * outbox integration, microservices path).
    */
-  modules?: ReadonlyArray<import("./module.js").ArcModuleInput>;
+  modules?: ReadonlyArray<import("../module.js").ArcModuleInput>;
 
   /**
    * Resources to register automatically. Accepts two shapes:
@@ -844,12 +672,12 @@ export interface CreateAppOptions {
    * ```
    */
   resources?:
-    | ReadonlyArray<import("./loadResources.js").ResourceLike>
+    | ReadonlyArray<import("../loadResources.js").ResourceLike>
     | ((
         fastify: FastifyInstance,
       ) =>
-        | ReadonlyArray<import("./loadResources.js").ResourceLike>
-        | Promise<ReadonlyArray<import("./loadResources.js").ResourceLike>>);
+        | ReadonlyArray<import("../loadResources.js").ResourceLike>
+        | Promise<ReadonlyArray<import("../loadResources.js").ResourceLike>>);
 
   /**
    * URL prefix for all auto-registered resources.
@@ -1011,37 +839,4 @@ export interface CreateAppOptions {
 
   /** Hook called when the app is shutting down */
   onClose?: (fastify: FastifyInstance) => void | Promise<void>;
-}
-
-// Plugin-specific options
-
-export interface UnderPressureOptions {
-  /** Expose `/_status` route for health checks (default: false) */
-  exposeStatusRoute?: boolean;
-  /** Event loop lag threshold in ms — requests rejected above this (default: 1000) */
-  maxEventLoopDelay?: number;
-  /** V8 heap usage threshold in bytes — requests rejected above this */
-  maxHeapUsedBytes?: number;
-  /** RSS memory threshold in bytes — requests rejected above this */
-  maxRssBytes?: number;
-}
-
-export interface MultipartOptions {
-  limits?: {
-    /** Max file size in bytes (default: Fastify default ~1MB) */
-    fileSize?: number;
-    /** Max number of files per request */
-    files?: number;
-  };
-}
-
-export interface RawBodyOptions {
-  /** Body field name to store raw body on (default: 'rawBody') */
-  field?: string;
-  /** Apply to all routes globally (default: false) */
-  global?: boolean;
-  /** Encoding for raw body string (default: 'utf8') */
-  encoding?: string;
-  /** Parse raw body before other parsers (default: false) */
-  runFirst?: boolean;
 }

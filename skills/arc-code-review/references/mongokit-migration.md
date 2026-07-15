@@ -200,13 +200,14 @@ export const userRepo = new Repository<UserDoc>(User, [
 // resources/user/user.resource.ts — arc resource consuming the mongokit repo
 import { defineResource, requireRoles, allowPublic, fields } from '@classytic/arc';
 import { createMongooseAdapter } from '@classytic/mongokit/adapter';   // arc 2.12+: from the kit
-import { buildCrudSchemasFromModel } from '@classytic/mongokit';
 import { User } from '../../models/user.js';
 import { userRepo } from '../../repositories/userRepository.js';
 
 export const userResource = defineResource({
   name: 'user',
-  adapter: createMongooseAdapter({ model: User, repository: userRepo, schemaGenerator: buildCrudSchemasFromModel }),
+  // mongokit >=3.21 defaults schemaGenerator to buildCrudSchemasFromModel
+  // (pre-3.21: wire it explicitly, or OpenAPI/MCP bodies come out null)
+  adapter: createMongooseAdapter({ model: User, repository: userRepo }),
   presets: ['softDelete'],          // multiTenant is at the repo layer (mongokit), so we don't need the arc preset too — pick one
   permissions: {
     list:   requireRoles(['admin']),
@@ -344,7 +345,7 @@ For each Mongoose model in the project:
 
 If consumers see `as unknown as RepositoryLike<T>` casts when wiring a repo into the mongoose adapter, that's drift. Mongokit's `tests/unit/standard-repo-assignment.test-d.ts` proves whole-interface assignment via TypeScript. Run `npm run typecheck:tests` in mongokit; if it fails, the published version drifted from the contract — pin to a known-good version or open a PR.
 
-In the client project, prefer `createMongooseAdapter({ model, repository, schemaGenerator })` from `@classytic/mongokit/adapter` over manual `RepositoryLike` shaping — it accepts mongokit-native repos with no casts.
+In the client project, prefer `createMongooseAdapter({ model, repository })` from `@classytic/mongokit/adapter` over manual `RepositoryLike` shaping — it accepts mongokit-native repos with no casts, and since mongokit 3.21 `schemaGenerator` defaults to `buildCrudSchemasFromModel` (`schemaGenerator: false` opts out — see anti-patterns §32f before recommending that).
 
 ## arc 2.12 / mongokit 3.13.0 — adapter split
 

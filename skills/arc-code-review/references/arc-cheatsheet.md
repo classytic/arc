@@ -23,12 +23,22 @@ A condensed map of what arc provides, so during audit you can spot what the team
 | Custom `withRetry` / `withDLQ` plumbing on events | `RedisStreamTransport` (durable, consumer groups, DLQ) |
 | Hand-rolled idempotency token check | `idempotencyPlugin` (header-based, configurable store) |
 | Manual SCIM provisioning endpoints | `@classytic/arc/scim` — `scimPlugin({ users, groups, bearer })` |
+| `setInterval` sweeps + hand-rolled leader lock / job registry | `schedulesPlugin` from `@classytic/arc/plugins` (2.21 — interval jobs, LockAdapter lease, no Redis) |
+| `as never` casts + spread-merges assembling resources in module packages | `mergeResourceConfig` + `ResourceSeams` (2.21) with kernel-typed engine ports |
+| Same `view`/`manage` gate repeated across 5 CRUD keys | `permissionMatrix({ read, write, delete? })` (2.21) |
+| DB connect + dynamic-import ordering in the composition root | `createApp({ beforeBoot })` (2.21 — runs before Fastify + all imports) |
+| `import { x } from 'better-auth/plugins'` (barrel) | dedicated path `better-auth/plugins/<name>` — tree-shaking (BA best practice) |
+| Hand-rolled per-tenant usage/billing counters | `usagePlugin` from `@classytic/arc/usage` (2.22 — per-actor per-period counters, fail-safe, `UsageStore` backends) |
+| Per-plan rate limits via custom middleware | `rateLimit.plan { resolve, limits, default }` (2.22 — `false` = unlimited, fail-safe fallback, tenant-keyed buckets) |
+| Hand-built audit-timeline endpoints (`GET /:id/history` handlers over audit rows) | `history: true` on `defineResource` (2.22 — implies `audit: true`, stricter-than-read gate) |
 
 ## Boot order (FIXED)
 
 ```
+0. beforeBoot()     ← pre-everything (DB connect; before Fastify + imports) — 2.21
+0.5 module resolve  ← thunk imports + dependsOn topo-sort; module errorMappers merge
 1. Arc core (security, auth, events)
-2. plugins()        ← user infra (DB, docs, webhooks)
+2. plugins()        ← user infra (docs, webhooks)
 3. bootstrap[]      ← domain init (engines, singletons)
 4. resources (factory runs after bootstrap)
 5. resources[]      ← register each
@@ -54,7 +64,7 @@ defineResource({
   rateLimit?, tenantField?, idField?,
   prefix?, skipGlobalPrefix?,
   queryParser?, onFieldWriteDenied?,
-  audit?, mcp?,                                     // mcp: false to exclude from MCP tool gen
+  audit?, history?, mcp?,                           // mcp: false to exclude from MCP tool gen; history: true → GET /:id/history (2.22)
   displayName?, module?,
   onTenantDelete?,                                  // GDPR cascade strategy
 });
@@ -69,6 +79,7 @@ requireRoles(['admin'])                    requireServiceScope('jobs:bulk')
 requireOwnership('userId')                 requireScopeContext('branchId')
 requireOrgMembership()                     requireOrgInScope(targetId)
 allOf(...) · anyOf(...) · not(...) · when(...) · denyAll()
+permissionMatrix({ read, write, delete? })        // 2.21 — expands to the full CRUD map
 createDynamicPermissionMatrix({ resolveRolePermissions, cacheStore })
 ```
 
@@ -159,7 +170,9 @@ import type { DataAdapter, RepositoryLike } from '@classytic/repo-core/adapter';
 
 ```typescript
 import { defineResource, BaseController, allowPublic }    from '@classytic/arc';
+import { mergeResourceConfig, type ResourceSeams }         from '@classytic/arc';         // 2.21
 import { createApp, loadResources }                        from '@classytic/arc/factory';
+import { schedulesPlugin }                                 from '@classytic/arc/plugins'; // 2.21
 import { MemoryCacheStore, RedisCacheStore, QueryCache }   from '@classytic/arc/cache';
 import { eventPlugin, EventOutbox }                        from '@classytic/arc/events';
 import { RedisEventTransport, RedisStreamTransport }       from '@classytic/arc/events/redis-stream';

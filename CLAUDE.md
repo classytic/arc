@@ -66,6 +66,8 @@ Run the minimum that covers your change:
 | `src/presets/*` | `npx vitest run tests/presets/` |
 | `src/integrations/mcp/*` | `npx vitest run tests/integrations/mcp/` |
 | `src/factory/*` | `npx vitest run tests/factory/ tests/e2e/full-app.test.ts` |
+| `src/usage/*` | `npx vitest run tests/usage/` |
+| `src/testing/*` | `npx vitest run tests/testing/` |
 | `src/utils/store-helpers*` | `npx vitest run tests/adapters/ tests/core/base-controller.test.ts` |
 | `src/docs/*` | `npx vitest run tests/docs/` |
 | `src/cli/*` | `npx vitest run tests/cli/` |
@@ -115,9 +117,9 @@ Arc's boot order is **fixed** (do not reorder; do not skip slots):
 
 | Peer | Min | Required? |
 |------|-----|-----------|
-| fastify | >=5.0.0 | **Yes** |
-| @classytic/primitives | >=0.6.0 | **Yes** |
-| @classytic/repo-core | >=0.5.0 | **Yes** |
+| fastify | ^5.8.5 | **Yes** |
+| @classytic/primitives | >=0.9.0 | **Yes** |
+| @classytic/repo-core | >=0.7.0 | **Yes** |
 | better-auth | >=1.6.2 | No |
 | ioredis | >=5.0.0 | No |
 | bullmq | >=5.0.0 | No |

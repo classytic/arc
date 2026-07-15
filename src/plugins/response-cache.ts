@@ -327,6 +327,12 @@ const responseCachePluginImpl: FastifyPluginAsync<ResponseCacheOptions> = async 
   const cache = new LRUCache(maxEntries);
   const invalidateMethods = new Set(invalidateOn.map((m) => m.toUpperCase()));
 
+  // Declared so per-request assignment in the global onRequest hook below
+  // doesn't mutate the request object's hidden class on every GET/HEAD.
+  if (!fastify.hasRequestDecorator("__arcCacheTTL")) {
+    fastify.decorateRequest("__arcCacheTTL", undefined);
+  }
+
   /** Find TTL for a given URL path (seconds) */
   function getTTL(url: string): number {
     const path = url.split("?")[0] ?? url;

@@ -18,11 +18,16 @@
  *   - `resolvePipelineSteps`   — `PipelineConfig | undefined` → steps for op
  *   - `buildRateLimitConfig`   — per-route rate-limit config
  *   - `selectPluginMw`         — pick cacheMw/idempotencyMw by HTTP method
- *   - `buildPreHandlerChain`   — compose preHandler[] in the canonical order
+ *   - `buildRouteHooks`        — compose {onRequest, preHandler} in the canonical order
  *
- * Canonical preHandler order (CRUD + Actions must agree):
+ * Canonical hook placement (CRUD + Actions + Aggregations must agree, 2.22):
  *
- *   preAuth → arcDecorator → authMw → permissionMw → pluginMw → routeGuards → customMws
+ *   onRequest:  preAuth → arcDecorator → authMw
+ *   preHandler: permissionMw → pluginMw → routeGuards → customMws
+ *
+ * Auth lives at onRequest so 401s happen BEFORE body parsing + AJV
+ * validation (cost + schema-probing surface); body-aware middleware stays
+ * at preHandler. See middlewares/chain.ts for the full rationale.
  *
  * Where:
  *   - `preAuth`       runs BEFORE auth (token promotion, header rewrites for SSE)
@@ -41,9 +46,11 @@ export {
   requiresAuthentication,
 } from "./middlewares/auth.js";
 export {
-  buildPreHandlerChain,
+  buildRouteHooks,
   type PreHandlerHook,
+  type RouteHookChains,
   resolveRoutePreHandlers,
+  routeHookOptions,
 } from "./middlewares/chain.js";
 export { buildFieldWritePreHandler, methodCarriesBody } from "./middlewares/fieldWrite.js";
 export {

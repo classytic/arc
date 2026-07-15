@@ -8,7 +8,7 @@
  *
  * ```typescript
  * // Preferred — explicit domain
- * import type { ResourceConfig } from '../types/resource.js';
+ * import type { ResourceConfig } from '../types/resource/index.js';
  * import type { ParsedQuery } from '../types/query.js';
  *
  * // Allowed — facade for cross-domain or external imports
@@ -19,7 +19,7 @@
  * - `./base.ts`        — primitives, user shape, response envelope, Fastify decl-merge
  * - `./query.ts`       — request context, parsed query, query-parser interface
  * - `./fastify.ts`     — Fastify-specific shapes (RequestWithExtras, decorators)
- * - `./resource.ts`    — `ResourceConfig`, routes, actions, schemas, presets, hooks, events
+ * - `./resource/`      — `ResourceConfig`, routes, actions, schemas, presets, hooks, events (themed files + barrel)
  * - `./auth.ts`        — JWT context, authenticator, auth plugin options
  * - `./plugins.ts`     — plugin option types + `CrudRouterOptions`
  * - `./registry.ts`    — registry / introspection metadata
@@ -182,7 +182,7 @@ export type {
   RouteMcpConfig,
   RouteMethod,
   RouteSchemaOptions,
-} from "./resource.js";
+} from "./resource/index.js";
 // ──────────────────────────────────────────────────────────────────────
 // Type-level utilities
 // ──────────────────────────────────────────────────────────────────────

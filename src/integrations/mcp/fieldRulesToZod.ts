@@ -250,6 +250,26 @@ function buildListShape(
   // Start with pagination fields
   const shape: Record<string, z.ZodTypeAny> = { ...PAGINATION_SHAPE };
 
+  // Resource-dispatch verbs (REST parity with `?_count=true` etc. — same
+  // list route, same permission gate + row filters + tenant scoping; the
+  // controller dispatches to repo.count()/exists()/distinct() and fetches
+  // ZERO documents). Leading-underscore keys survive expandOperatorKeys
+  // by construction (`lastIndexOf('_') > 0` guard).
+  shape._count = z
+    .boolean()
+    .optional()
+    .describe(
+      "Return only { count } of records matching the filters — no documents fetched. Cheapest way to answer 'how many'.",
+    );
+  shape._exists = z
+    .boolean()
+    .optional()
+    .describe("Return only whether ANY record matches the filters (boolean existence check).");
+  shape._distinct = z
+    .string()
+    .optional()
+    .describe("Return the distinct values of this field across records matching the filters.");
+
   if (!fieldRules) return shape;
 
   for (const name of filterableFields) {

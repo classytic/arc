@@ -37,7 +37,7 @@
 
 import type { TenantPurgeProgress, TenantPurgeStrategy } from "@classytic/repo-core/repository";
 import { DEFAULT_TENANT_FIELD } from "../constants.js";
-import type { ResolvedTenantPurge } from "../types/resource.js";
+import type { ResolvedTenantPurge } from "../types/resource/index.js";
 import { type PurgeResourceOutcome, purgeResource } from "./purgeResource.js";
 import type { ResourceRegistry } from "./ResourceRegistry.js";
 

@@ -6,7 +6,19 @@ Arc ships heavily tree-shaken: every feature has its own subpath. Pay only for w
 
 ```typescript
 import { defineResource, BaseController, BaseCrudController, allowPublic } from '@classytic/arc';
+// createApp rateLimit gains `plan: { resolve, limits, default }` (2.22) — per-plan ceilings, `false` = unlimited, fail-safe fallback.
 import { createApp, loadResources } from '@classytic/arc/factory';
+import { defineModule, getModuleExports, orderModules } from '@classytic/arc/factory';
+// Worker role (2.23) — same options object, headless process (no routes, no auth;
+// events/jobs/schedules run). Primitive: `mountRoutes: false`; preset: 'worker'.
+import { createWorker } from '@classytic/arc/factory';
+import type { ArcWorker, CreateWorkerOptions } from '@classytic/arc/factory';
+
+// Programmatic resource assembly (2.21) — for module authors composing
+// base config + host seams without casts. Arrays concat, plain objects
+// deep-merge, class instances last-win, `undefined` never clobbers.
+import { mergeResourceConfig } from '@classytic/arc';
+import type { ResourceSeams, SeamedResourceConfig, AdapterLike } from '@classytic/arc';
 ```
 
 ## Adapters (kit-owned, never arc)
@@ -52,6 +64,7 @@ import {
   requireAgentScope, requireMandate, requireDPoP,
   type RequireAgentScopeOptions, type RequireMandateOptions,
   allOf, anyOf, when, denyAll,
+  permissionMatrix,                                              // 2.21: { read, write, delete? } → full CRUD map
   createDynamicPermissionMatrix, createRoleHierarchy,
   fields, roles,
 } from '@classytic/arc/permissions';
@@ -101,6 +114,8 @@ import { createEvent, createChildEvent, matchEventPattern } from '@classytic/pri
 import {
   healthPlugin, gracefulShutdownPlugin, ssePlugin,
   metricsPlugin, versioningPlugin,
+  schedulesPlugin,   // 2.21: interval jobs, optional LockAdapter leader lease, no Redis
+  type ScheduleLockLike, type ScheduleDefinition,
 } from '@classytic/arc/plugins';
 import { tracingPlugin } from '@classytic/arc/plugins/tracing';
 import { auditPlugin } from '@classytic/arc/audit';
@@ -151,6 +166,21 @@ import {
 } from '@classytic/arc/presets';
 ```
 
+## Usage (2.22)
+
+```typescript
+// Per-actor, per-period (UTC YYYY-MM) usage counters — the accounting layer for
+// quotas, plan enforcement, and usage-based billing. Decorates `fastify.usage`.
+// requireQuota = the enforcement half: PermissionCheck gating on counters
+// (429 quota.exceeded with { kind, used, limit, period, resetsAt }; limit may
+// be a number, false = unlimited, or a plan-aware resolver; fail-open default).
+import { usagePlugin, MemoryUsageStore, usagePeriod, requireQuota } from '@classytic/arc/usage';
+import type { UsageStore, UsageBucket, UsagePluginOptions, UsageMeter, QuotaOptions } from '@classytic/arc/usage';
+// Canonical store contract + cross-kit conformance: @classytic/repo-core/usage +
+// runUsageStoreContract from @classytic/repo-core/testing; Mongo adapter:
+// createMongoUsageStore from @classytic/mongokit/usage (>=3.22).
+```
+
 ## Testing
 
 ```typescript
@@ -158,6 +188,10 @@ import {
   createTestApp, expectArc, createHttpTestHarness,
   TestAuthSession, TestAuthProvider, TestFixtures,
   runStorageContract,
+  bootModuleApp,     // 2.22: real app around modules ("boots green ⇒ composes");
+                     //   t.exports<T>(name) typed accessor; DB via `database` seam —
+                     //   mongoMemoryDatabase default, any kit injectable
+  mongoMemoryDatabase,
 } from '@classytic/arc/testing';
 ```
 

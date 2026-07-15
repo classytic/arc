@@ -43,7 +43,7 @@
 import type { z } from "zod";
 import type { PermissionCheck } from "../permissions/types.js";
 import type { RequestWithExtras } from "../types/fastify.js";
-import type { ActionDefinition, RouteMcpConfig } from "../types/resource.js";
+import type { ActionDefinition, RouteMcpConfig } from "../types/resource/index.js";
 
 /**
  * Config for `defineAction()`. `TSchema` is the literal Zod schema type

@@ -565,6 +565,8 @@ resources: async () => loadResources(import.meta.url, { context: { engine } }),
 // Each *.resource.ts then exports: (ctx) => defineResource({ adapter: ctx.engine.adapter() })
 ```
 
+For the DB **connection** itself (as opposed to engines), arc 2.21 adds `createApp({ beforeBoot: async () => connectDatabase() })` — awaited before Fastify exists, before module thunks resolve, and before any resource file imports. A composition root that connects the DB then dynamic-imports the app to control evaluation order is the pre-2.21 workaround; flag it and move the connect into `beforeBoot`.
+
 ---
 
 ## §21. Field-write denied as silent strip when reject is needed (or vice versa) 🟡
@@ -803,31 +805,19 @@ const userId = requireUserId(scope, 'finalize-checkout');    // hint surfaces in
 
 ---
 
-## §32f. `createMongooseAdapter` without `schemaGenerator` 🟠
+## §32f. Missing / dodged `schemaGenerator` 🟠
 
 **Detection:**
 ```
 pattern: "createMongooseAdapter\\s*\\(\\s*\\{[^}]*\\}\\s*\\)"
 multiline: true
 ```
-Then check whether the object literal includes a `schemaGenerator:` key.
+Then check the `schemaGenerator:` key — what to flag depends on the kit version:
 
-Also: `createDrizzleAdapter` without `schemaGenerator: buildCrudSchemasFromTable`.
+- **mongokit >=3.21**: `schemaGenerator` DEFAULTS to `buildCrudSchemasFromModel` — omitting it is now correct. Flag the opposite: `schemaGenerator: false` used to dodge a wire-vs-model shape mismatch (minor-unit integers vs Money objects, enums, etc.). That opt-out silently kills OpenAPI bodies AND MCP tool input schemas for the whole resource. The right fix is a real wire contract: `customSchemas: { create: { body }, update: { body } }` with the generator ON — in arc 2.21 a custom part REPLACES the generated part wholesale (no `required[]` union), so wire and model shapes can differ cleanly.
+- **mongokit <3.21**: omitted `schemaGenerator` emits `null` OpenAPI bodies (arc 2.12 deleted the built-in fallback). Fix: upgrade the kit, or wire `schemaGenerator: buildCrudSchemasFromModel` explicitly.
 
-**Why high:** Arc 2.12 deleted the built-in mongoose / drizzle schema-gen fallback (~290 LOC). If `schemaGenerator` is omitted, OpenAPI bodies are emitted as `null` rather than silently inferred — the route still serves traffic but the docs / MCP tool input schemas are empty.
-
-**Fix:**
-```typescript
-import { createMongooseAdapter } from '@classytic/mongokit/adapter';   // arc 2.12+
-import { buildCrudSchemasFromModel } from '@classytic/mongokit';
-
-createMongooseAdapter({
-  model: ProductModel,
-  repository: productRepo,
-  schemaGenerator: buildCrudSchemasFromModel,   // required
-});
-```
-For drizzle: `import { createDrizzleAdapter } from '@classytic/sqlitekit/adapter'` + `schemaGenerator: buildCrudSchemasFromTable` from `@classytic/sqlitekit`.
+For drizzle: `createDrizzleAdapter` still wants `schemaGenerator: buildCrudSchemasFromTable` from `@classytic/sqlitekit` — check the kit's own version before flagging.
 
 ---
 
@@ -937,6 +927,68 @@ For backends without `repo.aggregate`, declare a `materialized` hook on the aggr
 
 ---
 
+## §34. `as never` / `as unknown as` casts on engine bags in module packages 🟠
+
+**Detection:**
+```
+pattern: "as never|as unknown as"
+```
+Concentrated hits in `@classytic/arc-*` (or `@scope/arc-*`) module packages — especially around `defineResource(...)` assembly, adapter construction from an engine, or hand-rolled config spread-merges.
+
+**Anti-pattern (pre-2.21 module-author tax):**
+```typescript
+interface EngineLike { models: Record<string, unknown>; repositories: Record<string, unknown> }
+adapter: createMongooseAdapter(engine.models.Party as never, repo as never),
+...(cfg.extraRoutes ? { routes: [...base.routes, ...cfg.extraRoutes] as never } : {}),
+```
+
+**Why high:** every cast is a hole where the kernel's real types (optional sub-module members, role unions, doc shapes) stop flowing — typos compile, wrong repos pair with wrong models, and hand-rolled spread-merges clobber host arrays.
+
+**Fix (arc 2.21):** type the engine port with the KERNEL's own bags and assemble via `mergeResourceConfig`:
+```typescript
+import { mergeResourceConfig, type ResourceSeams, type AdapterLike } from '@classytic/arc';
+
+interface CatalogEngineLike {                    // kernel is already a peer — no new coupling
+  models: CatalogEngine['models'];
+  repositories: CatalogEngine['repositories'];
+}
+defineResource(mergeResourceConfig(
+  { name: 'product', adapter: createMongooseAdapter({ model: models.Product, repository: repositories.product }), ... },
+  hostSeams,                                     // typed ResourceSeams — arrays concat, objects deep-merge,
+));                                              // instances last-win, undefined never clobbers
+```
+Remaining honest boundaries (hydrated-vs-lean id widening at a kernel bridge, wire-body narrowing in action handlers) get a comment, not a blanket `as never`.
+
+---
+
+## §35. Hand-rolled recurring jobs (`setInterval` / cron + DB lock) 🟠
+
+**Detection:**
+```
+pattern: "setInterval\\s*\\(|node-cron|cron\\.schedule|new CronJob"
+```
+Plus home-grown "job registry" / "leader lock" / "acquireLock" modules paired with timers.
+
+**Why high:** every host regrows the same layer — overlap prevention, multi-replica leader lock, shutdown timer cleanup, failure counters — and gets at least one of them wrong (stacking `setInterval` runs, timers holding the process open, no lease recovery after a crashed leader).
+
+**Fix (arc 2.21):** `schedulesPlugin` from `@classytic/arc/plugins` — interval jobs with no-overlap by construction (timeout chain), optional `lock` (any `LockAdapter`: `@classytic/mongokit/lock`, sqlitekit, memory) for multi-replica lease safety, `jitterMs`, `runOnStart`, `getScheduleStats()`, clean `onClose` drain. Calendar cron-expressions / durable retries stay in the BullMQ tier (`@classytic/arc/integrations/jobs`) — don't flag hosts that need real cron semantics for using it.
+
+---
+
+## §36. Wrong tenant config key — `{ field }` instead of `{ tenantField }` 🔴
+
+**Detection:**
+```
+pattern: "tenant:\\s*\\{\\s*field\\s*:"
+```
+Also any object passed as tenant config whose keys aren't in repo-core's `TenantConfig`.
+
+**Why critical:** unknown keys are **silently ignored** — `{ tenant: { field: 'branchId' } }` compiles (loose host types), the resource falls back to the default tenant field, and cross-tenant reads/writes go unscoped for hosts on a custom field name. Found live in published spine packages (arc-assets / arc-pricelist 0.1.x).
+
+**Fix:** the key is `tenantField` (repo-core `TenantConfig`). In arc resources prefer the top-level `tenantField: 'branchId'` shorthand or the `multiTenant` preset; when passing a tenant object through a module seam, type it as `TenantConfig` so unknown keys fail the build.
+
+---
+
 ## Detection checklist (run-order)
 
 Run sweeps in this order — early hits often invalidate later context:
@@ -951,5 +1003,6 @@ Run sweeps in this order — early hits often invalidate later context:
 8. §7, §8, §22, §23 — events/cache/idempotency/audit (silent inconsistency)
 9. §14, §18, §19 — preset adoption + custom controller wiring
 10. §11, §12, §13, §29, §30, §31 — style and edges
-11. §32a–§32g — canonical-contract drift (pagination / events / tenant / errors / adapter imports), missing `requireOrgId` accessors, missing `schemaGenerator`, kit-specific adapter imports from arc (3.0 break)
+11. §32a–§32g — canonical-contract drift (pagination / events / tenant / errors / adapter imports), missing `requireOrgId` accessors, missing/dodged `schemaGenerator`, kit-specific adapter imports from arc (3.0 break)
 12. §33 — hand-rolled `Model.aggregate([...])` in resource routes vs declarative `aggregations: { … }`
+13. §36 — tenant config `{ field }` key (security: silent unscoped queries), then §34–§35 — module-package `as never` casts vs 2.21 seams; hand-rolled recurring jobs vs `schedulesPlugin`

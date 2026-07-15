@@ -11,6 +11,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { createAdapterTemplate, customAdapterTemplate } from "./templates/adapter.js";
+import { agentsGuideTemplate } from "./templates/agents.js";
 import { appTemplate, envLoaderTemplate, indexTemplate } from "./templates/app.js";
 import {
   authHandlersTemplate,
@@ -182,6 +183,11 @@ export async function createProjectStructure(
   if (config.edge) {
     files["wrangler.toml"] = wranglerTemplate(config);
   }
+
+  // Agent guidance — ALWAYS emitted (2.22). AI coding agents decide from
+  // training priors + what's in context; this file is the in-context signal
+  // that stops them hand-rolling what arc provides. See templates/agents.ts.
+  files["CLAUDE.md"] = agentsGuideTemplate(config);
 
   // Save project config for CLI tools (generate, etc.)
   files[".arcrc"] = `${JSON.stringify(

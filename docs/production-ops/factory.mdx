@@ -8,12 +8,14 @@ Secure, production-ready Fastify app creation with sensible defaults and **opt-o
 import { createApp, loadResources } from '@classytic/arc/factory';
 import mongoose from 'mongoose';
 
-await mongoose.connect(process.env.MONGO_URI);
-
 const app = await createApp({
   preset: 'production',
   resourcePrefix: '/api/v1',
-  resources: await loadResources(import.meta.url),
+  // 2.21 — runs before Fastify exists and before any resource file imports:
+  // the canonical slot for the DB connection (no more connect-before-createApp
+  // ordering in the composition root).
+  beforeBoot: async () => { await mongoose.connect(process.env.MONGO_URI); },
+  resources: async () => loadResources(import.meta.url),
   auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
   cors: { origin: [process.env.FRONTEND_URL] },
 });
@@ -158,7 +160,7 @@ configureArcLogger({ writer: pinoAdapter });
 > - Callers that already injected a `logger` → no change (injection still wins over the fallback).
 > - Callers that relied on the silent default → warnings will now show. This is intentional — skip / factory-failure events used to disappear silently, which masked misconfiguration. Use one of the three suppression knobs above if you genuinely want silence.
 
-`loadResources` options: `exclude`, `include`, `suffix` (default: `.resource`), `recursive` (default: true), `context`, `logger`.
+`loadResources` options: `exclude`, `include`, `suffix` (default: `.resource`), `recursive` (default: true), `context`, `logger`, `filter` (2.21 — `(absolutePath) => boolean`, gates files BEFORE import so disabled features' modules never evaluate; `include`/`exclude` match resource names after import).
 
 **When to use the factory form** — resource definitions are evaluated at module-import time, so any resource whose adapter depends on an async-booted engine (e.g. `@classytic/catalog`, `@classytic/flow` patterns using `await createX(...)`) can't be defined statically. Before 2.11.x, hosts wrote per-resource lazy-bridge adapters that awaited `ensureEngine()` on every CRUD call — pure boilerplate. The factory slot runs between `bootstrap[]` and route wiring, so `defineResource(...)` calls inside it see the engine already live.
 
@@ -167,8 +169,10 @@ configureArcLogger({ writer: pinoAdapter });
 ### Boot Order
 
 ```
+0. beforeBoot()               ← pre-everything (DB connect; before Fastify,
+                                 module thunks, and resource imports) — 2.21
 1. Arc core (security, auth, events)
-2. plugins()                  ← infra (DB, SSE, docs)
+2. plugins()                  ← infra (SSE, docs)
 3. bootstrap[]                ← domain init (engines, singletons)
 4. resources factory (if any) ← resolved here — engine state is live
 5. resources[]                ← routes (under resourcePrefix, split by skipGlobalPrefix)
@@ -181,8 +185,8 @@ const app = await createApp({
   preset: 'production',
   resourcePrefix: '/api/v1',
 
+  beforeBoot: async () => { await mongoose.connect(process.env.MONGO_URI); },
   plugins: async (f) => {
-    await mongoose.connect(process.env.MONGO_URI);
     await f.register(docsPlugin);
   },
   bootstrap: [inventoryInit, accountingInit, loyaltyInit],

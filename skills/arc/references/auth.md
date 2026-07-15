@@ -71,6 +71,14 @@ const adapter = createBetterAuthAdapter({
 const app = await createApp({
   auth: { type: 'betterAuth', betterAuth: adapter },
 });
+
+// BA-on-Mongo + `beforeBoot` (2.22): BA's mongodbAdapter needs an OPEN
+// connection (`mongoose.connection.getClient()` throws pre-connect), so pass
+// a THUNK — resolved during auth registration, after beforeBoot connects:
+const app2 = await createApp({
+  beforeBoot: () => connectDatabase(),
+  auth: { type: 'betterAuth', betterAuth: () => createBetterAuthAdapter({ auth: getAuth(), orgContext: true }) },
+});
 ```
 
 **Org context flow** (when `orgContext: true`):
@@ -79,6 +87,11 @@ const app = await createApp({
 3. Looks up org membership via `auth.api.getActiveMember` (or `getActiveMemberRole` with explicit `organizationId` for header-based resolution)
 4. Splits roles: `"admin,recruiter"` → `['admin', 'recruiter']`
 5. Sets `request.scope`: `{ kind: 'member', organizationId, orgRoles: string[], teamId? }`
+
+**Sessions at scale (BA-native knobs — know these before reaching for arc's):**
+- **Redis sessions**: use BA's `secondaryStorage` (sessions land there INSTEAD of the DB unless `session.storeSessionInDatabase: true`). Arc's `@classytic/arc/auth/redis` (`SessionStore`) is the JWT-strategy store — different layer, don't mix them.
+- **Cookie cache gotcha that keeps orgContext correct**: BA's `session.cookieCache` never caches CUSTOM session fields (e.g. `activeOrganizationId`) — they're re-fetched per request, so arc's org scope can't go stale via the cookie. Cost: enabling cookieCache does NOT skip the org lookup.
+- **Rate limiting**: BA ships its own (`rateLimit.storage: 'secondary-storage'`) for auth endpoints; arc's `rateLimit.skipPaths: ['/api/auth/*']` guidance composes — exempt BA routes from arc's bucket, let BA's limiter own its own surface.
 
 > **Arc 2.13+ requires `auth.api.*`** — pass a real `betterAuth()` instance. The pre-2.13 HTTP fallback for org/team lookups was retired.
 
@@ -91,7 +104,7 @@ Better Auth writes its own tables (`user`, `organization`, `member`, `invitation
 ```typescript
 import { betterAuth } from 'better-auth';
 import { mongodbAdapter } from '@better-auth/mongo-adapter';
-import { organization } from 'better-auth/plugins';
+import { organization } from 'better-auth/plugins/organization'; // dedicated path — tree-shaking (BA best practice)
 import mongoose from 'mongoose';
 import {
   createBetterAuthOverlay,
@@ -160,7 +173,7 @@ Same parallel structure as mongokit. The factory derives the Drizzle table dynam
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { betterAuth } from 'better-auth';
-import { organization } from 'better-auth/plugins';
+import { organization } from 'better-auth/plugins/organization'; // dedicated path — tree-shaking (BA best practice)
 import { createBetterAuthOverlay } from '@classytic/sqlitekit/better-auth';
 
 const sqlite = new Database('app.db');
@@ -239,7 +252,11 @@ The `auth.api.*` direct in-process API map and `auth.$context.tables` schema int
 ```typescript
 import { betterAuth } from 'better-auth';
 import { mongodbAdapter } from '@better-auth/mongo-adapter';
-import { admin, organization, twoFactor, bearer } from 'better-auth/plugins';
+// Dedicated paths per plugin — tree-shaking (BA best practice; never the barrel)
+import { admin } from 'better-auth/plugins/admin';
+import { organization } from 'better-auth/plugins/organization';
+import { twoFactor } from 'better-auth/plugins/two-factor';
+import { bearer } from 'better-auth/plugins/bearer';
 import { apiKey } from '@better-auth/api-key';
 import { createBetterAuthOverlay, registerBetterAuthStubs } from '@classytic/mongokit/better-auth';
 
@@ -367,7 +384,7 @@ The plugin also adds a required `configId` field on `apikey` rows and uses `refe
 For non-cookie clients (React Native, native mobile, headless SPA), enable `bearer()` so sessions travel as `Authorization: Bearer <session-token>` instead of cookies. Same `auth.api.getSession()` path, just a different transport.
 
 ```typescript
-import { bearer } from 'better-auth/plugins';
+import { bearer } from 'better-auth/plugins/bearer'; // dedicated path — tree-shaking
 const auth = betterAuth({ plugins: [bearer(), organization()] });
 ```
 

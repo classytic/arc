@@ -6,6 +6,7 @@
 
 import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { parseJsonBody } from "../utils/jsonBody.js";
 import { ScimError } from "./errors.js";
 import type { ScimResourceMapping } from "./mapping.js";
 import type { ScimPluginOptions, ScimResourceBinding } from "./types.js";
@@ -117,7 +118,10 @@ export function asRecord(doc: unknown): Record<string, unknown> {
 /**
  * Register the `application/scim+json` Fastify content-type parser. Idempotent
  * — second registration in the same scope is a no-op. Empty bodies (DELETE,
- * GET) yield `undefined` rather than crashing on `JSON.parse("")`.
+ * GET) yield `undefined` rather than crashing on `JSON.parse("")`. Parsing
+ * flows through `parseJsonBody`, so malformed SCIM payloads surface as 400
+ * `arc.bad_request` (not 500) and prototype-poisoning bodies are rejected —
+ * same contract as arc's main `application/json` parser.
  */
 export function ensureScimContentTypeParser(fastify: import("fastify").FastifyInstance): void {
   if (fastify.hasContentTypeParser("application/scim+json")) return;
@@ -125,13 +129,8 @@ export function ensureScimContentTypeParser(fastify: import("fastify").FastifyIn
     "application/scim+json",
     { parseAs: "string" },
     (_req, body, done) => {
-      const raw = body as string;
-      if (!raw || raw.length === 0) {
-        done(null, undefined);
-        return;
-      }
       try {
-        done(null, JSON.parse(raw));
+        done(null, parseJsonBody(body as string, "Invalid SCIM JSON payload"));
       } catch (err) {
         done(err as Error, undefined);
       }

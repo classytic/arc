@@ -22,7 +22,6 @@
 // --- Arc-specific assertions -----------------------------------------------
 export type { ArcAssertion, ArcResponseLike } from "./assertions.js";
 export { expectArc } from "./assertions.js";
-
 // --- Auth sessions ----------------------------------------------------------
 export type { RoleConfig, TestAuthProvider, TestAuthSession } from "./authSession.js";
 export {
@@ -30,7 +29,6 @@ export {
   createCustomAuthProvider,
   createJwtAuthProvider,
 } from "./authSession.js";
-
 // --- Better Auth flow helpers (thin layer over TestAuthProvider) ------------
 export type {
   AuthResponse,
@@ -49,6 +47,16 @@ export {
   safeParseBody,
   setupBetterAuthTestApp,
 } from "./betterAuth.js";
+// --- Module composability harness (2.22) -------------------------------------
+export type {
+  BootModuleAppOptions,
+  BootModulesInput,
+  ModuleTestApp,
+  TestDatabase,
+  TestDatabaseFactory,
+  TestkitContext,
+} from "./bootModuleApp.js";
+export { bootModuleApp, mongoMemoryDatabase } from "./bootModuleApp.js";
 
 // --- Fixtures ---------------------------------------------------------------
 export type {

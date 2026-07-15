@@ -21,13 +21,13 @@ In arc 2.12:
 
 ### Coordinated versions
 
-| Package | Min |
-|---|---|
-| `@classytic/arc` | 2.12.0 |
-| `@classytic/repo-core` | 0.4.0 |
-| `@classytic/mongokit` | 3.13.0 |
-| `@classytic/sqlitekit` | 0.3.0 |
-| `@classytic/prismakit` | 0.1.0 |
+| Package | Min (adapter split) | Current best-practice floor |
+|---|---|---|
+| `@classytic/arc` | 2.12.0 | 2.21.0 — seams/`mergeResourceConfig`, `beforeBoot`, `permissionMatrix`, `schedulesPlugin` |
+| `@classytic/repo-core` | 0.4.0 | 0.9.0 — `StandardRepo.getByIds` contract member |
+| `@classytic/mongokit` | 3.13.0 | 3.21.0 — adapter `schemaGenerator` defaults ON |
+| `@classytic/sqlitekit` | 0.3.0 | 0.7.0 |
+| `@classytic/prismakit` | 0.1.0 | 0.1.0 |
 
 ### Import migration table
 

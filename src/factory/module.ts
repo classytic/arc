@@ -142,6 +142,32 @@ export interface ArcModule<TExports = unknown> {
   bootstrap?: (fastify: FastifyInstance) => TExports | Promise<TExports>;
 
   /**
+   * App-level resource NAMES this module authoritatively SUPERSEDES. When the
+   * host also lists (or `resourceDir`-discovers) a resource of the same name,
+   * arc DROPS the app copy and registers THIS module's version instead — so the
+   * host keeps NO hand-maintained "which resources did modules take over" filter
+   * set. Ownership lives on the atom that provides it (colocated, drift-proof):
+   *
+   * ```ts
+   * defineModule({ name: "order", owns: ["order", "quotation", "rfq"], resources: () => [...] })
+   * ```
+   *
+   * Semantics:
+   *   - Purely a supersede-the-app-fork switch — it filters the *app* resource
+   *     list, never the module's own `resources` (those always register).
+   *   - Static + declarative: read at compose time, so it works regardless of
+   *     whether `resources` is an array or a post-bootstrap factory (no early
+   *     factory resolution, no boot-order coupling).
+   *   - Idempotent + tolerant: an `owns` entry with no matching app resource is
+   *     a silent no-op — a module may pre-declare a name before any fork exists.
+   *   - Collected across ALL modules; the app-side supersession is their union.
+   *
+   * Contract: if you `owns` a name, PROVIDE it (in this module's `resources`).
+   * Dropping the app fork without supplying a replacement removes the route.
+   */
+  readonly owns?: readonly string[];
+
+  /**
    * The module's resources. Array or factory — the factory form runs AFTER all
    * bootstraps, so `defineResource(...)` receives fully-booted engines. Flows
    * through arc's normal registration (prefix, dedup, docs), identical to a

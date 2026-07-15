@@ -151,7 +151,7 @@ Full MCP spec-compliant OAuth 2.1: authorization code + PKCE, token exchange, dy
 
 ```typescript
 // auth.config.ts — add mcp() plugin to Better Auth
-import { mcp } from 'better-auth/plugins';
+import { mcp } from 'better-auth/plugins/mcp'; // dedicated path — tree-shaking
 betterAuth({ plugins: [mcp({ loginPage: '/login' })] });
 
 // app.ts

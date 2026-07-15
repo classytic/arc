@@ -18,8 +18,8 @@ export interface RequestWithExtras extends FastifyRequest {
    */
   arc?: {
     resourceName?: string;
-    schemaOptions?: import("./resource.js").RouteSchemaOptions;
-    permissions?: import("./resource.js").ResourcePermissions;
+    schemaOptions?: import("./resource/index.js").RouteSchemaOptions;
+    permissions?: import("./resource/index.js").ResourcePermissions;
     /**
      * The configured `idField` for this resource (e.g. `_id`, `slug`,
      * `reportId`). Set by routers that bind a path `:id` segment so
@@ -110,6 +110,6 @@ export type MiddlewareHandler = (
  */
 declare module "fastify" {
   interface FastifyContextConfig {
-    arcExtensions?: import("./resource.js").ResourceExtensions;
+    arcExtensions?: import("./resource/index.js").ResourceExtensions;
   }
 }

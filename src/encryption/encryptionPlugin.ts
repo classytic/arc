@@ -9,13 +9,11 @@
  * Hook placement follows Fastify's lifecycle exactly:
  *   - INBOUND  decryption → a content-type parser for `application/jose`
  *     (opt-in by media type; normal JSON traffic is untouched).
- *   - OUTBOUND headers (`Content-Type`, flag) → `preSerialization` (arc's
- *     rule: never set headers in async `onSend` — it races the flush path).
- *   - OUTBOUND full-body JWE → `onSend`, where the payload is the serialized
- *     string and arc's response-schema field-stripping has already run, so we
- *     encrypt the already-sanitized output.
- *   - OUTBOUND field encryption → `preSerialization`, mutating the object in
- *     place (the JSON shape is preserved).
+ *   - OUTBOUND (headers, full-body JWE, field encryption) → ALL in
+ *     `preSerialization` (arc's rule: never in async `onSend` — it races
+ *     Fastify's flush path). Full-body JWE serializes the sanitized object
+ *     itself and installs a pass-through serializer; field encryption
+ *     mutates the object in place (the JSON shape is preserved).
  *   - SSE / streams / non-string bodies are skipped — JWE has no streaming form.
  *
  * @example
@@ -41,6 +39,8 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
+import { ArcError } from "../utils/errors.js";
+import { parseJsonBody } from "../utils/jsonBody.js";
 import { encryptField } from "./fieldCipher.js";
 import { jweDecrypt, jweEncrypt } from "./jose.js";
 import { resolveDirective } from "./resolver.js";
@@ -108,28 +108,35 @@ const encryptionPlugin: FastifyPluginAsync<EncryptionOptions> = async (
 
   // ── Inbound: decrypt `application/jose` request bodies ─────────────────
   // Registered per media type, so plain JSON requests never hit this path.
+  // The ENTIRE parse path is client-controlled input, so every failure —
+  // malformed compact JWE, unknown/missing `kid`, jose decrypt errors,
+  // invalid decrypted JSON — must surface as 400, never a 500 (Fastify
+  // forwards undecorated parser throws to the error handler as internal
+  // errors). The underlying jose error stays on `cause` for logging.
   if (decryptRequests) {
     fastify.addContentTypeParser(
       contentType,
       { parseAs: "string" },
       async (request: FastifyRequest, body: string) => {
         const provider: KeyProvider = keyProvider;
-        const plaintext = await jweDecrypt(
-          body,
-          (kid) => provider.decryptionKey(kid, { request }),
-          allowedAlgs,
-          allowedEncs,
-        );
+        let plaintext: string;
+        try {
+          plaintext = await jweDecrypt(
+            body,
+            (kid) => provider.decryptionKey(kid, { request }),
+            allowedAlgs,
+            allowedEncs,
+          );
+        } catch (cause) {
+          throw new ArcError("Invalid encrypted request body", {
+            code: "arc.bad_request",
+            statusCode: 400,
+            cause: cause as Error,
+          });
+        }
         request.requestDecrypted = true;
         if (plaintext.length === 0) return undefined;
-        try {
-          return JSON.parse(plaintext);
-        } catch (cause) {
-          throw Object.assign(
-            new Error("[arc/encryption] decrypted request body is not valid JSON"),
-            { statusCode: 400, cause },
-          );
-        }
+        return parseJsonBody(plaintext, "Decrypted request body is not valid JSON");
       },
     );
   }

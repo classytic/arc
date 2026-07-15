@@ -1,6 +1,6 @@
 {
   "name": "@classytic/arc",
-  "version": "2.21.0",
+  "version": "2.22.0",
   "description": "Resource-oriented backend framework for Fastify - clean, minimal, powerful, tree-shakable",
   "type": "module",
   "exports": {
@@ -207,6 +207,10 @@
     "./sync": {
       "types": "./dist/sync/changelog.d.mts",
       "default": "./dist/sync/changelog.mjs"
+    },
+    "./usage": {
+      "types": "./dist/usage/index.d.mts",
+      "default": "./dist/usage/index.mjs"
     }
   },
   "main": "./dist/index.mjs",
@@ -221,7 +225,8 @@
   "files": [
     "dist",
     "bin",
-    "skills"
+    "skills",
+    "llms.txt"
   ],
   "scripts": {
     "build": "tsdown",
@@ -247,7 +252,8 @@
     "release:tag": "node -e \"require('child_process').execSync('npm run push -- v'+require('./package.json').version,{stdio:'inherit'})\"",
     "release": "npm run push -- main && npm run release:tag && npm publish",
     "check:peer-skew": "node scripts/check-peer-skew.mjs",
-    "prepublishOnly": "npm run check:peer-skew && npm run typecheck && npm run lint && npm run build && npm run test:ci && npm run smoke"
+    "check:docs-drift": "node scripts/check-docs-drift.mjs",
+    "prepublishOnly": "npm run check:peer-skew && npm run check:docs-drift && npm run typecheck && npm run lint && npm run build && npm run test:ci && npm run smoke"
   },
   "engines": {
     "node": ">=22"
@@ -373,9 +379,9 @@
     "@better-auth/mongo-adapter": "^1.6.19",
     "@biomejs/biome": "^2.5.0",
     "@classytic/dev-tools": "^0.2.0",
-    "@classytic/mongokit": "^3.21.0",
+    "@classytic/mongokit": "^3.22.0",
     "@classytic/primitives": "^0.9.1",
-    "@classytic/repo-core": "^0.9.0",
+    "@classytic/repo-core": "^0.13.0",
     "@classytic/sqlitekit": "^0.6.0",
     "@classytic/streamline": "^2.7.0",
     "@fastify/cors": "^11.2.0",

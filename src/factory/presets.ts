@@ -7,7 +7,7 @@
  * - testing: In-memory DB, no rate limiting
  */
 
-import type { CreateAppOptions } from "./types.js";
+import type { CreateAppOptions } from "./types/index.js";
 
 /**
  * Production preset - strict security, performance optimized
@@ -241,10 +241,37 @@ export const edgePreset: Partial<CreateAppOptions> = {
 /**
  * Get preset by name
  */
+/**
+ * Worker preset (2.23) — the headless process role. Flips the HTTP surface
+ * off and enables the `mountRoutes: false` primitive; runtime tiers
+ * (events, jobs, schedules, caching, audit, usage) stay AS CONFIGURED by
+ * the host's options. Per the preset contract, explicit narrow settings
+ * win — `arcPlugins: { metrics: true }` re-enables Prometheus on workers,
+ * `auth: {...}` keeps auth. See wiki/factory.md § createWorker.
+ */
+export const workerPreset: Partial<CreateAppOptions> = {
+  mountRoutes: false,
+  auth: false,
+  helmet: false,
+  cors: false,
+  rateLimit: false,
+  underPressure: false,
+  sensible: false,
+  arcPlugins: {
+    requestId: false,
+    health: false,
+    sse: false,
+    metrics: false,
+    gracefulShutdown: true,
+  },
+};
+
 export function getPreset(
-  name: "production" | "development" | "testing" | "edge",
+  name: "production" | "development" | "testing" | "edge" | "worker",
 ): Partial<CreateAppOptions> {
   switch (name) {
+    case "worker":
+      return workerPreset;
     case "production":
       return productionPreset;
     case "development":

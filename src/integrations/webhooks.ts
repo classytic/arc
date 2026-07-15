@@ -130,8 +130,9 @@ export interface VerifySignatureOptions {
  *
  * ⚠ The `body` argument must be the exact bytes the sender signed. Fastify
  * parses JSON bodies by default and the re-serialised object will NOT match
- * the original signature. Register `@fastify/raw-body` or use `preParsing`
- * to capture `req.rawBody`, then pass that here.
+ * the original signature. Register `fastify-raw-body` (arc's createApp does
+ * this automatically with `global: false`) and opt the route in via
+ * `config: { rawBody: true }`, then pass `req.rawBody` here.
  *
  * @param body      - Raw request body (string or Buffer — must be the exact bytes the sender signed)
  * @param secret    - Shared secret between sender and receiver
@@ -143,8 +144,11 @@ export interface VerifySignatureOptions {
  * ```typescript
  * import { verifySignature } from '@classytic/arc/integrations/webhooks';
  *
- * // Arc-to-Arc (default headers + format)
- * fastify.post('/webhooks/incoming', async (req, reply) => {
+ * // Arc-to-Arc (default headers + format). `config: { rawBody: true }` is
+ * // REQUIRED — arc registers fastify-raw-body with `global: false`, so
+ * // routes opt in per-route; without it `req.rawBody` is undefined and
+ * // verifySignature throws a TypeError.
+ * fastify.post('/webhooks/incoming', { config: { rawBody: true } }, async (req, reply) => {
  *   const sig = req.headers['x-webhook-signature'] as string;
  *   if (!verifySignature(req.rawBody, secret, sig)) {
  *     return reply.status(401).send({ error: 'Invalid signature' });
@@ -176,7 +180,8 @@ export function verifySignature(
   if (typeof body !== "string" && !Buffer.isBuffer(body)) {
     throw new TypeError(
       "verifySignature: body must be a string or Buffer (the exact bytes the sender signed). " +
-        "Register @fastify/raw-body and pass req.rawBody — not req.body.",
+        "Add `config: { rawBody: true }` to the route (arc registers fastify-raw-body " +
+        "with global: false) and pass req.rawBody — not req.body.",
     );
   }
 
