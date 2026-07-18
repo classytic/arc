@@ -56,30 +56,39 @@ describe("Response Format Consistency", () => {
       expect(sentPayload.hasPrev).toBe(false);
     });
 
-    it("listResponse schema is a oneOf union of every canonical wire shape", () => {
-      // 2.13: listResponse() now models the FULL union toCanonicalList
-      // can emit (offset / keyset / aggregate / bare) instead of only
-      // offset. Hosts that pin a single variant use the per-shape
-      // helpers below; the default helper accepts any kit-shaped result.
+    it("listResponse schema is one merged permissive shape covering every canonical wire variant", () => {
+      // 2.13 modelled the full union as a top-level oneOf; 2.22 merged it
+      // into ONE permissive object because fast-json-stringify implements
+      // oneOf via per-response AJV branch validation — on the hottest
+      // route. Wire bytes are identical (pinned by
+      // list-response-serialization.test.ts); this test pins the schema
+      // SHAPE contract: every variant's fields declared, only `data`
+      // required, no envelope, no oneOf.
       const schema = listResponse({ type: "object", properties: { name: { type: "string" } } });
-      expect(schema.oneOf).toBeDefined();
-      expect(schema.oneOf).toHaveLength(4);
+      expect(schema.oneOf).toBeUndefined();
+      expect(schema.type).toBe("object");
+      expect(schema.required).toEqual(["data"]);
+      expect(schema.additionalProperties).toBe(true);
 
-      // Each branch is keyed by `data: array`, no `success` field anywhere.
-      for (const branch of schema.oneOf ?? []) {
-        const props = (branch as { properties?: Record<string, unknown> }).properties ?? {};
-        expect(props).toHaveProperty("data");
-        expect(props).not.toHaveProperty("success");
+      const props = (schema.properties ?? {}) as Record<string, unknown>;
+      // Offset/aggregate counters + keyset cursor fields all declared so
+      // fast-json-stringify serializes them typed (not via the
+      // additionalProperties slow path).
+      for (const field of [
+        "method",
+        "data",
+        "page",
+        "limit",
+        "total",
+        "pages",
+        "hasNext",
+        "hasPrev",
+        "hasMore",
+        "next",
+      ]) {
+        expect(props).toHaveProperty(field);
       }
-
-      // Branches discriminate via `method` (or its absence for the bare list).
-      const methods = (schema.oneOf ?? [])
-        .map((b) => {
-          const m = (b as { properties?: Record<string, { const?: string }> }).properties?.method;
-          return m?.const;
-        })
-        .sort((a, b) => String(a).localeCompare(String(b)));
-      expect(methods).toEqual(["aggregate", "keyset", "offset", undefined]);
+      expect(props).not.toHaveProperty("success");
 
       // paginationSchema (legacy flat helper) still uses canonical field names.
       const paginationProps = paginationSchema.properties || {};

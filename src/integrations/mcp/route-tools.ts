@@ -12,18 +12,25 @@
  */
 
 import { resolvePipelineSteps } from "../../core/routerShared.js";
+import type { FieldPermissionMap } from "../../permissions/fields.js";
 import type { PermissionCheck } from "../../permissions/types.js";
 import { executePipeline } from "../../pipeline/pipe.js";
 import type { PipelineConfig, PipelineContext } from "../../pipeline/types.js";
+import type { ServerAccessor } from "../../types/handlers.js";
 import type { IControllerResponse } from "../../types/index.js";
-import { buildRequestContext, type McpOperation } from "./buildRequestContext.js";
 import {
+  buildRequestContext,
+  type McpContextExtras,
+  type McpOperation,
+} from "./buildRequestContext.js";
+import {
+  applyMcpReadMasking,
   evaluatePermission,
   permissionDeniedResult,
   toCallToolError,
   toCallToolResult,
 } from "./tool-helpers.js";
-import type { CallToolResult, ToolDefinition } from "./types.js";
+import type { CallToolResult, McpExecutionWiring, ToolDefinition } from "./types.js";
 
 type ControllerMethod = (ctx: unknown) => Promise<IControllerResponse>;
 
@@ -83,6 +90,23 @@ export interface CustomRouteToolOptions {
    * around the handler — same `executePipeline` call the HTTP path uses.
    */
   readonly pipeline?: PipelineConfig;
+  /**
+   * Resource field-permission map — field-level READ masking applies to
+   * the tool payload exactly as the HTTP arc decorator applies it to the
+   * REST response for the same route.
+   */
+  readonly fields?: FieldPermissionMap;
+  /**
+   * App-level execution wiring — threads `metadata.arc` (hooks/events) +
+   * `server` accessor into the synthetic context so a route handler that
+   * dispatches to controller methods (or reads `ctx.server.events`) runs
+   * with full HTTP parity.
+   */
+  readonly wiring?: McpExecutionWiring;
+  /** Resource `schemaOptions` — rides on `metadata.arc` like HTTP. */
+  readonly schemaOptions?: unknown;
+  /** Resource `idField` — rides on `metadata.arc` for `getEntityIdField()`. */
+  readonly idField?: string;
 }
 
 /**
@@ -111,8 +135,28 @@ export function createCustomRouteHandler(
     typeof route.handler === "string"
       ? route.handler
       : (route.operation ?? slugifyRoute(route.method, route.path));
-  const { resourceName, operationName, permissions, pipeline } = options;
+  const { resourceName, operationName, permissions, pipeline, fields, wiring } = options;
   const pipelineSteps = resolvePipelineSteps(pipeline, operationName);
+  // Same shape invokeController assembles — hooks/events/server parity for
+  // route handlers that dispatch to controller methods.
+  const contextExtras: McpContextExtras | undefined = wiring
+    ? {
+        arc: {
+          resourceName,
+          schemaOptions: options.schemaOptions,
+          permissions,
+          hooks: wiring.hooks,
+          events: wiring.events,
+          fields,
+          idField: options.idField,
+        },
+        server: {
+          events: wiring.events as ServerAccessor["events"],
+          audit: wiring.audit as ServerAccessor["audit"],
+          log: wiring.log as ServerAccessor["log"],
+        },
+      }
+    : undefined;
 
   return async (input, _ctx) => {
     const session = _ctx.session;
@@ -150,7 +194,19 @@ export function createCustomRouteHandler(
         kind,
         permResult?.filters,
         permResult?.scope,
+        contextExtras,
       );
+
+      // Field-read masking at the serialization boundary — same policy
+      // step `sendControllerResponse` runs for this route's REST twin.
+      const emit = (envelope: IControllerResponse): CallToolResult => {
+        const data = applyMcpReadMasking(envelope.data, {
+          fields,
+          session,
+          scopeOverride: permResult?.scope,
+        });
+        return toCallToolResult(data === envelope.data ? envelope : { ...envelope, data });
+      };
 
       // Function-handler case — arc's pipeline-wrapped handler is the route's
       // own `handler`. No controller lookup needed.
@@ -181,14 +237,14 @@ export function createCustomRouteHandler(
             },
             operationName,
           );
-          return toCallToolResult(response);
+          return emit(response);
         }
         const out = (await fn(reqCtx)) as unknown;
         const envelope =
           out !== null && typeof out === "object" && "data" in out
             ? (out as IControllerResponse)
             : ({ data: out } as IControllerResponse);
-        return toCallToolResult(envelope);
+        return emit(envelope);
       }
 
       // String-handler case — look up on the controller.
@@ -205,7 +261,7 @@ export function createCustomRouteHandler(
           isError: true,
         };
       }
-      return toCallToolResult(await method(reqCtx));
+      return emit(await method(reqCtx));
     } catch (err) {
       // Canonical error contract — same shape CRUD/action/aggregation tools
       // emit. Raw `Error: ${msg}` strings lost ArcError code/status and

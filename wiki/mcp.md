@@ -2,9 +2,11 @@
 
 **Summary**: Model Context Protocol integration — auto-generates AI tool schemas from `defineResource()` configs. Tools enforce same permissions as REST.
 **Sources**: src/integrations/mcp/.
-**Last updated**: 2026-07-06.
+**Last updated**: 2026-07-17 (execution wiring: hooks/events/masking/idempotency parity — 2.23).
 
 ---
+
+**List-tool dispatch verbs (2.22)**: the list tool advertises `_count` / `_exists` / `_distinct` — REST's `?_count=true` family with identical permission/filter/tenant semantics (same controller dispatch), zero documents fetched. Cheapest way for an agent to answer "how many" / "any?" / "which values".
 
 ## What it produces
 
@@ -50,6 +52,18 @@ Tool `source` strings: `crud:<resource>:<op>`, `action:<resource>:<name>`, `rout
 MCP tools run through the same [[permissions]] pipeline as REST. Hidden fields do not leak in tool schemas. Row-level filters (ownership, multi-tenant) apply. `PermissionResult.filters` flow into MCP tools exactly like REST.
 
 When changing resource field rules, permissions, or routes → MCP tools change too. Always run `tests/integrations/mcp/`. See [[gotchas]] #16.
+
+## Execution wiring — full pipeline parity (2.23)
+
+The controller pipeline reads its wiring off the REQUEST context (`metadata.arc.hooks`, `ctx.server`, `ctx.scope`) — stamped by the arc decorator on HTTP. `McpExecutionWiring` restores the same on the synthetic path:
+
+- **`mcpPlugin` wires automatically** (lazy getters over `fastify.arc.hooks` / `events` / `audit` / `log` / `idempotency.store`) — registration order doesn't matter for execution; register `idempotencyPlugin` before `mcpPlugin` only if you want `_idempotencyKey` advertised in tool schemas.
+- **Hooks + events**: resource hooks (before/around/after) now run on MCP calls, so the arcCorePlugin after-hook publishes `<resource>.<op>d` events — realtime feeds, webhooks, and subscribers see agent-originated mutations. Pre-2.23 they silently no-oped.
+- **Field-read masking** (`applyMcpReadMasking`): `fields.hidden()`/`visibleTo()`/`redactFor()` apply to every tool family's output — CRUD, custom routes, actions, aggregation rows — with HTTP-identical semantics (elevated bypass, user∪org roles).
+- **Idempotency**: mutating CRUD tools accept `_idempotencyKey` (advertised only when a store is wired); the executor runs the HTTP plugin's check → lock → execute → record → replay protocol against the SAME store, fingerprinted by tool + input + caller. Errors are never cached; same key + different input = fresh execution.
+- **Standalone** `resourceToTools()` / `createTestMcpClient()` callers pass `{ wiring }` themselves, or omit it for legacy dispatch-only tools.
+
+Pinned by `tests/integrations/mcp/mcp-execution-parity.test.ts` + `mcp-field-masking.test.ts`.
 
 ## Related
 - [[core]] — `defineResource` shape drives tools

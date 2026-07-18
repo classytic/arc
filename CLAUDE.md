@@ -119,14 +119,14 @@ Arc's boot order is **fixed** (do not reorder; do not skip slots):
 |------|-----|-----------|
 | fastify | ^5.8.5 | **Yes** |
 | @classytic/primitives | >=0.9.0 | **Yes** |
-| @classytic/repo-core | >=0.7.0 | **Yes** |
+| @classytic/repo-core | >=0.14.0 | **Yes** |
 | better-auth | >=1.6.2 | No |
 | ioredis | >=5.0.0 | No |
 | bullmq | >=5.0.0 | No |
 
 **Removed in arc 2.12:** `@classytic/mongokit`, `@classytic/sqlitekit`, `mongoose`, `@prisma/client`. Every kit-specific adapter — Mongoose, Drizzle, AND Prisma — ships from its kit (`@classytic/mongokit/adapter@>=3.13.0`, `@classytic/sqlitekit/adapter@>=0.3.0`, `@classytic/prismakit/adapter@>=0.1.0`); hosts depend on the kit directly. The kit owns the driver peer. Custom kits implementing `DataAdapter<TDoc>` from `@classytic/repo-core/adapter` plug in identically.
 
-`@classytic/repo-core@>=0.4.0` publishes the `MinimalRepo` / `StandardRepo` contract plus the canonical pagination, tenant, error, schema-generator, AND adapter contracts (`/adapter` subpath: `DataAdapter`, `RepositoryLike`, `AdapterRepositoryInput`, `AdapterFactory`, `OpenApiSchemas`, `SchemaMetadata`, `FieldMetadata`, `RelationMetadata`, `asRepositoryLike`, `isRepository`, ...). Hosts import those from repo-core directly — arc re-exports only `RepositoryLike`. See the gotcha under "Type conventions" above. `@classytic/primitives` owns the canonical event types (`EventMeta`, `DomainEvent`, `EventTransport`, `createEvent`, `createChildEvent`, `matchEventPattern`, ...); arc re-exports the runtime `MemoryEventTransport` only. `mergeFieldRuleConstraints` + `applyNullable` now live in `@classytic/repo-core/schema`. Arc 2.12 ships zero kit-specific adapters — any kit (mongokit, sqlitekit, prismakit, future pgkit, custom) plugs in via the `/adapter` subpath.
+`@classytic/repo-core@>=0.4.0` publishes the `MinimalRepo` / `StandardRepo` contract plus the canonical pagination, tenant, error, schema-generator, AND adapter contracts (`/adapter` subpath: `DataAdapter`, `RepositoryLike`, `AdapterRepositoryInput`, `AdapterFactory`, `OpenApiSchemas`, `SchemaMetadata`, `FieldMetadata`, `RelationMetadata`, `asRepositoryLike`, `isRepository`, ...). Hosts import those from repo-core directly — arc re-exports only `RepositoryLike`. See the gotcha under "Type conventions" above. `@classytic/primitives` owns the canonical event types (`EventMeta`, `DomainEvent`, `EventTransport`, `createEvent`, `createChildEvent`, `matchEventPattern`, ...); arc re-exports the runtime `MemoryEventTransport` only. `mergeFieldRuleConstraints` + `applyNullable` now live in `@classytic/repo-core/schema`. Arc 2.12 ships zero kit-specific adapters — any kit (mongokit, sqlitekit, prismakit, pgkit, custom) plugs in via the `/adapter` subpath.
 
 ## Files
 
@@ -134,5 +134,5 @@ Arc's boot order is **fixed** (do not reorder; do not skip slots):
 - [CHANGELOG.md](CHANGELOG.md) — release history + migration notes
 - [v3.md](v3.md) — v3 design notes
 - [wiki/](wiki/) — concept pages; loaded on demand
-- [skills/](skills/) — `arc`, `arc-code-review`, `arc-module-publishing` are arc's own, shipped in the npm package (`files`). `fastify-best-practices` + `visa-best-practices` are dev-only junctions into `.agents/skills/` (managed by `npx skills`, pinned in `skills-lock.json`); `npm pack` doesn't follow junctions, so they never ship.
+- [skills/](skills/) — ONLY arc's own skills: `arc`, `arc-code-review`, `arc-module-publishing`, shipped in the npm package (`files`). Third-party skills (`better-auth-best-practices`, `fastify-best-practices`, `visa-best-practices`, ...) never go here — they live as junctions in `.claude/skills/` pointing into `.agents/skills/` (managed by `npx skills`, pinned in `skills-lock.json`).
 - [knip.config.ts](knip.config.ts) · [biome.json](biome.json) · [tsdown.config.ts](tsdown.config.ts) · [vitest.config.ts](vitest.config.ts)

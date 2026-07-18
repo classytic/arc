@@ -31,9 +31,11 @@ import { executeAggregation } from "../../core/aggregation/buildHandler.js";
 import type { AggregationConfig, AggregationsMap } from "../../core/aggregation/types.js";
 import type { NormalizedAggregation } from "../../core/aggregation/validate.js";
 import { validateAggregations } from "../../core/aggregation/validate.js";
+import type { FieldPermissionMap } from "../../permissions/fields.js";
 import type { PermissionCheck } from "../../permissions/types.js";
 import type { AnyRecord, RouteSchemaOptions } from "../../types/index.js";
 import {
+  applyMcpReadMasking,
   evaluatePermission,
   permissionDeniedResult,
   toCallToolError,
@@ -64,6 +66,12 @@ export function buildAggregationTools(args: {
   buildOptionsFromSession: (session: unknown) => AnyRecord;
   /** Optional tool name prefix (matches `prefix` in the action-tools path). */
   prefix?: string;
+  /**
+   * Resource field-permission map — masks aggregation rows the same way
+   * the REST aggregation route does, so hidden fields don't leak via
+   * group keys or measure values.
+   */
+  fields?: FieldPermissionMap;
 }): ToolDefinition[] {
   const {
     resourceName,
@@ -73,6 +81,7 @@ export function buildAggregationTools(args: {
     repo,
     buildOptionsFromSession,
     prefix,
+    fields,
   } = args;
 
   if (!aggregations || Object.keys(aggregations).length === 0) return [];
@@ -117,6 +126,7 @@ export function buildAggregationTools(args: {
         resourceName,
         repo,
         buildOptionsFromSession,
+        fields,
       }),
     });
   }
@@ -237,10 +247,11 @@ interface CreateHandlerArgs {
   resourceName: string;
   repo: unknown;
   buildOptionsFromSession: (session: unknown) => AnyRecord;
+  fields?: FieldPermissionMap;
 }
 
 function createAggregationToolHandler(args: CreateHandlerArgs): ToolDefinition["handler"] {
-  const { normalized, permissions, resourceName, repo, buildOptionsFromSession } = args;
+  const { normalized, permissions, resourceName, repo, buildOptionsFromSession, fields } = args;
 
   return async (input, ctx) => {
     // Permission check first — same gate the Fastify route runs.
@@ -288,6 +299,17 @@ function createAggregationToolHandler(args: CreateHandlerArgs): ToolDefinition["
     // wraps via the shared helpers so the same JSON shape an HTTP
     // client would see ends up inside the tool-call result.
     if (result.status === 200) {
+      // Mask rows like the REST aggregation route's arc decorator does —
+      // hidden fields must not leak via group keys or measure values.
+      const body = result.body as { rows?: unknown[] } & Record<string, unknown>;
+      if (fields && Array.isArray(body?.rows)) {
+        const rows = applyMcpReadMasking(body.rows, {
+          fields,
+          session: ctx.session,
+          scopeOverride: permResult?.scope,
+        });
+        return toCallToolSuccess({ ...body, rows });
+      }
       return toCallToolSuccess(result.body);
     }
     return toCallToolError(result.body as ErrorContract);

@@ -159,7 +159,15 @@ export interface IRequestContext<
   body: TBody;
   /** Authenticated user or null */
   user: TUser | null;
-  /** Request headers */
+  /**
+   * Request headers.
+   *
+   * ⚠ Declared narrow for ergonomics, but on the HTTP path this is
+   * Fastify's headers object passed through — repeated headers arrive as
+   * `string[]` at RUNTIME behind this type. Read via `getHeader(ctx.headers,
+   * name)` from `@classytic/arc/utils` for array-safe, duplicate-deterministic
+   * access. The declared type widens to `ArcHeaders` in v3.
+   */
   headers: Record<string, string | undefined>;
   /** Organization ID (for multi-tenant apps) */
   organizationId?: string;

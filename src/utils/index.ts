@@ -62,6 +62,9 @@ export type { FilterDialect } from "./filter-dialect.js";
 export { MONGO_DIALECT, NEUTRAL_DIALECT } from "./filter-dialect.js";
 // Raw handler wrapper
 export { handleRaw } from "./handleRaw.js";
+export type { ArcHeaders } from "./headers.js";
+// Headers — honest typing + duplicate-safe accessor for HTTP and MCP contexts
+export { getHeader } from "./headers.js";
 export type { ArcQueryParserOptions } from "./queryParser.js";
 // Query Parser
 export {
@@ -98,6 +101,9 @@ export {
 } from "./schemaConverter.js";
 // Minimal flat-equality matcher for `DataAdapter.matchesFilter` on custom/minimal repos
 export { simpleEqualityMatcher } from "./simpleEqualityMatcher.js";
+export type { SseStream, SseStreamOptions } from "./sseStream.js";
+// SSE transport primitive — hijack + CORS-merged headers, heartbeat, backpressure fail-fast
+export { openSseStream } from "./sseStream.js";
 export type { StateMachine, TransitionConfig } from "./stateMachine.js";
 // State Machine
 export { createStateMachine } from "./stateMachine.js";

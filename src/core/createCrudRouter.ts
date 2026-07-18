@@ -13,7 +13,7 @@
  * - Framework-agnostic controllers via adapter pattern
  */
 
-import type { FastifySchema, preHandlerHookHandler, RouteHandlerMethod } from "fastify";
+import type { FastifySchema, RouteHandlerMethod } from "fastify";
 
 import { CRUD_OPERATIONS, DEFAULT_UPDATE_METHOD } from "../constants.js";
 import type { PermissionCheck } from "../permissions/types.js";

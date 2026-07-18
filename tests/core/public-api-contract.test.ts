@@ -79,10 +79,36 @@ describe("Public API Contract", () => {
       "./testing/storage",
       "./types",
       "./types/storage",
+      "./usage",
       "./utils",
     ].sort();
 
     expect(actualKeys).toEqual(expectedKeys);
+  });
+
+  it("labels every subpath with a stability level (arc.subpathStability)", () => {
+    // Governance gate: every published subpath must declare stable |
+    // experimental. A NEW subpath fails here until it's classified, and
+    // an orphan label (subpath removed, label kept) fails too — the map
+    // can't silently rot in either direction. Machine-readable so agents
+    // and downstream tooling can read maturity without scraping docs.
+    const pkg = readPackageJson() as unknown as {
+      exports: Record<string, unknown>;
+      arc?: { subpathStability?: Record<string, string> };
+    };
+    const stability = pkg.arc?.subpathStability ?? {};
+    const exportKeys = Object.keys(pkg.exports).sort();
+    const labeledKeys = Object.keys(stability).sort();
+
+    expect(labeledKeys, "arc.subpathStability must cover exactly the exports map").toEqual(
+      exportKeys,
+    );
+    for (const [subpath, level] of Object.entries(stability)) {
+      expect(
+        ["stable", "experimental"],
+        `exports["${subpath}"] has invalid stability "${level}"`,
+      ).toContain(level);
+    }
   });
 
   it("keeps all export entries wired to existing dist artifacts", () => {
@@ -128,7 +154,7 @@ describe("Public API Contract", () => {
       },
       {
         subpath: "@classytic/arc/permissions",
-        symbols: ["allowPublic", "requireAuth", "requireRoles"],
+        symbols: ["allowPublic", "requireAuth", "requireRoles", "requireGrant"],
       },
       { subpath: "@classytic/arc/hooks", symbols: ["HookSystem"] },
       { subpath: "@classytic/arc/registry", symbols: ["ResourceRegistry"] },

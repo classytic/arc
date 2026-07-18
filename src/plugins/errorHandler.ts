@@ -81,16 +81,28 @@ export interface ErrorHandlerOptions {
  * {@link ErrorHandlerOptions.isDuplicateKeyError}.
  */
 export function defaultIsDuplicateKeyError(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-  const e = err as { code?: number | string; codeName?: string; errno?: number };
-  if (e.code === 11000 || e.codeName === "DuplicateKey") return true; // MongoDB
-  if (e.code === "P2002") return true; // Prisma
-  if (e.code === "23505") return true; // Postgres / Neon
-  if (e.code === "ER_DUP_ENTRY" || e.errno === 1062) return true; // MySQL / MariaDB
-  if (e.code === "SQLITE_CONSTRAINT_UNIQUE" || e.code === "SQLITE_CONSTRAINT_PRIMARYKEY") {
-    // SQLITE_CONSTRAINT alone covers NOT NULL / CHECK / FK violations too —
-    // match only the unique-constraint variants to avoid false 409s.
-    return true;
+  // Walk the `cause` chain (bounded): ORMs wrap driver errors — Drizzle's
+  // DrizzleQueryError carries the Postgres 23505 on `.cause`, not on
+  // itself — and a top-level-only check turns clean 409s into 500s.
+  // Matching stays strict-code-only at every level (never messages).
+  let current: unknown = err;
+  for (let depth = 0; depth < 5 && current && typeof current === "object"; depth++) {
+    const e = current as {
+      code?: number | string;
+      codeName?: string;
+      errno?: number;
+      cause?: unknown;
+    };
+    if (e.code === 11000 || e.codeName === "DuplicateKey") return true; // MongoDB
+    if (e.code === "P2002") return true; // Prisma
+    if (e.code === "23505") return true; // Postgres / Neon
+    if (e.code === "ER_DUP_ENTRY" || e.errno === 1062) return true; // MySQL / MariaDB
+    if (e.code === "SQLITE_CONSTRAINT_UNIQUE" || e.code === "SQLITE_CONSTRAINT_PRIMARYKEY") {
+      // SQLITE_CONSTRAINT alone covers NOT NULL / CHECK / FK violations too —
+      // match only the unique-constraint variants to avoid false 409s.
+      return true;
+    }
+    current = e.cause;
   }
   return false;
 }

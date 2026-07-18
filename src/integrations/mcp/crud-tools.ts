@@ -11,6 +11,7 @@
  * `invokeController` eliminates that drift.
  */
 
+import type { FieldPermissionMap } from "../../permissions/fields.js";
 import type { ResourcePermissions } from "../../types/index.js";
 import { pluralize } from "../../utils/pluralize.js";
 import { invokeController } from "./invokeController.js";
@@ -18,6 +19,7 @@ import type {
   CrudDescriptionMeta,
   CrudDescriptionOverride,
   CrudOperation,
+  McpExecutionWiring,
   ToolAnnotations,
   ToolDefinition,
 } from "./types.js";
@@ -38,19 +40,45 @@ export const CRUD_ANNOTATIONS: Record<CrudOperation, ToolAnnotations> = {
  * build + envelope/error conversion all live in one place — this factory
  * only resolves the op-specific permission and threads it through.
  */
+/** Ops where an idempotency key is meaningful (mutations). */
+const MUTATING_CRUD_OPS: ReadonlySet<CrudOperation> = new Set(["create", "update", "delete"]);
+
 export function createCrudHandler(
   op: CrudOperation,
   controller: unknown,
   resourceName: string,
   permissions?: ResourcePermissions,
+  fields?: FieldPermissionMap,
+  extras?: {
+    wiring?: McpExecutionWiring;
+    schemaOptions?: unknown;
+    idField?: string;
+  },
 ): ToolDefinition["handler"] {
   const permission = permissions?.[op as keyof ResourcePermissions];
-  return (input, ctx) =>
-    invokeController(controller, op, input, {
+  return (input, ctx) => {
+    // `_idempotencyKey` is executor metadata, never body data — lift it out
+    // before dispatch so BodySanitizer / strict schemas never see it.
+    let idempotencyKey: string | undefined;
+    let payload = input;
+    if ("_idempotencyKey" in input) {
+      const { _idempotencyKey, ...rest } = input;
+      payload = rest;
+      if (MUTATING_CRUD_OPS.has(op) && typeof _idempotencyKey === "string" && _idempotencyKey) {
+        idempotencyKey = _idempotencyKey;
+      }
+    }
+    return invokeController(controller, op, payload, {
       session: ctx.session,
       resourceName,
       permissions: permission,
+      fields,
+      wiring: extras?.wiring,
+      schemaOptions: extras?.schemaOptions,
+      idField: extras?.idField,
+      idempotencyKey,
     });
+  };
 }
 
 /**

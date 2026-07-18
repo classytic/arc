@@ -4,7 +4,8 @@ One-line hooks per page. Load only what you need.
 
 ## Meta
 - [identity](identity.md) — what arc is, philosophy, non-negotiable rules
-- [architecture](architecture.md) — 29-module map, file sizes, what lives where
+- [architecture](architecture.md) — module map, what lives where, heavy files
+- [extension-decision](extension-decision.md) — WHICH extension seam for WHICH need: preset vs module vs plugin vs hook vs pipeline vs action vs adapter vs subscriber
 - [commands](commands.md) — typecheck, lint, test, build, release
 - [peer-deps](peer-deps.md) — peer dep matrix, what's bundleable
 
@@ -24,6 +25,7 @@ One-line hooks per page. Load only what you need.
 
 ## Runtime features
 - [events](events.md) — `EventPlugin`, `EventMeta`, transports, outbox, DLQ
+- [delivery-guarantees](delivery-guarantees.md) — ONE matrix: ordering/durability/retries/dedup/backpressure/shutdown/multi-replica across memory, pub/sub, Streams, outbox, SSE, realtime, jobs, schedules, webhooks
 - [hooks](hooks.md) — `HookSystem` before/after lifecycle
 - [cache](cache.md) — `QueryCache`, SWR, scope-aware keys
 - [plugins](plugins.md) — built-in plugins + the onSend race rule (v2.10.2)

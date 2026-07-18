@@ -76,14 +76,53 @@ export interface WebhookPluginOptions {
   timeout?: number;
   /** Max delivery log entries kept in memory (default: 1000) */
   maxLogEntries?: number;
-  /** Max concurrent deliveries per event (default: 5). Set to 1 for sequential. */
+  /**
+   * Max concurrent deliveries per event (default: 5). Set to 1 for
+   * sequential. Must be >= 1 — the plugin throws at registration otherwise
+   * (a zero would make the delivery loop spin forever without progress).
+   */
   concurrency?: number;
+  /**
+   * URL policy hook — the SSRF seam for tenant-registered URLs. Throw to
+   * reject. Pass {@link defaultWebhookUrlPolicy} to require HTTPS and block
+   * localhost / link-local / private-network / cloud-metadata destinations,
+   * or supply your own (allowlists, per-tenant rules).
+   *
+   * Enforcement points when set:
+   *  - `register()` — new subscriptions are validated BEFORE saving.
+   *  - Plugin init — every PERSISTED subscription is re-validated; failures
+   *    are excluded from dispatch and logged (they stay in the store for
+   *    the host to fix), so pre-policy rows and out-of-band store writes
+   *    can't bypass the policy.
+   *  - Delivery — `fetch` runs with `redirect: "manual"`, so an allowed
+   *    public URL can't 302 into a blocked private/metadata target; a 3xx
+   *    records as a failed delivery.
+   *
+   * Arc deliberately ships no DEFAULT policy — deployments differ (internal
+   * webhooks to private services are legitimate), and DNS-rebinding
+   * protection belongs at the actual outbound network boundary, not in the
+   * framework.
+   */
+  validateUrl?: (url: URL, subscription: WebhookSubscription) => void | Promise<void>;
 }
+
+/** `WebhookSubscription` as returned by `list()` — secret withheld. */
+export type WebhookSubscriptionPublic = Omit<WebhookSubscription, "secret">;
 
 export interface WebhookManager {
   register(sub: WebhookSubscription): Promise<void> | void;
   unregister(id: string): Promise<void> | void;
-  list(): WebhookSubscription[];
+  /**
+   * Enumerate subscriptions WITHOUT their secrets — safe to surface in
+   * admin UIs / API responses. Use {@link WebhookManager.getSecret} for
+   * the privileged retrieval path.
+   */
+  list(): WebhookSubscriptionPublic[];
+  /**
+   * Privileged secret retrieval — separate from `list()` so enumerating
+   * subscriptions never leaks signing material into logs or UIs.
+   */
+  getSecret(id: string): string | undefined;
   deliveryLog(limit?: number): WebhookDeliveryRecord[];
 }
 
@@ -100,12 +139,193 @@ declare module "fastify" {
 /**
  * Sign a payload with HMAC-SHA256 for outbound webhook delivery.
  *
+ * @deprecated LEGACY (pre-2.23) format — signs the BODY ONLY, so a captured
+ * request can be replayed indefinitely and the event-id header is not
+ * cryptographically bound to the body. Still emitted on the legacy
+ * `x-webhook-signature` header for existing receivers; new receivers should
+ * verify the v1 contract (`x-arc-webhook-signature`) via {@link verifyWebhook}.
+ * Legacy emission is scheduled for removal in v3.
+ *
  * @returns `sha256=<hex>` — the format written to `x-webhook-signature`
  */
 export function signPayload(payload: string, secret: string): string {
   const hmac = createHmac("sha256", secret);
   hmac.update(payload);
   return `sha256=${hmac.digest("hex")}`;
+}
+
+// ============================================================================
+// v1 signing contract — replay-bounded, delivery-id-bound
+// ============================================================================
+
+/**
+ * Signed-string layout for the v1 webhook contract:
+ *
+ *     v1.<timestampMs>.<deliveryId>.<body>
+ *
+ * Binding the timestamp bounds replay to the verifier's tolerance window,
+ * and binding the delivery id lets receivers deduplicate redeliveries on an
+ * AUTHENTICATED value (the legacy `x-webhook-id` header was unsigned — an
+ * attacker replaying a captured request could change it and defeat dedup).
+ *
+ * Wire headers:
+ *   - `x-arc-webhook-signature: v1=<hex hmac-sha256>`
+ *   - `x-arc-webhook-timestamp: <unix epoch ms>`
+ *   - `x-arc-webhook-delivery:  <delivery id>` (arc sends the event's
+ *     `meta.id` — STABLE across retries of the same event, so dedup on it
+ *     collapses redeliveries)
+ */
+export function signWebhook(
+  body: string,
+  secret: string,
+  meta: { timestamp: number; deliveryId: string },
+): string {
+  const hmac = createHmac("sha256", secret);
+  hmac.update(`v1.${meta.timestamp}.${meta.deliveryId}.${body}`);
+  return `v1=${hmac.digest("hex")}`;
+}
+
+export interface VerifyWebhookInput {
+  /** Raw request body — the exact bytes the sender signed (`req.rawBody`). */
+  body: string | Buffer;
+  /** Shared secret. */
+  secret: string;
+  /** `x-arc-webhook-signature` header value (`v1=<hex>`). */
+  signature: string | undefined;
+  /** `x-arc-webhook-timestamp` header value (unix epoch ms). */
+  timestamp: string | number | undefined;
+  /** `x-arc-webhook-delivery` header value. */
+  deliveryId: string | undefined;
+  /**
+   * Max allowed clock skew between sender timestamp and now, in ms.
+   * @default 300_000 (5 minutes)
+   */
+  toleranceMs?: number;
+  /** Injectable clock for tests. @default Date.now */
+  now?: () => number;
+}
+
+export type VerifyWebhookResult =
+  | {
+      valid: true;
+      /** The AUTHENTICATED delivery id — dedup redeliveries on this. */
+      deliveryId: string;
+      /** Sender timestamp (unix epoch ms), authenticated. */
+      timestamp: number;
+    }
+  | { valid: false; reason: "missing_headers" | "bad_timestamp" | "expired" | "bad_signature" };
+
+/**
+ * Verify an inbound v1 arc webhook: signature + timestamp tolerance, and
+ * return the authenticated delivery id for receiver-side deduplication.
+ *
+ * ⚠ Pass `req.rawBody` (route opted in via `config: { rawBody: true }`),
+ * never the parsed `req.body` — re-serialised JSON won't match the HMAC.
+ *
+ * @example
+ * ```typescript
+ * fastify.post('/hooks/arc', { config: { rawBody: true } }, async (req, reply) => {
+ *   const result = verifyWebhook({
+ *     body: req.rawBody,
+ *     secret: process.env.WEBHOOK_SECRET,
+ *     signature: req.headers['x-arc-webhook-signature'] as string,
+ *     timestamp: req.headers['x-arc-webhook-timestamp'] as string,
+ *     deliveryId: req.headers['x-arc-webhook-delivery'] as string,
+ *   });
+ *   if (!result.valid) return reply.status(401).send({ error: result.reason });
+ *   if (await seen(result.deliveryId)) return reply.send({ ok: true }); // dedup
+ *   // ... handle, then mark result.deliveryId seen
+ * });
+ * ```
+ */
+export function verifyWebhook(input: VerifyWebhookInput): VerifyWebhookResult {
+  const { body, secret, signature, deliveryId, toleranceMs = 300_000, now = Date.now } = input;
+  if (typeof body !== "string" && !Buffer.isBuffer(body)) {
+    throw new TypeError(
+      "verifyWebhook: body must be a string or Buffer (the exact bytes the sender signed). " +
+        "Add `config: { rawBody: true }` to the route and pass req.rawBody — not req.body.",
+    );
+  }
+  if (!signature || !deliveryId || input.timestamp === undefined || input.timestamp === "") {
+    return { valid: false, reason: "missing_headers" };
+  }
+  const timestamp = Number(input.timestamp);
+  if (!Number.isFinite(timestamp)) return { valid: false, reason: "bad_timestamp" };
+  if (Math.abs(now() - timestamp) > toleranceMs) return { valid: false, reason: "expired" };
+
+  const bodyString = typeof body === "string" ? body : body.toString("utf8");
+  const expected = signWebhook(bodyString, secret, { timestamp, deliveryId });
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    return { valid: false, reason: "bad_signature" };
+  }
+  return { valid: true, deliveryId, timestamp };
+}
+
+// ============================================================================
+// URL policy — opt-in SSRF guard for tenant-registered webhook URLs
+// ============================================================================
+
+/**
+ * Opt-in URL policy for tenant-registered webhooks: requires HTTPS and
+ * rejects loopback, link-local, private-network, and cloud-metadata
+ * destinations. Pass as `validateUrl: defaultWebhookUrlPolicy`.
+ *
+ * Scope note: this validates the URL LITERAL at registration time. It does
+ * not resolve DNS — rebinding/level-2 SSRF protection belongs at the actual
+ * outbound network boundary (egress proxy, network policy), where the real
+ * connection target is known. Internal deployments that legitimately POST
+ * to private services should write their own narrower policy instead.
+ */
+const BLOCKED_V4 = /^(?:127\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|169\.254\.|0\.)/; // loopback, RFC1918, link-local (incl. 169.254.169.254 metadata), unspecified
+
+export function defaultWebhookUrlPolicy(url: URL): void {
+  if (url.protocol !== "https:") {
+    throw new Error(`Webhook URL must use https (got ${url.protocol}//)`);
+  }
+  // WHATWG URL keeps brackets on IPv6 hostnames — strip for inspection.
+  let host = url.hostname.toLowerCase();
+  if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
+
+  const blockedName =
+    host === "localhost" || host.endsWith(".localhost") || host === "metadata.google.internal";
+
+  // IPv6 literals: loopback/unspecified, unique-local fc00::/7, link-local
+  // fe80::/10, and IPv4-mapped — police the embedded v4, it reaches the
+  // same private/metadata targets the v4 rules block. WHATWG URL
+  // CANONICALIZES `::ffff:169.254.169.254` into hex groups
+  // (`::ffff:a9fe:a9fe`), so decode both spellings back to dotted-quad.
+  const isV6 = host.includes(":");
+  const mappedV4 = isV6 ? decodeMappedV4(host) : undefined;
+  const blockedV6 =
+    isV6 &&
+    (host === "::1" ||
+      host === "::" ||
+      /^f[cd]/.test(host) || // fc00::/7 unique-local
+      /^fe[89ab]/.test(host) || // fe80::/10 link-local
+      (mappedV4 !== undefined && BLOCKED_V4.test(mappedV4)));
+
+  const blockedV4 = !isV6 && BLOCKED_V4.test(host);
+
+  if (blockedName || blockedV4 || blockedV6) {
+    throw new Error(`Webhook URL host '${host}' is not allowed (loopback/private/metadata)`);
+  }
+}
+
+/**
+ * Decode an IPv4-mapped IPv6 literal to its dotted-quad form. Accepts both
+ * the textual spelling (`::ffff:1.2.3.4`) and the hex-group canonical form
+ * WHATWG URL produces (`::ffff:102:304`). Returns undefined for anything else.
+ */
+function decodeMappedV4(host: string): string | undefined {
+  const dotted = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(host)?.[1];
+  if (dotted) return dotted;
+  const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(host);
+  if (!hex?.[1] || !hex[2]) return undefined;
+  const hi = Number.parseInt(hex[1], 16);
+  const lo = Number.parseInt(hex[2], 16);
+  return `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
 }
 
 /** Options for `verifySignature` — customize for non-Arc webhook senders */
@@ -263,13 +483,42 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
   const timeout = opts.timeout ?? 10000;
   const maxLogEntries = opts.maxLogEntries ?? 1000;
   const concurrency = opts.concurrency ?? 5;
+  // A concurrency of 0 (or negative/NaN) would make the delivery loop below
+  // splice empty batches forever — fail at boot, not at first delivery.
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new Error(
+      `webhookPlugin: concurrency must be an integer >= 1 (got ${String(opts.concurrency)})`,
+    );
+  }
 
   // In-memory cache of subscriptions (loaded from store on init)
   let subscriptions: WebhookSubscription[] = [];
   const log: WebhookDeliveryRecord[] = [];
 
-  // Load persisted subscriptions
+  // Load persisted subscriptions — and re-apply the URL policy to EVERY one.
+  // `register()` validates new entries, but rows written before the policy
+  // existed (or by another writer sharing the store) would otherwise bypass
+  // it entirely. Failing boot on one poisoned row would turn a bad DB write
+  // into an outage, so invalid entries are EXCLUDED from dispatch and logged
+  // loudly instead — they stay in the store for the host to fix or
+  // unregister.
   subscriptions = await store.getAll();
+  if (opts.validateUrl) {
+    const admitted: WebhookSubscription[] = [];
+    for (const sub of subscriptions) {
+      try {
+        await opts.validateUrl(new URL(sub.url), sub);
+        admitted.push(sub);
+      } catch (err) {
+        fastify.log.warn(
+          { subscriptionId: sub.id, url: sub.url, err },
+          "webhookPlugin: persisted subscription failed the URL policy — excluded from dispatch. " +
+            "Fix the URL or unregister the subscription.",
+        );
+      }
+    }
+    subscriptions = admitted;
+  }
 
   // -------------------------------------------------------------------
   // Dispatch a single event to all matching subscriptions
@@ -296,7 +545,16 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
       };
 
       try {
-        const signature = signPayload(body, sub.secret);
+        // v1 contract: timestamp + delivery id are INSIDE the signed string,
+        // so replay is bounded by the receiver's tolerance window and dedup
+        // runs on an authenticated id. The legacy body-only headers ride
+        // along for pre-2.23 receivers (removal scheduled for v3).
+        const timestamp = Date.now();
+        const v1Signature = signWebhook(body, sub.secret, {
+          timestamp,
+          deliveryId: event.meta.id,
+        });
+        const legacySignature = signPayload(body, sub.secret);
 
         const ac = new AbortController();
         const timer = setTimeout(() => ac.abort(), timeout);
@@ -306,12 +564,22 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
             method: "POST",
             headers: {
               "content-type": "application/json",
-              "x-webhook-signature": signature,
+              "x-arc-webhook-signature": v1Signature,
+              "x-arc-webhook-timestamp": String(timestamp),
+              "x-arc-webhook-delivery": event.meta.id,
+              // Legacy (deprecated, unsigned metadata + body-only HMAC):
+              "x-webhook-signature": legacySignature,
               "x-webhook-id": event.meta.id,
               "x-webhook-event": event.type,
             },
             body,
             signal: ac.signal,
+            // With a URL policy active, following redirects would let an
+            // ALLOWED public URL 302 into a blocked private/metadata target
+            // — the policy validated the literal, not the redirect chain.
+            // `manual` surfaces the 3xx as a failed delivery instead.
+            // Without a policy the platform default (follow) is kept.
+            ...(opts.validateUrl ? { redirect: "manual" as const } : {}),
           });
 
           record.success = response.ok;
@@ -355,6 +623,16 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
 
   const manager: WebhookManager = {
     async register(sub: WebhookSubscription): Promise<void> {
+      // URL must at least parse; the host-supplied policy (SSRF guard,
+      // allowlists) runs on the parsed URL and rejects by throwing.
+      let parsed: URL;
+      try {
+        parsed = new URL(sub.url);
+      } catch {
+        throw new Error(`webhookPlugin: invalid webhook URL '${sub.url}'`);
+      }
+      if (opts.validateUrl) await opts.validateUrl(parsed, sub);
+
       await store.save(sub);
       // Update in-memory cache
       subscriptions = subscriptions.filter((s) => s.id !== sub.id);
@@ -366,8 +644,14 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
       subscriptions = subscriptions.filter((s) => s.id !== id);
     },
 
-    list(): WebhookSubscription[] {
-      return [...subscriptions];
+    list(): WebhookSubscriptionPublic[] {
+      // Secrets never leave via enumeration — admin UIs and API responses
+      // consume list() wholesale; getSecret() is the privileged path.
+      return subscriptions.map(({ secret: _secret, ...pub }) => pub);
+    },
+
+    getSecret(id: string): string | undefined {
+      return subscriptions.find((s) => s.id === id)?.secret;
     },
 
     deliveryLog(limit?: number): WebhookDeliveryRecord[] {

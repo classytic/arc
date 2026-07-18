@@ -426,4 +426,45 @@ describe("Better Auth Adapter", () => {
       await app.close();
     });
   });
+
+  describe("rateLimit option — per-route bucket on the auth catch-all (2.22)", () => {
+    it("applies a tighter limit to /api/auth/* than the global limiter", async () => {
+      const app = Fastify({ logger: false });
+      const rateLimit = await import("@fastify/rate-limit");
+      await app.register(rateLimit.default, { max: 1000, timeWindow: "1 minute", global: false });
+
+      const { plugin } = createBetterAuthAdapter({
+        auth: createJsonAuthHandler(),
+        rateLimit: { max: 2, timeWindow: "1 minute" },
+      });
+      await app.register(plugin);
+      await app.ready();
+
+      const r1 = await app.inject({ method: "GET", url: "/api/auth/get-session" });
+      const r2 = await app.inject({ method: "GET", url: "/api/auth/get-session" });
+      const r3 = await app.inject({ method: "GET", url: "/api/auth/get-session" });
+      expect(r1.statusCode).toBe(200);
+      expect(r2.statusCode).toBe(200);
+      expect(r3.statusCode).toBe(429);
+
+      await app.close();
+    });
+
+    it("ships NO default limit — the catch-all also serves the get-session heartbeat", async () => {
+      const app = Fastify({ logger: false });
+      const rateLimit = await import("@fastify/rate-limit");
+      await app.register(rateLimit.default, { max: 1000, timeWindow: "1 minute", global: false });
+
+      const { plugin } = createBetterAuthAdapter({ auth: createJsonAuthHandler() });
+      await app.register(plugin);
+      await app.ready();
+
+      for (let i = 0; i < 5; i++) {
+        const res = await app.inject({ method: "GET", url: "/api/auth/get-session" });
+        expect(res.statusCode).toBe(200);
+      }
+
+      await app.close();
+    });
+  });
 });

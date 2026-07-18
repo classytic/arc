@@ -148,6 +148,60 @@ describe("Error Handler Plugin", () => {
   // .status errors (MongoKit, http-errors, etc.) → correct status code
   // ========================================================================
 
+  describe("Fastify-style statusCode errors — domain code honoring (path 4)", () => {
+    it("surfaces a caller-attached DOMAIN code alongside statusCode", async () => {
+      await createApp({ includeStack: false }, (app) => {
+        app.get("/domain-code", async () => {
+          throw Object.assign(new Error("Purchase not found"), {
+            statusCode: 404,
+            code: "PURCHASE_NOT_FOUND",
+          });
+        });
+      });
+      const res = await app.inject({ method: "GET", url: "/domain-code" });
+      expect(res.statusCode).toBe(404);
+      const body = JSON.parse(res.body);
+      expect(body.code).toBe("PURCHASE_NOT_FOUND");
+      expect(body.message).toBe("Purchase not found");
+    });
+
+    it("falls back to arc.<status> when no code is attached", async () => {
+      await createApp({ includeStack: false }, (app) => {
+        app.get("/no-code", async () => {
+          throw Object.assign(new Error("Bad"), { statusCode: 400 });
+        });
+      });
+      const res = await app.inject({ method: "GET", url: "/no-code" });
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).code).toMatch(/^arc\./);
+    });
+
+    it("never leaks a Node errno (ECONNREFUSED) as the wire code", async () => {
+      await createApp({ includeStack: false }, (app) => {
+        app.get("/node-errno", async () => {
+          throw Object.assign(new Error("upstream down"), {
+            statusCode: 502,
+            code: "ECONNREFUSED",
+          });
+        });
+      });
+      const res = await app.inject({ method: "GET", url: "/node-errno" });
+      const body = JSON.parse(res.body);
+      expect(body.code).not.toBe("ECONNREFUSED");
+      expect(body.code).toMatch(/^arc\./);
+    });
+
+    it("never leaks a Fastify internal code (FST_*) as the wire code", async () => {
+      await createApp({ includeStack: false }, (app) => {
+        app.get("/fst-code", async () => {
+          throw Object.assign(new Error("boom"), { statusCode: 400, code: "FST_ERR_CTP_INVALID" });
+        });
+      });
+      const res = await app.inject({ method: "GET", url: "/fst-code" });
+      expect(JSON.parse(res.body).code).not.toBe("FST_ERR_CTP_INVALID");
+    });
+  });
+
   describe("Errors with .status property (MongoKit pattern)", () => {
     it('should handle .status = 404 (MongoKit "Document not found")', async () => {
       await createApp({}, (app) => {
@@ -743,6 +797,69 @@ describe("Error Handler Plugin", () => {
       const body = JSON.parse(res.body);
       expect(body.code).toBe("arc.internal_error");
       // ErrorContract no longer carries body.timestamp — only code/message/status/details/meta/correlationId.
+    });
+  });
+
+  // ========================================================================
+  // Internal-message sanitization (5xx fallback)
+  // ========================================================================
+
+  describe("Internal-message sanitization", () => {
+    it("replaces the fallback 500 message when exposeInternalMessages is false", async () => {
+      await createApp({ includeStack: false, exposeInternalMessages: false }, (app) => {
+        app.get("/leak", async () => {
+          throw new Error("connect failed: mongodb://admin:hunter2@db.internal:27017");
+        });
+      });
+
+      const res = await app.inject({ method: "GET", url: "/leak" });
+      expect(res.statusCode).toBe(500);
+
+      const body = JSON.parse(res.body);
+      expect(body.code).toBe("arc.internal_error");
+      expect(body.message).toBe("Internal Server Error");
+      expect(res.body).not.toContain("hunter2");
+    });
+
+    it("keeps the raw message when exposeInternalMessages is true (dev default)", async () => {
+      await createApp({ includeStack: false, exposeInternalMessages: true }, (app) => {
+        app.get("/leak", async () => {
+          throw new Error("debuggable detail");
+        });
+      });
+
+      const res = await app.inject({ method: "GET", url: "/leak" });
+      expect(JSON.parse(res.body).message).toBe("debuggable detail");
+    });
+
+    it("preserves intentional domain-coded 5xx messages even when sanitizing", async () => {
+      await createApp({ includeStack: false, exposeInternalMessages: false }, (app) => {
+        app.get("/domain-5xx", async () => {
+          throw new ArcError("Payment gateway timed out, retry later", {
+            statusCode: 503,
+            code: "payment.gateway.timeout",
+          });
+        });
+      });
+
+      const res = await app.inject({ method: "GET", url: "/domain-5xx" });
+      expect(res.statusCode).toBe(503);
+      const body = JSON.parse(res.body);
+      expect(body.code).toBe("payment.gateway.timeout");
+      // Domain-coded 5xx is a deliberate client contract — never rewritten.
+      expect(body.message).toBe("Payment gateway timed out, retry later");
+    });
+
+    it("sanitizes 4xx never — client errors keep their messages", async () => {
+      await createApp({ includeStack: false, exposeInternalMessages: false }, (app) => {
+        app.get("/client-err", async () => {
+          throw new NotFoundError("Product", "42");
+        });
+      });
+
+      const res = await app.inject({ method: "GET", url: "/client-err" });
+      expect(res.statusCode).toBe(404);
+      expect(JSON.parse(res.body).message).toContain("Product");
     });
   });
 

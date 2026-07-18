@@ -23,7 +23,8 @@
  */
 
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { normalizeRoles } from "../permissions/types.js";
+import { getUserRoles } from "../permissions/types.js";
+import { OrgAccessDeniedError, UnauthorizedError, ValidationError } from "../utils/errors.js";
 import type { RequestScope } from "./types.js";
 
 export interface ResolveOrgFromHeaderOptions {
@@ -44,19 +45,26 @@ export function resolveOrgFromHeader(
 ): (request: FastifyRequest, reply: FastifyReply) => Promise<void> {
   const { header = "x-organization-id", resolveMembership } = options;
 
-  return async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
-    const orgId = request.headers[header] as string | undefined;
+  return async (request: FastifyRequest, _reply: FastifyReply): Promise<void> => {
+    // Tenant selection is security-sensitive: a REPEATED header arrives as an
+    // array at runtime, and picking either value would let a smuggled
+    // duplicate steer the membership check. Reject outright instead — this
+    // is exactly the duplicate-header posture `getHeader()`'s docs prescribe.
+    const raw = request.headers[header.toLowerCase()];
+    if (Array.isArray(raw)) {
+      throw new ValidationError(`Duplicate '${header}' header`);
+    }
+    const orgId = raw;
     if (!orgId) return; // No org header — scope stays as auth adapter set it
 
+    // Canonical error contract: THROW ArcError subclasses and let the global
+    // error handler emit the ErrorContract shape. Hand-rolled
+    // `{ success, error, message }` envelopes (pre-2.23) bypassed error
+    // mapping, tracing attributes, and log severity rules — and taught
+    // clients a wire shape nothing else in arc produces.
     const scope = request.scope;
     if (!scope || scope.kind === "public") {
-      reply.code(401).send({
-        success: false,
-        error: "Unauthorized",
-        message: "Authentication required for organization access",
-        code: "ORG_AUTH_REQUIRED",
-      });
-      return;
+      throw new UnauthorizedError("Authentication required for organization access");
     }
 
     // Already elevated — don't downgrade
@@ -64,40 +72,30 @@ export function resolveOrgFromHeader(
 
     const user = request.user;
     if (!user) {
-      reply.code(401).send({
-        success: false,
-        error: "Unauthorized",
-        message: "Authentication required for organization access",
-        code: "ORG_AUTH_REQUIRED",
-      });
-      return;
+      throw new UnauthorizedError("Authentication required for organization access");
     }
 
     const userId = String(user.id ?? user._id ?? "");
     if (!userId) {
-      reply.code(401).send({
-        success: false,
-        error: "Unauthorized",
-        message: "User identity required for organization access",
-      });
-      return;
+      throw new UnauthorizedError("User identity required for organization access");
     }
 
     const membership = await resolveMembership(userId, orgId);
     if (!membership) {
-      reply.code(403).send({
-        success: false,
-        error: "Forbidden",
-        message: "Not a member of this organization",
-        code: "ORG_ACCESS_DENIED",
-      });
-      return;
+      throw new OrgAccessDeniedError("Not a member of this organization");
     }
+
+    // Preserve roles the auth adapter already resolved onto the scope
+    // (JWT `roles` claim, session roles) — re-deriving from `user.role`
+    // alone dropped them when upgrading authenticated → member. Fall back
+    // to the canonical helper for scopes that carry no roles.
+    const carriedRoles =
+      "userRoles" in scope && Array.isArray(scope.userRoles) ? scope.userRoles : undefined;
 
     request.scope = {
       kind: "member",
       userId: userId || undefined,
-      userRoles: normalizeRoles(user.role),
+      userRoles: carriedRoles?.length ? carriedRoles : getUserRoles(user),
       organizationId: orgId,
       orgRoles: membership.roles,
     } satisfies RequestScope;

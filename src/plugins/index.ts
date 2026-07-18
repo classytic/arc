@@ -68,6 +68,12 @@ export {
   default as metricsPlugin,
   metricsPlugin as metricsPluginFn,
 } from "./metrics.js";
+export type { ChangeOperation, RealtimeOptions } from "./realtime.js";
+// Realtime resource change feed — permission-gated SSE per resource (2.22)
+export {
+  default as realtimePlugin,
+  realtimePlugin as realtimePluginFn,
+} from "./realtime.js";
 // Reply helpers (response envelope decorators)
 export { replyHelpersPlugin } from "./replyHelpers.js";
 export type { RequestIdOptions } from "./requestId.js";

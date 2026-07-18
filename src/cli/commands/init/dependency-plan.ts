@@ -76,9 +76,17 @@ export const SCAFFOLD_DEP_VERSIONS = {
   devCommon: {
     // Biome = formatter + linter in one, zero-config. `npm run lint`.
     "@biomejs/biome": "^2.4.15",
-    "mongodb-memory-server": "^11.1.0",
     "pino-pretty": "^13.1.3",
     vitest: "^4.1.7",
+  },
+  // Dev tooling — mongokit scaffolds only. mongodb-memory-server downloads
+  // a full MongoDB binary on install (~hundreds of MB, network + disk) —
+  // far too heavy to force on `--adapter custom` projects that never touch
+  // Mongo. The generated test harness only imports it when
+  // `config.adapter === 'mongokit'` (templates/auth.ts), so the dep group
+  // mirrors that exact condition.
+  devMongokit: {
+    "mongodb-memory-server": "^11.1.0",
   },
   devTypescript: {
     // @types/node tracks Node.js major — pin to 22 to match arc's >=22 requirement
@@ -277,6 +285,7 @@ export function resolveScaffoldDependencies(config: ProjectConfig): DependencyMa
 
   if (config.adapter === "mongokit") {
     Object.assign(dependencies, SCAFFOLD_DEP_VERSIONS.adapterMongokit);
+    Object.assign(devDependencies, SCAFFOLD_DEP_VERSIONS.devMongokit);
   }
 
   if (config.typescript) {

@@ -15,16 +15,19 @@
 import type { z } from "zod";
 import { normalizeSchemaIR, shouldRejectAdditionalProperties } from "../../core/schemaIR.js";
 import { schemaIRToZodShape } from "../../core/schemaIRZod.js";
+import type { FieldPermissionMap } from "../../permissions/fields.js";
 import type { PermissionCheck } from "../../permissions/types.js";
+import type { ServerAccessor } from "../../types/handlers.js";
 import type { ResourcePermissions } from "../../types/index.js";
-import { buildRequestContext } from "./buildRequestContext.js";
+import { buildRequestContext, type McpContextExtras } from "./buildRequestContext.js";
 import {
+  applyMcpReadMasking,
   evaluatePermission,
   permissionDeniedResult,
   toCallToolError,
   toCallToolSuccess,
 } from "./tool-helpers.js";
-import type { ToolDefinition } from "./types.js";
+import type { McpExecutionWiring, ToolDefinition } from "./types.js";
 
 /**
  * Convert an action's `schema` field into a Zod shape for MCP input.
@@ -72,7 +75,42 @@ export function createActionToolHandler(
    * parity. Defaults to `false` (legacy behavior — id-bound).
    */
   idLess = false,
+  /**
+   * Resource field-permission map — field-level READ masking applies to
+   * action results carrying documents, matching the arc-decorator masking
+   * the action's REST route applies.
+   */
+  fields?: FieldPermissionMap,
+  /**
+   * App-level execution wiring + resource meta — threads `metadata.arc`
+   * (hooks/events) and the `server` accessor into the synthetic context,
+   * matching what the HTTP action route's arc decorator provides.
+   */
+  extras?: {
+    wiring?: McpExecutionWiring;
+    schemaOptions?: unknown;
+    idField?: string;
+  },
 ): ToolDefinition["handler"] {
+  const wiring = extras?.wiring;
+  const contextExtras: McpContextExtras | undefined = wiring
+    ? {
+        arc: {
+          resourceName,
+          schemaOptions: extras?.schemaOptions,
+          permissions,
+          hooks: wiring.hooks,
+          events: wiring.events,
+          fields,
+          idField: extras?.idField,
+        },
+        server: {
+          events: wiring.events as ServerAccessor["events"],
+          audit: wiring.audit as ServerAccessor["audit"],
+          log: wiring.log as ServerAccessor["log"],
+        },
+      }
+    : undefined;
   const ir = rawSchema ? normalizeSchemaIR(rawSchema) : undefined;
   const strict = ir ? shouldRejectAdditionalProperties(ir) : false;
   // Pre-compute the allowed key set ONCE — every action call re-reads it to
@@ -133,6 +171,7 @@ export function createActionToolHandler(
       "action",
       permResult?.filters,
       permResult?.scope,
+      contextExtras,
     );
 
     // Id-less actions don't carry an entity handle — pass `""` to the
@@ -148,7 +187,10 @@ export function createActionToolHandler(
       // No-envelope contract: emit the action's raw return as the success
       // payload. The `isError: false` (default) on `CallToolResult`
       // discriminates success/error for MCP, mirroring HTTP status.
-      return toCallToolSuccess(result);
+      // Field-read masking mirrors the REST action route's arc decorator.
+      return toCallToolSuccess(
+        applyMcpReadMasking(result, { fields, session, scopeOverride: permResult?.scope }),
+      );
     } catch (err) {
       // Route ArcError / HttpError throws through the canonical
       // `toErrorContract` so MCP agents see the same shape HTTP clients

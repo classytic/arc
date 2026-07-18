@@ -37,6 +37,10 @@ Non-fatal by design: any step throwing degrades to `undefined` metadata with a w
 
 **History (why this is a rule, not a preference):** pre-2.21 this was a deep merge that UNIONED `required[]` — a custom body describing a *different* wire shape (legacy controllers mapping public bodies onto kernel models) still demanded the model's required fields. Dormant while adapters shipped no generator; detonated across 28 production resources when mongokit 3.21 turned generation on by default. Pinned by `tests/core/custom-schemas-precedence.test.ts` + `resource-plugin-schema-synthesis.test.ts`.
 
+## Zod v4 everywhere a schema slot exists (pinned 2.22)
+
+Every schema slot arc accepts — `customSchemas.{op}.{body,querystring,params,response[status]}`, `routes[].schema.*`, and `actionSchemas` — takes a plain JSON Schema **or** a Zod v4 schema. Conversion is ONE-TIME at route registration via `convertRouteSchema`/`toJsonSchema` (`z.toJSONSchema()`, `draft-7` target for Fastify's AJV; `openapi-3.0` for docs); zod stays an optional peer (lazy import; plain JSON Schema passes through untouched). DX notes: `z.number().positive()` → draft-7 numeric `exclusiveMinimum` (AJV-valid), `z.coerce.number()` querystrings coerce under createApp's `coerceTypes: true`, and a `z.object` RESPONSE schema doubles as a field-stripping contract (`additionalProperties: false` — undeclared repo fields never reach the wire). The wiring predates 2.22; the route-layer zod path was untested until `tests/core/zod-route-schemas.test.ts` pinned all slots live.
+
 ## Choosing the right knob (decision table)
 
 | Situation | Use |

@@ -2,7 +2,7 @@
 
 **Summary**: `defineResource` is the fundamental unit. Controllers are a mixin stack: `BaseCrudController` (CRUD core) + four preset mixins (SoftDelete / Tree / Slug / Bulk). `BaseController` is the pre-composed "everything" facade. `createCrudRouter` mounts handlers on Fastify.
 **Sources**: src/core/.
-**Last updated**: 2026-04-24 (v2.11.0 mixin split + action-router parity via `routerShared`).
+**Last updated**: 2026-07-15 (history/audit-at-scale: retention, indexes, audit-log-as-resource).
 
 ---
 
@@ -61,11 +61,14 @@ All symbols exported from `@classytic/arc` (root) and `@classytic/arc/core`.
 
 `createCrudRouter` mounts CRUD handlers on Fastify from the resource definition. `createActionRouter` (internal since v2.9 — declare actions via `defineResource({ actions })`) mounts the unified `POST /:id/action` endpoint. Both delegate every cross-cutting concern — auth, permission, pipeline, preHandler composition, response shaping — to shared primitives in [src/core/routerShared.ts](../src/core/routerShared.ts) so CRUD and actions can't silently drift.
 
-**Canonical preHandler order** (both routers emit it via `buildPreHandlerChain`):
+**Canonical hook placement** (all three routers — CRUD, actions, aggregations — emit it via `buildRouteHooks`, 2.22):
 
 ```
-preAuth → arcDecorator → authMw → permissionMw → pluginMw → routeGuards → customMws
+onRequest:  preAuth → arcDecorator → authMw
+preHandler: permissionMw → pluginMw → routeGuards → customMws
 ```
+
+Auth sits at route-level `onRequest` — Fastify parses the body and runs AJV BETWEEN the stages, so unauthenticated requests 401 before paying parse/validate cost (and before a 400 leaks schema shape). Auth reads only headers/cookies/params/query; body-shaped middleware stays at preHandler. Elevation is unaffected (wraps the `authenticate` decorator, rides wherever auth runs). Consequence: unauthenticated invalid-body requests get 401, not 400 — including action posts. Pinned by `tests/core/auth-before-parse.test.ts`; full rationale in `core/middlewares/chain.ts`.
 
 - `permissionMw` — CRUD uses the static `buildCrudPermissionMw` (permission known at route-registration time); actions use the dynamic `buildActionPermissionMw` (permission resolved from `body.action` at request time). Both apply `_policyFilters` + `request.scope` via `evaluateAndApplyPermission` **before** `pluginMw` (idempotency) runs — so unauthorized requests never record idempotency keys and route guards see the full permission-installed scope.
 - `buildPipelineHandler` + `buildActionPipelineHandler` — both return `Promise<IControllerResponse<unknown>>`. Pipeline steps that need to fail throw an `ArcError` (or any `HttpError`-shaped class); the global error handler catches and serializes to the canonical `ErrorContract` wire shape.
@@ -76,6 +79,18 @@ See [[removed]] for the list of public action-router APIs retired in v2.9.
 ## Per-route rate limit (2.20)
 
 `RouteDefinition.rateLimit?: RateLimitConfig | false` overrides the resource/app default for one custom endpoint (`{ max, timeWindow }` to tighten, `false` to never throttle, omit to inherit). Each custom route is its own Fastify route, so the override rides `config.rateLimit` cleanly — same primitive as aggregations. **Actions do NOT get a per-action limit**: they share one `POST /:id/action` mount, where Fastify's per-route limit can't distinguish them, so they inherit the resource limit — throttle a specific action by promoting it to a `routes:` entry (documented on `ActionDefinition`). Requires `@fastify/rate-limit` (arc's factory wires it).
+
+## `history: true` — per-record audit timeline (2.22)
+
+`defineResource({ history: true })` injects `GET /:prefix/:id/history` — that record's audit rows (`?limit=&offset=`, wire cap 200) — and **implies `audit: true`**. Requires `auditPlugin`; without it the route answers 503 `history.audit_unavailable`. Gate defaults stricter than reads: resource `update` permission → `get` → `requireAuth()`; override with `history: { permissions, limit }`. The flag is consumed in Phase-0 normalization (same contract as `customRoutesOnly` — expanded before the router ever sees it). See [[plugins]] for the audit plugin itself.
+
+### History/audit at scale — retention, indexes, rich queries
+
+Three concerns, three homes (framework/kit/recipe):
+
+- **Retention** (audit rows ARE the history — prune them, history prunes with them): `auditPlugin({ retention: { maxAgeMs, purgeIntervalMs } })` runs a periodic `purgeOlderThan` → repo `deleteMany(timestamp < cutoff)`. **Multi-replica hosts**: set `purgeIntervalMs: 0` and drive `fastify.audit.purge(...)` from a [[plugins]] `schedulesPlugin` entry instead — leader-safe, jittered, observable (the built-in timer predates 2.21 and runs on every replica). **Mongo hosts** can skip both: a TTL index (`{ timestamp: 1 }, { expireAfterSeconds }`) makes the DB do it server-side — the store contract explicitly blesses this.
+- **Indexes are kit territory** (the audit model is host-defined): Mongo — TTL index above + compound `{ resource: 1, documentId: 1, timestamp: -1 }` (covers the history-timeline query exactly); SQL kits — index `(resource, document_id, timestamp)` + the kit's ttl/sweep plugin (sqlitekit ships `ttlPlugin` with scheduled/trigger/lazy modes).
+- **Rich search**: `audit.query()` is deliberately narrow (the timeline's needs). For an admin audit-log UI with full repo-core filter power, mount the audit repository AS a resource — `defineResource({ name: 'audit-log', crud: { list: true, get: true }, adapter: { repository: auditRepo }, queryParser: new QueryParser({ allowedFilterFields: ['resource', 'documentId', 'userId', 'action', 'organizationId'] }), permissions: { list: requireRoles(['auditor']), ... } })` — filters, sort, keyset pagination, MCP tools, and permission gating all arrive free. Rows are just documents; the composition IS the search API.
 
 ## Write-side field permissions (v2.9) + systemManaged strip (v2.11)
 

@@ -214,15 +214,15 @@ describe("CORS credentials handling", () => {
     expect(res.headers["access-control-allow-credentials"]).toBe("true");
   });
 
-  it('credentials: true with origin: "*" should auto-convert to origin: true (smart CORS)', async () => {
-    // Browsers reject Access-Control-Allow-Origin: * with credentials.
-    // Arc's smart CORS converts origin: '*' to origin: true when credentials are enabled.
-    app = await buildApp({ origin: "*", credentials: true });
-
-    const res = await getWithOrigin(app, "https://myapp.com");
-    // Should reflect origin, NOT literal '*'
-    expect(res.headers["access-control-allow-origin"]).toBe("https://myapp.com");
-    expect(res.headers["access-control-allow-credentials"]).toBe("true");
+  it('credentials: true with origin: "*" should fail fast at boot', async () => {
+    // Browsers reject Access-Control-Allow-Origin: * with credentials — that
+    // restriction exists to prevent credentialed cross-origin reads from any
+    // site. Pre-2.22 arc silently "fixed" the combo by reflecting the request
+    // Origin (origin: true), which reintroduces the exact vulnerability the
+    // wildcard ban prevents. Now it throws at boot with a fix hint.
+    await expect(buildApp({ origin: "*", credentials: true })).rejects.toThrow(
+      /origin: '\*'.*credentials: true/s,
+    );
   });
 
   it('credentials: false with origin: "*" should return literal *', async () => {

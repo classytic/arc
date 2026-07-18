@@ -121,6 +121,13 @@ declare module "fastify" {
        * ```
        */
       middleware: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+      /**
+       * The resolved backing store. Exposed so non-HTTP executors (MCP
+       * tools via `mcpPlugin`'s execution wiring, jobs, workflows) can run
+       * the same check → lock → execute → record protocol against the same
+       * backend. `undefined` when the plugin is disabled.
+       */
+      store?: import("./stores/interface.js").IdempotencyStore;
     };
   }
 }
@@ -168,6 +175,10 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
       invalidate: async () => {},
       has: async () => false,
       middleware: async () => {},
+      // No store when disabled — MCP wiring reads this and skips
+      // idempotent execution rather than half-working against a store
+      // the HTTP surface isn't using.
+      store: undefined,
     });
     fastify.decorateRequest("idempotencyKey", undefined);
     fastify.decorateRequest("idempotencyReplayed", false);
@@ -353,6 +364,9 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
       return !!result;
     },
     middleware: idempotencyMiddleware,
+    // Shared backend for non-HTTP executors (MCP tools, jobs) — same
+    // store, same TTL/lock semantics, different fingerprint namespace.
+    store,
   });
 
   // Cache the response body on 2xx via preSerialization.

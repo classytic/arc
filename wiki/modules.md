@@ -317,7 +317,3 @@ can't split into services, modules can.
 - arc CLI `generate module` (planned): package skeleton + module factory +
   testkit test.
 - Deps typed and explicit → a consumer reads ONE type to integrate.
-
-```
-
-```

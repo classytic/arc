@@ -28,20 +28,33 @@
  * internal subpath.
  */
 
+import { createHash, randomUUID } from "node:crypto";
+import type { IdempotencyStore } from "../../idempotency/stores/interface.js";
+import { createIdempotencyResult } from "../../idempotency/stores/interface.js";
+import type { FieldPermissionMap } from "../../permissions/fields.js";
 import type { PermissionCheck } from "../../permissions/types.js";
 import type { RequestScope } from "../../scope/types.js";
+import type { ServerAccessor } from "../../types/handlers.js";
 import type { IControllerResponse } from "../../types/index.js";
 import {
   buildRequestContext as buildRequestContextInternal,
+  type McpContextExtras,
   type McpOperation,
 } from "./buildRequestContext.js";
 import {
+  applyMcpReadMasking,
   evaluatePermission,
   permissionDeniedResult,
   toCallToolError,
   toCallToolResult,
 } from "./tool-helpers.js";
-import type { CallToolResult, McpAuthResult, ToolContext, ToolDefinition } from "./types.js";
+import type {
+  CallToolResult,
+  McpAuthResult,
+  McpExecutionWiring,
+  ToolContext,
+  ToolDefinition,
+} from "./types.js";
 
 export {
   buildRequestContext,
@@ -80,7 +93,96 @@ export interface InvokeControllerOptions {
    * action handler reached through a `string` route handler).
    */
   readonly methodName?: string;
+  /**
+   * Resource field-permission map (`ResourceConfig.fields`). When present,
+   * field-level READ permissions are applied to the response payload before
+   * serialization — the same masking the HTTP wire and realtime frames get.
+   * Omit only for tools whose output carries no resource documents.
+   */
+  readonly fields?: FieldPermissionMap;
+  /**
+   * App-level execution wiring (hooks system, event bus, audit, logger,
+   * idempotency store). When present, the synthetic request context carries
+   * `metadata.arc` + `server` exactly like HTTP's `createRequestContext` —
+   * so resource hooks run, CRUD events publish, and `ctx.server.*` works.
+   * `mcpPlugin` supplies this automatically; omit for dispatch-only calls.
+   */
+  readonly wiring?: McpExecutionWiring;
+  /** Resource `schemaOptions` — rides on `metadata.arc` like HTTP. */
+  readonly schemaOptions?: unknown;
+  /** Resource `idField` — rides on `metadata.arc` for `getEntityIdField()`. */
+  readonly idField?: string;
+  /**
+   * Caller-supplied idempotency key (mutations only). Requires
+   * `wiring.idempotencyStore`; the executor then runs the same
+   * check → lock → execute → record → replay protocol the HTTP
+   * idempotency plugin runs, keyed by tool + input + caller identity.
+   * A concurrent call with the same key gets a 409 `arc.idempotency_conflict`.
+   */
+  readonly idempotencyKey?: string;
 }
+
+/**
+ * Assemble the {@link McpContextExtras} for a controller invocation from
+ * resource-scoped metadata + app-level wiring. Mirrors what
+ * `buildArcDecorator` (metadata.arc) and `createRequestContext` (server
+ * accessor) assemble on the HTTP path.
+ */
+function buildContextExtras(options: InvokeControllerOptions): McpContextExtras | undefined {
+  const { wiring, resourceName, permissions, fields, schemaOptions, idField } = options;
+  if (!wiring) return undefined;
+  return {
+    arc: {
+      resourceName,
+      schemaOptions,
+      permissions,
+      hooks: wiring.hooks,
+      events: wiring.events,
+      fields,
+      idField,
+    },
+    server: {
+      events: wiring.events as ServerAccessor["events"],
+      audit: wiring.audit as ServerAccessor["audit"],
+      log: wiring.log as ServerAccessor["log"],
+    },
+  };
+}
+
+/**
+ * Stable fingerprint of a tool invocation — sorted-key JSON, hashed.
+ * Scopes an idempotency key to (resource, action, input, caller) so a
+ * reused key with DIFFERENT input is a fresh execution, matching the HTTP
+ * plugin's method+url+bodyHash+user fingerprint semantics.
+ */
+function invocationFingerprint(
+  resourceName: string,
+  actionName: string,
+  input: Record<string, unknown>,
+  session: McpAuthResult | null,
+): string {
+  const sortKeys = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(sortKeys);
+    if (value !== null && typeof value === "object") {
+      return Object.fromEntries(
+        Object.keys(value as Record<string, unknown>)
+          .sort()
+          .map((k) => [k, sortKeys((value as Record<string, unknown>)[k])]),
+      );
+    }
+    return value;
+  };
+  const inputHash = createHash("sha256")
+    .update(JSON.stringify(sortKeys(input)))
+    .digest("hex")
+    .substring(0, 16);
+  const caller = session?.userId ?? session?.clientId ?? "anon";
+  return `mcp:${resourceName}:${actionName}:${inputHash}:u=${caller}`;
+}
+
+/** TTLs matching the HTTP idempotency plugin's defaults. */
+const MCP_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+const MCP_IDEMPOTENCY_LOCK_MS = 10_000;
 
 /**
  * Invoke a controller method through the MCP synthetic-context path.
@@ -120,7 +222,16 @@ export async function invokeController(
   input: Record<string, unknown>,
   options: InvokeControllerOptions,
 ): Promise<CallToolResult> {
-  const { session, resourceName, actionName = op, permissions, methodName = op } = options;
+  const {
+    session,
+    resourceName,
+    actionName = op,
+    permissions,
+    methodName = op,
+    fields,
+    wiring,
+    idempotencyKey,
+  } = options;
   const ctrl = controller as Record<string, ControllerMethod | undefined>;
 
   try {
@@ -149,14 +260,62 @@ export async function invokeController(
       });
     }
 
-    const reqCtx = buildRequestContextInternal(
-      input,
-      session,
-      op,
-      permResult?.filters as Record<string, unknown> | undefined,
-      permResult?.scope as RequestScope | undefined,
-    );
-    return toCallToolResult(await method(reqCtx));
+    const dispatch = async (): Promise<CallToolResult> => {
+      const reqCtx = buildRequestContextInternal(
+        input,
+        session,
+        op,
+        permResult?.filters as Record<string, unknown> | undefined,
+        permResult?.scope as RequestScope | undefined,
+        buildContextExtras(options),
+      );
+      const response = await method(reqCtx);
+      // Field-read masking — same policy step the HTTP adapter runs in
+      // `sendControllerResponse`. Applied AFTER dispatch so hooks/pipeline
+      // see full documents, masked only at the serialization boundary.
+      const data = applyMcpReadMasking(response.data, {
+        fields,
+        session,
+        scopeOverride: permResult?.scope as RequestScope | undefined,
+      });
+      return toCallToolResult(data === response.data ? response : { ...response, data });
+    };
+
+    // ── Idempotent execution (key + store present) ──
+    // Same protocol as the HTTP plugin: cached → replay; locked → 409;
+    // else lock → execute → record success → unlock. Success results are
+    // recorded with the same 24h TTL; error results are never cached so a
+    // retry after a transient failure re-executes.
+    const store = wiring?.idempotencyStore as IdempotencyStore | undefined;
+    if (idempotencyKey && store) {
+      const fullKey = `${idempotencyKey}:${invocationFingerprint(resourceName, actionName, input, session)}`;
+      const cached = await store.get(fullKey);
+      if (cached) return cached.body as CallToolResult;
+
+      const lockId = randomUUID();
+      const locked = await store.tryLock(fullKey, lockId, MCP_IDEMPOTENCY_LOCK_MS);
+      if (!locked) {
+        return toCallToolError({
+          code: "arc.idempotency_conflict",
+          message: "A call with this idempotency key is already in progress",
+          status: 409,
+        });
+      }
+      try {
+        const result = await dispatch();
+        if (!result.isError) {
+          await store.set(
+            fullKey,
+            createIdempotencyResult(200, result, {}, MCP_IDEMPOTENCY_TTL_MS),
+          );
+        }
+        return result;
+      } finally {
+        await store.unlock(fullKey, lockId);
+      }
+    }
+
+    return await dispatch();
   } catch (err) {
     return toCallToolError(err instanceof Error ? err : new Error(String(err)));
   }

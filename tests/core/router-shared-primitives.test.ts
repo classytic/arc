@@ -18,12 +18,13 @@ import {
   buildAuthMiddleware,
   buildAuthMiddlewareForPermissions,
   buildPermissionContext,
-  buildPreHandlerChain,
   buildRateLimitConfig,
+  buildRouteHooks,
   requiresAuthentication,
   resolvePipelineSteps,
   resolveRoutePreHandlers,
   resolveRouterPluginMw,
+  routeHookOptions,
   selectPluginMw,
 } from "../../src/core/routerShared.js";
 import { allowPublic, requireAuth, requireRoles } from "../../src/permissions/index.js";
@@ -227,10 +228,10 @@ describe("resolveRouterPluginMw", () => {
 });
 
 // ============================================================================
-// buildPreHandlerChain — canonical order
+// buildRouteHooks — canonical placement across onRequest + preHandler
 // ============================================================================
 
-describe("buildPreHandlerChain — canonical order", () => {
+describe("buildRouteHooks — canonical hook placement", () => {
   const arcDecorator = vi.fn(() => Promise.resolve());
   const authMw = vi.fn();
   const permissionMw = vi.fn();
@@ -240,8 +241,8 @@ describe("buildPreHandlerChain — canonical order", () => {
   const custom1 = vi.fn();
   const preAuth1 = vi.fn();
 
-  it("emits canonical order: preAuth → arc → auth → perm → plugin → guards → custom", () => {
-    const chain = buildPreHandlerChain({
+  it("splits canonically: onRequest = preAuth → arc → auth; preHandler = perm → plugin → guards → custom", () => {
+    const hooks = buildRouteHooks({
       preAuth: [preAuth1],
       arcDecorator,
       authMw,
@@ -250,20 +251,14 @@ describe("buildPreHandlerChain — canonical order", () => {
       routeGuards: [guard1, guard2],
       customMws: [custom1],
     });
-    expect(chain).toEqual([
-      preAuth1,
-      arcDecorator,
-      authMw,
-      permissionMw,
-      pluginMw,
-      guard1,
-      guard2,
-      custom1,
-    ]);
+    // Auth at onRequest: 401 BEFORE body parse + AJV — cost and
+    // schema-probing surface. Everything body-aware stays preHandler.
+    expect(hooks.onRequest).toEqual([preAuth1, arcDecorator, authMw]);
+    expect(hooks.preHandler).toEqual([permissionMw, pluginMw, guard1, guard2, custom1]);
   });
 
-  it("drops null and undefined slots (no stray slots in the chain)", () => {
-    const chain = buildPreHandlerChain({
+  it("drops null and undefined slots (no stray slots in either chain)", () => {
+    const hooks = buildRouteHooks({
       arcDecorator,
       authMw: null,
       permissionMw: undefined,
@@ -271,29 +266,36 @@ describe("buildPreHandlerChain — canonical order", () => {
       routeGuards: [guard1, null, undefined],
       customMws: [undefined, custom1],
     });
-    expect(chain).toEqual([arcDecorator, guard1, custom1]);
+    expect(hooks.onRequest).toEqual([arcDecorator]);
+    expect(hooks.preHandler).toEqual([guard1, custom1]);
   });
 
-  it("arcDecorator is always present — it is the contract that stamps req.arc", () => {
-    const chain = buildPreHandlerChain({ arcDecorator });
-    expect(chain).toEqual([arcDecorator]);
+  it("arcDecorator is always present in onRequest — the contract that stamps req.arc", () => {
+    const hooks = buildRouteHooks({ arcDecorator });
+    expect(hooks.onRequest).toEqual([arcDecorator]);
+    expect(hooks.preHandler).toEqual([]);
   });
 
-  it("enforces that auth runs AFTER arcDecorator but BEFORE plugin middleware", () => {
+  it("enforces auth AFTER arcDecorator (onRequest) and BEFORE plugin middleware (preHandler)", () => {
     // Regression: cache/idempotency middleware MUST run AFTER auth so
     // user-scoped cache keys and idempotency fingerprints incorporate
-    // `request.user`. Before the split, a future refactor could have
-    // reordered this pair without a test noticing.
-    const chain = buildPreHandlerChain({
+    // `request.user`. Auth lives at onRequest, plugin middleware at
+    // preHandler — Fastify runs the entire onRequest stage first, so the
+    // lifecycle itself now enforces the pair's order.
+    const hooks = buildRouteHooks({
       arcDecorator,
       authMw,
       pluginMw,
     });
-    const arcIdx = chain.indexOf(arcDecorator);
-    const authIdx = chain.indexOf(authMw);
-    const pluginIdx = chain.indexOf(pluginMw);
-    expect(arcIdx).toBeLessThan(authIdx);
-    expect(authIdx).toBeLessThan(pluginIdx);
+    expect(hooks.onRequest.indexOf(arcDecorator)).toBeLessThan(hooks.onRequest.indexOf(authMw));
+    expect(hooks.onRequest).toContain(authMw);
+    expect(hooks.preHandler).toContain(pluginMw);
+  });
+
+  it("routeHookOptions omits empty arrays entirely", () => {
+    const opts = routeHookOptions(buildRouteHooks({ arcDecorator }));
+    expect(opts.onRequest).toHaveLength(1);
+    expect(opts).not.toHaveProperty("preHandler");
   });
 });
 

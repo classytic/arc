@@ -166,6 +166,42 @@ export interface CrudDescriptionMeta {
  */
 export type CrudDescriptionOverride = string | ((meta: CrudDescriptionMeta) => string);
 
+/**
+ * Execution wiring for MCP tools — the app-level services HTTP requests
+ * receive via Fastify decorators (`fastify.arc.hooks`, `fastify.events`,
+ * `fastify.audit`, `fastify.log`, `fastify.idempotency`) and MCP's
+ * synthetic-context path historically dropped.
+ *
+ * When present, tool handlers thread it into the request context so the
+ * controller pipeline achieves FULL HTTP parity: resource hooks run
+ * (before/around/after), the arcCorePlugin after-hook publishes
+ * `<resource>.<op>d` events (→ realtime feeds, webhooks, event-driven
+ * cache invalidation all see MCP-originated mutations), `ctx.server.*`
+ * works inside handlers, and mutating CRUD tools accept an optional
+ * `_idempotencyKey` input for retry-safe execution.
+ *
+ * `mcpPlugin` builds this automatically from its Fastify instance (lazy
+ * getters — decorator registration order doesn't matter). Standalone
+ * `resourceToTools()` / `createMcpServer()` callers pass their own, or
+ * omit it to keep the legacy dispatch-only behavior.
+ */
+export interface McpExecutionWiring {
+  /** Shared `HookSystem` — `fastify.arc.hooks`. */
+  readonly hooks?: unknown;
+  /** Event bus decorator — `fastify.events`. */
+  readonly events?: unknown;
+  /** Audit decorator — `fastify.audit`. */
+  readonly audit?: unknown;
+  /** Structured logger — `fastify.log`. */
+  readonly log?: unknown;
+  /**
+   * Idempotency store (the `IdempotencyStore` contract from
+   * `@classytic/arc/idempotency`). Presence advertises `_idempotencyKey`
+   * on mutating CRUD tools and enables executor-level check/lock/replay.
+   */
+  readonly idempotencyStore?: unknown;
+}
+
 /** Per-resource MCP configuration overrides */
 export interface McpResourceConfig {
   /** Which CRUD operations to expose (default: all enabled on the resource) */

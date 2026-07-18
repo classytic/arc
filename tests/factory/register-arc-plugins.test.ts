@@ -7,7 +7,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerArcCore, registerArcPlugins } from "../../src/factory/registerArcPlugins.js";
-import type { CreateAppOptions } from "../../src/factory/types.js";
+import type { CreateAppOptions } from "../../src/factory/types/index.js";
 
 function createTestFastify(): FastifyInstance {
   return Fastify({ logger: false });

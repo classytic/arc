@@ -9,6 +9,7 @@ export default defineConfig({
     "src/index.ts",
     "src/core/index.ts",
     "src/sync/changelog.ts",
+    "src/usage/index.ts",
     "src/types/index.ts",
     "src/types/storage.ts",
     "src/permissions/index.ts",

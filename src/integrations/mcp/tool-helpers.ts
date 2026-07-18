@@ -12,7 +12,13 @@ import type { FastifyRequest } from "fastify";
 import { BaseController } from "../../core/BaseController.js";
 import type { ResourceDefinition } from "../../core/defineResource.js";
 import { normalizePermissionResult } from "../../permissions/applyPermissionResult.js";
+import {
+  applyFieldReadPermissions,
+  type FieldPermissionMap,
+  resolveEffectiveRoles,
+} from "../../permissions/fields.js";
 import type { PermissionCheck, PermissionResult } from "../../permissions/types.js";
+import { isElevated, isMember, type RequestScope } from "../../scope/types.js";
 import type { IControllerResponse } from "../../types/index.js";
 import { isArcError } from "../../utils/errors.js";
 import { buildScope } from "./buildRequestContext.js";
@@ -72,6 +78,58 @@ export async function evaluatePermission(
   });
 
   return normalizePermissionResult(result);
+}
+
+/**
+ * Apply field-level READ permissions to an MCP tool payload — the same
+ * masking `sendControllerResponse` applies on the HTTP wire and the
+ * realtime plugin applies per frame. Without this, a resource declaring
+ * `fields: { salary: fields.visibleTo(['admin']) }` masked salary over
+ * REST and SSE but leaked it verbatim through every MCP tool.
+ *
+ * Mirrors the HTTP adapter's semantics exactly:
+ *  - Elevated scope (platform admin) bypasses masking — consistent with
+ *    `requireOrgRole()` and `BodySanitizer` bypass logic.
+ *  - Effective roles = session roles ∪ org roles (member scope only),
+ *    via the shared `resolveEffectiveRoles`.
+ *  - `scopeOverride` (a `PermissionResult.scope`) follows the same
+ *    non-downgrade rule as `buildRequestContext`: honored only when the
+ *    session-derived scope is `public`.
+ *
+ * Handles the three payload shapes MCP tools emit: a single record, an
+ * array of records, and a paginated result object carrying an inner
+ * `data: T[]`. Scalars and `null` pass through untouched.
+ */
+export function applyMcpReadMasking<T>(
+  data: T,
+  options: {
+    fields: FieldPermissionMap | undefined;
+    session: McpAuthResult | null;
+    scopeOverride?: RequestScope;
+  },
+): T {
+  const { fields, session, scopeOverride } = options;
+  if (!fields || data === null || typeof data !== "object") return data;
+
+  const sessionScope = buildScope(session);
+  const scope: RequestScope =
+    scopeOverride && sessionScope.kind === "public" ? scopeOverride : sessionScope;
+  if (isElevated(scope)) return data;
+
+  const roles = resolveEffectiveRoles(session?.roles ?? [], isMember(scope) ? scope.orgRoles : []);
+  const maskItem = <I>(item: I): I =>
+    item !== null && typeof item === "object" && !Array.isArray(item)
+      ? (applyFieldReadPermissions(item as Record<string, unknown>, fields, roles) as I)
+      : item;
+
+  if (Array.isArray(data)) return data.map(maskItem) as T;
+
+  // Paginated list result — kits return `{ data: T[], ...pageMeta }`.
+  const inner = (data as Record<string, unknown>).data;
+  if (Array.isArray(inner)) {
+    return { ...data, data: inner.map(maskItem) };
+  }
+  return maskItem(data);
 }
 
 /**

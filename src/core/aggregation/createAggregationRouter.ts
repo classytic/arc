@@ -16,13 +16,7 @@
  * frontend code reads dashboards with the same envelope across kits.
  */
 
-import type {
-  FastifyReply,
-  FastifyRequest,
-  FastifySchema,
-  preHandlerHookHandler,
-  RouteHandlerMethod,
-} from "fastify";
+import type { FastifyReply, FastifyRequest, FastifySchema, RouteHandlerMethod } from "fastify";
 import type { FieldPermissionMap } from "../../permissions/fields.js";
 import type {
   PermissionCheck,

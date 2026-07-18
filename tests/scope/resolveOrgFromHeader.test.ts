@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { resolveOrgFromHeader } from "../../src/scope/resolveOrgFromHeader.js";
+import {
+  OrgAccessDeniedError,
+  UnauthorizedError,
+  ValidationError,
+} from "../../src/utils/errors.js";
 
 function mockReq(overrides: Record<string, unknown> = {}) {
   return {
@@ -31,24 +36,38 @@ describe("resolveOrgFromHeader()", () => {
     expect(resolveMembership).not.toHaveBeenCalled();
   });
 
-  it("returns 401 when scope is public", async () => {
+  it("rejects a REPEATED org header with 400 instead of picking a value", async () => {
+    // Duplicate tenant-selection headers are a smuggling signal — neither
+    // value can be trusted to steer the membership check.
+    resolveMembership.mockClear();
+    const req = mockReq({
+      headers: { "x-organization-id": ["org-1", "org-evil"] },
+      scope: { kind: "authenticated", userId: "u1" },
+      user: { id: "u1" },
+    });
+    await expect(hook(req, mockReply())).rejects.toThrow(ValidationError);
+    expect(resolveMembership).not.toHaveBeenCalled();
+  });
+
+  // 2.23 — the hook THROWS ArcError subclasses (canonical ErrorContract via
+  // the global error handler) instead of hand-rolling the legacy
+  // `{ success, error, message }` envelope. Status codes ride on the error.
+
+  it("throws 401 UnauthorizedError when scope is public", async () => {
     const req = mockReq({
       headers: { "x-organization-id": "org-1" },
       scope: { kind: "public" },
     });
-    const reply = mockReply();
-    await hook(req, reply);
-    expect((reply as any).code).toHaveBeenCalledWith(401);
+    await expect(hook(req, mockReply())).rejects.toThrow(UnauthorizedError);
+    await expect(hook(req, mockReply())).rejects.toMatchObject({ statusCode: 401 });
   });
 
-  it("returns 401 when no scope", async () => {
+  it("throws 401 UnauthorizedError when no scope", async () => {
     const req = mockReq({
       headers: { "x-organization-id": "org-1" },
       scope: undefined,
     });
-    const reply = mockReply();
-    await hook(req, reply);
-    expect((reply as any).code).toHaveBeenCalledWith(401);
+    await expect(hook(req, mockReply())).rejects.toThrow(UnauthorizedError);
   });
 
   it("skips if already elevated (does not downgrade)", async () => {
@@ -63,27 +82,25 @@ describe("resolveOrgFromHeader()", () => {
     expect((req as any).scope.kind).toBe("elevated");
   });
 
-  it("returns 401 when user is missing", async () => {
+  it("throws 401 UnauthorizedError when user is missing", async () => {
     const req = mockReq({
       headers: { "x-organization-id": "org-1" },
       scope: { kind: "authenticated", userId: "u1" },
       user: undefined,
     });
-    const reply = mockReply();
-    await hook(req, reply);
-    expect((reply as any).code).toHaveBeenCalledWith(401);
+    await expect(hook(req, mockReply())).rejects.toThrow(UnauthorizedError);
   });
 
-  it("returns 403 when user is not a member", async () => {
+  it("throws 403 OrgAccessDeniedError when user is not a member", async () => {
     resolveMembership.mockResolvedValue(null);
     const req = mockReq({
       headers: { "x-organization-id": "org-1" },
       scope: { kind: "authenticated", userId: "u1" },
       user: { id: "u1" },
     });
-    const reply = mockReply();
-    await hook(req, reply);
-    expect((reply as any).code).toHaveBeenCalledWith(403);
+    await expect(hook(req, mockReply())).rejects.toThrow(OrgAccessDeniedError);
+    resolveMembership.mockResolvedValue(null);
+    await expect(hook(req, mockReply())).rejects.toMatchObject({ statusCode: 403 });
   });
 
   it("sets scope to member when membership resolved", async () => {
@@ -101,6 +118,30 @@ describe("resolveOrgFromHeader()", () => {
       organizationId: "org-1",
       orgRoles: ["admin"],
     });
+  });
+
+  it("preserves adapter-resolved scope.userRoles when upgrading to member", async () => {
+    // The JWT adapter normalized roles from the token onto the scope —
+    // re-deriving from `user.role` alone (pre-2.23) dropped them.
+    resolveMembership.mockResolvedValue({ roles: ["org-admin"] });
+    const req = mockReq({
+      headers: { "x-organization-id": "org-1" },
+      scope: { kind: "authenticated", userId: "u1", userRoles: ["support", "auditor"] },
+      user: { id: "u1" }, // note: no user.role at all
+    });
+    await hook(req, mockReply());
+    expect((req as any).scope.userRoles).toEqual(["support", "auditor"]);
+  });
+
+  it("falls back to user.role when the scope carries no roles", async () => {
+    resolveMembership.mockResolvedValue({ roles: ["member"] });
+    const req = mockReq({
+      headers: { "x-organization-id": "org-1" },
+      scope: { kind: "authenticated", userId: "u1", userRoles: [] },
+      user: { id: "u1", role: "editor,reviewer" },
+    });
+    await hook(req, mockReply());
+    expect((req as any).scope.userRoles).toEqual(["editor", "reviewer"]);
   });
 
   it("supports custom header name", async () => {

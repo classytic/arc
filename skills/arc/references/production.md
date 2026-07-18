@@ -283,6 +283,21 @@ import { ssePlugin } from '@classytic/arc/plugins';
 await fastify.register(ssePlugin, { requireAuth: true, orgScoped: true });
 ```
 
+### Realtime resource change feed (2.22)
+
+`arcPlugins: { realtime: true }` → `GET /realtime/:resource` (resource NAME) and
+multiplexed `GET /realtime?resources=a,b,c` (cap 20): SSE change feed gated by the
+resource's own `list` permission with per-event row filtering, tenant guard, and
+field masking. Client = plain `EventSource` with `?token=`. No replay — reconnect
+refetches the list. Choosing: per-user resource views → realtime; bidirectional/geo
+→ `integrations/websocket` (its CRUD bridge is org-coarse — never expose
+row-permissioned resources through it); event firehose → sse. Massive fan-out
+(viral feeds, live scores) → publish once to an edge layer (Ably/Centrifugo/CF)
+via `app.events.subscribe(...)`; full tiering guide: docs/production-ops/realtime.mdx.
+
+```typescript
+```
+
 **Fail-closed auth:** When `requireAuth: true` (default), throws at registration if `fastify.authenticate` is missing — prevents exposing SSE without auth.
 
 **Org-scoped:** When `orgScoped: true`, events with `organizationId` are only sent to clients whose `request.scope` matches. Prevents cross-tenant leakage.
@@ -694,3 +709,26 @@ defineResource({
 **Compensation errors**: collected in `result.compensationErrors[]` without stopping rollback. **Context**: mutable `Record<string, unknown>` shared across all steps.
 
 **Scope**: In-process primitive. Process crash = no compensation. For durable distributed workflows, use Temporal, Inngest, or `@classytic/streamline`.
+
+## Multi-Domain Deployment
+
+Arc supports multi-domain applications through COMPOSITION — it deliberately owns no domain routing, domain databases, certificate provisioning, or wildcard-domain management. The deployment shape:
+
+```
+api.example.com       → arc API
+auth.example.com      → Better Auth (or auth module)
+events.example.com    → SSE/WebSocket edge tier
+admin.example.com     → frontend
+customer-domain.com   → gateway/domain resolver → tenant context
+```
+
+The primitives are already there: CORS allowlists, Better Auth trusted origins, tenant scope, request context, `trustProxy` configuration, resource/module prefixes.
+
+**Custom tenant domains**: resolve the domain at a gateway or an early host plugin, then convert it into a trusted `RequestScope` — a small host-provided resolver is enough:
+
+```typescript
+// onRequest, before auth: map host → tenant hint
+const tenant = await resolveTenantDomain(request.hostname); // → { organizationId } | null
+```
+
+Then validate membership or service scope through the NORMAL permission path. **Never treat raw `Host` / `X-Forwarded-Host` as tenant authorization by itself** — behind a misconfigured proxy those are attacker-controlled (see the `trustProxy` boot warning). The header selects the tenant *candidate*; membership resolution authorizes it — same rule `resolveOrgFromHeader` follows for `x-organization-id`.

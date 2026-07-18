@@ -121,6 +121,9 @@ export class ResourceRegistry {
       disabledRoutes: resource.disabledRoutes ? [...resource.disabledRoutes] : undefined,
       openApiSchemas: options.openApiSchemas,
       fieldPermissions: extractFieldPermissions(resource.fields),
+      // Live map for request-time masking (realtime feed); metadata twin above.
+      fields:
+        resource.fields && Object.keys(resource.fields).length > 0 ? resource.fields : undefined,
       pipelineSteps: extractPipelineSteps(resource.pipe),
       rateLimit: resource.rateLimit,
       audit: resource.audit,

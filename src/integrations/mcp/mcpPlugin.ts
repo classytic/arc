@@ -114,10 +114,43 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
   });
 
   // ── 3. Generate tool definitions ──
+  //
+  // Execution wiring — the app-level services HTTP requests get via Fastify
+  // decorators. Lazy getters so registration ORDER doesn't matter for
+  // execution (hooks/events/audit resolve at call time even when mcpPlugin
+  // registers before the events plugin). The ONE order-sensitive piece is
+  // `_idempotencyKey` schema advertising: input schemas bake at generation,
+  // so register `idempotencyPlugin` BEFORE `mcpPlugin` to surface the field
+  // (execution-side idempotency still works either way via the getter).
+  const fastifyAny = fastify as unknown as {
+    arc?: { hooks?: unknown };
+    events?: unknown;
+    audit?: unknown;
+    idempotency?: { store?: unknown };
+  };
+  const wiring = {
+    get hooks() {
+      return fastifyAny.arc?.hooks;
+    },
+    get events() {
+      return fastifyAny.events;
+    },
+    get audit() {
+      return fastifyAny.audit;
+    },
+    get log() {
+      return fastify.log;
+    },
+    get idempotencyStore() {
+      return fastifyAny.idempotency?.store;
+    },
+  };
+
   const overrides = options.overrides ?? {};
   const allTools = enabledResources.flatMap((r) => {
     const resOverrides = overrides[r.name] ?? {};
     return resourceToTools(r, {
+      wiring,
       ...resOverrides,
       toolNamePrefix: resOverrides.toolNamePrefix ?? options.toolNamePrefix,
     });

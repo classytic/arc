@@ -92,6 +92,35 @@ describe("defineEvent()", () => {
 // EventRegistry
 // ============================================================================
 
+describe("validatePayload — JSON Schema `integer` type", () => {
+  // Regression: `typeof 42` is 'number', never 'integer'. The raw string
+  // comparison rejected EVERY integer-typed field, so integer money schemas
+  // (minor units) failed validation on all publishes.
+  const event = defineEvent({
+    name: "money.moved",
+    schema: {
+      type: "object",
+      required: ["amount"],
+      properties: { amount: { type: "integer" }, note: { type: "string" } },
+    },
+  });
+
+  it("accepts integer numbers for integer-typed fields", () => {
+    const registry = createEventRegistry();
+    registry.register(event);
+    expect(registry.validate("money.moved", { amount: 114999 }).valid).toBe(true);
+    expect(registry.validate("money.moved", { amount: 0 }).valid).toBe(true);
+    expect(registry.validate("money.moved", { amount: -250 }).valid).toBe(true);
+  });
+
+  it("rejects fractional numbers and non-numbers for integer-typed fields", () => {
+    const registry = createEventRegistry();
+    registry.register(event);
+    expect(registry.validate("money.moved", { amount: 1149.99 }).valid).toBe(false);
+    expect(registry.validate("money.moved", { amount: "114999" }).valid).toBe(false);
+  });
+});
+
 describe("EventRegistry", () => {
   it("should register events and provide catalog", () => {
     const registry = createEventRegistry();

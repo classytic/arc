@@ -69,8 +69,14 @@ export interface JWTPayload {
 }
 
 /**
- * Standard API response envelope — `{ success, data?, error?, message?, meta? }`.
- * Used by Arc's default response shape.
+ * @deprecated LEGACY envelope — arc's actual wire contract has not used
+ * `{ success, data, error, message }` for a long time. Successes return
+ * DIRECT data (see `IControllerResponse` — `{ data, meta?, status?, headers? }`
+ * flattened onto the wire), and errors return the canonical `ErrorContract`
+ * (`{ code, message, status, details? }` from `@classytic/repo-core/errors`)
+ * emitted by the global error handler. Keeping this type visible teaches new
+ * applications and AI agents to generate an obsolete shape. Scheduled for
+ * removal in v3. Do NOT build new response handling against it.
  */
 export interface ApiResponse<T = unknown> {
   success: boolean;

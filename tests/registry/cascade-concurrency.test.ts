@@ -19,7 +19,7 @@ import {
   cascadeDeleteForOrganization,
 } from "../../src/registry/cascadeOrgDelete.js";
 import { ResourceRegistry } from "../../src/registry/ResourceRegistry.js";
-import type { OnTenantDeleteConfig } from "../../src/types/resource.js";
+import type { OnTenantDeleteConfig } from "../../src/types/resource/index.js";
 
 const ORG = "test-org";
 

@@ -238,6 +238,16 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   const presetConfig = options.preset ? getPreset(options.preset) : {};
   const config: CreateAppOptions = { ...presetConfig, ...options };
 
+  // The production preset ships `trustProxy: true` (trust EVERY proxy) so
+  // apps behind one LB work out of the box — but if the app is reachable
+  // without the proxy, direct clients can spoof `X-Forwarded-*` (rate-limit
+  // bypass via fake IPs, wrong audit IPs, forged proto/host). A framework
+  // can't know the host's proxy topology, so we warn ONLY when the host
+  // inherited the permissive default without deciding: an explicit
+  // `trustProxy` (true, hop count, CIDR, or function) silences this.
+  const inheritedPermissiveTrustProxy =
+    options.preset === "production" && options.trustProxy === undefined;
+
   // ── 1.5 Resolve + order the module graph — pure work (dynamic imports +
   // stable topological sort), hoisted BEFORE any side-effecting phase: a
   // broken composition root (dup name, missing/self dep, cycle) now aborts
@@ -338,6 +348,17 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
   for (const warning of deferredWarnings) {
     fastify.log.warn(warning);
+  }
+
+  if (inheritedPermissiveTrustProxy) {
+    fastify.log.warn(
+      "[arc] preset: 'production' defaults to trustProxy: true (trust EVERY proxy). " +
+        "If this app is reachable without your load balancer, clients can spoof " +
+        "X-Forwarded-For/Proto (rate-limit bypass, wrong audit IPs, forged protocol). " +
+        "Silence this by setting trustProxy explicitly: a hop count (trustProxy: 1), " +
+        "a CIDR allow-list ('10.0.0.0/8'), a resolver function, or true if you accept the trade-off. " +
+        "v3 flips this preset default to false — set it now to be upgrade-proof.",
+    );
   }
 
   // TypeBox type provider (opt-in)

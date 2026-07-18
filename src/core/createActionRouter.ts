@@ -41,13 +41,7 @@
  * ```
  */
 
-import type {
-  FastifyReply,
-  FastifyRequest,
-  FastifySchema,
-  preHandlerHookHandler,
-  RouteHandlerMethod,
-} from "fastify";
+import type { FastifyReply, FastifyRequest, FastifySchema, RouteHandlerMethod } from "fastify";
 
 /**
  * Local projection of `request.validationError` — Fastify types this as

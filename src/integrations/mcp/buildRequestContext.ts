@@ -6,7 +6,9 @@
  * as REST requests (AccessControl, BodySanitizer, QueryResolver, HookSystem).
  */
 
+import { buildRequestScopeProjection } from "../../scope/projection.js";
 import type { RequestScope } from "../../scope/types.js";
+import type { ServerAccessor } from "../../types/handlers.js";
 import type { IRequestContext } from "../../types/index.js";
 import type { McpAuthResult } from "./types.js";
 
@@ -15,6 +17,35 @@ import type { McpAuthResult } from "./types.js";
 // ============================================================================
 
 export type McpOperation = "list" | "get" | "create" | "update" | "delete" | "action";
+
+/**
+ * Optional context extras — the pieces of `IRequestContext` that HTTP's
+ * `createRequestContext` assembles from Fastify decorators and the MCP
+ * synthetic path historically DROPPED. Without them, controller code that
+ * reads `metadata.arc.hooks` (the whole hook system — including the
+ * arcCorePlugin after-hook that publishes `<resource>.<op>d` events) or
+ * `ctx.server.events` silently no-ops on MCP calls: agents could mutate
+ * records without hooks firing, events publishing, realtime feeds updating,
+ * or webhooks dispatching. Thread these through `invokeController` /
+ * `resourceToTools({ wiring })` to restore full HTTP ↔ MCP parity.
+ */
+export interface McpContextExtras {
+  /**
+   * Resource wiring — becomes `metadata.arc`, the same frozen shape
+   * `buildArcDecorator` stamps on HTTP requests (`ArcRouteMeta`).
+   */
+  arc?: {
+    readonly resourceName: string;
+    readonly schemaOptions?: unknown;
+    readonly permissions?: unknown;
+    readonly hooks?: unknown;
+    readonly events?: unknown;
+    readonly fields?: unknown;
+    readonly idField?: string;
+  };
+  /** Server accessor — `ctx.server.events/audit/log`, mirroring HTTP. */
+  server?: ServerAccessor;
+}
 
 // ============================================================================
 // Main
@@ -44,6 +75,7 @@ export function buildRequestContext(
   operation: McpOperation,
   policyFilters?: Record<string, unknown>,
   scopeOverride?: RequestScope,
+  extras?: McpContextExtras,
 ): IRequestContext {
   const sessionScope = buildScope(auth);
   // Honor scopeOverride only when session is still public (same rule as
@@ -59,7 +91,19 @@ export function buildRequestContext(
     user: user as IRequestContext["user"],
     headers: {} as Record<string, string | undefined>,
     context: {},
-    metadata: { _scope: scope, _policyFilters: policyFilters ?? {} },
+    // First-class projection — same lift HTTP's createRequestContext does,
+    // so controller overrides reading `ctx.scope?.organizationId` behave
+    // identically on both surfaces.
+    scope: buildRequestScopeProjection(scope),
+    metadata: {
+      _scope: scope,
+      _policyFilters: policyFilters ?? {},
+      // Resource wiring — read by BaseCrudController.getHooks() and
+      // sendControllerResponse's HTTP twin. Presence unlocks hooks (and
+      // through the arcCorePlugin after-hook, CRUD event publishing).
+      ...(extras?.arc ? { arc: extras.arc } : {}),
+    },
+    ...(extras?.server ? { server: extras.server } : {}),
   };
 
   switch (operation) {

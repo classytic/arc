@@ -1,0 +1,146 @@
+# Realtime
+
+Live data for arc apps: the built-in change feed, when to use which push
+surface, and how to scale past a single process — up to viral-feed /
+live-scoreboard fan-out.
+
+## The realtime plugin (built-in, 2.22)
+
+One flag gives every resource a permission-aware live feed:
+
+```typescript
+const app = await createApp({
+  arcPlugins: { realtime: true },
+  resources: [orderResource, invoiceResource],
+});
+```
+
+```typescript
+// Browser — plain EventSource, no SDK. `:resource` is the resource NAME.
+const feed = new EventSource(`/realtime/order?token=${jwt}`);
+feed.addEventListener('order.updated', (e) => render(JSON.parse(e.data)));
+
+// Multiplexed: N feeds over ONE connection (dashboards) — cap 20
+new EventSource(`/realtime?resources=order,invoice,task&token=${jwt}`);
+```
+
+What every subscriber gets, enforced server-side per event:
+
+- **The resource's own `list` permission** gates the connection (same 401/403 as REST).
+- **Row filters** from that permission apply to every event in-process — a
+  `requireOwnership('ownerId')` subscriber only ever receives their own records.
+- **Field-level read permissions** mask every payload (`fields.visibleTo(['admin'])`
+  fields never reach non-admin subscribers).
+- **Tenant guard** — org-scoped events never cross organizations.
+
+Frame envelope: `{ type, resource, id, data, meta: { timestamp, correlationId } }`
+with SSE-standard `id:` (for client `lastEventId` dedup) and a `retry:` hint.
+Reconnect contract: **no replay** — on reconnect, refetch the list, then resume
+the feed. The feed is a change notifier, not an event store; use the
+[outbox](./events.mdx) for guaranteed delivery.
+
+### Membership transitions — handle `<resource>.left`
+
+When an update moves a record OUT of your filtered view (owner reassigned,
+soft-deleted, moved org), the feed emits a **`<resource>.left`** frame carrying
+only `{ id }` — your UI must drop that row. This is the "row left the result
+set" signal (Firestore `removed` / ElectricSQL move-out). The ENTER direction
+needs no special handling: a record updated so it now matches arrives as a
+normal `<resource>.updated` with the full record, so you upsert it.
+
+```typescript
+const feed = new EventSource(`/realtime/order?token=${jwt}`);
+feed.addEventListener('order.created', (e) => upsert(JSON.parse(e.data)));
+feed.addEventListener('order.updated', (e) => upsert(JSON.parse(e.data))); // also = "entered"
+feed.addEventListener('order.deleted', (e) => drop(JSON.parse(e.data).id));
+feed.addEventListener('order.left',    (e) => drop(JSON.parse(e.data).id)); // left your view
+```
+
+### Permission staleness — the feed force-closes at token expiry
+
+Row filters are snapshotted at connect, so a caller whose permissions are
+revoked mid-connection would keep their old view until reconnect. arc bounds
+this: the feed **force-closes when the auth token's `exp` passes**, so the
+client reconnects and re-authorizes with fresh filters. Use short-lived tokens
+to tighten the window. For session/cookie auth with no `exp`, set
+`arcPlugins: { realtime: { maxConnectionMs } }` as the cap. (Same posture as
+Supabase's JWT-TTL-bounded Broadcast channels — snapshot auth is only safe when
+staleness is bounded.)
+
+### Filters must be self-contained
+
+The in-process matcher evaluates each event's document against the snapshotted
+filter — so a permission filter must resolve to CONCRETE values at connect
+(arc's `requireOwnership`/`requireGrant`/tenant helpers do; a grant's id list is
+materialized into a literal `$in`). A custom filter that references a related
+row NOT present in the event payload can't be evaluated in-process — model such
+rules as data on the record, or accept that only the REST list reflects them.
+
+## Which push surface?
+
+| Surface | Direction | Authorization | Use for |
+|---|---|---|---|
+| `arcPlugins.realtime` | server→client (SSE) | per-subscriber row filters + field masking | Live resource views — **the default** |
+| `@classytic/arc/integrations/websocket` | bidirectional + rooms | handshake + org-coarse rooms | Client→server messages, GeoRoom tracking, targeted push |
+| `arcPlugins.sse` | server→client (SSE) | pattern/org/custom filter | Raw domain-event firehose (internal tools) |
+
+Do **not** expose row-permissioned resources through the websocket CRUD
+bridge — its broadcast is org-coarse by design.
+
+## Scaling tiers
+
+**Tier 1 — one instance (most apps).** A Node process comfortably serves
+thousands of concurrent SSE subscribers at SaaS write rates. Costs are bounded
+by design: slow clients are destroyed (never buffered), and unmasked
+subscribers of the same event share one serialized frame.
+
+**Tier 2 — multiple instances.** Nothing new to learn: with
+`runtime: 'distributed'` (Redis Streams events transport), every instance
+receives every event, subscribers spread across instances behind your load
+balancer, and each instance fans out only to its own connections. Unlike
+WAL-polling architectures, subscriber count adds **zero database load** —
+the feed rides events from writes that already happened.
+
+**Tier 3 — massive fan-out (viral feeds, live scores, 10k–1M+ viewers).**
+This does not belong in any application process — the industry pattern is
+*publish once, fan out at the edge*, and arc's side of it is one event
+subscription:
+
+```typescript
+// afterResources() or a module — the ONLY arc code involved:
+app.events.subscribe('match.updated', async (event) => {
+  await edge.publish('scores', event.payload.data); // Ably/Centrifugo/CF/etc.
+});
+```
+
+Pick the edge by operational preference — the arc side is identical:
+
+| Edge layer | Shape | Notes |
+|---|---|---|
+| **Ably / Pusher / PubNub** | managed | Fastest path; token-auth endpoints for private channels are a tiny arc route minting the provider's capability token |
+| **Centrifugo** | self-hosted binary | Purpose-built fan-out (WS + SSE), JWT auth aligns with arc's tokens; publish via its HTTP API |
+| **Cloudflare Workers/Durable Objects** | edge compute | Publish via a Worker endpoint; DO holds the room; global anycast delivery |
+| **Redis pub/sub + stateless SSE gateway fleet** | DIY | Reuse arc's `sseStream` transport in a routes-free gateway if you want zero third parties |
+
+Design rules for Tier 3:
+
+1. **Publish the public shape.** Viral/scoreboard data is the same bytes for
+   everyone — that homogeneity is exactly what makes edge fan-out possible.
+   Strip/mask BEFORE publishing (the egress subscriber decides the shape once);
+   per-subscriber visibility is Tier 1/2's job, not the edge's.
+2. **Private channels = capability tokens.** An arc route gated by your normal
+   permissions mints the provider token (Ably `tokenRequest`, Centrifugo JWT).
+   Same pattern as arc-shares link tokens: the server stays the authority.
+3. **Idempotent consumers.** Event `meta.id` rides along — edge consumers and
+   clients dedup on it (Redis Streams is at-least-once).
+4. **Don't dual-serve.** A resource on the edge tier shouldn't also be in
+   `arcPlugins.realtime`'s `resources` allowlist — one source of truth per
+   audience.
+
+## Quick decision
+
+- Team dashboard, owner-scoped lists, admin screens → `arcPlugins.realtime`, done.
+- Same, multi-instance → add the Redis Streams transport. Still done.
+- Public scoreboard with 50k viewers → Tier 3 egress; arc publishes once.
+- Chat/cursors/typing → websocket integration (bidirectional), or a dedicated
+  collab service — not a change feed problem.

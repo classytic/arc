@@ -24,7 +24,8 @@ import type { DomainEvent } from "../events/EventTransport.js";
 import { arcLog } from "../logger/index.js";
 import type { RequestScope } from "../scope/types.js";
 import { getOrgId, PUBLIC_SCOPE } from "../scope/types.js";
-import { forwardedStreamHeaders, promoteStreamTokenToHeader } from "../utils/streaming.js";
+import { openSseStream } from "../utils/sseStream.js";
+import { promoteStreamTokenToHeader } from "../utils/streaming.js";
 
 const log = arcLog("sse");
 
@@ -102,25 +103,10 @@ const ssePlugin: FastifyPluginAsync<SSEOptions> = async (
       },
     },
     handler: async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
-      // 1. Tell Fastify we are taking over the socket
-      reply.hijack();
-
-      // Set SSE headers and flush immediately so clients detect the connection.
-      // Merge any CORS / Vary headers @fastify/cors already set (its default
-      // `onRequest` hook runs before this handler) — `writeHead` on the raw socket
-      // bypasses Fastify's onSend chain, which is where those headers would
-      // otherwise reach the wire, so a cross-origin EventSource would get blocked.
-      reply.raw.writeHead(200, {
-        "content-type": "text/event-stream",
-        "cache-control": "no-cache",
-        connection: "keep-alive",
-        "x-accel-buffering": "no", // Disable nginx buffering
-        ...forwardedStreamHeaders(reply),
-      });
-      reply.raw.flushHeaders();
-
-      // Track unsubscribers for cleanup
-      const unsubscribers: (() => void)[] = [];
+      // Transport mechanics (hijack, headers incl. CORS merge, heartbeat,
+      // backpressure fail-fast, disconnect cleanup) live in openSseStream.
+      const stream = openSseStream(request, reply, { heartbeatMs: heartbeat });
+      stream.onCleanup(() => activeConnections.delete(stream.close));
 
       // Get org context from request.scope for filtering
       const scope: RequestScope = request.scope ?? PUBLIC_SCOPE;
@@ -153,44 +139,13 @@ const ssePlugin: FastifyPluginAsync<SSEOptions> = async (
               payload: event.payload,
               meta: { id: event.meta.id, timestamp: event.meta.timestamp },
             });
-            const success = reply.raw.write(`event: ${event.type}\ndata: ${data}\n\n`);
-            if (!success) {
-              // TCP Backpressure / Slow Client Check:
-              // Terminate connection if buffer is full to prevent unbounded memory leaks via L7 proxies
-              request.raw.destroy(new Error("SSE connection terminated: slow client backpressure"));
-              cleanup();
-            }
+            stream.write(event.type, data);
           },
         );
-        unsubscribers.push(unsub);
+        stream.onCleanup(unsub);
       }
 
-      // Heartbeat to keep connection alive
-      const heartbeatTimer = setInterval(() => {
-        const success = reply.raw.write(": heartbeat\n\n");
-        if (!success) {
-          request.raw.destroy(new Error("SSE connection terminated: heartbeat backpressure"));
-          cleanup();
-        }
-      }, heartbeat);
-
-      // Cleanup function
-      const cleanup = () => {
-        clearInterval(heartbeatTimer);
-        for (const unsub of unsubscribers) {
-          unsub();
-        }
-        // End the response to release the connection
-        if (!reply.raw.writableEnded) {
-          reply.raw.end();
-        }
-        activeConnections.delete(cleanup);
-      };
-
-      activeConnections.add(cleanup);
-
-      // Cleanup on client disconnect
-      request.raw.on("close", cleanup);
+      activeConnections.add(stream.close);
     },
   };
 

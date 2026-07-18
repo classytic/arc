@@ -120,6 +120,20 @@ export async function registerArcPlugins(
     }
   }
 
+  // Realtime resource change feed (opt-in, requires events)
+  if (config.arcPlugins?.realtime) {
+    if (config.arcPlugins?.events === false) {
+      fastify.log.warn(
+        "Realtime plugin requires events plugin (arcPlugins.events). Realtime disabled.",
+      );
+    } else {
+      const { default: realtimePlugin } = await import("../plugins/realtime.js");
+      const opts = config.arcPlugins.realtime === true ? {} : config.arcPlugins.realtime;
+      await fastify.register(realtimePlugin, opts);
+      trackPlugin("arc-realtime", opts as Record<string, unknown>);
+    }
+  }
+
   // Metrics (opt-in)
   if (config.arcPlugins?.metrics) {
     const { default: metricsPlugin } = await import("../plugins/metrics.js");

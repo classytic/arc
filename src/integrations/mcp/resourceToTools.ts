@@ -48,6 +48,7 @@ import type {
   CallToolResult,
   CrudOperation,
   McpAuthResult,
+  McpExecutionWiring,
   McpResourceConfig,
   ToolAnnotations,
   ToolDefinition,
@@ -61,6 +62,13 @@ export interface ResourceToToolsConfig extends McpResourceConfig {
   toolNamePrefix?: string;
   /** Per-operation tool name overrides: `{ get: 'get_job_by_id' }` */
   names?: Partial<Record<CrudOperation, string>>;
+  /**
+   * App-level execution wiring (hooks, events, audit, log, idempotency
+   * store). `mcpPlugin` supplies this automatically from its Fastify
+   * instance; standalone callers pass their own or omit it for
+   * dispatch-only tools (no hooks/events/idempotency).
+   */
+  wiring?: McpExecutionWiring;
 }
 
 // ============================================================================
@@ -113,6 +121,7 @@ export function resourceToTools(
 
   const tools: ToolDefinition[] = [];
   const prefix = config.toolNamePrefix;
+  const wiring = config.wiring;
 
   // ── CRUD tools ──
   if (controller) {
@@ -135,6 +144,28 @@ export function resourceToTools(
         sortableFields,
       });
 
+      const inputSchema = buildInputSchema(op, fieldRules, {
+        hiddenFields,
+        readonlyFields,
+        extraHideFields: config.hideFields,
+        filterableFields,
+        allowedOperators,
+        adapterBodies,
+      });
+      // Advertise `_idempotencyKey` on mutating tools ONLY when a store is
+      // wired — advertising a no-op input would mislead agents into a
+      // retry-safety they don't have. The handler lifts it out of the
+      // payload before dispatch, so it never reaches BodySanitizer.
+      if (wiring?.idempotencyStore && op !== "list" && op !== "get") {
+        inputSchema._idempotencyKey = z
+          .string()
+          .optional()
+          .describe(
+            "Optional idempotency key — retrying with the same key and input " +
+              "replays the first successful result instead of re-executing.",
+          );
+      }
+
       tools.push({
         name,
         description: resolveCrudDescription(config.descriptions?.[op], {
@@ -147,15 +178,19 @@ export function resourceToTools(
           sortableFields,
         }),
         annotations: CRUD_ANNOTATIONS[op],
-        inputSchema: buildInputSchema(op, fieldRules, {
-          hiddenFields,
-          readonlyFields,
-          extraHideFields: config.hideFields,
-          filterableFields,
-          allowedOperators,
-          adapterBodies,
-        }),
-        handler: createCrudHandler(op, controller, resource.name, resource.permissions),
+        inputSchema,
+        handler: createCrudHandler(
+          op,
+          controller,
+          resource.name,
+          resource.permissions,
+          resource.fields,
+          {
+            wiring,
+            schemaOptions: resource.schemaOptions,
+            idField: resource.idField,
+          },
+        ),
         source: `crud:${resource.name}:${op}`,
       });
     }
@@ -292,6 +327,10 @@ export function resourceToTools(
               operationName: opName,
               permissions: route.permissions,
               pipeline: resource.pipe,
+              fields: resource.fields,
+              wiring,
+              schemaOptions: resource.schemaOptions,
+              idField: resource.idField,
             },
           ),
     });
@@ -386,6 +425,14 @@ export function resourceToTools(
           // 2.15.5 — `idLess: true` drops `id` from the strict-mode allowed
           // key set and forces `id: ""` into the handler signature.
           idLess,
+          // Field-read masking parity with the action's REST route.
+          resource.fields,
+          // Hooks/events/server parity with the action's REST route.
+          {
+            wiring,
+            schemaOptions: resource.schemaOptions,
+            idField: resource.idField,
+          },
         ),
       });
     }
@@ -438,6 +485,7 @@ export function resourceToTools(
         repo: repoForAgg,
         buildOptionsFromSession,
         prefix,
+        fields: resource.fields,
       }),
     );
   }

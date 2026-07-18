@@ -331,8 +331,17 @@ function validatePayload(payload: unknown, schema: EventSchema): ValidationResul
         if (key in record && record[key] !== undefined && record[key] !== null) {
           const expectedType = propSchema.type;
           if (expectedType) {
-            const actualType = Array.isArray(record[key]) ? "array" : typeof record[key];
-            if (expectedType !== actualType) {
+            const value = record[key];
+            const actualType = Array.isArray(value) ? "array" : typeof value;
+            // JSON Schema `integer` is a NUMERIC constraint, not a typeof:
+            // `typeof 42` is 'number', never 'integer'. Raw string
+            // comparison rejected EVERY integer-typed field (e.g.
+            // minor-units money schemas) — accept via Number.isInteger.
+            if (expectedType === "integer") {
+              if (actualType !== "number" || !Number.isInteger(value)) {
+                errors.push(`Field '${key}': expected integer, got ${actualType}`);
+              }
+            } else if (expectedType !== actualType) {
               errors.push(`Field '${key}': expected ${expectedType}, got ${actualType}`);
             }
           }

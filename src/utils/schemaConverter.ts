@@ -205,7 +205,18 @@ export function toJsonSchema(
       );
     }
     try {
-      const converted = _toJSONSchema(input, { target });
+      // `unrepresentable`: strict `throw` mode (action-route VALIDATION) keeps
+      // Zod's default `'throw'` so an unconvertible action schema stays a loud
+      // boot error — a silent contract hole there is a bug. Non-strict paths
+      // (OpenAPI doc generation, e.g. better-auth's endpoint schemas, which use
+      // `.transform`/`.refine` internally) use `'any'`: an unrepresentable node
+      // emits `{}` for THAT field instead of throwing, so the rest of the schema
+      // survives and no spurious "validation disabled" warning fires. Docs
+      // fidelity is best-effort; the transform still runs at the auth layer.
+      const converted = _toJSONSchema(input, {
+        target,
+        unrepresentable: mode === "throw" ? "throw" : "any",
+      });
       // Strip `$schema` meta — Fastify's AJV warns about unknown draft URIs under
       // strictSchema when the bundled AJV draft doesn't match. Harmless for OpenAPI too.
       if ("$schema" in converted) {

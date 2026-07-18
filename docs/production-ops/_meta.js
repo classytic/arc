@@ -3,6 +3,7 @@ export default {
   factory: 'Factory and App Bootstrap',
   plugins: 'Plugins',
   events: 'Events',
+  realtime: 'Realtime',
   workflows: 'Workflows & Compensation',
   idempotency: 'Idempotency',
   audit: 'Audit',

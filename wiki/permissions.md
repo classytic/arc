@@ -2,7 +2,7 @@
 
 **Summary**: v2.10 split the `permissions/` module into `core`, `scope`, `dynamic`. Public import path `@classytic/arc/permissions` is unchanged.
 **Sources**: src/permissions/.
-**Last updated**: 2026-07-13 (`permissionMatrix` preset — 2.21).
+**Last updated**: 2026-07-15 (`requireGrant` per-record grants — 2.22).
 
 ---
 
@@ -39,6 +39,10 @@ denyAll('reason')          // always 403
 | `requireTeamMembership` | member | Team membership |
 
 Full matrix: `docs/getting-started/permissions.mdx`.
+
+## `requireGrant` — per-record grants / record sharing (2.22)
+
+Subject × record × mode grants (Puter's one good ACL idea, minus its mistakes — verdict + recipe: `designs/record-sharing.md`). Arc ships the GATE only: `requireGrant({ mode, resolve, bypassRoles })` + the `GRANT_MODES` lattice (`see < list < read < write < manage`, held ≥ required via `modeSatisfies`). Grant STORAGE is a host `defineResource` (tenant-scoped, `audit: true` — DB-agnostic over `RepositoryLike`); `resolve` is structural. Resolutions: `boolean` | `{ mode }` (lattice-checked for single-record ops) | `{ filters }` (list-shaped — flows through `PermissionResult.filters` into the ONE list query; never per-item ACL walks). Fail-closed: resolver throw, empty resolution, and corrupted mode strings all deny. Anonymous callers reach the resolver by design (share links = a signed token referencing a grant ROW with `subjectType: 'link'` — revocable by deleting the row). Turnkey layer: **`@classytic/arc-shares`** (arc-ecosystem) — ShareStore port + adapter, createShares service, revocable HMAC share links, prebuilt permission sets (ownership folded into the resolver — see the package for why anyOf(requireOwnership, requireGrant) would short-circuit). Pinned by `tests/permissions/require-grant.test.ts`.
 
 ## CRUD public-by-omission (2.20)
 

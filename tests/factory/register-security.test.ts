@@ -94,22 +94,16 @@ describe("registerSecurityPlugins", () => {
     expect(res.headers["access-control-allow-origin"]).toBe("https://example.com");
   });
 
-  it("smart CORS: credentials + origin:'*' converts to origin:true", async () => {
+  it("throws at boot on credentials + origin:'*' (reflected-origin hazard)", async () => {
+    // Pre-2.22 this combo was silently rewritten to `origin: true`, which
+    // reflects ANY request Origin with credentials — the vulnerability the
+    // browser wildcard ban exists to prevent. It is now a boot-time error.
     app = createTestFastify();
-    await registerSecurityPlugins(app, {
-      cors: { credentials: true, origin: "*" },
-    });
-    app.get("/test", async () => ({ ok: true }));
-    await app.ready();
-
-    const res = await app.inject({
-      method: "GET",
-      url: "/test",
-      headers: { origin: "https://any.com" },
-    });
-    // Should reflect the request origin, not literal '*'
-    expect(res.headers["access-control-allow-origin"]).toBe("https://any.com");
-    expect(res.headers["access-control-allow-credentials"]).toBe("true");
+    await expect(
+      registerSecurityPlugins(app, {
+        cors: { credentials: true, origin: "*" },
+      }),
+    ).rejects.toThrow(/origin: '\*'.*credentials: true/s);
   });
 
   it("skips rate limit when rateLimit: false", async () => {

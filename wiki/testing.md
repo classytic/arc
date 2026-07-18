@@ -1,22 +1,23 @@
 # Testing
 
-**Summary**: Vitest + `mongodb-memory-server`. Mirror src structure. Always run targeted tests; never the full suite during dev. Perf runs in its own lane.
+**Summary**: Vitest + `mongodb-memory-server`. Mirror src structure. Always run targeted tests; never the full suite during dev. Perf runs in its own lane. `test:main` = plain `vitest run` — vitest **projects** split the suite into `parallel` + `ws-serial` (websocket files run with `fileParallelism: false` automatically; no manual `--no-file-parallelism` needed, ~40s wall clock).
 **Sources**: tests/, vitest.config.ts, vitest.perf.config.ts, src/testing/.
-**Last updated**: 2026-04-24 (v2.11 testing surface rewrite).
+**Last updated**: 2026-07-14 (`bootModuleApp` — 2.22).
 
 ---
 
 ## Public test API (`@classytic/arc/testing`)
 
-Three primary entry points, picked by what you're testing:
+Four primary entry points, picked by what you're testing:
 
 | Testing… | Use | Why |
 |---|---|---|
 | Framework behavior | `createHttpTestHarness` | Auto-generates CRUD + permission + validation tests against a live app. |
 | Custom scenarios | `createTestApp` | Turnkey Fastify + in-memory Mongo + auth + fixtures; drive `app.inject()` yourself. |
 | Adapter contracts | `runStorageContract` | DB-agnostic conformance suite for custom `Storage` implementations. |
+| Module composability | `bootModuleApp` (2.22) | Real arc app around modules + in-memory Mongo — see section below. |
 
-Shared primitives used by all three:
+Shared primitives used across all of them:
 
 - **`TestAuthSession` / `TestAuthProvider`** — unified auth (JWT, Better Auth, custom). `register(role, config)` → `.as(role).headers`. Replaces fragmented `createJwtAuthProvider` / `createBetterAuthProvider` / `TestRequestBuilder.withAuth`.
 - **`TestFixtures`** — DB-agnostic record seeding. Register named factories; arc tracks inserted records for `.clear()` cleanup.
@@ -24,6 +25,27 @@ Shared primitives used by all three:
 - **`mocks`** — `createMockRepository`, `createMockUser`, `createMockRequest`, etc. Stays as-is (most-used helper in the package).
 
 See the [docs/testing/ site](../docs/testing/index.mdx) for the decision tree and usage examples.
+
+## `bootModuleApp` — module composability harness (2.22)
+
+Boots a REAL arc app around one or more [[modules]] and returns `{ app, uri, connection, exports, close }`. Upstreamed from the spine testkit; this is the ecosystem contract: **boots green in bootModuleApp ⇒ composes in any host.**
+
+```ts
+import { bootModuleApp } from '@classytic/arc/testing';
+
+const t = await bootModuleApp(async ({ connection }) => [
+  createAccountingModule({ connection, permissions }),
+], { replset: true });          // replset: single-node replica set for transactional kernels
+const engine = t.exports<AccountingEngine>('accounting');  // typed module-export accessor
+await t.app.inject({ method: 'GET', url: '/accounting/accounts' });
+await t.close();
+```
+
+- **DB-agnostic by seam**: the harness never names a driver — provisioning is the `database: TestDatabaseFactory` option (`TestDatabase = { uri, connection, teardown }`, structural). Default: exported `mongoMemoryDatabase` (in-memory MongoDB, lazy devDep imports; owns mongoose's DEFAULT connection *including a per-boot model-registry wipe* so multi-boot files never collide on kernel models). sqlitekit/pgkit testkits ship their own factory.
+- `modules` may be a module, an array, or a **sync/async context factory** receiving `TestkitContext` (`{ uri, connection }` — the DB is live before module resolution starts; `mongoUri` is a deprecated alias of `uri`).
+- **A bare function argument is ALWAYS the context factory**; module thunks ride inside arrays (`bootModuleApp([async () => createXModule(...)])`).
+- `t.exports<T>(name)` — typed module-export accessor (delegates to `getModuleExports`; throws with the registered list on unknown names). Kills the `(t.app as ...).arc.modules.X` cast.
+- Defaults `preset: 'testing'`, `auth: false`, `sensible: false`; override via `options.app`. Boot-failure cleanup (a throwing `createApp` tears the DB down), idempotent `close()`, `app.ready()` awaited (routes frozen post-boot, same as real apps). `bootModuleApp<TConn>` generic lets DB-typed facades pin the connection type once (spine-testkit = 39-line typed wrapper).
 
 ## Internal test bootstrap (`tests/setup.ts`)
 

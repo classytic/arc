@@ -404,6 +404,15 @@ export interface CreateAppOptions {
      */
     sse?: import("../../plugins/sse.js").SSEOptions | boolean;
     /**
+     * Realtime resource change feed (2.22) — `GET /realtime/:resource`
+     * streams that resource's created/updated/deleted events over SSE,
+     * gated by its own `list` permission with per-event row filtering,
+     * tenant scoping, and field-level masking. Default: false (opt-in).
+     * Set true for defaults, or pass RealtimeOptions (path, heartbeat,
+     * resource allowlist, operations). Requires events.
+     */
+    realtime?: import("../../plugins/realtime.js").RealtimeOptions | boolean;
+    /**
      * QueryCache — TanStack Query-inspired server cache with SWR.
      * Default: false (opt-in). Set to true for memory store defaults.
      * Requires per-resource `cache` config on defineResource().

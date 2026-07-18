@@ -79,6 +79,17 @@ describe("arc init — JWT + Single Tenant", () => {
     expect(await exists(projectPath)).toBe(true);
   });
 
+  it("emits CLAUDE.md agent guidance — the anti-hand-rolling signal (2.22)", async () => {
+    const guide = await fs.readFile(path.join(projectPath, "CLAUDE.md"), "utf-8");
+    // The one rule + the capability table + the skill pointer must survive
+    // template edits — this is what keeps AI agents from hand-rolling.
+    expect(guide).toContain("Hand-rolling is a bug");
+    expect(guide).toContain("defineResource(");
+    expect(guide).toContain("schedulesPlugin");
+    expect(guide).toContain("skills/arc/SKILL.md");
+    expect(guide).toContain("doubles as AGENTS.md");
+  });
+
   it("should create core directories", async () => {
     const dirs = [
       "src",

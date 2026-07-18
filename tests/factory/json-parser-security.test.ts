@@ -58,7 +58,7 @@ describe("JSON parser security", () => {
     expect(res.json().body).toEqual({ name: "test", value: 42 });
   });
 
-  it("rejects malformed JSON with error status", async () => {
+  it("rejects malformed JSON with 400 and the arc error contract", async () => {
     await makeApp();
     const res = await app.inject({
       method: "POST",
@@ -66,8 +66,21 @@ describe("JSON parser security", () => {
       headers: { "content-type": "application/json" },
       body: "{ invalid json",
     });
-    // Parser error — Fastify returns 4xx or 5xx depending on error handler
-    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    // Client-sent bad JSON is a client error, never a 500 — matches
+    // Fastify's own FST_ERR_CTP_INVALID_JSON_BODY (400) semantics.
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe("arc.bad_request");
+  });
+
+  it("does not leak the parser's internal error message", async () => {
+    await makeApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/echo",
+      headers: { "content-type": "application/json" },
+      body: "{ invalid json",
+    });
+    expect(res.json().message).toBe("Invalid JSON payload");
   });
 
   // ── Prototype poisoning protection (secure-json-parse) ──
@@ -82,7 +95,9 @@ describe("JSON parser security", () => {
       body: malicious,
     });
     // secure-json-parse throws "Object contains forbidden prototype property"
-    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    // — a client-crafted payload, so it must surface as 400, not 500.
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe("arc.bad_request");
     // Critical: Object.prototype must NOT be polluted
     expect(({} as Record<string, unknown>).isAdmin).toBeUndefined();
   });
@@ -96,7 +111,7 @@ describe("JSON parser security", () => {
       headers: { "content-type": "application/json" },
       body: malicious,
     });
-    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(res.statusCode).toBe(400);
     expect(({} as Record<string, unknown>).isAdmin).toBeUndefined();
   });
 
@@ -109,7 +124,7 @@ describe("JSON parser security", () => {
       headers: { "content-type": "application/json" },
       body: malicious,
     });
-    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(res.statusCode).toBe(400);
     expect(({} as Record<string, unknown>).role).toBeUndefined();
   });
 

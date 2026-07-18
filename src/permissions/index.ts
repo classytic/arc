@@ -83,6 +83,11 @@ export {
   resolveEffectiveRoles,
 } from "./fields.js";
 // ──────────────────────────────────────────────────────────────────────
+// Per-record grants — subject × record × mode (record sharing)
+// ──────────────────────────────────────────────────────────────────────
+export type { GrantMode, GrantResolution, RequireGrantOptions } from "./grants.js";
+export { GRANT_MODES, modeSatisfies, requireGrant } from "./grants.js";
+// ──────────────────────────────────────────────────────────────────────
 // Role hierarchy
 // ──────────────────────────────────────────────────────────────────────
 export type { RoleHierarchy } from "./roleHierarchy.js";

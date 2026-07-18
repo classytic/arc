@@ -10,6 +10,7 @@ import { z } from "zod";
 import {
   convertOpenApiSchemas,
   convertRouteSchema,
+  ensureSchemaConverter,
   isJsonSchema,
   isZodSchema,
   toJsonSchema,
@@ -236,11 +237,41 @@ describe("toJsonSchema", () => {
     expect(toJsonSchema(unknown)).toBe(unknown);
   });
 
-  it('falls back to { type: "object" } for broken Zod-like objects', () => {
-    // Object with _zod marker but not a valid Zod schema — z.toJSONSchema() will throw
+  it('warn mode (default): falls back to { type: "object" } for broken Zod-like objects', () => {
+    // Object with _zod marker but not a valid Zod schema — z.toJSONSchema() will throw.
+    // Default mode is 'warn' (doc-generation paths): degrade, don't crash.
     const fakeZod = { _zod: { invalid: true } };
     const result = toJsonSchema(fakeZod);
     expect(result).toEqual({ type: "object" });
+  });
+
+  it("throw mode: broken Zod schemas fail fast instead of silently disabling validation", () => {
+    const fakeZod = { _zod: { invalid: true } };
+    expect(() => toJsonSchema(fakeZod, "draft-7", "throw")).toThrow(/z\.toJSONSchema\(\) failed/);
+  });
+
+  it("detects Zod v3 schemas (_def without _zod) with an actionable upgrade message", () => {
+    const zodV3Like = { _def: { typeName: "ZodObject" }, safeParse: () => ({}) };
+    expect(() => toJsonSchema(zodV3Like, "draft-7", "throw")).toThrow(/zod >=4/);
+    // warn mode degrades instead of crashing (doc paths)
+    expect(toJsonSchema(zodV3Like, "openapi-3.0", "warn")).toEqual({ type: "object" });
+  });
+
+  it("convertRouteSchema (validation path) throws on unconvertible Zod input", () => {
+    // The draft-7 target IS the validation path — silent { type: 'object' }
+    // there means AJV accepts anything, i.e. validation switched off.
+    const fakeZod = { _zod: { invalid: true } };
+    expect(() => convertRouteSchema({ body: fakeZod })).toThrow(/z\.toJSONSchema\(\) failed/);
+  });
+
+  it("convertRouteSchema (OpenAPI target — doc path) degrades instead of throwing", () => {
+    const fakeZod = { _zod: { invalid: true } };
+    const result = convertRouteSchema({ body: fakeZod }, "openapi-3.0");
+    expect(result.body).toEqual({ type: "object" });
+  });
+
+  it("ensureSchemaConverter resolves (readiness barrier for boot-time conversion)", async () => {
+    await expect(ensureSchemaConverter()).resolves.toBeUndefined();
   });
 
   // ---------------------------------------------------------------------------

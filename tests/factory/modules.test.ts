@@ -446,4 +446,110 @@ describe("createApp — modules", () => {
     expect((await app.inject({ method: "GET", url: "/plains" })).statusCode).toBe(200);
     await app.close();
   });
+
+  // ── owns — module resource supersession ──
+  //
+  // A module declares `owns: [name]` for the app-level resources it
+  // authoritatively provides; arc DROPS the same-named app fork so the module's
+  // version registers. Replaces a host-side hand-maintained "which resources did
+  // modules take over" filter list with a colocated, per-atom declaration.
+
+  /** An owned resource whose `/ping` route ONLY the module version carries — so
+   *  a test can prove the module's copy won (the app fork had no `/ping`). */
+  function makeOwnedResourceWithPing(name: string) {
+    const Model = createMockModel(`Mod${name.charAt(0).toUpperCase()}${name.slice(1)}`);
+    const repo = createMockRepository(Model);
+    return defineResource({
+      name,
+      adapter: createMongooseAdapter({ model: Model, repository: repo }),
+      controller: new BaseController(repo, { resourceName: name }),
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
+      },
+      routes: [
+        {
+          method: "GET",
+          path: "/ping",
+          raw: true,
+          permissions: allowPublic(),
+          handler: async (_req, reply) => reply.send({ from: "module" }),
+        },
+      ],
+    });
+  }
+
+  it("a module's `owns` supersedes the app resource of the same name (module version wins)", async () => {
+    const widgets = defineModule({
+      name: "widgets",
+      owns: ["widget"],
+      resources: [makeOwnedResourceWithPing("widget")],
+    });
+
+    const app = await createApp({
+      preset: "testing",
+      auth: false,
+      resourcePrefix: "/api/v1",
+      // A leftover duplicate 'widget' (app + module) would THROW under strict —
+      // booting clean proves the app fork was dropped, not merely warned.
+      strictResources: true,
+      resources: [makeResource("widget"), makeResource("gadget")],
+      modules: [widgets],
+    });
+    await app.ready();
+
+    // The owned resource registers — and it's the MODULE's copy: only it has /ping.
+    expect((await app.inject({ method: "GET", url: "/api/v1/widgets" })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/v1/widgets/ping" })).statusCode).toBe(200);
+    // The non-owned app resource is untouched.
+    expect((await app.inject({ method: "GET", url: "/api/v1/gadgets" })).statusCode).toBe(200);
+
+    await app.close();
+  });
+
+  it("`owns` a name with no matching app resource is a silent no-op", async () => {
+    const solo = defineModule({
+      name: "solo",
+      owns: ["neverForked"], // pre-declared; no app resource of this name exists
+      resources: [makeResource("solo")],
+    });
+
+    const app = await createApp({
+      preset: "testing",
+      auth: false,
+      resourcePrefix: "/api/v1",
+      resources: [makeResource("keep")],
+      modules: [solo],
+    });
+    await app.ready();
+
+    expect((await app.inject({ method: "GET", url: "/api/v1/solos" })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/v1/keeps" })).statusCode).toBe(200);
+
+    await app.close();
+  });
+
+  it("supersession is the UNION across all modules; unowned app resources survive", async () => {
+    const modA = defineModule({ name: "modA", owns: ["aaa"], resources: [makeResource("aaa")] });
+    const modB = defineModule({ name: "modB", owns: ["bbb"], resources: [makeResource("bbb")] });
+
+    const app = await createApp({
+      preset: "testing",
+      auth: false,
+      resourcePrefix: "/api/v1",
+      strictResources: true, // both forks must be dropped, else a dup throws
+      resources: [makeResource("aaa"), makeResource("bbb"), makeResource("ccc")],
+      modules: [modA, modB],
+    });
+    await app.ready();
+
+    expect((await app.inject({ method: "GET", url: "/api/v1/aaas" })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/v1/bbbs" })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/v1/cccs" })).statusCode).toBe(200);
+
+    await app.close();
+  });
 });

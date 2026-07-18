@@ -68,6 +68,14 @@ export interface RegistryEntry extends ResourceMetadata {
     string,
     { type: string; roles?: readonly string[]; redactValue?: unknown }
   >;
+  /**
+   * The LIVE field-permission map (2.22) — the same object `defineResource`
+   * consumes, surfaced so request-time consumers (the realtime change feed)
+   * can apply `applyFieldReadPermissions` masking to event payloads without
+   * re-reading the resource definition. `fieldPermissions` above stays the
+   * introspection-safe metadata twin.
+   */
+  fields?: import("../permissions/fields.js").FieldPermissionMap;
   /** Pipeline step names (for OpenAPI data) */
   pipelineSteps?: Array<{ type: string; name: string; operations?: string[] }>;
   /** Update HTTP method(s) used for this resource */
