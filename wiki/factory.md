@@ -29,7 +29,7 @@ Full rationale in changelog 2.22 ("hardening wave" sections); the contracts:
 - Unclassified 500 messages sanitized in prod — `errorHandler({ exposeInternalMessages })`; domain-coded 5xx keep their messages.
 - Request id is **server-level** (`genReqId: createRequestIdGenerator()`, automatic) so `request.id`, `request.log`'s `reqId`, requestContext, and the echoed header all agree. Exported for standalone use.
 - `arcLog` routes through `fastify.log` via `createPinoWriter` (inherits transports/level/redaction); `logger: false` keeps the console fallback.
-- Knobs: `requestTimeout`/`connectionTimeout`/`keepAliveTimeout` pass-throughs (no arc defaults — Node ≥18 bounds slow-loris; a forced requestTimeout would 408 slow uploads); `trustProxy` accepts hop-count/CIDR forms.
+- Knobs: `requestTimeout`/`connectionTimeout`/`keepAliveTimeout` pass-throughs (no arc defaults — Node ≥18 bounds slow-loris; a forced requestTimeout would 408 slow uploads); `trustProxy` accepts hop-count/CIDR forms — default `false` everywhere incl. the production preset (2.24 fail-closed flip; proxied hosts must set it explicitly).
 - Multipart caps every busboy dimension (`fields: 100`, `parts: 120` join `fileSize`/`files`); host `limits` deep-merge per key.
 
 ## Plan-aware rate limits (2.22)

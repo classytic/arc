@@ -120,15 +120,17 @@ describe("Key symbols from @classytic/arc/core", () => {
 });
 
 describe("Key symbols from @classytic/arc/events", () => {
-  it("exports EventOutbox, MemoryOutboxStore, outbox errors, retry helper", async () => {
+  it("exports the outbox RUNTIME; the contract stays in primitives (2.24 clean break)", async () => {
     const mod = await import("@classytic/arc/events");
     expect(typeof mod.EventOutbox).toBe("function");
     expect(typeof mod.MemoryOutboxStore).toBe("function");
     expect(typeof mod.MemoryEventTransport).toBe("function");
-    expect(typeof mod.OutboxOwnershipError).toBe("function");
-    expect(typeof mod.InvalidOutboxEventError).toBe("function");
     expect(typeof mod.exponentialBackoff).toBe("function");
     expect(typeof mod.eventPlugin).toBe("function");
+    // Contract classes are canonically owned by @classytic/primitives/outbox
+    // and intentionally NOT re-exported by arc.
+    expect((mod as Record<string, unknown>).OutboxOwnershipError).toBeUndefined();
+    expect((mod as Record<string, unknown>).InvalidOutboxEventError).toBeUndefined();
   });
 });
 

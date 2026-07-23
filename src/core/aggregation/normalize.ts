@@ -181,7 +181,7 @@ function resolveAggRequestLimit(
   const policy = normalized.compiled.limitPolicy;
   if (!policy) return normalized.compiled.limit;
 
-  const raw = query["limit"];
+  const raw = query.limit;
   if (raw === undefined || raw === "") return policy.defaultLimit;
 
   const parsed = typeof raw === "number" ? raw : Number.parseInt(String(raw), 10);

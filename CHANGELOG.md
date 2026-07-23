@@ -8,6 +8,14 @@ Detailed release notes now live under [changelog/](changelog/). This root file s
 
 See [changelog/v2.md](changelog/v2.md) for the full v2 release history.
 
+## 2.25
+
+- [2.25.0](changelog/v2.md#2250) — **`scopeFirstCtx`** (`@classytic/arc/scope`): the shared scope-first actor/org context derivation for the `arc-*` module fleet — `request.scope` (userId/clientId + org) first, `x-organization-id` header only as the custom-auth/public bridge; `fallbackActorId` overload narrows to `{ actorId: string }`. Kills the 7+ per-package `ctxOf` derivation clones. **⚠ Breaking:** `@classytic/arc/schemas` moved to TypeBox 1.0 — optional peers `typebox@>=1` + `@fastify/type-provider-typebox@>=6` (was `@sinclair/typebox`); the `typeProvider: 'typebox'` option and `TypeBoxValidatorCompiler` export were removed (arc always validated with standard AJV). See [migration](changelog/v2.md#2250).
+
+## 2.24
+
+- [2.24.0](changelog/v2.md#2240) — **self-describing modules**: four additive composition arms on `ArcModule` (`healthChecks`, `eventHandlers`, `workflows`, `scheduledJobs`) so the host composition root stays thin. Modules carry their own readiness probes, event subscriptions, workflow defs, and interval jobs; arc collects them (dependency-ordered, boot-fail on duplicate names, per-owner provenance) and merges into the single health/schedule tables. Reuses the canonical `ScheduleDefinition`; DB/engine-agnostic (health `{name,check}`, transport-agnostic `fastify.events`, opaque workflows, pluggable repo-core `LockAdapter` for schedule leader-safety). New `./factory` + `./plugins` exports. **Breaking cleanup:** resource validators now import from `@classytic/arc/core`; the `/utils` re-export was removed. **Performance wave 12:** real load-shedding defaults, cache single-flight + jitter, multipart `maxTotalBytes`, two-phase outbox batch claim, Streams `processingConcurrency`, O(1) WS queue drain, bucketed health metrics. **⚠ Breaking:** outbox contract (`OutboxStore`, option types, `OutboxOwnershipError`, `InvalidOutboxEventError`) moved to `@classytic/primitives/outbox` — arc keeps the runtime only; peer `@classytic/primitives` >=0.13.0.
+
 ## 2.20
 
 - [2.20.0](changelog/v2.md#2200) — domain **modules** (`defineModule` / `ArcModule<TExports>` / typed `getModuleExports`, thunk-of-dynamic-import lazy packs, **`dependsOn` stable topological composition order** with fail-fast cycle/missing/self/duplicate detection via `orderModules`, augmentable `ArcModuleRegistry` for cast-free `getModuleExports`), security-defaults wave (`readOnly()` write-deny, `crud-public-by-omission` diagnostic, MCP session-hijack + MCP aggregation tenant-scope fixes), approval/involvement presets extracted to `@classytic/arc-approval` / `@classytic/arc-involvement` pre-publish (subpaths never shipped), zod made truly optional for `actions:`, `check:peer-skew` release gate, un-driftable `arc init` pins, `./sync` subpath, peer floors primitives `>=0.9.0` / repo-core `>=0.7.0`.

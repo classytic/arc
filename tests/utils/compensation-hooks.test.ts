@@ -134,8 +134,11 @@ describe("withCompensation — hooks & fire-and-forget", () => {
 
       // 'next' ran before 'slow' because slow is fire-and-forget
       expect(result.completedSteps).toContain("fast");
-      expect(result.completedSteps).toContain("slow-bg");
       expect(result.completedSteps).toContain("next");
+      // 2.24 (wave-6 audit): fireAndForget steps are NOT in completedSteps —
+      // the step hasn't completed when the result is returned, and pre-fix
+      // a step that later FAILED had already been reported as completed.
+      expect(result.completedSteps).not.toContain("slow-bg");
       expect(order).toEqual(["fast", "next"]); // slow hasn't resolved yet
 
       // Clean up
@@ -167,6 +170,122 @@ describe("withCompensation — hooks & fire-and-forget", () => {
 
       // Saga still succeeds — email failure is swallowed
       expect(compensated).toHaveLength(0);
+    });
+
+    it("fireAndForget rejection surfaces via onStepFailed (2.24 — was silently swallowed)", async () => {
+      const { withCompensation } = await import("../../src/utils/compensation.js");
+      const onStepFailed = vi.fn();
+
+      let rejectBg: (err: Error) => void = () => {};
+      const bgPromise = new Promise<never>((_, reject) => {
+        rejectBg = reject;
+      });
+
+      const result = await withCompensation(
+        "ff-observe",
+        [
+          { name: "main", execute: async () => ({}) },
+          { name: "bg", execute: () => bgPromise, fireAndForget: true },
+        ],
+        undefined,
+        { onStepFailed },
+      );
+
+      // Transaction outcome unaffected by the pending bg step.
+      expect(result.success).toBe(true);
+      expect(onStepFailed).not.toHaveBeenCalled();
+
+      rejectBg(new Error("SMTP down"));
+      await new Promise((r) => setImmediate(r));
+
+      expect(onStepFailed).toHaveBeenCalledTimes(1);
+      expect(onStepFailed).toHaveBeenCalledWith("bg", expect.any(Error));
+    });
+
+    it("a THROWING observability hook cannot become an unhandled rejection (wave-7 fix)", async () => {
+      const { withCompensation } = await import("../../src/utils/compensation.js");
+      const unhandled: unknown[] = [];
+      const capture = (reason: unknown) => void unhandled.push(reason);
+      process.on("unhandledRejection", capture);
+
+      try {
+        const result = await withCompensation(
+          "ff-hook-throws",
+          [
+            { name: "main", execute: async () => ({}) },
+            {
+              name: "bg-ok",
+              execute: async () => ({}),
+              fireAndForget: true,
+            },
+            {
+              name: "bg-fail",
+              execute: async () => {
+                throw new Error("bg down");
+              },
+              fireAndForget: true,
+            },
+          ],
+          undefined,
+          {
+            // BOTH hooks throw — the detached chains must contain it.
+            onStepComplete: () => {
+              throw new Error("metrics sink down");
+            },
+            onStepFailed: () => {
+              throw new Error("alerting down");
+            },
+          },
+        );
+        expect(result.success).toBe(true);
+
+        // Let the detached fire-and-forget chains fully settle.
+        await new Promise((r) => setImmediate(r));
+        await new Promise((r) => setImmediate(r));
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off("unhandledRejection", capture);
+      }
+    });
+
+    it("contained hook failures are REPORTED via onHookError (not silent)", async () => {
+      const { withCompensation } = await import("../../src/utils/compensation.js");
+      const reported: Array<[string, string]> = [];
+
+      const result = await withCompensation(
+        "hook-error-report",
+        [{ name: "main", execute: async () => ({}) }],
+        undefined,
+        {
+          onStepComplete: () => {
+            throw new Error("metrics sink down");
+          },
+          onHookError: (hook, error) => {
+            reported.push([hook, error.message]);
+          },
+        },
+      );
+
+      expect(result.success).toBe(true); // containment unchanged
+      expect(reported).toEqual([["onStepComplete", "metrics sink down"]]);
+    });
+
+    it("a throwing onHookError is itself contained", async () => {
+      const { withCompensation } = await import("../../src/utils/compensation.js");
+      const result = await withCompensation(
+        "hook-error-throws",
+        [{ name: "main", execute: async () => ({}) }],
+        undefined,
+        {
+          onStepComplete: () => {
+            throw new Error("sink down");
+          },
+          onHookError: () => {
+            throw new Error("reporter down too");
+          },
+        },
+      );
+      expect(result.success).toBe(true);
     });
 
     it("fireAndForget step is excluded from compensation rollback", async () => {

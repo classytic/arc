@@ -24,8 +24,16 @@ import fp from "fastify-plugin";
 export interface HealthCheck {
   /** Name of the dependency */
   name: string;
-  /** Function that returns true if healthy, false otherwise */
-  check: () => Promise<boolean> | boolean;
+  /**
+   * Function that returns true if healthy, false otherwise.
+   *
+   * Receives an `AbortSignal` aborted when the check's timeout elapses —
+   * pass it to fetch/driver calls so a stalled dependency probe actually
+   * STOPS instead of accumulating an abandoned operation per readiness
+   * poll. Ignoring the parameter is fine (back-compat): the timeout still
+   * bounds how long the PROBE waits, just not the underlying work.
+   */
+  check: (signal?: AbortSignal) => Promise<boolean> | boolean;
   /** Optional timeout in ms (default: 5000) */
   timeout?: number;
   /** Whether this check is critical for readiness (default: true) */
@@ -36,7 +44,7 @@ export interface HealthOptions {
   /** Route prefix (default: '/_health') */
   prefix?: string;
   /** Health check dependencies */
-  checks?: HealthCheck[];
+  checks?: readonly HealthCheck[];
   /** Enable metrics endpoint (default: false) */
   metrics?: boolean;
   /** Custom metrics collector function */
@@ -47,6 +55,39 @@ export interface HealthOptions {
   collectHttpMetrics?: boolean;
 }
 
+/** A named source of readiness checks, used for collision diagnostics. */
+export interface HealthCheckGroup {
+  owner: string;
+  checks?: readonly HealthCheck[];
+}
+
+/**
+ * Merge health checks without losing ownership information.
+ *
+ * Check names are the identity used in readiness responses and criticality
+ * lookup, so duplicates are ambiguous and fail at boot instead of silently
+ * picking the first declaration. Input order is preserved.
+ */
+export function mergeHealthChecks(groups: readonly HealthCheckGroup[]): HealthCheck[] {
+  const owners = new Map<string, string>();
+  const merged: HealthCheck[] = [];
+
+  for (const group of groups) {
+    for (const check of group.checks ?? []) {
+      const prior = owners.get(check.name);
+      if (prior !== undefined) {
+        throw new Error(
+          `[arc] duplicate health-check name "${check.name}" — declared by ${prior} and ${group.owner}. Health-check names must be unique.`,
+        );
+      }
+      owners.set(check.name, group.owner);
+      merged.push(check);
+    }
+  }
+
+  return merged;
+}
+
 interface CheckResult {
   name: string;
   healthy: boolean;
@@ -55,21 +96,46 @@ interface CheckResult {
 }
 
 // Metrics storage (instance-scoped to avoid contamination between app instances)
+
+/**
+ * Fixed histogram bucket upper bounds (ms). Recording is O(#buckets) per
+ * request; the scrape derives quantile UPPER BOUNDS from cumulative counts
+ * in O(#buckets) — no sample retention, no per-scrape sort (the previous
+ * 10k-sample ring buffer copied + sorted on EVERY scrape), and bucket
+ * counts aggregate correctly across instances.
+ */
+const DURATION_BUCKETS_MS = [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000] as const;
+
 interface HttpMetrics {
   requestsTotal: Record<string, number>;
-  requestDurations: number[];
-  /** Write index for ring buffer — wraps modulo capacity */
-  _ringIndex: number;
+  /** Count per DURATION_BUCKETS_MS bound, plus one overflow slot at the end. */
+  durationBuckets: number[];
+  durationCount: number;
+  durationSumMs: number;
   startTime: number;
 }
 
 function createHttpMetrics(): HttpMetrics {
   return {
     requestsTotal: {},
-    requestDurations: [],
-    _ringIndex: 0,
+    durationBuckets: new Array(DURATION_BUCKETS_MS.length + 1).fill(0),
+    durationCount: 0,
+    durationSumMs: 0,
     startTime: Date.now(),
   };
+}
+
+/** Smallest bucket upper bound whose cumulative count reaches `q × total`. */
+function bucketQuantile(metrics: HttpMetrics, q: number): number {
+  const target = Math.ceil(metrics.durationCount * q);
+  let cumulative = 0;
+  for (let i = 0; i < metrics.durationBuckets.length; i++) {
+    cumulative += metrics.durationBuckets[i] ?? 0;
+    if (cumulative >= target) {
+      return DURATION_BUCKETS_MS[i] ?? DURATION_BUCKETS_MS[DURATION_BUCKETS_MS.length - 1] ?? 0;
+    }
+  }
+  return DURATION_BUCKETS_MS[DURATION_BUCKETS_MS.length - 1] ?? 0;
 }
 
 const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
@@ -84,6 +150,7 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
     version,
     collectHttpMetrics = metrics,
   } = opts;
+  const readinessChecks = mergeHealthChecks([{ owner: "healthPlugin options", checks }]);
 
   // Instance-scoped metrics — each Fastify instance gets its own counters
   const httpMetrics = createHttpMetrics();
@@ -197,9 +264,9 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
       },
     },
     async (_, reply) => {
-      const results = await runChecks(checks);
+      const results = await runChecks(readinessChecks);
       const criticalFailed = results.some(
-        (r) => !r.healthy && (checks.find((c) => c.name === r.name)?.critical ?? true),
+        (result, index) => !result.healthy && (readinessChecks[index]?.critical ?? true),
       );
 
       const response = {
@@ -272,22 +339,23 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
         }
         lines.push("");
 
-        // Request duration histogram
-        if (httpMetrics.requestDurations.length > 0) {
-          const sorted = [...httpMetrics.requestDurations].sort((a, b) => a - b);
-          const p50 = sorted[Math.floor(sorted.length * 0.5)] || 0;
-          const p95 = sorted[Math.floor(sorted.length * 0.95)] || 0;
-          const p99 = sorted[Math.floor(sorted.length * 0.99)] || 0;
-          const sum = sorted.reduce((a, b) => a + b, 0);
+        // Request duration — bucketed histogram quantile bounds, O(#buckets)
+        // per scrape (see DURATION_BUCKETS_MS). Quantiles are the bucket
+        // UPPER BOUND containing the target rank — conservative, and
+        // aggregatable across instances unlike sorted-sample quantiles.
+        if (httpMetrics.durationCount > 0) {
+          const p50 = bucketQuantile(httpMetrics, 0.5);
+          const p95 = bucketQuantile(httpMetrics, 0.95);
+          const p99 = bucketQuantile(httpMetrics, 0.99);
 
           lines.push(
-            "# HELP http_request_duration_milliseconds HTTP request duration",
+            "# HELP http_request_duration_milliseconds HTTP request duration (bucket upper bounds)",
             "# TYPE http_request_duration_milliseconds summary",
             `http_request_duration_milliseconds{quantile="0.5"} ${p50.toFixed(2)}`,
             `http_request_duration_milliseconds{quantile="0.95"} ${p95.toFixed(2)}`,
             `http_request_duration_milliseconds{quantile="0.99"} ${p99.toFixed(2)}`,
-            `http_request_duration_milliseconds_sum ${sum.toFixed(2)}`,
-            `http_request_duration_milliseconds_count ${sorted.length}`,
+            `http_request_duration_milliseconds_sum ${httpMetrics.durationSumMs.toFixed(2)}`,
+            `http_request_duration_milliseconds_count ${httpMetrics.durationCount}`,
             "",
           );
         }
@@ -309,13 +377,18 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
       const statusBucket = `${Math.floor(reply.statusCode / 100)}xx`;
       httpMetrics.requestsTotal[statusBucket] = (httpMetrics.requestsTotal[statusBucket] || 0) + 1;
 
-      // Store duration in ring buffer (O(1) vs O(n) for Array.shift)
-      if (httpMetrics.requestDurations.length < 10000) {
-        httpMetrics.requestDurations.push(duration);
-      } else {
-        httpMetrics.requestDurations[httpMetrics._ringIndex % 10000] = duration;
+      // Bucketed recording — O(#buckets) worst case, no sample retention.
+      let bucket: number = DURATION_BUCKETS_MS.length; // overflow slot
+      for (let i = 0; i < DURATION_BUCKETS_MS.length; i++) {
+        const bound = DURATION_BUCKETS_MS[i];
+        if (bound !== undefined && duration <= bound) {
+          bucket = i;
+          break;
+        }
       }
-      httpMetrics._ringIndex = httpMetrics._ringIndex + 1;
+      httpMetrics.durationBuckets[bucket] = (httpMetrics.durationBuckets[bucket] ?? 0) + 1;
+      httpMetrics.durationCount++;
+      httpMetrics.durationSumMs += duration;
     });
   }
 
@@ -329,40 +402,48 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
 /**
  * Run all health checks with timeout
  */
-async function runChecks(checks: HealthCheck[]): Promise<CheckResult[]> {
-  const results: CheckResult[] = [];
+async function runChecks(checks: readonly HealthCheck[]): Promise<CheckResult[]> {
+  // Checks describe independent dependencies. Run them concurrently so probe
+  // latency is bounded by the slowest timeout, not the sum of every module's
+  // timeout. Promise.all preserves declaration order in the response.
+  return Promise.all(
+    checks.map(async (check): Promise<CheckResult> => {
+      const start = Date.now();
+      const timeout = check.timeout ?? 5000;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const abort = new AbortController();
 
-  for (const check of checks) {
-    const start = Date.now();
-    const timeout = check.timeout ?? 5000;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const checkPromise = Promise.resolve(check.check(abort.signal));
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            const err = new Error("Health check timeout");
+            // Signal the probe to stop its underlying work — the race alone
+            // only stops US from waiting (see HealthCheck.check docs).
+            abort.abort(err);
+            reject(err);
+          }, timeout);
+        });
 
-    try {
-      const checkPromise = Promise.resolve(check.check());
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("Health check timeout")), timeout);
-      });
+        const healthy = await Promise.race([checkPromise, timeoutPromise]);
 
-      const healthy = await Promise.race([checkPromise, timeoutPromise]);
-
-      results.push({
-        name: check.name,
-        healthy: Boolean(healthy),
-        duration: Date.now() - start,
-      });
-    } catch (err) {
-      results.push({
-        name: check.name,
-        healthy: false,
-        duration: Date.now() - start,
-        error: (err as Error).message,
-      });
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-  }
-
-  return results;
+        return {
+          name: check.name,
+          healthy: Boolean(healthy),
+          duration: Date.now() - start,
+        };
+      } catch (err) {
+        return {
+          name: check.name,
+          healthy: false,
+          duration: Date.now() - start,
+          error: (err as Error).message,
+        };
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }),
+  );
 }
 
 export default fp(healthPlugin, {

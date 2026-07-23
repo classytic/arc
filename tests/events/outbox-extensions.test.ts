@@ -18,12 +18,7 @@ import {
   type EventTransport,
   type PublishManyResult,
 } from "../../src/events/EventTransport.js";
-import {
-  EventOutbox,
-  exponentialBackoff,
-  MemoryOutboxStore,
-  type OutboxFailurePolicy,
-} from "../../src/events/outbox.js";
+import { EventOutbox, exponentialBackoff, MemoryOutboxStore } from "../../src/events/outbox.js";
 
 function alwaysFailingTransport(): EventTransport {
   return {

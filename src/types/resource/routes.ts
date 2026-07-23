@@ -3,7 +3,7 @@
  * shape), the HTTP method union, and per-route/action MCP config.
  */
 
-import type { FastifyInstance, FastifyReply, FastifyRequest, RouteHandlerMethod } from "fastify";
+import type { FastifyInstance, RouteHandlerMethod } from "fastify";
 import type { PermissionCheck } from "../../permissions/types.js";
 import type { ControllerHandler } from "../handlers.js";
 import type { RateLimitConfig } from "./rate-limit.js";
@@ -49,7 +49,15 @@ export interface RouteDefinition {
     | string
     | ControllerHandler
     | RouteHandlerMethod
-    | ((request: FastifyRequest<Record<string, unknown>>, reply: FastifyReply) => unknown);
+    // Raw-handler escape hatch. `never` in the contravariant parameter
+    // positions lets TYPED request generics assign without casting —
+    // `(req: FastifyRequest<{ Body: CreateBody }>, reply) => …` is not
+    // assignable to a `FastifyRequest<Record<string, unknown>>` parameter
+    // under strictFunctionTypes, but every concrete handler signature
+    // satisfies the `never`-parameter form (the same variance pattern as
+    // utils/circuitBreaker's AnyAsyncFn). Runtime always passes the real
+    // (request, reply) pair.
+    | ((request: never, reply: never) => unknown);
   /**
    * Typed function-reference handler (2.16). Receives the live controller
    * instance and returns the method to invoke — TypeScript catches typos

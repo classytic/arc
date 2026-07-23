@@ -7,13 +7,17 @@
  * exhausted events wrapped in a `DeadLetteredEvent` envelope automatically.
  */
 
-import { describe, expect, it, vi } from "vitest";
+import Fastify, { type FastifyInstance } from "fastify";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createEvent,
   type DeadLetteredEvent,
+  type DomainEvent,
+  type EventHandler,
   type EventTransport,
   MemoryEventTransport,
 } from "../../src/events/EventTransport.js";
+import { eventPlugin } from "../../src/events/eventPlugin.js";
 import { withRetry } from "../../src/events/retry.js";
 
 const silentLogger = { warn: () => {}, error: () => {} };
@@ -115,7 +119,10 @@ describe("withRetry + transport.deadLetter auto-routing", () => {
     await expect(wrapped(createEvent("x", {}))).resolves.toBeUndefined();
   });
 
-  it("transport.deadLetter() throwing does not break the handler loop", async () => {
+  it("transport.deadLetter() failing RETHROWS by default — the transport must redeliver, not ack a lost event", async () => {
+    // Pre-2.24 this logged and returned: the transport saw a successful
+    // handler and ACKNOWLEDGED the message even though neither processing
+    // nor DLQ persistence succeeded — silent event loss (wave-6 audit).
     const transport = new MemoryEventTransport({ logger: silentLogger }) as EventTransport & {
       deadLetter: (e: DeadLetteredEvent) => Promise<void>;
     };
@@ -130,7 +137,41 @@ describe("withRetry + transport.deadLetter auto-routing", () => {
       { maxRetries: 0, backoffMs: 1, transport, logger: silentLogger },
     );
 
-    // Must not propagate the DLQ failure
+    await expect(wrapped(createEvent("x", {}))).rejects.toThrow(/dead-letter persistence failed/);
+  });
+
+  it("dlqFailureMode: 'log-and-drop' opts into the old swallow behavior", async () => {
+    const transport = new MemoryEventTransport({ logger: silentLogger }) as EventTransport & {
+      deadLetter: (e: DeadLetteredEvent) => Promise<void>;
+    };
+    transport.deadLetter = async () => {
+      throw new Error("dlq-down");
+    };
+
+    const wrapped = withRetry(
+      async () => {
+        throw new Error("boom");
+      },
+      {
+        maxRetries: 0,
+        backoffMs: 1,
+        transport,
+        dlqFailureMode: "log-and-drop",
+        logger: silentLogger,
+      },
+    );
+
+    await expect(wrapped(createEvent("x", {}))).resolves.toBeUndefined();
+  });
+
+  it("successful DLQ persistence still resolves normally (event acked as dead-lettered)", async () => {
+    const { transport } = transportWithDlq();
+    const wrapped = withRetry(
+      async () => {
+        throw new Error("boom");
+      },
+      { maxRetries: 0, backoffMs: 1, transport, logger: silentLogger },
+    );
     await expect(wrapped(createEvent("x", {}))).resolves.toBeUndefined();
   });
 
@@ -163,5 +204,111 @@ describe("withRetry + transport.deadLetter auto-routing", () => {
     await wrapped(createEvent("x", {}));
     expect(calls).toBe(2);
     expect(dlq).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================================
+// eventPlugin wiring — durable DLQ slot end-to-end
+// ============================================================================
+
+describe("eventPlugin — durable DLQ failure propagation", () => {
+  // `deadLetterQueue.store` rides withRetry's durable `deadLetter` slot: a
+  // failing store follows dlqFailureMode (rethrow default) so an
+  // at-least-once transport redelivers instead of acking a lost event.
+  // `onDead` stays observability-only. Tested through eventPlugin with a
+  // transport that PROPAGATES handler failures to publish (models ack
+  // semantics — MemoryEventTransport logs-and-swallows, which would hide
+  // exactly the behavior under test).
+  let app: FastifyInstance;
+
+  afterEach(async () => {
+    await app?.close();
+  });
+
+  function propagatingTransport() {
+    const handlers: EventHandler[] = [];
+    return {
+      name: "test-propagating",
+      publish: async (event: DomainEvent) => {
+        for (const h of handlers) await h(event);
+      },
+      subscribe: async (_pattern: string, handler: EventHandler) => {
+        handlers.push(handler);
+        return () => {};
+      },
+    };
+  }
+
+  async function buildApp(opts: Record<string, unknown>) {
+    app = Fastify({ logger: false });
+    await app.register(eventPlugin, { transport: propagatingTransport(), ...opts });
+    await app.ready();
+    return app;
+  }
+
+  const failingHandler = async () => {
+    throw new Error("handler-down");
+  };
+
+  it("a failing deadLetterQueue.store makes the wrapped handler THROW", async () => {
+    await buildApp({
+      failOpen: false,
+      retry: { maxRetries: 0, backoffMs: 1 },
+      deadLetterQueue: {
+        store: async () => {
+          throw new Error("dlq-store-down");
+        },
+      },
+    });
+    await app.events.subscribe("order.created", failingHandler);
+
+    await expect(app.events.publish("order.created", {})).rejects.toThrow(
+      /dead-letter persistence failed/,
+    );
+  });
+
+  it("a working deadLetterQueue.store is called and the event acks normally", async () => {
+    const store = vi.fn(async () => {});
+    await buildApp({
+      failOpen: false,
+      retry: { maxRetries: 0, backoffMs: 1 },
+      deadLetterQueue: { store },
+    });
+    await app.events.subscribe("order.created", failingHandler);
+
+    await expect(app.events.publish("order.created", {})).resolves.toBeUndefined();
+    expect(store).toHaveBeenCalledTimes(1);
+  });
+
+  it("dlqFailureMode: 'log-and-drop' opts into acknowledging despite store failure", async () => {
+    await buildApp({
+      failOpen: false,
+      retry: { maxRetries: 0, backoffMs: 1, dlqFailureMode: "log-and-drop" },
+      deadLetterQueue: {
+        store: async () => {
+          throw new Error("dlq-store-down");
+        },
+      },
+    });
+    await app.events.subscribe("order.created", failingHandler);
+
+    await expect(app.events.publish("order.created", {})).resolves.toBeUndefined();
+  });
+
+  it("user onDead observability still fires; its failure never affects acknowledgement", async () => {
+    const onDead = vi.fn(() => {
+      throw new Error("metrics-down");
+    });
+    const store = vi.fn(async () => {});
+    await buildApp({
+      failOpen: false,
+      retry: { maxRetries: 0, backoffMs: 1, onDead },
+      deadLetterQueue: { store },
+    });
+    await app.events.subscribe("order.created", failingHandler);
+
+    await expect(app.events.publish("order.created", {})).resolves.toBeUndefined();
+    expect(store).toHaveBeenCalledTimes(1);
+    expect(onDead).toHaveBeenCalledTimes(1);
   });
 });

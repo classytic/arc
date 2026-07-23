@@ -514,6 +514,17 @@ await OutboxModel.collection.createIndex(
 ```
 
 **OutboxStore interface** — Arc is DB-agnostic; you implement this for your database.
+The contract is canonically owned by **`@classytic/primitives/outbox`** (>=0.13) —
+import `OutboxStore`, the option types, and the `OutboxOwnershipError` /
+`InvalidOutboxEventError` classes from primitives, not from arc (arc 2.24 removed
+its re-export). This lets domain packages implement stores against primitives alone,
+without peer-depping arc:
+
+```typescript
+import type { OutboxStore, OutboxWriteOptions } from '@classytic/primitives/outbox';
+import { OutboxOwnershipError } from '@classytic/primitives/outbox';
+```
+
 The contract has three required methods and several optional capabilities that stores
 can opt into for richer semantics:
 
@@ -795,7 +806,7 @@ that don't need the breakdown.
 Auto-dispatch Arc events to customer webhook endpoints with HMAC-SHA256 signing and bounded concurrency.
 
 ```typescript
-import { webhookPlugin, verifySignature } from '@classytic/arc/integrations/webhooks';
+import { webhookPlugin, verifyWebhook } from '@classytic/arc/integrations/webhooks';
 
 // Outbound: auto-dispatch events to subscribers
 await fastify.register(webhookPlugin, { concurrency: 5 });
@@ -808,14 +819,21 @@ await app.webhooks.register({
 });
 
 await app.events.publish('order.created', { orderId: '123' });
-// → POST https://customer.com/webhook with x-webhook-signature header
+// → POST https://customer.com/webhook with the v1 headers:
+//    x-arc-webhook-signature: v1=<hmac>   (signs timestamp + delivery id + body)
+//    x-arc-webhook-timestamp, x-arc-webhook-delivery
 
-// Inbound: verify signatures from other Arc services or third parties
-fastify.post('/webhooks/incoming', async (req, reply) => {
-  if (!verifySignature(req.rawBody, secret, req.headers['x-webhook-signature'])) {
-    return reply.status(401).send({ error: 'Invalid signature' });
-  }
-  // handle event
+// Inbound from another arc service: verify the v1 contract
+fastify.post('/webhooks/incoming', { config: { rawBody: true } }, async (req, reply) => {
+  const result = verifyWebhook({
+    body: req.rawBody as string,
+    secret,
+    signature: req.headers['x-arc-webhook-signature'] as string,
+    timestamp: req.headers['x-arc-webhook-timestamp'] as string,
+    deliveryId: req.headers['x-arc-webhook-delivery'] as string,
+  });
+  if (!result.valid) return reply.status(401).send({ error: result.reason });
+  // dedup on result.deliveryId, then handle the event
 });
 ```
 

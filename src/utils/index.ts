@@ -4,18 +4,6 @@
  * Common utilities for the Arc framework.
  */
 
-// Resource config validation — dev tooling moved here from the root barrel in
-// v2.11.0 so `@classytic/arc` can honor its "root = essentials only" policy.
-export type {
-  ConfigError,
-  ValidateOptions,
-  ValidationResult,
-} from "../core/validateResourceConfig.js";
-export {
-  assertValidConfig,
-  formatValidationErrors,
-  validateResourceConfig,
-} from "../core/validateResourceConfig.js";
 export type { CircuitBreakerOptions, CircuitBreakerStats } from "./circuitBreaker.js";
 // Circuit Breaker
 export {
@@ -64,7 +52,7 @@ export { MONGO_DIALECT, NEUTRAL_DIALECT } from "./filter-dialect.js";
 export { handleRaw } from "./handleRaw.js";
 export type { ArcHeaders } from "./headers.js";
 // Headers — honest typing + duplicate-safe accessor for HTTP and MCP contexts
-export { getHeader } from "./headers.js";
+export { getHeader, requireSingleHeaderValue } from "./headers.js";
 export type { ArcQueryParserOptions } from "./queryParser.js";
 // Query Parser
 export {
@@ -120,4 +108,4 @@ export type { EventsDecorator } from "./typeGuards.js";
 // Type Guards
 export { hasEvents } from "./typeGuards.js";
 // User-object helpers (moved from `/types` in v2.11.0)
-export { getUserId } from "./userHelpers.js";
+export { getUserId, getUserRoles, normalizeRoles } from "./userHelpers.js";

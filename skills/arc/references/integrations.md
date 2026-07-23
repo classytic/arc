@@ -335,7 +335,8 @@ Events published via `fastify.events.publish()` auto-deliver to matching webhook
 ```typescript
 await app.events.publish('order.created', { orderId: '123' });
 // → POST https://customer.com/webhook
-//   Headers: x-webhook-signature, x-webhook-id, x-webhook-event
+//   Headers: x-arc-webhook-signature (v1=<hmac>), x-arc-webhook-timestamp,
+//            x-arc-webhook-delivery (= event meta.id, stable across retries)
 //   Body: { type, payload, meta }
 ```
 
@@ -343,23 +344,31 @@ Deliveries run with bounded concurrency (default: 5) — one slow endpoint won't
 
 ### HMAC Signing & Verification
 
-**Outbound** — every delivery is signed with the subscription's secret:
+**Outbound** — every delivery is signed with the subscription's secret using the v1 contract (timestamp + delivery id are INSIDE the signed string — replay-bounded, dedup on an authenticated id):
 
 ```
-x-webhook-signature: sha256=a1b2c3...
+x-arc-webhook-signature: v1=a1b2c3...
+x-arc-webhook-timestamp: 1784640000000
+x-arc-webhook-delivery:  evt_...
 ```
 
-**Inbound** — verify with `verifySignature()` (timing-safe, never throws):
+**Inbound from arc** — verify with `verifyWebhook()` (signature + tolerance window, typed failure reasons):
 
 ```typescript
-import { verifySignature } from '@classytic/arc/integrations/webhooks';
+import { verifyWebhook } from '@classytic/arc/integrations/webhooks';
 
-fastify.post('/webhooks/incoming', async (req, reply) => {
-  const sig = req.headers['x-webhook-signature'] as string;
-  if (!verifySignature(req.rawBody, secret, sig)) {
-    return reply.status(401).send({ error: 'Invalid signature' });
+fastify.post('/webhooks/incoming', { config: { rawBody: true } }, async (req, reply) => {
+  const result = verifyWebhook({
+    body: req.rawBody as string,
+    secret,
+    signature: req.headers['x-arc-webhook-signature'] as string,
+    timestamp: req.headers['x-arc-webhook-timestamp'] as string,
+    deliveryId: req.headers['x-arc-webhook-delivery'] as string,
+  });
+  if (!result.valid) {
+    return reply.status(401).send({ error: result.reason });
   }
-  // handle event via req.headers['x-webhook-event']
+  // dedup on result.deliveryId, then handle the event
 });
 ```
 

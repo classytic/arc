@@ -84,6 +84,11 @@ describe("service scope — accessors", () => {
     expect(getUserId(service)).toBeUndefined();
   });
 
+  it("getUserId ignores a malformed userId smuggled onto a service scope", () => {
+    const malformed = { ...service, userId: "user-must-not-win" } as unknown as RequestScope;
+    expect(getUserId(malformed)).toBeUndefined();
+  });
+
   it("getUserRoles returns an empty array for service", () => {
     expect(getUserRoles(service)).toEqual([]);
   });

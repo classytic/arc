@@ -55,6 +55,7 @@ describe("Route Prefix Handling", () => {
     const healthCheckResource = makeResource("health-check");
 
     app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       resources: [productResource, itemResource, accountTypeResource, healthCheckResource],

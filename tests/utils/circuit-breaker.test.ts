@@ -367,3 +367,167 @@ describe("CircuitBreaker", () => {
     });
   });
 });
+
+// ============================================================================
+// Half-open probe fencing + abort propagation
+// ============================================================================
+
+describe("half-open probe fencing", () => {
+  // After resetTimeout, every queued caller observes "eligible"; only
+  // `halfOpenMaxProbes` (default 1) may actually test the downstream — the
+  // rest fail fast (or hit the fallback) as if the circuit were still open.
+  async function openBreaker(breaker: CircuitBreaker<() => Promise<unknown>>): Promise<void> {
+    for (let i = 0; i < 2; i++) {
+      await breaker.call().catch(() => {});
+    }
+    expect(breaker.getState()).toBe(CircuitState.OPEN);
+  }
+
+  it("only ONE concurrent caller probes after resetTimeout; the rest fail fast", async () => {
+    let invocations = 0;
+    let mode: "fail" | "slow-success" = "fail";
+    const fn = async () => {
+      invocations++;
+      if (mode === "fail") throw new Error("down");
+      await wait(50);
+      return "ok";
+    };
+    const breaker = new CircuitBreaker(fn, {
+      failureThreshold: 2,
+      resetTimeout: 30,
+      timeout: 1000,
+    });
+
+    await openBreaker(breaker as CircuitBreaker<() => Promise<unknown>>);
+    invocations = 0;
+    mode = "slow-success";
+    await wait(40); // past resetTimeout — every caller now sees "eligible"
+
+    const results = await Promise.allSettled([breaker.call(), breaker.call(), breaker.call()]);
+
+    expect(invocations).toBe(1); // exactly one probe reached the downstream
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(2);
+    for (const r of rejected) {
+      expect(r.reason).toBeInstanceOf(CircuitBreakerError);
+      expect((r.reason as CircuitBreakerError).state).toBe(CircuitState.HALF_OPEN);
+    }
+    expect(breaker.getState()).toBe(CircuitState.CLOSED);
+  });
+
+  it("halfOpenMaxProbes widens the probe window", async () => {
+    let invocations = 0;
+    let failing = true;
+    const fn = async () => {
+      invocations++;
+      if (failing) throw new Error("down");
+      await wait(30);
+      return "ok";
+    };
+    const breaker = new CircuitBreaker(fn, {
+      failureThreshold: 2,
+      resetTimeout: 20,
+      successThreshold: 2,
+      halfOpenMaxProbes: 2,
+      timeout: 1000,
+    });
+
+    await openBreaker(breaker as CircuitBreaker<() => Promise<unknown>>);
+    invocations = 0;
+    failing = false;
+    await wait(30);
+
+    const results = await Promise.allSettled([breaker.call(), breaker.call(), breaker.call()]);
+    expect(invocations).toBe(2);
+    expect(results.filter((r) => r.status === "rejected")).toHaveLength(1);
+  });
+
+  it("excess half-open callers get the fallback when configured", async () => {
+    let failing = true;
+    const fn = async () => {
+      if (failing) throw new Error("down");
+      await wait(30);
+      return "live";
+    };
+    const breaker = new CircuitBreaker(fn, {
+      failureThreshold: 2,
+      resetTimeout: 20,
+      timeout: 1000,
+      fallback: async () => "cached",
+    });
+
+    for (let i = 0; i < 2; i++) await breaker.call().catch(() => {});
+    failing = false;
+    await wait(30);
+
+    const [probe, shed] = await Promise.all([breaker.call(), breaker.call()]);
+    expect(probe).toBe("live");
+    expect(shed).toBe("cached");
+  });
+
+  it("sequential half-open probes are unaffected (slot frees between calls)", async () => {
+    let failing = true;
+    const fn = async () => {
+      if (failing) throw new Error("down");
+      return "ok";
+    };
+    const breaker = new CircuitBreaker(fn, {
+      failureThreshold: 2,
+      resetTimeout: 20,
+      successThreshold: 2,
+      timeout: 1000,
+    });
+
+    for (let i = 0; i < 2; i++) await breaker.call().catch(() => {});
+    failing = false;
+    await wait(30);
+
+    await breaker.call();
+    expect(breaker.getState()).toBe(CircuitState.HALF_OPEN);
+    await breaker.call();
+    expect(breaker.getState()).toBe(CircuitState.CLOSED);
+  });
+});
+
+describe("abort propagation", () => {
+  it("propagateAbort hands the fn a trailing AbortSignal fired on timeout", async () => {
+    let seenSignal: AbortSignal | undefined;
+    const fn = async (label: string, signal?: AbortSignal) => {
+      seenSignal = signal;
+      await wait(200);
+      return label;
+    };
+    const breaker = new CircuitBreaker(fn, { timeout: 30, propagateAbort: true });
+
+    await expect(breaker.call("x")).rejects.toThrow(/timeout after 30ms/);
+    expect(seenSignal).toBeInstanceOf(AbortSignal);
+    expect(seenSignal?.aborted).toBe(true);
+  });
+
+  it("without propagateAbort no signal is passed (back-compat)", async () => {
+    const seenArgs: unknown[][] = [];
+    const fn = async (...args: unknown[]) => {
+      seenArgs.push(args);
+      return "ok";
+    };
+    const breaker = new CircuitBreaker(fn as (a: string) => Promise<string>, { timeout: 100 });
+    await breaker.call("only");
+    expect(seenArgs[0]).toEqual(["only"]);
+  });
+
+  it("signal is NOT aborted on success", async () => {
+    let seenSignal: AbortSignal | undefined;
+    const fn = async (signal?: AbortSignal) => {
+      seenSignal = signal;
+      return "ok";
+    };
+    const breaker = new CircuitBreaker(fn as () => Promise<string>, {
+      timeout: 100,
+      propagateAbort: true,
+    });
+    await breaker.call();
+    expect(seenSignal?.aborted).toBe(false);
+  });
+});

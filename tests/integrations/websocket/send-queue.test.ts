@@ -132,6 +132,108 @@ describe("SendQueue — droppable sendRealtime()", () => {
 });
 
 // ============================================================================
+// SendQueue — head-pointer drain (wave-12: no O(n²) shift/reindex)
+// ============================================================================
+
+describe("SendQueue — head-pointer drain", () => {
+  it("repeated fill/drain cycles preserve order and leave the queue empty", () => {
+    const s = makeSocket({ bufferedAmount: 1024 * 1024 });
+    const q = new SendQueue(s, { capacity: 512 });
+    const expected: string[] = [];
+    for (let cycle = 0; cycle < 3; cycle++) {
+      for (let i = 0; i < 100; i++) {
+        const payload = `c${cycle}-m${i}`;
+        expected.push(payload);
+        q.send(payload);
+      }
+      s.setBufferedAmount(0);
+      q.flush();
+      s.setBufferedAmount(1024 * 1024);
+    }
+    expect(s.sent).toEqual(expected);
+    expect(q.size()).toBe(0);
+  });
+
+  it("coalesce keys stay valid across a partial drain (absolute indices)", () => {
+    const s = makeSocket({ bufferedAmount: 1024 * 1024 });
+    const q = new SendQueue(s);
+    q.send("crit-1");
+    q.send("crit-2");
+    q.sendRealtime("gps-v1", "gps");
+
+    // Partial drain: socket frees for exactly two writes, then chokes again.
+    let writes = 0;
+    s.send.mockImplementation((msg: string) => {
+      s.sent.push(msg);
+      writes += 1;
+      if (writes === 2) s.setBufferedAmount(1024 * 1024);
+    });
+    s.setBufferedAmount(0);
+    q.flush();
+    expect(s.sent).toEqual(["crit-1", "crit-2"]);
+
+    // The gps entry is still queued behind the advanced head — its
+    // coalesce index must still resolve so this replaces, not appends.
+    q.sendRealtime("gps-v2", "gps");
+    expect(q.size()).toBe(1);
+
+    s.setBufferedAmount(0);
+    q.flush();
+    expect(s.sent).toEqual(["crit-1", "crit-2", "gps-v2"]);
+  });
+
+  it("shed-on-overflow accounts for the drained prefix (size uses head)", () => {
+    const s = makeSocket({ bufferedAmount: 1024 * 1024 });
+    const q = new SendQueue(s, { capacity: 2 });
+    // Fill to capacity, drain fully, then verify capacity is AVAILABLE
+    // again — a length-based size() would see the stale prefix and
+    // terminate/shed incorrectly.
+    q.send("a");
+    q.send("b");
+    s.setBufferedAmount(0);
+    q.flush();
+    expect(q.size()).toBe(0);
+
+    s.setBufferedAmount(1024 * 1024);
+    q.send("c");
+    q.send("d");
+    expect(s.terminate).not.toHaveBeenCalled();
+    expect(q.size()).toBe(2);
+  });
+
+  it("compacts the drained prefix and reindexes coalesce keys correctly", () => {
+    const s = makeSocket({ bufferedAmount: 1024 * 1024 });
+    const q = new SendQueue(s, { capacity: 512 });
+    // Drain enough frames to cross the compaction threshold (head ≥ 64).
+    for (let i = 0; i < 100; i++) q.send(`m${i}`);
+    // Leave one keyed droppable queued behind the prefix.
+    q.sendRealtime("gps-v1", "gps");
+
+    let writes = 0;
+    s.send.mockImplementation((msg: string) => {
+      s.sent.push(msg);
+      writes += 1;
+      if (writes === 100) s.setBufferedAmount(1024 * 1024); // stop before gps
+    });
+    s.setBufferedAmount(0);
+    q.flush();
+    expect(q.size()).toBe(1);
+
+    // Internal invariant: the drained prefix was garbage-collected.
+    const internals = q as unknown as { head: number; entries: unknown[] };
+    expect(internals.head).toBe(0);
+    expect(internals.entries.length).toBe(1);
+
+    // Post-compaction the rebuilt coalesce index must still replace.
+    q.sendRealtime("gps-v2", "gps");
+    expect(q.size()).toBe(1);
+    s.setBufferedAmount(0);
+    q.flush();
+    expect(s.sent[s.sent.length - 1]).toBe("gps-v2");
+  });
+});
+
+// ============================================================================
 // RoomManager — addressed-send routing
 // ============================================================================
 

@@ -97,10 +97,19 @@ export interface MultipartBodyOptions {
    * @example ['avatar', 'cover']       // multi-field upload (profile editor)
    */
   requiredFields?: string[];
+  /**
+   * Cap on the TOTAL buffered file bytes per request (default: 25 MiB).
+   * Per-file and per-count limits bound individual files but not their
+   * SUM — without this, `maxFiles: 5` × `maxFileSize: 10 MiB` lets one
+   * request retain ~50 MiB of process memory, and concurrency multiplies
+   * it (20 such uploads ≈ 1 GiB). Exceeding the cap returns 413.
+   */
+  maxTotalBytes?: number;
 }
 
 const DEFAULT_MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const DEFAULT_MAX_FILES = 5;
+const DEFAULT_MAX_TOTAL_BYTES = 25 * 1024 * 1024; // 25MB across ALL files in one request
 const DEFAULT_FILES_KEY = "_files";
 
 interface MimeMatcher {
@@ -158,10 +167,19 @@ function buildMimeMatcher(allowed: string[] | undefined): MimeMatcher | undefine
  * For non-multipart requests (regular JSON), this is a no-op — the request
  * passes through unchanged. This makes it safe to add to create/update
  * middlewares without breaking JSON clients.
+ *
+ * **BUFFERED — for small uploads only.** Every accepted file is held fully
+ * in process memory for the request's lifetime; memory cost is
+ * `concurrency × maxTotalBytes`. Suitable for avatars, documents, and
+ * form attachments. For large files use PRESIGNED direct-to-object-storage
+ * uploads (see the files-upload preset / production guide) and pair upload
+ * routes with strict rate limits — buffering video through the app tier is
+ * the wrong architecture regardless of limits.
  */
 export function multipartBody(options: MultipartBodyOptions = {}): RouteHandlerMethod {
   const maxFileSize = options.maxFileSize ?? DEFAULT_MAX_FILE_SIZE;
   const maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
+  const maxTotalBytes = options.maxTotalBytes ?? DEFAULT_MAX_TOTAL_BYTES;
   const mimeMatcher = buildMimeMatcher(options.allowedMimeTypes);
   const filesKey = options.filesKey ?? DEFAULT_FILES_KEY;
   const requiredFields =
@@ -186,6 +204,7 @@ export function multipartBody(options: MultipartBodyOptions = {}): RouteHandlerM
     const body: Record<string, unknown> = {};
     const files: Record<string, ParsedFile> = {};
     let fileCount = 0;
+    let totalBytes = 0;
 
     try {
       const parts = (request as unknown as { parts: () => AsyncIterable<MultipartPart> }).parts();
@@ -210,6 +229,16 @@ export function multipartBody(options: MultipartBodyOptions = {}): RouteHandlerM
             return reply.code(413).send({
               code: "arc.payload_too_large",
               message: `File '${part.filename}' exceeds maximum size of ${Math.round(maxFileSize / 1024 / 1024)}MB`,
+              status: 413,
+            });
+          }
+
+          // Total-request cap — per-file limits don't bound the SUM.
+          totalBytes += buffer.length;
+          if (totalBytes > maxTotalBytes) {
+            return reply.code(413).send({
+              code: "arc.payload_too_large",
+              message: `Combined upload size exceeds ${Math.round(maxTotalBytes / 1024 / 1024)}MB per request`,
               status: 413,
             });
           }

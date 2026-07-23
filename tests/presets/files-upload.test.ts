@@ -33,7 +33,7 @@ function fakeStorage(overrides: Partial<Storage> = {}): Storage {
       bytes: input.size,
     })),
     read: vi.fn(async () => ({
-      kind: "buffer",
+      kind: "buffer" as const,
       buffer: Buffer.from("x"),
       contentType: "application/octet-stream",
     })),

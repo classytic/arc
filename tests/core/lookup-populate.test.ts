@@ -316,29 +316,29 @@ describe("Lookup/join (no refs — $lookup aggregation)", () => {
 });
 
 // ============================================================================
-// No allowedLookups restriction (open)
+// No allowedLookups — DENY by default (2.24 flip)
 // ============================================================================
 
-describe("Lookup without allowedLookups (unrestricted)", () => {
+describe("Lookup without allowedLookups (deny-by-default)", () => {
   beforeAll(async () => {
     await createTestAppWithResource({
-      // No allowedLookups — all lookups allowed
+      // No allowedLookups — client-driven lookups are DROPPED
       schemaOptions: {},
     });
   });
 
-  it("should allow any lookup when allowedLookups is not set", async () => {
+  it("drops the lookup when allowedLookups is not configured", async () => {
     await seedData();
 
     const res = await app.inject({
       method: "GET",
       url: `/lookup-products?lookup[cat][from]=lookupcategories&lookup[cat][localField]=categorySlug&lookup[cat][foreignField]=slug&lookup[cat][single]=true`,
     });
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(200); // request succeeds — the join is silently dropped
     const body = res.json();
     const phone = body.data.find((d: any) => d.name === "Phone");
-    expect(phone.cat).toBeDefined();
-    expect(phone.cat.name).toBe("Electronics");
+    expect(phone).toBeDefined();
+    expect(phone.cat).toBeUndefined();
   });
 });
 
@@ -348,7 +348,9 @@ describe("Lookup without allowedLookups (unrestricted)", () => {
 
 describe("Lookup combined with sort and filter", () => {
   beforeAll(async () => {
-    await createTestAppWithResource({ schemaOptions: {} });
+    await createTestAppWithResource({
+      schemaOptions: { query: { allowedLookups: ["lookupcategories"] } },
+    });
   });
 
   it("should filter + sort + lookup in single query", async () => {
@@ -388,7 +390,9 @@ describe("Lookup combined with sort and filter", () => {
 
 describe("Root select + lookup combined", () => {
   beforeAll(async () => {
-    await createTestAppWithResource({ schemaOptions: {} });
+    await createTestAppWithResource({
+      schemaOptions: { query: { allowedLookups: ["lookupcategories"] } },
+    });
   });
 
   it("should apply root select and still join via lookup", async () => {
@@ -431,7 +435,9 @@ describe("Root select + lookup combined", () => {
 
 describe("Keyset pagination + lookup", () => {
   beforeAll(async () => {
-    await createTestAppWithResource({ schemaOptions: {} });
+    await createTestAppWithResource({
+      schemaOptions: { query: { allowedLookups: ["lookupcategories"] } },
+    });
   });
 
   it("should work with offset pagination and lookup", async () => {

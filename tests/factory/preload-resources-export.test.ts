@@ -7,7 +7,7 @@
  * smokes that scaffold `createApp` against real resources) wants it
  * next to `loadResources`. 2.17 re-exports the helper from `/factory`
  * so autocomplete + docs surface it where it's actually needed. The
- * canonical source still lives in `src/testing/preloadResources.ts`;
+ * canonical source lives in `src/factory/preloadResources.ts`;
  * `/factory` and `/testing` are just two entry points to the same
  * function.
  */

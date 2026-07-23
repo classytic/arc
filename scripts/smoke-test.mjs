@@ -119,8 +119,9 @@ check("npm pack --dry-run", () => {
 });
 
 // 5. Real consumer install (file:../..) — proves the published artifact actually works
-// Skipped on `npm run smoke` (fast iteration). Enforced via SMOKE_CONSUMER=1 or prepublishOnly.
-if (process.env.SMOKE_CONSUMER === "1" || process.env.npm_lifecycle_event === "prepublishOnly") {
+// Skipped on `npm run smoke` (fast iteration). Enforced by `npm run smoke:consumer`
+// in prepublishOnly, or directly via SMOKE_CONSUMER=1.
+if (process.argv.includes("--consumer") || process.env.SMOKE_CONSUMER === "1") {
   console.log("\n[5/5] Running consumer install + e2e (file:../..)...");
   check("examples/_consumer-smoke", () => {
     // Clean install — file: deps don't update on plain `npm install` reliably

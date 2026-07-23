@@ -17,9 +17,15 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { loadResources } from "../../src/factory/loadResources.js";
 
 const TMP = join(import.meta.dirname, "__tmp_import_compat__");
+const WINDOWS_SAFE_REMOVE = {
+  recursive: true,
+  force: true,
+  maxRetries: 5,
+  retryDelay: 50,
+} as const;
 
 afterAll(() => {
-  if (existsSync(TMP)) rmSync(TMP, { recursive: true, force: true });
+  if (existsSync(TMP)) rmSync(TMP, WINDOWS_SAFE_REMOVE);
 });
 
 // ── Helper: create a minimal resource file ──
@@ -45,7 +51,7 @@ describe("loadResources — relative imports", () => {
   const dir = join(TMP, "relative");
 
   afterEach(() => {
-    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+    if (existsSync(dir)) rmSync(dir, WINDOWS_SAFE_REMOVE);
   });
 
   it("resource importing ./helper.ts via .js extension works", async () => {

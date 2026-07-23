@@ -30,6 +30,7 @@ const SRC = path.resolve(process.cwd(), "src");
 const LAYERS = {
   // 0 — leaf primitives: no arc-internal imports beyond each other
   constants: 0,
+  lock: 0,
   logger: 0,
   context: 0,
   schemas: 0,
@@ -75,18 +76,7 @@ const LAYERS = {
  * Grandfathered edges are excluded from both the layer check and cycle
  * detection (they'd otherwise explain every composite cycle they sit on).
  */
-const GRANDFATHERED_EDGES = new Map([
-  // `@classytic/arc/utils` re-exports validateResourceConfig from core —
-  // public-surface decision from v2.11.0 ("root = essentials only").
-  ["utils -> core", "barrel re-export of core/validateResourceConfig"],
-  // `@classytic/arc` (factory barrel) re-exports preloadResources from
-  // testing for DX autocomplete next to loadResources.
-  ["factory -> testing", "barrel re-export of testing/preloadResources"],
-  // scope/elevation + resolveOrgFromHeader use getUserRoles/normalizeRoles
-  // from permissions/types. Burn-down: move the role-normalization helpers
-  // into scope (or a lower module) and re-export from permissions.
-  ["scope -> permissions", "getUserRoles/normalizeRoles helper placement"],
-]);
+const GRANDFATHERED_EDGES = new Map();
 
 // ── graph construction ──────────────────────────────────────────────────
 
@@ -215,5 +205,5 @@ if (errors.length > 0) {
   process.exit(1);
 }
 console.log(
-  `✔ Dependency boundaries hold — ${files.length} files, ${graph.size} modules, ${usedGrandfathers.size} grandfathered edges pending burn-down.`,
+  `✔ Dependency boundaries hold — ${files.length} files, ${graph.size} modules, ${usedGrandfathers.size} grandfathered edges.`,
 );

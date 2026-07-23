@@ -20,6 +20,7 @@ describe("JSON parser security", () => {
 
   async function makeApp(): Promise<FastifyInstance> {
     app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
     });

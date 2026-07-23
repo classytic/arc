@@ -425,7 +425,6 @@ const app = await createApp({
   sensible: true,            // fastify.httpErrors helpers
   multipart: { limits: { fileSize: 10 * 1024 * 1024 } },  // File uploads
   rawBody: { field: 'rawBody', global: false },            // Webhooks (Stripe, etc.)
-  typeProvider: 'typebox',   // TypeBox type-safe schemas
 
   // Error handler (auto-registered)
   errorHandler: { includeStack: true },  // or false to disable
@@ -478,22 +477,20 @@ const app = await ArcFactory.testing({
 
 ## Error Normalization
 
+All errors normalize to the canonical `ErrorContract` from `@classytic/repo-core/errors` — `{ code, message, status, details?, correlationId?, meta? }`. There is no `success` field; the HTTP status discriminates.
+
 | Source | HTTP Status | Response |
 |--------|------------|----------|
-| AJV validation | 422 | `{ success: false, error: 'Validation failed', details: [...] }` |
-| Mongoose CastError | 400 | `{ success: false, error: 'Invalid ID format' }` |
-| Duplicate key (E11000) | 409 | `{ success: false, error: 'Duplicate entry' }` |
-| ArcError | Custom | `{ success: false, error: message, code: errorCode }` |
+| AJV validation | 422 | `{ code: 'arc.validation_error', message: 'Validation failed', status: 422, details: [...] }` |
+| Cast / bad id | 400 | `{ code: 'arc.invalid_id', message: 'Invalid ID format', status: 400 }` |
+| Duplicate key (E11000) | 409 | `{ code: 'arc.conflict', message: 'Duplicate entry', status: 409 }` |
+| ArcError | Custom | `{ code, message, status }` (carries its own `code` + `status`) |
 
-## TypeBox Type Provider
+## TypeBox Schemas
 
-```typescript
-const app = await createApp({
-  typeProvider: 'typebox',
-});
-```
+**Requires:** `npm install typebox @fastify/type-provider-typebox`
 
-**Requires:** `npm install @sinclair/typebox @fastify/type-provider-typebox`
+Arc uses **one** TypeBox stack: `typebox` (v1) builds schemas and derives their TypeScript types; `@fastify/type-provider-typebox` (v6) supplies the compile-time route/plugin typing. Arc does **not** globally install `TypeBoxValidatorCompiler` — there is no `typeProvider` switch. `Type.*` produces plain JSON Schema, so **Fastify's standard AJV pipeline** validates requests and serializes responses for every route (JSON Schema, Zod-converted, and TypeBox alike), keeping validation/coercion defaults consistent.
 
 ```typescript
 import { Type, ArcListResponse, ArcPaginationQuery } from '@classytic/arc/schemas';
@@ -505,9 +502,25 @@ fastify.get('/products', {
 }, handler);
 ```
 
+For full request/response **inference** in your handlers, type the plugin with `FastifyPluginAsyncTypebox` (re-exported from `@classytic/arc/schemas`):
+
+```typescript
+import type { FastifyPluginAsyncTypebox } from '@classytic/arc/schemas';
+import { Type } from '@classytic/arc/schemas';
+
+export const productRoutes: FastifyPluginAsyncTypebox = async (app) => {
+  app.post('/products', {
+    schema: { body: Type.Object({ name: Type.String({ minLength: 1 }) }) },
+  }, async (request) => {
+    // request.body.name is inferred as string
+    return request.body;
+  });
+};
+```
+
 | Helper | Description |
 |--------|-------------|
-| `ArcListResponse(schema)` | Paginated list — `oneOf` of `{ method, data, ... }` (offset / keyset / aggregate) or bare `{ data }` |
+| `ArcListResponse(schema)` | Paginated list — `anyOf` union of `{ method, data, ... }` (offset / keyset / aggregate) or bare `{ data }` (TypeBox `Type.Union` emits `anyOf`) |
 | `ArcOffsetListResponse(schema)` | Pin one variant — `{ method: 'offset', data, page, limit, total, pages, hasNext, hasPrev }` |
 | `ArcKeysetListResponse(schema)` | Pin one variant — `{ method: 'keyset', data, limit, hasMore, next }` |
 | `ArcAggregateListResponse(schema)` | Pin one variant — `{ method: 'aggregate', ...same as offset }` |

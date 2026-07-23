@@ -1,0 +1,23 @@
+name: Feature request
+description: Propose an addition or change to arc's public surface
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem (not the solution)
+      description: What can't you express or guarantee today?
+    validations:
+      required: true
+  - type: textarea
+    id: sketch
+    attributes:
+      label: API sketch (optional)
+      description: >
+        How it might look at a call site. Note the stability tier you'd
+        expect (stable/beta/experimental — see GOVERNANCE.md) and whether
+        it belongs in arc, repo-core, or a kit.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Workarounds you considered

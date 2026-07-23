@@ -23,8 +23,7 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import sjson from "secure-json-parse";
 import { authenticateWebSocket } from "./auth.js";
-import { DeadQueue } from "./dead-queue.js";
-import { EnvelopeWriter } from "./envelope.js";
+import type { EnvelopeWriter } from "./envelope.js";
 import { derivePrincipal, type PushRefRegistry } from "./pushref-registry.js";
 import type { RoomManager } from "./room-manager.js";
 import { safeAsync } from "./safe-async.js";
@@ -147,10 +146,6 @@ export async function handleConnection(
     clientId: serviceClientId,
     authMode: options.auth,
   });
-  const mintEnvelope =
-    options.messageEnvelope === "seq"
-      ? () => new EnvelopeWriter(new DeadQueue(options.deadQueueSize))
-      : undefined;
   const urlPushRef = readPushRefFromRequest(request);
 
   let pushRef: string;

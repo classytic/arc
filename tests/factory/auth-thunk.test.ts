@@ -31,6 +31,7 @@ describe("auth.betterAuth thunk (2.22)", () => {
   it("resolves the thunk AFTER beforeBoot — the connect-then-auth ordering", async () => {
     const order: string[] = [];
     const app = await createApp({
+      logger: false,
       preset: "testing",
       beforeBoot: async () => {
         order.push("beforeBoot");
@@ -52,6 +53,7 @@ describe("auth.betterAuth thunk (2.22)", () => {
   it("sync thunks work too", async () => {
     let resolved = false;
     const app = await createApp({
+      logger: false,
       preset: "testing",
       auth: {
         type: "betterAuth",
@@ -68,6 +70,7 @@ describe("auth.betterAuth thunk (2.22)", () => {
   it("the eager object form keeps working unchanged (back-compat)", async () => {
     let registered = false;
     const app = await createApp({
+      logger: false,
       preset: "testing",
       auth: {
         type: "betterAuth",

@@ -53,6 +53,8 @@ Pattern for exactly-once-effective delivery with DB-level atomicity.
 new EventOutbox({ repository, transport });  // repository is any RepositoryLike — see [[adapters]]
 ```
 
+**Contract vs runtime split (2.24):** the CONTRACT (`OutboxStore`, option types, `OutboxOwnershipError`, `InvalidOutboxEventError`) is owned by `@classytic/primitives/outbox` (>=0.13) — arc does NOT re-export it; import from primitives (same rule as the event types since 2.12). Arc owns the RUNTIME: `EventOutbox`, `RelayResult`, `MemoryOutboxStore`, `repositoryAsOutboxStore`, `exponentialBackoff`. Domain packages implement stores against primitives alone (never peer-dep arc); one class identity makes `instanceof OutboxOwnershipError` work across the boundary.
+
 - `store()` auto-maps `meta.idempotencyKey` → `OutboxWriteOptions.dedupeKey`.
 - `failurePolicy({ event, error, attempts }) => { retryAt?, deadLetter? }` centralises retry/DLQ.
 - `store.getDeadLettered?(limit)` returns `DeadLetteredEvent[]`.

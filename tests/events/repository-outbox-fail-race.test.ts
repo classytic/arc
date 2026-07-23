@@ -9,9 +9,9 @@
  * "only owner can acknowledge held event"); `fail()` now matches.
  */
 
+import { OutboxOwnershipError } from "@classytic/primitives/outbox";
 import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import { describe, expect, it } from "vitest";
-import { OutboxOwnershipError } from "../../src/events/outbox.js";
 import { repositoryAsOutboxStore } from "../../src/events/repository-outbox-adapter.js";
 
 interface OutboxRow extends Record<string, unknown> {

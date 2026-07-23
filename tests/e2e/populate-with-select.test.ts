@@ -115,6 +115,8 @@ describe("Populate with Select - E2E Integration", () => {
       }),
       controller: postController,
       queryParser, // MongoKit QueryParser for advanced populate options
+      // 2.24: populate is deny-by-default — list the relations clients may join
+      schemaOptions: { query: { allowedPopulate: ["authorId"] } },
       permissions: {
         list: requireAuth(),
         get: requireAuth(),
@@ -382,6 +384,8 @@ describe("Populate with Select - E2E Integration", () => {
         }),
         controller: multiRefPostController,
         queryParser,
+        // 2.24: populate is deny-by-default — allowlist the joinable refs
+        schemaOptions: { query: { allowedPopulate: ["authorId", "categoryId"] } },
         permissions: {
           list: requireAuth(),
           get: requireAuth(),
@@ -465,8 +469,12 @@ describe("Populate with Select - E2E Integration", () => {
         },
       });
 
-      // Mongoose throws error for non-existent populate paths
-      expect(response.statusCode).toBe(500);
+      // Deny-by-default allowlisting drops the unknown path before it ever
+      // reaches Mongoose (which would 500 on a non-existent populate path) —
+      // the request succeeds with the field unpopulated.
+      expect(response.statusCode).toBe(200);
+      const payload = JSON.parse(response.payload);
+      expect(typeof payload.data[0].authorId).toBe("string");
     });
 
     it("should handle populate with filter/pagination together", async () => {

@@ -22,6 +22,7 @@ describe("Webhooks — createApp Factory", () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
 
     app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
     });
@@ -48,7 +49,7 @@ describe("Webhooks — createApp Factory", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, opts] = fetchMock.mock.calls[0];
     expect(url).toBe("https://customer.com/hook");
-    expect(opts.headers["x-webhook-signature"]).toMatch(/^sha256=/);
+    expect(opts.headers["x-arc-webhook-signature"]).toMatch(/^v1=/);
 
     const log = app.webhooks.deliveryLog();
     expect(log[0].success).toBe(true);

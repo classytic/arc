@@ -32,7 +32,13 @@ export const productionPreset: Partial<CreateAppOptions> = {
       censor: "[REDACTED]",
     },
   },
-  trustProxy: true,
+  // Fail-closed (2.24 flip; was `true` = trust EVERY proxy): a spoofed
+  // X-Forwarded-* from a directly-reachable app forges request.ip
+  // (rate-limit bypass, wrong audit IPs, forged proto). Hosts behind a
+  // proxy/LB MUST set trustProxy explicitly (hop count, CIDR, function, or
+  // a deliberate true) — createApp warns at boot when this default is
+  // inherited, because behind a proxy `false` means request.ip is the LB.
+  trustProxy: false,
 
   // Security
   helmet: {
@@ -76,6 +82,10 @@ export const productionPreset: Partial<CreateAppOptions> = {
   underPressure: {
     exposeStatusRoute: true,
     maxEventLoopDelay: 3000,
+    maxEventLoopUtilization: 0.98,
+    // Deployment-specific — size BOTH from your container memory limit
+    // (e.g. ~80% of the cgroup limit). 1 GiB is a placeholder that sheds
+    // too early on big instances and too late on small ones.
     maxHeapUsedBytes: 1024 * 1024 * 1024, // 1GB
     maxRssBytes: 1024 * 1024 * 1024, // 1GB
   },

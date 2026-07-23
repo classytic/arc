@@ -22,6 +22,8 @@
 // Pulled in for the `require*` throwing accessors below. Errors module
 // has no dependency on scope, so no cycle.
 import { OrgRequiredError, UnauthorizedError } from "../utils/errors.js";
+import { type ArcHeaders, requireSingleHeaderValue } from "../utils/headers.js";
+import { getUserId as getRawUserId } from "../utils/userHelpers.js";
 
 // ============================================================================
 // Capability Mandate (agent-led flows: AP2, Stripe x402, MCP authorization)
@@ -131,7 +133,9 @@ export interface Mandate {
  * | elevated      | Platform admin, explicit elevation               |
  *
  * **Identity fields by kind:**
- * - `userId` / `userRoles` — available on `authenticated`, `member`, `elevated` (a real human)
+ * - `userId` — available on `authenticated`, `member`, `elevated` (a real human)
+ * - `userRoles` — available on `authenticated` and `member`; elevated scope
+ *   bypasses role gates explicitly and therefore does not carry role claims
  * - `clientId` — available on `service` (a machine identity, NOT a user)
  * - `organizationId` — required on `member` and `service`, optional on `elevated`
  * - `orgRoles` — org-level roles, only on `member` (from membership records)
@@ -317,8 +321,7 @@ export function getTenantFromRequest(
     if (id) return { organizationId: id, source: "scope" };
   }
   const headerName = (options.header ?? "x-organization-id").toLowerCase();
-  const raw = req.headers[headerName];
-  const headerValue = Array.isArray(raw) ? raw[0] : raw;
+  const headerValue = requireSingleHeaderValue(req.headers, headerName);
   if (typeof headerValue === "string" && headerValue.length > 0) {
     return { organizationId: headerValue, source: "header" };
   }
@@ -512,8 +515,15 @@ export function isOrgInScope(scope: RequestScope, targetOrgId: string): boolean 
  * ```
  */
 export function getUserId(scope: RequestScope): string | undefined {
-  if (scope.kind === "public") return undefined;
-  return (scope as { userId?: string }).userId;
+  switch (scope.kind) {
+    case "authenticated":
+    case "member":
+    case "elevated":
+      return scope.userId;
+    case "public":
+    case "service":
+      return undefined;
+  }
 }
 
 // ============================================================================
@@ -658,16 +668,18 @@ export function getOrgContext(request: {
   orgRoles: string[];
 } {
   const scope = request.scope ?? { kind: "public" as const };
+  // Validate a supplied tenant-selection header even when an authoritative
+  // scope/user value wins. Ambiguous identity input is rejected, not ignored.
+  const requestedOrgId = requireSingleHeaderValue(request.headers, "x-organization-id");
+  const rawOrganizationId = request.user?.organizationId;
+  const userOrganizationId =
+    rawOrganizationId === undefined || rawOrganizationId === null
+      ? undefined
+      : String(rawOrganizationId) || undefined;
 
   // Primary: derive from scope (set by auth adapters)
-  const userId =
-    getUserId(scope) ??
-    (request.user?.id as string | undefined) ??
-    (request.user?._id as string | undefined);
-  const organizationId =
-    getOrgId(scope) ??
-    (request.user?.organizationId as string | undefined) ??
-    (request.headers?.["x-organization-id"] as string | undefined);
+  const userId = getUserId(scope) ?? getRawUserId(request.user);
+  const organizationId = getOrgId(scope) ?? userOrganizationId ?? requestedOrgId;
   const roles = getUserRoles(scope);
   const orgRoles = getOrgRoles(scope);
 
@@ -699,6 +711,129 @@ export function getOrgContext(request: {
  */
 export function getRequestScope(request: { scope?: RequestScope }): RequestScope {
   return request.scope ?? PUBLIC_SCOPE;
+}
+
+// ============================================================================
+// scopeFirstCtx — the shared actor/org context derivation for module packages
+// ============================================================================
+
+/** Options for {@link scopeFirstCtx}. */
+export interface ScopeFirstCtxOptions {
+  /**
+   * Tenant-selection header consulted ONLY when the scope carries no org —
+   * the custom-auth/public bridge (same semantics as `getTenantFromRequest`).
+   * A validated scope org always wins; the header never overrides it.
+   * Default `'x-organization-id'`; pass `false` to disable the bridge and
+   * read strictly from scope.
+   */
+  orgHeader?: string | false;
+  /**
+   * Actor id substituted when the scope carries no user/client identity
+   * (e.g. `'system'` / `'anonymous'`). When provided, the returned `actorId`
+   * narrows to `string`; omit to receive `actorId: undefined` on
+   * unauthenticated requests and apply your own policy.
+   */
+  fallbackActorId?: string;
+}
+
+/** Return shape of {@link scopeFirstCtx}. */
+export interface ScopeFirstCtx {
+  actorId?: string;
+  organizationId?: string;
+}
+
+/**
+ * Request shape accepted by {@link scopeFirstCtx} — deliberately structural so
+ * ONE helper serves both surfaces:
+ * - a raw `FastifyRequest`, whose `scope` is the discriminated {@link RequestScope}
+ * - arc's `IRequestContext` (controller overrides, pipeline handlers, actions),
+ *   whose `scope` is the FLAT projection (`{ organizationId?, userId?, orgRoles? }`
+ *   lifted from `metadata._scope` — see `RequestScopeProjection`)
+ */
+export interface ScopeFirstCtxRequest {
+  scope?:
+    | RequestScope
+    | {
+        organizationId?: string | undefined;
+        userId?: string | undefined;
+        orgRoles?: string[] | undefined;
+      }
+    | undefined;
+  /** `ArcHeaders` — readonly, repeated headers may arrive as arrays. Fastify's `IncomingHttpHeaders` assigns cleanly. */
+  headers?: ArcHeaders | undefined;
+}
+
+/**
+ * The ONE shared actor/org derivation for resource handlers and module
+ * packages (`arc-*` fleet) — scope-FIRST, per the canonical precedence:
+ *
+ * 1. `request.scope` (arc's validated `RequestScope`, set by auth adapters):
+ *    `userId` (human) or `clientId` (service) → `actorId`; `getOrgId(scope)`
+ *    → `organizationId`.
+ * 2. The `x-organization-id` header — ONLY when the scope carries no org.
+ *    This is the bridge for custom-auth/public routes where arc leaves scope
+ *    unpopulated; it never overrides a validated scope.
+ *
+ * Replaces per-package hand-rolled clones of
+ * `req.user?._id ?? req.user?.id ?? headers['x-organization-id']` — that
+ * pattern re-implements (and drifts from) arc's canonical resolution. A
+ * package's `ctxOf(req)` should call this for the shared
+ * `{ actorId, organizationId }` and only ADD its kernel-specific fields
+ * (`actorKind` / `correlationId` / `roles` / `idempotencyKey`).
+ *
+ * Structural request shape — works on a raw `FastifyRequest` AND on arc's
+ * `IRequestContext` (see {@link ScopeFirstCtxRequest}: the discriminated
+ * `RequestScope` and the flat controller projection are both understood).
+ *
+ * @example
+ * ```typescript
+ * import { scopeFirstCtx } from '@classytic/arc/scope';
+ *
+ * // Guaranteed actor (kernel context requires one):
+ * const { actorId, organizationId } = scopeFirstCtx(req, { fallbackActorId: 'system' });
+ *
+ * // Optional actor (package applies its own policy):
+ * const ctx = scopeFirstCtx(req);
+ * if (ctx.actorId) audit.record({ actor: ctx.actorId });
+ * ```
+ */
+export function scopeFirstCtx(
+  req: ScopeFirstCtxRequest,
+  options: ScopeFirstCtxOptions & { fallbackActorId: string },
+): { actorId: string; organizationId?: string };
+export function scopeFirstCtx(
+  req: ScopeFirstCtxRequest,
+  options?: ScopeFirstCtxOptions,
+): ScopeFirstCtx;
+export function scopeFirstCtx(
+  req: ScopeFirstCtxRequest,
+  options: ScopeFirstCtxOptions = {},
+): ScopeFirstCtx {
+  let actorId: string | undefined;
+  let organizationId: string | undefined;
+  const s = req.scope;
+  if (s && "kind" in s) {
+    // Discriminated RequestScope (raw FastifyRequest decoration).
+    actorId = getUserId(s) ?? getClientId(s);
+    organizationId = getOrgId(s);
+  } else if (s) {
+    // Flat controller projection (IRequestContext.scope).
+    actorId = s.userId;
+    organizationId = s.organizationId;
+  }
+  actorId = actorId ?? options.fallbackActorId;
+  if (!organizationId && options.orgHeader !== false && req.headers) {
+    const headerName = (options.orgHeader ?? "x-organization-id").toLowerCase();
+    const headerValue = requireSingleHeaderValue(req.headers, headerName);
+    if (typeof headerValue === "string" && headerValue.length > 0) {
+      organizationId = headerValue;
+    }
+  }
+
+  return {
+    ...(actorId !== undefined ? { actorId } : {}),
+    ...(organizationId !== undefined ? { organizationId } : {}),
+  };
 }
 
 // ============================================================================

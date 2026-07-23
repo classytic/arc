@@ -69,7 +69,31 @@ export interface ArcCore {
    * `Record<string, unknown>` intersection keeps un-augmented reads open.
    * Populated lazily by `registerResources` — absent until a module exports.
    */
-  modules?: Partial<import("../factory/module.js").ArcModuleRegistry> & Record<string, unknown>;
+  modules?: Partial<import("../factory/module/index.js").ArcModuleRegistry> &
+    Record<string, unknown>;
+  /**
+   * Module-contributed readiness checks, collected in dependency order and
+   * frozen by `createApp`. The API role merges these into its `healthPlugin`;
+   * `createWorker` reads this to give its probe listener the identical union
+   * (the worker preset disables the main health plugin, so this is how module
+   * checks reach the probe without a double registration). Empty until
+   * `createApp` populates it.
+   */
+  healthChecks?: readonly import("../plugins/health.js").HealthCheck[];
+  /**
+   * The resolved, dependency-ordered module definitions (frozen by createApp).
+   * Integrations that collect a module arm at their OWN init time — e.g. the
+   * streamline integration calling `collectModuleWorkflows(fastify, defs)` after
+   * it has created + decorated its container — read the list from here. Empty
+   * until createApp populates it.
+   */
+  moduleDefinitions?: readonly import("../factory/module/index.js").ArcModule[];
+  /**
+   * Module-contributed recurring schedules, resolved once in dependency order
+   * and frozen after bootstraps. The same definitions are executed by Arc's
+   * schedules plugin and exposed here for introspection. Empty until collection.
+   */
+  scheduledJobs?: readonly Readonly<import("../plugins/schedules.js").ScheduleDefinition>[];
 }
 
 // `declare module "fastify" { FastifyInstance.arc?: ArcCore }` lives in
@@ -95,6 +119,11 @@ const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
     emitEvents,
     externalOpenApiPaths: [],
     plugins: new Map<string, PluginMeta>(),
+    // Populated (and frozen) by createApp once modules are resolved; empty
+    // otherwise so `fastify.arc.healthChecks` is always a readable array.
+    healthChecks: [] as readonly import("../plugins/health.js").HealthCheck[],
+    moduleDefinitions: [] as readonly import("../factory/module/index.js").ArcModule[],
+    scheduledJobs: [] as readonly Readonly<import("../plugins/schedules.js").ScheduleDefinition>[],
   });
 
   // Declare every request property arc's permission/preset middlewares

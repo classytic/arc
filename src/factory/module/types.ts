@@ -43,11 +43,50 @@
  * returns an `ArcModule`, the host owns the composition. No proxy, no per-call
  * lazy bridges — engines are initialized in `bootstrap` and passed live into
  * `defineResource(...)` inside the `resources` factory.
+ *
+ * Directory map (mechanical split of the former single file):
+ *   types.ts         — the module contract (this file)
+ *   resolve.ts       — input-form resolution (thunks / promises / contributions)
+ *   order.ts         — `dependsOn` stable topological ordering
+ *   contributions.ts — health / workflow / schedule collection
+ *   lifecycle.ts     — event-handler subscription + teardown
+ *   index.ts         — `defineModule`, `getModuleExports`, public barrel
  */
 
 import type { FastifyInstance } from "fastify";
-import type { ErrorMapper } from "../plugins/errorHandler.js";
-import type { ResourceLike } from "./loadResources.js";
+import type { EventHandler } from "../../events/EventTransport.js";
+import type { ErrorMapper } from "../../plugins/errorHandler.js";
+import type { HealthCheck } from "../../plugins/health.js";
+import type { ScheduleDefinition } from "../../plugins/schedules.js";
+import type { ResourceLike } from "../loadResources.js";
+
+/**
+ * A module's contribution of some arm (event handlers, scheduled jobs, …).
+ * Either a static array or a factory resolved AFTER all module bootstraps, so a
+ * contribution can close over booted engines / the Fastify instance instead of
+ * reaching for a global getter (the coupling the module contract removes).
+ */
+export type ModuleContribution<T> =
+  | readonly T[]
+  | ((fastify: FastifyInstance) => readonly T[] | Promise<readonly T[]>);
+
+/**
+ * A domain-event subscription a module owns. Subscribed in dependency order
+ * during the `afterResources` phase (routes mounted, engines booted) and
+ * auto-unsubscribed at shutdown BEFORE module `onClose` (deps still alive).
+ */
+export interface EventHandlerDefinition {
+  /** Event pattern(s) to subscribe — same matcher as `fastify.events.subscribe`. */
+  event: string | readonly string[];
+  /** The subscriber. */
+  handler: EventHandler;
+  /**
+   * Optional stable name — enables duplicate detection + teardown diagnostics.
+   * Third-party modules should prefix it with their module name, for example
+   * `inventory.order-created`; Arc does not silently rewrite public names.
+   */
+  name?: string;
+}
 
 export interface ArcModule<TExports = unknown> {
   /** Stable identifier — appears in boot logs and duplicate-module detection. */
@@ -187,6 +226,78 @@ export interface ArcModule<TExports = unknown> {
   afterResources?: (fastify: FastifyInstance) => void | Promise<void>;
 
   /**
+   * Readiness checks this module contributes to the app's
+   * `healthPlugin` (`/_health/ready`). Collected across ALL modules in
+   * dependency order and merged BEFORE the host's app-level `arcPlugins.health`
+   * checks (modules-first, host-last) — the same additive convention arc uses
+   * for resources and error mappers. Check `name`s must be unique across the
+   * module graph (arc fails at boot on a collision, attributing both owners).
+   *
+   * STATIC by design (not a factory): declare the check up front and let its
+   * `check()` closure resolve dependencies LAZILY at probe time, so collection
+   * can happen before the health plugin registers and the worker probe
+   * (`createWorker`) receives the identical union without a second registration.
+   *
+   * ```ts
+   * defineModule({ name: "inventory", healthChecks: [
+   *   { name: "flow-engine", check: () => flow.isReady() },
+   * ] })
+   * ```
+   */
+  readonly healthChecks?: readonly HealthCheck[];
+
+  /**
+   * Domain-event subscriptions this module owns — the declarative replacement
+   * for imperative `fastify.events.subscribe(...)` calls inside
+   * `afterResources`. Subscribed in dependency order during the
+   * `afterResources` phase (routes mounted, engines booted), and arc RETAINS
+   * every unsubscribe and invokes it at shutdown BEFORE module `onClose` (while
+   * module deps are still alive). Named handlers must be unique across the
+   * module graph; a module that declares handlers while the event subsystem is
+   * disabled (`arcPlugins.events: false`) fails at boot. Array or factory (the
+   * factory runs after bootstraps, so it can close over booted engines).
+   *
+   * ```ts
+   * defineModule({ name: "party", eventHandlers: [
+   *   { name: "party.link-customer", event: ["customer:created"], handler: onCustomer },
+   * ] })
+   * ```
+   */
+  readonly eventHandlers?: ModuleContribution<EventHandlerDefinition>;
+
+  /**
+   * Durable workflows this module owns. OPAQUE to arc core — arc never imports
+   * `@classytic/streamline`; the value flows through untouched and the
+   * streamline integration (`@classytic/arc/integrations/streamline`, a peer)
+   * gives it meaning (name/shape validation, registration). Collected via
+   * `collectModuleWorkflows` at integration-init time (after module bootstraps),
+   * so a factory can close over the shared workflow container the integration
+   * decorates on the instance.
+   *
+   * ```ts
+   * defineModule({ name: "invoice",
+   *   workflows: (f) => createInvoiceWorkflows(f.streamlineContainer) })
+   * ```
+   */
+  readonly workflows?: ModuleContribution<unknown>;
+
+  /**
+   * Recurring interval schedules this module owns. Arc composes them into its
+   * existing `schedulesPlugin` after bootstraps, in dependency order. Names
+   * must be unique across the module graph. Configure multi-replica locking via
+   * `arcPlugins.schedules`; explicitly disabling that runner while a module
+   * declares schedules fails boot instead of silently dropping work. Array or
+   * factory (the factory runs once after bootstraps and may close over engines).
+   *
+   * ```ts
+   * defineModule({ name: "loyalty", scheduledJobs: [
+   *   { name: "loyalty.point.expiration", every: 3_600_000, handler: () => sweep() },
+   * ] })
+   * ```
+   */
+  readonly scheduledJobs?: ModuleContribution<ScheduleDefinition>;
+
+  /**
    * Teardown — registered as a Fastify `onClose` hook. Destroy engines, stop
    * timers, flush the module's outbox. Modules close in REVERSE list order
    * (last composed, first closed), mirroring init.
@@ -223,169 +334,6 @@ export type ArcModuleInput<TExports = unknown> =
   | (() => ArcModule<TExports> | Promise<ArcModule<TExports>>);
 
 /**
- * Resolve any module-input form to a concrete `ArcModule`. A thunk is invoked
- * (this is where a dynamic `import()` fires); a promise (or plain module) is
- * awaited. Called once per module at the start of the bootstrap phase.
- */
-export async function resolveModule(input: ArcModuleInput): Promise<ArcModule> {
-  const resolved = typeof input === "function" ? await input() : await input;
-  if (!resolved || typeof resolved !== "object" || typeof resolved.name !== "string") {
-    throw new Error(
-      "[arc] a `modules` entry resolved to something that is not an ArcModule " +
-        "(expected an object with a string `name`). Check dynamic-import thunks " +
-        "return `createXModule(deps)` (or the module object), not the namespace.",
-    );
-  }
-  return resolved;
-}
-
-/**
- * Order modules for composition by their `dependsOn` edges — a STABLE
- * topological sort. Called once at the start of the bootstrap phase; every
- * subsequent phase (bootstrap, resources, afterResources, and reverse-order
- * onClose) iterates the returned list, so a module's declared dependencies are
- * always composed before it.
- *
- * "Stable" = modules with no edge between them keep their original list order,
- * so declaring `dependsOn` on one module never silently reorders an unrelated
- * one. Backward compatible: a `modules` array with NO `dependsOn` anywhere is
- * returned unchanged.
- *
- * Fail-fast — throws (never reorders past a broken contract) on:
- *   - duplicate module names (the name is the graph key)
- *   - a `dependsOn` name not present in the composed set
- *   - a self-reference (`dependsOn` includes the module's own name)
- *   - a dependency cycle (reports the concrete `a → b → … → a` path)
- */
-export function orderModules(modules: readonly ArcModule[]): ArcModule[] {
-  // The name is the graph key — a duplicate would corrupt ordering, so this is
-  // also the single place duplicate module names are rejected.
-  const byName = new Map<string, ArcModule>();
-  for (const m of modules) {
-    if (byName.has(m.name)) {
-      throw new Error(
-        `[arc] Duplicate module name "${m.name}" — composed twice; check your modules array.`,
-      );
-    }
-    byName.set(m.name, m);
-  }
-
-  // Validate every declared edge up front (clearer than surfacing it mid-sort).
-  for (const m of modules) {
-    for (const dep of m.dependsOn ?? []) {
-      if (dep === m.name) {
-        throw new Error(`[arc] module "${m.name}" dependsOn itself — remove the self-reference.`);
-      }
-      if (!byName.has(dep)) {
-        throw new Error(
-          `[arc] module "${m.name}" dependsOn "${dep}", which is not composed. ` +
-            `Add the "${dep}" module to createApp({ modules }) (before this one is fine — ` +
-            `arc orders them), or drop the dependency. ` +
-            `Composed modules: ${[...byName.keys()].join(", ") || "(none)"}.`,
-        );
-      }
-    }
-  }
-
-  // Fast path — no edges anywhere means the original order already satisfies
-  // every (empty) constraint. Return a copy, unchanged.
-  if (modules.every((m) => !m.dependsOn || m.dependsOn.length === 0)) {
-    return [...modules];
-  }
-
-  // Stable Kahn: repeatedly emit the LOWEST-original-index module whose deps
-  // are all already emitted. N is small (tens of modules at most), so the
-  // O(N²) ready-scan is the simplest correct form.
-  const originalIndex = new Map<string, number>();
-  let nextIndex = 0;
-  for (const m of modules) originalIndex.set(m.name, nextIndex++);
-  const pendingDeps = new Map<string, number>(
-    modules.map((m) => [m.name, (m.dependsOn ?? []).length]),
-  );
-  // dep name → modules that declared it (so emitting `dep` unblocks them).
-  const dependents = new Map<string, string[]>();
-  for (const m of modules) {
-    for (const dep of m.dependsOn ?? []) {
-      const list = dependents.get(dep);
-      if (list) list.push(m.name);
-      else dependents.set(dep, [m.name]);
-    }
-  }
-
-  const ordered: ArcModule[] = [];
-  const remaining = new Set(modules.map((m) => m.name));
-  while (remaining.size > 0) {
-    // Emit the ready module (all deps already emitted) with the lowest
-    // original index — that's what makes the sort STABLE.
-    let pick: string | undefined;
-    let pickIndex = Number.POSITIVE_INFINITY;
-    for (const name of remaining) {
-      if (pendingDeps.get(name) !== 0) continue;
-      const index = originalIndex.get(name) ?? Number.POSITIVE_INFINITY;
-      if (index < pickIndex) {
-        pick = name;
-        pickIndex = index;
-      }
-    }
-    if (pick === undefined) {
-      // Everything remaining has an unmet dependency → a cycle. Report one.
-      throw new Error(describeModuleCycle(remaining, byName));
-    }
-    const picked = byName.get(pick);
-    if (!picked) {
-      // Unreachable: `pick` came from `remaining`, seeded from the same modules
-      // as `byName`. Throw rather than silently emit N-1 modules if a future
-      // refactor ever lets the two diverge — fail-fast over a silent drop.
-      throw new Error(`[arc] internal: ordered module "${pick}" is missing from the index`);
-    }
-    ordered.push(picked);
-    remaining.delete(pick);
-    for (const dependent of dependents.get(pick) ?? []) {
-      pendingDeps.set(dependent, (pendingDeps.get(dependent) ?? 1) - 1);
-    }
-  }
-  return ordered;
-}
-
-/** Walk the still-unordered subgraph for one concrete cycle path. */
-function describeModuleCycle(remaining: Set<string>, byName: Map<string, ArcModule>): string {
-  const stack: string[] = [];
-  const onStack = new Set<string>();
-  const done = new Set<string>();
-  let cycle: string[] | null = null;
-
-  const walk = (name: string): void => {
-    if (cycle) return;
-    stack.push(name);
-    onStack.add(name);
-    for (const dep of byName.get(name)?.dependsOn ?? []) {
-      if (!remaining.has(dep)) continue; // already ordered — not in the cycle
-      if (onStack.has(dep)) {
-        cycle = [...stack.slice(stack.indexOf(dep)), dep];
-        return;
-      }
-      if (!done.has(dep)) walk(dep);
-      if (cycle) return;
-    }
-    onStack.delete(name);
-    stack.pop();
-    done.add(name);
-  };
-
-  for (const name of remaining) {
-    if (!done.has(name)) walk(name);
-    if (cycle) break;
-  }
-  const path = cycle ? (cycle as string[]).join(" → ") : [...remaining].join(", ");
-  return (
-    `[arc] module dependency cycle: ${path}. ` +
-    "Modules cannot dependsOn each other circularly — break it with a shared " +
-    "module both point at, or wire the softer direction through an event/port " +
-    "instead of a hard dependsOn."
-  );
-}
-
-/**
  * Typed module registry — hosts augment this via declaration merging so
  * `getModuleExports(f, "order")` infers the export type without a manual type
  * argument (the fastify / awilix pattern):
@@ -404,61 +352,3 @@ function describeModuleCycle(remaining: Set<string>, byName: Map<string, ArcModu
  */
 // biome-ignore lint/suspicious/noEmptyInterface: augmentation target (declaration merging)
 export interface ArcModuleRegistry {}
-
-/**
- * Identity helper for authoring a typed module — mirrors `defineResource`.
- * Gives inference + a single obvious construction site; does no work.
- *
- * `TExports` is inferred from the `bootstrap` return value, so a module
- * author gets a typed public export for free:
- *
- * ```ts
- * export const accountingModule = (deps: Deps) =>
- *   defineModule({
- *     name: "accounting",
- *     bootstrap: async () => createAccountingEngine(deps), // TExports inferred
- *   });
- * ```
- */
-export function defineModule<TExports = unknown>(module: ArcModule<TExports>): ArcModule<TExports> {
-  return module;
-}
-
-/**
- * Typed accessor for a module's public export (its `bootstrap` return value),
- * recorded at `fastify.arc.modules[name]`.
- *
- * Throwing, in line with the fail-fast contract (and `requireOrgId`-style
- * accessors): a missing entry means the module either isn't composed, is
- * composed AFTER the caller (list order = init order), or returned nothing —
- * all wiring bugs that must surface at boot, not as `undefined` downstream.
- *
- * The type parameter is an assertion, not a proof. Two ways to type it:
- *   - augment `ArcModuleRegistry` once — then the name alone infers the type:
- *     `getModuleExports(f, "accounting")` → `AccountingEngine`.
- *   - or pass it inline: `getModuleExports<AccountingEngine>(f, "accounting")`.
- */
-export function getModuleExports<K extends keyof ArcModuleRegistry>(
-  fastify: FastifyInstance,
-  name: K,
-): ArcModuleRegistry[K];
-export function getModuleExports<TExports = unknown>(
-  fastify: FastifyInstance,
-  name: string,
-): TExports;
-export function getModuleExports(fastify: FastifyInstance, name: string): unknown {
-  const modules = fastify.arc?.modules;
-  // `Object.hasOwn`, not `name in modules` — the latter walks the prototype
-  // chain, so a module named "constructor"/"toString"/etc. that never exported
-  // would spuriously pass and return an `Object.prototype` member. (The map is
-  // also created null-proto in registerResources, but this is the honest read.)
-  if (!modules || !Object.hasOwn(modules, name)) {
-    const available = modules ? Object.keys(modules) : [];
-    throw new Error(
-      `[arc] no public export recorded for module "${name}".\n` +
-        `A module's export is its bootstrap() return value; it is readable only AFTER that module's bootstrap ran (dependsOn / list order = init order).\n` +
-        `Modules with recorded exports: ${available.length ? available.join(", ") : "(none)"}.`,
-    );
-  }
-  return modules[name];
-}

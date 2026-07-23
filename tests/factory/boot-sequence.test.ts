@@ -65,6 +65,7 @@ describe("createApp — boot sequence", () => {
       const order = makeResource("order");
 
       const app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         resourcePrefix: "/api/v1",
@@ -90,6 +91,7 @@ describe("createApp — boot sequence", () => {
       const item = makeResource("item");
 
       const app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         resourcePrefix: "/api",
@@ -135,6 +137,7 @@ describe("createApp — boot sequence", () => {
       const thing = makeResource("thing");
 
       const app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         resources: [thing],
@@ -151,6 +154,7 @@ describe("createApp — boot sequence", () => {
       const widget = makeResource("widget");
 
       const app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         resourcePrefix: "/api/v2/",
@@ -174,6 +178,7 @@ describe("createApp — boot sequence", () => {
       const order: string[] = [];
 
       const app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         plugins: async () => {
@@ -201,6 +206,7 @@ describe("createApp — boot sequence", () => {
       let hasArc = false;
 
       const app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         bootstrap: [
@@ -222,6 +228,7 @@ describe("createApp — boot sequence", () => {
       const results: number[] = [];
 
       const app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         bootstrap: [
@@ -248,6 +255,7 @@ describe("createApp — boot sequence", () => {
     it("bootstrap error gives clear message", async () => {
       await expect(
         createApp({
+          logger: false,
           preset: "testing",
           auth: false,
           bootstrap: [
@@ -261,6 +269,7 @@ describe("createApp — boot sequence", () => {
 
     it("no bootstrap is fine (backward compat)", async () => {
       const app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
       });
@@ -279,6 +288,7 @@ describe("createApp — boot sequence", () => {
       const res = makeResource("post");
 
       const app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         bootstrap: [
@@ -315,6 +325,7 @@ describe("createApp — boot sequence", () => {
       const res = makeResource("task");
 
       const app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         plugins: async () => {

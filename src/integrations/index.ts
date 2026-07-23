@@ -22,7 +22,7 @@ export type {
   JobMeta,
   JobsPluginOptions,
   QueueStats,
-} from "./jobs.js";
+} from "./jobs/index.js";
 // MCP (Model Context Protocol)
 // Runtime: import from '@classytic/arc/mcp'
 export type {

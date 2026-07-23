@@ -12,6 +12,7 @@ const apps: Array<{ close(): Promise<void> }> = [];
 
 async function buildApp(plan: Record<string, unknown>) {
   const app = await createApp({
+    logger: false,
     preset: "testing",
     auth: false,
     rateLimit: {

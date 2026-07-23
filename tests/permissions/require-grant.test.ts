@@ -163,6 +163,7 @@ describe("requireGrant — end to end (filters reach the repository query)", () 
     };
 
     app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       resources: [

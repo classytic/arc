@@ -224,6 +224,7 @@ describe("resolveLoggerConfig — logger redact safe defaults (2.15.1)", () => {
     let app: FastifyInstance | null = null;
     try {
       app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         plugins: async (f) => {

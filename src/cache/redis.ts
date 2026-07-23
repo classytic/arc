@@ -24,6 +24,16 @@ export interface RedisCacheClient {
   ): Promise<[string | number, string[]]>;
   /** Optional: pipeline for batched commands (ioredis compatible) */
   pipeline?(): RedisPipeline;
+  /** Optional: atomic increment-by (Redis INCRBY). Enables `CacheStore.increment`. */
+  incrBy?(key: string, by: number): Promise<number>;
+  /**
+   * Optional: set a TTL only when the key has none (Redis 7 `EXPIRE ... NX`,
+   * or a Lua `TTL`/`EXPIRE` script on older servers). Required alongside
+   * `incrBy` for the atomic `increment` path — the CacheAdapter contract is
+   * TTL-ON-CREATE, and no return value of INCRBY can prove creation (an
+   * existing counter at 0 incremented by `by` also returns `by`).
+   */
+  expireIfAbsent?(key: string, seconds: number): Promise<unknown>;
 }
 
 export interface RedisPipeline {
@@ -106,6 +116,33 @@ export class RedisCacheStore<TValue = unknown> implements CacheStore<TValue> {
   }
 
   /**
+   * Atomic increment (canonical `CacheAdapter` signature: key, by, ttl).
+   *
+   * The atomic path requires `incrBy` AND — when a TTL is requested —
+   * `expireIfAbsent`: TTL-on-create cannot be inferred from INCRBY's
+   * return value (an existing counter at 0 also returns `by`), so the
+   * NX-expiry must be its own atomic server-side operation. A client that
+   * can't honor the COMPLETE contract falls back to read-modify-write
+   * (monotonic, but a concurrent replica's bump can be lost, and the TTL
+   * refreshes per write since plain SET can't preserve expiry).
+   */
+  async increment(key: string, by = 1, ttlSeconds?: number): Promise<number> {
+    const prefixed = this.withPrefix(key);
+    const wantsTtl = ttlSeconds !== undefined && ttlSeconds > 0;
+    if (this.client.incrBy && (!wantsTtl || this.client.expireIfAbsent)) {
+      const next = await this.client.incrBy(prefixed, by);
+      if (wantsTtl) {
+        await this.client.expireIfAbsent?.(prefixed, Math.ceil(ttlSeconds));
+      }
+      return next;
+    }
+    const current = await this.get(key);
+    const next = (typeof current === "number" ? current : 0) + by;
+    await this.set(key, next as unknown as TValue, ttlSeconds ?? this.defaultTtlSeconds);
+    return next;
+  }
+
+  /**
    * Invalidate keys. Pass a glob pattern to delete a subset (`user:*:v2`);
    * omit to clear every key under this store's prefix.
    */
@@ -176,6 +213,8 @@ export interface IoredisLike {
   del(...keys: string[]): Promise<number>;
   scan(cursor: string | number, ...args: (string | number)[]): Promise<[string, string[]]>;
   pipeline?(): { del(key: string): unknown; exec(): Promise<unknown> };
+  incrby?(key: string, by: number): Promise<number>;
+  eval?(script: string, numKeys: number, ...args: (string | number)[]): Promise<unknown>;
 }
 
 /**
@@ -222,8 +261,27 @@ export function ioredisAsCacheClient(client: IoredisLike): RedisCacheClient {
       return [next, keys];
     },
     pipeline: client.pipeline ? () => (client.pipeline as () => RedisPipeline)() : undefined,
+    incrBy: client.incrby
+      ? (key, by) => (client.incrby as (k: string, n: number) => Promise<number>)(key, by)
+      : undefined,
+    // Atomic NX-expiry via a Lua script — TTL < 0 covers both "missing"
+    // (-2) and "exists without expiry" (-1, a fresh INCRBY-created key).
+    // Works on every Redis version ioredis supports, unlike `EXPIRE ... NX`
+    // which needs Redis 7.
+    expireIfAbsent: client.eval
+      ? (key, seconds) =>
+          (client.eval as (s: string, n: number, ...a: (string | number)[]) => Promise<unknown>)(
+            EXPIRE_IF_ABSENT_LUA,
+            1,
+            key,
+            seconds,
+          )
+      : undefined,
   };
 }
+
+const EXPIRE_IF_ABSENT_LUA =
+  "if redis.call('TTL', KEYS[1]) < 0 then return redis.call('EXPIRE', KEYS[1], ARGV[1]) else return 0 end";
 
 /**
  * Minimal `@upstash/redis` REST SDK shape we depend on.
@@ -240,6 +298,8 @@ export interface UpstashRedisLike {
     cursor: number | string,
     opts?: { match?: string; count?: number },
   ): Promise<[number, string[]] | [string, string[]]>;
+  incrby?(key: string, by: number): Promise<number>;
+  eval?(script: string, keys: string[], args: (string | number)[]): Promise<unknown>;
 }
 
 /**
@@ -298,5 +358,18 @@ export function upstashAsCacheClient(client: UpstashRedisLike): RedisCacheClient
       const [next, keys] = await client.scan(cursor, opts);
       return [next, keys];
     },
+    incrBy: client.incrby
+      ? (key, by) => (client.incrby as (k: string, n: number) => Promise<number>)(key, by)
+      : undefined,
+    // Same atomic NX-expiry Lua as the ioredis adapter — upstash's REST
+    // eval takes (script, keys[], args[]).
+    expireIfAbsent: client.eval
+      ? (key, seconds) =>
+          (client.eval as (s: string, k: string[], a: (string | number)[]) => Promise<unknown>)(
+            EXPIRE_IF_ABSENT_LUA,
+            [key],
+            [seconds],
+          )
+      : undefined,
   };
 }

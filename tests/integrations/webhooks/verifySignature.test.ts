@@ -7,7 +7,14 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { signPayload, verifySignature } from "../../../src/integrations/webhooks.js";
+import { createHmac } from "node:crypto";
+import { verifySignature } from "../../../src/integrations/webhooks.js";
+
+// Local sha256=<hex> signer — arc no longer EXPORTS the legacy signPayload
+// (2.24: outbound is v1-only), but verifySignature stays as the generic
+// INBOUND verifier for third-party webhooks, which is what these tests pin.
+const signPayload = (payload: string | Buffer, secret: string): string =>
+  `sha256=${createHmac("sha256", secret).update(payload).digest("hex")}`;
 
 const SECRET = "whsec_test_secret_abc123";
 const BODY = '{"type":"order.created","payload":{"orderId":"ord-1"}}';

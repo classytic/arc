@@ -122,6 +122,42 @@ export class MemoryCacheStore<TValue = unknown> implements CacheStore<TValue> {
     if (entry) this.removeEntry(key, entry);
   }
 
+  /**
+   * Atomic increment (canonical `CacheAdapter` signature: key, by, ttl) —
+   * synchronous on purpose: no `await` between read and write means
+   * concurrent bumps on the event loop can't interleave, which is the whole
+   * point of the `CacheStore.increment` contract.
+   *
+   * TTL semantics follow the repo-core contract: `ttlSeconds` applies only
+   * when the key is CREATED — an existing counter keeps its original expiry
+   * (Redis `EXPIRE ... NX` semantics), so every conforming adapter ages a
+   * counter identically.
+   */
+  increment(key: string, by = 1, ttlSeconds?: number): number {
+    const now = Date.now();
+    const entry = this.cache.get(key);
+    const live = entry && entry.expiresAt > now;
+    const current = live && typeof entry.value === "number" ? entry.value : 0;
+    const next = current + by;
+
+    const effectiveTtlSeconds = ttlSeconds ?? this.defaultTtlSeconds;
+    if (entry) this.currentBytes -= entry.size;
+    this.cache.delete(key);
+    const size = 8; // a bare number — no need to JSON-stringify for sizing
+    this.cache.set(key, {
+      // `increment` is only meaningful on numeric keys; the store-wide
+      // generic can't express "this one entry is a number".
+      value: next as unknown as TValue,
+      size,
+      // TTL-on-create: keep the live entry's expiry; stamp fresh only when
+      // the key is new or expired.
+      expiresAt: live ? entry.expiresAt : now + Math.max(1, effectiveTtlSeconds) * 1000,
+    });
+    this.currentBytes += size;
+    this.evictToLimit();
+    return next;
+  }
+
   async clear(pattern?: string): Promise<void> {
     if (pattern === undefined) {
       this.cache.clear();

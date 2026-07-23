@@ -272,7 +272,6 @@ export {
 export type {
   // Base types
   AnyRecord,
-  ApiResponse,
   ArcInternalMetadata,
   // User & Auth / DX helpers
   ArcRequest,

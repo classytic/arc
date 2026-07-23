@@ -175,8 +175,8 @@ const requestIdPlugin: FastifyPluginAsync<RequestIdOptions> = async (
     // Parse and validate `traceparent` (required) and `tracestate` (optional).
     // Both are forwarded in the response so downstream hops can continue the trace.
     if (propagateTraceContext) {
-      const rawTraceparent = request.headers["traceparent"];
-      const rawTracestate = request.headers["tracestate"];
+      const rawTraceparent = request.headers.traceparent;
+      const rawTracestate = request.headers.tracestate;
 
       if (typeof rawTraceparent === "string") {
         const tp = rawTraceparent.trim();

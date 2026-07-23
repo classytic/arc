@@ -26,6 +26,8 @@ import {
 } from "../permissions/index.js";
 import type { RequestScope } from "../scope/types.js";
 import { ArcError } from "../utils/errors.js";
+import { requireSingleHeaderValue } from "../utils/headers.js";
+import { extractBetterAuthOpenApi } from "./betterAuthOpenApi.js";
 
 // Plugin-local augmentation for @fastify/raw-body compatibility
 declare module "fastify" {
@@ -581,11 +583,10 @@ export function createBetterAuthAdapter(
 
       if (orgEnabled) {
         const session = sessionData.session as Record<string, unknown> | undefined;
+        const requestedOrgId = requireSingleHeaderValue(request.headers, "x-organization-id");
         // Prefer session's activeOrganizationId; fall back to x-organization-id header
         // (needed for API-key auth where synthetic sessions carry no org context)
-        const activeOrgId =
-          (session?.activeOrganizationId as string | undefined) ||
-          (request.headers["x-organization-id"] as string | undefined);
+        const activeOrgId = (session?.activeOrganizationId as string | undefined) || requestedOrgId;
 
         if (activeOrgId) {
           let orgRoles = await getActiveMemberRoles(auth, headers);
@@ -616,6 +617,7 @@ export function createBetterAuthAdapter(
         }
       }
     } catch (err) {
+      if (err instanceof ArcError) throw err;
       // Don't leak internal error details to clients unless explicitly opted-in
       const message = exposeAuthErrors
         ? err instanceof Error
@@ -665,9 +667,8 @@ export function createBetterAuthAdapter(
 
       if (orgEnabled) {
         const session = sessionData.session as Record<string, unknown> | undefined;
-        const activeOrgId =
-          (session?.activeOrganizationId as string | undefined) ||
-          (request.headers["x-organization-id"] as string | undefined);
+        const requestedOrgId = requireSingleHeaderValue(request.headers, "x-organization-id");
+        const activeOrgId = (session?.activeOrganizationId as string | undefined) || requestedOrgId;
 
         if (activeOrgId) {
           let orgRoles = await getActiveMemberRoles(auth, headers);
@@ -686,7 +687,8 @@ export function createBetterAuthAdapter(
           }
         }
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof ArcError) throw err;
       // Silently ignore — invalid/expired session = treat as unauthenticated
     }
   };
@@ -760,7 +762,6 @@ export function createBetterAuthAdapter(
 
     // Auto-extract OpenAPI from auth.api if not already set
     if (!extractedOpenApi && openapiOpt !== false && auth.api && typeof auth.api === "object") {
-      const { extractBetterAuthOpenApi } = await import("./betterAuthOpenApi.js");
       extractedOpenApi = extractBetterAuthOpenApi(auth.api as Record<string, unknown>, {
         basePath,
         userFields,

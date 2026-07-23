@@ -10,6 +10,7 @@
 
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { UserBase } from "../permissions/types.js";
+import type { ArcHeaders } from "../utils/headers.js";
 import type { RequestContext } from "./index.js";
 
 /**
@@ -160,15 +161,15 @@ export interface IRequestContext<
   /** Authenticated user or null */
   user: TUser | null;
   /**
-   * Request headers.
-   *
-   * ⚠ Declared narrow for ergonomics, but on the HTTP path this is
-   * Fastify's headers object passed through — repeated headers arrive as
-   * `string[]` at RUNTIME behind this type. Read via `getHeader(ctx.headers,
-   * name)` from `@classytic/arc/utils` for array-safe, duplicate-deterministic
-   * access. The declared type widens to `ArcHeaders` in v3.
+   * Request headers — `ArcHeaders` (`string | string[] | undefined` per
+   * name), the HONEST type: on the HTTP path this is Fastify's headers
+   * object passed through, and repeated headers arrive as `string[]` at
+   * runtime (2.24 widening — the previous `Record<string, string |
+   * undefined>` lied about that). Read via `getHeader(ctx.headers, name)`
+   * from `@classytic/arc/utils` for array-safe, duplicate-deterministic
+   * access, or `requireSingleHeaderValue` for security-sensitive headers.
    */
-  headers: Record<string, string | undefined>;
+  headers: ArcHeaders;
   /** Organization ID (for multi-tenant apps) */
   organizationId?: string;
   /** Team ID (for team-scoped resources) */

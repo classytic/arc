@@ -34,12 +34,33 @@
  * // Idempotency-Key: order-123-abc
  *
  * // If same key sent again within TTL, returns cached response
+ *
+ * ## Guarantee: best-effort effectively-once, NOT exactly-once
+ *
+ * The plugin gives strong request replay + overlap protection: a
+ * distributed lock guards execution (concurrent same-key requests get
+ * 409), the store key includes a body/caller fingerprint (a different
+ * body under the same key executes as its own operation instead of
+ * replaying someone else's response), and a completed result replays on
+ * hit. It does NOT make the business effect exactly-once, because the
+ * domain write and the idempotency record live in different systems:
+ *
+ *  - a crash after the DB mutation but before the result is recorded
+ *    (preSerialization) lets a retry re-execute the mutation;
+ *  - a handler that outruns `lockTimeoutMs` can overlap its own retry —
+ *    size the lock timeout above the slowest protected handler.
+ *
+ * For mutations where re-execution is unacceptable, write the idempotency
+ * record in the SAME transaction as the business write inside the handler
+ * (the store contract is public — `@classytic/arc/idempotency` exports it),
+ * or make the handler naturally idempotent (upserts, compare-and-set).
  */
 
 import { createHash } from "node:crypto";
 import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
+import { requireSingleHeaderValue } from "../utils/headers.js";
 import { repositoryAsIdempotencyStore } from "./repository-idempotency-adapter.js";
 import type { IdempotencyStore } from "./stores/interface.js";
 import { createIdempotencyResult } from "./stores/interface.js";
@@ -234,7 +255,17 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
       return obj;
     }
     if (depth >= MAX_FINGERPRINT_DEPTH) {
-      return "<truncated>";
+      // Beyond the cap, hash the subtree instead of collapsing to a shared
+      // sentinel — a bare "<truncated>" made ALL deep subtrees fingerprint
+      // identically, so two different over-deep bodies under the same key
+      // would false-MATCH and replay the wrong response. The hash is
+      // insertion-order-sensitive (no key sorting past the cap), which can
+      // only produce a false MISMATCH (422) — the fail-safe direction.
+      try {
+        return `<deep:${createHash("sha256").update(JSON.stringify(obj)).digest("hex").slice(0, 16)}>`;
+      } catch {
+        return "<truncated>"; // circular/unserializable — legacy sentinel
+      }
     }
 
     if (Array.isArray(obj)) {
@@ -294,8 +325,8 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     }
 
     // Get idempotency key from header
-    const keyHeader = request.headers[headerName.toLowerCase()];
-    const idempotencyKey = typeof keyHeader === "string" ? keyHeader.trim() : undefined;
+    const keyHeader = requireSingleHeaderValue(request.headers, headerName);
+    const idempotencyKey = keyHeader?.trim();
 
     if (!idempotencyKey) {
       // No key provided - proceed normally

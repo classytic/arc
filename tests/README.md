@@ -1,233 +1,87 @@
-# Arc Framework Test Suite
+# Arc test suite
 
-Comprehensive end-to-end and unit tests for the Arc framework using Vitest.
+~520 files / ~6,000 tests, full run ≈ 40s. Vitest, three projects
+(`vitest.config.ts`): **parallel** (default), **ws** (WebSocket files,
+auto-serialized), **perf** (isolated, `vitest.perf.config.ts`, own GC
+lane). Type assertions compile in their own `tsc` lane — see below.
 
-## Running Tests
+## Lanes
 
-```bash
-# Run all tests
-npm test
+| Script | Scope | When |
+|---|---|---|
+| `test:fast` | core, hooks, utils, plugins, cache, events | inner loop |
+| `test:contract` | `contract/` (incl. `.env`-gated live Redis), `adapters/` (real kits: mongokit, sqlitekit, pgkit, Better Auth), `types/` | adapter/API contracts |
+| `test:integration` | `integrations/`, `factory/`, `auth/` | wiring against mocks (BullMQ, transports) |
+| `test:e2e` | `e2e/`, `scenarios/`, `smoke/` | full apps over `inject()` |
+| `test:reliability` | cache, events, migrations, schedules, health, breaker, compensation, jobs-timeout | the failure-safety surface |
+| `test:changed` | `vitest run --changed` | pre-commit |
+| `test:main` / `test:ci` | everything / everything + perf | release gate only — never during dev |
 
-# Run tests in watch mode
-npm run test:watch
+Targeted runs beat lanes during dev: `npx vitest run tests/<area>/file.test.ts`.
+The change→suite mapping table lives in [CLAUDE.md](../CLAUDE.md).
 
-# Run with coverage report
-npm run test:coverage
+## Directory taxonomy
 
-# Run only E2E tests
-npm run test:e2e
+- One **primary test file per production source file**, named for the
+  invariant it protects (`policy-filter-fail-closed.test.ts`, never
+  `v2-10-6-fixes.test.ts`). A second file only for a genuinely separate
+  lane (contract / e2e / property / perf).
+- `tests/<module>/` mirrors `src/<module>/` (e.g. `tests/integrations/` ↔
+  `src/integrations/`). There is deliberately NO `tests/integration/`
+  (singular) — real-kit suites live in `tests/adapters/`.
+- `tests/contract/` — cross-package contracts and live external services.
+  `redis-live.test.ts` runs against real Redis when `REDIS_URL` is set
+  (copy `.env.example` → `.env`); it skips cleanly otherwise.
+- `tests/property/` — fast-check property suites. `tests/security/` —
+  attack-shaped inputs. `tests/perf/` — memory/GC budgets, isolated lane.
 
-# Run only unit tests
-npm run test:unit
+## Type tests are compiled, not just executed
 
-# Run with UI
-npm run test:ui
-```
+`npm run typecheck:types` compiles `tests/types/**`, `*.test-d.ts`
+contracts, AND every runtime test file containing `expectTypeOf` /
+`@ts-expect-error` assertions — each is listed explicitly in
+`tsconfig.types.json`. Vitest transpiles without type-checking, so a
+type-assertion file that is NOT in that config proves nothing at the type
+level. **If you add `expectTypeOf` to a file, add the file to the config
+include list** (prefer putting compile-only contracts in `tests/types/`).
+The lane runs in `npm run typecheck`, CI, and the release gate.
 
-## Test Structure
+## `_support/` helpers
 
-```
-tests/
-├── setup.ts                    # Test utilities and helpers
-├── core/
-│   └── base-controller.test.ts # CRUD operations and hooks
-├── hooks/
-│   └── hook-system.test.ts     # Hook registration and execution
-├── utils/
-│   └── circuit-breaker.test.ts # Circuit breaker pattern
-└── e2e/
-    └── full-app.test.ts        # Complete integration tests
-```
+Use these instead of re-rolling per file (they expose behavior; they
+never hide the scenario under test):
 
-## Test Coverage
+- `fastify.ts` — `useFastify()` returns `create()`/`track()` with
+  automatic `afterEach` close of every instance (leak-proof even when a
+  test throws).
+- `logger.ts` — `silentLogger`; `recordingLogger()` when the test asserts
+  WHAT was logged (`messages("warn")`).
+- `deferred.ts` — `deferred<T>()`, `flushPromises()`, `wait(ms)` for
+  concurrency choreography.
+- `lock.ts` — `FakeLockAdapter` with real lease semantics (same-holder
+  extends, expiry, `latencyMs`, `failNextAcquire`) for renewal/contention
+  tests.
+- `bullmq.ts` — `createBullmqMock(processors)`; pair with `vi.hoisted`
+  exactly as documented in the file header. Prefer testing
+  `executeTimedHandler` (jobs-execution.ts) directly — one wiring test
+  per behavior is enough BullMQ mocking.
 
-### Core Module (✅ Implemented)
-- **BaseController** - All CRUD operations (create, update, delete, getById, getAll)
-- **Hook Integration** - beforeCreate, afterCreate, beforeUpdate, afterUpdate, beforeDelete, afterDelete
-- **Hook Priority** - Execution order based on priority
-- **Error Handling** - Before hooks fail request, after hooks log errors
-- **Query Features** - Filtering, sorting, pagination
+`tests/_helpers/` + `tests/setup.js` hold the older repository mocks and
+DB harness (`setupTestDatabase` for mongodb-memory-server suites).
 
-### Hooks Module (✅ Implemented)
-- **Registration** - Both object and positional argument syntax
-- **Execution** - Before and after hooks with data transformation
-- **Priority** - Lower priority executes first
-- **Wildcards** - Wildcard hooks for all resources
-- **Unregistration** - Cleanup and removal
-- **Error Handling** - After hooks don't fail requests
+## Conventions
 
-### Utils Module (✅ Implemented)
-- **Circuit Breaker** - CLOSED/OPEN/HALF_OPEN state transitions
-- **Fallbacks** - Graceful degradation when circuit is open
-- **Timeouts** - Long-running operation protection
-- **Statistics** - Success/failure tracking
-- **Manual Control** - Manual reset and state inspection
-
-### E2E Tests (✅ Implemented)
-- **Full Application** - Factory initialization to HTTP requests
-- **Health Checks** - Liveness and readiness endpoints
-- **CRUD Flow** - Complete create → read → update → delete flow
-- **Hook Execution** - Lifecycle hooks executing in real requests
-- **Query Features** - Filtering, sorting, pagination in HTTP layer
-- **Error Handling** - 404s, validation errors, server errors
-
-## Test Utilities
-
-### `setupTestDatabase()`
-Creates a MongoDB Memory Server for isolated testing.
-
-```typescript
-import { setupTestDatabase, teardownTestDatabase } from './setup.js';
-
-beforeAll(async () => {
-  const mongoUri = await setupTestDatabase();
-});
-
-afterAll(async () => {
-  await teardownTestDatabase();
-});
-```
-
-### `createMockModel(name)`
-Creates a Mongoose model for testing.
-
-```typescript
-import { createMockModel } from './setup.js';
-
-const Product = createMockModel('Product');
-const repository = new BaseRepository(Product);
-```
-
-### `clearDatabase()`
-Clears all collections between tests.
-
-```typescript
-import { clearDatabase } from './setup.js';
-
-afterEach(async () => {
-  await clearDatabase();
-});
-```
-
-### Mock Data
-```typescript
-import { mockUser, mockOrg, mockContext } from './setup.js';
-
-const req = {
-  user: mockUser,
-  context: mockContext,
-};
-```
-
-## Writing New Tests
-
-### Unit Test Template
-
-```typescript
-import { describe, it, expect, beforeEach } from 'vitest';
-import { setupGlobalHooks } from '../setup.js';
-
-setupGlobalHooks(); // Auto-setup/teardown database
-
-describe('MyFeature', () => {
-  beforeEach(() => {
-    // Setup for each test
-  });
-
-  it('should do something', () => {
-    expect(true).toBe(true);
-  });
-});
-```
-
-### E2E Test Template
-
-```typescript
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { createApp } from '../../src/factory/createApp.js';
-import { setupTestDatabase, teardownTestDatabase } from '../setup.js';
-
-describe('Feature E2E', () => {
-  let app: FastifyInstance;
-
-  beforeAll(async () => {
-    const mongoUri = await setupTestDatabase();
-    app = await createApp({
-      preset: 'development',
-      auth: { type: 'jwt', jwt: { secret: 'test-jwt-secret-must-be-at-least-32-chars-long' } },
-      logger: false,
-    });
-    await app.listen({ port: 3001 });
-  });
-
-  afterAll(async () => {
-    await app.close();
-    await teardownTestDatabase();
-  });
-
-  it('should handle request', async () => {
-    const response = await app.inject({
-      method: 'GET',
-      url: '/endpoint',
-    });
-
-    expect(response.statusCode).toBe(200);
-  });
-});
-```
-
-## Coverage Goals
-
-- **Statements**: > 80%
-- **Branches**: > 75%
-- **Functions**: > 80%
-- **Lines**: > 80%
-
-## CI/CD Integration
-
-Tests run automatically on:
-- Pre-commit (via hooks)
-- Pull requests
-- Before publishing to npm
-
-## Debugging Tests
-
-```bash
-# Run specific test file
-npx vitest run tests/core/base-controller.test.ts
-
-# Run tests matching pattern
-npx vitest run -t "should create"
-
-# Debug with inspect
-node --inspect-brk ./node_modules/.bin/vitest run
-
-# Use console.log or debugger
-it('should debug', () => {
-  console.log('Debug info');
-  debugger; // Set breakpoint
-});
-```
-
-## Known Issues
-
-- MongoDB Memory Server can be slow on first run (downloads binary)
-- Some tests may timeout on slow machines (increase `testTimeout` in vitest.config.ts)
-- Ensure MongoDB is not running on port 27017 (conflicts with memory server)
-
-### Cache Module (✅ Implemented)
-- **QueryCache** — get/set, SWR freshness, version bumping
-- **Cache Keys** — deterministic key generation, param hashing
-- **Tag Versions** — cross-resource tag invalidation
-
-## Future Tests
-
-Tests we should add:
-- [ ] Presets (softDelete, slugLookup, multiTenant, ownedByUser)
-- [ ] Schema migrations (up, down, validation)
-- [ ] Factory presets (production, development, testing)
-- [ ] Authentication/Authorization
-- [ ] Organization scoping
-- [ ] Events system
-- [ ] Policies
-- [ ] OpenAPI documentation generation
+- `Fastify({ logger: false })` (or `useFastify()`) — tests must not emit
+  request logs; CLI tests capture or silence stdout.
+- Prefer `app.inject()`; real sockets ONLY for WebSocket/SSE transport
+  behavior (those files auto-serialize via the ws project glob).
+- Timing-sensitive tests (renewal cadences, grace windows) use generous
+  margins — they run under full-suite CPU contention. Never run the full
+  suite concurrently with builds.
+- Fake timers: restore in `afterEach` (`vi.useRealTimers()`); remember
+  vitest fakes `Date` too.
+- At-least-once surfaces (events, jobs): assert idempotent-handler
+  behavior, not single-delivery.
+- Every external-review fix lands as a test named for the invariant, in
+  the source-oriented suite — regression files are merged after the
+  behavior stabilizes.

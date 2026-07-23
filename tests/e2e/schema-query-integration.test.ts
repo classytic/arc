@@ -114,6 +114,7 @@ describe("Schema + Query Integration E2E", () => {
     ]);
 
     app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       resources: [productResource],
@@ -428,17 +429,22 @@ describe("Schema + Query Integration E2E", () => {
   });
 
   // ============================================================================
-  // Query does not strip unknown params (permissive)
+  // Query validation: Fastify schema permissive, mongokit parser fail-closed
   // ============================================================================
 
-  describe("permissive query validation", () => {
-    it("unknown query params are passed through (not rejected)", async () => {
+  describe("query validation — schema permissive, parser fail-closed", () => {
+    it("unknown filter fields are rejected fail-closed (400, mongokit >=3.25)", async () => {
       const res = await app.inject({
         method: "GET",
         url: "/products?customField=test&another[nested]=value",
       });
-      // Should NOT return 400 — additionalProperties: true
-      expect(res.statusCode).toBe(200);
+      // Two layers: (1) Fastify's query SCHEMA is permissive
+      // (additionalProperties: true), so it does NOT reject unknown params at
+      // validation time; (2) mongokit's QueryParser is fail-closed by default —
+      // a filter field outside `allowedFilterFields` raises HTTP 400
+      // (INVALID_QUERY_INPUT) rather than being silently dropped (which would
+      // return the whole collection). So the end-to-end result is a clean 400.
+      expect(res.statusCode).toBe(400);
     });
 
     it("populate with bracket notation passes schema validation (not rejected as 400)", async () => {

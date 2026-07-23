@@ -85,7 +85,7 @@ describe("v1 wire contract", () => {
     }
   });
 
-  it("keeps the legacy body-only headers for pre-2.23 receivers", async () => {
+  it("emits ONLY the v1 headers — legacy x-webhook-* removed in 2.24", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
     await createApp(fetchMock);
     await app.webhooks.register({
@@ -99,9 +99,10 @@ describe("v1 wire contract", () => {
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const headers = init.headers as Record<string, string>;
-    expect(headers["x-webhook-signature"]).toMatch(/^sha256=[a-f0-9]{64}$/);
-    expect(verifySignature(init.body as string, SECRET, headers["x-webhook-signature"])).toBe(true);
-    expect(headers["x-webhook-id"]).toBe(headers["x-arc-webhook-delivery"]);
+    expect(headers["x-webhook-signature"]).toBeUndefined();
+    expect(headers["x-webhook-id"]).toBeUndefined();
+    expect(headers["x-webhook-event"]).toBeUndefined();
+    expect(headers["x-arc-webhook-signature"]).toMatch(/^v1=[a-f0-9]{64}$/);
   });
 });
 

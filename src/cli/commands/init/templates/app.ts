@@ -174,7 +174,10 @@ export async function createAppInstance()${ts ? ": Promise<FastifyInstance>" : "
       allowedHeaders: config.cors.allowedHeaders,
       credentials: config.cors.credentials,
     },
-    trustProxy: true,
+    // One proxy hop (the typical LB / reverse-proxy deploy). Widen to a CIDR
+    // list or \`true\` only if you know every hop is yours; \`false\` if clients
+    // connect directly. Arc's production preset defaults to \`false\` (fail-closed).
+    trustProxy: 1,
     arcPlugins: {
       metrics: config.env === 'production',  // Prometheus /_metrics endpoint
 ${

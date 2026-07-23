@@ -7,7 +7,6 @@
  * tests and single-process dev where durable persistence is noise.
  */
 
-import type { DeadLetteredEvent, DomainEvent } from "./EventTransport.js";
 import {
   InvalidOutboxEventError,
   type OutboxAcknowledgeOptions,
@@ -17,7 +16,8 @@ import {
   OutboxOwnershipError,
   type OutboxStore,
   type OutboxWriteOptions,
-} from "./outbox.js";
+} from "@classytic/primitives/outbox";
+import type { DeadLetteredEvent, DomainEvent } from "./EventTransport.js";
 
 const DEFAULT_LEASE_MS = 30_000;
 

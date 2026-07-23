@@ -1,0 +1,32 @@
+name: Bug report
+description: Something behaves differently than documented
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: "@classytic/arc version + Node version"
+      placeholder: "arc 2.24.0, Node 22.11"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: >
+        Smallest createApp/defineResource snippet that shows it. For
+        reliability bugs (events/jobs/schedules/idempotency), state the
+        transport/store in use and whether replicas are involved.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Kit / peers involved
+      placeholder: "mongokit 3.x / sqlitekit / custom adapter; fastify 5.x; repo-core 0.14"

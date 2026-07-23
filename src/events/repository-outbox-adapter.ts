@@ -57,11 +57,6 @@
  * If/when one appears, the FIFO loop becomes a 1-call adoption candidate.
  */
 
-import type { RepositoryLike } from "@classytic/repo-core/adapter";
-import { and, anyOf, eq as eqFilter, lte, ne, or } from "@classytic/repo-core/filter";
-import { update } from "@classytic/repo-core/update";
-import { createIsDuplicateKeyError, createSafeGetOne } from "../utils/store-helpers.js";
-import type { DeadLetteredEvent, DomainEvent } from "./EventTransport.js";
 import {
   InvalidOutboxEventError,
   type OutboxAcknowledgeOptions,
@@ -71,7 +66,12 @@ import {
   OutboxOwnershipError,
   type OutboxStore,
   type OutboxWriteOptions,
-} from "./outbox.js";
+} from "@classytic/primitives/outbox";
+import type { RepositoryLike } from "@classytic/repo-core/adapter";
+import { and, anyOf, eq as eqFilter, lte, ne, or } from "@classytic/repo-core/filter";
+import { update } from "@classytic/repo-core/update";
+import { createIsDuplicateKeyError, createSafeGetOne } from "../utils/store-helpers.js";
+import type { DeadLetteredEvent, DomainEvent } from "./EventTransport.js";
 
 /**
  * Outbox row shape. The PK field is determined by the kit's
@@ -207,28 +207,57 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
       const consumerId = options?.consumerId ?? "anonymous";
       const typeFilter = options?.types?.length ? anyOf("type", options.types) : null;
 
-      const claimed: DomainEvent[] = [];
-      // Atomic per-doc FIFO claim via findOneAndUpdate. The compound filter
-      // excludes docs under an active lease, so concurrent relayers never
-      // see the same doc. Cannot be replaced by `StandardRepo.claim` —
-      // see the module docblock; `claim` requires an id upfront which the
-      // relayer doesn't have. find+sort+CAS in one round-trip stays.
-      for (let i = 0; i < limit; i++) {
-        const now = new Date();
-        const leaseExpiresAt = new Date(now.getTime() + leaseMs);
-        const filter = typeFilter ? and(claimableFilter(now), typeFilter) : claimableFilter(now);
-        const doc = (await r.findOneAndUpdate(
-          filter,
-          update({
-            set: { leaseOwner: consumerId, leaseExpiresAt },
-            inc: { attempts: 1 },
-          }),
-          { sort: { createdAt: 1 }, returnDocument: "after" },
-        )) as OutboxDoc | null;
-        if (!doc) break;
-        if (isWellFormed(doc.event)) claimed.push(doc.event);
-      }
-      return claimed;
+      // Two-phase batch claim — the portable optimum:
+      //
+      //   Phase 1: ONE round trip fetches the FIFO candidate window.
+      //   Phase 2: per-id CAS claims run CONCURRENTLY — each
+      //            findOneAndUpdate re-checks the full claimable filter, so
+      //            a concurrent relayer that wins a doc just nulls it out
+      //            here (skipped; the winner owns it).
+      //
+      // Wall-clock ≈ 2 DB round trips for the whole batch instead of the
+      // previous `limit` SEQUENTIAL claim queries (~1s per 100 events at
+      // 10ms RTT). A single limited atomic batch-claim is NOT portable —
+      // Mongo's updateMany has no limit, so "claim exactly N in one
+      // statement" can't be expressed across kits. Backends with stronger
+      // primitives (SQL `FOR UPDATE SKIP LOCKED`) can supply their own
+      // `OutboxStore` with a native `claimPending` — the store contract IS
+      // the batch seam. `StandardRepo.claim` still doesn't apply: it needs
+      // an id upfront, and here the CAS *selects* the ids.
+      const now = new Date();
+      const candidateFilter = typeFilter
+        ? and(claimableFilter(now), typeFilter)
+        : claimableFilter(now);
+      const candidates = unwrapDocs<OutboxDoc>(
+        await r.getAll({
+          filters: candidateFilter,
+          sort: { createdAt: 1 },
+          page: 1,
+          limit,
+        }),
+      );
+      if (candidates.length === 0) return [];
+
+      const results = await Promise.all(
+        candidates.map((candidate) => {
+          const claimNow = new Date();
+          const leaseExpiresAt = new Date(claimNow.getTime() + leaseMs);
+          return r.findOneAndUpdate(
+            and(eqFilter(idField, candidate.event.meta.id), claimableFilter(claimNow)),
+            update({
+              set: { leaseOwner: consumerId, leaseExpiresAt },
+              inc: { attempts: 1 },
+            }),
+            { returnDocument: "after" },
+          ) as Promise<OutboxDoc | null>;
+        }),
+      );
+
+      // Promise.all preserves candidate order → claims stay FIFO.
+      return results
+        .filter((doc): doc is OutboxDoc => doc !== null)
+        .map((doc) => doc.event)
+        .filter(isWellFormed);
     },
 
     async acknowledge(eventId: string, options?: OutboxAcknowledgeOptions): Promise<void> {

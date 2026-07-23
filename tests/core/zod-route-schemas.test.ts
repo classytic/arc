@@ -42,6 +42,7 @@ describe("zod v4 schemas in customSchemas + custom routes", () => {
 
   async function makeApp() {
     app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       resources: [

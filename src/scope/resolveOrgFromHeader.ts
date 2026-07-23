@@ -23,8 +23,9 @@
  */
 
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { getUserRoles } from "../permissions/types.js";
-import { OrgAccessDeniedError, UnauthorizedError, ValidationError } from "../utils/errors.js";
+import { OrgAccessDeniedError, UnauthorizedError } from "../utils/errors.js";
+import { requireSingleHeaderValue } from "../utils/headers.js";
+import { getUserRoles } from "../utils/userHelpers.js";
 import type { RequestScope } from "./types.js";
 
 export interface ResolveOrgFromHeaderOptions {
@@ -50,18 +51,12 @@ export function resolveOrgFromHeader(
     // array at runtime, and picking either value would let a smuggled
     // duplicate steer the membership check. Reject outright instead — this
     // is exactly the duplicate-header posture `getHeader()`'s docs prescribe.
-    const raw = request.headers[header.toLowerCase()];
-    if (Array.isArray(raw)) {
-      throw new ValidationError(`Duplicate '${header}' header`);
-    }
-    const orgId = raw;
+    const orgId = requireSingleHeaderValue(request.headers, header);
     if (!orgId) return; // No org header — scope stays as auth adapter set it
 
     // Canonical error contract: THROW ArcError subclasses and let the global
-    // error handler emit the ErrorContract shape. Hand-rolled
-    // `{ success, error, message }` envelopes (pre-2.23) bypassed error
-    // mapping, tracing attributes, and log severity rules — and taught
-    // clients a wire shape nothing else in arc produces.
+    // error handler emit the ErrorContract shape — a hand-rolled reply here
+    // would bypass error mapping, tracing attributes, and log severity rules.
     const scope = request.scope;
     if (!scope || scope.kind === "public") {
       throw new UnauthorizedError("Authentication required for organization access");

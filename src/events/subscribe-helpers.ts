@@ -30,11 +30,12 @@
  * @see [defineEvent.ts](./defineEvent.ts) for `defineEvent` / `EventDefinitionOutput`.
  */
 
-import type {
-  CustomValidator,
-  EventDefinitionOutput,
-  EventRegistry,
-  ValidationResult,
+import {
+  type CustomValidator,
+  createEventRegistry,
+  type EventDefinitionOutput,
+  type EventRegistry,
+  type ValidationResult,
 } from "./defineEvent.js";
 import type { DomainEvent, EventHandler, EventLogger } from "./EventTransport.js";
 
@@ -157,9 +158,6 @@ export function wrapWithSchema<T>(
     } else if (registry) {
       result = registry.validate(definition.name, event.payload, eventVersion);
     } else if (definition.schema) {
-      // Lazy-import to avoid a cycle: `defineEvent.ts` exports the validator
-      // and this file is pulled in via `events/index.ts`.
-      const { createEventRegistry } = await import("./defineEvent.js");
       const adhoc = createEventRegistry();
       adhoc.register(definition as unknown as EventDefinitionOutput);
       result = adhoc.validate(definition.name, event.payload);

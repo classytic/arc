@@ -113,6 +113,27 @@ describe("getOrgContext() canonical org extraction", () => {
     expect(ctx.organizationId).toBe("org-header");
   });
 
+  it("rejects repeated organization headers even when scope is authoritative", () => {
+    expect(() =>
+      getOrgContext({
+        scope: {
+          kind: "member",
+          userId: "u-1",
+          userRoles: [],
+          organizationId: "org-scope",
+          orgRoles: [],
+        },
+        headers: { "x-organization-id": ["org-scope", "org-other"] },
+      }),
+    ).toThrow("Duplicate 'x-organization-id' header");
+  });
+
+  it("normalizes fallback user identifiers without trusting their runtime type", () => {
+    const ctx = getOrgContext({ user: { id: 42, organizationId: 7 } });
+    expect(ctx.userId).toBe("42");
+    expect(ctx.organizationId).toBe("7");
+  });
+
   it("returns undefined for everything when fully anonymous", () => {
     const ctx = getOrgContext({});
 

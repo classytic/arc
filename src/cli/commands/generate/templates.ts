@@ -239,7 +239,7 @@ export default crudSchemas;
         ? `import { buildCrudSchemasFromModel } from '@classytic/mongokit';\n`
         : "";
       const queryParserImport = useMongoKit
-        ? `\nimport { QueryParser } from '@classytic/mongokit';\n\nconst queryParser = new QueryParser({\n  // Whitelist the fields this resource accepts in URL filters.\n  // Empty by default — only \`createdAt\` is implicit; add yours.\n  allowedFilterFields: [],\n});\n`
+        ? `\nimport { QueryParser } from '@classytic/mongokit';\n\n// Fail-closed by default (mongokit >=3.25): invalid/blocked query input →\n// HTTP 400 instead of silently broadening the result set.\nconst queryParser = new QueryParser({\n  // Whitelist the fields this resource accepts in URL filters.\n  // Empty by default — only \`createdAt\` is implicit; add yours.\n  allowedFilterFields: [],\n});\n`
         : "";
       const adapterCall = useMongoKit
         ? `createMongooseAdapter({ model: ${name}, repository: ${camel}Repository, schemaGenerator: buildCrudSchemasFromModel })`

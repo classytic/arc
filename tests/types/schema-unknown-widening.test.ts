@@ -92,6 +92,8 @@ describe("RouteDefinition.schema slots remain Zod-friendly (sister convention)",
       method: "POST",
       path: "/products",
       handler: "create",
+      // Route permissions are REQUIRED (crud-public-by-omission closed in 2.20)
+      permissions: (() => true) as unknown as RouteDefinition["permissions"],
       schema: { body: bodySchema },
     };
     expect((def.schema as { body: unknown }).body).toBe(bodySchema);

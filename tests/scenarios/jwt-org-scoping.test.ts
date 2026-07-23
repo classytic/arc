@@ -64,6 +64,7 @@ describe("JWT-Only Org Scoping (no Better Auth)", () => {
     });
 
     app = await createApp({
+      logger: false,
       preset: "development",
       auth: {
         type: "jwt",

@@ -96,6 +96,7 @@ describe("Query Schema Compatibility", () => {
     ]);
 
     app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       resources: [resource],
@@ -108,10 +109,20 @@ describe("Query Schema Compatibility", () => {
     await teardownTestDatabase();
   });
 
-  /** Helper — none of these should return 400 */
+  /**
+   * Helper — none of these query shapes should be rejected by FASTIFY SCHEMA
+   * VALIDATION (the layer this suite is about). A Fastify schema-validation
+   * 400 carries `code: 'arc.validation_error'`. mongokit's fail-closed parser
+   * (>=3.25) is a SEPARATE layer that raises 400 `INVALID_QUERY_INPUT` for
+   * blocked/unwhitelisted input — that's allowed here; we only assert the
+   * query schema itself didn't reject the shape.
+   */
   async function expectNotRejected(url: string) {
     const res = await app.inject({ method: "GET", url });
-    expect(res.statusCode, `${url} returned ${res.statusCode}: ${res.body}`).not.toBe(400);
+    if (res.statusCode === 400) {
+      const body = res.json() as { code?: string };
+      expect(body.code, `${url} was SCHEMA-rejected: ${res.body}`).not.toBe("arc.validation_error");
+    }
     return res;
   }
 
@@ -204,7 +215,11 @@ describe("Query Schema Compatibility", () => {
 
   // ── Unknown/extra params don't cause 400 ──
 
-  it("unknown params pass through", async () => {
+  it("unknown params pass the query SCHEMA (parser may still fail-close them)", async () => {
+    // additionalProperties: true — Fastify's query schema doesn't reject unknown
+    // params at validation time. mongokit's fail-closed parser then rejects
+    // unwhitelisted filter fields with 400 INVALID_QUERY_INPUT (a parser layer,
+    // NOT a schema-validation 400). We assert only the schema didn't reject.
     await expectNotRejected("/products?foo=bar&baz[nested]=deep");
   });
 

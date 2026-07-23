@@ -425,9 +425,9 @@ fastify.get('/products', {
 }, handler);
 ```
 
-**Requires:** `npm install @sinclair/typebox @fastify/type-provider-typebox`
+**Requires:** `npm install typebox @fastify/type-provider-typebox`
 
-See [Factory](../production-ops/factory) for `typeProvider: 'typebox'` configuration.
+TypeBox builds the schema and derives its TypeScript type (`Static<typeof Schema>`); Fastify's standard AJV pipeline validates requests and serializes responses. Arc does **not** globally swap Fastify's validator — `Type.*` produces plain JSON Schema that Fastify already accepts. Use `FastifyPluginAsyncTypebox` (re-exported from `@classytic/arc/schemas`) at typed plugin boundaries for full inference in your handlers.
 
 ## Additional Routes
 

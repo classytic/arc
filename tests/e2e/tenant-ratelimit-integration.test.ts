@@ -23,6 +23,7 @@ describe("Per-Tenant Rate Limit — Integration", () => {
     const keyGen = createTenantKeyGenerator();
 
     app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       rateLimit: {

@@ -643,11 +643,13 @@ describe("9. Edge cases", () => {
 // ============================================================================
 
 describe("10. QueryParser security", () => {
-  it("should block dangerous operators in filters", () => {
-    const parsed = parseQuery("$where=malicious&name=safe");
-    // $where should be stripped or ignored
-    expect(parsed.filters?.$where).toBeUndefined();
-    expect(parsed.filters?.name).toBe("safe");
+  it("should block dangerous operators in filters (fail-closed → throws)", () => {
+    // mongokit >=3.25 is fail-closed by default (invalidInput: 'throw'): a
+    // dangerous operator like $where raises 400 (INVALID_QUERY_INPUT) instead
+    // of being silently stripped. Throwing is STRONGER blocking than dropping —
+    // a malformed/hostile query fails loudly rather than degrading to a query
+    // that could match unintended rows.
+    expect(() => parseQuery("$where=malicious&name=safe")).toThrow(/\$where/);
   });
 
   it("should handle deeply nested filters safely", () => {

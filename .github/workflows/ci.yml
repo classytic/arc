@@ -16,7 +16,8 @@ jobs:
 
     strategy:
       matrix:
-        node-version: [22]
+        # Minimum supported + current LTS
+        node-version: [22, 24]
 
     services:
       mongodb:
@@ -34,8 +35,8 @@ jobs:
 
       - run: npm ci
 
-      - name: Typecheck
-        run: npx tsc --noEmit
+      - name: Typecheck (src + enforced type-test lane)
+        run: npm run typecheck
 
       - name: Lint
         run: npx biome check src/ --diagnostic-level=error
@@ -43,8 +44,17 @@ jobs:
       - name: Dead code
         run: npx knip
 
+      - name: Dependency boundaries
+        run: npm run check:boundaries
+
       - name: Build
         run: npm run build
+
+      - name: Public API surface
+        run: npm run check:api-surface
+
+      - name: Package standards (publint + attw)
+        run: npm run check:package
 
       - name: Test
         run: npx vitest run
@@ -61,6 +71,38 @@ jobs:
         run: node scripts/mcp-e2e.mjs
         env:
           MONGODB_URI: mongodb://localhost:27017/arc_mcp_e2e
+
+  # ─────────────────────────────────────────────
+  # Peer minimums — the floors in peerDependencies must actually work.
+  # Local dev proves the LATEST combination; this proves the declared
+  # minimums (fastify / repo-core / primitives) still compile, build,
+  # and pass the fast + contract lanes.
+  # ─────────────────────────────────────────────
+  peer-minimums:
+    name: Peer minimums (fastify 5.8.5, repo-core 0.14.0, primitives 0.9.0)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Pin peers to their declared floors
+        run: npm install --no-save fastify@5.8.5 @classytic/repo-core@0.14.0 @classytic/primitives@0.9.0
+
+      - name: Typecheck against floors
+        run: npm run typecheck
+
+      - name: Build against floors
+        run: npm run build
+
+      - name: Fast + contract lanes against floors
+        run: npm run test:fast && npx vitest run tests/contract tests/types
 
   # ─────────────────────────────────────────────
   # Bun — secondary runtime

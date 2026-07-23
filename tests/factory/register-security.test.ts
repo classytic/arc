@@ -6,7 +6,7 @@
  */
 
 import Fastify, { type FastifyInstance } from "fastify";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   loadPlugin,
   registerSecurityPlugins,
@@ -260,5 +260,67 @@ describe("registerUtilityPlugins", () => {
     // preset: "testing" — no compression warning
     await registerUtilityPlugins(app, { preset: "testing" });
     await app.ready();
+  });
+});
+
+// ============================================================================
+// under-pressure — real default thresholds + threshold-less warning (wave-12)
+// ============================================================================
+
+describe("registerUtilityPlugins — under-pressure load shedding", () => {
+  let app: FastifyInstance;
+
+  afterEach(async () => {
+    if (app) await app.close();
+  });
+
+  it("default config exposes the status route (real thresholds, not monitoring-only)", async () => {
+    app = createTestFastify();
+    await registerUtilityPlugins(app, {});
+    await app.ready();
+
+    // Arc's default is `exposeStatusRoute: true` + event-loop thresholds —
+    // the route existing proves the arc default object was applied instead
+    // of @fastify/under-pressure's all-zeros (disabled) defaults.
+    const res = await app.inject({ method: "GET", url: "/status" });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("warns in production when host config has NO pressure thresholds", async () => {
+    app = createTestFastify();
+    const warn = vi.spyOn(app.log, "warn");
+    await registerUtilityPlugins(app, {
+      preset: "production",
+      underPressure: { exposeStatusRoute: true }, // monitoring-only
+    });
+    await app.ready();
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("never shed load"));
+  });
+
+  it("does NOT warn in production when a threshold is configured", async () => {
+    app = createTestFastify();
+    const warn = vi.spyOn(app.log, "warn");
+    await registerUtilityPlugins(app, {
+      preset: "production",
+      underPressure: { maxEventLoopDelay: 2000 },
+    });
+    await app.ready();
+
+    const calls = warn.mock.calls.map((c) => String(c[0]));
+    expect(calls.some((m) => m.includes("never shed load"))).toBe(false);
+  });
+
+  it("does NOT warn outside production for a threshold-less config", async () => {
+    app = createTestFastify();
+    const warn = vi.spyOn(app.log, "warn");
+    await registerUtilityPlugins(app, {
+      preset: "development",
+      underPressure: { exposeStatusRoute: true },
+    });
+    await app.ready();
+
+    const calls = warn.mock.calls.map((c) => String(c[0]));
+    expect(calls.some((m) => m.includes("never shed load"))).toBe(false);
   });
 });

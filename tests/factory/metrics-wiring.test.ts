@@ -39,6 +39,7 @@ describe("createApp — metrics plugin", () => {
 
     it("does NOT register metrics when explicitly false", async () => {
       app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         arcPlugins: { metrics: false as unknown as boolean },
@@ -66,6 +67,7 @@ describe("createApp — metrics plugin", () => {
 
     it("uses custom path when configured", async () => {
       app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         arcPlugins: { metrics: { path: "/observability/metrics" } },
@@ -80,6 +82,7 @@ describe("createApp — metrics plugin", () => {
 
     it("uses custom prefix for metric names", async () => {
       app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         arcPlugins: { metrics: { prefix: "myapp" } },

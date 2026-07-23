@@ -6,7 +6,14 @@
 
 import type { FastifyInstance } from "fastify";
 import type { ResourceLike } from "./loadResources.js";
-import { type ArcModule, orderModules, resolveModule } from "./module.js";
+import {
+  type ArcModule,
+  collectModuleScheduledJobs,
+  orderModules,
+  resolveModule,
+  subscribeModuleEventHandlers,
+  unsubscribeModuleEventHandlers,
+} from "./module/index.js";
 import type { FastifyPlugin } from "./shared.js";
 import type { CreateAppOptions } from "./types/index.js";
 
@@ -427,9 +434,55 @@ export async function registerResources(
       throw new Error(`[arc] module "${m.name}" afterResources() threw: ${msg}`, { cause: err });
     }
   }
+  // Module schedules resolve exactly once, then flow through Arc's canonical
+  // schedules plugin. Do this BEFORE event activation so invalid schedule
+  // configuration cannot leave already-subscribed handlers behind.
+  const scheduledJobs = await collectModuleScheduledJobs(fastify, modules);
+  if (scheduledJobs.length > 0) {
+    if (config.arcPlugins?.schedules === false) {
+      throw new Error(
+        "[arc] modules declare scheduledJobs but arcPlugins.schedules is false. Enable the scheduler or remove the declarations.",
+      );
+    }
+    if (fastify.hasDecorator("getScheduleStats")) {
+      throw new Error(
+        "[arc] modules declare scheduledJobs but schedulesPlugin was already registered manually. Configure their runner through arcPlugins.schedules so Arc can compose one schedule table.",
+      );
+    }
+    const frozenJobs = Object.freeze(scheduledJobs.map((job) => Object.freeze({ ...job })));
+    const scheduleOptions =
+      typeof config.arcPlugins?.schedules === "object" ? config.arcPlugins.schedules : {};
+    const { default: schedulesPlugin } = await import("../plugins/schedules.js");
+    await fastify.register(schedulesPlugin, { ...scheduleOptions, schedules: frozenJobs });
+    if (fastify.arc) {
+      fastify.arc.scheduledJobs = frozenJobs;
+      fastify.arc.plugins.set("arc-schedules", {
+        name: "arc-schedules",
+        options: { scheduleCount: frozenJobs.length },
+        registeredAt: new Date().toISOString(),
+      });
+    }
+  }
+
+  // Module event handlers — transactional subscription in dependency order.
+  // The helper rolls back partial activation; the caller also rolls back if
+  // app-level post-wiring below fails.
+  const eventUnsubscribes = await subscribeModuleEventHandlers(fastify, modules);
+
   if (config.afterResources) {
-    await config.afterResources(fastify);
-    fastify.log.debug("afterResources hook executed");
+    try {
+      await config.afterResources(fastify);
+      fastify.log.debug("afterResources hook executed");
+    } catch (err) {
+      const rollbackErrors = await unsubscribeModuleEventHandlers(eventUnsubscribes);
+      for (const rollbackError of rollbackErrors) {
+        fastify.log.error(
+          { err: rollbackError },
+          "[arc] module event-handler rollback after afterResources failure failed",
+        );
+      }
+      throw err;
+    }
   }
 
   // ── 7. Lifecycle hooks ──
@@ -455,8 +508,15 @@ export async function registerResources(
   // app onClose see live infra, and the underlying connections close last.
   const closers = modules.filter((m) => m.onClose).reverse();
   const appOnClose = config.onClose;
-  if (closers.length || appOnClose) {
+  if (closers.length || appOnClose || eventUnsubscribes.length) {
     fastify.addHook("onClose", async () => {
+      // Unsubscribe module event handlers FIRST (reverse of subscription
+      // order), while module deps are still live — before any module onClose
+      // tears the engines they call down.
+      const unsubscribeErrors = await unsubscribeModuleEventHandlers(eventUnsubscribes);
+      for (const err of unsubscribeErrors) {
+        fastify.log.error({ err }, "[arc] module event-handler shutdown unsubscribe failed");
+      }
       for (const m of closers) {
         await m.onClose?.(fastify);
       }

@@ -7,7 +7,7 @@
  * cyclic edges. The composition wiring is proven separately in modules.test.ts.
  */
 import { describe, expect, it } from "vitest";
-import { type ArcModule, orderModules } from "../../src/factory/module.js";
+import { type ArcModule, orderModules } from "../../src/factory/module/index.js";
 
 const mod = (name: string, dependsOn?: string[]): ArcModule =>
   dependsOn ? { name, dependsOn } : { name };

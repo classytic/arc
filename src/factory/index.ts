@@ -28,17 +28,6 @@
 // reflect that without forcing hosts to also import from /plugins.
 import "../types/fastify-augmentation.js";
 
-// Production-shaped sibling of `loadResources`. Directory scanning fails
-// for some hosts under tsx / vitest (Node `#path` subpath imports,
-// transitive `.js→.ts` resolution, top-level engine init); the glob form
-// sidesteps those paths. Re-exported here so compliance smokes find the
-// helper next to `loadResources` in autocomplete + docs — the canonical
-// source still lives in `src/testing/preloadResources.ts` and is also
-// available from `@classytic/arc/testing`.
-export {
-  preloadResources,
-  preloadResourcesAsync,
-} from "../testing/preloadResources.js";
 export { ArcFactory, createApp } from "./createApp.js";
 export type {
   ArcWorker,
@@ -58,11 +47,28 @@ export {
   type ArcModule,
   type ArcModuleInput,
   type ArcModuleRegistry,
+  collectModuleHealthChecks,
+  collectModuleScheduledJobs,
+  collectModuleWorkflows,
   defineModule,
+  type EventHandlerDefinition,
   getModuleExports,
+  type ModuleContribution,
   orderModules,
+  resolveContribution,
   resolveModule,
-} from "./module.js";
+  subscribeModuleEventHandlers,
+} from "./module/index.js";
+// Production-shaped sibling of `loadResources`. Directory scanning fails
+// for some hosts under tsx / vitest (Node `#path` subpath imports,
+// transitive `.js→.ts` resolution, top-level engine init); the glob form
+// sidesteps those paths. Re-exported here so compliance smokes find the
+// helper next to `loadResources` in autocomplete + docs — the canonical
+// The testing subpath also re-exports these helpers for test-fixture DX.
+export {
+  preloadResources,
+  preloadResourcesAsync,
+} from "./preloadResources.js";
 export {
   developmentPreset,
   edgePreset,

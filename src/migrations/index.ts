@@ -32,9 +32,29 @@
  *
  * const runner = new MigrationRunner(mongoose.connection.db, {
  *   store: new MongoMigrationStore(mongoose.connection.db),
+ *   lock: createMongoLockAdapter({ connection }), // multi-replica safety
  * });
  * await runner.up(migrations);
+ *
+ * ## Deployment discipline
+ *
+ * Migrations should be executed by ONE owner — a deploy job, a CI step, or
+ * a leader — not by every replica on startup. The optional `lock` (any
+ * ecosystem `LockAdapter`) makes concurrent runners fail fast instead of
+ * double-applying, and the pending set is recomputed INSIDE the lock so a
+ * runner that waited on another deploy sees its writes. Two windows remain
+ * host concerns and are deliberately documented instead of hidden:
+ *   - a crash between `up()` and `record()` re-executes that migration on
+ *     the next run — write migrations to be idempotent (`$rename`,
+ *     `IF NOT EXISTS`, upserts);
+ *   - `up()` and `record()` are not one transaction — stores backed by a
+ *     transactional DB can override `record()` to join the migration's
+ *     transaction.
  */
+
+import { createHash, randomUUID } from "node:crypto";
+import type { LockAdapter } from "@classytic/repo-core/lock";
+import { startRenewingLease } from "../lock/renewingLease.js";
 
 // ============================================================================
 // Types
@@ -73,6 +93,12 @@ export interface MigrationRecord {
   description?: string;
   appliedAt: Date;
   executionTime: number;
+  /**
+   * SHA-256 of the migration's `up` + `down` source at apply time.
+   * Present on records written by 2.24+; older records lack it and are
+   * skipped by drift detection.
+   */
+  checksum?: string;
 }
 
 /**
@@ -86,8 +112,12 @@ export interface MigrationRecord {
 export interface MigrationStore {
   /** Get all applied migration records, sorted by appliedAt ascending */
   getApplied(): Promise<MigrationRecord[]>;
-  /** Record a completed migration */
-  record(migration: Migration, executionTime: number): Promise<void>;
+  /**
+   * Record a completed migration. `meta.checksum` (2.24+) is the source
+   * checksum for drift detection — stores should persist it when given;
+   * existing two-argument implementations remain valid and simply skip it.
+   */
+  record(migration: Migration, executionTime: number, meta?: { checksum?: string }): Promise<void>;
   /** Remove a migration record (for rollback) */
   remove(migration: Migration): Promise<void>;
 }
@@ -156,7 +186,11 @@ export class MongoMigrationStore implements MigrationStore {
     return records as MigrationRecord[];
   }
 
-  async record(migration: Migration, executionTime: number): Promise<void> {
+  async record(
+    migration: Migration,
+    executionTime: number,
+    meta?: { checksum?: string },
+  ): Promise<void> {
     const collection = this.db.collection(this.collectionName);
     await collection.insertOne({
       version: migration.version,
@@ -164,6 +198,7 @@ export class MongoMigrationStore implements MigrationStore {
       description: migration.description,
       appliedAt: new Date(),
       executionTime,
+      ...(meta?.checksum ? { checksum: meta.checksum } : {}),
     });
   }
 
@@ -185,6 +220,50 @@ export interface MigrationRunnerOptions {
   store: MigrationStore;
   /** Logger (defaults to process.stdout/stderr) */
   logger?: MigrationLogger;
+  /**
+   * Ecosystem lock adapter (`LockAdapter` from `@classytic/repo-core/lock`)
+   * for multi-replica / concurrent-deploy safety.
+   * When set, `up()` / `down()` / `downTo()` acquire the `arc:migrations`
+   * lease first and FAIL FAST if another runner holds it — two replicas
+   * starting together can no longer both execute the same migration.
+   * Omit only when a single owner (deploy job, CI step) runs migrations.
+   */
+  lock?: LockAdapter;
+  /**
+   * Lease duration for the migration lock (default: 10 minutes). Must
+   * comfortably exceed the slowest migration so the lease cannot lapse
+   * mid-run and admit a second runner.
+   */
+  lockLeaseMs?: number;
+  /** Lease holder identity (default: random per runner instance). */
+  holderId?: string;
+  /**
+   * What to do when an APPLIED migration's current source no longer matches
+   * the checksum recorded at apply time (the file was edited after being
+   * applied — drift that silently invalidates rollback correctness).
+   *   - `'warn'` (default) — log and continue. Checksums come from
+   *     `Function.prototype.toString()`, so a transpile-target change can
+   *     shift them without semantic drift; warn keeps that honest.
+   *   - `'error'` — throw before running anything.
+   * Records without a checksum (written by older stores) are skipped.
+   */
+  checksumMismatch?: "warn" | "error";
+}
+
+const MIGRATION_LOCK_NAME = "arc:migrations";
+const DEFAULT_LOCK_LEASE_MS = 10 * 60 * 1000;
+
+/**
+ * Source checksum for drift detection — SHA-256 over the migration's
+ * `up`/`down` source. Stable for a given build; a transpile-target change
+ * can legitimately shift it (hence `checksumMismatch: 'warn'` default).
+ */
+export function computeMigrationChecksum(migration: Migration): string {
+  return createHash("sha256")
+    .update(migration.up.toString())
+    .update("\n")
+    .update(migration.down.toString())
+    .digest("hex");
 }
 
 /**
@@ -220,94 +299,232 @@ export class MigrationRunner {
   private readonly db: unknown;
   private readonly store: MigrationStore;
   private readonly log: MigrationLogger;
+  private readonly lock?: LockAdapter;
+  private readonly lockLeaseMs: number;
+  private readonly holderId: string;
+  private readonly checksumMismatch: "warn" | "error";
 
   constructor(db: unknown, opts: MigrationRunnerOptions) {
     this.db = db;
     this.store = opts.store;
     this.log = opts.logger ?? defaultLogger;
+    this.lock = opts.lock;
+    this.lockLeaseMs = opts.lockLeaseMs ?? DEFAULT_LOCK_LEASE_MS;
+    this.holderId = opts.holderId ?? `migration-runner-${randomUUID()}`;
+    this.checksumMismatch = opts.checksumMismatch ?? "warn";
   }
 
   /**
-   * Run all pending migrations
+   * Acquire the migration lease (when a lock is configured) and run `fn`.
+   * Fail-fast on contention: a concurrent deploy should error loudly, not
+   * queue — the OTHER runner is applying the same set.
+   *
+   * The lease renews while `fn` runs (`startRenewingLease` — serialized,
+   * awaited teardown), so a migration slower than `lockLeaseMs` can't let
+   * a second deployment acquire the lock mid-run. Ownership loss is
+   * ENFORCED, not just logged: `fn` receives a `leaseLost` probe to refuse
+   * starting further migrations, and even a successful `fn` fails the run
+   * when the lease was lost — a concurrent runner may have interleaved, so
+   * the applied state must be verified, not trusted. (A stale holder's
+   * in-flight write can only be truly fenced by a token from the lock
+   * contract — planned repo-core evolution.)
+   */
+  private async withLock<T>(fn: (leaseLost: () => boolean) => Promise<T>): Promise<T> {
+    const lock = this.lock;
+    if (!lock) return fn(() => false);
+
+    const acquired = await lock.tryAcquire(MIGRATION_LOCK_NAME, this.holderId, this.lockLeaseMs);
+    if (!acquired) {
+      throw new Error(
+        "MigrationRunner: another runner holds the migration lock — refusing to run concurrently. " +
+          "If a previous runner crashed, the lease expires on its own " +
+          `(leaseMs: ${this.lockLeaseMs}).`,
+      );
+    }
+
+    const lease = startRenewingLease({
+      lock,
+      name: MIGRATION_LOCK_NAME,
+      holderId: this.holderId,
+      leaseMs: this.lockLeaseMs,
+      onLost: () =>
+        this.log.error(
+          "MigrationRunner: lease renewal lost — another holder took the migration lock; " +
+            "no further migrations will start and this run will fail.",
+        ),
+      onError: (error) =>
+        this.log.error(
+          `MigrationRunner: lease renewal errored (lease may lapse mid-run): ${(error as Error).message}`,
+        ),
+    });
+
+    try {
+      const result = await fn(() => lease.lost);
+      if (lease.lost) {
+        throw new Error(
+          "MigrationRunner: migration lock ownership was lost mid-run — a concurrent " +
+            "runner may have executed migrations in parallel. Verify the applied state " +
+            "(getAppliedMigrations) before re-running.",
+        );
+      }
+      return result;
+    } finally {
+      await lease.stop();
+      try {
+        await lock.release(MIGRATION_LOCK_NAME, this.holderId);
+      } catch (error) {
+        // The lease self-expires; a failed release must not mask fn()'s result.
+        this.log.error(`MigrationRunner: lock release failed: ${(error as Error).message}`);
+      }
+    }
+  }
+
+  /**
+   * Drift detection: compare each APPLIED record's stored checksum against
+   * the current source of the same migration. A mismatch means the file was
+   * edited after being applied — its `down()` may no longer invert what
+   * actually ran.
+   */
+  private verifyChecksums(applied: MigrationRecord[], migrations: Migration[]): void {
+    for (const record of applied) {
+      if (!record.checksum) continue; // older record — nothing to compare
+      const current = migrations.find(
+        (m) => m.resource === record.resource && m.version === record.version,
+      );
+      if (!current) continue;
+      const checksum = computeMigrationChecksum(current);
+      if (checksum !== record.checksum) {
+        const msg =
+          `Migration ${record.resource}:${record.version} source changed after it was applied ` +
+          `(checksum ${record.checksum.slice(0, 12)}… → ${checksum.slice(0, 12)}…). ` +
+          "Ship a NEW migration instead of editing an applied one.";
+        if (this.checksumMismatch === "error") {
+          throw new Error(`MigrationRunner: ${msg}`);
+        }
+        this.log.error(`WARNING: ${msg}`);
+      }
+    }
+  }
+
+  /**
+   * Run all pending migrations.
+   *
+   * With a `lock` configured, the applied set is (re)read INSIDE the lease —
+   * a runner that raced another deploy computes pending against the winner's
+   * completed writes, not a stale pre-lock snapshot.
    */
   async up(migrations: Migration[]): Promise<void> {
-    const applied = await this.store.getApplied();
-    const appliedVersions = new Set(applied.map((m) => `${m.resource}:${m.version}`));
+    await this.withLock(async (leaseLost) => {
+      const applied = await this.store.getApplied();
+      this.verifyChecksums(applied, migrations);
+      const appliedVersions = new Set(applied.map((m) => `${m.resource}:${m.version}`));
 
-    const pending = migrations
-      .filter((m) => !appliedVersions.has(`${m.resource}:${m.version}`))
-      .sort((a, b) => a.version - b.version);
+      const pending = migrations
+        .filter((m) => !appliedVersions.has(`${m.resource}:${m.version}`))
+        .sort((a, b) => a.version - b.version);
 
-    if (pending.length === 0) {
-      this.log.info("No pending migrations");
-      return;
-    }
+      if (pending.length === 0) {
+        this.log.info("No pending migrations");
+        return;
+      }
 
-    this.log.info(`Running ${pending.length} migration(s)...`);
+      this.log.info(`Running ${pending.length} migration(s)...`);
 
-    for (const migration of pending) {
-      await this.runMigration(migration, "up");
-    }
+      for (const migration of pending) {
+        if (leaseLost()) {
+          throw new Error(
+            "MigrationRunner: refusing to start the next migration — lock ownership lost.",
+          );
+        }
+        await this.runMigration(migration, "up");
+      }
 
-    this.log.info("All migrations completed successfully");
+      this.log.info("All migrations completed successfully");
+    });
   }
 
   /**
    * Rollback last migration
    */
   async down(migrations: Migration[]): Promise<void> {
-    const applied = await this.store.getApplied();
-    if (applied.length === 0) {
-      this.log.info("No migrations to rollback");
-      return;
-    }
+    await this.withLock(async () => {
+      const applied = await this.store.getApplied();
+      const last = applied[applied.length - 1];
+      if (!last) {
+        this.log.info("No migrations to rollback");
+        return;
+      }
 
-    const last = applied[applied.length - 1];
-    if (!last) {
-      this.log.info("No migrations to rollback");
-      return;
-    }
-
-    const migration = migrations.find(
-      (m) => m.resource === last.resource && m.version === last.version,
-    );
-
-    if (!migration) {
-      throw new Error(`Migration ${last.resource}:${last.version} not found in migration files`);
-    }
-
-    this.log.info(`Rolling back ${migration.resource} v${migration.version}...`);
-    await this.runMigration(migration, "down", true);
-    this.log.info("Rollback completed");
-  }
-
-  /**
-   * Rollback to specific version
-   */
-  async downTo(migrations: Migration[], targetVersion: number): Promise<void> {
-    const applied = await this.store.getApplied();
-    const toRollback = applied.filter((m) => m.version > targetVersion).reverse();
-
-    if (toRollback.length === 0) {
-      this.log.info(`Already at or below version ${targetVersion}`);
-      return;
-    }
-
-    this.log.info(`Rolling back ${toRollback.length} migration(s)...`);
-
-    for (const record of toRollback) {
       const migration = migrations.find(
-        (m) => m.resource === record.resource && m.version === record.version,
+        (m) => m.resource === last.resource && m.version === last.version,
       );
 
       if (!migration) {
-        throw new Error(`Migration ${record.resource}:${record.version} not found`);
+        throw new Error(`Migration ${last.resource}:${last.version} not found in migration files`);
       }
 
+      this.log.info(`Rolling back ${migration.resource} v${migration.version}...`);
       await this.runMigration(migration, "down", true);
-    }
+      this.log.info("Rollback completed");
+    });
+  }
 
-    this.log.info("Rollback completed");
+  /**
+   * Rollback to a specific version.
+   *
+   * Versions are RESOURCE-scoped, so a bare numeric threshold is only
+   * meaningful within one resource. When the applied set spans multiple
+   * resources, `options.resource` is required — rolling every resource back
+   * across a shared number silently reverts unrelated schemas.
+   */
+  async downTo(
+    migrations: Migration[],
+    targetVersion: number,
+    options?: { resource?: string },
+  ): Promise<void> {
+    await this.withLock(async (leaseLost) => {
+      const applied = await this.store.getApplied();
+
+      const resources = new Set(applied.map((m) => m.resource));
+      if (!options?.resource && resources.size > 1) {
+        throw new Error(
+          `MigrationRunner.downTo: applied migrations span ${resources.size} resources ` +
+            `(${[...resources].sort().join(", ")}) — versions are resource-scoped, so pass ` +
+            "{ resource: '<name>' } to select which one to roll back.",
+        );
+      }
+
+      const inScope = options?.resource
+        ? applied.filter((m) => m.resource === options.resource)
+        : applied;
+      const toRollback = inScope.filter((m) => m.version > targetVersion).reverse();
+
+      if (toRollback.length === 0) {
+        this.log.info(`Already at or below version ${targetVersion}`);
+        return;
+      }
+
+      this.log.info(`Rolling back ${toRollback.length} migration(s)...`);
+
+      for (const record of toRollback) {
+        if (leaseLost()) {
+          throw new Error(
+            "MigrationRunner: refusing to start the next rollback — lock ownership lost.",
+          );
+        }
+        const migration = migrations.find(
+          (m) => m.resource === record.resource && m.version === record.version,
+        );
+
+        if (!migration) {
+          throw new Error(`Migration ${record.resource}:${record.version} not found`);
+        }
+
+        await this.runMigration(migration, "down", true);
+      }
+
+      this.log.info("Rollback completed");
+    });
   }
 
   /**
@@ -360,7 +577,9 @@ export class MigrationRunner {
           }
         }
 
-        await this.store.record(migration, Date.now() - start);
+        await this.store.record(migration, Date.now() - start, {
+          checksum: computeMigrationChecksum(migration),
+        });
       } else {
         await migration.down(this.db);
 

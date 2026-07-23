@@ -358,6 +358,7 @@ describe("searchPreset — end-to-end via createApp", () => {
     });
 
     app = await createApp({
+      logger: false,
       resources: [productResource],
       auth: "none",
       helmet: false,
@@ -589,6 +590,7 @@ describe("searchPreset — end-to-end via createApp", () => {
     });
 
     app = await createApp({
+      logger: false,
       resources: [resource],
       auth: "none",
       helmet: false,

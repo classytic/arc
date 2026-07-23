@@ -224,13 +224,13 @@ describe("error mappers", () => {
 
 describe("BullMQ jobs integration (#8)", () => {
   it("Arc exports defineJob and jobsPlugin", async () => {
-    const { defineJob, jobsPlugin } = await import("../../src/integrations/jobs.js");
+    const { defineJob, jobsPlugin } = await import("../../src/integrations/jobs/index.js");
     expect(typeof defineJob).toBe("function");
     expect(typeof jobsPlugin).toBe("function");
   });
 
   it("defineJob creates a typed job definition", async () => {
-    const { defineJob } = await import("../../src/integrations/jobs.js");
+    const { defineJob } = await import("../../src/integrations/jobs/index.js");
     const emailJob = defineJob({
       name: "send-email",
       handler: async (data: { to: string; subject: string }) => {

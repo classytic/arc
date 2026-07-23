@@ -790,6 +790,49 @@ const perms = createOrgPermissions({
 
 ### Custom Scoped Permissions with Filters
 
+#### Multiple teams, workspaces, or host-defined tenancy names
+
+Keep one **active selection per request**. A user may belong to many teams or
+workspaces in the host database, but the authenticated `RequestScope` should
+carry only the team/workspace selected for this operation. The auth resolver
+must verify that selection against the user's memberships before constructing
+the scope. This prevents an accidental union of every tenant the user can
+access from widening a query.
+
+Arc's built-in `teamId` is optional convenience, not a required naming model.
+Hosts can use any dimension through `scope.context`, gate it with
+`requireScopeContext`, and apply it as a repository filter with
+`multiTenantPreset({ tenantFields })`:
+
+```typescript
+// In the host's authentication/membership resolver, after verifying access:
+request.scope = {
+  kind: 'member',
+  userId: user.id,
+  userRoles: user.roles,
+  organizationId: membership.organizationId,
+  orgRoles: membership.roles,
+  context: { workspaceId: selectedWorkspace.id },
+};
+
+const workspacePermission = allOf(
+  requireOrgMembership(),
+  requireScopeContext('workspaceId'),
+);
+
+const workspaceTenant = multiTenantPreset({
+  tenantFields: [
+    { field: 'organizationId', type: 'org' },
+    { field: 'workspaceId', contextKey: 'workspaceId' },
+  ],
+});
+```
+
+When membership rules require database lookups, hosts may pass any custom
+`PermissionCheck` function. Return `{ granted: true, filters }` to narrow rows,
+or return a verified `scope` from an earlier authentication permission. Built-in
+role checks remain preferable when no custom lookup or row filter is needed.
+
 For permissions that need query scoping (e.g. "AM sees only assigned jobs"), write a custom `PermissionCheck` that reads org roles from `request.scope`:
 
 ```typescript

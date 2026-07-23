@@ -23,14 +23,14 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { createProjectStructure } from "../src/cli/commands/init/file-writer.js";
-import type { ProjectConfig } from "../src/cli/commands/init/types.js";
-import { BaseController } from "../src/core/BaseController.js";
-import { defineResource } from "../src/core/defineResource.js";
-import { resourceToTools } from "../src/integrations/mcp/resourceToTools.js";
-import { allowPublic } from "../src/permissions/index.js";
-import { ResourceRegistry } from "../src/registry/ResourceRegistry.js";
-import { createMockRepositoryMock } from "./setup.js";
+import { createProjectStructure } from "../../src/cli/commands/init/file-writer.js";
+import type { ProjectConfig } from "../../src/cli/commands/init/types.js";
+import { BaseController } from "../../src/core/BaseController.js";
+import { defineResource } from "../../src/core/defineResource.js";
+import { resourceToTools } from "../../src/integrations/mcp/resourceToTools.js";
+import { allowPublic } from "../../src/permissions/index.js";
+import { ResourceRegistry } from "../../src/registry/ResourceRegistry.js";
+import { createMockRepositoryMock } from "../setup.js";
 
 // ============================================================================
 // #1 — resourceToTools resolves `controllerMethod` for custom routes
@@ -113,7 +113,7 @@ describe("Fix #2 — qs lives in `dependencies`, not `devDependencies`", () => {
     // doing `import { createApp } from '@classytic/arc'` would fail with
     // MODULE_NOT_FOUND if qs were only a devDependency. Lock the
     // declaration in so a future "cleanup" doesn't silently demote it.
-    const pkgPath = fileURLToPath(new URL("../package.json", import.meta.url));
+    const pkgPath = fileURLToPath(new URL("../../package.json", import.meta.url));
     const pkg = JSON.parse(await readFile(pkgPath, "utf8")) as {
       dependencies?: Record<string, string>;
       devDependencies?: Record<string, string>;
@@ -176,8 +176,6 @@ describe("Fix #4 — `arc init` skips Docker assets unless --docker is set", () 
   /** Capture-only file-writer stand-in — we don't actually touch disk. */
   function captureScaffold(config: ProjectConfig): Record<string, string> {
     const files: Record<string, string> = {};
-    const fs = vi.hoisted(() => null);
-    void fs; // silence unused
     // The real `writeProjectFiles` constructs `files` then loops to disk.
     // For this test we only care about the construction phase; intercept
     // `console.log` to keep the test output quiet.

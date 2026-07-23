@@ -5,9 +5,9 @@
  * from their respective providers — and that explicit options always win.
  */
 
+import type { OutboxWriteOptions } from "@classytic/primitives/outbox";
 import { describe, expect, it } from "vitest";
 import type { DomainEvent } from "../../src/events/EventTransport.js";
-import type { OutboxWriteOptions } from "../../src/events/outbox.js";
 import { EventOutbox } from "../../src/events/outbox.js";
 
 function makeEvent(id = "evt-1"): DomainEvent {

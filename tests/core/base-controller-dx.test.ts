@@ -48,9 +48,8 @@ describe("BaseController — TRepository default tracks TDoc", () => {
     type InferredRepo<TDoc extends AnyRecord> =
       BaseController<TDoc> extends { repository: infer R } ? R : never;
 
-    // @ts-expect-error — `repository` is protected, we're testing the
-    // TYPE-LEVEL shape via conditional inference only. The expectation
-    // below reads the generic binding.
+    // Conditional inference reads the TYPE-LEVEL shape only — protected
+    // visibility doesn't block `infer` on the structural member.
     type _ = InferredRepo<Product>;
 
     // Pragmatic assertion: construct a BaseController instance and verify
@@ -128,31 +127,48 @@ describe("Arc{List,Get,Create,Update,Delete}Result — override helpers", () => 
     expect(true).toBe(true);
   });
 
-  it("works with `this` on a subclass — the documented override pattern", () => {
-    // This is the exact usage pattern the CHANGELOG snippet advertises.
-    // If `this` doesn't thread through the utility types, the subclass
-    // author has to restate the full Promise<...> shape. Compiles means
-    // the pattern works.
-    class Fake implements FakeController {
-      // biome-ignore lint/suspicious/noExplicitAny: test shim
-      async list(_ctx: IRequestContext): ArcListResult<this> {
-        return { success: true, data: [] as Product[] };
+  it("works on a subclass override, parameterized by the BASE type", () => {
+    // The compiled type lane caught that `ArcXResult<this>` can NEVER
+    // annotate an async method return: `this` includes the member being
+    // defined, so the alias is circular (TS2577) regardless of
+    // inheritance. The working sugar parameterizes by the BASE class —
+    // `ArcListResult<Base>` reads the inherited signature, stays
+    // non-circular, and still saves restating the full Promise<...> shape.
+    class Base {
+      async list(_ctx: IRequestContext): Promise<IControllerResponse<ListResult<Product>>> {
+        return { data: { data: [], total: 0 } as unknown as ListResult<Product> };
       }
-      // biome-ignore lint/suspicious/noExplicitAny: test shim
-      async get(_ctx: IRequestContext): ArcGetResult<this> {
-        return { success: true, data: { _id: "1", name: "test" } as Product };
+      async get(_ctx: IRequestContext): Promise<IControllerResponse<Product>> {
+        return { data: { _id: "1", name: "test" } };
       }
-      // biome-ignore lint/suspicious/noExplicitAny: test shim
-      async create(_ctx: IRequestContext): ArcCreateResult<this> {
-        return { success: true, data: { _id: "1", name: "test" } as Product };
+      async create(_ctx: IRequestContext): Promise<IControllerResponse<Product>> {
+        return { data: { _id: "1", name: "test" } };
       }
-      // biome-ignore lint/suspicious/noExplicitAny: test shim
-      async update(_ctx: IRequestContext): ArcUpdateResult<this> {
-        return { success: true, data: { _id: "1", name: "test" } as Product };
+      async update(_ctx: IRequestContext): Promise<IControllerResponse<Product>> {
+        return { data: { _id: "1", name: "test" } };
       }
-      // biome-ignore lint/suspicious/noExplicitAny: test shim
-      async delete(_ctx: IRequestContext): ArcDeleteResult<this> {
-        return { success: true, data: { message: "deleted", id: "1" } };
+      async delete(
+        _ctx: IRequestContext,
+      ): Promise<IControllerResponse<{ message: string; id?: string }>> {
+        return { data: { message: "deleted", id: "1" } };
+      }
+    }
+
+    class Fake extends Base {
+      override async list(ctx: IRequestContext): ArcListResult<Base> {
+        return super.list(ctx);
+      }
+      override async get(ctx: IRequestContext): ArcGetResult<Base> {
+        return super.get(ctx);
+      }
+      override async create(ctx: IRequestContext): ArcCreateResult<Base> {
+        return super.create(ctx);
+      }
+      override async update(ctx: IRequestContext): ArcUpdateResult<Base> {
+        return super.update(ctx);
+      }
+      override async delete(ctx: IRequestContext): ArcDeleteResult<Base> {
+        return super.delete(ctx);
       }
     }
 
@@ -497,7 +513,12 @@ describe("defineResource — user-controller dropped-options warn", () => {
     defineResource({
       name: "auto-build",
       prefix: "/auto-build",
-      adapter: createMongooseAdapter(Model, repo),
+      adapter: createMongooseAdapter({
+        model: Model,
+        // The mock harness is untyped; the adapter input contract is what's
+        // under test elsewhere (repository-contract-types.test-d.ts).
+        repository: repo as import("@classytic/repo-core/adapter").AdapterRepositoryInput<unknown>,
+      }),
       tenantField: "_id",
       idField: "uuid",
       permissions: {

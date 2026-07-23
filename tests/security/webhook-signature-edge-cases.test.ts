@@ -17,7 +17,13 @@
 
 import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { signPayload, verifySignature } from "../../src/integrations/webhooks.js";
+import { createHmac } from "node:crypto";
+import { verifySignature } from "../../src/integrations/webhooks.js";
+
+// Local sha256=<hex> signer — arc no longer exports the legacy signPayload
+// (2.24); verifySignature remains for inbound third-party webhooks.
+const signPayload = (payload: string | Buffer, secret: string): string =>
+  `sha256=${createHmac("sha256", secret).update(payload).digest("hex")}`;
 
 const SECRET = "whsec_test_secret_for_unit_tests_only";
 const PAYLOAD = JSON.stringify({ event: "order.created", id: "ord_1" });

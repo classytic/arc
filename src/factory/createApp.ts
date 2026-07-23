@@ -44,7 +44,7 @@ import qs from "qs";
 import { arcLog, configureArcLogger, createPinoWriter } from "../logger/index.js";
 import { createRequestIdGenerator } from "../plugins/requestId.js";
 import { parseJsonBody } from "../utils/jsonBody.js";
-import { orderModules, resolveModule } from "./module.js";
+import { collectModuleHealthChecks, orderModules, resolveModule } from "./module/index.js";
 import { getPreset } from "./presets.js";
 import { registerArcCore, registerArcPlugins } from "./registerArcPlugins.js";
 import {
@@ -182,6 +182,31 @@ function validateDistributedRuntime(options: CreateAppOptions): string[] {
     }
   }
 
+  // Schedules without a lock — every replica fires every tick. Warn, don't
+  // throw: duplicate schedule execution is a correctness hazard the host
+  // may have accepted (idempotent jobs), unlike the hard-required stores
+  // above.
+  const schedules = options.arcPlugins?.schedules;
+  if (
+    schedules &&
+    typeof schedules === "object" &&
+    schedules.enabled !== false &&
+    !schedules.lock
+  ) {
+    deferredWarnings.push(
+      "runtime: 'distributed' — schedules configured without a `lock` adapter. " +
+        "EVERY replica will fire every schedule tick. Pass an ecosystem lock " +
+        "(e.g. createMongoLockAdapter) under arcPlugins.schedules.lock for " +
+        "single-firer leases.",
+    );
+  }
+
+  // The guard validates what `createApp` can SEE (stores + arcPlugins).
+  // Subsystems wired inside `plugins()` / `bootstrap[]` — webhook stores,
+  // audit/usage stores, realtime broadcast adapters, outbox relays — are
+  // the host's checklist: wiki/delivery-guarantees.md, "Distributed
+  // deployment checklist".
+
   if (missing.length > 0) {
     const lines = missing.map((m) => `  • ${m.key.padEnd(20)} → ${m.hint}`).join("\n");
     throw new Error(
@@ -238,14 +263,14 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   const presetConfig = options.preset ? getPreset(options.preset) : {};
   const config: CreateAppOptions = { ...presetConfig, ...options };
 
-  // The production preset ships `trustProxy: true` (trust EVERY proxy) so
-  // apps behind one LB work out of the box — but if the app is reachable
-  // without the proxy, direct clients can spoof `X-Forwarded-*` (rate-limit
-  // bypass via fake IPs, wrong audit IPs, forged proto/host). A framework
-  // can't know the host's proxy topology, so we warn ONLY when the host
-  // inherited the permissive default without deciding: an explicit
-  // `trustProxy` (true, hop count, CIDR, or function) silences this.
-  const inheritedPermissiveTrustProxy =
+  // The production preset ships `trustProxy: false` (2.24 flip — fail
+  // closed; it was `true` = trust EVERY proxy). A framework can't know the
+  // host's proxy topology: behind an LB, `false` means `request.ip` is the
+  // LB's address (rate-limit keys collapse onto one bucket, audit IPs are
+  // wrong), so we warn ONLY when the host inherited the default without
+  // deciding — an explicit `trustProxy` (hop count, CIDR, function, or a
+  // deliberate true/false) silences this.
+  const inheritedTrustProxyDefault =
     options.preset === "production" && options.trustProxy === undefined;
 
   // ── 1.5 Resolve + order the module graph — pure work (dynamic imports +
@@ -259,6 +284,11 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     await Promise.all((config.modules ?? []).map((m) => resolveModule(m))),
   );
   const moduleErrorMappers = resolvedModules.flatMap((m) => m.errorMappers ?? []);
+  // Module readiness checks — collected in dependency order (fails on a
+  // duplicate name across modules). Merged modules-first with the host's
+  // app-level checks in registerArcPlugins; exposed on `fastify.arc` so the
+  // worker probe (createWorker) gets the identical union.
+  const moduleHealthChecks = collectModuleHealthChecks(resolvedModules);
 
   const resolvedLogger = resolveLoggerConfig(config.logger);
 
@@ -350,28 +380,26 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     fastify.log.warn(warning);
   }
 
-  if (inheritedPermissiveTrustProxy) {
+  if (inheritedTrustProxyDefault) {
     fastify.log.warn(
-      "[arc] preset: 'production' defaults to trustProxy: true (trust EVERY proxy). " +
-        "If this app is reachable without your load balancer, clients can spoof " +
-        "X-Forwarded-For/Proto (rate-limit bypass, wrong audit IPs, forged protocol). " +
-        "Silence this by setting trustProxy explicitly: a hop count (trustProxy: 1), " +
-        "a CIDR allow-list ('10.0.0.0/8'), a resolver function, or true if you accept the trade-off. " +
-        "v3 flips this preset default to false — set it now to be upgrade-proof.",
+      "[arc] preset: 'production' now defaults to trustProxy: false (fail-closed; " +
+        "was true before 2.24). If this app runs behind a load balancer or reverse " +
+        "proxy, request.ip is currently the PROXY's address — rate-limit keys collapse " +
+        "onto one bucket and audit logs record the wrong client. Set trustProxy " +
+        "explicitly: a hop count (trustProxy: 1), a CIDR allow-list ('10.0.0.0/8'), " +
+        "a resolver function, or false if clients truly connect directly.",
     );
   }
 
-  // TypeBox type provider (opt-in)
-  if (config.typeProvider === "typebox") {
-    try {
-      const { TypeBoxValidatorCompiler } = await import("@fastify/type-provider-typebox");
-      fastify.setValidatorCompiler(TypeBoxValidatorCompiler);
-    } catch {
-      fastify.log.warn(
-        'typeProvider: "typebox" requested but @fastify/type-provider-typebox is not installed.',
-      );
-    }
-  }
+  // NOTE: arc deliberately does NOT swap Fastify's validator compiler for
+  // TypeBoxValidatorCompiler. TypeBox v1 is for schema construction +
+  // compile-time inference; Fastify's standard AJV pipeline owns runtime
+  // request validation and serialization for EVERY route (plain JSON Schema,
+  // Zod-converted, and TypeBox schemas alike). Fastify already accepts the
+  // JSON Schema that `Type.*` produces — no global provider switch, so
+  // validation/coercion/property-stripping defaults stay consistent. Use
+  // `@fastify/type-provider-typebox`'s `FastifyPluginAsyncTypebox` only at
+  // typed plugin/route boundaries for inference. See src/schemas/index.ts.
 
   // Fix empty JSON body on DELETE/GET requests.
   // Some clients send Content-Type: application/json with no body on DELETE/GET.
@@ -416,8 +444,18 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
   const arcModules = await registerArcCore(fastify, config, trackPlugin);
 
+  // Expose the (dependency-ordered, frozen) module health checks on arc so the
+  // worker probe can reuse the identical union. arcCorePlugin ran inside
+  // registerArcCore, so `fastify.arc` is present here.
+  if (fastify.arc) {
+    fastify.arc.healthChecks = Object.freeze([...moduleHealthChecks]);
+    // Expose the dependency-ordered module definitions so integrations can
+    // collect their own arm at init time (e.g. streamline → collectModuleWorkflows).
+    fastify.arc.moduleDefinitions = Object.freeze([...resolvedModules]);
+  }
+
   // ── 5. Arc plugins (opt-in) ──
-  await registerArcPlugins(fastify, config, trackPlugin, arcModules);
+  await registerArcPlugins(fastify, config, trackPlugin, arcModules, moduleHealthChecks);
 
   // ── 6. Auth (scope + strategy + elevation + error handler) ──
   decorateRequestScope(fastify);

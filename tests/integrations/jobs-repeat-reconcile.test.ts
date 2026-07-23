@@ -23,7 +23,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import eventPlugin from "../../src/events/eventPlugin.js";
-import { defineJob, type JobDefinition, jobsPlugin } from "../../src/integrations/jobs.js";
+import { defineJob, type JobDefinition, jobsPlugin } from "../../src/integrations/jobs/index.js";
 
 // ── BullMQ mock state ──
 

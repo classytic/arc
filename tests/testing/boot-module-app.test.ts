@@ -6,7 +6,7 @@
  * close() tears everything down.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { defineModule } from "../../src/factory/module.js";
+import { defineModule } from "../../src/factory/module/index.js";
 import type { ModuleTestApp, TestkitContext } from "../../src/testing/bootModuleApp.js";
 import { bootModuleApp } from "../../src/testing/bootModuleApp.js";
 

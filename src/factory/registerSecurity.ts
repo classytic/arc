@@ -100,10 +100,46 @@ export async function registerUtilityPlugins(
     );
   }
 
-  // Under Pressure — health monitoring
+  // Under Pressure — load shedding + health monitoring.
+  //
+  // @fastify/under-pressure defaults every threshold to 0 = DISABLED: with
+  // no thresholds it observes but never sheds, so an overloaded process
+  // keeps admitting requests until latency explodes or the heap OOMs while
+  // "protection" appears enabled. Arc's default therefore configures REAL
+  // event-loop thresholds (matching the production preset). Memory
+  // thresholds stay host/preset concerns — heap/RSS limits are
+  // container-specific and a wrong guess sheds healthy traffic.
   if (config.underPressure !== false) {
     const underPressure = await loadPlugin("underPressure");
-    await fastify.register(underPressure, config.underPressure ?? { exposeStatusRoute: true });
+    const hostConfig = config.underPressure;
+    const effective = hostConfig ?? {
+      exposeStatusRoute: true,
+      maxEventLoopDelay: 3000,
+      maxEventLoopUtilization: 0.98,
+    };
+    // A host-supplied config with NO thresholds is monitoring-only. Fine in
+    // dev; in production that's an overload-admission hole — say so once.
+    const THRESHOLD_KEYS = [
+      "maxEventLoopDelay",
+      "maxEventLoopUtilization",
+      "maxHeapUsedBytes",
+      "maxRssBytes",
+      "pressureHandler",
+      "healthCheck",
+    ] as const;
+    if (
+      config.preset === "production" &&
+      hostConfig &&
+      !THRESHOLD_KEYS.some((key) => key in hostConfig)
+    ) {
+      fastify.log.warn(
+        "[arc] underPressure is configured without any pressure threshold " +
+          "(maxEventLoopDelay / maxEventLoopUtilization / maxHeapUsedBytes / maxRssBytes) — " +
+          "it will monitor but never shed load. Set at least an event-loop threshold, " +
+          "and size heap/RSS limits from your container memory limit.",
+      );
+    }
+    await fastify.register(underPressure, effective);
     fastify.log.debug("Health monitoring (under-pressure) enabled");
   }
 

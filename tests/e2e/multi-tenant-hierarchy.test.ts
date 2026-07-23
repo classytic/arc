@@ -177,6 +177,7 @@ describe("Multi-Tenant Hierarchy E2E", () => {
 
     // ── Custom authenticator: reads identity from headers ──
     app = await createApp({
+      logger: false,
       preset: "testing",
       auth: {
         type: "authenticator",

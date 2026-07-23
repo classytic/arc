@@ -29,8 +29,8 @@
 
 import type { FastifyInstance } from "fastify";
 import { createApp } from "../factory/createApp.js";
-import type { ArcModuleInput } from "../factory/module.js";
-import { getModuleExports } from "../factory/module.js";
+import type { ArcModuleInput } from "../factory/module/index.js";
+import { getModuleExports } from "../factory/module/index.js";
 import type { CreateAppOptions } from "../factory/types/index.js";
 
 /** Handed to a modules factory — the in-memory DB is live at call time. */

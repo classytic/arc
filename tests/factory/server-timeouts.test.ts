@@ -21,6 +21,7 @@ describe("server timeout and trustProxy pass-throughs", () => {
 
   it("passes requestTimeout / connectionTimeout / keepAliveTimeout to Fastify", async () => {
     app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       requestTimeout: 30_000,

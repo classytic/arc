@@ -29,11 +29,17 @@ import type {
   PaginationResult,
 } from "../../../src/types/index.js";
 
-interface Product {
+// A TYPE alias, not an interface: `BaseController<TDoc extends AnyRecord>`'s
+// bound is satisfied by object-type literals via TypeScript's implicit index
+// signature, while interfaces are deliberately not implicitly indexable.
+// Hosts using interface doc types go through `defineResource` (unconstrained
+// by design — see the load-bearing gotcha in CLAUDE.md); direct
+// `BaseController<T>` instantiation uses aliases.
+type Product = {
   _id?: string;
   name: string;
   price: number;
-}
+};
 
 function mockRepo(): RepositoryLike {
   return {

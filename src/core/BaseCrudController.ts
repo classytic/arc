@@ -531,6 +531,50 @@ export class BaseCrudController<
     return executeAfterHook(this.hookOpContext(req), op, data, meta);
   }
 
+  /**
+   * Per-instance single-flight for cache fills — concurrent requests for
+   * the SAME cache key coalesce onto one repository query instead of each
+   * issuing its own (a popular entry expiring under 1,000 concurrent
+   * readers must produce 1 DB query, not 1,000). Keys already encode the
+   * resolved query + user/org scope + resource version, so coalescing can
+   * never cross tenants, scopes, or invalidation generations. Per-process
+   * by design; distributed refresh leases are a store-level concern
+   * (planned with the repo-core CacheEngine façade, which ships
+   * single-flight natively).
+   */
+  private readonly inFlightCacheFills = new Map<string, Promise<unknown>>();
+
+  private cacheSingleFlight<T>(key: string, fill: () => Promise<T>): Promise<T> {
+    const existing = this.inFlightCacheFills.get(key);
+    if (existing) return existing as Promise<T>;
+    const flight = fill().finally(() => {
+      this.inFlightCacheFills.delete(key);
+    });
+    this.inFlightCacheFills.set(key, flight);
+    return flight;
+  }
+
+  /**
+   * Register a background SWR refresh for `key` unless one is already in
+   * flight. Registration is SYNCHRONOUS (before the deferred tick) so a
+   * burst of stale readers arriving in the same tick schedules exactly one
+   * revalidation.
+   */
+  private scheduleCacheRefresh(key: string, refresh: () => Promise<void>): void {
+    if (this.inFlightCacheFills.has(key)) return;
+    const flight = new Promise<void>((resolve) => {
+      scheduleBackground(() => {
+        refresh()
+          .catch(() => {})
+          .finally(() => {
+            this.inFlightCacheFills.delete(key);
+            resolve();
+          });
+      });
+    });
+    this.inFlightCacheFills.set(key, flight);
+  }
+
   /** Cached `list()` flow with SWR semantics. Returns null when cache is disabled. */
   protected async withListCache(
     req: IRequestContext,
@@ -562,16 +606,18 @@ export class BaseCrudController<
     }
 
     if (status === "stale") {
-      scheduleBackground(() => {
-        this.executeListQuery(options, req)
-          .then((fresh) => qc.set(key, fresh, cacheConfig))
-          .catch(() => {});
+      this.scheduleCacheRefresh(key, async () => {
+        const fresh = await this.executeListQuery(options, req);
+        await qc.set(key, fresh, cacheConfig);
       });
       return this.cacheResponse(data, "STALE");
     }
 
-    const result = await this.executeListQuery(options, req);
-    await qc.set(key, result, cacheConfig);
+    const result = await this.cacheSingleFlight(key, async () => {
+      const fresh = await this.executeListQuery(options, req);
+      await qc.set(key, fresh, cacheConfig);
+      return fresh;
+    });
     return this.cacheResponse(result, "MISS");
   }
 
@@ -604,19 +650,19 @@ export class BaseCrudController<
     }
 
     if (status === "stale") {
-      scheduleBackground(() => {
-        this.executeGetQuery(id, options, req)
-          .then(({ doc: fresh }) => {
-            if (fresh) qc.set(key, fresh, cacheConfig);
-          })
-          .catch(() => {});
+      this.scheduleCacheRefresh(key, async () => {
+        const { doc: fresh } = await this.executeGetQuery(id, options, req);
+        if (fresh) await qc.set(key, fresh, cacheConfig);
       });
       return this.cacheResponse(data, "STALE");
     }
 
-    const { doc, reason } = await this.executeGetQuery(id, options, req);
+    const { doc, reason } = await this.cacheSingleFlight(key, async () => {
+      const result = await this.executeGetQuery(id, options, req);
+      if (result.doc) await qc.set(key, result.doc, cacheConfig);
+      return result;
+    });
     if (!doc) this.throwNotFound(reason);
-    await qc.set(key, doc, cacheConfig);
     return this.cacheResponse(doc, "MISS");
   }
 

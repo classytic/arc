@@ -83,6 +83,7 @@ describe("Zod + Fastify schema regression (exclusive numeric constraints)", () =
     app = await createApp({
       resources: [resource],
       auth: { mode: "none" },
+      logger: false,
     });
   });
 

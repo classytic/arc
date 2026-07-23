@@ -15,9 +15,10 @@
  *   4. Order preservation across retry — FIFO is honoured
  */
 
+import type { OutboxStore } from "@classytic/primitives/outbox";
 import { describe, expect, it, vi } from "vitest";
 import type { DomainEvent, EventTransport } from "../../src/events/EventTransport.js";
-import { EventOutbox, MemoryOutboxStore, type OutboxStore } from "../../src/events/outbox.js";
+import { EventOutbox, MemoryOutboxStore } from "../../src/events/outbox.js";
 
 function makeEvent(
   id: string,

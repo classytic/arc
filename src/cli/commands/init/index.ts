@@ -8,6 +8,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { primeLatestScaffoldVersions } from "./dependency-plan.js";
 import { createProjectStructure, printSuccessMessage } from "./file-writer.js";
 import { gatherConfig } from "./options.js";
 import { detectPackageManager, formatProject, installDependencies } from "./postinstall.js";
@@ -75,7 +76,6 @@ export async function init(options: InitOptions = {}): Promise<void> {
   // crosses — see dependency-plan.ts). Offline/timeout → pinned fallbacks.
   // Skipped under test runners for determinism.
   if (!process.env.VITEST && process.env.ARC_INIT_OFFLINE !== "1") {
-    const { primeLatestScaffoldVersions } = await import("./dependency-plan.js");
     const { resolved, total } = await primeLatestScaffoldVersions().catch(() => ({
       resolved: 0,
       total: 0,

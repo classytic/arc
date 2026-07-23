@@ -1,203 +1,23 @@
 /**
- * @classytic/arc — Job Queue Integration
+ * Jobs plugin — BullMQ wiring: queues, workers, DLQ routing, the
+ * `fastify.jobs` dispatcher, management endpoints, and graceful shutdown.
  *
- * Pluggable adapter for background job processing with BullMQ.
- * Provides a clean defineJob() API, auto-connects to Arc's event bus,
- * and supports retries, delays, priorities, and dead-letter queues.
- *
- * This is a SEPARATE subpath import — only loaded when explicitly used:
- *   import { jobsPlugin, defineJob } from '@classytic/arc/integrations/jobs';
- *
- * Requires: bullmq (peer dependency)
- *
- * NOTE: Job processing requires a persistent process and Redis.
- * This does NOT work on serverless platforms.
- *
- * @example
- * ```typescript
- * import { jobsPlugin, defineJob } from '@classytic/arc/integrations/jobs';
- *
- * const sendEmail = defineJob({
- *   name: 'send-email',
- *   handler: async (data) => {
- *     await emailService.send(data.to, data.subject, data.body);
- *   },
- *   retries: 3,
- *   backoff: { type: 'exponential', delay: 1000 },
- * });
- *
- * await fastify.register(jobsPlugin, {
- *   connection: { host: 'localhost', port: 6379 },
- *   jobs: [sendEmail],
- * });
- *
- * // Dispatch a job from anywhere
- * await fastify.jobs.dispatch('send-email', {
- *   to: 'user@example.com',
- *   subject: 'Hello',
- *   body: 'Welcome!',
- * });
- * ```
+ * Requires: bullmq (optional peer, imported dynamically at registration).
+ * Job processing needs a persistent process and Redis — NOT serverless.
  */
+
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
-
-// ============================================================================
-// Types (no BullMQ import at module level)
-// ============================================================================
-
-/** Repeat schedule — cron pattern or fixed interval. Explicit timezone is required. */
-export interface JobRepeatOptions {
-  /** Cron pattern (e.g. '0 9 * * *' = every day 09:00). Mutually exclusive with `every`. */
-  pattern?: string;
-  /** Fixed interval in ms. Mutually exclusive with `pattern`. */
-  every?: number;
-  /** IANA timezone (e.g. 'UTC', 'America/New_York'). Required for `pattern` — prevents DST drift. */
-  tz?: string;
-  /** Stop repeating after this date. */
-  endDate?: Date | string | number;
-  /** Max total runs. */
-  limit?: number;
-}
-
-export interface JobDefinition<TData = unknown, TResult = unknown> {
-  /** Unique job name */
-  name: string;
-  /** Job handler function */
-  handler: (data: TData, meta: JobMeta) => Promise<TResult>;
-  /** Number of retries on failure (default: 3) */
-  retries?: number;
-  /** Backoff strategy */
-  backoff?: { type: "exponential" | "fixed"; delay: number };
-  /** Job timeout in ms (default: 30000) */
-  timeout?: number;
-  /** Concurrency per worker (default: 1) */
-  concurrency?: number;
-  /** Rate limit: max jobs per duration */
-  rateLimit?: { max: number; duration: number };
-  /** Dead letter queue name (default: '{name}-dead') */
-  deadLetterQueue?: string;
-  /** Repeat schedule — cron or interval. Requires explicit timezone for cron. */
-  repeat?: JobRepeatOptions;
-  /**
-   * Arc-level semaphore: max simultaneous handler executions for this job type.
-   * Jobs that dequeue while all slots are full are held (state stays `active`)
-   * and appear as `throttled: true` in `GET /jobs/:id/status`.
-   * Distinct from BullMQ `concurrency` — use this when the constraint is a
-   * downstream resource (AI model rate limit, DB connection pool, external API).
-   */
-  maxConcurrent?: number;
-}
-
-export interface JobMeta {
-  jobId: string;
-  attemptsMade: number;
-  timestamp: number;
-}
-
-export interface JobDispatchOptions {
-  /** Delay job execution by ms */
-  delay?: number;
-  /** Job priority (lower = higher priority) */
-  priority?: number;
-  /** Unique job ID (for deduplication) */
-  jobId?: string;
-  /** Remove job after completion */
-  removeOnComplete?: boolean | number;
-  /** Remove job after failure */
-  removeOnFail?: boolean | number;
-  /** One-shot repeat override at dispatch time. Usually prefer `JobDefinition.repeat`. */
-  repeat?: JobRepeatOptions;
-}
-
-/** Point-in-time snapshot of a single job. */
-export interface JobStatus {
-  id: string;
-  /** Registered job name (= queue name). */
-  name: string;
-  state: "waiting" | "active" | "completed" | "failed" | "delayed" | "unknown";
-  /** Progress reported by the handler via BullMQ `job.updateProgress()`. */
-  progress: number | Record<string, unknown>;
-  /** True when the job is dequeued by a worker but blocked on a `maxConcurrent` semaphore slot. */
-  throttled?: boolean;
-  /** Unix ms when the job was enqueued. */
-  timestamp?: number;
-  /** Unix ms when processing started. */
-  processedOn?: number;
-  /** Unix ms when the job finished (completed or failed). */
-  finishedOn?: number;
-  /** Failure message when `state === 'failed'`. */
-  failedReason?: string;
-  /** Handler return value when `state === 'completed'` (only present if removeOnComplete hasn't cleared the job). */
-  returnValue?: unknown;
-}
-
-export interface JobsPluginOptions {
-  /** Redis connection options (passed to BullMQ) */
-  connection: { host: string; port: number; password?: string; db?: number } | unknown;
-  /** Job definitions to register */
-  jobs: JobDefinition[];
-  /** URL prefix for job management endpoints (default: '/jobs') */
-  prefix?: string;
-  /** Bridge job events to Arc's event bus (default: true) */
-  bridgeEvents?: boolean;
-  /** Default job options applied to all jobs */
-  defaults?: {
-    retries?: number;
-    backoff?: { type: "exponential" | "fixed"; delay: number };
-    timeout?: number;
-    removeOnComplete?: boolean | number;
-    removeOnFail?: boolean | number;
-  };
-}
-
-export interface JobDispatcher {
-  dispatch<TData = unknown>(
-    name: string,
-    data: TData,
-    options?: JobDispatchOptions,
-  ): Promise<{ jobId: string }>;
-  getQueue(name: string): unknown | null;
-  getStats(): Promise<Record<string, QueueStats>>;
-  /**
-   * Fetch a point-in-time status snapshot for a job by its ID.
-   * Searches across all registered queues.
-   * Returns `null` if the job doesn't exist or has been removed by retention policy.
-   */
-  getStatus(jobId: string): Promise<JobStatus | null>;
-  close(): Promise<void>;
-}
-
-export interface QueueStats {
-  waiting: number;
-  active: number;
-  completed: number;
-  failed: number;
-  delayed: number;
-}
-
-// ============================================================================
-// defineJob — declarative job definition
-// ============================================================================
-
-/**
- * Define a background job with typed data and configuration.
- *
- * @example
- * const processImage = defineJob({
- *   name: 'process-image',
- *   handler: async (data: { url: string; width: number }) => {
- *     return await sharp(data.url).resize(data.width).toBuffer();
- *   },
- *   retries: 3,
- *   timeout: 60000,
- * });
- */
-export function defineJob<TData = unknown, TResult = unknown>(
-  definition: JobDefinition<TData, TResult>,
-): JobDefinition<TData, TResult> {
-  return definition;
-}
+import { executeTimedHandler } from "./execution.js";
+import { type RepeatSpec, removeStaleRepeatSchedulers } from "./repeat.js";
+import type {
+  JobDefinition,
+  JobDispatcher,
+  JobMeta,
+  JobStatus,
+  JobsPluginOptions,
+  QueueStats,
+} from "./types.js";
 
 // ============================================================================
 // Semaphore — arc-level concurrency cap per job type
@@ -232,134 +52,6 @@ class Semaphore {
     } else {
       this.available++;
     }
-  }
-}
-
-// ============================================================================
-// Repeatable-schedule reconciliation — boot-time hygiene
-// ============================================================================
-
-/**
- * One repeatable schedule as reported by BullMQ. Covers both the modern
- * `getJobSchedulers()` shape (`JobSchedulerJson` — `every` is a number) and
- * the deprecated `getRepeatableJobs()` shape (`RepeatableJob` — `every` is a
- * string, fields nullable). Normalisation happens in {@link repeatSpecMatches}.
- */
-interface RepeatScheduleRecord {
-  key: string;
-  name: string;
-  pattern?: string | null;
-  every?: number | string | null;
-  tz?: string | null;
-  endDate?: number | null;
-}
-
-/**
- * Feature-detected slice of a BullMQ Queue. The ambient `bullmq` declaration
- * in `src/optional-peers.d.ts` stays minimal on purpose — these methods are
- * probed at runtime so older BullMQ versions (and test mocks) degrade to a
- * no-op instead of crashing boot.
- */
-interface RepeatScheduleQueue {
-  getJobSchedulers?(): Promise<RepeatScheduleRecord[]>;
-  getRepeatableJobs?(): Promise<RepeatScheduleRecord[]>;
-  removeJobScheduler?(id: string): Promise<boolean>;
-  removeRepeatableByKey?(key: string): Promise<boolean>;
-}
-
-/** The repeat options arc sends to `queue.add` — the comparison baseline. */
-interface RepeatSpec {
-  pattern?: string;
-  every?: number;
-  tz?: string;
-  endDate?: Date | string | number;
-  limit?: number;
-}
-
-/**
- * Whether an existing schedule matches the currently configured repeat spec.
- *
- * BullMQ keys repeatable schedules by `name:jobId:endDate:tz:(pattern|every)`
- * — exactly these fields determine schedule identity, so they are exactly
- * what we compare. `limit` is intentionally NOT compared: it isn't part of
- * the key, so a changed limit upserts in place and never strands a stale
- * schedule.
- */
-function repeatSpecMatches(record: RepeatScheduleRecord, spec: RepeatSpec): boolean {
-  if ((record.pattern ?? undefined) !== spec.pattern) return false;
-  // Legacy getRepeatableJobs() reports `every` as a string — normalise.
-  const recordEvery = record.every == null ? undefined : Number(record.every);
-  if (recordEvery !== spec.every) return false;
-  if ((record.tz ?? undefined) !== spec.tz) return false;
-  const recordEnd = record.endDate == null ? undefined : record.endDate;
-  const specEnd = spec.endDate == null ? undefined : new Date(spec.endDate).getTime();
-  if (recordEnd !== specEnd) return false;
-  return true;
-}
-
-/**
- * Remove repeatable schedules left behind by a previous deploy whose repeat
- * spec no longer matches the current `JobDefinition.repeat`.
- *
- * BullMQ keys repeatable schedules by a hash of their repeat options, so
- * re-adding a job with a CHANGED pattern/every/tz/endDate creates a NEW
- * schedule while the old one keeps firing — the job double-fires after every
- * repeat-config change. This reconciles at plugin registration:
- *
- *   - Only schedulers whose `name` equals the registered job's name are
- *     candidates — foreign/unknown schedulers are never touched.
- *   - A scheduler matching the current spec is kept (the subsequent
- *     `queue.add` upserts it in place, preserving its timing state).
- *   - Fail-open: any error logs a warning and never blocks boot — this is
- *     boot-time hygiene, not a correctness gate.
- *
- * Uses the modern `getJobSchedulers()` / `removeJobScheduler()` API (BullMQ
- * 5.x job schedulers) and falls back to the deprecated `getRepeatableJobs()`
- * / `removeRepeatableByKey()` pair on older clients. When neither API exists
- * the step is skipped entirely.
- */
-async function removeStaleRepeatSchedulers(
-  queue: unknown,
-  jobName: string,
-  spec: RepeatSpec,
-  log: FastifyInstance["log"],
-): Promise<void> {
-  const q = queue as RepeatScheduleQueue;
-  const list =
-    typeof q.getJobSchedulers === "function"
-      ? q.getJobSchedulers.bind(q)
-      : typeof q.getRepeatableJobs === "function"
-        ? q.getRepeatableJobs.bind(q)
-        : null;
-  const remove =
-    typeof q.removeJobScheduler === "function"
-      ? q.removeJobScheduler.bind(q)
-      : typeof q.removeRepeatableByKey === "function"
-        ? q.removeRepeatableByKey.bind(q)
-        : null;
-  if (!list || !remove) return;
-
-  try {
-    const existing = await list();
-    for (const record of existing) {
-      if (!record || record.name !== jobName) continue;
-      if (repeatSpecMatches(record, spec)) continue;
-      await remove(record.key);
-      log.warn(
-        {
-          job: jobName,
-          schedulerKey: record.key,
-          stalePattern: record.pattern ?? undefined,
-          staleEvery: record.every ?? undefined,
-        },
-        `[arc/jobs] Removed stale repeatable schedule for '${jobName}' — repeat config changed since last deploy`,
-      );
-    }
-  } catch (err) {
-    log.warn(
-      { err, job: jobName },
-      `[arc/jobs] Failed to reconcile repeatable schedules for '${jobName}' — continuing (boot-time hygiene only)`,
-    );
   }
 }
 
@@ -488,12 +180,6 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
     const worker = new Worker(
       queueName,
       async (bullJob: { id?: string; attemptsMade?: number; data?: unknown }) => {
-        const meta: JobMeta = {
-          jobId: bullJob.id ?? "",
-          attemptsMade: bullJob.attemptsMade ?? 0,
-          timestamp: Date.now(),
-        };
-
         // Acquire semaphore slot before running the handler.
         // Jobs that find all slots occupied wait here (state stays `active`
         // in BullMQ but `throttled: true` in the status endpoint).
@@ -506,29 +192,26 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
           }
         }
 
-        // Apply job-level timeout if configured.
-        // Clear the timer on success to avoid orphaned timers under load.
-        let result: unknown;
-        try {
-          if (jobTimeout) {
-            let timer: ReturnType<typeof setTimeout> | undefined;
-            const timeoutPromise = new Promise<never>((_, reject) => {
-              timer = setTimeout(
-                () => reject(new Error(`Job '${queueName}' timed out after ${jobTimeout}ms`)),
-                jobTimeout,
-              );
-            });
-            try {
-              result = await Promise.race([job.handler(bullJob.data, meta), timeoutPromise]);
-            } finally {
-              clearTimeout(timer);
-            }
-          } else {
-            result = await job.handler(bullJob.data, meta);
-          }
-        } finally {
-          semaphore?.release();
-        }
+        // Timeout + bulkhead semantics live in `executeTimedHandler`
+        // (execution.ts) — signal-based cancellation, settle-based
+        // slot release, grace-bounded hold. See that module's contract.
+        const result: unknown = await executeTimedHandler({
+          label: queueName,
+          ...(bullJob.id !== undefined ? { jobId: bullJob.id } : {}),
+          ...(jobTimeout !== undefined ? { timeoutMs: jobTimeout } : {}),
+          ...(job.cancelGraceMs !== undefined ? { cancelGraceMs: job.cancelGraceMs } : {}),
+          ...(semaphore ? { releaseSlot: () => semaphore.release() } : {}),
+          logger: fastify.log,
+          run: (signal) => {
+            const meta: JobMeta = {
+              jobId: bullJob.id ?? "",
+              attemptsMade: bullJob.attemptsMade ?? 0,
+              timestamp: Date.now(),
+              signal,
+            };
+            return job.handler(bullJob.data, meta);
+          },
+        });
 
         // Bridge completion event
         if (bridgeEvents && fastify.events?.publish) {

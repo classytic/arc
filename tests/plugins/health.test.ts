@@ -90,6 +90,56 @@ describe("Health Plugin — Readiness Probe", () => {
     expect(body.checks[1].healthy).toBe(true);
   });
 
+  it("rejects duplicate check names during plugin boot", async () => {
+    app = Fastify({ logger: false });
+    app.register(healthPlugin, {
+      checks: [
+        { name: "database", check: () => true },
+        { name: "database", check: () => false },
+      ],
+    });
+
+    await expect(app.ready()).rejects.toThrow(
+      /duplicate health-check name "database".*healthPlugin options/,
+    );
+  });
+
+  it("runs independent checks concurrently while preserving declaration order", async () => {
+    const releases: Array<() => void> = [];
+    const barrierCheck = () =>
+      new Promise<boolean>((resolve) => {
+        releases.push(() => resolve(true));
+        if (releases.length === 2) {
+          for (const release of releases) release();
+        }
+      });
+
+    app = Fastify({ logger: false });
+    await app.register(healthPlugin, {
+      checks: [
+        {
+          name: "slow-first",
+          check: barrierCheck,
+          timeout: 100,
+        },
+        {
+          name: "slow-second",
+          check: barrierCheck,
+          timeout: 100,
+        },
+      ],
+    });
+    await app.ready();
+
+    const response = await app.inject({ method: "GET", url: "/_health/ready" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().checks.map((check: { name: string }) => check.name)).toEqual([
+      "slow-first",
+      "slow-second",
+    ]);
+  });
+
   it("should return 503 when critical check fails", async () => {
     app = Fastify({ logger: false });
     await app.register(healthPlugin, {
@@ -289,5 +339,77 @@ describe("Health Plugin — K8s Integration Pattern", () => {
     // Liveness — still 200 (process is alive even if DB is down)
     const stillLive = await app.inject({ method: "GET", url: "/_health/live" });
     expect(stillLive.statusCode).toBe(200);
+  });
+});
+
+// ============================================================================
+// Check cancellation — AbortSignal on timeout
+// ============================================================================
+
+describe("health checks — abort on timeout", () => {
+  // Promise.race alone leaves a stalled dependency probe running after every
+  // readiness poll. Checks receive an AbortSignal aborted at their timeout;
+  // ignoring it stays valid (zero-arg back-compat), signal-aware checks can
+  // actually stop their work.
+  let abortApp: FastifyInstance;
+
+  afterEach(async () => {
+    await abortApp?.close();
+  });
+
+  it("passes a signal that aborts when the check times out", async () => {
+    let seen: AbortSignal | undefined;
+    abortApp = Fastify({ logger: false });
+    await abortApp.register(healthPlugin, {
+      checks: [
+        {
+          name: "stalled-db",
+          timeout: 30,
+          check: async (signal) => {
+            seen = signal;
+            await new Promise((r) => setTimeout(r, 200));
+            return true;
+          },
+        },
+      ],
+    });
+    await abortApp.ready();
+
+    const res = await abortApp.inject({ method: "GET", url: "/_health/ready" });
+    expect(res.statusCode).toBe(503); // timed out ⇒ unhealthy
+    expect(seen).toBeInstanceOf(AbortSignal);
+    expect(seen?.aborted).toBe(true);
+  });
+
+  it("signal stays quiet for healthy fast checks", async () => {
+    let seen: AbortSignal | undefined;
+    abortApp = Fastify({ logger: false });
+    await abortApp.register(healthPlugin, {
+      checks: [
+        {
+          name: "fast",
+          check: (signal) => {
+            seen = signal;
+            return true;
+          },
+        },
+      ],
+    });
+    await abortApp.ready();
+
+    const res = await abortApp.inject({ method: "GET", url: "/_health/ready" });
+    expect(res.statusCode).toBe(200);
+    expect(seen?.aborted).toBe(false);
+  });
+
+  it("zero-arg checks keep working (back-compat)", async () => {
+    abortApp = Fastify({ logger: false });
+    await abortApp.register(healthPlugin, {
+      checks: [{ name: "legacy", check: () => true }],
+    });
+    await abortApp.ready();
+
+    const res = await abortApp.inject({ method: "GET", url: "/_health/ready" });
+    expect(res.statusCode).toBe(200);
   });
 });

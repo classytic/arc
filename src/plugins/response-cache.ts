@@ -324,6 +324,17 @@ const responseCachePluginImpl: FastifyPluginAsync<ResponseCacheOptions> = async 
     keyFn,
   } = opts;
 
+  // Mutation-driven invalidation scans every entry synchronously (prefix
+  // match) — O(maxEntries) on the event loop per mutating request. Fine at
+  // the 500 default; a much larger cache turns every write into a pause.
+  if (maxEntries > 5000) {
+    fastify.log.warn(
+      `[arc] responseCache maxEntries=${maxEntries}: prefix invalidation scans all entries ` +
+        "synchronously on every mutating request — expect event-loop pauses at this size. " +
+        "This cache is an instance-local micro-cache; for large shared caching use the " +
+        "queryCache with a Redis store instead.",
+    );
+  }
   const cache = new LRUCache(maxEntries);
   const invalidateMethods = new Set(invalidateOn.map((m) => m.toUpperCase()));
 

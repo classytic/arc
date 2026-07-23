@@ -18,7 +18,7 @@ import {
   defineModule,
   getModuleExports,
   orderModules,
-} from "../../src/factory/module.js";
+} from "../../src/factory/module/index.js";
 import { gc, measureHeapMedian } from "../_helpers/heap.js";
 
 /**

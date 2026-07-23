@@ -22,6 +22,7 @@
 import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
+import { transactionContext } from "../context/transactionContext.js";
 import type { RequestContext, UserBase } from "../types/index.js";
 import { repositoryAsAuditStore } from "./repository-audit-adapter.js";
 import type { AuditContext, AuditEntry, AuditStore } from "./stores/interface.js";
@@ -67,6 +68,17 @@ export interface AuditPluginOptions {
     /** Interval between purges in ms. Default 86_400_000 (24h). 0 disables the timer. */
     purgeIntervalMs?: number;
   };
+  /**
+   * Unit-of-Work session provider for the built-in `repository` store. When a
+   * request runs inside a `transactionContext.run(session, …)` scope, the audit
+   * row is written **with that session**, so it commits/rolls back atomically
+   * with the domain write. Defaults to `() => transactionContext.get()`, so
+   * atomic audit works out of the box for kits that honor a write session
+   * (mongokit). Outside a transaction scope the provider returns `undefined`
+   * and the audit write proceeds session-less (unchanged). Pass `false` (or
+   * `() => undefined`) to opt out.
+   */
+  sessionProvider?: (() => unknown) | false;
   /**
    * Automatically audit CRUD operations via the hook system (default: true when enabled).
    * When enabled, create/update/delete operations are auto-logged without manual calls.
@@ -182,7 +194,12 @@ const auditPlugin: FastifyPluginAsync<AuditPluginOptions> = async (
   fastify: FastifyInstance,
   opts: AuditPluginOptions = {},
 ) => {
-  const { enabled = false, repository, customStores = [] } = opts;
+  const {
+    enabled = false,
+    repository,
+    customStores = [],
+    sessionProvider = () => transactionContext.get(),
+  } = opts;
 
   // Skip if not enabled
   if (!enabled) {
@@ -199,7 +216,13 @@ const auditPlugin: FastifyPluginAsync<AuditPluginOptions> = async (
   // stores (Kafka, S3, etc.) compose alongside; memory is the final fallback
   // for dev / tests.
   const stores: AuditStore[] = [];
-  if (repository) stores.push(repositoryAsAuditStore(repository));
+  if (repository) {
+    stores.push(
+      repositoryAsAuditStore(repository, {
+        sessionProvider: sessionProvider === false ? undefined : sessionProvider,
+      }),
+    );
+  }
   stores.push(...customStores);
   if (stores.length === 0) stores.push(new MemoryAuditStore());
 

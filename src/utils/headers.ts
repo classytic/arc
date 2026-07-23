@@ -11,6 +11,8 @@
  * and deterministic about duplicates.
  */
 
+import { ValidationError } from "./errors.js";
+
 /** What a headers bag actually contains at runtime — HTTP or synthetic MCP. */
 export type ArcHeaders = Readonly<Record<string, string | readonly string[] | undefined>>;
 
@@ -32,5 +34,23 @@ export function getHeader(
   if (!headers) return undefined;
   const value = (headers as ArcHeaders)[name.toLowerCase()];
   if (Array.isArray(value)) return value[0];
+  return value as string | undefined;
+}
+
+/**
+ * Read an identity-bearing or protocol header and reject repeated values.
+ *
+ * Repeated security-sensitive headers are ambiguous at proxy boundaries and
+ * may indicate request smuggling. Callers must not silently choose a winner.
+ */
+export function requireSingleHeaderValue(
+  headers: ArcHeaders | Record<string, string | undefined> | undefined,
+  name: string,
+): string | undefined {
+  if (!headers) return undefined;
+  const value = (headers as ArcHeaders)[name.toLowerCase()];
+  if (Array.isArray(value)) {
+    throw new ValidationError(`Duplicate '${name}' header`);
+  }
   return value as string | undefined;
 }

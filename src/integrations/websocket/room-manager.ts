@@ -150,7 +150,7 @@ export class RoomManager {
     for (const clientId of members) {
       if (clientId === excludeClientId) continue;
       const client = this.clients.get(clientId);
-      if (!client || client.socket.readyState !== 1) continue;
+      if (client?.socket.readyState !== 1) continue;
       // Skip slow readers whose outbound buffer is saturated; if the socket
       // never drains it will be caught by the heartbeat liveness check.
       if ((client.socket.bufferedAmount ?? 0) > WS_BACKPRESSURE_LIMIT) continue;
@@ -177,7 +177,7 @@ export class RoomManager {
     if (!members) return;
     for (const clientId of members) {
       const client = this.clients.get(clientId);
-      if (!client || client.socket.readyState !== 1) continue;
+      if (client?.socket.readyState !== 1) continue;
       // If the client has a queue, route through the coalescing path.
       // No queue ⇒ fall back to the bufferedAmount-skip broadcast — better
       // a dropped GPS frame than a memory leak.

@@ -91,7 +91,7 @@ export default defineConfig({
     "src/integrations/websocket.ts",
     "src/integrations/websocket-redis.ts",
     "src/integrations/websocket-pushref-redis.ts",
-    "src/integrations/jobs.ts",
+    "src/integrations/jobs/index.ts",
     "src/integrations/event-gateway.ts",
     "src/integrations/webhooks.ts",
 

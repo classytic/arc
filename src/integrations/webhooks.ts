@@ -57,6 +57,8 @@ export interface WebhookDeliveryRecord {
   status?: number;
   error?: string;
   timestamp: Date;
+  /** Delivery attempts made (present when `retry` is configured). */
+  attempts?: number;
 }
 
 /** Pluggable persistence — memory for dev, bring your own DB for prod */
@@ -82,6 +84,25 @@ export interface WebhookPluginOptions {
    * (a zero would make the delivery loop spin forever without progress).
    */
   concurrency?: number;
+  /**
+   * In-process retry for failed deliveries. Default: single attempt.
+   * Retries fire on network errors, timeouts, 429 and 5xx — NOT on other
+   * 4xx (the receiver rejected the payload; repeating it can't succeed).
+   * Each attempt is re-signed with a fresh timestamp so the receiver's
+   * replay-tolerance window applies per attempt; `x-arc-webhook-delivery`
+   * stays constant, which is exactly what receiver-side dedup keys on.
+   *
+   * This is BEST-EFFORT: attempts live in this process, so a crash or
+   * deploy drops the remaining ones. Guaranteed delivery is a durable-job
+   * concern (queue keyed by subscription + delivery id) — pair the events
+   * outbox with a worker if you need it.
+   */
+  retry?: {
+    /** Total attempts including the first. Must be an integer >= 1. */
+    attempts: number;
+    /** Backoff before retry N, as `backoffMs * 2^(N-1)` ms (default: 1000). */
+    backoffMs?: number;
+  };
   /**
    * URL policy hook — the SSRF seam for tenant-registered URLs. Throw to
    * reject. Pass {@link defaultWebhookUrlPolicy} to require HTTPS and block
@@ -136,23 +157,12 @@ declare module "fastify" {
 // HMAC Signing & Verification
 // ============================================================================
 
-/**
- * Sign a payload with HMAC-SHA256 for outbound webhook delivery.
- *
- * @deprecated LEGACY (pre-2.23) format — signs the BODY ONLY, so a captured
- * request can be replayed indefinitely and the event-id header is not
- * cryptographically bound to the body. Still emitted on the legacy
- * `x-webhook-signature` header for existing receivers; new receivers should
- * verify the v1 contract (`x-arc-webhook-signature`) via {@link verifyWebhook}.
- * Legacy emission is scheduled for removal in v3.
- *
- * @returns `sha256=<hex>` — the format written to `x-webhook-signature`
- */
-export function signPayload(payload: string, secret: string): string {
-  const hmac = createHmac("sha256", secret);
-  hmac.update(payload);
-  return `sha256=${hmac.digest("hex")}`;
-}
+// The legacy body-only signing format (`signPayload` → `x-webhook-signature`)
+// was REMOVED in 2.24: it allowed indefinite replay of a captured request and
+// carried the event id on an unsigned header. Arc emits ONLY the v1 contract
+// (`x-arc-webhook-*`, timestamp + delivery-id bound — `signWebhook` /
+// `verifyWebhook` below). `verifySignature` stays as a generic INBOUND
+// verifier for third-party `sha256=<hex>` webhooks arc receives.
 
 // ============================================================================
 // v1 signing contract — replay-bounded, delivery-id-bound
@@ -337,16 +347,19 @@ export interface VerifySignatureOptions {
   prefix?: string;
   /**
    * HMAC algorithm (default: `'sha256'`).
-   * Must match what the sender uses — Arc's `signPayload` always uses sha256.
+   * Must match what the sender uses.
    */
   algorithm?: string;
 }
 
 /**
- * Verify an inbound webhook signature using timing-safe comparison.
+ * Verify an INBOUND third-party webhook signature using timing-safe
+ * comparison — for webhooks arc RECEIVES (GitHub, Stripe, ...), not for
+ * arc-to-arc delivery. Arc's own outbound contract is v1
+ * (`x-arc-webhook-*`) — receivers of arc webhooks use {@link verifyWebhook}.
  *
- * Works with Arc's own `signPayload` format by default (`sha256=<hex>`),
- * but configurable for any HMAC scheme via options.
+ * Defaults to the common `sha256=<hex>` format; configurable for any HMAC
+ * scheme via options.
  *
  * ⚠ The `body` argument must be the exact bytes the sender signed. Fastify
  * parses JSON bodies by default and the re-serialised object will NOT match
@@ -364,21 +377,17 @@ export interface VerifySignatureOptions {
  * ```typescript
  * import { verifySignature } from '@classytic/arc/integrations/webhooks';
  *
- * // Arc-to-Arc (default headers + format). `config: { rawBody: true }` is
- * // REQUIRED — arc registers fastify-raw-body with `global: false`, so
- * // routes opt in per-route; without it `req.rawBody` is undefined and
- * // verifySignature throws a TypeError.
- * fastify.post('/webhooks/incoming', { config: { rawBody: true } }, async (req, reply) => {
- *   const sig = req.headers['x-webhook-signature'] as string;
+ * // `config: { rawBody: true }` is REQUIRED — arc registers
+ * // fastify-raw-body with `global: false`, so routes opt in per-route;
+ * // without it `req.rawBody` is undefined and verifySignature throws a
+ * // TypeError.
+ *
+ * // GitHub-style sender (sha256=<hex>)
+ * fastify.post('/webhooks/github', { config: { rawBody: true } }, async (req, reply) => {
+ *   const sig = req.headers['x-hub-signature-256'] as string;
  *   if (!verifySignature(req.rawBody, secret, sig)) {
  *     return reply.status(401).send({ error: 'Invalid signature' });
  *   }
- *   // handle event via req.headers['x-webhook-event']
- * });
- *
- * // Third-party sender with custom header + bare hex
- * const valid = verifySignature(body, secret, req.headers['x-hub-signature'], {
- *   prefix: 'sha256=',  // GitHub format
  * });
  *
  * // Stripe-style (bare hex, different header)
@@ -490,6 +499,13 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
       `webhookPlugin: concurrency must be an integer >= 1 (got ${String(opts.concurrency)})`,
     );
   }
+  const retryAttempts = opts.retry?.attempts ?? 1;
+  const retryBackoffMs = opts.retry?.backoffMs ?? 1000;
+  if (!Number.isInteger(retryAttempts) || retryAttempts < 1) {
+    throw new Error(
+      `webhookPlugin: retry.attempts must be an integer >= 1 (got ${String(opts.retry?.attempts)})`,
+    );
+  }
 
   // In-memory cache of subscriptions (loaded from store on init)
   let subscriptions: WebhookSubscription[] = [];
@@ -544,51 +560,61 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
         timestamp: new Date(),
       };
 
-      try {
-        // v1 contract: timestamp + delivery id are INSIDE the signed string,
-        // so replay is bounded by the receiver's tolerance window and dedup
-        // runs on an authenticated id. The legacy body-only headers ride
-        // along for pre-2.23 receivers (removal scheduled for v3).
-        const timestamp = Date.now();
-        const v1Signature = signWebhook(body, sub.secret, {
-          timestamp,
-          deliveryId: event.meta.id,
-        });
-        const legacySignature = signPayload(body, sub.secret);
-
-        const ac = new AbortController();
-        const timer = setTimeout(() => ac.abort(), timeout);
-
+      for (let attempt = 1; attempt <= retryAttempts; attempt++) {
+        record.attempts = attempt;
+        delete record.status;
+        delete record.error;
         try {
-          const response = await fetchFn(sub.url, {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              "x-arc-webhook-signature": v1Signature,
-              "x-arc-webhook-timestamp": String(timestamp),
-              "x-arc-webhook-delivery": event.meta.id,
-              // Legacy (deprecated, unsigned metadata + body-only HMAC):
-              "x-webhook-signature": legacySignature,
-              "x-webhook-id": event.meta.id,
-              "x-webhook-event": event.type,
-            },
-            body,
-            signal: ac.signal,
-            // With a URL policy active, following redirects would let an
-            // ALLOWED public URL 302 into a blocked private/metadata target
-            // — the policy validated the literal, not the redirect chain.
-            // `manual` surfaces the 3xx as a failed delivery instead.
-            // Without a policy the platform default (follow) is kept.
-            ...(opts.validateUrl ? { redirect: "manual" as const } : {}),
+          // v1 contract: timestamp + delivery id are INSIDE the signed
+          // string, so replay is bounded by the receiver's tolerance window
+          // and dedup runs on an authenticated id. Each attempt is re-signed
+          // with a fresh timestamp; the delivery id stays constant so
+          // receiver-side dedup treats retries as the same delivery.
+          const timestamp = Date.now();
+          const v1Signature = signWebhook(body, sub.secret, {
+            timestamp,
+            deliveryId: event.meta.id,
           });
 
-          record.success = response.ok;
-          record.status = response.status;
-        } finally {
-          clearTimeout(timer);
+          const ac = new AbortController();
+          const timer = setTimeout(() => ac.abort(), timeout);
+
+          try {
+            const response = await fetchFn(sub.url, {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                "x-arc-webhook-signature": v1Signature,
+                "x-arc-webhook-timestamp": String(timestamp),
+                "x-arc-webhook-delivery": event.meta.id,
+              },
+              body,
+              signal: ac.signal,
+              // With a URL policy active, following redirects would let an
+              // ALLOWED public URL 302 into a blocked private/metadata target
+              // — the policy validated the literal, not the redirect chain.
+              // `manual` surfaces the 3xx as a failed delivery instead.
+              // Without a policy the platform default (follow) is kept.
+              ...(opts.validateUrl ? { redirect: "manual" as const } : {}),
+            });
+
+            record.success = response.ok;
+            record.status = response.status;
+          } finally {
+            clearTimeout(timer);
+          }
+        } catch (err) {
+          record.error = err instanceof Error ? err.message : String(err);
         }
-      } catch (err) {
-        record.error = err instanceof Error ? err.message : String(err);
+
+        if (record.success) break;
+        // Retry only transient failures: network errors/timeouts (no
+        // status) and 429/5xx. Other statuses — 4xx rejections, 3xx under
+        // redirect: "manual" — are final for this payload.
+        const transient =
+          record.status === undefined || record.status === 429 || record.status >= 500;
+        if (!transient || attempt === retryAttempts) break;
+        await new Promise((r) => setTimeout(r, retryBackoffMs * 2 ** (attempt - 1)));
       }
 
       // Append to log (ring buffer)

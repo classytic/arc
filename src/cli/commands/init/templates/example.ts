@@ -135,6 +135,8 @@ ${config.tenant === "multi" ? "import { flexibleMultiTenantPreset } from '#share
 import exampleRepository from './example.repository.js';
 import exampleController from './example.controller.js';
 
+// Fail-closed by default (mongokit >=3.25): invalid/blocked query input →
+// HTTP 400 instead of silently broadening the result set.
 const queryParser = new QueryParser({
   allowedFilterFields: ['isActive'],
 });

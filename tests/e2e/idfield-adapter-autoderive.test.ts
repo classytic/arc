@@ -84,6 +84,7 @@ describe("BaseController — idField auto-derive from adapter.repository", () =>
     });
 
     app = await createApp({
+      logger: false,
       resources: [agentResource],
     });
   }, 30_000);
@@ -227,6 +228,7 @@ describe("fetchWithAccessControl — permission-filter asymmetry is the real 404
     });
 
     tenantApp = await createApp({
+      logger: false,
       resources: [
         defineResource({
           name: "tenant-agent",

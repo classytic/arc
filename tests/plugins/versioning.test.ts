@@ -128,3 +128,116 @@ describe("versioningPlugin — custom options", () => {
     await app.close();
   });
 });
+
+// ============================================================================
+// Supported-version enforcement
+// ============================================================================
+
+describe("versioning — supported-version enforcement", () => {
+  // Without `versions`, the plugin is detection-only (annotate + deprecate).
+  // With it, unknown versions are rejected with 400 arc.unsupported_api_version
+  // before the handler runs.
+  let vApp: FastifyInstance;
+
+  afterEach(async () => {
+    await vApp?.close();
+  });
+
+  it("rejects an unsupported header version with 400", async () => {
+    vApp = Fastify({ logger: false });
+    await vApp.register(versioningPlugin, { type: "header", versions: ["1", "2"] });
+    vApp.get("/items", async () => ({ ok: true }));
+    await vApp.ready();
+
+    const res = await vApp.inject({
+      method: "GET",
+      url: "/items",
+      headers: { "accept-version": "99" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res.json())).toContain("99");
+  });
+
+  it("accepts a supported version and stamps the response header", async () => {
+    vApp = Fastify({ logger: false });
+    await vApp.register(versioningPlugin, { type: "header", versions: ["1", "2"] });
+    vApp.get("/items", async (req) => ({ version: req.apiVersion }));
+    await vApp.ready();
+
+    const res = await vApp.inject({
+      method: "GET",
+      url: "/items",
+      headers: { "accept-version": "2" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ version: "2" });
+    expect(res.headers["x-api-version"]).toBe("2");
+  });
+
+  it("versionless requests resolve to the default and are never rejected", async () => {
+    vApp = Fastify({ logger: false });
+    await vApp.register(versioningPlugin, { type: "header", versions: ["1", "2"] });
+    vApp.get("/items", async (req) => ({ version: req.apiVersion }));
+    await vApp.ready();
+
+    const res = await vApp.inject({ method: "GET", url: "/items" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ version: "1" });
+  });
+
+  it("rejects an unsupported prefix version", async () => {
+    vApp = Fastify({ logger: false });
+    await vApp.register(versioningPlugin, { type: "prefix", versions: ["1"] });
+    vApp.get("/v1/items", async () => ({ ok: true }));
+    vApp.get("/v2/items", async () => ({ ok: true }));
+    await vApp.ready();
+
+    expect((await vApp.inject({ method: "GET", url: "/v1/items" })).statusCode).toBe(200);
+    expect((await vApp.inject({ method: "GET", url: "/v2/items" })).statusCode).toBe(400);
+  });
+
+  it("without `versions`, any requested version is accepted (detection-only back-compat)", async () => {
+    vApp = Fastify({ logger: false });
+    await vApp.register(versioningPlugin, { type: "header" });
+    vApp.get("/items", async (req) => ({ version: req.apiVersion }));
+    await vApp.ready();
+
+    const res = await vApp.inject({
+      method: "GET",
+      url: "/items",
+      headers: { "accept-version": "99" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ version: "99" });
+  });
+
+  it("throws at registration when defaultVersion is not in versions", async () => {
+    vApp = Fastify({ logger: false });
+    await expect(
+      vApp
+        .register(versioningPlugin, { type: "header", versions: ["2", "3"], defaultVersion: "1" })
+        .ready(),
+    ).rejects.toThrow(/defaultVersion '1' is not in versions/);
+  });
+
+  it("deprecation headers still apply to supported-but-deprecated versions", async () => {
+    vApp = Fastify({ logger: false });
+    await vApp.register(versioningPlugin, {
+      type: "header",
+      versions: ["1", "2"],
+      deprecated: ["1"],
+      sunset: "2026-01-01",
+    });
+    vApp.get("/items", async () => ({ ok: true }));
+    await vApp.ready();
+
+    const res = await vApp.inject({
+      method: "GET",
+      url: "/items",
+      headers: { "accept-version": "1" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers.deprecation).toBe("true");
+    expect(res.headers.sunset).toBe("2026-01-01");
+  });
+});

@@ -11,9 +11,9 @@
 | Peer | Min | Required? | Used by |
 |---|---|---|---|
 | fastify | ^5.8.5 | **Yes** | Everything |
-| @classytic/primitives | >=0.9.0 | **Yes** | Canonical event types (`EventMeta`, `DomainEvent`, `EventTransport`, ...) |
+| @classytic/primitives | >=0.14.0 | **Yes** | Canonical event types (`EventMeta`, `DomainEvent`, `EventTransport` — `subscribe` optional as of 0.14) + outbox contract |
 | @classytic/repo-core | >=0.14.0 | **Yes** | `RepositoryLike`, adapter contract (`/adapter`), canonical pagination / tenant / errors / schema-generator contracts |
-| @classytic/streamline | >=2.7.0 | No | Streamline integration |
+| @classytic/streamline | >=2.8.0 | No | Streamline integration |
 | better-auth | >=1.6.2 | No | Better Auth integration |
 | ioredis | >=5.0.0 | No | Redis events, cache, sessions |
 | bullmq | >=5.0.0 | No | Job queue |

@@ -96,3 +96,13 @@ export type { TreeExt } from "./mixins/tree.js";
 export { TreeMixin } from "./mixins/tree.js";
 export type { QueryResolverConfig } from "./QueryResolver.js";
 export { QueryResolver } from "./QueryResolver.js";
+export type {
+  ConfigError,
+  ValidateOptions,
+  ValidationResult,
+} from "./validateResourceConfig.js";
+export {
+  assertValidConfig,
+  formatValidationErrors,
+  validateResourceConfig,
+} from "./validateResourceConfig.js";

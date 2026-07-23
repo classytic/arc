@@ -74,6 +74,33 @@ export interface CircuitBreakerOptions {
   successThreshold?: number;
 
   /**
+   * Maximum concurrent probe calls allowed while HALF_OPEN.
+   * After `resetTimeout`, only this many callers actually test the
+   * downstream — the rest fail fast (or hit the fallback) as if the
+   * circuit were still open. Without a cap, every queued caller floods
+   * a barely-recovered dependency the instant the circuit half-opens.
+   * @default 1
+   */
+  halfOpenMaxProbes?: number;
+
+  /**
+   * Abort the underlying operation when the breaker times out.
+   * When `true`, the wrapped function receives an `AbortSignal` as an
+   * EXTRA TRAILING argument, aborted on timeout — pass it to fetch/DB
+   * calls so timed-out work stops consuming sockets and pool slots
+   * instead of running to completion behind the rejected caller.
+   * Opt-in because it changes the wrapped function's call shape.
+   * @default false
+   *
+   * @example
+   * const breaker = new CircuitBreaker(
+   *   async (url: string, signal?: AbortSignal) => fetch(url, { signal }),
+   *   { timeout: 5000, propagateAbort: true },
+   * );
+   */
+  propagateAbort?: boolean;
+
+  /**
    * Fallback function when circuit is open.
    * Receives the same arguments as the wrapped function.
    */
@@ -124,10 +151,14 @@ export class CircuitBreaker<T extends AnyAsyncFn> {
   private lastCallAt: number | null = null;
   private openedAt: number | null = null;
 
+  private halfOpenInFlight: number = 0;
+
   private readonly failureThreshold: number;
   private readonly resetTimeout: number;
   private readonly timeout: number;
   private readonly successThreshold: number;
+  private readonly halfOpenMaxProbes: number;
+  private readonly propagateAbort: boolean;
   private readonly fallback?: (...args: unknown[]) => Promise<unknown>;
   private readonly onStateChange?: (from: CircuitState, to: CircuitState) => void;
   private readonly onError?: (error: Error) => void;
@@ -141,6 +172,8 @@ export class CircuitBreaker<T extends AnyAsyncFn> {
     this.resetTimeout = options.resetTimeout ?? 60000;
     this.timeout = options.timeout ?? 10000;
     this.successThreshold = options.successThreshold ?? 1;
+    this.halfOpenMaxProbes = options.halfOpenMaxProbes ?? 1;
+    this.propagateAbort = options.propagateAbort ?? false;
     this.fallback = options.fallback;
     this.onStateChange = options.onStateChange;
     this.onError = options.onError;
@@ -175,6 +208,26 @@ export class CircuitBreaker<T extends AnyAsyncFn> {
       this.setState(CircuitState.HALF_OPEN);
     }
 
+    // Probe fencing: while HALF_OPEN, only `halfOpenMaxProbes` callers may
+    // actually test the downstream. Every concurrent caller that arrived
+    // while the circuit was open observes the same eligible-to-probe state
+    // after resetTimeout — without this gate they would ALL rush the
+    // barely-recovered dependency at once.
+    let isProbe = false;
+    if (this.state === CircuitState.HALF_OPEN) {
+      if (this.halfOpenInFlight >= this.halfOpenMaxProbes) {
+        if (this.fallback) {
+          return this.fallback(...args) as ReturnType<T>;
+        }
+        throw new CircuitBreakerError(
+          `Circuit breaker is HALF_OPEN for ${this.name} — probe slots full`,
+          CircuitState.HALF_OPEN,
+        );
+      }
+      this.halfOpenInFlight++;
+      isProbe = true;
+    }
+
     try {
       // Execute with timeout
       const result = await this.executeWithTimeout(args);
@@ -186,19 +239,35 @@ export class CircuitBreaker<T extends AnyAsyncFn> {
       // Failure
       this.onFailure(err instanceof Error ? err : new Error(String(err)));
       throw err;
+    } finally {
+      if (isProbe) {
+        this.halfOpenInFlight--;
+      }
     }
   }
 
   /**
-   * Execute function with timeout
+   * Execute function with timeout. With `propagateAbort`, the wrapped fn
+   * receives a trailing AbortSignal that fires on timeout — the breaker's
+   * timeout otherwise only rejects the CALLER while the underlying work
+   * keeps consuming sockets/pool slots to completion.
    */
   private async executeWithTimeout(args: Parameters<T>): Promise<ReturnType<T>> {
+    const controller = this.propagateAbort ? new AbortController() : undefined;
+
     return new Promise<ReturnType<T>>((resolve, reject) => {
       const timeoutId = setTimeout(() => {
+        controller?.abort(new Error(`Request timeout after ${this.timeout}ms`));
         reject(new Error(`Request timeout after ${this.timeout}ms`));
       }, this.timeout);
 
-      this.fn(...args)
+      // The trailing-signal call shape is opt-in (`propagateAbort`) and
+      // outside `T`'s declared parameters — cast at this single call site.
+      const invocation = controller
+        ? (this.fn as unknown as (...a: unknown[]) => Promise<unknown>)(...args, controller.signal)
+        : this.fn(...args);
+
+      invocation
         .then((result) => {
           clearTimeout(timeoutId);
           // `T extends AnyAsyncFn` widens the return slot to `Promise<unknown>`

@@ -29,7 +29,7 @@ import { createEvent, type DomainEvent } from "../../src/events/EventTransport.j
 import eventPlugin from "../../src/events/eventPlugin.js";
 import { RedisEventTransport } from "../../src/events/transports/redis.js";
 import { RedisStreamTransport } from "../../src/events/transports/redis-stream.js";
-import { defineJob, jobsPlugin } from "../../src/integrations/jobs.js";
+import { defineJob, jobsPlugin } from "../../src/integrations/jobs/index.js";
 
 const redisUrl = process.env.UPSTASH_REDIS_URL;
 const describeRedis = redisUrl ? describe : describe.skip;

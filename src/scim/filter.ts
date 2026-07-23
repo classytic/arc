@@ -191,7 +191,7 @@ class Parser {
     if (this.peek()?.kind === "op" && (this.peek() as { value: string }).value === "not") {
       this.consume();
       const next = this.peek();
-      if (!next || next.kind !== "lparen")
+      if (next?.kind !== "lparen")
         throw new ScimError(400, "invalidFilter", "Expected '(' after 'not'");
       this.consume();
       const child = this.parseOr();

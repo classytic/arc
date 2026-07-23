@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  computeMigrationChecksum,
   defineMigration,
   type Migration,
   type MigrationRecord,
@@ -322,5 +323,288 @@ describe("MigrationRunner", () => {
 
     const runner = new MigrationRunner({}, { store, logger: silentLogger });
     await expect(runner.up(migrations)).rejects.toThrow("validation failed");
+  });
+});
+
+// ============================================================================
+// Distributed safety — lock, lease renewal, checksums, resource-aware downTo
+// ============================================================================
+
+describe("MigrationRunner — distributed safety", () => {
+  class FakeStore implements MigrationStore {
+    applied: MigrationRecord[] = [];
+    recordMeta: Array<{ checksum?: string } | undefined> = [];
+    calls: string[] = [];
+
+    async getApplied(): Promise<MigrationRecord[]> {
+      this.calls.push("getApplied");
+      return [...this.applied];
+    }
+
+    async record(
+      migration: Migration,
+      executionTime: number,
+      meta?: { checksum?: string },
+    ): Promise<void> {
+      this.calls.push(`record:${migration.resource}:${migration.version}`);
+      this.recordMeta.push(meta);
+      this.applied.push({
+        version: migration.version,
+        resource: migration.resource,
+        appliedAt: new Date(),
+        executionTime,
+        ...(meta?.checksum ? { checksum: meta.checksum } : {}),
+      });
+    }
+
+    async remove(migration: Migration): Promise<void> {
+      this.calls.push(`remove:${migration.resource}:${migration.version}`);
+      this.applied = this.applied.filter(
+        (r) => !(r.resource === migration.resource && r.version === migration.version),
+      );
+    }
+  }
+
+  // Same-holder tryAcquire EXTENDS the lease (the LockAdapter contract) —
+  // required for renewal assertions.
+  class FakeLock {
+    held = new Map<string, string>();
+    calls: string[] = [];
+
+    tryAcquire(name: string, holderId: string, _leaseMs: number): boolean {
+      this.calls.push(`acquire:${name}`);
+      const holder = this.held.get(name);
+      if (holder && holder !== holderId) return false;
+      this.held.set(name, holderId);
+      return true;
+    }
+
+    release(name: string, _holderId: string): boolean {
+      this.calls.push(`release:${name}`);
+      this.held.delete(name);
+      return true;
+    }
+  }
+
+  function migration(resource: string, version: number, ops?: Partial<Migration>): Migration {
+    return defineMigration({
+      version,
+      resource,
+      up: ops?.up ?? (async () => {}),
+      down: ops?.down ?? (async () => {}),
+      ...(ops?.validate ? { validate: ops.validate } : {}),
+    });
+  }
+
+  describe("lock", () => {
+    it("acquires the arc:migrations lease, reads applied INSIDE it, releases after", async () => {
+      const store = new FakeStore();
+      const lock = new FakeLock();
+      const order: string[] = [];
+      const origGetApplied = store.getApplied.bind(store);
+      store.getApplied = async () => {
+        order.push("getApplied");
+        return origGetApplied();
+      };
+      const origAcquire = lock.tryAcquire.bind(lock);
+      lock.tryAcquire = (n, h, l) => {
+        order.push("acquire");
+        return origAcquire(n, h, l);
+      };
+
+      const runner = new MigrationRunner({}, { store, lock, logger: silentLogger });
+      await runner.up([migration("product", 1)]);
+
+      expect(order[0]).toBe("acquire");
+      expect(order[1]).toBe("getApplied");
+      expect(lock.calls[0]).toBe("acquire:arc:migrations");
+      expect(lock.calls.at(-1)).toBe("release:arc:migrations");
+      expect(lock.held.size).toBe(0);
+    });
+
+    it("fails fast when another runner holds the lock", async () => {
+      const store = new FakeStore();
+      const lock = new FakeLock();
+      lock.held.set("arc:migrations", "other-runner");
+
+      const runner = new MigrationRunner({}, { store, lock, logger: silentLogger });
+      await expect(runner.up([migration("product", 1)])).rejects.toThrow(
+        /another runner holds the migration lock/,
+      );
+      expect(store.calls).toEqual([]); // nothing executed
+    });
+
+    it("releases the lock even when a migration throws", async () => {
+      const store = new FakeStore();
+      const lock = new FakeLock();
+      const runner = new MigrationRunner({}, { store, lock, logger: silentLogger });
+
+      const failing = migration("product", 1, {
+        up: async () => {
+          throw new Error("boom");
+        },
+      });
+      await expect(runner.up([failing])).rejects.toThrow("boom");
+      expect(lock.held.size).toBe(0);
+      expect(lock.calls).toContain("release:arc:migrations");
+    });
+
+    it("works without a lock (single-runner mode, back-compat)", async () => {
+      const store = new FakeStore();
+      const runner = new MigrationRunner({}, { store, logger: silentLogger });
+      await runner.up([migration("product", 1)]);
+      expect(store.applied).toHaveLength(1);
+    });
+
+    it("renews the lease while a migration outruns lockLeaseMs", async () => {
+      const store = new FakeStore();
+      const lock = new FakeLock();
+
+      const runner = new MigrationRunner(
+        {},
+        { store, lock, logger: silentLogger, lockLeaseMs: 40 }, // renew every 20ms
+      );
+      const slow = migration("product", 1, {
+        up: async () => {
+          await new Promise((r) => setTimeout(r, 90)); // outruns the 40ms lease
+        },
+      });
+      await runner.up([slow]);
+
+      const acquires = lock.calls.filter((c) => c === "acquire:arc:migrations").length;
+      expect(acquires).toBeGreaterThanOrEqual(3); // initial + ≥2 renewals
+      expect(lock.calls.at(-1)).toBe("release:arc:migrations");
+      expect(lock.held.size).toBe(0);
+    });
+
+    it("ownership loss FAILS the run — even when the migration itself succeeded", async () => {
+      const store = new FakeStore();
+      const lock = new FakeLock();
+
+      const runner = new MigrationRunner(
+        {},
+        { store, lock, logger: silentLogger, lockLeaseMs: 40 },
+      );
+      const slow = migration("product", 1, {
+        up: async () => {
+          // Simulate another holder stealing the lock mid-run: the next
+          // renewal (same-holder extend) must observe the loss.
+          lock.held.set("arc:migrations", "intruder");
+          await new Promise((r) => setTimeout(r, 60));
+        },
+      });
+      await expect(runner.up([slow])).rejects.toThrow(/ownership was lost mid-run/);
+    });
+  });
+
+  describe("checksums", () => {
+    it("records a sha256 source checksum with every applied migration", async () => {
+      const store = new FakeStore();
+      const runner = new MigrationRunner({}, { store, logger: silentLogger });
+      const m = migration("product", 1);
+      await runner.up([m]);
+
+      expect(store.recordMeta[0]?.checksum).toMatch(/^[a-f0-9]{64}$/);
+      expect(store.recordMeta[0]?.checksum).toBe(computeMigrationChecksum(m));
+    });
+
+    it("warns (default) when an applied migration's source changed", async () => {
+      const store = new FakeStore();
+      const errors: string[] = [];
+      const logger = { info: () => {}, error: (msg: string) => errors.push(msg) };
+
+      const original = migration("product", 1);
+      const runner1 = new MigrationRunner({}, { store, logger: silentLogger });
+      await runner1.up([original]);
+
+      // Same identity, different source — as if the file was edited post-apply.
+      const edited = migration("product", 1, {
+        up: async () => {
+          void "edited";
+        },
+      });
+      const runner2 = new MigrationRunner({}, { store, logger });
+      await runner2.up([edited, migration("product", 2)]);
+
+      expect(errors.some((e) => /source changed after it was applied/.test(e))).toBe(true);
+      expect(store.applied.map((r) => r.version)).toEqual([1, 2]); // pending still ran
+    });
+
+    it("throws before running anything with checksumMismatch: 'error'", async () => {
+      const store = new FakeStore();
+      const runner1 = new MigrationRunner({}, { store, logger: silentLogger });
+      await runner1.up([migration("product", 1)]);
+
+      const edited = migration("product", 1, {
+        up: async () => {
+          void "edited";
+        },
+      });
+      const runner2 = new MigrationRunner(
+        {},
+        { store, logger: silentLogger, checksumMismatch: "error" },
+      );
+      await expect(runner2.up([edited, migration("product", 2)])).rejects.toThrow(
+        /source changed after it was applied/,
+      );
+      expect(store.applied.map((r) => r.version)).toEqual([1]); // v2 never ran
+    });
+
+    it("skips drift detection for records without a checksum (older stores)", async () => {
+      const store = new FakeStore();
+      store.applied.push({
+        version: 1,
+        resource: "product",
+        appliedAt: new Date(),
+        executionTime: 1,
+        // no checksum — legacy record
+      });
+      const runner = new MigrationRunner(
+        {},
+        { store, logger: silentLogger, checksumMismatch: "error" },
+      );
+      await expect(runner.up([migration("product", 1)])).resolves.toBeUndefined();
+    });
+  });
+
+  describe("resource-aware downTo", () => {
+    it("throws when the applied set spans multiple resources and no resource is given", async () => {
+      const store = new FakeStore();
+      const runner = new MigrationRunner({}, { store, logger: silentLogger });
+      const all = [migration("product", 1), migration("product", 2), migration("order", 1)];
+      await runner.up(all);
+
+      await expect(runner.downTo(all, 1)).rejects.toThrow(/resource-scoped/);
+    });
+
+    it("rolls back only the named resource", async () => {
+      const store = new FakeStore();
+      const runner = new MigrationRunner({}, { store, logger: silentLogger });
+      const all = [
+        migration("product", 1),
+        migration("product", 2),
+        migration("order", 1),
+        migration("order", 2),
+      ];
+      await runner.up(all);
+
+      await runner.downTo(all, 1, { resource: "product" });
+
+      expect(store.applied.map((r) => `${r.resource}:${r.version}`).sort()).toEqual([
+        "order:1",
+        "order:2",
+        "product:1",
+      ]);
+    });
+
+    it("keeps the bare form for a single-resource applied set (back-compat)", async () => {
+      const store = new FakeStore();
+      const runner = new MigrationRunner({}, { store, logger: silentLogger });
+      const all = [migration("product", 1), migration("product", 2), migration("product", 3)];
+      await runner.up(all);
+
+      await runner.downTo(all, 1);
+      expect(store.applied.map((r) => r.version)).toEqual([1]);
+    });
   });
 });

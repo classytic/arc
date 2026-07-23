@@ -15,7 +15,7 @@
 import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import eventPlugin from "../../src/events/eventPlugin.js";
-import { defineJob, jobsPlugin } from "../../src/integrations/jobs.js";
+import { defineJob, jobsPlugin } from "../../src/integrations/jobs/index.js";
 
 // Track the listeners each Worker instance registers + the pause/close order.
 const workerListeners = new Map<string, string[]>();

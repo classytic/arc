@@ -2,7 +2,7 @@
  * Arc Schema Utilities — TypeBox Integration
  *
  * Provides type-safe schema definitions for Fastify routes using TypeBox.
- * Install `@sinclair/typebox` and `@fastify/type-provider-typebox` to use.
+ * Install `typebox` (v1) and `@fastify/type-provider-typebox` (v6) to use.
  *
  * @example
  * ```typescript
@@ -26,16 +26,18 @@
  * @module
  */
 
+// Compile-time typed plugin/route boundaries only — arc uses Fastify's
+// standard AJV validator at runtime, NOT TypeBoxValidatorCompiler. These are
+// TYPES; import them (or `@fastify/type-provider-typebox` directly) to get
+// `Type.*`-schema inference in your handlers.
 export type {
   FastifyPluginAsyncTypebox,
   FastifyPluginCallbackTypebox,
   TypeBoxTypeProvider,
 } from "@fastify/type-provider-typebox";
-// Re-export Fastify TypeBox type provider
-export { TypeBoxValidatorCompiler } from "@fastify/type-provider-typebox";
-export type { Static, TObject, TSchema } from "@sinclair/typebox";
-// Re-export TypeBox core — users import Type from here instead of @sinclair/typebox directly
-export { Type } from "@sinclair/typebox";
+export type { Static, TObject, TSchema } from "typebox";
+// Re-export TypeBox core — users import Type from here instead of `typebox` directly
+export { Type } from "typebox";
 
 import {
   type ErrorContract,
@@ -43,8 +45,8 @@ import {
   errorContractSchema,
   errorDetailSchema,
 } from "@classytic/repo-core/errors";
-import type { TSchema } from "@sinclair/typebox";
-import { Type } from "@sinclair/typebox";
+import type { TSchema } from "typebox";
+import { Type } from "typebox";
 
 // ============================================================================
 // Arc Response Schemas (TypeBox versions of responseSchemas.ts)

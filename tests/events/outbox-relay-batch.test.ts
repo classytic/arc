@@ -14,6 +14,7 @@
  * 10. Malformed event aborts batch and increments `malformed` counter
  */
 
+import type { OutboxStore } from "@classytic/primitives/outbox";
 import { describe, expect, it, vi } from "vitest";
 import type {
   DomainEvent,
@@ -25,7 +26,6 @@ import {
   EventOutbox,
   exponentialBackoff,
   MemoryOutboxStore,
-  type OutboxStore,
   type RelayResult,
 } from "../../src/events/outbox.js";
 
@@ -75,6 +75,21 @@ describe("relayBatch — rich result", () => {
     expect(result.malformed).toBe(0);
     // MemoryEventTransport implements publishMany
     expect(result.usedPublishMany).toBe(true);
+  });
+
+  it("reports claimMs / publishMs phase timings when events were attempted (wave-12)", async () => {
+    const store = new MemoryOutboxStore();
+    const transport = new MemoryEventTransport();
+    const outbox = new EventOutbox({ store, transport });
+    await outbox.store(makeEvent("e1"));
+
+    const result = await outbox.relayBatch();
+    // Operators watching relay lag need to see WHICH phase is slow —
+    // store claim round-trips vs transport publish.
+    expect(typeof result.claimMs).toBe("number");
+    expect(typeof result.publishMs).toBe("number");
+    expect(result.claimMs).toBeGreaterThanOrEqual(0);
+    expect(result.publishMs).toBeGreaterThanOrEqual(0);
   });
 
   it("counts publishFailed when transport rejects individual events", async () => {

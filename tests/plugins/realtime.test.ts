@@ -261,6 +261,7 @@ describe("Realtime Plugin", () => {
 
   async function boot(resources: unknown[], realtime: Record<string, unknown> | true = true) {
     app = await createApp({
+      logger: false,
       preset: "testing",
       auth: { type: "jwt", jwt: { secret: JWT_SECRET } },
       arcPlugins: { realtime } as never,

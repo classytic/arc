@@ -8,9 +8,9 @@
  *
  * This test proves that decision is wired correctly:
  *   1. `claimPending` does NOT call `repository.claim` even when the
- *      kit ships it — it stays on the find+sort+CAS `findOneAndUpdate`
- *      path, which is the single-round-trip primitive the FIFO loop
- *      needs.
+ *      kit ships it — it stays on the two-phase candidate-fetch +
+ *      per-id CAS `findOneAndUpdate` path (see the adapter docblock for
+ *      why an atomic limited batch claim is not portable).
  *   2. `acknowledge` does NOT call `repository.claim` — it stays on
  *      `findOneAndUpdate` so the `ne('status', 'delivered')` source-state
  *      predicate (broader than `claim`'s exact-`from` requirement)
@@ -98,17 +98,22 @@ function makeRepoWithClaimTrap(
 
 describe("repositoryAsOutboxStore — does not adopt StandardRepo.claim", () => {
   it("claimPending uses findOneAndUpdate, never claim, even when claim is available", async () => {
-    let claimedOnce = false;
-    const repo = makeRepoWithClaimTrap(async () => {
-      // Return one claimed row, then null to terminate the loop.
-      if (claimedOnce) return null;
-      claimedOnce = true;
-      return makeRow({
+    const repo = makeRepoWithClaimTrap(async () =>
+      makeRow({
         status: "pending",
         leaseOwner: "worker-A",
         leaseExpiresAt: new Date(Date.now() + 30_000),
         attempts: 1,
-      });
+      }),
+    );
+    // Two-phase claim: phase 1 reads candidates via getAll, phase 2 CASes
+    // each candidate id via findOneAndUpdate.
+    (repo as { getAll: unknown }).getAll = async () => ({
+      data: [makeRow()],
+      total: 1,
+      page: 1,
+      limit: 1,
+      pages: 1,
     });
 
     const store = repositoryAsOutboxStore(repo);
@@ -206,7 +211,8 @@ describe("repositoryAsOutboxStore — works against repos without claim", () => 
       // current row + by acknowledge's null-fallback recheck. Always return
       // the worker-A-owned row.
       getOne: async () => ownedRow,
-      getAll: async () => ({ data: [], total: 0, page: 1, limit: 0, pages: 0 }),
+      // Phase 1 of the two-phase claim reads candidates from getAll.
+      getAll: async () => ({ data: [ownedRow], total: 1, page: 1, limit: 1, pages: 1 }),
       deleteMany: async () => ({ deletedCount: 0 }),
       // Returning a non-null OutboxRow shape from every `findOneAndUpdate`
       // satisfies acknowledge/fail's success path (no post-write recheck).
@@ -229,9 +235,8 @@ describe("repositoryAsOutboxStore — works against repos without claim", () => 
       store.fail("evt-A", { message: "transient" }, { consumerId: "worker-A" }),
     ).resolves.toBeUndefined();
 
-    // claimPending loops until findOneAndUpdate returns null — but our
-    // stub always returns ownedRow, so the loop hits the limit (1) and
-    // breaks. Then acknowledge=1, fail=1 → 3 total findOneAndUpdate calls.
+    // claimPending CASes each phase-1 candidate once (1 candidate → 1 call).
+    // Then acknowledge=1, fail=1 → 3 total findOneAndUpdate calls.
     expect(fouCalls).toBe(3);
   });
 });

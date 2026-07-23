@@ -58,6 +58,7 @@ describe("createApp({ resources })", () => {
     });
 
     app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       resources: [productResource, orderResource],
@@ -169,6 +170,7 @@ describe("createApp({ resources })", () => {
     let pluginsCalled = false;
 
     const app2 = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       resources: [resource],
@@ -191,6 +193,7 @@ describe("createApp({ resources })", () => {
 
   it("handles empty resources array gracefully", async () => {
     const app3 = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       resources: [],
@@ -206,6 +209,7 @@ describe("createApp({ resources })", () => {
 
   it("works without resources option (backward compatible)", async () => {
     const app4 = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
     });

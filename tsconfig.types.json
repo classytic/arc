@@ -7,7 +7,19 @@
   },
   "include": [
     "src/**/*",
-    "tests/core/repository-contract-types.test-d.ts"
+    "tests/types/**/*",
+    "tests/core/repository-contract-types.test-d.ts",
+    "tests/core/base-controller-dx.test.ts",
+    "tests/core/mixins/type-precision.test.ts",
+    "tests/core/request-context-generics.test.ts",
+    "tests/core/tenant-field-auto-system-managed.test.ts",
+    "tests/events/subscribe-helpers.test.ts",
+    "tests/events/transport-cleanup.test.ts",
+    "tests/permissions/scope-context.test.ts",
+    "tests/presets/files-upload.test.ts",
+    "tests/presets/preset-controller-types.test.ts",
+    "tests/schemas/schema-helpers-fastify-integration.test.ts",
+    "tests/scope/service-scope.test.ts"
   ],
   "exclude": ["node_modules", "dist"]
 }

@@ -9,6 +9,7 @@
  */
 
 import type { FastifyInstance } from "fastify";
+import { type HealthCheck, type HealthOptions, mergeHealthChecks } from "../plugins/health.js";
 import type { CreateAppOptions } from "./types/index.js";
 
 type PluginTracker = (name: string, opts?: Record<string, unknown>) => void;
@@ -65,6 +66,7 @@ export async function registerArcPlugins(
   config: CreateAppOptions,
   trackPlugin: PluginTracker,
   modules: ArcPluginModules,
+  moduleHealthChecks: readonly HealthCheck[] = [],
 ): Promise<void> {
   const { requestIdPlugin, healthPlugin, gracefulShutdownPlugin } = modules;
 
@@ -77,12 +79,20 @@ export async function registerArcPlugins(
     // 2.15.1 — `health` accepts a HealthOptions object so hosts can pass
     // readiness checks (Mongo connectivity, engine warmup, queue probes,
     // etc.) inline instead of disabling Arc's plugin and re-registering.
-    const healthOpts =
+    const appHealth: HealthOptions =
       typeof config.arcPlugins?.health === "object" && config.arcPlugins.health !== null
         ? config.arcPlugins.health
         : {};
+    // Modules-first, host-last (arc's additive convention). Module checks are
+    // already inter-module unique (collectModuleHealthChecks); this union check
+    // catches an app-level check colliding with a module's name.
+    const checks = mergeHealthChecks([
+      { owner: "the module graph", checks: moduleHealthChecks },
+      { owner: "arcPlugins.health", checks: appHealth.checks },
+    ]);
+    const healthOpts: HealthOptions = { ...appHealth, checks };
     await fastify.register(healthPlugin, healthOpts);
-    trackPlugin("arc-health", healthOpts as Record<string, unknown>);
+    trackPlugin("arc-health", { checkCount: healthOpts.checks?.length ?? 0 });
   }
 
   if (config.arcPlugins?.gracefulShutdown !== false) {

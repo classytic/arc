@@ -80,7 +80,7 @@ describe("schema helpers — Fastify integration", () => {
 
     const res = await app.inject({ method: "POST", url: "/products", payload: {} });
     expect(res.statusCode).toBe(201);
-    expect((res.json() as { _id: string }).name).toBe("Beta");
+    expect((res.json() as { _id: string; name: string }).name).toBe("Beta");
   });
 
   it("ArcErrorResponse describes the canonical ErrorContract", async () => {
@@ -108,7 +108,9 @@ describe("schema helpers — Fastify integration", () => {
     app.get(
       "/bad",
       { schema: { response: { 200: ProductSchema } } },
-      // @ts-expect-error — intentionally bad shape (missing required `price`)
+      // Intentionally bad shape (missing required `price`) — Fastify's
+      // handler typing doesn't constrain the return to the response schema,
+      // so this is a RUNTIME serialization concern, not a compile error.
       async () => ({ _id: "a", name: "Alpha" }),
     );
     await app.ready();

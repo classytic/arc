@@ -277,7 +277,11 @@ describe("Compensation — Flexibility", () => {
 
       // 'respond' ran before 'analytics' resolved
       expect(order).toEqual(["db", "respond"]);
-      expect(result.completedSteps).toContain("send-analytics");
+      // 2.24 (wave-6 audit): fireAndForget steps are NOT in completedSteps —
+      // the step hasn't completed when the result returns, and a step that
+      // later fails must never have been reported as completed.
+      expect(result.completedSteps).not.toContain("send-analytics");
+      expect(result.completedSteps).toEqual(["db-write", "respond"]);
 
       bgResolve?.();
       await bgPromise;

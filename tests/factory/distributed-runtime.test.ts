@@ -154,6 +154,50 @@ describe("distributed runtime validation", () => {
     await app.close();
   });
 
+  it("warns when schedules are configured without a lock (every replica fires)", async () => {
+    const lines: string[] = [];
+    const app = await createApp({
+      runtime: "distributed",
+      stores: { events: mockRedisTransport as any },
+      auth: false,
+      logger: {
+        level: "warn",
+        stream: { write: (msg: string) => void lines.push(msg) },
+      } as any,
+      helmet: false,
+      cors: false,
+      rateLimit: false,
+      underPressure: false,
+      arcPlugins: { schedules: {} },
+    });
+    expect(lines.some((l) => l.includes("schedules configured without a `lock`"))).toBe(true);
+    await app.close();
+  });
+
+  it("does NOT warn when schedules carry a lock adapter", async () => {
+    const lines: string[] = [];
+    const app = await createApp({
+      runtime: "distributed",
+      stores: { events: mockRedisTransport as any },
+      auth: false,
+      logger: {
+        level: "warn",
+        stream: { write: (msg: string) => void lines.push(msg) },
+      } as any,
+      helmet: false,
+      cors: false,
+      rateLimit: false,
+      underPressure: false,
+      arcPlugins: {
+        schedules: {
+          lock: { tryAcquire: () => true, release: () => true },
+        },
+      },
+    });
+    expect(lines.some((l) => l.includes("schedules configured without"))).toBe(false);
+    await app.close();
+  });
+
   it("should pass with all required stores for a full distributed setup", async () => {
     const app = await createApp({
       runtime: "distributed",

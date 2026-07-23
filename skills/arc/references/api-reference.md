@@ -115,8 +115,10 @@ import {
   healthPlugin, gracefulShutdownPlugin, ssePlugin,
   metricsPlugin, versioningPlugin,
   schedulesPlugin,   // 2.21: interval jobs, optional LockAdapter leader lease, no Redis
-  type ScheduleLockLike, type ScheduleDefinition,
+  type ScheduleDefinition,
 } from '@classytic/arc/plugins';
+// Lock contract (schedules.lock / MigrationRunner.lock) — one ecosystem standard:
+// import type { LockAdapter } from '@classytic/repo-core/lock';
 import { tracingPlugin } from '@classytic/arc/plugins/tracing';
 import { auditPlugin } from '@classytic/arc/audit';
 import { idempotencyPlugin } from '@classytic/arc/idempotency';

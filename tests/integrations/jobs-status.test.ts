@@ -12,7 +12,7 @@
 import Fastify from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import eventPlugin from "../../src/events/eventPlugin.js";
-import { defineJob, jobsPlugin } from "../../src/integrations/jobs.js";
+import { defineJob, jobsPlugin } from "../../src/integrations/jobs/index.js";
 
 // ── BullMQ mock with Job.fromId support ──────────────────────────────────────
 

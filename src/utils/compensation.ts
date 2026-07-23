@@ -52,7 +52,20 @@ export interface CompensationStep<TCtx = Record<string, unknown>, TResult = unkn
   readonly execute: (ctx: TCtx) => Promise<TResult>;
   /** Rollback on failure — receives context and this step's own result */
   readonly compensate?: (ctx: TCtx, stepResult: TResult) => Promise<void>;
-  /** Fire-and-forget — don't await, don't block, swallow errors, skip in rollback */
+  /**
+   * Fire-and-forget — don't await, don't block, skip in rollback.
+   *
+   * OUTSIDE the transactional result by design: the step is NOT listed in
+   * `completedSteps` (it hasn't completed when the result is returned — a
+   * step that later fails must never have been reported as completed), its
+   * value never appears in `results`, and it is not compensatable. Its
+   * rejection is reported through `hooks.onStepFailed` (observability
+   * only — the transaction outcome is unaffected).
+   *
+   * This is best-effort by construction — a crash loses it. Side effects
+   * that must survive failure belong in the outbox or a job queue, not in
+   * a fire-and-forget step.
+   */
   readonly fireAndForget?: boolean;
 }
 
@@ -61,6 +74,13 @@ export interface CompensationHooks {
   readonly onStepComplete?: (stepName: string, result: unknown) => void;
   readonly onStepFailed?: (stepName: string, error: Error) => void;
   readonly onCompensate?: (stepName: string) => void;
+  /**
+   * Reports a hook that THREW. Hook failures never alter the transaction
+   * (contained by design), but silent containment makes a broken
+   * metrics/audit sink invisible — wire this to a logger. Must not throw;
+   * if it does, that too is contained.
+   */
+  readonly onHookError?: (hookName: string, error: Error) => void;
 }
 
 /** Error from a compensation action that failed during rollback */
@@ -90,6 +110,24 @@ export type CompensationResult =
 // ============================================================================
 
 /**
+ * Observability hooks must never alter the transaction: a throwing metrics
+ * sink must not fail a step that succeeded, trigger compensation, or become
+ * an unhandled rejection from a detached fire-and-forget chain. Containment
+ * is reported via `hooks.onHookError` so broken sinks stay visible.
+ */
+function safeHook(name: string, invoke: () => void, hooks?: CompensationHooks): void {
+  try {
+    invoke();
+  } catch (err) {
+    try {
+      hooks?.onHookError?.(name, err instanceof Error ? err : new Error(String(err)));
+    } catch {
+      /* the reporter itself is contained too */
+    }
+  }
+}
+
+/**
  * Run steps in order with automatic compensation on failure.
  *
  * @typeParam TCtx - Context type shared across steps (defaults to Record<string, unknown>)
@@ -109,13 +147,29 @@ export async function withCompensation<
 
   for (const step of steps) {
     if (step.fireAndForget) {
-      completedSteps.push(step.name);
-      step.execute(ctx).then(
-        (result) => hooks?.onStepComplete?.(step.name, result),
-        () => {
-          /* swallowed */
-        },
-      );
+      // NOT pushed to completedSteps — it hasn't completed when the result
+      // is returned; a step that later fails must never have been reported
+      // as completed. Rejections surface via onStepFailed. The chain ends
+      // in a catch so nothing detached can become an unhandled rejection.
+      void step
+        .execute(ctx)
+        .then(
+          (result) =>
+            safeHook("onStepComplete", () => hooks?.onStepComplete?.(step.name, result), hooks),
+          (err) =>
+            safeHook(
+              "onStepFailed",
+              () =>
+                hooks?.onStepFailed?.(
+                  step.name,
+                  err instanceof Error ? err : new Error(String(err)),
+                ),
+              hooks,
+            ),
+        )
+        .catch(() => {
+          /* backstop */
+        });
       continue;
     }
 
@@ -124,10 +178,10 @@ export async function withCompensation<
       completedSteps.push(step.name);
       results[step.name] = result;
       completed.push({ step, result });
-      hooks?.onStepComplete?.(step.name, result);
+      safeHook("onStepComplete", () => hooks?.onStepComplete?.(step.name, result), hooks);
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
-      hooks?.onStepFailed?.(step.name, error);
+      safeHook("onStepFailed", () => hooks?.onStepFailed?.(step.name, error), hooks);
 
       const compensationErrors = await rollback(ctx, completed, hooks);
 
@@ -163,7 +217,7 @@ async function rollback<TCtx extends Record<string, unknown>>(
 
     try {
       await compensateFn(ctx, entry.result);
-      hooks?.onCompensate?.(entry.step.name);
+      safeHook("onCompensate", () => hooks?.onCompensate?.(entry.step.name), hooks);
     } catch (err) {
       errors.push({
         step: entry.step.name,

@@ -91,6 +91,7 @@ describe("Dynamic Permission Matrix E2E", () => {
     });
 
     app = await createApp({
+      logger: false,
       preset: "development",
       auth: {
         type: "jwt",

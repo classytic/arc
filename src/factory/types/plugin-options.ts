@@ -8,6 +8,8 @@ export interface UnderPressureOptions {
   exposeStatusRoute?: boolean;
   /** Event loop lag threshold in ms — requests rejected above this (default: 1000) */
   maxEventLoopDelay?: number;
+  /** Event loop utilization threshold (0–1) — requests rejected above this */
+  maxEventLoopUtilization?: number;
   /** V8 heap usage threshold in bytes — requests rejected above this */
   maxHeapUsedBytes?: number;
   /** RSS memory threshold in bytes — requests rejected above this */

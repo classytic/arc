@@ -17,6 +17,7 @@ describe("Plugin Registry", () => {
 
   it("tracks registered plugins as a Map", async () => {
     app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
     });

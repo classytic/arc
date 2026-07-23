@@ -160,6 +160,7 @@ describe("Compensation in Arc additionalRoute", () => {
     });
 
     app = await createApp({
+      logger: false,
       preset: "testing",
       auth: {
         type: "jwt",

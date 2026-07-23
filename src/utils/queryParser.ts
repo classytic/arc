@@ -10,6 +10,8 @@
  * defineResource({ name: 'product', adapter: ... });
  *
  * // Use MongoKit's QueryParser (recommended for MongoDB - has $lookup, aggregations, etc.)
+ * // Fail-closed by default (mongokit >=3.25): invalid/blocked query input
+ * // becomes HTTP 400 instead of a silently broadened result set.
  * import { QueryParser } from '@classytic/mongokit';
  * defineResource({
  *   name: 'product',

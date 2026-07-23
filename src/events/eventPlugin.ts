@@ -81,6 +81,12 @@ export interface EventPluginOptions {
    * Dead letter queue for events that exhaust all retries.
    * Requires `retry` to be enabled. If `retry` is set but no custom `store`,
    * failed events are published to the `$deadLetter` event type by default.
+   *
+   * The store is DURABLE persistence: if it throws, the wrapped handler
+   * rethrows (per `retry.dlqFailureMode`, default `'rethrow'`) so an
+   * at-least-once transport redelivers instead of acknowledging an event
+   * that was neither processed nor dead-lettered. Metrics/alerting belongs
+   * in `retry.onDead`, whose failures never affect acknowledgement.
    */
   deadLetterQueue?: {
     /** Custom store function. If omitted, publishes to '$deadLetter' event type. */
@@ -310,13 +316,35 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
       if (retryOpts && pattern !== "$deadLetter") {
         wrappedHandler = withRetry(handler, {
           ...retryOpts,
-          onDead: dlqOpts?.store ?? createDeadLetterPublisher(fastify.events),
+          // DURABLE slot — a failing store/publisher follows dlqFailureMode
+          // (rethrow by default → the transport redelivers). Never wire the
+          // store through `onDead`: that slot swallows failures, which would
+          // acknowledge an event that was neither processed nor persisted.
+          // User-supplied retryOpts.onDead (observability) flows through the
+          // spread above.
+          deadLetter: dlqOpts?.store ?? createDeadLetterPublisher(fastify.events),
           logger: fastify.log as import("./EventTransport.js").EventLogger,
         });
       }
 
       if (logEvents) {
         fastify.log?.info?.({ pattern, retry: !!retryOpts }, "Subscribing to events");
+      }
+      // `EventTransport.subscribe` is optional as of primitives 0.14 —
+      // publish-only transports (outbox bridges, Kafka/webhook pipes) omit
+      // it. Arc's subscribe path requires in-process delivery, so a
+      // publish-only transport can't register a handler: fail clearly rather
+      // than throw a cryptic "not a function". Backward-compatible with 0.13
+      // (subscribe always present there).
+      if (typeof transport.subscribe !== "function") {
+        const error = new Error(
+          `[Arc Events] transport '${transport.name}' is publish-only (no subscribe) — ` +
+            `cannot register a handler for '${pattern}'. Use MemoryEventTransport / ` +
+            `RedisEventTransport, or a transport that implements subscribe().`,
+        );
+        fastify.log?.error?.({ transport: transport.name, pattern }, error.message);
+        if (!failOpen) throw error;
+        return () => {};
       }
       try {
         return await transport.subscribe(pattern, wrappedHandler);

@@ -31,6 +31,7 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
+import { requireSingleHeaderValue } from "../../utils/headers.js";
 import {
   isBetterAuth,
   McpAuthCache,
@@ -443,7 +444,7 @@ function registerStatefulRoutes(
         .send({ jsonrpc: "2.0", error: { code: -32000, message: "Unauthorized" } });
     }
 
-    const sessionId = request.headers["mcp-session-id"] as string | undefined;
+    const sessionId = requireSingleHeaderValue(request.headers, "mcp-session-id");
 
     // Existing session — verify ownership before reuse
     if (sessionId) {
@@ -494,7 +495,7 @@ function registerStatefulRoutes(
 
   // GET /mcp — SSE stream for server-initiated messages
   fastify.get(prefix, async (request, reply) => {
-    const sessionId = request.headers["mcp-session-id"] as string | undefined;
+    const sessionId = requireSingleHeaderValue(request.headers, "mcp-session-id");
     if (!sessionId) return reply.code(400).send({ error: "Missing Mcp-Session-Id header" });
 
     const entry = cache.get(sessionId);
@@ -527,7 +528,7 @@ function registerStatefulRoutes(
 
   // DELETE /mcp — session termination (requires ownership proof)
   fastify.delete(prefix, async (request, reply) => {
-    const sessionId = request.headers["mcp-session-id"] as string | undefined;
+    const sessionId = requireSingleHeaderValue(request.headers, "mcp-session-id");
     if (!sessionId) return reply.code(400).send({ error: "Missing Mcp-Session-Id header" });
 
     const entry = cache.get(sessionId);

@@ -53,30 +53,22 @@ export {
   type CrudEventSuffix,
   crudEventType,
 } from "./eventTypes.js";
+// Transactional Outbox — arc ships the RUNTIME only. The outbox CONTRACT
+// (`OutboxStore`, `OutboxWriteOptions` / claim / ack / fail option types,
+// `OutboxFailurePolicy`, `OutboxOwnershipError`, `InvalidOutboxEventError`)
+// is owned by `@classytic/primitives/outbox` (>=0.13) — import it from
+// primitives directly, exactly like the event contract above:
+//
+//   import type { OutboxStore } from '@classytic/primitives/outbox';
+//   import { OutboxOwnershipError } from '@classytic/primitives/outbox';
 export type {
   EventOutboxOptions,
   ExponentialBackoffOptions,
-  OutboxAcknowledgeOptions,
-  OutboxClaimOptions,
-  OutboxErrorInfo,
-  OutboxFailOptions,
-  OutboxFailureContext,
-  OutboxFailureDecision,
-  OutboxFailurePolicy,
   OutboxRelayErrorHandler,
   OutboxRelayErrorKind,
-  OutboxStore,
-  OutboxWriteOptions,
   RelayResult,
 } from "./outbox.js";
-// Transactional Outbox pattern
-export {
-  EventOutbox,
-  exponentialBackoff,
-  InvalidOutboxEventError,
-  MemoryOutboxStore,
-  OutboxOwnershipError,
-} from "./outbox.js";
+export { EventOutbox, exponentialBackoff, MemoryOutboxStore } from "./outbox.js";
 /**
  * Repository → OutboxStore adapter. Exposed so consumers can build and
  * decorate the repo-backed store before passing it to {@link EventOutbox}

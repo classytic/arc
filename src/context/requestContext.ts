@@ -125,7 +125,7 @@ export function getTraceHeaders(): Record<string, string> | undefined {
   if (!store) return undefined;
 
   const headers: Record<string, string> = {};
-  if (store.traceparent) headers["traceparent"] = store.traceparent;
-  if (store.tracestate) headers["tracestate"] = store.tracestate;
+  if (store.traceparent) headers.traceparent = store.traceparent;
+  if (store.tracestate) headers.tracestate = store.tracestate;
   return Object.keys(headers).length > 0 ? headers : undefined;
 }

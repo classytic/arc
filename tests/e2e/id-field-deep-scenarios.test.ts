@@ -248,7 +248,8 @@ describe("idField — deep E2E scenarios with MongoKit + multi-tenancy", () => {
       adapter: createMongooseAdapter({ model: ProductModel, repository: productRepo }),
       queryParser: productParser,
       idField: "sku",
-      schemaOptions: { fieldRules: systemFields },
+      // 2.24: populate is deny-by-default — allowlist the category ref
+      schemaOptions: { fieldRules: systemFields, query: { allowedPopulate: ["category"] } },
       controller: new BaseController(productRepo, {
         queryParser: productParser,
         resourceName: "product",

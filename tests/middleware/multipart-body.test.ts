@@ -496,6 +496,97 @@ describe("multipartBody middleware", () => {
 });
 
 // ============================================================================
+// maxTotalBytes — combined-upload memory cap (wave-12)
+// ============================================================================
+
+describe("multipartBody — maxTotalBytes", () => {
+  let app: FastifyInstance;
+
+  beforeAll(async () => {
+    const { multipartBody } = await import("../../src/middleware/multipartBody.js");
+    const multipartPlugin = await import("@fastify/multipart").then((m) => m.default);
+
+    app = Fastify({ logger: false });
+    await app.register(multipartPlugin, { limits: { fileSize: 10 * 1024 * 1024 } });
+
+    // Per-file limit (2KB) is bigger than half the total cap (3KB), so two
+    // individually-valid files can violate the SUM.
+    app.post(
+      "/bounded",
+      { preHandler: [multipartBody({ maxFileSize: 2048, maxTotalBytes: 3072 })] },
+      async (request) => ({ body: request.body }),
+    );
+
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it("accepts uploads whose combined size stays under the cap", async () => {
+    const form = buildMultipart([
+      {
+        type: "file",
+        name: "a",
+        filename: "a.bin",
+        mimetype: "image/png",
+        content: Buffer.alloc(1024, "a"),
+      },
+      {
+        type: "file",
+        name: "b",
+        filename: "b.bin",
+        mimetype: "image/png",
+        content: Buffer.alloc(1024, "b"),
+      },
+    ]);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/bounded",
+      headers: form.headers,
+      payload: form.payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(Object.keys(response.json().body._files)).toHaveLength(2);
+  });
+
+  it("rejects with 413 when individually-valid files exceed the combined cap", async () => {
+    // Each file (2KB) passes maxFileSize; the sum (4KB) exceeds maxTotalBytes (3KB).
+    const form = buildMultipart([
+      {
+        type: "file",
+        name: "a",
+        filename: "a.bin",
+        mimetype: "image/png",
+        content: Buffer.alloc(2048, "a"),
+      },
+      {
+        type: "file",
+        name: "b",
+        filename: "b.bin",
+        mimetype: "image/png",
+        content: Buffer.alloc(2048, "b"),
+      },
+    ]);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/bounded",
+      headers: form.headers,
+      payload: form.payload,
+    });
+
+    expect(response.statusCode).toBe(413);
+    const body = response.json();
+    expect(body.code).toBe("arc.payload_too_large");
+    expect(body.message).toContain("Combined upload size");
+  });
+});
+
+// ============================================================================
 // Helper: Build multipart/form-data payload for app.inject()
 // ============================================================================
 

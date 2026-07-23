@@ -25,6 +25,7 @@ describe("createApp — versioning plugin", () => {
   describe("registration", () => {
     it("registers when arcPlugins.versioning is set", async () => {
       app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         arcPlugins: { versioning: { type: "header" } },
@@ -47,6 +48,7 @@ describe("createApp — versioning plugin", () => {
   describe("header-based versioning", () => {
     it("extracts version from Accept-Version header", async () => {
       app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         arcPlugins: { versioning: { type: "header" } },
@@ -68,6 +70,7 @@ describe("createApp — versioning plugin", () => {
 
     it("defaults to version 1 when no header present", async () => {
       app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         arcPlugins: { versioning: { type: "header", defaultVersion: "1" } },
@@ -83,6 +86,7 @@ describe("createApp — versioning plugin", () => {
 
     it("sets x-api-version response header", async () => {
       app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         arcPlugins: { versioning: { type: "header" } },
@@ -107,6 +111,7 @@ describe("createApp — versioning plugin", () => {
   describe("prefix-based versioning", () => {
     it("extracts version from URL prefix /v{n}/", async () => {
       app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         arcPlugins: { versioning: { type: "prefix" } },
@@ -122,6 +127,7 @@ describe("createApp — versioning plugin", () => {
 
     it("defaults to version 1 for non-versioned paths", async () => {
       app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         arcPlugins: { versioning: { type: "prefix", defaultVersion: "1" } },
@@ -143,6 +149,7 @@ describe("createApp — versioning plugin", () => {
   describe("deprecation warnings", () => {
     it("adds Deprecation header for deprecated versions", async () => {
       app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         arcPlugins: { versioning: { type: "header", deprecated: ["1"] } },
@@ -162,6 +169,7 @@ describe("createApp — versioning plugin", () => {
 
     it("uses custom sunset date", async () => {
       app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         arcPlugins: {
@@ -182,6 +190,7 @@ describe("createApp — versioning plugin", () => {
 
     it("does NOT add Deprecation header for current versions", async () => {
       app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         arcPlugins: { versioning: { type: "header", deprecated: ["1"] } },

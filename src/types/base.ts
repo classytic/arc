@@ -68,23 +68,13 @@ export interface JWTPayload {
   [key: string]: unknown;
 }
 
-/**
- * @deprecated LEGACY envelope — arc's actual wire contract has not used
- * `{ success, data, error, message }` for a long time. Successes return
- * DIRECT data (see `IControllerResponse` — `{ data, meta?, status?, headers? }`
- * flattened onto the wire), and errors return the canonical `ErrorContract`
- * (`{ code, message, status, details? }` from `@classytic/repo-core/errors`)
- * emitted by the global error handler. Keeping this type visible teaches new
- * applications and AI agents to generate an obsolete shape. Scheduled for
- * removal in v3. Do NOT build new response handling against it.
- */
-export interface ApiResponse<T = unknown> {
-  success: boolean;
-  data?: T;
-  error?: string;
-  message?: string;
-  meta?: Record<string, unknown>;
-}
+// `ApiResponse` (the legacy `{ success, data, error, message }` envelope) was
+// REMOVED in 2.24 — it hadn't been arc's wire contract for a long time and
+// its continued export taught new applications and AI agents an obsolete
+// shape. Successes return DIRECT data (`IControllerResponse` — `{ data,
+// meta?, status?, headers? }` flattened onto the wire); errors return the
+// canonical `ErrorContract` (`{ code, message, status, details? }` from
+// `@classytic/repo-core/errors`) via the global error handler.
 
 /**
  * Typed Fastify request with Arc decorations. Use in `raw: true` handlers

@@ -10,17 +10,16 @@
  * - Multi-worker safety via lease ownership
  */
 
-import { describe, expect, it, vi } from "vitest";
-import type { DomainEvent, EventTransport } from "../../src/events/EventTransport.js";
-import { MemoryEventTransport } from "../../src/events/EventTransport.js";
 import {
-  EventOutbox,
   InvalidOutboxEventError,
-  MemoryOutboxStore,
   OutboxOwnershipError,
   type OutboxStore,
   type OutboxWriteOptions,
-} from "../../src/events/outbox.js";
+} from "@classytic/primitives/outbox";
+import { describe, expect, it, vi } from "vitest";
+import type { DomainEvent, EventTransport } from "../../src/events/EventTransport.js";
+import { MemoryEventTransport } from "../../src/events/EventTransport.js";
+import { EventOutbox, MemoryOutboxStore } from "../../src/events/outbox.js";
 
 function makeEvent(id: string, type = "test.event"): DomainEvent {
   return { type, payload: { id }, meta: { id, timestamp: new Date() } };

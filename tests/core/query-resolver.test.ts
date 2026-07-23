@@ -98,8 +98,10 @@ describe("QueryResolver", () => {
       expect(result.search).toBe("laptop");
     });
 
-    it("parses populate from query", () => {
-      const resolver = createResolver();
+    it("parses populate from query (with an allowlist configured)", () => {
+      const resolver = createResolver({
+        schemaOptions: { query: { allowedPopulate: ["author", "category"] } },
+      });
       const req = createReq({ query: { populate: "author,category" } });
 
       const result = resolver.resolve(req);
@@ -512,13 +514,13 @@ describe("QueryResolver", () => {
       expect(result.populate).toEqual(["author", "category"]);
     });
 
-    it("allows all populate when no allowedPopulate is defined", () => {
+    it("DENIES all populate when no allowedPopulate is defined (2.24 default flip)", () => {
       const resolver = createResolver();
       const req = createReq({ query: { populate: "author,anything" } });
 
       const result = resolver.resolve(req);
 
-      expect(result.populate).toEqual(["author", "anything"]);
+      expect(result.populate).toBeUndefined();
     });
 
     it("returns undefined populate when no allowed fields match", () => {

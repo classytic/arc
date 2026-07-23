@@ -32,7 +32,8 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
 import { arcLog } from "../logger/index.js";
-import { getUserRoles } from "../permissions/types.js";
+import { requireSingleHeaderValue } from "../utils/headers.js";
+import { getUserRoles } from "../utils/userHelpers.js";
 import type { RequestScope } from "./types.js";
 
 const log = arcLog("elevation");
@@ -97,7 +98,7 @@ const elevationPlugin: FastifyPluginAsync<ElevationOptions> = async (
     if (reply.sent) return;
 
     // Step 2: Check elevation header
-    const headerValue = request.headers[scopeHeader] as string | undefined;
+    const headerValue = requireSingleHeaderValue(request.headers, scopeHeader);
     if (headerValue !== "platform") return;
 
     // Step 3: Validate user for elevation
@@ -130,7 +131,7 @@ const elevationPlugin: FastifyPluginAsync<ElevationOptions> = async (
     }
 
     // Step 4: Build elevated scope
-    const orgId = request.headers[orgHeader] as string | undefined;
+    const orgId = requireSingleHeaderValue(request.headers, orgHeader);
     const userId = String(user.id ?? user._id ?? "unknown");
 
     const scope: RequestScope = {

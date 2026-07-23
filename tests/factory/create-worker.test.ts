@@ -5,15 +5,16 @@
  * routes (tenant cascade works on a worker), events/schedules runtime,
  * health opt-in 503→200, teardown, shared-options safety, type surface.
  */
+
+import { createMemoryLockAdapter } from "@classytic/repo-core/lock";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defineResource } from "../../src/core/defineResource.js";
-import { cascadeDeleteForOrganization } from "../../src/registry/cascadeOrgDelete.js";
 import { createWorker } from "../../src/factory/createWorker.js";
-import { defineModule } from "../../src/factory/module.js";
+import { defineModule } from "../../src/factory/module/index.js";
 import type { CreateAppOptions } from "../../src/factory/types/index.js";
 import { allowPublic } from "../../src/permissions/core.js";
 import schedulesPlugin from "../../src/plugins/schedules.js";
-import { createMemoryLockAdapter } from "@classytic/repo-core/lock";
+import { cascadeDeleteForOrganization } from "../../src/registry/cascadeOrgDelete.js";
 import { createMockRepository } from "../../src/testing/mocks.js";
 
 const workers: Array<{ close(): Promise<void> }> = [];
@@ -106,8 +107,11 @@ describe("createWorker — the headless role", () => {
     const w = await createWorker(baseOptions());
     workers.push(w);
 
-    const arc = (w.app as unknown as { arc: { registry: import("../../src/registry/index.js").ResourceRegistry } })
-      .arc;
+    const arc = (
+      w.app as unknown as {
+        arc: { registry: import("../../src/registry/index.js").ResourceRegistry };
+      }
+    ).arc;
     const names = arc.registry.getAll().map((e) => e.name);
     expect(names).toContain("widget");
 
@@ -137,8 +141,11 @@ describe("createWorker — the headless role", () => {
             name: "consumer",
             bootstrap: () => ({}),
             afterResources: async (f) => {
-              const events = (f as { events?: { subscribe(p: string, h: (e: { type: string }) => void): unknown } })
-                .events;
+              const events = (
+                f as {
+                  events?: { subscribe(p: string, h: (e: { type: string }) => void): unknown };
+                }
+              ).events;
               await events?.subscribe("job.*", (e) => {
                 seen.push(e.type);
               });
@@ -149,7 +156,8 @@ describe("createWorker — the headless role", () => {
     );
     workers.push(w);
 
-    const events = (w.app as { events?: { publish(t: string, d: unknown): Promise<unknown> } }).events;
+    const events = (w.app as { events?: { publish(t: string, d: unknown): Promise<unknown> } })
+      .events;
     await events?.publish("job.done", { ok: true });
     await new Promise((r) => setTimeout(r, 20));
     expect(seen).toContain("job.done");
@@ -200,6 +208,66 @@ describe("createWorker — the headless role", () => {
     expect(ready.statusCode).toBe(200);
     // No other surface on the probe port:
     expect((await probed.app.inject({ method: "GET", url: "/widgets" })).statusCode).toBe(404);
+  });
+
+  it("shared API health config is merged into the single worker probe registration", async () => {
+    const w = await createWorker(
+      baseOptions({
+        modules: [
+          defineModule({
+            name: "engine",
+            healthChecks: [{ name: "engine", check: () => true }],
+          }),
+        ],
+        arcPlugins: {
+          health: {
+            version: "shared",
+            checks: [{ name: "database", check: () => true }],
+          },
+        },
+      }),
+      {
+        health: {
+          port: 0,
+          host: "127.0.0.1",
+          checks: [{ name: "queue", check: () => true }],
+        },
+      },
+    );
+    workers.push(w);
+
+    const response = await w.app.inject({ method: "GET", url: "/_health/ready" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().checks.map((check: { name: string }) => check.name)).toEqual([
+      "engine",
+      "database",
+      "queue",
+    ]);
+    expect((await w.app.inject({ method: "GET", url: "/_health/live" })).json().version).toBe(
+      "shared",
+    );
+  });
+
+  it("fails when a worker probe check collides with a module check", async () => {
+    await expect(
+      createWorker(
+        baseOptions({
+          modules: [
+            defineModule({
+              name: "engine",
+              healthChecks: [{ name: "database", check: () => true }],
+            }),
+          ],
+        }),
+        {
+          health: {
+            port: 0,
+            host: "127.0.0.1",
+            checks: [{ name: "database", check: () => true }],
+          },
+        },
+      ),
+    ).rejects.toThrow(/duplicate health-check name "database"/);
   });
 
   it("teardown: module onClose runs, close() is idempotent", async () => {

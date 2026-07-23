@@ -42,20 +42,10 @@
  * ```
  */
 
+import type { LockAdapter } from "@classytic/repo-core/lock";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
-
-/**
- * Structural view of the ecosystem lock contract — matches
- * `LockAdapter` from `@classytic/repo-core/lock` (and every kit
- * implementation) WITHOUT importing the subpath, so arc's emitted
- * declarations carry no repo-core@>=0.8 subpath reference and the
- * peer floor stays honest. Any conforming adapter assigns.
- */
-export interface ScheduleLockLike {
-  tryAcquire(name: string, holderId: string, leaseMs: number): Promise<boolean> | boolean;
-  release(name: string, holderId: string): Promise<boolean> | boolean;
-}
+import { type RenewingLease, startRenewingLease } from "../lock/renewingLease.js";
 
 export interface ScheduleDefinition {
   /** Unique name — also the lock key (`arc:schedule:<name>`). */
@@ -85,12 +75,13 @@ export interface ScheduleDefinition {
 }
 
 export interface SchedulesPluginOptions {
-  schedules: ScheduleDefinition[];
+  schedules: readonly ScheduleDefinition[];
   /**
-   * Ecosystem lock adapter for multi-replica deployments. Omit for
-   * single-instance apps — every tick runs locally.
+   * Ecosystem lock adapter (`LockAdapter` from `@classytic/repo-core/lock`)
+   * for multi-replica deployments. Omit for single-instance apps — every
+   * tick runs locally.
    */
-  lock?: ScheduleLockLike;
+  lock?: LockAdapter;
   /**
    * Identity of this replica for lease ownership. Default: a random id per
    * process (repo-core's `getInstanceId()` is a good explicit value).
@@ -137,12 +128,25 @@ const schedulesPlugin: FastifyPluginAsync<SchedulesPluginOptions> = async (fasti
   // Fail-fast validation — a bad schedule table is a boot bug, not a tick bug.
   const seen = new Set<string>();
   for (const s of schedules) {
-    if (!s.name) throw new TypeError("[arc-schedules] every schedule needs a name");
+    if (!s.name.trim()) throw new TypeError("[arc-schedules] every schedule needs a name");
     if (seen.has(s.name))
       throw new TypeError(`[arc-schedules] duplicate schedule name "${s.name}"`);
     seen.add(s.name);
     if (!Number.isFinite(s.every) || s.every <= 0) {
       throw new TypeError(`[arc-schedules] "${s.name}": \`every\` must be a positive number of ms`);
+    }
+    if (typeof s.handler !== "function") {
+      throw new TypeError(`[arc-schedules] "${s.name}": \`handler\` must be a function`);
+    }
+    if (s.jitterMs !== undefined && (!Number.isFinite(s.jitterMs) || s.jitterMs < 0)) {
+      throw new TypeError(
+        `[arc-schedules] "${s.name}": \`jitterMs\` must be a non-negative number of ms`,
+      );
+    }
+    if (s.leaseMs !== undefined && (!Number.isFinite(s.leaseMs) || s.leaseMs <= 0)) {
+      throw new TypeError(
+        `[arc-schedules] "${s.name}": \`leaseMs\` must be a positive number of ms`,
+      );
     }
     if (s.every < MIN_SAFE_INTERVAL_MS) {
       fastify.log.warn(
@@ -159,14 +163,39 @@ const schedulesPlugin: FastifyPluginAsync<SchedulesPluginOptions> = async (fasti
   async function tick(s: ScheduleDefinition): Promise<void> {
     const stat = stats.get(s.name);
     if (!stat) return;
+    // Lease renewal while the handler runs (same-holder tryAcquire extends
+    // the lease) — a handler outrunning its lease must not let another
+    // replica overlap it. The lease is deliberately never released after
+    // the run: its natural expiry is what makes other replicas skip the
+    // same tick window. On loss we log and let the (idempotent) handler
+    // finish — a schedule tick has no cancellation contract.
+    let lease: RenewingLease | undefined;
     try {
       if (lock) {
+        const lockName = `arc:schedule:${s.name}`;
         const leaseMs = s.leaseMs ?? Math.min(Math.floor(s.every * 0.9), MAX_DEFAULT_LEASE_MS);
-        const won = await lock.tryAcquire(`arc:schedule:${s.name}`, holderId, leaseMs);
+        const won = await lock.tryAcquire(lockName, holderId, leaseMs);
         if (!won) {
           stat.skippedByLock++;
           return;
         }
+        lease = startRenewingLease({
+          lock,
+          name: lockName,
+          holderId,
+          leaseMs,
+          onLost: () =>
+            fastify.log.warn(
+              { schedule: s.name },
+              "[arc-schedules] lease renewal lost — another holder took the lock; " +
+                "this run may now overlap. Handlers should be idempotent.",
+            ),
+          onError: (err) =>
+            fastify.log.warn(
+              { err, schedule: s.name },
+              "[arc-schedules] lease renewal errored (lease may lapse mid-run)",
+            ),
+        });
       }
       stat.runs++;
       stat.lastRunAt = new Date().toISOString();
@@ -176,6 +205,8 @@ const schedulesPlugin: FastifyPluginAsync<SchedulesPluginOptions> = async (fasti
       stat.failures++;
       stat.lastError = err instanceof Error ? err.message : String(err);
       fastify.log.error({ err, schedule: s.name }, "[arc-schedules] schedule run failed");
+    } finally {
+      await lease?.stop();
     }
   }
 

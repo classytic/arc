@@ -10,8 +10,8 @@
  */
 
 import { describe, expect, it } from "vitest";
-import type { JobDefinition } from "../../src/integrations/jobs.js";
-import { defineJob } from "../../src/integrations/jobs.js";
+import type { JobDefinition } from "../../src/integrations/jobs/index.js";
+import { defineJob } from "../../src/integrations/jobs/index.js";
 
 describe("defineJob configuration", () => {
   it("should accept timeout in job definition", () => {

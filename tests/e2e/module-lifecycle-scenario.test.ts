@@ -25,7 +25,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
-import { defineModule, getModuleExports } from "../../src/factory/module.js";
+import { defineModule, getModuleExports } from "../../src/factory/module/index.js";
 import { allowPublic } from "../../src/permissions/index.js";
 import {
   createMockModel,

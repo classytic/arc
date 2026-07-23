@@ -182,10 +182,12 @@ describe("Runtime: MongoKit Repository + QueryParser → CRUD", () => {
     expect(result.data.some((d: any) => d.name === "TypeScript Handbook")).toBe(true);
   });
 
-  it("QueryParser rejects disallowed filter fields", () => {
-    const parsed = queryParser.parse({ price: { $gt: 100 } });
-    // price is NOT in allowedFilterFields, so it should be dropped
-    expect(parsed.filters).not.toHaveProperty("price");
+  it("QueryParser rejects disallowed filter fields (fail-closed → throws)", () => {
+    // price is NOT in allowedFilterFields. mongokit >=3.25 is fail-closed by
+    // default (invalidInput: 'throw'): a disallowed filter field raises 400
+    // (INVALID_QUERY_INPUT) instead of being silently dropped (which would run
+    // the query without that constraint).
+    expect(() => queryParser.parse({ price: { $gt: 100 } })).toThrow(/price/);
   });
 
   it("QueryParser accepts allowed filter fields with eq", () => {

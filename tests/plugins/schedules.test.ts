@@ -168,3 +168,144 @@ describe("schedulesPlugin", () => {
     ).rejects.toThrow(/positive number/);
   });
 });
+
+// ============================================================================
+// Lease renewal — long handlers keep exclusive ownership
+// ============================================================================
+
+describe("schedules — lease renewal", () => {
+  // A tick acquires its lease once; without renewal a handler outrunning
+  // the lease lets another replica overlap it. The renewal loop (shared
+  // `startRenewingLease` primitive) is serialized and torn down awaited.
+  it("renews the lease while a handler outruns leaseMs/2", async () => {
+    const acquires: Array<{ name: string; holderId: string; leaseMs: number }> = [];
+    const lock = {
+      tryAcquire: (name: string, holderId: string, leaseMs: number) => {
+        acquires.push({ name, holderId, leaseMs });
+        return true;
+      },
+      release: () => true,
+    };
+
+    const app = Fastify({ logger: false });
+    await app.register(schedulesPlugin, {
+      lock,
+      holderId: "replica-1",
+      schedules: [
+        {
+          name: "long-sweep",
+          every: 5000,
+          leaseMs: 60, // renew interval = 30ms
+          runOnStart: true,
+          handler: async () => {
+            await sleep(110); // outruns leaseMs — needs ≥2 renewals
+          },
+        },
+      ],
+    });
+    await app.ready();
+    await sleep(160);
+
+    const forSchedule = acquires.filter((a) => a.name === "arc:schedule:long-sweep");
+    // 1 initial acquire + at least 2 renewals, all same holder + lease.
+    expect(forSchedule.length).toBeGreaterThanOrEqual(3);
+    for (const a of forSchedule) {
+      expect(a.holderId).toBe("replica-1");
+      expect(a.leaseMs).toBe(60);
+    }
+    await app.close();
+  });
+
+  it("stops renewing once the handler settles", async () => {
+    const acquires: string[] = [];
+    const lock = {
+      tryAcquire: (name: string) => {
+        acquires.push(name);
+        return true;
+      },
+      release: () => true,
+    };
+
+    const app = Fastify({ logger: false });
+    await app.register(schedulesPlugin, {
+      lock,
+      schedules: [
+        {
+          name: "quick",
+          every: 5000,
+          leaseMs: 40,
+          runOnStart: true,
+          handler: async () => {
+            /* returns immediately — renewal loop must be cleared */
+          },
+        },
+      ],
+    });
+    await app.ready();
+    await sleep(30);
+    const afterRun = acquires.length;
+    await sleep(100); // several renewal intervals worth of time
+    expect(acquires.length).toBe(afterRun); // no renewals after settle
+    await app.close();
+  });
+
+  it("renewals are SERIALIZED — a slow lock backend never sees overlapping tryAcquire calls", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const lock = {
+      tryAcquire: async () => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await sleep(40); // slower than the renewal cadence (leaseMs/2 = 15ms)
+        inFlight--;
+        return true;
+      },
+      release: () => true,
+    };
+
+    const app = Fastify({ logger: false });
+    await app.register(schedulesPlugin, {
+      lock,
+      schedules: [
+        {
+          name: "slow-lock",
+          every: 5000,
+          leaseMs: 30,
+          runOnStart: true,
+          handler: async () => {
+            await sleep(150);
+          },
+        },
+      ],
+    });
+    await app.ready();
+    await sleep(260); // handler + trailing renewal settle
+
+    // setInterval would stack calls every 15ms against a 40ms backend; the
+    // serialized loop keeps at most one in flight.
+    expect(maxInFlight).toBe(1);
+    expect(inFlight).toBe(0); // teardown awaited the in-flight renewal
+    await app.close();
+  });
+
+  it("fast handlers under lock behave as before (single acquire per tick)", async () => {
+    let count = 0;
+    const lock = {
+      tryAcquire: () => {
+        count++;
+        return true;
+      },
+      release: () => true,
+    };
+
+    const app = Fastify({ logger: false });
+    await app.register(schedulesPlugin, {
+      lock,
+      schedules: [{ name: "fast", every: 5000, runOnStart: true, handler: async () => {} }],
+    });
+    await app.ready();
+    await sleep(30);
+    expect(count).toBe(1);
+    await app.close();
+  });
+});

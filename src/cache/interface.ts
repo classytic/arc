@@ -29,6 +29,8 @@
  * sync values just short-circuit the microtask.
  */
 
+import type { CacheAdapter } from "@classytic/repo-core/cache";
+
 export interface CacheLogger {
   warn(message: string, ...args: unknown[]): void;
   error(message: string, ...args: unknown[]): void;
@@ -47,7 +49,14 @@ export interface CacheStats {
   evictions: number;
 }
 
-export interface CacheStore<TValue = unknown> {
+/**
+ * `extends CacheAdapter` is load-bearing: repo-core owns the transport
+ * contract, and extending (instead of maintaining a structural copy) makes
+ * any drift between the two a COMPILE error in arc rather than a runtime
+ * incompatibility — e.g. an argument-order divergence on `increment` would
+ * make a conforming adapter misread a TTL as the increment amount.
+ */
+export interface CacheStore<TValue = unknown> extends CacheAdapter {
   /** Store name for logs/diagnostics. Optional to match repo-core's bare `CacheAdapter`. */
   readonly name?: string;
 
@@ -76,6 +85,22 @@ export interface CacheStore<TValue = unknown> {
    * need strict invalidation must check for its presence: `store.clear?.(pattern)`.
    */
   clear?(pattern?: string): Promise<void> | void;
+
+  /**
+   * Atomic increment — adds `by` (default 1) to the integer at `key`,
+   * creating it with value `by` when absent; returns the NEW value.
+   * Signature is the canonical `@classytic/repo-core/cache.CacheAdapter`
+   * contract — Redis adapters map to `INCRBY` (+ `EXPIRE` when
+   * `ttlSeconds` is given).
+   *
+   * Optional — consumers feature-detect it. Arc's `QueryCache` uses it for
+   * version-based invalidation: with `increment`, concurrent bumps from
+   * multiple replicas are strictly monotonic and never collide; without it,
+   * QueryCache falls back to a read-modify-write that is monotonic within a
+   * process but can lose a concurrent replica's bump. Distributed hosts
+   * should use a store that implements this.
+   */
+  increment?(key: string, by?: number, ttlSeconds?: number): Promise<number> | number;
 
   /** Cache statistics for observability. Optional. */
   stats?(): CacheStats;

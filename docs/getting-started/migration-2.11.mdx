@@ -10,8 +10,11 @@
 
 ```diff
 - import { validateResourceConfig, assertValidConfig } from '@classytic/arc';
-+ import { validateResourceConfig, assertValidConfig } from '@classytic/arc/utils';
++ import { validateResourceConfig, assertValidConfig } from '@classytic/arc/core';
 ```
+
+> Since Arc 2.24, resource configuration validation is owned and exported by
+> `@classytic/arc/core`; the temporary `/utils` compatibility export was removed.
 
 Rationale: these are dev tooling (used at boot, CLI, test time), not runtime essentials. The root barrel is now explicit about what's there — "root = essentials only" was a stated policy that had drifted.
 

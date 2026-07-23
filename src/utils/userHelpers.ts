@@ -26,3 +26,24 @@ export function getUserId(user: UserLike | null | undefined): string | undefined
   const id = user.id ?? user._id;
   return id ? String(id) : undefined;
 }
+
+/** Normalize a raw role value from Better Auth, JWT, or a custom identity provider. */
+export function normalizeRoles(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((role) => String(role).trim()).filter(Boolean);
+  }
+  if (typeof value === "string" && value.length > 0) {
+    return value
+      .split(",")
+      .map((role) => role.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+/** Extract normalized roles from a user-like object. */
+export function getUserRoles(
+  user: { role?: unknown; roles?: unknown } | null | undefined,
+): string[] {
+  return user ? normalizeRoles(user.role ?? user.roles) : [];
+}

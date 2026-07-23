@@ -155,7 +155,7 @@ export function createMcpAuthFromBetterAuthApiKey(
       ...(userId ? { userId } : {}),
       ...(organizationId ? { organizationId } : {}),
       ...(clientId ? { clientId } : {}),
-      ...(scopes && scopes.length ? { scopes } : {}),
+      ...(scopes?.length ? { scopes } : {}),
     };
     return out;
   };

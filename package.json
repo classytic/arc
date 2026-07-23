@@ -1,6 +1,6 @@
 {
   "name": "@classytic/arc",
-  "version": "2.23.0",
+  "version": "2.25.0",
   "description": "Resource-oriented backend framework for Fastify - clean, minimal, powerful, tree-shakable",
   "type": "module",
   "exports": {
@@ -165,8 +165,8 @@
       "default": "./dist/integrations/websocket-pushref-redis.mjs"
     },
     "./integrations/jobs": {
-      "types": "./dist/integrations/jobs.d.mts",
-      "default": "./dist/integrations/jobs.mjs"
+      "types": "./dist/integrations/jobs/index.d.mts",
+      "default": "./dist/integrations/jobs/index.mjs"
     },
     "./integrations/event-gateway": {
       "types": "./dist/integrations/event-gateway.d.mts",
@@ -287,7 +287,9 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "npm run typecheck:src && npm run typecheck:types && npm run check:type-lane",
+    "typecheck:src": "tsc --noEmit",
+    "check:type-lane": "node scripts/check-type-lane.mjs",
     "lint": "biome check src/",
     "lint:fix": "biome check --fix src/",
     "lint:all": "biome check src/ tests/",
@@ -298,27 +300,36 @@
     "test:ci": "npm run test:main && npm run test:perf",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
+    "typecheck:types": "tsc -p tsconfig.types.json",
+    "api:surface": "node scripts/check-api-surface.mjs --update",
+    "check:api-surface": "node scripts/check-api-surface.mjs",
+    "check:package": "publint && attw --pack . --profile esm-only",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "vitest run tests/e2e",
-    "test:unit": "vitest run tests/core tests/hooks tests/utils tests/plugins",
+    "test:fast": "vitest run tests/core tests/hooks tests/utils tests/plugins tests/cache tests/events",
+    "test:contract": "vitest run tests/contract tests/adapters tests/types",
+    "test:integration": "vitest run tests/integrations tests/factory tests/auth",
+    "test:e2e": "vitest run tests/e2e tests/scenarios tests/smoke",
+    "test:changed": "vitest run --changed",
+    "test:reliability": "vitest run tests/cache tests/events tests/migrations tests/plugins/schedules.test.ts tests/plugins/health.test.ts tests/utils/circuit-breaker.test.ts tests/utils/compensation-hooks.test.ts tests/integrations/jobs-timeout.test.ts",
     "test:smoke:ws": "vitest run tests/integrations/websocket/smoke.test.ts",
     "test:smoke:redis": "node scripts/smoke-ws-redis.mjs",
     "smoke": "node scripts/smoke-test.mjs",
+    "smoke:consumer": "node scripts/smoke-test.mjs --consumer",
     "push": "classytic-push",
     "release:tag": "node -e \"require('child_process').execSync('npm run push -- v'+require('./package.json').version,{stdio:'inherit'})\"",
     "release": "npm run push -- main && npm run release:tag && npm publish",
     "check:peer-skew": "node scripts/check-peer-skew.mjs",
     "check:docs-drift": "node scripts/check-docs-drift.mjs",
     "check:boundaries": "node scripts/check-boundaries.mjs",
-    "prepublishOnly": "npm run check:peer-skew && npm run check:docs-drift && npm run check:boundaries && npm run typecheck && npm run lint && npm run build && npm run test:ci && npm run smoke"
+    "prepublishOnly": "npm run check:peer-skew && npm run check:docs-drift && npm run check:boundaries && npm run typecheck && npm run lint && npm run build && npm run check:api-surface && npm run check:package && npm run test:ci && npm run smoke:consumer"
   },
   "engines": {
     "node": ">=22"
   },
   "peerDependencies": {
-    "@classytic/primitives": ">=0.9.0",
+    "@classytic/primitives": ">=0.14.0",
     "@classytic/repo-core": ">=0.14.0",
-    "@classytic/streamline": ">=2.7.0",
+    "@classytic/streamline": ">=2.8.0",
     "@fastify/cors": ">=11.0.0",
     "@fastify/helmet": ">=13.0.0",
     "@fastify/jwt": ">=10.0.0",
@@ -335,7 +346,6 @@
     "@opentelemetry/instrumentation-http": ">=0.50.0",
     "@opentelemetry/instrumentation-mongodb": ">=0.40.0",
     "@opentelemetry/sdk-node": ">=0.50.0",
-    "@sinclair/typebox": ">=0.34.0",
     "better-auth": ">=1.6.2",
     "bullmq": ">=5.0.0",
     "fastify": "^5.8.5",
@@ -344,6 +354,7 @@
     "ioredis": ">=5.0.0",
     "jose": ">=5.0.0",
     "pino-pretty": ">=13.0.0",
+    "typebox": ">=1.0.0",
     "zod": ">=4.0.0"
   },
   "peerDependenciesMeta": {
@@ -407,7 +418,7 @@
     "jose": {
       "optional": true
     },
-    "@sinclair/typebox": {
+    "typebox": {
       "optional": true
     },
     "@fastify/type-provider-typebox": {
@@ -432,17 +443,18 @@
     "secure-json-parse": "^4.1.0"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
     "@better-auth/drizzle-adapter": "^1.6.19",
     "@better-auth/mongo-adapter": "^1.6.19",
     "@biomejs/biome": "^2.5.0",
     "@classytic/dev-tools": "^0.2.0",
     "@classytic/gitkit": ">=0.1.0",
-    "@classytic/mongokit": "^3.22.0",
+    "@classytic/mongokit": "^3.25.0",
     "@classytic/pgkit": "^0.1.0",
-    "@classytic/primitives": "^0.9.1",
+    "@classytic/primitives": "^0.14.0",
     "@classytic/repo-core": "^0.14.0",
     "@classytic/sqlitekit": "^0.6.0",
-    "@classytic/streamline": "^2.7.0",
+    "@classytic/streamline": "^2.8.2",
     "@electric-sql/pglite": "^0.5.4",
     "@fastify/cors": "^11.2.0",
     "@fastify/helmet": "^13.0.2",
@@ -455,7 +467,6 @@
     "@fastify/websocket": "^11.2.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@opentelemetry/api": "^1.9.1",
-    "@sinclair/typebox": "^0.34.49",
     "@types/node": "^22.19.21",
     "@types/qs": "^6.15.1",
     "@vitest/coverage-v8": "^4.1.9",
@@ -466,7 +477,7 @@
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
     "fast-check": "^4.8.0",
-    "fastify": "^5.8.5",
+    "fastify": "^5.10.0",
     "fastify-raw-body": "^5.0.0",
     "h3-js": "^4.4.0",
     "ioredis": "^5.11.1",
@@ -476,7 +487,9 @@
     "mongodb": "^7.3.0",
     "mongodb-memory-server": "^11.2.0",
     "mongoose": "^9.7.1",
+    "publint": "^0.3.21",
     "tsdown": "^0.22.5",
+    "typebox": "^1.3.6",
     "typescript": "^7.0.2",
     "vitest": "^4.1.9",
     "ws": "^8.21.0",
@@ -508,6 +521,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/classytic/arc.git"
+    "url": "git+https://github.com/classytic/arc.git"
   }
 }

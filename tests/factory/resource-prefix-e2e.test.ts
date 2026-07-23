@@ -64,6 +64,7 @@ describe("resourcePrefix + skipGlobalPrefix", () => {
       });
 
       const app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         resourcePrefix: "/api/v1",
@@ -94,6 +95,7 @@ describe("resourcePrefix + skipGlobalPrefix", () => {
       });
 
       const app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         resourcePrefix: "/api",
@@ -123,6 +125,7 @@ describe("resourcePrefix + skipGlobalPrefix", () => {
       });
 
       const app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         resourcePrefix: "/api/v1",
@@ -153,6 +156,7 @@ describe("resourcePrefix + skipGlobalPrefix", () => {
       });
 
       const app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         // No resourcePrefix
@@ -175,6 +179,7 @@ describe("resourcePrefix + skipGlobalPrefix", () => {
       });
 
       const app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         resourcePrefix: "/api",
@@ -266,6 +271,7 @@ export default defineResource({
       expect(resources).toHaveLength(3);
 
       const app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         resourcePrefix: "/api/v1",
@@ -323,6 +329,7 @@ export default defineResource({
       const bootOrder: string[] = [];
 
       const app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         resourcePrefix: "/api",
@@ -397,6 +404,7 @@ export default defineResource({
       const order = makeResource("order");
 
       const app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         resources: [product, order],
@@ -413,6 +421,7 @@ export default defineResource({
       const order: string[] = [];
 
       const app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         plugins: async () => {
@@ -444,6 +453,7 @@ export default defineResource({
       });
 
       const app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         resources: [resource],

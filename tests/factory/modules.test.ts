@@ -17,7 +17,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
-import { defineModule, getModuleExports } from "../../src/factory/module.js";
+import { defineModule, getModuleExports } from "../../src/factory/module/index.js";
 import { allowPublic } from "../../src/permissions/index.js";
 import {
   createMockModel,
@@ -60,6 +60,7 @@ describe("createApp — modules", () => {
     });
 
     const app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       resourcePrefix: "/api/v1",
@@ -108,6 +109,7 @@ describe("createApp — modules", () => {
     });
 
     const app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       modules: [mod],
@@ -144,6 +146,7 @@ describe("createApp — modules", () => {
     });
 
     const app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       plugins: async () => {
@@ -191,6 +194,7 @@ describe("createApp — modules", () => {
     const sales = defineModule({ name: "sales", resources: [makeResource("order")] });
 
     const app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       modules: [sales],
@@ -237,6 +241,7 @@ describe("createApp — modules", () => {
     });
 
     const app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       modules: [reservation, orderMod],
@@ -322,6 +327,7 @@ describe("createApp — modules", () => {
 
     const region = "BD";
     const app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       modules: [region === "BD" ? bdPack : usPack],
@@ -336,6 +342,7 @@ describe("createApp — modules", () => {
 
   it("accepts a promise form", async () => {
     const app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       modules: [Promise.resolve(defineModule({ name: "p", resources: [makeResource("invoice")] }))],
@@ -349,6 +356,7 @@ describe("createApp — modules", () => {
   it("a thunk resolving to a non-module fails fast with a named error", async () => {
     await expect(
       createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         // Namespace-shaped object (the classic dynamic-import mistake).
@@ -379,6 +387,7 @@ describe("createApp — modules", () => {
     const b = defineModule({ name: "b", onClose: () => void closed.push("module.b") });
 
     const app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       modules: [a, b],
@@ -437,6 +446,7 @@ describe("createApp — modules", () => {
 
   it("no modules — behaves exactly as before (backward compat)", async () => {
     const app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       resources: [makeResource("plain")],
@@ -490,6 +500,7 @@ describe("createApp — modules", () => {
     });
 
     const app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       resourcePrefix: "/api/v1",
@@ -518,6 +529,7 @@ describe("createApp — modules", () => {
     });
 
     const app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       resourcePrefix: "/api/v1",
@@ -537,6 +549,7 @@ describe("createApp — modules", () => {
     const modB = defineModule({ name: "modB", owns: ["bbb"], resources: [makeResource("bbb")] });
 
     const app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       resourcePrefix: "/api/v1",
@@ -551,5 +564,59 @@ describe("createApp — modules", () => {
     expect((await app.inject({ method: "GET", url: "/api/v1/cccs" })).statusCode).toBe(200);
 
     await app.close();
+  });
+
+  it("merges module and app readiness checks in dependency order", async () => {
+    const calls: string[] = [];
+    const base = defineModule({
+      name: "base-health",
+      healthChecks: [{ name: "base", check: () => void calls.push("base") || true }],
+    });
+    const dependent = defineModule({
+      name: "dependent-health",
+      dependsOn: ["base-health"],
+      healthChecks: [{ name: "dependent", check: () => void calls.push("dependent") || true }],
+    });
+
+    const app = await createApp({
+      logger: false,
+      preset: "testing",
+      auth: false,
+      modules: [dependent, base],
+      arcPlugins: {
+        health: {
+          checks: [{ name: "host", check: () => void calls.push("host") || true }],
+        },
+      },
+    });
+    const response = await app.inject({ method: "GET", url: "/_health/ready" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().checks.map((check: { name: string }) => check.name)).toEqual([
+      "base",
+      "dependent",
+      "host",
+    ]);
+    expect(calls).toEqual(["base", "dependent", "host"]);
+    await app.close();
+  });
+
+  it("fails boot when module and host readiness check names collide", async () => {
+    await expect(
+      createApp({
+        logger: false,
+        preset: "testing",
+        auth: false,
+        modules: [
+          defineModule({
+            name: "inventory",
+            healthChecks: [{ name: "database", check: () => true }],
+          }),
+        ],
+        arcPlugins: {
+          health: { checks: [{ name: "database", check: () => true }] },
+        },
+      }),
+    ).rejects.toThrow(/duplicate health-check name "database"/);
   });
 });

@@ -92,6 +92,7 @@ describe("Scenario: Accounting App", () => {
     await JM.deleteMany({});
 
     app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       resources: [journalResource],
@@ -320,6 +321,7 @@ describe("Scenario: Multi-Branch App (mixed tenantField)", () => {
     ]);
 
     app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       resources: [accountTypeResource, orderResource],
@@ -445,6 +447,7 @@ describe("Scenario: Plugin-Added Fields (extraFields)", () => {
     await PM.deleteMany({});
 
     app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       resources: [productResource],

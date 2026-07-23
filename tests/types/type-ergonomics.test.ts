@@ -8,12 +8,14 @@
  */
 
 import type { DataAdapter } from "@classytic/repo-core/adapter";
+import type {
+  KeysetPaginationResult as KeysetPaginatedResult,
+  OffsetPaginationResult as OffsetPaginatedResult,
+} from "@classytic/repo-core/pagination";
 import type { FastifyReply, FastifyRequest, RouteHandlerMethod } from "fastify";
 import { describe, expect, it } from "vitest";
 import type {
   EventDefinition,
-  KeysetPaginatedResult,
-  OffsetPaginatedResult,
   OpenApiSchemas,
   PaginationResult,
   RouteDefinition,
@@ -301,7 +303,7 @@ describe("RouteSchemaOptions.fieldRules MongoKit alignment", () => {
         password: { systemManaged: true },
         email: { immutableAfterCreate: true },
       },
-      query: { page: { type: "integer" }, limit: { type: "integer" } },
+      query: { allowedPopulate: ["author"], allowedLookups: ["categories"] },
     };
 
     expect(options.hiddenFields).toContain("password");
@@ -450,8 +452,10 @@ describe("Pagination result types — TExtra generic", () => {
     expect(narrow(keyset)).toBeNull();
   });
 
-  it("warning field (offset-only) is typed as optional string", () => {
-    const page: OffsetPaginatedResult<Product> = {
+  it("kit-specific warning field threads through the TExtra slot", () => {
+    // `warning` is not a core member — kits that emit deep-offset warnings
+    // declare it via the extras generic, same as any other kit extension.
+    const page: OffsetPaginatedResult<Product, { warning?: string }> = {
       method: "offset",
       data: [],
       page: 101,

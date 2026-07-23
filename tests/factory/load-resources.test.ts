@@ -349,6 +349,7 @@ describe("loadResources()", () => {
     const resources = await loadResources(FIXTURE_DIR);
 
     const app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       resources,
@@ -404,6 +405,7 @@ describe("loadResources()", () => {
 
     await expect(
       createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         resources: [badResource as any],
@@ -435,6 +437,7 @@ describe("loadResources()", () => {
     let pluginsCalled = false;
 
     const app = await createApp({
+      logger: false,
       preset: "testing",
       auth: false,
       resources: [...discovered, taskResource],

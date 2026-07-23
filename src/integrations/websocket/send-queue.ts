@@ -72,7 +72,15 @@ export interface SendQueueOptions {
  */
 export class SendQueue {
   private entries: QueueEntry[] = [];
-  /** `coalesceKey → entries[] index` for O(1) replacement. */
+  /**
+   * Logical queue head — `entries[head..]` is the live queue. Draining
+   * advances the pointer instead of `shift()`ing (which moves every
+   * trailing element AND invalidated every tracked coalesce index,
+   * making a full drain O(n²)). The prefix is garbage-collected by
+   * {@link compactIfNeeded} — amortized O(1) per drained frame.
+   */
+  private head = 0;
+  /** `coalesceKey → ABSOLUTE entries[] index` for O(1) replacement. */
   private coalesceIndex = new Map<string, number>();
   private socket: SendQueueSocket;
   private capacity: number;
@@ -92,7 +100,7 @@ export class SendQueue {
   /** Ordered, guaranteed-best-effort delivery. Overflow ⇒ terminate. */
   send(payload: string): void {
     if (this.disposed) return;
-    if (this.entries.length >= this.capacity) {
+    if (this.size() >= this.capacity) {
       // Queue is full of critical (or non-coalescable droppable) frames.
       // Force a reconnect so the client recovers via RESUME (PR 3) rather
       // than silently dropping a payment-confirmed-style message.
@@ -110,26 +118,36 @@ export class SendQueue {
    */
   sendRealtime(payload: string, coalesceKey?: string): void {
     if (this.disposed) return;
-    // Coalesce path — replace in-place, no growth.
+    // Coalesce path — replace in-place, no growth. Indices are absolute;
+    // one still >= head is live.
     if (coalesceKey !== undefined) {
       const idx = this.coalesceIndex.get(coalesceKey);
-      if (idx !== undefined && this.entries[idx]) {
+      if (idx !== undefined && idx >= this.head && this.entries[idx]) {
         this.entries[idx] = { payload, cls: "droppable", coalesceKey };
         this.flush();
         return;
       }
     }
-    if (this.entries.length >= this.capacity) {
+    if (this.size() >= this.capacity) {
       // Shed the oldest droppable. If everything is critical the new
       // droppable frame is simply dropped (location updates aren't worth
-      // killing the connection over).
-      const shedIdx = this.entries.findIndex((e) => e.cls === "droppable");
+      // killing the connection over). The splice is the rare overflow
+      // path — adjust the (small) coalesce map instead of rebuilding.
+      let shedIdx = -1;
+      for (let i = this.head; i < this.entries.length; i++) {
+        if (this.entries[i]?.cls === "droppable") {
+          shedIdx = i;
+          break;
+        }
+      }
       if (shedIdx === -1) return;
       const evicted = this.entries.splice(shedIdx, 1)[0];
       if (evicted?.coalesceKey !== undefined) {
         this.coalesceIndex.delete(evicted.coalesceKey);
       }
-      this.reindexCoalesceFrom(shedIdx);
+      for (const [key, idx] of this.coalesceIndex) {
+        if (idx > shedIdx) this.coalesceIndex.set(key, idx - 1);
+      }
     }
     this.entries.push({ payload, cls: "droppable", coalesceKey });
     if (coalesceKey !== undefined) {
@@ -146,29 +164,24 @@ export class SendQueue {
    */
   flush(): void {
     if (this.disposed) return;
-    while (this.entries.length > 0 && this.socket.readyState === 1) {
+    while (this.size() > 0 && this.socket.readyState === 1) {
       if ((this.socket.bufferedAmount ?? 0) >= this.drainThreshold) {
         // Backpressure — schedule a retry so the queue resumes draining
         // automatically once the socket's buffer drains below threshold.
         // Without this, queued frames would stall indefinitely after the
-        // first time the socket goes into backpressure.
+        // first time the socket goes into backpressure. `break` (not
+        // `return`) so the drained prefix is still compacted below — a
+        // long backpressure pause must not pin already-sent frames.
         this.scheduleRetry();
-        return;
+        break;
       }
-      const entry = this.entries.shift();
+      // Advance the head pointer — no element movement, no index rebuild.
+      // Absolute coalesce indices stay valid for every remaining entry.
+      const entry = this.entries[this.head];
       if (!entry) return;
+      this.head++;
       if (entry.coalesceKey !== undefined) {
         this.coalesceIndex.delete(entry.coalesceKey);
-      }
-      // CRITICAL: shift() moves every trailing entry down by 1, so any
-      // remaining entries with a coalesceKey now have stale tracked
-      // indices. Reindex unconditionally — not just when the shifted
-      // entry itself was coalesced (the previous code only reindexed in
-      // that case, which left ghost indices after a critical was flushed
-      // ahead of a droppable; sendRealtime(...sameKey) would then fail
-      // to replace and the queue would accumulate duplicate frames).
-      if (this.coalesceIndex.size > 0) {
-        this.reindexCoalesceFrom(0);
       }
       try {
         this.socket.send(entry.payload);
@@ -178,15 +191,32 @@ export class SendQueue {
         return;
       }
     }
+    this.compactIfNeeded();
   }
 
   size(): number {
-    return this.entries.length;
+    return this.entries.length - this.head;
+  }
+
+  /**
+   * Drop the drained prefix once it dominates the array. Rebuilding the
+   * (small) coalesce index here is the amortized cost that replaces the
+   * per-frame O(n) reindex the old `shift()` drain paid.
+   */
+  private compactIfNeeded(): void {
+    if (this.head < 64 || this.head * 2 < this.entries.length) return;
+    this.entries = this.entries.slice(this.head);
+    this.head = 0;
+    if (this.coalesceIndex.size > 0) {
+      this.coalesceIndex.clear();
+      this.reindexCoalesceFrom(0);
+    }
   }
 
   dispose(): void {
     this.disposed = true;
     this.entries.length = 0;
+    this.head = 0;
     this.coalesceIndex.clear();
     if (this.retryTimer) {
       clearTimeout(this.retryTimer);

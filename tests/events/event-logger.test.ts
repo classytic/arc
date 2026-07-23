@@ -226,9 +226,9 @@ describe("withRetry logger", () => {
 
     await handler(testEvent());
 
-    // 1 error for permanent failure + 1 error for DLQ callback failure
+    // 1 error for permanent failure + 1 error for the onDead callback failure
     expect(logger.errorCalls.length).toBe(2);
-    expect(logger.errorCalls[1]?.[0]).toContain("Dead letter callback failed");
+    expect(logger.errorCalls[1]?.[0]).toContain("onDead observability callback failed");
   });
 
   it("should default to console when no logger is provided", async () => {

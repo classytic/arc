@@ -110,6 +110,7 @@ export default defineResource({
       let engineReady = false;
 
       app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         resourcePrefix: "/api/v1",
@@ -202,7 +203,9 @@ export default defineResource({
       createApp({
         preset: "testing",
         auth: false,
-        logger: { level: "warn" },
+        // Warn-level logger so the duplicate-detection path runs, but sunk —
+        // tests must not emit pino JSON to stdout (tests/README convention).
+        logger: { level: "warn", stream: { write: () => {} } } as never,
         resources: [product1, product2],
       }),
     ).rejects.toThrow(/product.*failed to register/i);
@@ -254,6 +257,7 @@ export default defineResource({
   it("bootstrap error prevents resource registration", async () => {
     await expect(
       createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         bootstrap: [
@@ -280,6 +284,7 @@ export default defineResource({
       const manual = makeResource("manual");
 
       app = await createApp({
+        logger: false,
         preset: "testing",
         auth: false,
         resources: [...autoResources, manual],

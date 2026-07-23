@@ -73,6 +73,7 @@ beforeAll(async () => {
   });
 
   app = await createApp({
+    logger: false,
     resources: [widgetResource],
     auth: "none",
     helmet: false,

@@ -134,6 +134,12 @@ export interface CreateAppOptions {
    * - `'10.0.0.0/8'` / `['10.0.0.0/8', '172.16.0.0/12']` — trust only these
    *   CIDR ranges
    *
+   * Default: `false` everywhere, including `preset: 'production'` (2.24
+   * flip — fail-closed; the preset previously trusted every proxy). Apps
+   * behind a proxy/LB must set this explicitly or `request.ip` is the
+   * proxy's address; a boot warning fires when the production preset's
+   * default is inherited without an explicit choice.
+   *
    * @example
    * ```ts
    * createApp({ preset: 'production', trustProxy: 1 });          // one LB hop
@@ -393,6 +399,20 @@ export interface CreateAppOptions {
      */
     events?: Omit<import("../../events/eventPlugin.js").EventPluginOptions, "transport"> | boolean;
     /**
+     * Runtime options for module-contributed `scheduledJobs`. Module schedules
+     * automatically use Arc's existing schedules plugin. Pass lock/holder
+     * options for multi-replica safety, `true` for single-instance defaults,
+     * or `false` to reject any module that declares schedules.
+     *
+     * `enabled: false` registers the scheduler as a NO-OP — the host's runtime
+     * kill switch (e.g. an ops instance that must run zero background work
+     * against a shared DB). Unlike `schedules: false`, it does NOT reject
+     * modules that declare schedules; they are collected but never armed.
+     */
+    schedules?:
+      | Omit<import("../../plugins/schedules.js").SchedulesPluginOptions, "schedules">
+      | boolean;
+    /**
      * Caching headers (ETag + Cache-Control). Default: false (opt-in).
      * Set to true for defaults, or pass CachingOptions for fine control.
      */
@@ -429,27 +449,6 @@ export interface CreateAppOptions {
      */
     versioning?: import("../../plugins/versioning.js").VersioningOptions;
   };
-
-  /**
-   * Type provider for schema inference.
-   *
-   * When set to `'typebox'`, enables TypeBox type provider for
-   * automatic TypeScript inference from route schemas.
-   *
-   * Requires `@sinclair/typebox` and `@fastify/type-provider-typebox` installed.
-   *
-   * @example
-   * ```typescript
-   * import { Type } from '@classytic/arc/schemas';
-   *
-   * const app = await createApp({
-   *   typeProvider: 'typebox',
-   * });
-   *
-   * // Now route schemas built with Type.* give full TS inference
-   * ```
-   */
-  typeProvider?: "typebox";
 
   /**
    * Error handler plugin. Normalizes AJV, Mongoose, and ArcError responses
@@ -611,7 +610,7 @@ export interface CreateAppOptions {
    * See `wiki/modules.md` for the full design (authoring convention, events/
    * outbox integration, microservices path).
    */
-  modules?: ReadonlyArray<import("../module.js").ArcModuleInput>;
+  modules?: ReadonlyArray<import("../module/index.js").ArcModuleInput>;
 
   /**
    * Resources to register automatically. Accepts two shapes:

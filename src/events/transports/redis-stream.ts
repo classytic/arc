@@ -129,6 +129,21 @@ export interface RedisStreamTransportOptions {
   batchSize?: number;
 
   /**
+   * Bounded concurrency for processing a batch's ENTRIES (default: 1 —
+   * strict stream order, the safe default). With one slow handler,
+   * throughput per consumer is ~`1 / total handler latency`; raising this
+   * processes up to N entries of a batch concurrently.
+   *
+   * Trade-off: entries within a batch may complete OUT OF ORDER — only
+   * raise it when handlers are order-independent (idempotent, keyed
+   * upserts). Handlers on this transport should be short and I/O-bound
+   * regardless; heavy work belongs in jobs. Matching handlers for a single
+   * event always run sequentially.
+   * @default 1
+   */
+  processingConcurrency?: number;
+
+  /**
    * Max delivery attempts before moving to dead letter stream.
    * @default 5
    */
@@ -226,6 +241,7 @@ export class RedisStreamTransport implements EventTransport {
   private consumer: string;
   private blockTimeMs: number;
   private batchSize: number;
+  private processingConcurrency: number;
   private maxRetries: number;
   private claimTimeoutMs: number;
   private deadLetterStream: string | false;
@@ -283,6 +299,7 @@ export class RedisStreamTransport implements EventTransport {
     this.consumer = options.consumer ?? `consumer-${crypto.randomUUID().slice(0, 8)}`;
     this.blockTimeMs = options.blockTimeMs ?? 5000;
     this.batchSize = options.batchSize ?? 10;
+    this.processingConcurrency = Math.max(1, Math.floor(options.processingConcurrency ?? 1));
     this.maxRetries = options.maxRetries ?? 5;
     this.claimTimeoutMs = options.claimTimeoutMs ?? 30_000;
     this.deadLetterStream = options.deadLetterStream ?? "arc:events:dlq";
@@ -545,10 +562,34 @@ export class RedisStreamTransport implements EventTransport {
     if (!result) return; // Timeout, no new messages
 
     for (const [, entries] of result) {
+      await this.processEntries(entries);
+    }
+  }
+
+  /**
+   * Process a batch's entries with bounded concurrency
+   * (`processingConcurrency`, default 1 = strict order). Worker-pool over a
+   * shared index — at most N entries in flight, each entry's own handlers
+   * still sequential inside `processEntry`.
+   */
+  private async processEntries(entries: Array<[string, string[]]>): Promise<void> {
+    if (this.processingConcurrency <= 1) {
       for (const [messageId, fields] of entries) {
         await this.processEntry(messageId, fields);
       }
+      return;
     }
+    let next = 0;
+    const workers = Array.from(
+      { length: Math.min(this.processingConcurrency, entries.length) },
+      async () => {
+        while (next < entries.length) {
+          const entry = entries[next++];
+          if (entry) await this.processEntry(entry[0], entry[1]);
+        }
+      },
+    );
+    await Promise.all(workers);
   }
 
   private async claimPending(): Promise<void> {
@@ -596,9 +637,7 @@ export class RedisStreamTransport implements EventTransport {
           ...staleIds,
         );
 
-        for (const [messageId, fields] of claimed) {
-          await this.processEntry(messageId, fields);
-        }
+        await this.processEntries(claimed);
       }
     } catch (err) {
       // Pending check failures are non-fatal — will retry next poll iteration.

@@ -89,7 +89,6 @@ export {
 } from "./requestId.js";
 export type {
   ScheduleDefinition,
-  ScheduleLockLike,
   ScheduleStats,
   SchedulesPluginOptions,
 } from "./schedules.js";

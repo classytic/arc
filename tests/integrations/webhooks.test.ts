@@ -374,29 +374,39 @@ describe("Webhook Plugin", () => {
   });
 
   // ==========================================================================
-  // HMAC signing — payload fidelity
+  // HMAC signing — v1 contract (legacy signPayload/x-webhook-* removed 2.24)
   // ==========================================================================
 
   describe("HMAC signing", () => {
-    it("produces sha256= prefixed hex signature", async () => {
-      const { signPayload } = await import("../../src/integrations/webhooks.js");
-      const sig = signPayload('{"test":true}', "my-secret");
-      expect(sig).toMatch(/^sha256=[a-f0-9]{64}$/);
+    it("produces v1= prefixed hex signature", async () => {
+      const { signWebhook } = await import("../../src/integrations/webhooks.js");
+      const meta = { timestamp: 1_700_000_000_000, deliveryId: "evt-1" };
+      const sig = signWebhook('{"test":true}', "my-secret", meta);
+      expect(sig).toMatch(/^v1=[a-f0-9]{64}$/);
     });
 
-    it("is deterministic for same payload + secret", async () => {
-      const { signPayload } = await import("../../src/integrations/webhooks.js");
-      expect(signPayload("hello", "sec")).toBe(signPayload("hello", "sec"));
+    it("is deterministic for same body + secret + meta", async () => {
+      const { signWebhook } = await import("../../src/integrations/webhooks.js");
+      const meta = { timestamp: 1_700_000_000_000, deliveryId: "evt-1" };
+      expect(signWebhook("hello", "sec", meta)).toBe(signWebhook("hello", "sec", meta));
     });
 
     it("differs when secret changes", async () => {
-      const { signPayload } = await import("../../src/integrations/webhooks.js");
-      expect(signPayload("hello", "a")).not.toBe(signPayload("hello", "b"));
+      const { signWebhook } = await import("../../src/integrations/webhooks.js");
+      const meta = { timestamp: 1_700_000_000_000, deliveryId: "evt-1" };
+      expect(signWebhook("hello", "a", meta)).not.toBe(signWebhook("hello", "b", meta));
     });
 
-    it("differs when payload changes", async () => {
-      const { signPayload } = await import("../../src/integrations/webhooks.js");
-      expect(signPayload("a", "sec")).not.toBe(signPayload("b", "sec"));
+    it("differs when body, timestamp, or delivery id changes", async () => {
+      const { signWebhook } = await import("../../src/integrations/webhooks.js");
+      const meta = { timestamp: 1_700_000_000_000, deliveryId: "evt-1" };
+      expect(signWebhook("a", "sec", meta)).not.toBe(signWebhook("b", "sec", meta));
+      expect(signWebhook("a", "sec", { ...meta, timestamp: meta.timestamp + 1 })).not.toBe(
+        signWebhook("a", "sec", meta),
+      );
+      expect(signWebhook("a", "sec", { ...meta, deliveryId: "evt-2" })).not.toBe(
+        signWebhook("a", "sec", meta),
+      );
     });
 
     it("sends correct headers with each delivery", async () => {
@@ -415,9 +425,13 @@ describe("Webhook Plugin", () => {
 
       const headers = fetchMock.mock.calls[0][1].headers;
       expect(headers["content-type"]).toBe("application/json");
-      expect(headers["x-webhook-signature"]).toMatch(/^sha256=[a-f0-9]{64}$/);
-      expect(headers["x-webhook-event"]).toBe("test.fire");
-      expect(headers["x-webhook-id"]).toBeDefined();
+      expect(headers["x-arc-webhook-signature"]).toMatch(/^v1=[a-f0-9]{64}$/);
+      expect(headers["x-arc-webhook-timestamp"]).toMatch(/^\d+$/);
+      expect(headers["x-arc-webhook-delivery"]).toBeDefined();
+      // Legacy x-webhook-* headers removed in 2.24 — v1 contract only.
+      expect(headers["x-webhook-signature"]).toBeUndefined();
+      expect(headers["x-webhook-id"]).toBeUndefined();
+      expect(headers["x-webhook-event"]).toBeUndefined();
     });
 
     it("each subscriber gets signature from its own secret", async () => {
@@ -440,8 +454,8 @@ describe("Webhook Plugin", () => {
       await app.events.publish("e", {});
       await waitForDelivery(app, 2);
 
-      const sig1 = fetchMock.mock.calls[0][1].headers["x-webhook-signature"];
-      const sig2 = fetchMock.mock.calls[1][1].headers["x-webhook-signature"];
+      const sig1 = fetchMock.mock.calls[0][1].headers["x-arc-webhook-signature"];
+      const sig2 = fetchMock.mock.calls[1][1].headers["x-arc-webhook-signature"];
       expect(sig1).not.toBe(sig2);
     });
   });

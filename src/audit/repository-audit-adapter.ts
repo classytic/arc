@@ -41,13 +41,36 @@ interface StoredAuditDoc extends Record<string, unknown> {
   timestamp?: Date;
 }
 
-export function repositoryAsAuditStore(repository: RepositoryLike): AuditStore {
+/** Options for {@link repositoryAsAuditStore}. */
+export interface RepositoryAuditStoreOptions {
+  /**
+   * Unit-of-Work session provider (AsyncLocalStorage integration), mirroring
+   * {@link EventOutbox}'s `sessionProvider`. When set, `log()` calls it to get
+   * the active DB session and writes the audit row **with that session**, so
+   * the audit entry commits/rolls back **atomically with the domain write**
+   * that produced it — no unaudited successful write, and no orphan audit for a
+   * rolled-back write. Returns `undefined` outside a transaction scope, in
+   * which case the write proceeds session-less (unchanged legacy behaviour).
+   *
+   * Wire with arc's `transactionContext` (auditPlugin does this by default):
+   * ```ts
+   * repositoryAsAuditStore(repo, { sessionProvider: () => transactionContext.get() })
+   * ```
+   */
+  readonly sessionProvider?: () => unknown;
+}
+
+export function repositoryAsAuditStore(
+  repository: RepositoryLike,
+  options: RepositoryAuditStoreOptions = {},
+): AuditStore {
   // Primary-key column name per the kit's contract (mongokit → `_id`,
   // sqlitekit → `id`). Previously the adapter hardcoded both keys on
   // write, which happened to work because mongokit honored `_id` and SQL
   // kits happened to have a column named `id`. This is the principled
   // equivalent — one column name, chosen by the kit.
   const idField = repository.idField ?? "_id";
+  const { sessionProvider } = options;
 
   return {
     name: "repository",
@@ -69,7 +92,12 @@ export function repositoryAsAuditStore(repository: RepositoryLike): AuditStore {
         metadata: entry.metadata,
         timestamp: entry.timestamp,
       };
-      await repository.create(doc);
+      // Join the ambient Unit-of-Work transaction (if any) so the audit row is
+      // part of the same commit as the domain write. Explicit-session callers
+      // don't exist for audit (it's internal), so the provider is the only
+      // source; `undefined` → session-less write (legacy behaviour preserved).
+      const session = sessionProvider?.();
+      await repository.create(doc, session != null ? { session } : undefined);
     },
 
     async purgeOlderThan(cutoff: Date): Promise<number> {

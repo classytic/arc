@@ -134,10 +134,10 @@ describe("2.10.6 · ControllerLike accepts class instances without cast", () => 
   it("class with extra methods + private fields assigns to ControllerLike", () => {
     class ScrapController {
       async list(_req: IRequestContext): Promise<IControllerResponse> {
-        return { success: true, data: [] };
+        return { data: [] };
       }
       async create(_req: IRequestContext): Promise<IControllerResponse> {
-        return { success: true, data: {} };
+        return { data: {} };
       }
     }
 
@@ -186,7 +186,6 @@ describe("2.10.6 · first-class req.scope projection on IRequestContext", () => 
           path: "/whoami",
           permissions: requireAuth(),
           handler: async (req: IRequestContext): Promise<IControllerResponse> => ({
-            success: true,
             data: { scope: req.scope },
           }),
         },
@@ -230,7 +229,6 @@ describe("2.10.6 · first-class req.scope projection on IRequestContext", () => 
           path: "/whoami",
           permissions: allowPublic(),
           handler: async (req: IRequestContext): Promise<IControllerResponse> => ({
-            success: true,
             data: { scope: req.scope ?? null },
           }),
         },
@@ -256,21 +254,24 @@ describe("2.10.6 · first-class req.scope projection on IRequestContext", () => 
 
 describe("2.10.6 · defineErrorMapper helper — typed registration without cast", () => {
   it("a typed mapper assigns into ErrorMapper[] without 'as unknown as ErrorMapper'", () => {
+    // Explicit fields, not constructor parameter-properties — the compiled
+    // type lane runs with `erasableSyntaxOnly` (matching the build).
     class FlowError extends Error {
-      constructor(
-        message: string,
-        public readonly domainCode: string,
-      ) {
+      readonly domainCode: string;
+      constructor(message: string, domainCode: string) {
         super(message);
+        this.domainCode = domainCode;
       }
     }
     class InvalidTransitionError extends FlowError {
-      constructor(
-        public readonly from: string,
-        public readonly to: string,
-        public readonly resourceId?: string,
-      ) {
+      readonly from: string;
+      readonly to: string;
+      readonly resourceId?: string;
+      constructor(from: string, to: string, resourceId?: string) {
         super(`cannot transition ${from} → ${to}`, "INVALID_TRANSITION");
+        this.from = from;
+        this.to = to;
+        if (resourceId !== undefined) this.resourceId = resourceId;
       }
     }
 
@@ -291,31 +292,39 @@ describe("2.10.6 · defineErrorMapper helper — typed registration without cast
           status: 409,
           code: "INVALID_TRANSITION",
           message: err.message,
-          details: { from: err.from, to: err.to, resourceId: err.resourceId },
+          // ErrorContract details are an ErrorDetail[] (path/code/message)
+          details: [
+            {
+              path: "status",
+              code: "invalid_transition",
+              message: `${err.from} → ${err.to} (${err.resourceId})`,
+            },
+          ],
         }),
       }),
     ];
 
     expect(mappers).toHaveLength(2);
+    const [flowMapper, transitionMapper] = mappers;
+    if (!flowMapper || !transitionMapper) throw new Error("mappers missing");
     // Runtime: the type field is preserved verbatim — dispatch uses instanceof
-    expect(mappers[0].type).toBe(FlowError);
-    expect(mappers[1].type).toBe(InvalidTransitionError);
+    expect(flowMapper.type).toBe(FlowError);
+    expect(transitionMapper.type).toBe(InvalidTransitionError);
 
     // Runtime sanity — the toResponse callback works under the widened signature
     // because arc's dispatch checks `instanceof` first.
     const err = new InvalidTransitionError("draft", "paid", "inv-1");
-    const mapped = mappers[1].toResponse(err);
+    const mapped = transitionMapper.toResponse(err);
     expect(mapped.status).toBe(409);
-    expect(mapped.details?.resourceId).toBe("inv-1");
+    expect(mapped.details?.[0]?.message).toContain("inv-1");
   });
 
   it("preserves the narrowed type for direct use (no widening visible to the caller)", () => {
     class DomainError extends Error {
-      constructor(
-        message: string,
-        public readonly domainCode: string,
-      ) {
+      readonly domainCode: string;
+      constructor(message: string, domainCode: string) {
         super(message);
+        this.domainCode = domainCode;
       }
     }
 

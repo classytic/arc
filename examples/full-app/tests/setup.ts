@@ -26,6 +26,8 @@ export async function setupApp(): Promise<FastifyInstance> {
       type: "jwt",
       jwt: { secret: JWT_SECRET },
     },
+    // Quiet under test — these example tests also run in arc's main suite.
+    logger: false,
     // Auto-discover all *.resource.ts files in the resources directory.
     // Resolves relative to THIS file — works in src/ (dev) and dist/ (prod).
     resources: await loadResources(new URL("../resources", import.meta.url).href),

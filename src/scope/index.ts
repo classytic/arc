@@ -26,7 +26,13 @@ export type { ResolveOrgFromHeaderOptions } from "./resolveOrgFromHeader.js";
 // Org-from-header utility
 export { resolveOrgFromHeader } from "./resolveOrgFromHeader.js";
 // Core types and guards
-export type { Mandate, RequestScope } from "./types.js";
+export type {
+  Mandate,
+  RequestScope,
+  ScopeFirstCtx,
+  ScopeFirstCtxOptions,
+  ScopeFirstCtxRequest,
+} from "./types.js";
 export {
   AUTHENTICATED_SCOPE,
   getAncestorOrgIds,
@@ -57,4 +63,7 @@ export {
   requireOrgId,
   requireTeamId,
   requireUserId,
+  // Shared actor/org context derivation (scope-first, header bridge) — the
+  // one helper module packages base their `ctxOf(req)` on.
+  scopeFirstCtx,
 } from "./types.js";

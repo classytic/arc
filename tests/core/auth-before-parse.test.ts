@@ -50,6 +50,7 @@ describe("auth runs at onRequest — before body parse + validation", () => {
 
   async function makeApp() {
     app = await createApp({
+      logger: false,
       preset: "testing",
       auth: { type: "jwt", jwt: { secret: JWT_SECRET } },
       resources: [

@@ -1,21 +1,22 @@
 /**
- * Health Metrics Ring Buffer Tests
+ * Health Metrics Duration Histogram Tests
  *
- * Verifies that the health plugin's HTTP duration tracking uses
- * O(1) ring buffer writes instead of O(n) Array.shift() at capacity.
+ * Verifies that the health plugin's HTTP duration tracking uses fixed
+ * histogram buckets — O(#buckets) recording per request, O(#buckets)
+ * scrape (no sample retention, no per-scrape sort), with `_count`
+ * reflecting ALL requests as a true running counter.
  *
  * Scenarios:
- * - Duration tracking works below capacity
- * - Duration tracking at capacity (10k) overwrites instead of shifting
- * - Metrics endpoint still reports correct percentiles
- * - Performance: ring buffer is O(1) at scale
+ * - Duration tracking records every request
+ * - `_count` is exact regardless of request volume (no sample cap)
+ * - Metrics endpoint reports quantile bounds derived from buckets
  */
 
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { healthPlugin } from "../../src/plugins/health.js";
 
-describe("Health Metrics Ring Buffer", () => {
+describe("Health Metrics Duration Histogram", () => {
   let app: FastifyInstance;
 
   afterEach(async () => {
@@ -73,16 +74,13 @@ describe("Health Metrics Ring Buffer", () => {
   });
 
   // --------------------------------------------------------------------------
-  // Ring buffer behavior at capacity
+  // Counter behavior under volume
   // --------------------------------------------------------------------------
 
-  describe("ring buffer at capacity", () => {
-    it("should not exceed 10k entries", async () => {
+  describe("counters under volume", () => {
+    it("should keep reporting after many requests", async () => {
       await createApp();
 
-      // Make enough requests to exceed the buffer cap
-      // We can't easily make 10k+ HTTP requests, so we'll verify
-      // the metrics still work after many requests
       const promises = [];
       for (let i = 0; i < 100; i++) {
         promises.push(app.inject({ method: "GET", url: "/fast" }));

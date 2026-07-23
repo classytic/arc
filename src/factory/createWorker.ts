@@ -28,10 +28,10 @@
  */
 
 import type { FastifyInstance } from "fastify";
-import type { HealthCheck } from "../plugins/health.js";
-import { healthPlugin } from "../plugins/health.js";
+import type { HealthCheck, HealthOptions } from "../plugins/health.js";
+import { healthPlugin, mergeHealthChecks } from "../plugins/health.js";
 import { createApp } from "./createApp.js";
-import { getModuleExports } from "./module.js";
+import { getModuleExports } from "./module/index.js";
 import { workerPreset } from "./presets.js";
 import type { CreateAppOptions } from "./types/index.js";
 
@@ -82,6 +82,20 @@ export async function createWorker(
     ...runtimeOptions
   } = options;
 
+  const sharedHealth: HealthOptions =
+    typeof runtimeOptions.arcPlugins?.health === "object" &&
+    runtimeOptions.arcPlugins.health !== null
+      ? runtimeOptions.arcPlugins.health
+      : {};
+
+  const workerArcPlugins = {
+    ...workerPreset.arcPlugins,
+    ...runtimeOptions.arcPlugins,
+    // A dedicated worker probe is the single health-plugin registration.
+    // Shared API health options are merged into that probe below.
+    ...(workerOptions.health ? { health: false as const } : {}),
+  };
+
   // arcPlugins merges deep (createApp's preset merge is shallow — a host
   // arcPlugins object would clobber the preset's off-switches wholesale).
   // Host keys still win per-key: `arcPlugins: { metrics: true }` re-enables
@@ -89,14 +103,25 @@ export async function createWorker(
   const app = await createApp({
     ...runtimeOptions,
     preset: "worker",
-    ...(runtimeOptions.arcPlugins
-      ? { arcPlugins: { ...workerPreset.arcPlugins, ...runtimeOptions.arcPlugins } }
-      : {}),
+    arcPlugins: workerArcPlugins,
   });
 
   if (workerOptions.health) {
     const { port, host = "0.0.0.0", checks = [] } = workerOptions.health;
-    await app.register(healthPlugin, { checks });
+    // The worker preset disables the MAIN health plugin, so this probe is the
+    // single registration — feed it the SAME module-contributed checks the API
+    // role gets (collected + frozen by createApp on `arc.healthChecks`),
+    // modules-first then the worker's own probe checks.
+    const moduleChecks = app.arc?.healthChecks ?? [];
+    const mergedChecks = mergeHealthChecks([
+      { owner: "the module graph", checks: moduleChecks },
+      { owner: "shared arcPlugins.health", checks: sharedHealth.checks },
+      { owner: "the worker probe", checks },
+    ]);
+    await app.register(healthPlugin, {
+      ...sharedHealth,
+      checks: mergedChecks,
+    });
     await app.listen({ port, host });
   } else {
     await app.ready();

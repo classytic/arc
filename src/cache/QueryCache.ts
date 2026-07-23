@@ -27,6 +27,15 @@ export interface QueryCacheConfig {
   gcTime?: number;
   /** Tags for group invalidation */
   tags?: string[];
+  /**
+   * Randomized freshness jitter (0–1, default 0 = off). Each write varies
+   * its effective `staleTime` by ±(jitter × staleTime), so entries cached
+   * together don't all go stale in the same instant — spreading
+   * revalidation load instead of synchronizing a refresh burst.
+   * Single-flight coalescing (BaseCrudController) handles same-key
+   * stampedes; jitter de-synchronizes ACROSS keys. 0.1 is a sane value.
+   */
+  jitter?: number;
 }
 
 export type CacheStatus = "fresh" | "stale" | "miss";
@@ -65,7 +74,12 @@ export class QueryCache {
   }
 
   async set<T>(key: string, data: T, config: QueryCacheConfig): Promise<void> {
-    const staleTimeSec = config.staleTime ?? 0;
+    const baseStaleTimeSec = config.staleTime ?? 0;
+    const jitter = config.jitter ?? 0;
+    const staleTimeSec =
+      jitter > 0
+        ? Math.max(0, baseStaleTimeSec * (1 + (Math.random() * 2 - 1) * jitter))
+        : baseStaleTimeSec;
     const gcTimeSec = config.gcTime ?? 60;
     const totalTtlSec = staleTimeSec + gcTimeSec;
     const now = Date.now();
@@ -93,10 +107,7 @@ export class QueryCache {
 
   /** Bump resource version — orphans all cached queries for this resource */
   async bumpResourceVersion(resource: string): Promise<void> {
-    const key = versionKey(resource);
-    const newVersion = Date.now();
-    // Store version with a very long TTL (24h) — it's tiny data
-    await this.store.set(key, newVersion, 24 * 60 * 60);
+    await this.bumpVersion(versionKey(resource));
   }
 
   /** Get current version for a tag */
@@ -107,8 +118,42 @@ export class QueryCache {
 
   /** Bump tag version — orphans all cached queries tagged with this tag */
   async bumpTagVersion(tag: string): Promise<void> {
-    const key = tagVersionKey(tag);
-    const newVersion = Date.now();
-    await this.store.set(key, newVersion, 24 * 60 * 60);
+    await this.bumpVersion(tagVersionKey(tag));
+  }
+
+  /**
+   * Version-bump semantics:
+   *
+   *  - `store.increment` present (Redis `INCR`) — atomic and strictly
+   *    monotonic across replicas; concurrent bumps can never collide or
+   *    go backwards.
+   *  - fallback — read-modify-write with `max(now, current + 1)`: two
+   *    bumps in the same millisecond and clock regressions still advance
+   *    the version. Concurrent bumps from DIFFERENT replicas can lose one
+   *    write, which is why distributed hosts should use an incrementing
+   *    store (`runtime: 'distributed'` already requires a shared one).
+   *
+   * Version keys must outlive every derived cache entry — that invariant
+   * is what makes version invalidation sound (a version key expiring back
+   * to 0 would make entries written under the pre-reset version
+   * addressable again). The 1-year TTL applies with the repo-core
+   * TTL-ON-CREATE semantics, so a version key expires one year after its
+   * FIRST bump — safe, because a revived collision would need an entry to
+   * outlive that reset and entry TTLs are minutes-scale (staleTime +
+   * gcTime). The read-modify-write fallback uses plain `set`, which
+   * refreshes the TTL per bump — strictly longer-lived, equally safe.
+   */
+  private async bumpVersion(key: string): Promise<void> {
+    if (typeof this.store.increment === "function") {
+      // Canonical CacheAdapter signature: (key, by, ttlSeconds).
+      await this.store.increment(key, 1, VERSION_TTL_SECONDS);
+      return;
+    }
+    const current = (await this.store.get(key)) as number | undefined;
+    const next = Math.max(Date.now(), (current ?? 0) + 1);
+    await this.store.set(key, next, VERSION_TTL_SECONDS);
   }
 }
+
+/** See `bumpVersion` — effectively non-expiring, refreshed on every bump. */
+const VERSION_TTL_SECONDS = 365 * 24 * 60 * 60;

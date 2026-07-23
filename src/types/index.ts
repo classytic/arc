@@ -67,12 +67,11 @@ export type {
   TokenPair,
 } from "./auth.js";
 // ──────────────────────────────────────────────────────────────────────
-// Base — primitives, user shape, response envelope, ArcRequest
+// Base — primitives, user shape, ArcRequest
 // (also installs the Fastify declaration merge)
 // ──────────────────────────────────────────────────────────────────────
 export type {
   AnyRecord,
-  ApiResponse,
   ArcRequest,
   JWTPayload,
   ObjectId,

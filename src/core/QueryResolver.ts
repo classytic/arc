@@ -9,6 +9,7 @@
  */
 
 import { DEFAULT_LIMIT, DEFAULT_SORT, DEFAULT_TENANT_FIELD } from "../constants.js";
+import { arcLog } from "../logger/index.js";
 import { getOrgId as getOrgIdFromScope } from "../scope/types.js";
 import type {
   AnyRecord,
@@ -56,6 +57,26 @@ const defaultParser = new ArcQueryParser();
 
 export function getDefaultQueryParser(): QueryParserInterface {
   return defaultParser;
+}
+
+const log = arcLog("query");
+
+/**
+ * Deny-by-default (2.24 flip): `populate=` / `lookup=` with NO allowlist
+ * configured is rejected — client-driven joins/population are an easy
+ * accidental N+1 / expensive-join surface, and "absent means all" made
+ * every resource opt into it silently. A one-shot dev log explains the
+ * drop the first time a request hits it.
+ */
+let notedDeniedJoins = false;
+function noteDeniedJoins(kind: "populate" | "lookups"): void {
+  if (notedDeniedJoins || process.env.NODE_ENV === "production") return;
+  notedDeniedJoins = true;
+  log.warn(
+    `client requested ${kind} but no allowlist is configured — DENIED (2.24 default flip; ` +
+      "it was allow-all). Set schemaOptions.query.allowedPopulate / allowedLookups to enable " +
+      "client-driven joins. (dev-only note, shown once)",
+  );
 }
 
 // ============================================================================
@@ -216,8 +237,11 @@ export class QueryResolver {
 
     if (requested.length === 0) return undefined;
 
-    // If no allowlist, allow all
-    if (!allowedPopulate) return requested;
+    // Deny-by-default: no allowlist means NO client-driven populate.
+    if (!allowedPopulate) {
+      noteDeniedJoins("populate");
+      return undefined;
+    }
 
     const sanitized = requested.filter((p) => allowedPopulate.includes(p));
     return sanitized.length > 0 ? sanitized : undefined;
@@ -232,17 +256,20 @@ export class QueryResolver {
 
     const allowedPopulate = schemaOptions.query?.allowedPopulate;
 
-    // If no allowlist, allow all
-    if (!allowedPopulate) return options;
+    // Deny-by-default: no allowlist means NO client-driven populate.
+    if (!allowedPopulate) {
+      noteDeniedJoins("populate");
+      return undefined;
+    }
 
     const sanitized = options.filter((opt) => allowedPopulate.includes(opt.path));
     return sanitized.length > 0 ? sanitized : undefined;
   }
 
   /**
-   * Sanitize lookup/join options.
-   * If schemaOptions.query.allowedLookups is set, only those collections are allowed.
-   * Validates lookup structure to prevent injection.
+   * Sanitize lookup/join options. Deny-by-default: `allowedLookups` must be
+   * configured for any client-driven lookup to pass; listed collections are
+   * then structurally validated to prevent injection.
    */
   private sanitizeLookups(
     lookups: LookupOption[] | undefined,
@@ -251,6 +278,12 @@ export class QueryResolver {
     if (!lookups || lookups.length === 0) return undefined;
 
     const allowedLookups = schemaOptions.query?.allowedLookups;
+
+    // Deny-by-default: no allowlist means NO client-driven lookups.
+    if (!allowedLookups) {
+      noteDeniedJoins("lookups");
+      return undefined;
+    }
 
     const validFieldName = /^[a-zA-Z_][a-zA-Z0-9_.]*$/;
 
@@ -261,8 +294,7 @@ export class QueryResolver {
       if (!validFieldName.test(lookup.localField)) return false;
       if (!validFieldName.test(lookup.foreignField)) return false;
 
-      // If allowlist is set, enforce it
-      if (allowedLookups && !allowedLookups.includes(lookup.from)) return false;
+      if (!allowedLookups.includes(lookup.from)) return false;
 
       return true;
     });

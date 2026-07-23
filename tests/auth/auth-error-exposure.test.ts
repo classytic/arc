@@ -95,8 +95,10 @@ describe("Auth Error Detail Exposure", () => {
     });
 
     it("should hide details even with debug log level when exposeAuthErrors is false", async () => {
-      // This verifies the decoupling — log level should NOT affect error exposure
-      app = Fastify({ logger: { level: "debug" } });
+      // This verifies the decoupling — log level should NOT affect error
+      // exposure. Debug-level logger is required by the scenario; sunk so
+      // the test stays quiet (tests/README convention).
+      app = Fastify({ logger: { level: "debug", stream: { write: () => {} } } as never });
       await app.register(authPlugin, {
         jwt: { secret: JWT_SECRET },
         exposeAuthErrors: false,

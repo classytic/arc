@@ -234,14 +234,17 @@ describe("MongoKit geo query integration via Arc", () => {
     expect(body.data.every((d) => d.category === "cafe")).toBe(true);
   });
 
-  it("invalid coordinates → empty result, not 500 (parser drops malformed filter)", async () => {
+  it("invalid coordinates → 400 fail-closed, never a 5xx (mongokit >=3.25)", async () => {
     const res = await app.inject({
       method: "GET",
       url: "/places?location[withinRadius]=999,999,1000",
     });
 
-    // Parser drops the malformed filter, so we get all places (no filter applied).
-    // The important thing is no 5xx — Arc + MongoKit handle bad input gracefully.
-    expect(res.statusCode).toBe(200);
+    // mongokit's QueryParser is fail-closed by default (invalidInput: 'throw'):
+    // a malformed geo filter (lat 999 out of [-90, 90]) raises HTTP 400
+    // (INVALID_QUERY_INPUT) instead of silently dropping the filter and
+    // returning ALL places (a data-exposure footgun). Arc surfaces that as a
+    // clean 4xx — the important thing remains: no 5xx on bad input.
+    expect(res.statusCode).toBe(400);
   });
 });

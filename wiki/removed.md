@@ -2,9 +2,16 @@
 
 **Summary**: APIs removed by version, with migration targets. Do not re-add without a strong reason.
 **Sources**: CHANGELOG.md, commit history.
-**Last updated**: 2026-05-18.
+**Last updated**: 2026-07-22.
 
 ---
+
+## v2.24
+
+| Removed | Replacement | Why |
+|---|---|---|
+| Outbox contract exports from `@classytic/arc/events` — `OutboxStore`, `OutboxWriteOptions`, `OutboxClaimOptions`, `OutboxAcknowledgeOptions`, `OutboxFailOptions`, `OutboxErrorInfo`, `OutboxFailureContext`, `OutboxFailureDecision`, `OutboxFailurePolicy`, `OutboxOwnershipError`, `InvalidOutboxEventError` | Import from `@classytic/primitives/outbox` (>=0.13) | Contract was duplicated in both packages with conflicting source-of-truth docs; the duplicate class identities broke cross-package `instanceof`. Primitives owns contracts, arc owns runtime (`EventOutbox`, `MemoryOutboxStore`, `repositoryAsOutboxStore`, `exponentialBackoff` — all still in arc). |
+| `validateResourceConfig` / `assertValidConfig` / `formatValidationErrors` re-export from `@classytic/arc/utils` | Import from `@classytic/arc/core` | Utils must not import upward into the resource kernel (boundary rule). |
 
 ## v2.16
 

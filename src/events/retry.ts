@@ -75,12 +75,43 @@ export interface RetryOptions {
   transport?: Pick<EventTransport, "deadLetter">;
 
   /**
-   * Callback when all retries are exhausted. The event is "dead".
-   * Use this to publish to a `$deadLetter` channel, log, alert, etc.
+   * DURABLE dead-letter persistence for exhausted events (custom store,
+   * `$deadLetter` publisher, ...). Treated exactly like
+   * {@link transport}.deadLetter: a failure follows {@link dlqFailureMode}
+   * — rethrow by default, so the transport redelivers instead of
+   * acknowledging an event that is neither processed nor persisted.
    *
-   * Fires in addition to {@link transport} routing if both are set.
+   * This is what `eventPlugin({ deadLetterQueue })` wires. Use
+   * {@link onDead} for metrics/alerts whose failure must NOT affect
+   * acknowledgement.
+   */
+  deadLetter?: (event: DomainEvent, errors: Error[]) => void | Promise<void>;
+
+  /**
+   * OBSERVABILITY callback when all retries are exhausted (metrics,
+   * alerting, logging). Fires in addition to {@link transport} /
+   * {@link deadLetter} routing. Failures are logged and swallowed — this
+   * callback can never affect whether the event is acknowledged; durable
+   * persistence belongs in {@link deadLetter}.
    */
   onDead?: (event: DomainEvent, errors: Error[]) => void | Promise<void>;
+
+  /**
+   * What to do when `transport.deadLetter()` ITSELF fails after retries are
+   * exhausted.
+   *
+   *  - `'rethrow'` (default) — the wrapper throws, so the transport treats
+   *    the handler as failed: an at-least-once transport (Redis Streams,
+   *    SQS) keeps the original message pending and redelivers it. The only
+   *    mode that cannot LOSE the event — returning normally would
+   *    acknowledge a message that was neither processed nor persisted.
+   *  - `'log-and-drop'` — log the DLQ failure and return normally,
+   *    acknowledging the message. Only correct when losing the event is
+   *    acceptable (metrics, notifications).
+   *
+   * @default 'rethrow'
+   */
+  dlqFailureMode?: "rethrow" | "log-and-drop";
 
   /**
    * Optional name for logging + written into `DeadLetteredEvent.handlerName`.
@@ -115,7 +146,9 @@ export function withRetry<T = unknown>(
     maxBackoffMs = 30_000,
     jitter = 0.1,
     transport,
+    deadLetter,
     onDead,
+    dlqFailureMode = "rethrow",
     name,
     logger = console,
   } = options;
@@ -126,6 +159,7 @@ export function withRetry<T = unknown>(
     const errors: Error[] = [];
     let firstFailedAt: Date | undefined;
     let lastFailedAt: Date | undefined;
+    let dlqPersistError: Error | undefined;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
@@ -184,6 +218,18 @@ export function withRetry<T = unknown>(
         await transport.deadLetter(dlq);
       } catch (dlqErr) {
         logger.error("[Arc Events] transport.deadLetter() failed:", dlqErr);
+        dlqPersistError = dlqErr instanceof Error ? dlqErr : new Error(String(dlqErr));
+      }
+    }
+
+    // Custom durable persistence (eventPlugin's deadLetterQueue.store or
+    // $deadLetter publisher) — same failure contract as transport.deadLetter.
+    if (deadLetter) {
+      try {
+        await deadLetter(event, errors);
+      } catch (dlqErr) {
+        logger.error("[Arc Events] deadLetter() persistence failed:", dlqErr);
+        dlqPersistError ??= dlqErr instanceof Error ? dlqErr : new Error(String(dlqErr));
       }
     }
 
@@ -191,8 +237,22 @@ export function withRetry<T = unknown>(
       try {
         await onDead(event, errors);
       } catch (dlqErr) {
-        logger.error("[Arc Events] Dead letter callback failed:", dlqErr);
+        logger.error("[Arc Events] onDead observability callback failed:", dlqErr);
       }
+    }
+
+    // Returning normally acknowledges the message. Rethrow (default) when
+    // durable DLQ persistence failed so at-least-once transports retain
+    // the original — otherwise the event is neither processed nor
+    // dead-lettered. (onDead above is observability; it still ran.)
+    if (dlqPersistError && dlqFailureMode === "rethrow") {
+      throw new Error(
+        `[Arc Events] Handler '${label}' exhausted retries for ${event.type} AND ` +
+          "dead-letter persistence failed — rethrowing so the transport redelivers " +
+          "instead of acknowledging a lost event (set dlqFailureMode: 'log-and-drop' " +
+          "to accept loss).",
+        { cause: dlqPersistError },
+      );
     }
   };
 }
