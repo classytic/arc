@@ -44,6 +44,18 @@ export interface PurgeResourceOptions {
   signal?: AbortSignal;
   /** Forwarded to `purgeByField` — override per-resource batchSize. */
   batchSize?: number;
+  /**
+   * AUTHORITATIVE-CLEANUP GUARD (data-cleanup design §6.5). When `true`, a
+   * resource whose adapter lacks the chunked `purgeByField` primitive is
+   * REFUSED (`path: 'unsupported'`) instead of silently falling back to the
+   * legacy unbounded `deleteMany`. The single-round-trip fallback has no
+   * chunking, progress, or abort — it can lock a large collection for
+   * minutes and cannot honor a cancel. A Cleanup Center recipe that promises
+   * "chunked, restartable, verified" MUST set this so a legacy adapter fails
+   * loudly at plan time rather than running an unbounded delete. Defaults to
+   * `false` — the org-delete cascade keeps its best-effort fallback.
+   */
+  requireChunked?: boolean;
 }
 
 /**
@@ -76,6 +88,9 @@ export interface PurgeResourceOutcome {
  *
  * - `skip` strategy: returns `path: 'skipped'` without touching the repo.
  * - `purgeByField` present: routes through it (chunked, progress, abort).
+ * - `purgeByField` absent + `requireChunked`: returns `path: 'unsupported'`
+ *   (`arc.purge.chunked_required`) — authoritative cleanup never runs the
+ *   unbounded fallback.
  * - `purgeByField` absent + hard strategy: legacy `deleteMany` fallback.
  * - `purgeByField` absent + non-hard strategy: returns `path: 'unsupported'`
  *   with a clear error — soft/anonymize require the new primitive.
@@ -124,6 +139,28 @@ export async function purgeResource(
       path: "purgeByField",
       durationMs: result.durationMs,
       ...(result.error ? { error: result.error } : {}),
+    };
+  }
+
+  // Authoritative cleanup refuses the unbounded fallback entirely (§6.5):
+  // no chunking / progress / abort means it can't satisfy a "chunked,
+  // restartable, verified" recipe contract. Fail loudly, naming the fix.
+  if (options.requireChunked) {
+    return {
+      resource: resourceName,
+      tenantField,
+      strategy,
+      processed: 0,
+      ok: false,
+      path: "unsupported",
+      error: {
+        code: "arc.purge.chunked_required",
+        message:
+          `Resource '${resourceName}' requires chunked purge for authoritative cleanup, but its ` +
+          "adapter repository does not implement `purgeByField`. The legacy unbounded `deleteMany` " +
+          "fallback is disabled here (no chunking / progress / abort). Upgrade the adapter " +
+          "(@classytic/mongokit ≥ 3.13.4 / @classytic/sqlitekit ≥ 0.3.4).",
+      },
     };
   }
 

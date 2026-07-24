@@ -8,6 +8,10 @@ Detailed release notes now live under [changelog/](changelog/). This root file s
 
 See [changelog/v2.md](changelog/v2.md) for the full v2 release history.
 
+## 2.26
+
+- [2.26.0](changelog/v2.md#2260) — **data-cleanup foundation**: `purgeResource` gains a `requireChunked` option (data-cleanup design §6.5) that REFUSES the legacy unbounded `deleteMany` fallback (`arc.purge.chunked_required`) for authoritative cleanup — a legacy adapter without chunked `purgeByField` fails loudly at plan time instead of running an un-chunked, un-abortable delete. The org-delete cascade keeps its best-effort fallback (default `false`).
+
 ## 2.25
 
 - [2.25.0](changelog/v2.md#2250) — **`scopeFirstCtx`** (`@classytic/arc/scope`): the shared scope-first actor/org context derivation for the `arc-*` module fleet — `request.scope` (userId/clientId + org) first, `x-organization-id` header only as the custom-auth/public bridge; `fallbackActorId` overload narrows to `{ actorId: string }`. Kills the 7+ per-package `ctxOf` derivation clones. **⚠ Breaking:** `@classytic/arc/schemas` moved to TypeBox 1.0 — optional peers `typebox@>=1` + `@fastify/type-provider-typebox@>=6` (was `@sinclair/typebox`); the `typeProvider: 'typebox'` option and `TypeBoxValidatorCompiler` export were removed (arc always validated with standard AJV). See [migration](changelog/v2.md#2250).
