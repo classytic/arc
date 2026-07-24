@@ -10,7 +10,7 @@ See [changelog/v2.md](changelog/v2.md) for the full v2 release history.
 
 ## 2.26
 
-- [2.26.0](changelog/v2.md#2260) — **data-cleanup foundation**: `purgeResource` gains a `requireChunked` option (data-cleanup design §6.5) that REFUSES the legacy unbounded `deleteMany` fallback (`arc.purge.chunked_required`) for authoritative cleanup — a legacy adapter without chunked `purgeByField` fails loudly at plan time instead of running an un-chunked, un-abortable delete. The org-delete cascade keeps its best-effort fallback (default `false`).
+- [2.26.0](changelog/v2.md#2260) — **Data Cleanup Center framework** (`@classytic/arc/cleanup`, experimental) + **`purgeResource` `requireChunked` gate**. New thin recipe framework (data-cleanup design §5/§6.5): `createDataCleanupModule({ recipes, runStore, evidenceStore, permissions, writeFence?, worker? })` mounts a governance resource (`GET /recipes`, `POST /preview`, `POST /runs`, `GET /runs/:id`, `POST /runs/:id/action`) over a pure `createCleanupService` — preview → confirm-by-digest → execute-off-request-path → verify → record `PurgeEvidence` + immutable manifest, with a deterministic `computePlanDigest` (tamper-evident confirmation, `CLEANUP_PLAN_CHANGED`), boot-time recipe-id uniqueness, single-destructive-run + write fences, and stable coded errors. Arc owns the framework; recipes + statutory rules stay in the host + kernels. Also: `purgeResource` gains `requireChunked` — authoritative cleanup REFUSES the legacy unbounded `deleteMany` fallback (`arc.purge.chunked_required`) so a legacy adapter fails loudly at plan time; the org-delete cascade keeps its best-effort fallback (default `false`).
 
 ## 2.25
 
