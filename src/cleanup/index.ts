@@ -57,3 +57,6 @@ export type {
   ExecuteInput,
   PreviewInput,
 } from "./service.js";
+
+export { createDataCleanupModule } from "./module.js";
+export type { DataCleanupModuleDeps } from "./module.js";
