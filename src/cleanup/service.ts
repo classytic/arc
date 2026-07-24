@@ -1,52 +1,70 @@
 /**
  * Cleanup orchestration service — the framework's use-case core.
  *
- * Drives the design's lifecycle over the host-provided ports:
+ * Split into a REQUEST path and a WORKER path so the durability guarantees the
+ * ports promise actually hold:
  *
- *   preview()  → re-plan, seal a digest, surface blockers/retains/confirmation
- *   execute()  → re-plan + digest re-check (CLEANUP_PLAN_CHANGED), availability
- *                gate, single-destructive-run fence, write fence, run the recipe
- *                off the request path, verify, record evidence + manifest
- *   getRun()   → durable run lookup
- *   act()      → cancel / retry a run
+ *   preview()      → re-plan, seal a digest, surface blockers/retains/confirmation
+ *   execute()      → validate (availability, digest, confirmation, reason,
+ *                    blockers, limits), ATOMICALLY create the run (single-run
+ *                    guard), persist the sealed operation, ENQUEUE `{ runId }`,
+ *                    and RETURN. It does NOT run the recipe.
+ *   processRun()   → the worker entrypoint. Loads the run + its sealed plan,
+ *                    acquires the write fence (guarded), runs the recipe with
+ *                    cooperative cancellation, verifies, and finalizes (terminal
+ *                    status + evidence + manifest) idempotently. Recoverable
+ *                    from a `finalizing` state after a restart.
+ *   cancel()       → durable cancel request + CAS a not-yet-running run straight
+ *                    to `cancelled`. A running run stops cooperatively.
+ *   retry()        → reload the SAME sealed operation, re-validate its digest
+ *                    against a fresh plan (refuse if the world changed), re-enqueue.
  *
- * Framework-free (no Fastify/Mongo): the Arc resource factory wraps this.
- * Reliability rules (§8): persist the run before mutating; one destructive run
- * at a time; acquire the write fence; idempotent steps; abort between chunks;
- * never report success when a step reports `ok: false`; rebuild only after
- * authoritative cleanup succeeds; release the fence on every terminal path.
+ * Every status change goes through `compareAndTransition` (CAS) so a late
+ * `completed` write can never clobber a `cancelled` one.
  */
 
 import { createPurgeEvidence } from "@classytic/primitives/retention";
-import { CleanupErrors } from "./errors.js";
+import { CleanupCancelled, CleanupErrors } from "./errors.js";
 import { computeManifestDigest, computePlanDigest } from "./plan-digest.js";
 import type { CleanupRegistry } from "./registry.js";
-import type {
-  CleanupContext,
-  CleanupEvidenceStore,
-  CleanupExecutionContext,
-  CleanupInput,
-  CleanupManifest,
-  CleanupPlan,
-  CleanupRecipe,
-  CleanupResult,
-  CleanupRun,
-  CleanupStepResult,
-  CleanupWorker,
-  CleanupWriteFence,
-  PurgeActor,
-  VerificationResult,
+import {
+  CLEANUP_TERMINAL_STATUSES,
+  type CleanupContext,
+  type CleanupEvidenceStore,
+  type CleanupExecutionContext,
+  type CleanupInput,
+  type CleanupJobQueue,
+  type CleanupLimits,
+  type CleanupManifest,
+  type CleanupPlan,
+  type CleanupProgressSummary,
+  type CleanupRecipe,
+  type CleanupResult,
+  type CleanupRun,
+  type CleanupRunStore,
+  type CleanupStepResult,
+  type CleanupWriteFence,
+  DEFAULT_CLEANUP_LIMITS,
+  type PurgeActor,
+  type VerificationResult,
 } from "./types.js";
 
-/** Injected id/clock generators — kept as deps so the service stays testable. */
 export interface CleanupServiceDeps {
   registry: CleanupRegistry;
-  runStore: import("./types.js").CleanupRunStore;
+  runStore: CleanupRunStore;
   evidenceStore: CleanupEvidenceStore;
   /** Optional write fence (§8). No-op when absent. */
   writeFence?: CleanupWriteFence | undefined;
-  /** Optional worker (§8). Defaults to an inline in-process runner. */
-  worker?: CleanupWorker | undefined;
+  /**
+   * Durable job queue (§8). Defaults to a microtask-deferred in-process queue
+   * that calls `processRun` off the request path (single-process only). Inject
+   * BullMQ / SQS / repo-backed for cross-process durability + restart recovery.
+   */
+  jobQueue?: CleanupJobQueue | undefined;
+  /** Framework size caps. Defaults to {@link DEFAULT_CLEANUP_LIMITS}. */
+  limits?: Partial<CleanupLimits> | undefined;
+  /** Optional logger for release-failure / recovery diagnostics. */
+  logger?: CleanupContext["logger"];
   /** Id generator — defaults to `crypto.randomUUID`. */
   generateId?: () => string;
   /** Clock — defaults to `() => new Date()`. */
@@ -66,35 +84,66 @@ export interface ExecuteInput extends PreviewInput {
   reason: string;
   /** For a destructive recipe: the exact confirmation phrase. */
   confirmation?: string | undefined;
-  signal?: AbortSignal | undefined;
 }
-
-const inlineWorker: CleanupWorker = { submit: (task) => task() };
 
 export interface CleanupService {
   preview(input: PreviewInput): Promise<CleanupPlan>;
   execute(input: ExecuteInput): Promise<CleanupRun>;
+  /** Worker entrypoint — run the persisted, enqueued operation to completion. */
+  processRun(runId: string): Promise<void>;
   getRun(id: string): Promise<CleanupRun>;
   cancel(id: string): Promise<CleanupRun>;
   retry(id: string): Promise<CleanupRun>;
 }
 
+const EMPTY_PROGRESS: CleanupProgressSummary = { processed: 0, steps: 0 };
+
+function paramDepth(value: unknown, depth = 0): number {
+  if (value === null || typeof value !== "object" || value instanceof Date) return depth;
+  let max = depth;
+  for (const v of Array.isArray(value) ? value : Object.values(value as Record<string, unknown>)) {
+    max = Math.max(max, paramDepth(v, depth + 1));
+  }
+  return max;
+}
+
 export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
   const { registry, runStore, evidenceStore } = deps;
   const writeFence = deps.writeFence;
-  const worker = deps.worker ?? inlineWorker;
+  const logger = deps.logger;
   const generateId = deps.generateId ?? (() => globalThis.crypto.randomUUID());
   const now = deps.now ?? (() => new Date());
+  const limits: CleanupLimits = { ...DEFAULT_CLEANUP_LIMITS, ...deps.limits };
 
-  /** Build the ambient context a recipe method receives. */
+  // Default queue: defer to a microtask so execute() returns BEFORE the recipe
+  // runs (off the request path, single-process). A thrown processRun rejection
+  // is swallowed here — the run's own status/evidence is the durable record.
+  const jobQueue: CleanupJobQueue = deps.jobQueue ?? {
+    enqueue: async (job) => {
+      queueMicrotask(() => {
+        void processRun(job.runId).catch(() => {
+          /* durable failure is recorded on the run + evidence */
+        });
+      });
+    },
+  };
+
   function context(input: PreviewInput, signal?: AbortSignal): CleanupContext {
-    return { actor: input.actor, now: now(), signal, ambient: input.ambient };
+    return { actor: input.actor, now: now(), signal, ambient: input.ambient, logger };
   }
 
-  /** Re-plan the recipe and seal a digest — the single source for both preview + execute. */
-  async function seal(recipe: CleanupRecipe, input: PreviewInput, ctx: CleanupContext): Promise<CleanupPlan> {
+  async function seal(
+    recipe: CleanupRecipe,
+    input: PreviewInput,
+    ctx: CleanupContext,
+  ): Promise<CleanupPlan> {
     const draft = await recipe.plan({ parameters: input.parameters }, ctx);
     const items = draft.items;
+    if (items.length > limits.maxPlanItems) {
+      throw CleanupErrors.planTooLarge(
+        `${items.length} items > maxPlanItems ${limits.maxPlanItems}`,
+      );
+    }
     const estimatedTotal = items.reduce((sum, i) => sum + i.estimated, 0);
     const unsealed: Omit<CleanupPlan, "digest"> = {
       recipeId: recipe.id,
@@ -124,11 +173,21 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
     return seal(recipe, input, ctx);
   }
 
+  // ── Request path: validate + persist + enqueue (NO recipe execution) ────────
+
   async function execute(input: ExecuteInput): Promise<CleanupRun> {
     const recipe = registry.get(input.recipeId);
-    const ctx = context(input, input.signal);
+    const ctx = context(input);
 
-    // 1. Availability + confirmation + digest re-check (fail before any write).
+    // Input limits (bounded documents).
+    if ((input.reason ?? "").length > limits.maxReasonLength) {
+      throw CleanupErrors.planTooLarge(`reason length > ${limits.maxReasonLength}`);
+    }
+    if (input.parameters && paramDepth(input.parameters) > limits.maxParamDepth) {
+      throw CleanupErrors.planTooLarge(`parameters nested deeper than ${limits.maxParamDepth}`);
+    }
+
+    // Availability + digest re-check + confirmation + reason (fail before write).
     await ensureAvailable(recipe, ctx);
     const sealed = await seal(recipe, input, ctx);
     if (sealed.digest !== input.planDigest) {
@@ -138,137 +197,258 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
       throw CleanupErrors.confirmationRequired(sealed.confirmationPhrase);
     }
     if (!input.reason || input.reason.trim().length === 0) {
-      throw CleanupErrors.confirmationRequired(sealed.confirmationPhrase);
+      throw CleanupErrors.reasonRequired();
+    }
+    // Blockers are a HARD STOP (§4.4) — never confirmable through the normal flow.
+    if (sealed.blockers.length > 0) {
+      throw CleanupErrors.blocked(sealed.blockers);
     }
 
-    // 2. Single-destructive-run fence (§8).
-    if (recipe.destructive) {
-      const active = await runStore.findActiveDestructive();
-      if (active) throw CleanupErrors.alreadyRunning(active.id);
-    }
-
-    // 3. Persist the run BEFORE mutating anything (§8).
-    const operationId = generateId();
     const run: CleanupRun = {
       id: generateId(),
       recipeId: recipe.id,
-      status: "planned",
+      recipeVersion: recipe.version ?? "1",
+      status: "queued",
       planDigest: sealed.digest,
+      sealedPlan: sealed,
+      parameters: input.parameters ?? {},
+      actor: input.actor,
+      ambient: input.ambient,
       requestedBy: input.actor.ref,
       reason: input.reason,
-      operationId,
-      progress: [],
-      startedAt: now(),
+      operationId: generateId(),
+      progress: EMPTY_PROGRESS,
+      cancelRequested: false,
+      queuedAt: now(),
     };
-    await runStore.create(run);
 
-    // 4. Run off the request path (§8). The worker owns whether this awaits.
-    await worker.submit(() => runToCompletion(recipe, sealed, run, input));
+    // ATOMIC single-destructive-run guard (§8) — conditional insert, not a race.
+    const created = await runStore.createIfPermitted(run);
+    if (!created.created) throw CleanupErrors.alreadyRunning(created.activeRunId);
+
+    await jobQueue.enqueue({ runId: run.id });
     return (await runStore.get(run.id)) ?? run;
   }
 
-  /** The execute → verify → evidence body, fenced + status-tracked. */
-  async function runToCompletion(
-    recipe: CleanupRecipe,
-    plan: CleanupPlan,
-    run: CleanupRun,
-    input: ExecuteInput,
-  ): Promise<void> {
-    const progress: CleanupStepResult[] = [];
-    await runStore.update(run.id, { status: "running" });
-    if (writeFence) await writeFence.acquire(run.operationId);
+  // ── Worker path: run the persisted operation to completion ──────────────────
+
+  async function processRun(runId: string): Promise<void> {
+    const run = await runStore.get(runId);
+    if (!run) throw CleanupErrors.runNotFound(runId);
+    // Idempotent: a terminal run (or one another worker already claimed) is left alone.
+    if (CLEANUP_TERMINAL_STATUSES.includes(run.status)) return;
+
+    const recipe = registry.get(run.recipeId);
+    const plan = run.sealedPlan;
+
+    // Claim: CAS queued|finalizing → running. Losing the CAS means another
+    // worker owns it — return without touching state.
+    const claimed = await runStore.compareAndTransition(
+      run.id,
+      ["queued", "running", "finalizing"],
+      "running",
+      {
+        startedAt: run.startedAt ?? now(),
+      },
+    );
+    if (!claimed) return;
+
+    // If cancel was requested before we started, finish it here.
+    if (claimed.cancelRequested) {
+      await runStore.compareAndTransition(run.id, ["running"], "cancelled", { completedAt: now() });
+      return;
+    }
+
+    // Guarded write-fence acquisition — its OWN transition. A failure to acquire
+    // marks the run failed WITHOUT ever holding a fence (no leaked lock).
+    if (writeFence) {
+      try {
+        await writeFence.acquire(run.operationId);
+      } catch (err) {
+        await failRun(claimed, recipe, `write fence acquire failed: ${errMsg(err)}`);
+        return;
+      }
+    }
 
     try {
-      const execCtx: CleanupExecutionContext = {
-        actor: input.actor,
-        now: now(),
-        signal: input.signal,
-        ambient: input.ambient,
-        runId: run.id,
-        operationId: run.operationId,
-        async onStep(step) {
-          progress.push(step);
-          await runStore.update(run.id, { progress: [...progress] });
-        },
-      };
-
-      const result: CleanupResult = await recipe.execute(plan, execCtx);
-      // Never report success when a step reports ok:false (§8).
-      const anyFailed = result.results.some((r) => !r.ok);
-      const effectiveStatus = anyFailed && result.status === "completed" ? "partial" : result.status;
-
-      // Verify only after authoritative cleanup (§8) — but always record what happened.
-      let verification: VerificationResult = { ok: !anyFailed, checks: [] };
-      if (effectiveStatus !== "failed") {
-        verification = await recipe.verify(plan, {
-          actor: input.actor,
-          now: now(),
-          signal: input.signal,
-          ambient: input.ambient,
-        });
-      }
-
-      const completedAt = now();
-      // A run is a clean success ONLY when every step succeeded AND verification
-      // passed. Partial results or a failed verification ⇒ the run is `failed`
-      // (visible + retryable), never a false success (§8).
-      const finalStatus: CleanupRun["status"] =
-        effectiveStatus === "completed" && verification.ok ? "completed" : "failed";
-
-      await runStore.update(run.id, {
-        status: finalStatus,
-        progress: result.results.length ? [...result.results] : [...progress],
-        completedAt,
-      });
-
-      // Record evidence + immutable manifest (§5, §8).
-      await recordEvidenceAndManifest(
-        recipe,
-        plan,
-        run,
-        input,
-        result,
-        effectiveStatus,
-        verification,
-        completedAt,
-      );
-    } catch (err) {
-      await runStore.update(run.id, {
-        status: input.signal?.aborted ? "cancelled" : "failed",
-        completedAt: now(),
-        progress: [...progress],
-      });
-      throw err;
+      await runOperation(claimed, recipe, plan);
     } finally {
-      if (writeFence) await writeFence.release(run.operationId);
+      if (writeFence) {
+        try {
+          await writeFence.release(run.operationId);
+        } catch (relErr) {
+          // A release failure must NOT mask the primary outcome — log + record only.
+          logger?.error?.("cleanup write fence release failed", {
+            runId: run.id,
+            operationId: run.operationId,
+            error: errMsg(relErr),
+          });
+        }
+      }
     }
   }
 
-  async function recordEvidenceAndManifest(
+  /** Execute → verify → finalize, with cooperative cancellation. */
+  async function runOperation(
+    run: CleanupRun,
     recipe: CleanupRecipe,
     plan: CleanupPlan,
-    run: CleanupRun,
-    input: ExecuteInput,
-    result: CleanupResult,
-    effectiveStatus: CleanupResult["status"],
-    verification: VerificationResult,
-    completedAt: Date,
   ): Promise<void> {
-    const processed = result.results.reduce((sum, r) => sum + r.processed, 0);
+    const controller = new AbortController();
+    let processed = 0;
+    let steps = 0;
+    let failed = 0;
+    let cancelled = false;
+    let lastSummary: CleanupProgressSummary = run.progress ?? { processed: 0, steps: 0 };
+
+    const refreshCancel = async (): Promise<boolean> => {
+      const fresh = await runStore.get(run.id);
+      if (fresh?.cancelRequested) {
+        cancelled = true;
+        controller.abort();
+        return true;
+      }
+      return false;
+    };
+
+    const execCtx: CleanupExecutionContext = {
+      actor: run.actor,
+      now: now(),
+      signal: controller.signal,
+      ambient: run.ambient,
+      logger,
+      runId: run.id,
+      operationId: run.operationId,
+      async onStep(step: CleanupStepResult) {
+        steps += 1;
+        processed += step.processed;
+        if (!step.ok) failed += 1;
+        const summary: CleanupProgressSummary = {
+          processed,
+          steps,
+          failed,
+          currentResource: step.resource,
+          ...(step.cursor !== undefined ? { lastCursor: step.cursor } : {}),
+          heartbeatAt: now(),
+        };
+        lastSummary = summary;
+        await runStore.saveProgress(run.id, summary);
+        await refreshCancel();
+      },
+      async throwIfCancelled() {
+        if (cancelled || controller.signal.aborted || (await refreshCancel())) {
+          throw new CleanupCancelled(run.id);
+        }
+      },
+    };
+
+    let result: CleanupResult;
+    try {
+      result = await recipe.execute(plan, execCtx);
+    } catch (err) {
+      if (err instanceof CleanupCancelled || cancelled || controller.signal.aborted) {
+        // Cooperative cancel: committed chunks remain; CAS running → cancelled.
+        await runStore.compareAndTransition(run.id, ["running"], "cancelled", {
+          completedAt: now(),
+        });
+        return;
+      }
+      await failRun(run, recipe, `execute threw: ${errMsg(err)}`);
+      return;
+    }
+
+    // A cancel that landed exactly as execute resolved still wins.
+    if (cancelled || (await refreshCancel())) {
+      await runStore.compareAndTransition(run.id, ["running"], "cancelled", { completedAt: now() });
+      return;
+    }
+
+    // Cap the results folded into the manifest (bounded document).
+    const results =
+      result.results.length > limits.maxResults
+        ? result.results.slice(0, limits.maxResults)
+        : result.results;
+    const anyFailed = results.some((r) => !r.ok) || result.results.length > results.length;
+    const effectiveStatus = anyFailed && result.status === "completed" ? "partial" : result.status;
+
+    let verification: VerificationResult = { ok: !anyFailed, checks: [] };
+    if (effectiveStatus !== "failed") {
+      verification = await recipe.verify(plan, {
+        actor: run.actor,
+        now: now(),
+        signal: controller.signal,
+        ambient: run.ambient,
+        logger,
+      });
+    }
+    if (verification.checks.length > limits.maxChecks) {
+      verification = {
+        ok: verification.ok,
+        checks: verification.checks.slice(0, limits.maxChecks),
+      };
+    }
+
+    const success = effectiveStatus === "completed" && verification.ok;
+
+    // Enter `finalizing` (CAS running → finalizing) — a crash after this is
+    // recoverable: a restart re-runs processRun, re-claims, and re-finalizes
+    // idempotently (evidenceStore.finalize is keyed by operationId).
+    const finalizing = await runStore.compareAndTransition(run.id, ["running"], "finalizing");
+    if (!finalizing) return; // lost to a concurrent cancel/transition
+
+    await finalize(run, recipe, plan, effectiveStatus, results, verification);
+
+    await runStore.compareAndTransition(run.id, ["finalizing"], success ? "completed" : "failed", {
+      completedAt: now(),
+      ...(success
+        ? {}
+        : {
+            failureReason:
+              effectiveStatus === "partial" ? "partial results" : "verification failed",
+          }),
+      progress: { ...lastSummary, processed, steps, failed, heartbeatAt: now() },
+    });
+  }
+
+  /** Record a hard failure with failure evidence, CAS → failed. */
+  async function failRun(run: CleanupRun, recipe: CleanupRecipe, reason: string): Promise<void> {
+    const failing = await runStore.compareAndTransition(run.id, ["running"], "finalizing", {
+      failureReason: reason,
+    });
+    if (!failing) return;
+    await finalize(run, recipe, run.sealedPlan, "failed", [], { ok: false, checks: [] }, reason);
+    await runStore.compareAndTransition(run.id, ["finalizing"], "failed", {
+      completedAt: now(),
+      failureReason: reason,
+    });
+  }
+
+  /** Idempotently persist evidence + manifest for the run (keyed by operationId). */
+  async function finalize(
+    run: CleanupRun,
+    recipe: CleanupRecipe,
+    plan: CleanupPlan,
+    status: CleanupResult["status"],
+    results: readonly CleanupStepResult[],
+    verification: VerificationResult,
+    failureReason?: string,
+  ): Promise<void> {
+    const completedAt = now();
+    const processed = results.reduce((sum, r) => sum + r.processed, 0);
     const evidence = createPurgeEvidence({
       operationId: run.operationId,
       subject: { ref: `recipe:${recipe.id}`, model: "CleanupRun" },
       scope: `recipe:${recipe.id}`,
       strategy: "hard",
-      status: effectiveStatus,
+      status,
       measuresRetained: plan.retains.length > 0,
       processed,
-      startedAt: run.startedAt,
+      startedAt: run.startedAt ?? run.queuedAt,
       completedAt,
       occurredAt: completedAt,
-      actor: input.actor,
-      reason: input.reason,
-      results: result.results.map((r) => ({
+      actor: run.actor,
+      reason: failureReason ? `${run.reason} (${failureReason})` : run.reason,
+      results: results.map((r) => ({
         resource: r.resource,
         processed: r.processed,
         ok: r.ok,
@@ -277,24 +457,33 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
       verification: {
         ok: verification.ok,
         checks: verification.checks.length,
-        ...(verification.checks.length ? { note: verification.checks.map((c) => `${c.name}:${c.ok ? "ok" : "fail"}`).join(", ") } : {}),
+        ...(verification.checks.length
+          ? { note: verification.checks.map((c) => `${c.name}:${c.ok ? "ok" : "fail"}`).join(", ") }
+          : {}),
       },
     });
-    await evidenceStore.recordEvidence(evidence);
 
     const manifestBase = {
       runId: run.id,
       recipeId: recipe.id,
+      recipeVersion: run.recipeVersion,
+      operationId: run.operationId,
       planDigest: plan.digest,
-      actor: input.actor,
-      reason: input.reason,
-      results: result.results,
+      status,
+      actor: run.actor,
+      reason: run.reason,
+      results,
       verification,
       completedAt,
     };
-    const manifest: CleanupManifest = { ...manifestBase, manifestDigest: computeManifestDigest(manifestBase) };
-    await evidenceStore.recordManifest(manifest);
+    const manifest: CleanupManifest = {
+      ...manifestBase,
+      manifestDigest: computeManifestDigest(manifestBase),
+    };
+    await evidenceStore.finalize({ evidence, manifest });
   }
+
+  // ── Observe + control ───────────────────────────────────────────────────────
 
   async function getRun(id: string): Promise<CleanupRun> {
     const run = await runStore.get(id);
@@ -304,11 +493,16 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
 
   async function cancel(id: string): Promise<CleanupRun> {
     const run = await getRun(id);
-    if (run.status !== "running" && run.status !== "planned") {
+    if (CLEANUP_TERMINAL_STATUSES.includes(run.status)) {
       throw CleanupErrors.invalidAction("cancel", run.status);
     }
-    // Cooperative: mark cancelled; committed chunks remain (§7 "Cancel").
-    await runStore.update(id, { status: "cancelled", completedAt: now() });
+    // Durable request first (source of truth for a running executor).
+    await runStore.requestCancel(id);
+    // A not-yet-running run can be cancelled outright; a running one stops
+    // cooperatively at its next step and CAS-transitions itself.
+    await runStore.compareAndTransition(id, ["queued", "planned"], "cancelled", {
+      completedAt: now(),
+    });
     return getRun(id);
   }
 
@@ -317,22 +511,48 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
     if (run.status !== "failed" && run.status !== "cancelled") {
       throw CleanupErrors.invalidAction("retry", run.status);
     }
-    // Re-run the idempotent recipe from its durable plan digest. The recipe
-    // resumes by re-selection/keyset; already-processed rows are no-ops.
     const recipe = registry.get(run.recipeId);
-    const input: ExecuteInput = {
-      recipeId: run.recipeId,
-      actor: { ref: run.requestedBy, kind: "user" },
-      planDigest: run.planDigest,
-      reason: run.reason,
-      confirmation: recipe.destructive ? run.planDigest : undefined,
-    };
-    await runStore.update(id, { status: "running", completedAt: undefined });
-    const sealed = await seal(recipe, input, context(input));
-    // Retry keeps the SAME run row; re-run to completion.
-    await worker.submit(() => runToCompletion(recipe, sealed, { ...run, status: "running" }, input));
+    // Re-validate the SAME sealed operation against a fresh plan: if the world
+    // changed (or the recipe version moved), refuse — a retry must replay the
+    // authorized operation, never a materially different one under the old
+    // confirmation.
+    if ((recipe.version ?? "1") !== run.recipeVersion) {
+      throw CleanupErrors.planChanged(recipe.version ?? "1", run.recipeVersion);
+    }
+    const ctx: CleanupContext = { actor: run.actor, now: now(), ambient: run.ambient, logger };
+    const fresh = await seal(
+      recipe,
+      {
+        recipeId: run.recipeId,
+        actor: run.actor,
+        parameters: run.parameters,
+        ambient: run.ambient,
+      },
+      ctx,
+    );
+    if (fresh.digest !== run.planDigest) {
+      throw CleanupErrors.planChanged(fresh.digest, run.planDigest);
+    }
+
+    // Re-arm the run: CAS terminal → queued, clearing the stale cancel flag so
+    // the requeued worker doesn't immediately re-cancel.
+    const requeued = await runStore.compareAndTransition(
+      run.id,
+      ["failed", "cancelled"],
+      "queued",
+      {
+        queuedAt: now(),
+        cancelRequested: false,
+      },
+    );
+    if (!requeued) throw CleanupErrors.invalidAction("retry", (await getRun(id)).status);
+    await jobQueue.enqueue({ runId: run.id });
     return getRun(id);
   }
 
-  return { preview, execute, getRun, cancel, retry };
+  return { preview, execute, processRun, getRun, cancel, retry };
+}
+
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }

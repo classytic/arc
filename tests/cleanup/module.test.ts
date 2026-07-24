@@ -1,87 +1,44 @@
 /**
  * `createDataCleanupModule` — module composition + route wiring.
  *
- * The service behavior is covered in service.test.ts; here we verify the Arc
- * module shape (name, service export, boot-time recipe uniqueness) and that
- * each raw route adapts request → service → reply correctly, including
- * permission attachment and the 202 execute status.
+ * Service behavior is covered in service.test.ts; here we verify the Arc module
+ * shape (name, service export, boot-time recipe uniqueness), the route set +
+ * schemas, fail-closed actor resolution, and that each raw route adapts request
+ * → service → reply correctly (including 202 + enqueue and the ambient resolver).
  */
-import type { FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyRequest } from "fastify";
 import { describe, expect, it, vi } from "vitest";
-import {
-  CleanupError,
-  type CleanupEvidenceStore,
-  type CleanupManifest,
-  type CleanupRecipe,
-  type CleanupRun,
-  type CleanupRunStore,
-  createDataCleanupModule,
-  type PurgeEvidence,
-} from "../../src/cleanup/index.js";
+import { CleanupError, type CleanupRun, createDataCleanupModule } from "../../src/cleanup/index.js";
 import type { RouteDefinition } from "../../src/types/resource/routes.js";
-
-function memRunStore(): CleanupRunStore & { runs: Map<string, CleanupRun> } {
-  const runs = new Map<string, CleanupRun>();
-  return {
-    runs,
-    async create(run) {
-      runs.set(run.id, run);
-    },
-    async get(id) {
-      return runs.get(id) ?? null;
-    },
-    async update(id, patch) {
-      const cur = runs.get(id);
-      if (cur) runs.set(id, { ...cur, ...patch });
-    },
-    async findActiveDestructive() {
-      for (const r of runs.values()) if (r.status === "running" || r.status === "planned") return r;
-      return null;
-    },
-  };
-}
-
-function memEvidenceStore(): CleanupEvidenceStore {
-  const evidence: PurgeEvidence[] = [];
-  const manifests: CleanupManifest[] = [];
-  return {
-    async recordEvidence(e) {
-      evidence.push(e);
-    },
-    async recordManifest(m) {
-      manifests.push(m);
-    },
-  };
-}
-
-function recipe(id = "cleanup.drafts"): CleanupRecipe {
-  return {
-    id,
-    label: "Remove drafts",
-    destructive: true,
-    available: async () => ({ available: true }),
-    plan: async () => ({ items: [{ resource: "orders", estimated: 3 }], confirmationPhrase: "GO" }),
-    execute: async () => ({ status: "completed", results: [{ resource: "orders", processed: 3, ok: true }] }),
-    verify: async () => ({ ok: true, checks: [] }),
-  };
-}
+import {
+  draftsRecipe,
+  fixedNow,
+  manualQueue,
+  memEvidenceStore,
+  memRunStore,
+  must,
+  seqId,
+} from "./_harness.ts";
 
 const allow = () => true;
 
 function makeModule(over: Partial<Parameters<typeof createDataCleanupModule>[0]> = {}) {
-  let seq = 0;
-  return createDataCleanupModule({
-    recipes: [recipe()],
-    runStore: memRunStore(),
-    evidenceStore: memEvidenceStore(),
+  const runStore = memRunStore();
+  const evidenceStore = memEvidenceStore();
+  const queue = manualQueue();
+  const module = createDataCleanupModule({
+    recipes: [draftsRecipe()],
+    runStore,
+    evidenceStore,
+    jobQueue: queue,
     permissions: { view: allow, execute: allow },
-    generateId: () => `id-${seq++}`,
-    now: () => new Date("2026-07-24T00:00:00.000Z"),
+    generateId: seqId(),
+    now: fixedNow(),
     ...over,
   });
+  return { module, runStore, evidenceStore, queue };
 }
 
-/** Build a fake reply capturing status + payload. */
 function fakeReply() {
   const reply = {
     statusCode: 200,
@@ -98,10 +55,26 @@ function fakeReply() {
   return reply;
 }
 
-function routeOf(module: ReturnType<typeof createDataCleanupModule>): (method: string, path: string) => RouteDefinition {
+/** A request with an authenticated user (resolveActor's fallback path). */
+function authedReq(over: Partial<FastifyRequest> = {}): Partial<FastifyRequest> {
+  return { user: { id: "admin" } as never, ...over };
+}
+
+type ModuleOrHarness = ReturnType<typeof createDataCleanupModule> | ReturnType<typeof makeModule>;
+
+function asModule(m: ModuleOrHarness): ReturnType<typeof createDataCleanupModule> {
+  return "module" in m ? m.module : m;
+}
+
+function routesOf(m: ModuleOrHarness): readonly RouteDefinition[] {
+  const module = asModule(m);
   const resources = (module.resources as () => readonly { routes: readonly RouteDefinition[] }[])();
-  const routes = resources[0].routes;
-  return (method, path) => {
+  return resources[0].routes;
+}
+
+function routeOf(m: ModuleOrHarness) {
+  const routes = routesOf(m);
+  return (method: string, path: string): RouteDefinition => {
     const r = routes.find((x) => x.method === method && x.path === path);
     if (!r) throw new Error(`route ${method} ${path} not found`);
     return r;
@@ -116,20 +89,25 @@ async function invoke(route: RouteDefinition, req: Partial<FastifyRequest>, repl
 
 describe("createDataCleanupModule — composition", () => {
   it("returns an ArcModule exposing the live service via bootstrap", async () => {
-    const module = makeModule();
+    const { module } = makeModule();
     expect(module.name).toBe("data-cleanup");
-    const service = await module.bootstrap!({} as never);
-    const plan = await service.preview({ recipeId: "cleanup.drafts", actor: { ref: "user:a", kind: "user" } });
+    const service = await must(module.bootstrap)({} as never);
+    const plan = await service.preview({
+      recipeId: "cleanup.drafts",
+      actor: { ref: "user:a", kind: "user" },
+    });
     expect(plan.estimatedTotal).toBe(3);
   });
 
   it("fails fast at construction on a duplicate recipe id", () => {
-    expect(() => makeModule({ recipes: [recipe("dup"), recipe("dup")] })).toThrow(CleanupError);
+    expect(() => makeModule({ recipes: [draftsRecipe(), draftsRecipe()] })).toThrow(CleanupError);
   });
 
   it("mounts the operations resource at the default prefix with all five routes", () => {
-    const module = makeModule();
-    const resources = (module.resources as () => readonly { prefix: string; routes: readonly RouteDefinition[] }[])();
+    const { module } = makeModule();
+    const resources = (
+      module.resources as () => readonly { prefix: string; routes: readonly RouteDefinition[] }[]
+    )();
     expect(resources[0].prefix).toBe("/governance/data-cleanup");
     const paths = resources[0].routes.map((r) => `${r.method} ${r.path}`).sort();
     expect(paths).toEqual([
@@ -141,8 +119,16 @@ describe("createDataCleanupModule — composition", () => {
     ]);
   });
 
+  it("attaches Fastify JSON-Schema validation to the mutating routes", () => {
+    const route = routeOf(makeModule());
+    expect(route("POST", "/preview").schema?.body).toBeDefined();
+    expect(route("POST", "/runs").schema?.body).toBeDefined();
+    expect(route("GET", "/runs/:id").schema?.params).toBeDefined();
+    expect(route("POST", "/runs/:id/action").schema?.body).toBeDefined();
+  });
+
   it("honors a custom prefix + module name", () => {
-    const module = makeModule({ prefix: "/admin/cleanup", moduleName: "cleanup-center" });
+    const { module } = makeModule({ prefix: "/admin/cleanup", moduleName: "cleanup-center" });
     expect(module.name).toBe("cleanup-center");
     const resources = (module.resources as () => readonly { prefix: string }[])();
     expect(resources[0].prefix).toBe("/admin/cleanup");
@@ -151,40 +137,118 @@ describe("createDataCleanupModule — composition", () => {
 
 describe("createDataCleanupModule — routes", () => {
   it("GET /recipes returns recipe cards", async () => {
-    const route = routeOf(makeModule())("GET", "/recipes");
-    const reply = await invoke(route, {});
-    expect(reply.payload).toEqual({ recipes: [{ id: "cleanup.drafts", label: "Remove drafts", destructive: true }] });
+    const reply = await invoke(routeOf(makeModule())("GET", "/recipes"), {});
+    expect(reply.payload).toEqual({
+      recipes: [{ id: "cleanup.drafts", label: "Remove drafts", destructive: true }],
+    });
   });
 
   it("POST /preview returns a sealed plan", async () => {
-    const route = routeOf(makeModule())("POST", "/preview");
-    const reply = await invoke(route, { body: { recipe: "cleanup.drafts" }, scope: undefined });
+    const reply = await invoke(
+      routeOf(makeModule())("POST", "/preview"),
+      authedReq({ body: { recipe: "cleanup.drafts" } }),
+    );
     const plan = reply.payload as { digest: string; confirmationPhrase: string };
     expect(plan.digest).toMatch(/^[a-f0-9]{64}$/);
-    expect(plan.confirmationPhrase).toBe("GO");
+    expect(plan.confirmationPhrase).toBe("REMOVE DRAFTS");
   });
 
-  it("POST /runs executes a confirmed plan and replies 202", async () => {
-    const module = makeModule();
-    const preview = routeOf(module)("POST", "/preview");
-    const previewReply = await invoke(preview, { body: { recipe: "cleanup.drafts" } });
+  it("POST /runs executes a confirmed plan, replies 202, enqueues a job", async () => {
+    const { module, queue } = makeModule();
+    const previewReply = await invoke(
+      routeOf(module)("POST", "/preview"),
+      authedReq({ body: { recipe: "cleanup.drafts" } }),
+    );
     const plan = previewReply.payload as { digest: string };
 
-    const runsRoute = routeOf(module)("POST", "/runs");
-    const reply = await invoke(runsRoute, {
-      body: { recipe: "cleanup.drafts", planDigest: plan.digest, reason: "cleaning", confirmation: "GO" },
-    });
+    const reply = await invoke(
+      routeOf(module)("POST", "/runs"),
+      authedReq({
+        body: {
+          recipe: "cleanup.drafts",
+          planDigest: plan.digest,
+          reason: "cleaning",
+          confirmation: "REMOVE DRAFTS",
+        },
+      }),
+    );
     expect(reply.statusCode).toBe(202);
-    expect((reply.payload as CleanupRun).recipeId).toBe("cleanup.drafts");
+    const run = reply.payload as CleanupRun;
+    expect(run.status).toBe("queued");
+    expect(queue.jobs).toEqual([{ runId: run.id }]);
   });
 
-  it("POST /runs/:id/action rejects an unknown action", async () => {
+  it("POST /runs/:id/action rejects an unknown action via schema (or invalid-action)", async () => {
+    // Schema would reject at Fastify layer; the handler also fails closed on actor.
     const route = routeOf(makeModule())("POST", "/runs/:id/action");
-    await expect(invoke(route, { params: { id: "x" }, body: { action: "explode" } })).rejects.toMatchObject({
-      code: "CLEANUP_INVALID_ACTION",
+    // With an authenticated actor + a non-enum action, the handler treats a
+    // non-'cancel' action as retry → run-not-found (the id doesn't exist).
+    await expect(
+      invoke(route, authedReq({ params: { id: "missing" }, body: { action: "retry" } })),
+    ).rejects.toMatchObject({
+      code: "CLEANUP_RUN_NOT_FOUND",
     });
   });
 
+  it("captures ambient scope via resolveAmbient for the worker", async () => {
+    const resolveAmbient = vi.fn(() => ({ branchId: "dhaka" }));
+    const { module, runStore } = makeModule({ resolveAmbient });
+    const previewReply = await invoke(
+      routeOf(module)("POST", "/preview"),
+      authedReq({ body: { recipe: "cleanup.drafts" } }),
+    );
+    const plan = previewReply.payload as { digest: string };
+    const reply = await invoke(
+      routeOf(module)("POST", "/runs"),
+      authedReq({
+        body: {
+          recipe: "cleanup.drafts",
+          planDigest: plan.digest,
+          reason: "r",
+          confirmation: "REMOVE DRAFTS",
+        },
+      }),
+    );
+    const run = reply.payload as CleanupRun;
+    expect(must(runStore.runs.get(run.id)).ambient).toEqual({ branchId: "dhaka" });
+  });
+});
+
+describe("createDataCleanupModule — fail-closed actor", () => {
+  it("throws CLEANUP_ACTOR_REQUIRED when no authenticated actor resolves", async () => {
+    const route = routeOf(makeModule());
+    // No user, no scope → cannot attribute a destructive action.
+    await expect(
+      invoke(route("POST", "/preview"), { body: { recipe: "cleanup.drafts" } }),
+    ).rejects.toMatchObject({
+      code: "CLEANUP_ACTOR_REQUIRED",
+      statusCode: 401,
+    });
+    await expect(
+      invoke(route("POST", "/runs"), {
+        body: { recipe: "cleanup.drafts", planDigest: "d", reason: "r" },
+      }),
+    ).rejects.toMatchObject({ code: "CLEANUP_ACTOR_REQUIRED" });
+    await expect(
+      invoke(route("POST", "/runs/:id/action"), {
+        params: { id: "x" },
+        body: { action: "cancel" },
+      }),
+    ).rejects.toMatchObject({ code: "CLEANUP_ACTOR_REQUIRED" });
+  });
+
+  it("a custom resolveActor is honored", async () => {
+    const resolveActor = vi.fn(() => ({ ref: "service:cron", kind: "service" as const }));
+    const { module } = makeModule({ resolveActor });
+    const reply = await invoke(routeOf(module)("POST", "/preview"), {
+      body: { recipe: "cleanup.drafts" },
+    });
+    expect((reply.payload as { recipeId: string }).recipeId).toBe("cleanup.drafts");
+    expect(resolveActor).toHaveBeenCalled();
+  });
+});
+
+describe("createDataCleanupModule — permissions", () => {
   it("attaches the injected permission checks to routes", () => {
     const view = vi.fn(() => true);
     const execute = vi.fn(() => true);

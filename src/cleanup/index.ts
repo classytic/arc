@@ -3,21 +3,40 @@
  * (data-cleanup design §6.5).
  *
  * Arc owns: the recipe registry (boot-time uniqueness), the deterministic
- * plan digest, stable typed errors, the run/evidence store PORTS, the
- * orchestration service (preview → confirm → execute → verify → evidence),
- * and the Arc resource factory. Arc does NOT own recipe definitions or
- * statutory rules — those live in the host + domain kernels.
+ * plan/manifest checksums, stable typed errors, the durable run/evidence/queue
+ * PORTS, the orchestration service (validate → enqueue → worker: execute →
+ * verify → finalize, with CAS transitions + cooperative cancellation), and the
+ * Arc resource factory. Arc does NOT own recipe definitions or statutory rules
+ * — those live in the host + domain kernels.
  *
  * Compose with `createDataCleanupModule({ recipes, runStore, evidenceStore,
- * permissions, writeFence, worker })`.
+ * permissions, writeFence?, jobQueue?, ... })`.
  */
 
+export type { CleanupErrorCode } from "./errors.js";
+export { CleanupCancelled, CleanupError, CleanupErrors } from "./errors.js";
+export type { DataCleanupModuleDeps } from "./module.js";
+export { createDataCleanupModule } from "./module.js";
+
+export { canonicalJson, computeManifestDigest, computePlanDigest } from "./plan-digest.js";
+export type { CleanupRecipeInfo, CleanupRegistry } from "./registry.js";
+export { createCleanupRegistry } from "./registry.js";
+export type {
+  CleanupService,
+  CleanupServiceDeps,
+  ExecuteInput,
+  PreviewInput,
+} from "./service.js";
+export { createCleanupService } from "./service.js";
 export type {
   Availability,
   CleanupContext,
   CleanupEvidenceStore,
   CleanupExecutionContext,
   CleanupInput,
+  CleanupJob,
+  CleanupJobQueue,
+  CleanupLimits,
   CleanupLogger,
   CleanupManifest,
   CleanupOutcomeStatus,
@@ -26,13 +45,15 @@ export type {
   CleanupPlan,
   CleanupPlanDraft,
   CleanupPlanItem,
+  CleanupProgressSummary,
   CleanupRecipe,
   CleanupResult,
   CleanupRun,
+  CleanupRunCreateResult,
   CleanupRunStatus,
   CleanupRunStore,
+  CleanupRunTransitionPatch,
   CleanupStepResult,
-  CleanupWorker,
   CleanupWriteFence,
   PurgeActor,
   PurgeEvidence,
@@ -41,22 +62,4 @@ export type {
   VerificationCheck,
   VerificationResult,
 } from "./types.js";
-
-export { CleanupError, CleanupErrors } from "./errors.js";
-export type { CleanupErrorCode } from "./errors.js";
-
-export { computeManifestDigest, computePlanDigest } from "./plan-digest.js";
-
-export { createCleanupRegistry } from "./registry.js";
-export type { CleanupRegistry, CleanupRecipeInfo } from "./registry.js";
-
-export { createCleanupService } from "./service.js";
-export type {
-  CleanupService,
-  CleanupServiceDeps,
-  ExecuteInput,
-  PreviewInput,
-} from "./service.js";
-
-export { createDataCleanupModule } from "./module.js";
-export type { DataCleanupModuleDeps } from "./module.js";
+export { CLEANUP_TERMINAL_STATUSES, DEFAULT_CLEANUP_LIMITS } from "./types.js";

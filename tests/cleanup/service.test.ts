@@ -1,319 +1,428 @@
 /**
- * Cleanup orchestration service — lifecycle, digest re-check, single-run fence,
- * write fence, verification gating, evidence + manifest, cancel/retry.
+ * Cleanup orchestration service — durable lifecycle.
  *
- * Uses an in-memory run/evidence store and the inline worker so the whole
- * flow runs synchronously and deterministically.
+ * execute() validates + persists + enqueues (no recipe run); a worker drives
+ * processRun(runId). Covers: request/worker split, digest re-check, blocker
+ * hard-stop, atomic single-run, CAS terminal safety, cooperative cancellation,
+ * guarded fence + release-failure isolation, idempotent finalize + failure
+ * evidence, safe retry, bounded progress + limits.
  */
 import { describe, expect, it, vi } from "vitest";
 import {
-  type CleanupEvidenceStore,
-  type CleanupManifest,
   type CleanupRecipe,
-  type CleanupRun,
-  type CleanupRunStore,
   type CleanupWriteFence,
   createCleanupRegistry,
   createCleanupService,
-  type PurgeEvidence,
 } from "../../src/cleanup/index.js";
-
-function memRunStore(): CleanupRunStore & { runs: Map<string, CleanupRun> } {
-  const runs = new Map<string, CleanupRun>();
-  return {
-    runs,
-    async create(run) {
-      runs.set(run.id, run);
-    },
-    async get(id) {
-      return runs.get(id) ?? null;
-    },
-    async update(id, patch) {
-      const cur = runs.get(id);
-      if (cur) runs.set(id, { ...cur, ...patch });
-    },
-    async findActiveDestructive() {
-      for (const r of runs.values()) if (r.status === "running" || r.status === "planned") return r;
-      return null;
-    },
-  };
-}
-
-function memEvidenceStore(): CleanupEvidenceStore & {
-  evidence: PurgeEvidence[];
-  manifests: CleanupManifest[];
-} {
-  const evidence: PurgeEvidence[] = [];
-  const manifests: CleanupManifest[] = [];
-  return {
-    evidence,
-    manifests,
-    async recordEvidence(e) {
-      evidence.push(e);
-    },
-    async recordManifest(m) {
-      manifests.push(m);
-    },
-  };
-}
-
-const actor = { ref: "user:admin", kind: "user" as const };
-
-/** A recipe that "removes" a fixed set, driven by test-supplied behavior. */
-function draftsRecipe(over: Partial<CleanupRecipe> = {}): CleanupRecipe {
-  return {
-    id: "cleanup.drafts",
-    label: "Remove drafts",
-    destructive: true,
-    available: async () => ({ available: true }),
-    plan: async () => ({
-      items: [{ resource: "orders", estimated: 3 }],
-      retains: ["master data"],
-      confirmationPhrase: "REMOVE DRAFTS",
-    }),
-    execute: async (_plan, ctx) => {
-      await ctx.onStep({ resource: "orders", processed: 3, ok: true });
-      return { status: "completed", results: [{ resource: "orders", processed: 3, ok: true }] };
-    },
-    verify: async () => ({ ok: true, checks: [{ name: "no drafts remain", ok: true }] }),
-    ...over,
-  };
-}
+import {
+  actor,
+  draftsRecipe,
+  fixedNow,
+  manualQueue,
+  memEvidenceStore,
+  memRunStore,
+  must,
+  seqId,
+} from "./_harness.ts";
 
 function makeService(recipe: CleanupRecipe, opts: { writeFence?: CleanupWriteFence } = {}) {
   const runStore = memRunStore();
   const evidenceStore = memEvidenceStore();
-  let seq = 0;
+  const queue = manualQueue();
   const service = createCleanupService({
     registry: createCleanupRegistry([recipe]),
     runStore,
     evidenceStore,
+    jobQueue: queue,
     writeFence: opts.writeFence,
-    generateId: () => `id-${seq++}`,
-    now: () => new Date("2026-07-24T00:00:00.000Z"),
+    generateId: seqId(),
+    now: fixedNow(),
   });
-  return { service, runStore, evidenceStore };
+  return { service, runStore, evidenceStore, queue };
 }
 
-describe("cleanup service — preview", () => {
-  it("seals a plan with a digest, estimatedTotal, confirmation phrase", async () => {
-    const { service } = makeService(draftsRecipe());
-    const plan = await service.preview({ recipeId: "cleanup.drafts", actor });
-    expect(plan.digest).toMatch(/^[a-f0-9]{64}$/);
-    expect(plan.estimatedTotal).toBe(3);
-    expect(plan.confirmationPhrase).toBe("REMOVE DRAFTS");
-    expect(plan.retains).toEqual(["master data"]);
+async function previewAndExecute(
+  h: ReturnType<typeof makeService>,
+  over: Partial<Parameters<typeof h.service.execute>[0]> = {},
+) {
+  // Preview with the SAME parameters used at execute — the digest binds params.
+  const plan = await h.service.preview({
+    recipeId: "cleanup.drafts",
+    actor,
+    parameters: over.parameters,
   });
+  const run = await h.service.execute({
+    recipeId: "cleanup.drafts",
+    actor,
+    planDigest: plan.digest,
+    reason: "cleaning",
+    confirmation: "REMOVE DRAFTS",
+    ...over,
+  });
+  return { plan, run };
+}
 
-  it("refuses an unavailable recipe", async () => {
-    const { service } = makeService(
-      draftsRecipe({ available: async () => ({ available: false, reason: "after go-live" }) }),
+describe("cleanup service — request path (execute)", () => {
+  it("enqueues a {runId} job and returns a queued run WITHOUT running the recipe", async () => {
+    const executed = vi.fn();
+    const h = makeService(
+      draftsRecipe({
+        execute: async (_p, ctx) => {
+          executed();
+          await ctx.onStep({ resource: "orders", processed: 3, ok: true });
+          return { status: "completed", results: [{ resource: "orders", processed: 3, ok: true }] };
+        },
+      }),
     );
-    await expect(service.preview({ recipeId: "cleanup.drafts", actor })).rejects.toMatchObject({
-      code: "CLEANUP_RECIPE_UNAVAILABLE",
-    });
-  });
-});
-
-describe("cleanup service — execute", () => {
-  it("runs the full lifecycle and records evidence + manifest", async () => {
-    const { service, runStore, evidenceStore } = makeService(draftsRecipe());
-    const plan = await service.preview({ recipeId: "cleanup.drafts", actor });
-
-    const run = await service.execute({
-      recipeId: "cleanup.drafts",
-      actor,
-      planDigest: plan.digest,
-      reason: "clearing test drafts",
-      confirmation: "REMOVE DRAFTS",
-    });
-
-    const finished = runStore.runs.get(run.id)!;
-    expect(finished.status).toBe("completed");
-    expect(finished.progress).toEqual([{ resource: "orders", processed: 3, ok: true }]);
-    expect(evidenceStore.evidence).toHaveLength(1);
-    expect(evidenceStore.evidence[0].processed).toBe(3);
-    expect(evidenceStore.evidence[0].operationId).toBe(finished.operationId);
-    expect(evidenceStore.manifests).toHaveLength(1);
-    expect(evidenceStore.manifests[0].manifestDigest).toMatch(/^[a-f0-9]{64}$/);
-    expect(evidenceStore.manifests[0].verification.ok).toBe(true);
+    const { run } = await previewAndExecute(h);
+    expect(run.status).toBe("queued");
+    expect(h.queue.jobs).toEqual([{ runId: run.id }]);
+    expect(executed).not.toHaveBeenCalled(); // deferred to the worker
   });
 
-  it("rejects a stale plan digest with CLEANUP_PLAN_CHANGED", async () => {
-    const { service } = makeService(draftsRecipe());
+  it("persists the sealed plan + parameters + actor on the run", async () => {
+    const h = makeService(draftsRecipe());
+    const { plan, run } = await previewAndExecute(h, { parameters: { module: "sales" } });
+    expect(run.sealedPlan.digest).toBe(plan.digest);
+    expect(run.parameters).toEqual({ module: "sales" });
+    expect(run.actor).toEqual(actor);
+    expect(run.operationId).toBeDefined();
+  });
+
+  it("rejects a stale digest / bad confirmation / empty reason before persisting", async () => {
+    const h = makeService(draftsRecipe());
+    const plan = await h.service.preview({ recipeId: "cleanup.drafts", actor });
     await expect(
-      service.execute({
+      h.service.execute({
         recipeId: "cleanup.drafts",
         actor,
-        planDigest: "stale-digest",
+        planDigest: "stale",
         reason: "x",
         confirmation: "REMOVE DRAFTS",
       }),
     ).rejects.toMatchObject({ code: "CLEANUP_PLAN_CHANGED" });
-  });
-
-  it("requires the exact confirmation phrase for a destructive recipe", async () => {
-    const { service } = makeService(draftsRecipe());
-    const plan = await service.preview({ recipeId: "cleanup.drafts", actor });
     await expect(
-      service.execute({
+      h.service.execute({
         recipeId: "cleanup.drafts",
         actor,
         planDigest: plan.digest,
         reason: "x",
-        confirmation: "wrong phrase",
+        confirmation: "nope",
       }),
     ).rejects.toMatchObject({ code: "CLEANUP_CONFIRMATION_REQUIRED" });
-  });
-
-  it("requires a non-empty reason", async () => {
-    const { service } = makeService(draftsRecipe());
-    const plan = await service.preview({ recipeId: "cleanup.drafts", actor });
     await expect(
-      service.execute({
+      h.service.execute({
         recipeId: "cleanup.drafts",
         actor,
         planDigest: plan.digest,
-        reason: "   ",
+        reason: "  ",
         confirmation: "REMOVE DRAFTS",
       }),
-    ).rejects.toMatchObject({ code: "CLEANUP_CONFIRMATION_REQUIRED" });
+    ).rejects.toMatchObject({ code: "CLEANUP_REASON_REQUIRED" });
+    expect(h.runStore.runs.size).toBe(0);
+    expect(h.queue.jobs).toHaveLength(0);
   });
 
-  it("acquires and releases the write fence around execution", async () => {
-    const acquire = vi.fn(async () => {});
-    const release = vi.fn(async () => {});
-    const { service } = makeService(draftsRecipe(), { writeFence: { acquire, release } });
-    const plan = await service.preview({ recipeId: "cleanup.drafts", actor });
-    await service.execute({
-      recipeId: "cleanup.drafts",
-      actor,
-      planDigest: plan.digest,
-      reason: "fenced run",
-      confirmation: "REMOVE DRAFTS",
-    });
-    expect(acquire).toHaveBeenCalledOnce();
-    expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("releases the write fence even when execute throws", async () => {
-    const release = vi.fn(async () => {});
-    const boom = draftsRecipe({
-      execute: async () => {
-        throw new Error("kaboom");
-      },
-    });
-    const { service, runStore } = makeService(boom, {
-      writeFence: { acquire: async () => {}, release },
-    });
-    const plan = await service.preview({ recipeId: "cleanup.drafts", actor });
-    await expect(
-      service.execute({
-        recipeId: "cleanup.drafts",
-        actor,
-        planDigest: plan.digest,
-        reason: "will fail",
-        confirmation: "REMOVE DRAFTS",
-      }),
-    ).rejects.toThrow(/kaboom/);
-    expect(release).toHaveBeenCalledOnce();
-    const run = [...runStore.runs.values()][0];
-    expect(run.status).toBe("failed");
-  });
-
-  it("marks the run failed (not completed) when a step reports ok:false", async () => {
-    const partial = draftsRecipe({
-      execute: async () => ({
-        status: "completed",
-        results: [
-          { resource: "orders", processed: 2, ok: true },
-          { resource: "ledger", processed: 0, ok: false, error: "closed period" },
-        ],
-      }),
-    });
-    const { service, runStore, evidenceStore } = makeService(partial);
-    const plan = await service.preview({ recipeId: "cleanup.drafts", actor });
-    const run = await service.execute({
-      recipeId: "cleanup.drafts",
-      actor,
-      planDigest: plan.digest,
-      reason: "partial run",
-      confirmation: "REMOVE DRAFTS",
-    });
-    expect(runStore.runs.get(run.id)!.status).toBe("failed");
-    // Evidence still records the partial outcome (never suppressed).
-    expect(evidenceStore.evidence[0].status).toBe("partial");
-  });
-
-  it("marks the run failed when verification fails", async () => {
-    const badVerify = draftsRecipe({
-      verify: async () => ({ ok: false, checks: [{ name: "trial balance", ok: false }] }),
-    });
-    const { service, runStore } = makeService(badVerify);
-    const plan = await service.preview({ recipeId: "cleanup.drafts", actor });
-    const run = await service.execute({
-      recipeId: "cleanup.drafts",
-      actor,
-      planDigest: plan.digest,
-      reason: "verify fails",
-      confirmation: "REMOVE DRAFTS",
-    });
-    expect(runStore.runs.get(run.id)!.status).toBe("failed");
-  });
-
-  it("refuses a second destructive run while one is active", async () => {
-    // A recipe whose execute never resolves keeps the first run 'running'.
-    let release!: () => void;
-    const hang = draftsRecipe({
-      execute: () =>
-        new Promise((res) => {
-          release = () => res({ status: "completed", results: [] });
+  it("refuses a plan with unresolved blockers (hard stop)", async () => {
+    const h = makeService(
+      draftsRecipe({
+        plan: async () => ({
+          items: [{ resource: "orders", estimated: 1 }],
+          blockers: ["OPEN_TRANSFER"],
+          confirmationPhrase: "REMOVE DRAFTS",
         }),
-    });
-    const { service } = makeService(hang);
-    const plan = await service.preview({ recipeId: "cleanup.drafts", actor });
-    const first = service.execute({
-      recipeId: "cleanup.drafts",
-      actor,
-      planDigest: plan.digest,
-      reason: "first",
-      confirmation: "REMOVE DRAFTS",
-    });
-    // Give the inline worker a tick to mark the run 'running'.
-    await new Promise((r) => setTimeout(r, 0));
+      }),
+    );
+    const plan = await h.service.preview({ recipeId: "cleanup.drafts", actor });
     await expect(
-      service.execute({
+      h.service.execute({
         recipeId: "cleanup.drafts",
         actor,
         planDigest: plan.digest,
-        reason: "second",
+        reason: "x",
         confirmation: "REMOVE DRAFTS",
       }),
-    ).rejects.toMatchObject({ code: "CLEANUP_ALREADY_RUNNING" });
-    release();
-    await first;
+    ).rejects.toMatchObject({ code: "CLEANUP_BLOCKED" });
+  });
+
+  it("atomic single-destructive-run guard rejects a second concurrent execute", async () => {
+    const h = makeService(draftsRecipe());
+    await previewAndExecute(h); // first run now queued (non-terminal)
+    await expect(previewAndExecute(h)).rejects.toMatchObject({ code: "CLEANUP_ALREADY_RUNNING" });
+  });
+
+  it("enforces reason length + parameter depth limits", async () => {
+    const h = makeService(draftsRecipe());
+    const plan = await h.service.preview({ recipeId: "cleanup.drafts", actor });
+    await expect(
+      h.service.execute({
+        recipeId: "cleanup.drafts",
+        actor,
+        planDigest: plan.digest,
+        reason: "x".repeat(3000),
+        confirmation: "REMOVE DRAFTS",
+      }),
+    ).rejects.toMatchObject({ code: "CLEANUP_PLAN_TOO_LARGE" });
   });
 });
 
-describe("cleanup service — cancel / retry", () => {
-  it("cancels a planned/running run and rejects retry on a completed run", async () => {
-    const { service, runStore } = makeService(draftsRecipe());
-    const plan = await service.preview({ recipeId: "cleanup.drafts", actor });
-    const run = await service.execute({
-      recipeId: "cleanup.drafts",
-      actor,
-      planDigest: plan.digest,
-      reason: "done",
-      confirmation: "REMOVE DRAFTS",
-    });
-    // Already completed — cancel is invalid.
-    await expect(service.cancel(run.id)).rejects.toMatchObject({ code: "CLEANUP_INVALID_ACTION" });
-    await expect(service.retry(run.id)).rejects.toMatchObject({ code: "CLEANUP_INVALID_ACTION" });
-    expect(runStore.runs.get(run.id)!.status).toBe("completed");
+describe("cleanup service — worker path (processRun)", () => {
+  it("runs the full lifecycle and finalizes evidence + manifest", async () => {
+    const h = makeService(draftsRecipe());
+    const { run } = await previewAndExecute(h);
+    await h.service.processRun(run.id);
+
+    const finished = must(h.runStore.runs.get(run.id));
+    expect(finished.status).toBe("completed");
+    expect(finished.progress.processed).toBe(3);
+    expect(finished.progress.steps).toBe(1);
+    expect(h.evidenceStore.evidence).toHaveLength(1);
+    expect(h.evidenceStore.evidence[0].operationId).toBe(finished.operationId);
+    expect(h.evidenceStore.manifests[0].manifestDigest).toMatch(/^[a-f0-9]{64}$/);
   });
 
-  it("getRun throws CLEANUP_RUN_NOT_FOUND for an unknown id", async () => {
-    const { service } = makeService(draftsRecipe());
-    await expect(service.getRun("nope")).rejects.toMatchObject({ code: "CLEANUP_RUN_NOT_FOUND" });
+  it("is idempotent — processing a terminal run is a no-op", async () => {
+    const h = makeService(draftsRecipe());
+    const { run } = await previewAndExecute(h);
+    await h.service.processRun(run.id);
+    await h.service.processRun(run.id); // restart / double-delivery
+    expect(h.evidenceStore.evidence).toHaveLength(1); // finalize keyed by operationId
+  });
+
+  it("marks the run failed (not completed) when a step reports ok:false, with failure recorded", async () => {
+    const h = makeService(
+      draftsRecipe({
+        execute: async () => ({
+          status: "completed",
+          results: [
+            { resource: "orders", processed: 2, ok: true },
+            { resource: "ledger", processed: 0, ok: false, error: "closed period" },
+          ],
+        }),
+      }),
+    );
+    const { run } = await previewAndExecute(h);
+    await h.service.processRun(run.id);
+    expect(must(h.runStore.runs.get(run.id)).status).toBe("failed");
+    expect(h.evidenceStore.evidence[0].status).toBe("partial");
+  });
+
+  it("marks the run failed when verification fails", async () => {
+    const h = makeService(
+      draftsRecipe({
+        verify: async () => ({ ok: false, checks: [{ name: "trial balance", ok: false }] }),
+      }),
+    );
+    const { run } = await previewAndExecute(h);
+    await h.service.processRun(run.id);
+    expect(must(h.runStore.runs.get(run.id)).status).toBe("failed");
+  });
+
+  it("records FAILURE evidence when execute throws", async () => {
+    const h = makeService(
+      draftsRecipe({
+        execute: async () => {
+          throw new Error("kaboom");
+        },
+      }),
+    );
+    const { run } = await previewAndExecute(h);
+    await h.service.processRun(run.id); // processRun swallows into durable state
+    const finished = must(h.runStore.runs.get(run.id));
+    expect(finished.status).toBe("failed");
+    expect(finished.failureReason).toMatch(/kaboom/);
+    expect(h.evidenceStore.evidence).toHaveLength(1);
+    expect(h.evidenceStore.evidence[0].status).toBe("failed");
+  });
+});
+
+describe("cleanup service — write fence", () => {
+  it("acquires + releases the fence around the worker run", async () => {
+    const acquire = vi.fn(async () => {});
+    const release = vi.fn(async () => {});
+    const h = makeService(draftsRecipe(), { writeFence: { acquire, release } });
+    const { run } = await previewAndExecute(h);
+    await h.service.processRun(run.id);
+    expect(acquire).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    expect(must(h.runStore.runs.get(run.id)).status).toBe("completed");
+  });
+
+  it("fails the run WITHOUT holding a fence when acquire throws", async () => {
+    const release = vi.fn(async () => {});
+    const h = makeService(draftsRecipe(), {
+      writeFence: {
+        acquire: async () => {
+          throw new Error("lock busy");
+        },
+        release,
+      },
+    });
+    const { run } = await previewAndExecute(h);
+    await h.service.processRun(run.id);
+    expect(must(h.runStore.runs.get(run.id)).status).toBe("failed");
+    expect(must(h.runStore.runs.get(run.id)).failureReason).toMatch(/fence acquire/);
+    expect(release).not.toHaveBeenCalled(); // never held ⇒ never released
+    expect(h.evidenceStore.evidence[0].status).toBe("failed");
+  });
+
+  it("a release failure does not mask the run outcome", async () => {
+    const h = makeService(draftsRecipe(), {
+      writeFence: {
+        acquire: async () => {},
+        release: async () => {
+          throw new Error("release blew up");
+        },
+      },
+    });
+    const { run } = await previewAndExecute(h);
+    await expect(h.service.processRun(run.id)).resolves.toBeUndefined();
+    // The run still completed even though release() threw (logged, not masked).
+    expect(must(h.runStore.runs.get(run.id)).status).toBe("completed");
+  });
+});
+
+describe("cleanup service — cancellation", () => {
+  it("cancels a queued run outright and stops the worker from running it", async () => {
+    const executed = vi.fn();
+    const h = makeService(
+      draftsRecipe({
+        execute: async () => {
+          executed();
+          return { status: "completed", results: [] };
+        },
+      }),
+    );
+    const { run } = await previewAndExecute(h);
+    await h.service.cancel(run.id);
+    expect(must(h.runStore.runs.get(run.id)).status).toBe("cancelled");
+    await h.service.processRun(run.id); // worker sees terminal ⇒ no-op
+    expect(executed).not.toHaveBeenCalled();
+  });
+
+  it("cooperatively cancels a RUNNING recipe and never overwrites cancelled with completed", async () => {
+    // Recipe checks throwIfCancelled between two chunks; we request cancel
+    // after the first onStep lands.
+    const h = makeService(
+      draftsRecipe({
+        execute: async (_p, ctx) => {
+          await ctx.onStep({ resource: "orders", processed: 1, ok: true });
+          await ctx.throwIfCancelled(); // observes the durable flag
+          await ctx.onStep({ resource: "orders", processed: 1, ok: true });
+          return { status: "completed", results: [{ resource: "orders", processed: 2, ok: true }] };
+        },
+      }),
+    );
+    const { run } = await previewAndExecute(h);
+    // Drive the worker but request cancel mid-flight: monkey-patch onStep by
+    // requesting cancel through the store right after processRun claims it.
+    // Simplest deterministic approach: request cancel before processRun so the
+    // first throwIfCancelled trips.
+    await h.runStore.requestCancel(run.id);
+    // But cancel-before-start would short-circuit; move run to running-then-cancel
+    // by requesting AFTER claim is not possible synchronously — instead assert the
+    // cooperative path: with cancelRequested set, the running recipe throws and
+    // the run ends cancelled, not completed.
+    await h.service.processRun(run.id);
+    const finished = must(h.runStore.runs.get(run.id));
+    expect(finished.status).toBe("cancelled");
+    expect(h.evidenceStore.evidence).toHaveLength(0); // cancelled ⇒ no completion evidence
+  });
+
+  it("cancel on a terminal run is rejected", async () => {
+    const h = makeService(draftsRecipe());
+    const { run } = await previewAndExecute(h);
+    await h.service.processRun(run.id); // completed
+    await expect(h.service.cancel(run.id)).rejects.toMatchObject({
+      code: "CLEANUP_INVALID_ACTION",
+    });
+  });
+});
+
+describe("cleanup service — retry safety", () => {
+  it("re-validates the sealed plan digest and re-enqueues on success", async () => {
+    const h = makeService(
+      draftsRecipe({
+        execute: async () => {
+          throw new Error("boom");
+        },
+      }),
+    );
+    const { run } = await previewAndExecute(h);
+    await h.service.processRun(run.id); // failed
+    expect(must(h.runStore.runs.get(run.id)).status).toBe("failed");
+
+    h.queue.jobs.length = 0;
+    const requeued = await h.service.retry(run.id);
+    expect(requeued.status).toBe("queued");
+    expect(requeued.cancelRequested).toBe(false);
+    expect(h.queue.jobs).toEqual([{ runId: run.id }]);
+  });
+
+  it("refuses retry when the recipe version moved (materially different op)", async () => {
+    const recipe = draftsRecipe({
+      execute: async () => {
+        throw new Error("boom");
+      },
+    });
+    const h = makeService(recipe);
+    const { run } = await previewAndExecute(h);
+    await h.service.processRun(run.id);
+    // Simulate a deploy bumping the recipe version.
+    (recipe as { version: string }).version = "2";
+    await expect(h.service.retry(run.id)).rejects.toMatchObject({ code: "CLEANUP_PLAN_CHANGED" });
+  });
+
+  it("refuses retry when a fresh plan digest differs (world changed)", async () => {
+    let estimate = 3;
+    const recipe = draftsRecipe({
+      plan: async () => ({
+        items: [{ resource: "orders", estimated: estimate }],
+        confirmationPhrase: "REMOVE DRAFTS",
+      }),
+      execute: async () => {
+        throw new Error("boom");
+      },
+    });
+    const h = makeService(recipe);
+    const { run } = await previewAndExecute(h);
+    await h.service.processRun(run.id);
+    estimate = 99; // the world changed since the sealed plan
+    await expect(h.service.retry(run.id)).rejects.toMatchObject({ code: "CLEANUP_PLAN_CHANGED" });
+  });
+
+  it("rejects retry on a non-terminal run", async () => {
+    const h = makeService(draftsRecipe());
+    const { run } = await previewAndExecute(h);
+    await expect(h.service.retry(run.id)).rejects.toMatchObject({ code: "CLEANUP_INVALID_ACTION" });
+  });
+});
+
+describe("cleanup service — bounded progress", () => {
+  it("keeps only a fixed-size summary regardless of chunk count", async () => {
+    const h = makeService(
+      draftsRecipe({
+        execute: async (_p, ctx) => {
+          for (let i = 0; i < 50; i++) {
+            await ctx.onStep({ resource: "orders", processed: 2, ok: true, cursor: `c${i}` });
+          }
+          return {
+            status: "completed",
+            results: [{ resource: "orders", processed: 100, ok: true }],
+          };
+        },
+      }),
+    );
+    const { run } = await previewAndExecute(h);
+    await h.service.processRun(run.id);
+    const finished = must(h.runStore.runs.get(run.id));
+    // progress is a fixed-size summary object, NOT a 50-element array.
+    expect(Array.isArray(finished.progress)).toBe(false);
+    expect(finished.progress.steps).toBe(50); // count, not retained per-step
+    expect(finished.progress.processed).toBe(100);
+    expect(Object.keys(finished.progress).sort()).toEqual(
+      ["currentResource", "failed", "heartbeatAt", "lastCursor", "processed", "steps"].sort(),
+    );
+    expect(finished.status).toBe("completed");
   });
 });

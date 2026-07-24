@@ -8,14 +8,20 @@
  *
  *   GET  {prefix}/recipes         — recipe cards (introspection) [view]
  *   POST {prefix}/preview         — plan + digest, no mutation     [view]
- *   POST {prefix}/runs            — execute a confirmed plan       [execute]
+ *   POST {prefix}/runs            — execute a confirmed plan (202) [execute]
  *   GET  {prefix}/runs/:id        — observe a run                  [view]
  *   POST {prefix}/runs/:id/action — cancel | retry                 [manage]
  *
  * The resource has NO Mongo model — run/evidence persistence is the injected
  * ports' job (the host owns the collections). Routes are `raw` Fastify handlers
- * with route-level `permissions`; thrown `CleanupError`s carry `status`/`code`
- * so arc's error handler maps them without a per-host mapper.
+ * with route-level `permissions` AND Fastify JSON-Schema validation (`schema`);
+ * thrown `CleanupError`s carry `statusCode`/`code` so arc's error handler maps
+ * them without a per-host mapper.
+ *
+ * Route schemas are plain JSON Schema (not Zod) on purpose: `zod` is an OPTIONAL
+ * arc peer and this subpath is always-loaded, so importing zod here would make
+ * it a de-facto requirement for every cleanup consumer. Arc's `convertRouteSchema`
+ * accepts either form; a host that prefers Zod can override at its own edge.
  */
 
 import type { FastifyReply, FastifyRequest } from "fastify";
@@ -27,13 +33,14 @@ import { getUserId } from "../scope/types.js";
 import type { RequestWithExtras } from "../types/fastify.js";
 import { CleanupErrors } from "./errors.js";
 import { createCleanupRegistry } from "./registry.js";
-import { createCleanupService, type CleanupService } from "./service.js";
+import { type CleanupService, createCleanupService } from "./service.js";
 import type {
   CleanupEvidenceStore,
+  CleanupJobQueue,
+  CleanupLimits,
   CleanupPermissions,
   CleanupRecipe,
   CleanupRunStore,
-  CleanupWorker,
   CleanupWriteFence,
   PurgeActor,
 } from "./types.js";
@@ -41,16 +48,18 @@ import type {
 export interface DataCleanupModuleDeps {
   /** The recipes this deployment exposes. Ids must be unique (boot-checked). */
   recipes: readonly CleanupRecipe[];
-  /** Durable run store — host-owned persistence. */
+  /** Durable run store — host-owned persistence (atomic create + CAS transitions). */
   runStore: CleanupRunStore;
-  /** Durable evidence + manifest store — host-owned persistence. */
+  /** Durable evidence + manifest store — host-owned, idempotent by operationId. */
   evidenceStore: CleanupEvidenceStore;
   /** Permission checks for view / execute / manage. */
   permissions: CleanupPermissions;
   /** Optional write fence (§8). */
   writeFence?: CleanupWriteFence | undefined;
-  /** Optional worker (§8) — defaults to inline in-process. */
-  worker?: CleanupWorker | undefined;
+  /** Optional durable job queue (§8) — defaults to microtask-deferred in-process. */
+  jobQueue?: CleanupJobQueue | undefined;
+  /** Framework size caps. */
+  limits?: Partial<CleanupLimits> | undefined;
   /** Route prefix. Default `/governance/data-cleanup`. */
   prefix?: string | undefined;
   /** Module name. Default `data-cleanup`. */
@@ -58,21 +67,65 @@ export interface DataCleanupModuleDeps {
   /** App resource names this module supersedes. */
   owns?: readonly string[] | undefined;
   /**
-   * Derive the acting party from the request. Default reads
-   * `getUserId(req.scope)` → `{ ref: 'user:<id>', kind: 'user' }`, falling back
-   * to `{ ref: 'user:unknown', kind: 'user' }`.
+   * Derive the acting party from the request. Default reads `getUserId(req.scope)`
+   * (falling back to `req.user.id`) and FAILS CLOSED — a destructive governance
+   * action with no resolvable authenticated actor throws `CLEANUP_ACTOR_REQUIRED`
+   * (401) rather than attributing the purge to `user:unknown`.
    */
   resolveActor?: (req: RequestWithExtras) => PurgeActor;
-  /** Injected id generator (tests). Defaults to `crypto.randomUUID`. */
+  /**
+   * Capture the request's serializable ambient scope (branch/company target) so
+   * the worker rebuilds the exact operation context. Must be JSON-serializable.
+   */
+  resolveAmbient?: (req: RequestWithExtras) => Readonly<Record<string, unknown>> | undefined;
+  /** Injected id generator (tests). */
   generateId?: () => string;
-  /** Injected clock (tests). Defaults to `() => new Date()`. */
+  /** Injected clock (tests). */
   now?: () => Date;
 }
 
 function defaultResolveActor(req: RequestWithExtras): PurgeActor {
-  const id = (req.scope ? getUserId(req.scope) : undefined) ?? (req.user as { id?: string } | undefined)?.id;
-  return { ref: id ? `user:${id}` : "user:unknown", kind: "user" };
+  const id =
+    (req.scope ? getUserId(req.scope) : undefined) ?? (req.user as { id?: string } | undefined)?.id;
+  if (!id) throw CleanupErrors.actorRequired();
+  return { ref: `user:${id}`, kind: "user" };
 }
+
+const recipeIdSchema = { type: "string", minLength: 1, maxLength: 200 } as const;
+const parametersSchema = { type: "object", additionalProperties: true } as const;
+
+const previewBodySchema = {
+  type: "object",
+  required: ["recipe"],
+  additionalProperties: false,
+  properties: { recipe: recipeIdSchema, parameters: parametersSchema },
+} as const;
+
+const runsBodySchema = {
+  type: "object",
+  required: ["recipe", "planDigest", "reason"],
+  additionalProperties: false,
+  properties: {
+    recipe: recipeIdSchema,
+    parameters: parametersSchema,
+    planDigest: { type: "string", minLength: 1, maxLength: 128 },
+    reason: { type: "string", minLength: 1, maxLength: 2000 },
+    confirmation: { type: "string", maxLength: 500 },
+  },
+} as const;
+
+const runIdParamsSchema = {
+  type: "object",
+  required: ["id"],
+  properties: { id: { type: "string", minLength: 1, maxLength: 128 } },
+} as const;
+
+const actionBodySchema = {
+  type: "object",
+  required: ["action"],
+  additionalProperties: false,
+  properties: { action: { type: "string", enum: ["cancel", "retry"] } },
+} as const;
 
 /**
  * Build the Data Cleanup Center Arc module. The module's public export is the
@@ -85,12 +138,14 @@ export function createDataCleanupModule(deps: DataCleanupModuleDeps): ArcModule<
     runStore: deps.runStore,
     evidenceStore: deps.evidenceStore,
     writeFence: deps.writeFence,
-    worker: deps.worker,
+    jobQueue: deps.jobQueue,
+    limits: deps.limits,
     generateId: deps.generateId,
     now: deps.now,
   });
   const prefix = deps.prefix ?? "/governance/data-cleanup";
   const resolveActor = deps.resolveActor ?? defaultResolveActor;
+  const resolveAmbient = deps.resolveAmbient;
   const view = deps.permissions.view as PermissionCheck;
   const execute = deps.permissions.execute as PermissionCheck;
   const manage = (deps.permissions.manage ?? deps.permissions.execute) as PermissionCheck;
@@ -119,14 +174,15 @@ export function createDataCleanupModule(deps: DataCleanupModuleDeps): ArcModule<
         summary: "Preview a cleanup plan (no mutation)",
         permissions: view,
         raw: true,
+        schema: { body: previewBodySchema },
         handler: async (req: FastifyRequest, reply: FastifyReply) => {
           const r = req as RequestWithExtras;
-          const body = (req.body ?? {}) as { recipe?: string; parameters?: Record<string, unknown> };
-          if (!body.recipe) throw CleanupErrors.unknownRecipe(String(body.recipe));
+          const body = req.body as { recipe: string; parameters?: Record<string, unknown> };
           const plan = await service.preview({
             recipeId: body.recipe,
             parameters: body.parameters,
             actor: resolveActor(r),
+            ambient: resolveAmbient?.(r),
           });
           return reply.send(plan);
         },
@@ -137,23 +193,24 @@ export function createDataCleanupModule(deps: DataCleanupModuleDeps): ArcModule<
         summary: "Execute a confirmed cleanup plan",
         permissions: execute,
         raw: true,
+        schema: { body: runsBodySchema },
         handler: async (req: FastifyRequest, reply: FastifyReply) => {
           const r = req as RequestWithExtras;
-          const body = (req.body ?? {}) as {
-            recipe?: string;
+          const body = req.body as {
+            recipe: string;
             parameters?: Record<string, unknown>;
-            planDigest?: string;
-            reason?: string;
+            planDigest: string;
+            reason: string;
             confirmation?: string;
           };
-          if (!body.recipe) throw CleanupErrors.unknownRecipe(String(body.recipe));
           const run = await service.execute({
             recipeId: body.recipe,
             parameters: body.parameters,
-            planDigest: String(body.planDigest ?? ""),
-            reason: String(body.reason ?? ""),
+            planDigest: body.planDigest,
+            reason: body.reason,
             confirmation: body.confirmation,
             actor: resolveActor(r),
+            ambient: resolveAmbient?.(r),
           });
           return reply.status(202).send(run);
         },
@@ -164,6 +221,7 @@ export function createDataCleanupModule(deps: DataCleanupModuleDeps): ArcModule<
         summary: "Observe a cleanup run",
         permissions: view,
         raw: true,
+        schema: { params: runIdParamsSchema },
         handler: async (req: FastifyRequest, reply: FastifyReply) => {
           const { id } = req.params as { id: string };
           return reply.send(await service.getRun(id));
@@ -175,12 +233,14 @@ export function createDataCleanupModule(deps: DataCleanupModuleDeps): ArcModule<
         summary: "Cancel or retry a cleanup run",
         permissions: manage,
         raw: true,
+        schema: { params: runIdParamsSchema, body: actionBodySchema },
         handler: async (req: FastifyRequest, reply: FastifyReply) => {
+          // Attribution is required for a control action (fail-closed).
+          resolveActor(req as RequestWithExtras);
           const { id } = req.params as { id: string };
-          const { action } = (req.body ?? {}) as { action?: string };
+          const { action } = req.body as { action: "cancel" | "retry" };
           if (action === "cancel") return reply.send(await service.cancel(id));
-          if (action === "retry") return reply.send(await service.retry(id));
-          throw CleanupErrors.invalidAction(String(action), "unknown");
+          return reply.send(await service.retry(id));
         },
       },
     ],

@@ -52,7 +52,11 @@ export function createCleanupRegistry(recipes: readonly CleanupRecipe[]): Cleanu
       return [...byId.values()];
     },
     introspect() {
-      return [...byId.values()].map((r) => ({ id: r.id, label: r.label, destructive: r.destructive }));
+      return [...byId.values()].map((r) => ({
+        id: r.id,
+        label: r.label,
+        destructive: r.destructive,
+      }));
     },
   };
 }
