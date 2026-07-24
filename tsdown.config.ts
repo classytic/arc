@@ -107,6 +107,10 @@ export default defineConfig({
 
     // Discovery — auto-discovery plugin
     "src/discovery/index.ts",
+
+    // Data Cleanup Center — thin recipe framework (registry, plan digest,
+    // run/evidence ports, orchestration service, resource factory)
+    "src/cleanup/index.ts",
   ],
   format: ["esm"],
   dts: true,

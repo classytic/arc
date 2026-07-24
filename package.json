@@ -211,6 +211,10 @@
     "./usage": {
       "types": "./dist/usage/index.d.mts",
       "default": "./dist/usage/index.mjs"
+    },
+    "./cleanup": {
+      "types": "./dist/cleanup/index.d.mts",
+      "default": "./dist/cleanup/index.mjs"
     }
   },
   "main": "./dist/index.mjs",
@@ -227,6 +231,7 @@
       ".": "stable",
       "./permissions": "stable",
       "./cache": "stable",
+      "./cleanup": "experimental",
       "./types": "stable",
       "./types/storage": "stable",
       "./core": "stable",
