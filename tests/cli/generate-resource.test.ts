@@ -317,7 +317,15 @@ describe("arc generate — error handling", () => {
     // identifiers — traversal or non-identifier chars must be rejected BEFORE
     // any file write. (Valid-name acceptance is covered by the generation
     // tests above.)
-    for (const bad of ["../../evil", "../escape", "a/b", "foo.bar", "foo bar", "-leading", "1num"]) {
+    for (const bad of [
+      "../../evil",
+      "../escape",
+      "a/b",
+      "foo.bar",
+      "foo bar",
+      "-leading",
+      "1num",
+    ]) {
       await expect(generate("resource", [bad])).rejects.toThrow(/Invalid name/);
     }
   });

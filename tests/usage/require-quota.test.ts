@@ -10,9 +10,9 @@
  */
 import Fastify from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
-import usagePlugin, { MemoryUsageStore, requireQuota } from "../../src/usage/index.js";
-import type { UsageStore } from "../../src/usage/index.js";
 import type { PermissionCheck } from "../../src/permissions/types.js";
+import type { UsageStore } from "../../src/usage/index.js";
+import usagePlugin, { MemoryUsageStore, requireQuota } from "../../src/usage/index.js";
 
 const apps: Array<{ close(): Promise<void> }> = [];
 
@@ -46,7 +46,12 @@ async function buildMeteredApp(opts: {
           });
           if (ok !== true) return reply.code(403).send({ code: "forbidden" });
         } catch (err) {
-          const e = err as { statusCode?: number; code?: string; details?: unknown; message: string };
+          const e = err as {
+            statusCode?: number;
+            code?: string;
+            details?: unknown;
+            message: string;
+          };
           return reply
             .code(e.statusCode ?? 500)
             .send({ code: e.code, message: e.message, meta: e.details });
@@ -95,13 +100,19 @@ describe("requireQuota — the metered-export use case", () => {
     });
 
     const free = { "x-plan": "free" };
-    expect((await app.inject({ method: "POST", url: "/exports", headers: free })).statusCode).toBe(200);
-    expect((await app.inject({ method: "POST", url: "/exports", headers: free })).statusCode).toBe(429);
+    expect((await app.inject({ method: "POST", url: "/exports", headers: free })).statusCode).toBe(
+      200,
+    );
+    expect((await app.inject({ method: "POST", url: "/exports", headers: free })).statusCode).toBe(
+      429,
+    );
 
     // Unlimited plan sails through — same bucket, no ceiling.
     const ent = { "x-plan": "enterprise" };
     for (let i = 0; i < 5; i++) {
-      expect((await app.inject({ method: "POST", url: "/exports", headers: ent })).statusCode).toBe(200);
+      expect((await app.inject({ method: "POST", url: "/exports", headers: ent })).statusCode).toBe(
+        200,
+      );
     }
   });
 

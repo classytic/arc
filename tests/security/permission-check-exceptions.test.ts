@@ -19,12 +19,24 @@ import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { allowPublic } from "../../src/permissions/index.js";
 import type { PermissionCheck, PermissionContext } from "../../src/permissions/types.js";
+import { createDomainError } from "../../src/utils/errors.js";
 import {
   createMockModel,
   createMockRepository,
   setupTestDatabase,
   teardownTestDatabase,
 } from "../setup.js";
+
+/** Throws a STRUCTURED ArcError (discriminable `code` + `details`) — e.g. a
+ *  FLOW_MODE tier gate. Must be PRESERVED end-to-end, not flattened. */
+const throwingArcError: PermissionCheck = async (_ctx: PermissionContext) => {
+  throw createDomainError(
+    "arc.tier_required",
+    "This feature requires 'enterprise' mode or higher.",
+    403,
+    { requiredMode: "enterprise", currentMode: "standard" },
+  );
+};
 
 // --------------------------------------------------------------------------
 // Custom permission functions that throw
@@ -117,6 +129,28 @@ describe("Permission Check Exception Handling", () => {
         expect(res.statusCode).toBe(403);
         const body = JSON.parse(res.body);
         expect(body.message).toBe("Permission denied");
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("PRESERVES a thrown structured ArcError (discriminable code + details)", async () => {
+      // A permission check that throws an ArcError is making a machine-readable
+      // statement (tier gate → `arc.tier_required` + `{ requiredMode }`). It must
+      // reach the client intact, not be flattened to a generic "Permission denied".
+      const app = await createAppWithPermission(throwingArcError);
+
+      try {
+        const res = await app.inject({ method: "GET", url: "/items" });
+
+        expect(res.statusCode).toBe(403);
+        const body = JSON.parse(res.body);
+        expect(body.code).toBe("arc.tier_required");
+        expect(body.message).toContain("enterprise");
+        // Canonical ErrorContract: a machine-readable Record rides on `meta`
+        // (mirrors the global error handler; `details` is reserved for the
+        // field-error array shape). Byte-compatible with the preHandler path.
+        expect(body.meta).toEqual({ requiredMode: "enterprise", currentMode: "standard" });
       } finally {
         await app.close();
       }

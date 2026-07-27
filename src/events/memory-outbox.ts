@@ -39,6 +39,20 @@ export class MemoryOutboxStore implements OutboxStore {
   private readonly entries: MemoryEntry[] = [];
   private readonly seenDedupeKeys = new Set<string>();
 
+  /**
+   * Drop every entry (including delivered / failed / dead-lettered rows) and
+   * the dedupe-key memory.
+   *
+   * For tests only — it is the in-memory analogue of truncating the table, and
+   * exists so a suite can isolate cases against ONE store instance (the
+   * `reset` hook of `runOutboxStoreContract`). Not part of `OutboxStore`; a
+   * production store must never expose this.
+   */
+  clear(): void {
+    this.entries.length = 0;
+    this.seenDedupeKeys.clear();
+  }
+
   async save(event: DomainEvent, options?: OutboxWriteOptions): Promise<void> {
     if (!event?.type || typeof event.type !== "string") {
       throw new InvalidOutboxEventError("event.type is required");

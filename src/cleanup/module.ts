@@ -60,6 +60,10 @@ export interface DataCleanupModuleDeps {
   jobQueue?: CleanupJobQueue | undefined;
   /** Framework size caps. */
   limits?: Partial<CleanupLimits> | undefined;
+  /** Exclusive worker-lease duration (ms). Default 5 minutes. */
+  leaseMs?: number | undefined;
+  /** Min interval between persisted progress writes (ms). Default 0 (every chunk). */
+  progressThrottleMs?: number | undefined;
   /** Route prefix. Default `/governance/data-cleanup`. */
   prefix?: string | undefined;
   /** Module name. Default `data-cleanup`. */
@@ -124,7 +128,11 @@ const actionBodySchema = {
   type: "object",
   required: ["action"],
   additionalProperties: false,
-  properties: { action: { type: "string", enum: ["cancel", "retry"] } },
+  properties: {
+    action: { type: "string", enum: ["cancel", "retry"] },
+    /** Optional cancel justification — persisted on the run + evidence. */
+    reason: { type: "string", maxLength: 2000 },
+  },
 } as const;
 
 /**
@@ -140,6 +148,8 @@ export function createDataCleanupModule(deps: DataCleanupModuleDeps): ArcModule<
     writeFence: deps.writeFence,
     jobQueue: deps.jobQueue,
     limits: deps.limits,
+    leaseMs: deps.leaseMs,
+    progressThrottleMs: deps.progressThrottleMs,
     generateId: deps.generateId,
     now: deps.now,
   });
@@ -236,10 +246,12 @@ export function createDataCleanupModule(deps: DataCleanupModuleDeps): ArcModule<
         schema: { params: runIdParamsSchema, body: actionBodySchema },
         handler: async (req: FastifyRequest, reply: FastifyReply) => {
           // Attribution is required for a control action (fail-closed).
-          resolveActor(req as RequestWithExtras);
+          const actionActor = resolveActor(req as RequestWithExtras);
           const { id } = req.params as { id: string };
-          const { action } = req.body as { action: "cancel" | "retry" };
-          if (action === "cancel") return reply.send(await service.cancel(id));
+          const { action, reason } = req.body as { action: "cancel" | "retry"; reason?: string };
+          if (action === "cancel") {
+            return reply.send(await service.cancel(id, { actor: actionActor, reason }));
+          }
           return reply.send(await service.retry(id));
         },
       },

@@ -77,6 +77,11 @@ describe("Public API Contract", () => {
       // 2.20: 19-line re-export of repo-core's ./sync change-log contract.
       "./sync",
       "./testing",
+      // 2.27: conformance suite proving a host's CleanupRunStore implements the
+      // atomic semantics the cleanup framework's durability depends on.
+      "./testing/cleanup",
+      // 2.28: OutboxStore conformance suite — the delivery-guarantee contract.
+      "./testing/outbox",
       "./testing/storage",
       "./types",
       "./types/storage",

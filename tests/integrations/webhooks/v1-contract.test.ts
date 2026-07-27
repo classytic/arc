@@ -29,7 +29,10 @@ afterEach(async () => {
   await app?.close();
 });
 
-async function createApp(fetchMock: ReturnType<typeof vi.fn>, pluginOpts?: Record<string, unknown>) {
+async function createApp(
+  fetchMock: ReturnType<typeof vi.fn>,
+  pluginOpts?: Record<string, unknown>,
+) {
   app = Fastify({ logger: false });
   await app.register(eventPlugin);
   await app.register(webhookPlugin, { fetch: fetchMock, ...pluginOpts });
@@ -166,10 +169,22 @@ describe("verifyWebhook", () => {
 
   it("flags missing headers and malformed timestamps distinctly", () => {
     expect(
-      verifyWebhook({ body: "{}", secret: SECRET, signature: undefined, timestamp: 1, deliveryId: "x" }),
+      verifyWebhook({
+        body: "{}",
+        secret: SECRET,
+        signature: undefined,
+        timestamp: 1,
+        deliveryId: "x",
+      }),
     ).toEqual({ valid: false, reason: "missing_headers" });
     expect(
-      verifyWebhook({ body: "{}", secret: SECRET, signature: "v1=00", timestamp: "soon", deliveryId: "x" }),
+      verifyWebhook({
+        body: "{}",
+        secret: SECRET,
+        signature: "v1=00",
+        timestamp: "soon",
+        deliveryId: "x",
+      }),
     ).toEqual({ valid: false, reason: "bad_timestamp" });
   });
 

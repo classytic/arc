@@ -21,10 +21,10 @@ describe("mergeResourceConfig — merge semantics", () => {
   it("concats top-level array slots (routes, middlewares, disabledRoutes), base first", () => {
     const baseRoute = { method: "GET", path: "/a", handler: async () => ({}) };
     const seamRoute = { method: "GET", path: "/b", handler: async () => ({}) };
-    const merged = mergeResourceConfig(
-      { name: "widget", routes: [baseRoute] } as ResourceConfig,
-      { routes: [seamRoute], disabledRoutes: ["delete"] },
-    );
+    const merged = mergeResourceConfig({ name: "widget", routes: [baseRoute] } as ResourceConfig, {
+      routes: [seamRoute],
+      disabledRoutes: ["delete"],
+    });
     expect(merged.routes).toEqual([baseRoute, seamRoute]);
     expect(merged.disabledRoutes).toEqual(["delete"]);
   });

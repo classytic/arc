@@ -202,9 +202,7 @@ describe("executeTimedHandler", () => {
 const { processors } = vi.hoisted(() => ({
   processors: new Map<string, (job: unknown) => Promise<unknown>>(),
 }));
-vi.mock("bullmq", async () =>
-  (await import("../_support/bullmq.js")).createBullmqMock(processors),
-);
+vi.mock("bullmq", async () => (await import("../_support/bullmq.js")).createBullmqMock(processors));
 
 describe("jobsPlugin wiring", () => {
   afterEach(() => {

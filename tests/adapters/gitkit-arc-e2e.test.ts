@@ -94,7 +94,13 @@ describe("gitkit → arc — git-backed REST resource", () => {
     const res = await app.inject({
       method: "POST",
       url: "/docs",
-      payload: { id: "welcome", title: "Welcome", status: "published", tags: ["intro"], content: "hello" },
+      payload: {
+        id: "welcome",
+        title: "Welcome",
+        status: "published",
+        tags: ["intro"],
+        content: "hello",
+      },
     });
     expect(res.statusCode).toBeGreaterThanOrEqual(200);
     expect(res.statusCode).toBeLessThan(300);
@@ -133,7 +139,11 @@ describe("gitkit → arc — git-backed REST resource", () => {
   });
 
   it("PATCH /docs/:id updates and commits", async () => {
-    const res = await app.inject({ method: "PATCH", url: "/docs/second", payload: { status: "published" } });
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/docs/second",
+      payload: { status: "published" },
+    });
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body).status).toBe("published");
   });

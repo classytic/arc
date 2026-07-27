@@ -66,13 +66,18 @@ describe("history: true — Phase-0 expansion", () => {
     const get = () => true;
 
     expect(
-      historyRouteOf({ name: "a", history: { permissions: explicit }, permissions: { update, get } })
-        .permissions,
+      historyRouteOf({
+        name: "a",
+        history: { permissions: explicit },
+        permissions: { update, get },
+      }).permissions,
     ).toBe(explicit);
-    expect(historyRouteOf({ name: "b", history: true, permissions: { update, get } }).permissions).toBe(
-      update,
+    expect(
+      historyRouteOf({ name: "b", history: true, permissions: { update, get } }).permissions,
+    ).toBe(update);
+    expect(historyRouteOf({ name: "c", history: true, permissions: { get } }).permissions).toBe(
+      get,
     );
-    expect(historyRouteOf({ name: "c", history: true, permissions: { get } }).permissions).toBe(get);
     // No derivable gate → requireAuth() fallback (a function, not undefined)
     expect(typeof historyRouteOf({ name: "d", history: true }).permissions).toBe("function");
   });

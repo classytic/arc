@@ -36,10 +36,17 @@ import type {
   PurgeActor,
   PurgeEvidence,
   PurgeResourceResult,
+  PurgeStrategyKind,
   PurgeVerificationSummary,
 } from "@classytic/primitives/retention";
 
-export type { PurgeActor, PurgeEvidence, PurgeResourceResult, PurgeVerificationSummary };
+export type {
+  PurgeActor,
+  PurgeEvidence,
+  PurgeResourceResult,
+  PurgeStrategyKind,
+  PurgeVerificationSummary,
+};
 
 /** Ambient context every recipe method receives. Host-injected — never global. */
 export interface CleanupContext {
@@ -199,12 +206,28 @@ export interface VerificationResult {
   readonly checks: readonly VerificationCheck[];
 }
 
-export type CleanupOutcomeStatus = "completed" | "partial" | "failed";
+export type CleanupOutcomeStatus = "completed" | "partial" | "failed" | "cancelled";
 
 /** What `execute` returns — the per-step results + a terminal status. */
 export interface CleanupResult {
+  readonly status: Exclude<CleanupOutcomeStatus, "cancelled">;
+  readonly results: readonly CleanupStepResult[];
+}
+
+/**
+ * The finalization payload persisted ON the run BEFORE it enters `finalizing`
+ * (same CAS patch). This is what makes a `finalizing` crash recoverable
+ * WITHOUT re-executing the recipe: a recovering worker replays ONLY
+ * `evidenceStore.finalize()` + the terminal CAS from this durable snapshot —
+ * never `recipe.execute()` again.
+ */
+export interface CleanupFinalizationPayload {
   readonly status: CleanupOutcomeStatus;
   readonly results: readonly CleanupStepResult[];
+  readonly verification: VerificationResult;
+  /** Count of verification checks dropped by `maxChecks` truncation. */
+  readonly checksTruncated?: number | undefined;
+  readonly failureReason?: string | undefined;
 }
 
 /**
@@ -225,6 +248,14 @@ export interface CleanupRecipe {
    * incompatible sealed plan. Defaults to `'1'`.
    */
   readonly version?: string;
+  /**
+   * The purge strategy this recipe's evidence records (`'hard'` deletion,
+   * `'soft'` deactivation, `'anonymize'` redaction). Defaults to `'hard'`.
+   * A pure projection-rebuild recipe should declare `'soft'` (nothing about the
+   * SOURCE data is removed) or, better, the closest honest label — evidence
+   * must never overstate destructiveness.
+   */
+  readonly evidenceStrategy?: PurgeStrategyKind;
   /** Whether this recipe may run right now (e.g. pre-go-live only). */
   available(ctx: CleanupContext): Promise<Availability>;
   /** Compute a preview WITHOUT mutating anything. Idempotent + side-effect-free. */
@@ -270,9 +301,38 @@ export interface CleanupRun {
   readonly requestedBy: string;
   readonly reason: string;
   readonly operationId: string;
+  /**
+   * Whether the recipe was destructive at request time — persisted so a
+   * GENERIC store can enforce the single-destructive-run policy without
+   * consulting the registry (and so non-destructive rebuilds need not
+   * serialize behind it).
+   */
+  readonly destructive: boolean;
+  /**
+   * Admission-control key the store serializes on (e.g. `'global-destructive'`).
+   * Absent for runs that need no mutual exclusion. Hosts may shard it later
+   * (`'branch:<id>'`) without an arc change.
+   */
+  readonly concurrencyKey?: string | undefined;
+  /** How many times a worker has claimed this run (1 = first execution). */
+  readonly attempt: number;
+  /**
+   * Exclusive worker lease. A run in `running`/`finalizing` with an UNEXPIRED
+   * lease is owned — `claim` refuses it. Progress + status writes carry the
+   * token so a stalled ex-owner that wakes past expiry cannot clobber the new
+   * owner's writes.
+   */
+  readonly leaseToken?: string | undefined;
+  readonly leaseExpiresAt?: Date | undefined;
   readonly progress: CleanupProgressSummary;
   /** Durable cancellation request — the source of truth the executor polls. */
   readonly cancelRequested: boolean;
+  /** Who requested the cancel + why + when (audit — §8, cancel evidence). */
+  readonly cancelRequestedBy?: PurgeActor | undefined;
+  readonly cancelReason?: string | undefined;
+  readonly cancelRequestedAt?: Date | undefined;
+  /** Durable finalization snapshot — see {@link CleanupFinalizationPayload}. */
+  readonly finalization?: CleanupFinalizationPayload | undefined;
   readonly queuedAt?: Date | undefined;
   readonly startedAt?: Date | undefined;
   readonly completedAt?: Date | undefined;
@@ -291,6 +351,12 @@ export interface CleanupManifest {
   readonly reason: string;
   readonly results: readonly CleanupStepResult[];
   readonly verification: VerificationResult;
+  /**
+   * Count of verification checks DROPPED by the `maxChecks` cap. Present and
+   * non-zero whenever `verification.checks` is not the complete set — evidence
+   * must say so rather than silently show only the retained checks.
+   */
+  readonly checksTruncated?: number | undefined;
   readonly completedAt: Date;
   /**
    * Integrity CHECKSUM of the manifest content (not tamper-PROOF: plain SHA-256
@@ -316,37 +382,91 @@ export interface CleanupRunTransitionPatch {
   readonly progress?: CleanupProgressSummary;
   /** Reset the cancellation flag — used when a terminal run is re-armed on retry. */
   readonly cancelRequested?: boolean;
+  /** Persist the durable finalization snapshot (set entering `finalizing`). */
+  readonly finalization?: CleanupFinalizationPayload;
+}
+
+/** An exclusive worker lease on a run. */
+export interface CleanupLease {
+  /** Opaque token identifying THIS worker's ownership of the run. */
+  readonly token: string;
+  /** When the lease lapses and the run becomes claimable again. */
+  readonly expiresAt: Date;
+}
+
+/** Metadata persisted with a durable cancel request (audit). */
+export interface CleanupCancelRequest {
+  readonly actor?: PurgeActor | undefined;
+  readonly reason?: string | undefined;
+  readonly requestedAt: Date;
 }
 
 /**
  * Durable store for cleanup runs. The host owns persistence (Mongo/SQL/…) AND
  * the atomicity of these operations — the framework's safety rests on them:
  *
- *   - `createIfPermitted` MUST be atomic: for a destructive run it inserts ONLY
- *     if no other run is in a non-terminal state, backed by a unique partial
- *     index / conditional insert / lock. A check-then-create is NOT sufficient.
+ *   - `createIfPermitted` MUST be atomic: for a run with a `concurrencyKey` it
+ *     inserts ONLY if no other run with the same key is in a non-terminal
+ *     state, backed by a unique partial index / conditional insert / lock. A
+ *     check-then-create is NOT sufficient. Runs WITHOUT a key are always
+ *     admitted.
+ *   - `claim` MUST be atomic and EXCLUSIVE: grant the lease ONLY if the run is
+ *     `queued`, OR is `running`/`finalizing` with an ABSENT or EXPIRED lease
+ *     (`leaseExpiresAt <= now`). On grant it sets `leaseToken`/`leaseExpiresAt`,
+ *     increments `attempt`, and returns the run (status UNCHANGED — the service
+ *     branches on it: `finalizing` recovers finalization only, never
+ *     re-executes). A run whose lease is live is OWNED — return `null`.
  *   - `compareAndTransition` MUST be a compare-and-set: apply the transition
- *     ONLY if the current status is one of `expected`, atomically. This is the
- *     ONLY way status changes — it makes cancel-vs-complete races safe.
+ *     ONLY if the current status is one of `expected` AND, when `leaseToken`
+ *     is given, the run's current lease token matches. This is the ONLY way
+ *     status changes — it makes cancel-vs-complete AND stale-ex-owner races
+ *     safe.
+ *   - `reArmIfPermitted` MUST apply the same admission policy as
+ *     `createIfPermitted` atomically with the terminal→`queued` transition
+ *     (a retry must not slip past the single-destructive-run guard).
  */
 export interface CleanupRunStore {
-  /** Atomic conditional insert (single-destructive-run guard, §8). */
+  /** Atomic conditional insert (admission control by `concurrencyKey`, §8). */
   createIfPermitted(run: CleanupRun): Promise<CleanupRunCreateResult>;
   get(id: string): Promise<CleanupRun | null>;
   /**
+   * Atomically acquire the exclusive worker lease (see contract above).
+   * Returns the claimed run with the lease applied, or `null` if the run is
+   * owned, terminal, or missing.
+   */
+  claim(id: string, lease: CleanupLease): Promise<CleanupRun | null>;
+  /**
    * CAS the status: set `status=to` (+ `patch`) ONLY if current status ∈
-   * `expected`. Returns the updated run, or `null` if the CAS lost the race.
+   * `expected` and (when given) `leaseToken` matches the run's current lease.
+   * Returns the updated run, or `null` if the CAS lost the race.
    */
   compareAndTransition(
     id: string,
     expected: readonly CleanupRunStatus[],
     to: CleanupRunStatus,
     patch?: CleanupRunTransitionPatch,
+    leaseToken?: string,
   ): Promise<CleanupRun | null>;
-  /** Set `cancelRequested = true` (idempotent). Does NOT change `status`. */
-  requestCancel(id: string): Promise<CleanupRun | null>;
-  /** Overwrite the small bounded progress summary (frequent, non-status). */
-  saveProgress(id: string, progress: CleanupProgressSummary): Promise<void>;
+  /**
+   * Atomically re-arm a terminal (`failed`/`cancelled`) run back to `queued`
+   * under the SAME admission policy as `createIfPermitted` (its
+   * `concurrencyKey` must not collide with another non-terminal run). Clears
+   * the cancel flag/metadata + lease. Returns `{created:false}`-style refusal
+   * via `null` + the blocking run id in the second tuple slot is NOT modeled —
+   * a `null` simply means "not permitted or not in a terminal state."
+   */
+  reArmIfPermitted(id: string, patch: CleanupRunTransitionPatch): Promise<CleanupRun | null>;
+  /**
+   * Set `cancelRequested = true` (+ audit metadata, idempotent — first request
+   * wins). Does NOT change `status`.
+   */
+  requestCancel(id: string, request?: CleanupCancelRequest): Promise<CleanupRun | null>;
+  /**
+   * Overwrite the small bounded progress summary (frequent, non-status).
+   * When `lease` is given, ALSO extend `leaseExpiresAt` (heartbeat renewal) —
+   * and apply ONLY if the run's current lease token matches `lease.token`.
+   */
+  saveProgress(id: string, progress: CleanupProgressSummary, lease?: CleanupLease): Promise<void>;
 }
 
 /**
@@ -381,10 +501,18 @@ export interface CleanupJobQueue {
  * A company/target write fence (§8) — blocks new writes for the duration of a
  * destructive run. Acquire/release keyed by the operation id so a crashed run's
  * fence is recoverable by op id.
+ *
+ * `acquire` MAY return a fencing token; when it does, the service passes the
+ * SAME token back to `release`, and the fence MUST refuse a release carrying a
+ * stale token. This closes the distributed race where a stalled ex-owner wakes
+ * after lease expiry and releases the fence out from under the new owner.
+ * Implementations without cross-process workers may return `undefined` and
+ * ignore the token.
  */
 export interface CleanupWriteFence {
-  acquire(operationId: string): Promise<void>;
-  release(operationId: string): Promise<void>;
+  // biome-ignore lint/suspicious/noConfusingVoidType: void keeps plain `async acquire() {}` no-op fences assignable; the token is opt-in.
+  acquire(operationId: string): Promise<string | undefined | void>;
+  release(operationId: string, token?: string): Promise<void>;
 }
 
 export interface CleanupPermissions {

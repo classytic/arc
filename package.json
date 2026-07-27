@@ -1,6 +1,6 @@
 {
   "name": "@classytic/arc",
-  "version": "2.26.0",
+  "version": "2.28.0",
   "description": "Resource-oriented backend framework for Fastify - clean, minimal, powerful, tree-shakable",
   "type": "module",
   "exports": {
@@ -128,6 +128,10 @@
       "types": "./dist/testing/storageContract.d.mts",
       "default": "./dist/testing/storageContract.mjs"
     },
+    "./testing/cleanup": {
+      "types": "./dist/testing/cleanupStoreContract.d.mts",
+      "default": "./dist/testing/cleanupStoreContract.mjs"
+    },
     "./factory": {
       "types": "./dist/factory/index.d.mts",
       "default": "./dist/factory/index.mjs"
@@ -215,6 +219,10 @@
     "./cleanup": {
       "types": "./dist/cleanup/index.d.mts",
       "default": "./dist/cleanup/index.mjs"
+    },
+    "./testing/outbox": {
+      "types": "./dist/testing/outboxStoreContract.d.mts",
+      "default": "./dist/testing/outboxStoreContract.mjs"
     }
   },
   "main": "./dist/index.mjs",
@@ -231,7 +239,7 @@
       ".": "stable",
       "./permissions": "stable",
       "./cache": "stable",
-      "./cleanup": "experimental",
+      "./cleanup": "stable",
       "./types": "stable",
       "./types/storage": "stable",
       "./core": "stable",
@@ -260,6 +268,7 @@
       "./events/redis-stream": "stable",
       "./testing": "stable",
       "./testing/storage": "stable",
+      "./testing/cleanup": "stable",
       "./factory": "stable",
       "./schemas": "stable",
       "./migrations": "stable",
@@ -280,7 +289,8 @@
       "./scim": "stable",
       "./auth/audit": "stable",
       "./sync": "experimental",
-      "./usage": "experimental"
+      "./usage": "experimental",
+      "./testing/outbox": "stable"
     }
   },
   "files": [
@@ -332,8 +342,8 @@
     "node": ">=22"
   },
   "peerDependencies": {
-    "@classytic/primitives": ">=0.14.0",
-    "@classytic/repo-core": ">=0.14.0",
+    "@classytic/primitives": ">=0.15.0",
+    "@classytic/repo-core": ">=0.17.0",
     "@classytic/streamline": ">=2.8.0",
     "@fastify/cors": ">=11.0.0",
     "@fastify/helmet": ">=13.0.0",
@@ -451,13 +461,13 @@
     "@arethetypeswrong/cli": "^0.18.5",
     "@better-auth/drizzle-adapter": "^1.6.19",
     "@better-auth/mongo-adapter": "^1.6.19",
-    "@biomejs/biome": "^2.5.0",
+    "@biomejs/biome": "^2.5.5",
     "@classytic/dev-tools": "^0.2.0",
     "@classytic/gitkit": ">=0.1.0",
-    "@classytic/mongokit": "^3.25.0",
+    "@classytic/mongokit": "^3.28.0",
     "@classytic/pgkit": "^0.1.0",
-    "@classytic/primitives": "^0.14.0",
-    "@classytic/repo-core": "^0.14.0",
+    "@classytic/primitives": "^0.15.0",
+    "@classytic/repo-core": "^0.17.0",
     "@classytic/sqlitekit": "^0.6.0",
     "@classytic/streamline": "^2.8.2",
     "@electric-sql/pglite": "^0.5.4",
@@ -476,9 +486,9 @@
     "@types/qs": "^6.15.1",
     "@vitest/coverage-v8": "^4.1.9",
     "ajv": "^8.20.0",
-    "better-auth": "^1.6.19",
+    "better-auth": "^1.6.25",
     "better-sqlite3": "^12.11.1",
-    "bullmq": "^5.79.0",
+    "bullmq": "^5.81.2",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
     "fast-check": "^4.8.0",
@@ -493,10 +503,10 @@
     "mongodb-memory-server": "^11.2.0",
     "mongoose": "^9.7.1",
     "publint": "^0.3.21",
-    "tsdown": "^0.22.5",
+    "tsdown": "^0.22.14",
     "typebox": "^1.3.6",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.9",
+    "vitest": "^4.1.10",
     "ws": "^8.21.0",
     "zod": "^4.4.3"
   },

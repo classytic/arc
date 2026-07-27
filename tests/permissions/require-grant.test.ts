@@ -20,11 +20,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
-import {
-  GRANT_MODES,
-  modeSatisfies,
-  requireGrant,
-} from "../../src/permissions/grants.js";
+import { GRANT_MODES, modeSatisfies, requireGrant } from "../../src/permissions/grants.js";
 import type { PermissionContext } from "../../src/permissions/types.js";
 
 function ctx(overrides: Partial<PermissionContext> = {}): PermissionContext {

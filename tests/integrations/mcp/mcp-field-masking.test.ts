@@ -13,10 +13,10 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { ResourceDefinition } from "../../../src/core/defineResource.js";
-import { fields } from "../../../src/permissions/fields.js";
 import { resourceToTools } from "../../../src/integrations/mcp/resourceToTools.js";
 import { applyMcpReadMasking } from "../../../src/integrations/mcp/tool-helpers.js";
 import type { CallToolResult, McpAuthResult } from "../../../src/integrations/mcp/types.js";
+import { fields } from "../../../src/permissions/fields.js";
 
 const FIELD_PERMS = {
   password: fields.hidden(),

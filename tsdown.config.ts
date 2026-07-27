@@ -69,6 +69,8 @@ export default defineConfig({
     // Testing
     "src/testing/index.ts",
     "src/testing/storageContract.ts",
+    "src/testing/cleanupStoreContract.ts",
+    "src/testing/outboxStoreContract.ts",
 
     // Schemas (TypeBox)
     "src/schemas/index.ts",

@@ -6,8 +6,8 @@
 
 import type { TenantPurgeStrategy } from "@classytic/repo-core/repository";
 import { describe, expect, it, vi } from "vitest";
-import type { ResolvedTenantPurge } from "../../src/types/resource/index.js";
 import { purgeResource } from "../../src/registry/purgeResource.js";
+import type { ResolvedTenantPurge } from "../../src/types/resource/index.js";
 
 function resolved(strategy: TenantPurgeStrategy, batchSize = 500): ResolvedTenantPurge {
   return { strategy, batchSize, priority: 0, source: "declared" } as ResolvedTenantPurge;

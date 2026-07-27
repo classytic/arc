@@ -19,7 +19,7 @@ import type {
   PaginationResult,
   UserLike,
 } from "../../types/index.js";
-import { createError, ForbiddenError, NotFoundError } from "../../utils/errors.js";
+import { createError, ForbiddenError, isArcError, NotFoundError } from "../../utils/errors.js";
 import { withRepoFeatures } from "../../utils/repoFeature.js";
 import type { BaseCrudController } from "../BaseCrudController.js";
 
@@ -110,6 +110,10 @@ export function SoftDeleteMixin<TBase extends Constructor<BaseCrudController>>(
             meta: { id },
           });
         } catch (err) {
+          // Typed ArcErrors from a hook are deliberate outcomes — surface them
+          // verbatim; only wrap unexpected non-arc throws. (Mirrors the before-
+          // hook handling in crud/requestPipeline.ts.)
+          if (isArcError(err)) throw err;
           throw createError(400, "Hook execution failed", {
             code: "BEFORE_RESTORE_HOOK_ERROR",
             message: (err as Error).message,

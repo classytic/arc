@@ -84,7 +84,9 @@ interface OutboxDoc extends Record<string, unknown> {
   readonly type: string;
   status: "pending" | "delivered" | "dead_letter";
   attempts: number;
-  visibleAt: Date;
+  // The visibility timestamp is NOT declared here: its column is configurable
+  // (`visibleAtField`), so it rides the index signature above. Nothing reads it
+  // off the doc — the filter and both writers go through `visibleAtField`.
   leaseOwner: string | null;
   leaseExpiresAt: Date | null;
   deliveredAt: Date | null;
@@ -101,7 +103,31 @@ const DEFAULT_LEASE_MS = 30_000;
 const DEFAULT_CLAIM_LIMIT = 100;
 const DEFAULT_PURGE_BATCH = 500;
 
-export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore {
+/** Column this adapter reads/writes for the visibility timestamp. */
+const DEFAULT_VISIBLE_AT_FIELD = "visibleAt";
+
+export interface RepositoryOutboxStoreOptions {
+  /**
+   * Column holding the "not claimable before" timestamp. Default
+   * `'visibleAt'`.
+   *
+   * Exists so a host with an EXISTING outbox table can adopt this adapter
+   * without renaming a column and rebuilding its claim index — the one thing
+   * that otherwise forces a migration on the table that guarantees delivery.
+   * A store using `nextVisibleAt` (with a `{status, nextVisibleAt, createdAt}`
+   * index) passes `{ visibleAtField: 'nextVisibleAt' }` and keeps both.
+   *
+   * The field is used in the claimable filter, on `save`, and on `fail`'s
+   * retry scheduling — all three stay in lockstep by construction.
+   */
+  readonly visibleAtField?: string;
+}
+
+export function repositoryAsOutboxStore(
+  repository: RepositoryLike,
+  options?: RepositoryOutboxStoreOptions,
+): OutboxStore {
+  const visibleAtField = options?.visibleAtField ?? DEFAULT_VISIBLE_AT_FIELD;
   const missing: string[] = [];
   if (typeof repository.create !== "function") missing.push("create");
   if (typeof repository.getOne !== "function") missing.push("getOne");
@@ -150,7 +176,7 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
   const claimableFilter = (now: Date) =>
     and(
       eqFilter("status", "pending"),
-      lte("visibleAt", now),
+      lte(visibleAtField, now),
       or(eqFilter("leaseOwner", null), lte("leaseExpiresAt", now)),
     );
 
@@ -169,7 +195,7 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
         type: event.type,
         status: "pending",
         attempts: 0,
-        visibleAt: options?.visibleAt ?? now,
+        [visibleAtField]: options?.visibleAt ?? now,
         leaseOwner: null,
         leaseExpiresAt: null,
         deliveredAt: null,
@@ -325,7 +351,9 @@ export function repositoryAsOutboxStore(repository: RepositoryLike): OutboxStore
         update({
           set: {
             status: targetStatus,
-            visibleAt,
+            // Same configured column the claimable filter reads — the retry
+            // schedule and the claim predicate must never diverge.
+            [visibleAtField]: visibleAt,
             leaseOwner: null,
             leaseExpiresAt: null,
             lastFailedAt: now,

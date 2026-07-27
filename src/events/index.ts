@@ -75,6 +75,7 @@ export { EventOutbox, exponentialBackoff, MemoryOutboxStore } from "./outbox.js"
  * (metrics, tracing, multi-transport fan-out). Passing `{ repository }` to
  * the constructor remains the one-liner path for the common case.
  */
+export type { RepositoryOutboxStoreOptions } from "./repository-outbox-adapter.js";
 export { repositoryAsOutboxStore } from "./repository-outbox-adapter.js";
 export type { RetryOptions } from "./retry.js";
 // Retry & Dead Letter Queue (transport-agnostic)

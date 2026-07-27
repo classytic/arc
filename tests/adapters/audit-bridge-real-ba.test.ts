@@ -427,7 +427,9 @@ describe("audit bridge — real better-auth integration", () => {
     // Diagnostic parity with the sign-up test — surface BA hook-call counts
     // so a BA behaviour change is obvious in the failure message.
     if (sessionDeleteRows.length === 0) {
-      const calls = (bridge as unknown as { _testCalls: () => Record<string, number> })._testCalls();
+      const calls = (
+        bridge as unknown as { _testCalls: () => Record<string, number> }
+      )._testCalls();
       throw new Error(
         `session.delete audit row missing. BA hook-call counts: ${JSON.stringify(calls)}. bridge stats: ${JSON.stringify(bridge.getStats())}. auditRows: ${JSON.stringify(auditRows.map((r) => r.metadata?.customAction))}`,
       );

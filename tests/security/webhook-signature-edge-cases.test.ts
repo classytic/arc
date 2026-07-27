@@ -15,9 +15,8 @@
  * covers the raw-body footgun; this file targets the comparison step.
  */
 
-import crypto from "node:crypto";
+import crypto, { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { createHmac } from "node:crypto";
 import { verifySignature } from "../../src/integrations/webhooks.js";
 
 // Local sha256=<hex> signer — arc no longer exports the legacy signPayload

@@ -8,11 +8,10 @@
  * better-sqlite3 the real-driver e2e is CI-cheap and runs here too.
  */
 
-import type { RepositoryLike } from "@classytic/repo-core/adapter";
-import type { MinimalRepo } from "@classytic/repo-core/repository";
 import type { PgRepository } from "@classytic/pgkit";
 import type { PgDrizzleAdapter } from "@classytic/pgkit/adapter";
-import type { DataAdapter } from "@classytic/repo-core/adapter";
+import type { DataAdapter, RepositoryLike } from "@classytic/repo-core/adapter";
+import type { MinimalRepo } from "@classytic/repo-core/repository";
 import { describe, expect, it } from "vitest";
 
 type ProductRow = { id: string; name: string; price: number };

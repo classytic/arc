@@ -66,6 +66,9 @@ const LAYERS = {
   factory: 5,
   testing: 5,
   cli: 5,
+  // `createDataCleanupModule` assembles a governance resource + service into a
+  // mountable ArcModule — a composition root, and it imports `factory` (L5).
+  cleanup: 5,
 };
 
 /**

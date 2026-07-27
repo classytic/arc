@@ -13,8 +13,15 @@
  * permissions, writeFence?, jobQueue?, ... })`.
  */
 
+export type { RecipeFromStepsInput } from "./compose.js";
+export { recipeFromSteps } from "./compose.js";
 export type { CleanupErrorCode } from "./errors.js";
 export { CleanupCancelled, CleanupError, CleanupErrors } from "./errors.js";
+export {
+  MemoryCleanupEvidenceStore,
+  MemoryCleanupJobQueue,
+  MemoryCleanupRunStore,
+} from "./memory.js";
 export type { DataCleanupModuleDeps } from "./module.js";
 export { createDataCleanupModule } from "./module.js";
 
@@ -22,20 +29,24 @@ export { canonicalJson, computeManifestDigest, computePlanDigest } from "./plan-
 export type { CleanupRecipeInfo, CleanupRegistry } from "./registry.js";
 export { createCleanupRegistry } from "./registry.js";
 export type {
+  CancelInput,
   CleanupService,
   CleanupServiceDeps,
   ExecuteInput,
   PreviewInput,
 } from "./service.js";
-export { createCleanupService } from "./service.js";
+export { createCleanupService, GLOBAL_DESTRUCTIVE_KEY } from "./service.js";
 export type {
   Availability,
+  CleanupCancelRequest,
   CleanupContext,
   CleanupEvidenceStore,
   CleanupExecutionContext,
+  CleanupFinalizationPayload,
   CleanupInput,
   CleanupJob,
   CleanupJobQueue,
+  CleanupLease,
   CleanupLimits,
   CleanupLogger,
   CleanupManifest,
@@ -58,6 +69,7 @@ export type {
   PurgeActor,
   PurgeEvidence,
   PurgeResourceResult,
+  PurgeStrategyKind,
   PurgeVerificationSummary,
   VerificationCheck,
   VerificationResult,

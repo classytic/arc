@@ -29,7 +29,7 @@ import type {
   ResourceCacheConfig,
   UserLike,
 } from "../../types/index.js";
-import { createError, NotFoundError } from "../../utils/errors.js";
+import { createError, isArcError, NotFoundError } from "../../utils/errors.js";
 import { getUserId } from "../../utils/userHelpers.js";
 import type { FetchDenialReason } from "../AccessControl.js";
 import type { CacheStatus } from "../controllerTypes.js";
@@ -305,6 +305,12 @@ export async function executeHookedOp<TInput, TResult>(
       );
       if (pipeProcessed) processedData = beforeReturn as TInput;
     } catch (err) {
+      // A hook that throws a TYPED ArcError (NotFoundError, ConflictError,
+      // ValidationError, a domain guard, …) is expressing a deliberate outcome —
+      // surface it verbatim so the client gets the right status/code/message,
+      // not a masked generic 400. Only UNEXPECTED (non-arc) throws are wrapped
+      // in the canonical `BEFORE_<OP>_HOOK_ERROR` envelope.
+      if (isArcError(err)) throw err;
       throw createError(400, "Hook execution failed", {
         code: `BEFORE_${args.op.toUpperCase()}_HOOK_ERROR`,
         message: (err as Error).message,

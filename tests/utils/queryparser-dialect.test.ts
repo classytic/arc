@@ -9,9 +9,9 @@
  *      QueryParserInterface.
  */
 import { describe, expect, it } from "vitest";
-import { ArcQueryParser } from "../../src/utils/queryParser.js";
-import { MONGO_DIALECT, NEUTRAL_DIALECT } from "../../src/utils/filter-dialect.js";
 import type { FilterDialect } from "../../src/utils/filter-dialect.js";
+import { MONGO_DIALECT, NEUTRAL_DIALECT } from "../../src/utils/filter-dialect.js";
+import { ArcQueryParser } from "../../src/utils/queryParser.js";
 
 describe("FilterDialect — Mongo default (backward-compatible)", () => {
   const parser = new ArcQueryParser();

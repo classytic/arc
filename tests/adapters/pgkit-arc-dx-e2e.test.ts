@@ -19,9 +19,9 @@
  *      runtime API fails HERE before any host hits it.
  */
 
-import { PGlite } from "@electric-sql/pglite";
 import { PgRepository } from "@classytic/pgkit";
 import { createPgAdapter } from "@classytic/pgkit/adapter";
+import { PGlite } from "@electric-sql/pglite";
 import { sql } from "drizzle-orm";
 import { boolean, integer, pgTable, text } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/pglite";
@@ -46,9 +46,7 @@ interface Product {
 }
 
 const products = pgTable("products", {
-  id: text("id")
-    .primaryKey()
-    .default(sql`gen_random_uuid()::text`),
+  id: text("id").primaryKey().default(sql`gen_random_uuid()::text`),
   name: text("name").notNull(),
   sku: text("sku").notNull().unique(),
   price: integer("price").notNull(),
@@ -142,7 +140,13 @@ describe("pgkit → arc — zero-friction wiring (PGlite)", () => {
     await app.inject({
       method: "POST",
       url: "/products",
-      payload: { name: "Book", sku: "BK-001", price: 20, category: "books", createdAt: "2026-01-02" },
+      payload: {
+        name: "Book",
+        sku: "BK-001",
+        price: 20,
+        category: "books",
+        createdAt: "2026-01-02",
+      },
     });
 
     const res = await app.inject({ method: "GET", url: "/products" });
@@ -167,7 +171,13 @@ describe("pgkit → arc — zero-friction wiring (PGlite)", () => {
     const createRes = await app.inject({
       method: "POST",
       url: "/products",
-      payload: { name: "Food", sku: "FD-001", price: 10, category: "food", createdAt: "2026-01-03" },
+      payload: {
+        name: "Food",
+        sku: "FD-001",
+        price: 10,
+        category: "food",
+        createdAt: "2026-01-03",
+      },
     });
     const id = JSON.parse(createRes.body).id;
 
@@ -180,11 +190,21 @@ describe("pgkit → arc — zero-friction wiring (PGlite)", () => {
     const createRes = await app.inject({
       method: "POST",
       url: "/products",
-      payload: { name: "Patch Target", sku: "PT-001", price: 50, category: "electronics", createdAt: "2026-01-04" },
+      payload: {
+        name: "Patch Target",
+        sku: "PT-001",
+        price: 50,
+        category: "electronics",
+        createdAt: "2026-01-04",
+      },
     });
     const id = JSON.parse(createRes.body).id;
 
-    const res = await app.inject({ method: "PATCH", url: `/products/${id}`, payload: { price: 75 } });
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/products/${id}`,
+      payload: { price: 75 },
+    });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.price).toBe(75);
@@ -237,7 +257,13 @@ describe("pgkit × arc — feature detection of StandardRepo optionals", () => {
     const dup = await app.inject({
       method: "POST",
       url: "/products",
-      payload: { name: "Dup2", sku: "DUP-001", price: 2, category: "food", createdAt: "2026-01-07" },
+      payload: {
+        name: "Dup2",
+        sku: "DUP-001",
+        price: 2,
+        category: "food",
+        createdAt: "2026-01-07",
+      },
     });
     // Must be a clean client error (409/400 family), never a 500 crash.
     expect(dup.statusCode).toBeGreaterThanOrEqual(400);

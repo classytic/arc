@@ -25,8 +25,16 @@ import {
   seqId,
 } from "./_harness.ts";
 
-function makeService(recipe: CleanupRecipe, opts: { writeFence?: CleanupWriteFence } = {}) {
-  const runStore = memRunStore();
+function makeService(
+  recipe: CleanupRecipe,
+  opts: {
+    writeFence?: CleanupWriteFence;
+    limits?: Partial<import("../../src/cleanup/index.js").CleanupLimits>;
+    leaseMs?: number;
+  } = {},
+) {
+  const now = fixedNow();
+  const runStore = memRunStore(now); // same clock as the service — lease liveness agrees
   const evidenceStore = memEvidenceStore();
   const queue = manualQueue();
   const service = createCleanupService({
@@ -35,8 +43,10 @@ function makeService(recipe: CleanupRecipe, opts: { writeFence?: CleanupWriteFen
     evidenceStore,
     jobQueue: queue,
     writeFence: opts.writeFence,
+    limits: opts.limits,
+    leaseMs: opts.leaseMs,
     generateId: seqId(),
-    now: fixedNow(),
+    now,
   });
   return { service, runStore, evidenceStore, queue };
 }
@@ -326,7 +336,16 @@ describe("cleanup service — cancellation", () => {
     await h.service.processRun(run.id);
     const finished = must(h.runStore.runs.get(run.id));
     expect(finished.status).toBe("cancelled");
-    expect(h.evidenceStore.evidence).toHaveLength(0); // cancelled ⇒ no completion evidence
+    // A cancel is an AUDITED outcome: committed chunks remain, so the run
+    // leaves 'partial' evidence + a manifest recording verification was skipped.
+    expect(h.evidenceStore.evidence).toHaveLength(1);
+    expect(must(h.evidenceStore.evidence[0]).status).toBe("partial");
+    expect(must(h.evidenceStore.manifests[0]).status).toBe("cancelled");
+    expect(
+      must(h.evidenceStore.manifests[0]).verification.checks.some(
+        (c) => c.name === "verification.skipped" && !c.ok,
+      ),
+    ).toBe(true);
   });
 
   it("cancel on a terminal run is rejected", async () => {

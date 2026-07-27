@@ -170,14 +170,13 @@ describe("BaseCrudController helpers", () => {
       });
     });
 
-    it.each([
-      "HIT",
-      "STALE",
-      "MISS",
-    ] as const)("passes the %s status verbatim into the x-cache header", (status) => {
-      const result = controller.callCacheResponse(null, status);
-      expect(result.headers).toEqual({ "x-cache": status });
-    });
+    it.each(["HIT", "STALE", "MISS"] as const)(
+      "passes the %s status verbatim into the x-cache header",
+      (status) => {
+        const result = controller.callCacheResponse(null, status);
+        expect(result.headers).toEqual({ "x-cache": status });
+      },
+    );
 
     it("preserves null/undefined data shapes (used by stale-cache returns)", () => {
       const nullResult = controller.callCacheResponse(null, "STALE");

@@ -28,6 +28,7 @@
 
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { RequestScope } from "../scope/types.js";
+import { ArcError } from "../utils/errors.js";
 import type { PermissionCheck, PermissionContext, PermissionResult, UserBase } from "./types.js";
 
 // ============================================================================
@@ -155,6 +156,30 @@ export async function evaluateAndApplyPermission(
       { err, resource: context.resource, action: context.action },
       "Permission check threw",
     );
+    // A PermissionCheck that throws a STRUCTURED ArcError (a discriminable
+    // `code` + machine-readable context) is making a deliberate statement —
+    // e.g. a tier gate throwing `arc.tier_required` with
+    // `{ requiredMode, currentMode }`. Preserve it end-to-end instead of
+    // flattening EVERY throw to a generic "Permission denied", which erased the
+    // exact reason the frontend needs to render "requires Enterprise" vs a
+    // plain permission denial. Non-ArcError throws still flatten (fail-closed).
+    //
+    // Serialize IDENTICALLY to the global error handler: an ArcError's
+    // structured context is `err.meta` (the canonical `HttpError.meta` mirror of
+    // `.details`), and the ErrorContract puts a machine-readable Record on `meta`
+    // (— `details` is reserved for the field-error ARRAY shape). Emitting `meta`
+    // here keeps this permission-slot path byte-compatible with the preHandler
+    // path, so a discriminating client reads the SAME field regardless of which
+    // gate fired.
+    if (err instanceof ArcError) {
+      reply.code(err.status).send({
+        code: err.code,
+        message: err.message,
+        status: err.status,
+        ...(err.meta ? { meta: err.meta } : {}),
+      });
+      return false;
+    }
     reply.code(403).send({
       code: "arc.forbidden",
       message: "Permission denied",

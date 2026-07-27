@@ -11,8 +11,8 @@
  * silent 401 loop in production.
  */
 
-import { describe, expect, it } from "vitest";
 import { createHmac } from "node:crypto";
+import { describe, expect, it } from "vitest";
 import { verifySignature } from "../../src/integrations/webhooks.js";
 
 // Local sha256=<hex> signer — arc no longer exports the legacy signPayload

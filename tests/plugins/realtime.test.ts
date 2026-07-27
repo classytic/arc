@@ -159,9 +159,9 @@ describe("resolveDelivery — the per-event authorization decision", () => {
 
   it("tenantScoped: false disables the org guard (tenantField: false resources)", () => {
     const event = makeEvent({ data: { a: 1 } }, { organizationId: "org-1" });
-    expect(
-      resolveDelivery(event, { ...openPolicy, tenantScoped: false }, "created").kind,
-    ).toBe("deliver");
+    expect(resolveDelivery(event, { ...openPolicy, tenantScoped: false }, "created").kind).toBe(
+      "deliver",
+    );
   });
 
   it("filters: matching events deliver; non-matching CREATE/DELETE drop (never entered the view)", () => {

@@ -6,8 +6,8 @@
  * round-trip contract.
  */
 
-import { describe, expect, it } from "vitest";
 import { createHmac } from "node:crypto";
+import { describe, expect, it } from "vitest";
 import { verifySignature } from "../../../src/integrations/webhooks.js";
 
 // Local sha256=<hex> signer — arc no longer EXPORTS the legacy signPayload

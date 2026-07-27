@@ -11,8 +11,8 @@
 | Peer | Min | Required? | Used by |
 |---|---|---|---|
 | fastify | ^5.8.5 | **Yes** | Everything |
-| @classytic/primitives | >=0.14.0 | **Yes** | Canonical event types (`EventMeta`, `DomainEvent`, `EventTransport` — `subscribe` optional as of 0.14) + outbox contract |
-| @classytic/repo-core | >=0.14.0 | **Yes** | `RepositoryLike`, adapter contract (`/adapter`), canonical pagination / tenant / errors / schema-generator contracts |
+| @classytic/primitives | >=0.15.0 | **Yes** | Canonical event types (`EventMeta`, `DomainEvent`, `EventTransport` — `subscribe` optional as of 0.14) + outbox contract; **0.15 floor**: `/canonical` + `/retention` subpaths the cleanup framework imports (absent in 0.14 → `ERR_PACKAGE_PATH_NOT_EXPORTED`) |
+| @classytic/repo-core | >=0.17.0 | **Yes** | `RepositoryLike`, adapter contract (`/adapter`), canonical pagination / tenant / errors / schema-generator contracts; **0.17 floor**: `/cleanup` step contract (`CleanupStep`) |
 | @classytic/streamline | >=2.8.0 | No | Streamline integration |
 | better-auth | >=1.6.2 | No | Better Auth integration |
 | ioredis | >=5.0.0 | No | Redis events, cache, sessions |

@@ -8,8 +8,8 @@
  */
 import Fastify from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
-import usagePlugin, { MemoryUsageStore, usagePeriod } from "../../src/usage/index.js";
 import type { UsageStore } from "../../src/usage/index.js";
+import usagePlugin, { MemoryUsageStore, usagePeriod } from "../../src/usage/index.js";
 
 const apps: Array<{ close(): Promise<void> }> = [];
 

@@ -218,7 +218,7 @@
       "version",
       "when"
     ],
-    "typesHash": "45910573b73df5c0"
+    "typesHash": "031e18e0c0bc4905"
   },
   "./permissions": {
     "stability": "stable",
@@ -522,7 +522,7 @@
       "sendControllerResponse",
       "validateResourceConfig"
     ],
-    "typesHash": "c4b36cfb8f4f6553"
+    "typesHash": "300f06962df65d89"
   },
   "./presets": {
     "stability": "stable",
@@ -812,7 +812,7 @@
       "introspectionPlugin",
       "introspectionPluginFn"
     ],
-    "typesHash": "621851d6690d00cf"
+    "typesHash": "abfd54ceb63d9043"
   },
   "./utils": {
     "stability": "stable",
@@ -1070,7 +1070,7 @@
       "versioningPlugin",
       "versioningPluginFn"
     ],
-    "typesHash": "2d50f0e5fda4b867"
+    "typesHash": "00187601b8875af5"
   },
   "./plugins/tracing": {
     "stability": "stable",
@@ -1278,7 +1278,7 @@
       "wrapWithBoundary",
       "wrapWithSchema"
     ],
-    "typesHash": "d8e0bac9edcfd4e1"
+    "typesHash": "3f6919a13ce10322"
   },
   "./events/redis": {
     "stability": "stable",
@@ -1395,7 +1395,7 @@
       "setupBetterAuthTestApp",
       "waitFor"
     ],
-    "typesHash": "b07dfa69941453fb"
+    "typesHash": "d99c6eb063915c83"
   },
   "./testing/storage": {
     "stability": "stable",
@@ -1408,6 +1408,18 @@
       "runStorageContract"
     ],
     "typesHash": "f6bcc330e09438ab"
+  },
+  "./testing/cleanup": {
+    "stability": "stable",
+    "runtime": [
+      "runCleanupRunStoreContract"
+    ],
+    "types": [
+      "CleanupRunStoreContractSetup",
+      "CleanupRunStoreContractSetupResult",
+      "runCleanupRunStoreContract"
+    ],
+    "typesHash": "2b624b227c213c55"
   },
   "./factory": {
     "stability": "stable",
@@ -1478,7 +1490,7 @@
       "testingPreset",
       "toFetchHandler"
     ],
-    "typesHash": "a6ef2f0a4280fde6"
+    "typesHash": "8ccac82c4873bf8a"
   },
   "./schemas": {
     "stability": "stable",
@@ -2027,5 +2039,103 @@
       "usagePlugin"
     ],
     "typesHash": "bd86f174db8751d0"
+  },
+  "./cleanup": {
+    "stability": "stable",
+    "runtime": [
+      "CLEANUP_TERMINAL_STATUSES",
+      "CleanupCancelled",
+      "CleanupError",
+      "CleanupErrors",
+      "DEFAULT_CLEANUP_LIMITS",
+      "GLOBAL_DESTRUCTIVE_KEY",
+      "MemoryCleanupEvidenceStore",
+      "MemoryCleanupJobQueue",
+      "MemoryCleanupRunStore",
+      "canonicalJson",
+      "computeManifestDigest",
+      "computePlanDigest",
+      "createCleanupRegistry",
+      "createCleanupService",
+      "createDataCleanupModule",
+      "recipeFromSteps"
+    ],
+    "types": [
+      "Availability",
+      "CLEANUP_TERMINAL_STATUSES",
+      "CancelInput",
+      "CleanupCancelRequest",
+      "CleanupCancelled",
+      "CleanupContext",
+      "CleanupError",
+      "CleanupErrorCode",
+      "CleanupErrors",
+      "CleanupEvidenceStore",
+      "CleanupExecutionContext",
+      "CleanupFinalizationPayload",
+      "CleanupInput",
+      "CleanupJob",
+      "CleanupJobQueue",
+      "CleanupLease",
+      "CleanupLimits",
+      "CleanupLogger",
+      "CleanupManifest",
+      "CleanupOutcomeStatus",
+      "CleanupPermissionCheck",
+      "CleanupPermissions",
+      "CleanupPlan",
+      "CleanupPlanDraft",
+      "CleanupPlanItem",
+      "CleanupProgressSummary",
+      "CleanupRecipe",
+      "CleanupRecipeInfo",
+      "CleanupRegistry",
+      "CleanupResult",
+      "CleanupRun",
+      "CleanupRunCreateResult",
+      "CleanupRunStatus",
+      "CleanupRunStore",
+      "CleanupRunTransitionPatch",
+      "CleanupService",
+      "CleanupServiceDeps",
+      "CleanupStepResult",
+      "CleanupWriteFence",
+      "DEFAULT_CLEANUP_LIMITS",
+      "DataCleanupModuleDeps",
+      "ExecuteInput",
+      "GLOBAL_DESTRUCTIVE_KEY",
+      "MemoryCleanupEvidenceStore",
+      "MemoryCleanupJobQueue",
+      "MemoryCleanupRunStore",
+      "PreviewInput",
+      "PurgeActor",
+      "PurgeEvidence",
+      "PurgeResourceResult",
+      "PurgeStrategyKind",
+      "PurgeVerificationSummary",
+      "RecipeFromStepsInput",
+      "VerificationCheck",
+      "VerificationResult",
+      "canonicalJson",
+      "computeManifestDigest",
+      "computePlanDigest",
+      "createCleanupRegistry",
+      "createCleanupService",
+      "createDataCleanupModule",
+      "recipeFromSteps"
+    ],
+    "typesHash": "c591a5f440a761c4"
+  },
+  "./testing/outbox": {
+    "stability": "stable",
+    "runtime": [
+      "runOutboxStoreContract"
+    ],
+    "types": [
+      "OutboxStoreContractSetup",
+      "OutboxStoreContractSetupResult",
+      "runOutboxStoreContract"
+    ],
+    "typesHash": "ce3c61662428edd9"
   }
 }

@@ -8,8 +8,9 @@
  * ordering), sync and async thunks both work, and the eager object form
  * keeps working unchanged (back-compat).
  */
-import { afterEach, describe, expect, it } from "vitest";
+
 import type { FastifyInstance } from "fastify";
+import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../../src/factory/createApp.js";
 
 const apps: Array<{ close(): Promise<void> }> = [];

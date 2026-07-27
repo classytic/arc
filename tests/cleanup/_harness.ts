@@ -1,89 +1,34 @@
 /**
- * In-memory test harness for the cleanup service — models the ATOMIC semantics
- * the real ports must provide (conditional insert + CAS transitions), plus a
- * MANUAL job queue so tests drive the worker deterministically.
+ * Test harness for the cleanup service.
+ *
+ * The in-memory ports are arc's SHIPPED reference implementations
+ * (`MemoryCleanupRunStore` & co. from `@classytic/arc/cleanup`) — the suite
+ * exercises the very code hosts import, so the reference stores can never
+ * silently drift from what the tests prove. Their atomic semantics
+ * (conditional insert by concurrencyKey, EXCLUSIVE lease claim, lease-guarded
+ * CAS, admission-guarded re-arm) are independently pinned by
+ * `runCleanupRunStoreContract` in `memory-contract.test.ts`.
  */
-import type {
-  CleanupEvidenceStore,
-  CleanupJob,
-  CleanupJobQueue,
-  CleanupManifest,
-  CleanupProgressSummary,
-  CleanupRecipe,
-  CleanupRun,
-  CleanupRunCreateResult,
-  CleanupRunStatus,
-  CleanupRunStore,
-  CleanupRunTransitionPatch,
-  PurgeEvidence,
+import type { CleanupRecipe } from "../../src/cleanup/index.js";
+import {
+  MemoryCleanupEvidenceStore,
+  MemoryCleanupJobQueue,
+  MemoryCleanupRunStore,
 } from "../../src/cleanup/index.js";
-import { CLEANUP_TERMINAL_STATUSES } from "../../src/cleanup/index.js";
 
-export function memRunStore() {
-  const runs = new Map<string, CleanupRun>();
-  const store: CleanupRunStore = {
-    async createIfPermitted(run): Promise<CleanupRunCreateResult> {
-      // Atomic single-active guard: a destructive world allows only one
-      // non-terminal run at a time (matches a unique partial index).
-      for (const r of runs.values()) {
-        if (!CLEANUP_TERMINAL_STATUSES.includes(r.status)) {
-          return { created: false, activeRunId: r.id };
-        }
-      }
-      runs.set(run.id, run);
-      return { created: true };
-    },
-    async get(id) {
-      return runs.get(id) ?? null;
-    },
-    async compareAndTransition(id, expected, to, patch?: CleanupRunTransitionPatch) {
-      const cur = runs.get(id);
-      if (!cur || !expected.includes(cur.status)) return null;
-      const next: CleanupRun = { ...cur, ...(patch ?? {}), status: to as CleanupRunStatus };
-      runs.set(id, next);
-      return next;
-    },
-    async requestCancel(id) {
-      const cur = runs.get(id);
-      if (!cur) return null;
-      const next = { ...cur, cancelRequested: true };
-      runs.set(id, next);
-      return next;
-    },
-    async saveProgress(id, progress: CleanupProgressSummary) {
-      const cur = runs.get(id);
-      if (cur) runs.set(id, { ...cur, progress });
-    },
-  };
-  return Object.assign(store, { runs });
+/** Arc's shipped in-memory run store (`.runs` exposes the raw state). */
+export function memRunStore(nowFn: () => Date = () => new Date()): MemoryCleanupRunStore {
+  return new MemoryCleanupRunStore(nowFn);
 }
 
-export function memEvidenceStore() {
-  const evidence: PurgeEvidence[] = [];
-  const manifests: CleanupManifest[] = [];
-  const seenOps = new Set<string>();
-  const store: CleanupEvidenceStore = {
-    async finalize({ evidence: e, manifest }) {
-      // Idempotent by operationId (a retry/restart re-finalize is a no-op).
-      const op = e.operationId ?? "";
-      if (seenOps.has(op)) return;
-      seenOps.add(op);
-      evidence.push(e);
-      manifests.push(manifest);
-    },
-  };
-  return Object.assign(store, { evidence, manifests });
+/** Arc's shipped in-memory evidence store (`.evidence` / `.manifests`). */
+export function memEvidenceStore(): MemoryCleanupEvidenceStore {
+  return new MemoryCleanupEvidenceStore();
 }
 
-/** Manual queue: captures enqueued runIds; the test calls the drain fn. */
-export function manualQueue() {
-  const jobs: CleanupJob[] = [];
-  const queue: CleanupJobQueue = {
-    async enqueue(job) {
-      jobs.push(job);
-    },
-  };
-  return Object.assign(queue, { jobs });
+/** Manual queue: captures enqueued runIds; the test drives the worker itself. */
+export function manualQueue(): MemoryCleanupJobQueue {
+  return new MemoryCleanupJobQueue();
 }
 
 /** Assert non-null without a `!` (biome forbids non-null assertions in tests). */

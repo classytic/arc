@@ -1,5 +1,7 @@
 # @classytic/arc
 
+[![Sponsor](https://img.shields.io/github/sponsors/classytic?style=flat-square&label=Sponsor&logo=GitHub&color=EA4AAA)](https://github.com/sponsors/classytic)
+
 Database-agnostic resource framework for Fastify. One `defineResource()` call -> REST + auth + permissions + events + caching + OpenAPI + MCP tools.
 
 Fastify 5+ | Node.js 22+ | ESM only

@@ -10,14 +10,21 @@
  * row filters, and tenant scoping apply identically.
  */
 import { describe, expect, it } from "vitest";
-import { createCrudHandler, defaultCrudDescription } from "../../../src/integrations/mcp/crud-tools.js";
+import {
+  createCrudHandler,
+  defaultCrudDescription,
+} from "../../../src/integrations/mcp/crud-tools.js";
 import { buildInputSchema } from "../../../src/integrations/mcp/input-schema.js";
 
 describe("MCP list tool — count/exists/distinct verbs", () => {
   it("advertises _count, _exists, _distinct in the list input schema", () => {
-    const schema = buildInputSchema("list", { status: { type: "string" } }, {
-      filterableFields: ["status"],
-    });
+    const schema = buildInputSchema(
+      "list",
+      { status: { type: "string" } },
+      {
+        filterableFields: ["status"],
+      },
+    );
     const keys = Object.keys(schema as Record<string, unknown>);
     expect(keys).toEqual(expect.arrayContaining(["_count", "_exists", "_distinct", "status"]));
   });
@@ -41,10 +48,9 @@ describe("MCP list tool — count/exists/distinct verbs", () => {
     };
 
     const handler = createCrudHandler("list", controller, "order", undefined);
-    const result = await handler(
-      { _count: true, status: "active", total_gte: 100 },
-      { session: undefined } as never,
-    );
+    const result = await handler({ _count: true, status: "active", total_gte: 100 }, {
+      session: undefined,
+    } as never);
 
     // `_count` untouched (leading underscore), `total_gte` expanded to
     // bracket form — both behaviors from the same expandOperatorKeys pass.
