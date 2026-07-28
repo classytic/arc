@@ -20,7 +20,7 @@
  */
 
 import type { RepositoryLike } from "@classytic/repo-core/adapter";
-import type { PaginationParams } from "@classytic/repo-core/repository";
+import type { PaginationParams, QueryOptions } from "@classytic/repo-core/repository";
 import { buildQueryKey } from "../cache/keys.js";
 import type { QueryCacheConfig } from "../cache/QueryCache.js";
 import { DEFAULT_ID_FIELD, DEFAULT_LIMIT, DEFAULT_TENANT_FIELD } from "../constants.js";
@@ -29,10 +29,10 @@ import { getOrgId as getOrgIdFromScope } from "../scope/types.js";
 import type {
   AnyRecord,
   ArcInternalMetadata,
+  ControllerQueryOptions,
   IController,
   IControllerResponse,
   IRequestContext,
-  ParsedQuery,
   QueryParserInterface,
   ResourceCacheConfig,
   RouteSchemaOptions,
@@ -121,7 +121,7 @@ export class BaseCrudController<
   /**
    * Composable access control (ID filtering, policy checks, org scope, ownership).
    *
-   * Not `readonly` since 2.15.0 — `configure()` rebuilds it when the host
+   * Not `readonly` — `configure()` rebuilds it when the host
    * supplies tenant/idField/matchesFilter post-construction. Same model as
    * `queryResolver` after `setQueryParser` shipped in 2.10.9.
    */
@@ -129,7 +129,7 @@ export class BaseCrudController<
   /**
    * Composable body sanitization (field permissions, system fields).
    *
-   * Not `readonly` since 2.15.0 — `configure()` rebuilds it when the host
+   * Not `readonly` — `configure()` rebuilds it when the host
    * supplies schemaOptions/onFieldWriteDenied post-construction.
    */
   bodySanitizer: BodySanitizer;
@@ -578,7 +578,7 @@ export class BaseCrudController<
   /** Cached `list()` flow with SWR semantics. Returns null when cache is disabled. */
   protected async withListCache(
     req: IRequestContext,
-    options: ParsedQuery,
+    options: ControllerQueryOptions,
   ): Promise<IControllerResponse<ListResult<TDoc>> | null> {
     const cacheConfig = this.resolveCacheConfig("list");
     const qc = req.server?.queryCache;
@@ -625,7 +625,7 @@ export class BaseCrudController<
   protected async withGetCache(
     req: IRequestContext,
     id: string,
-    options: ParsedQuery,
+    options: ControllerQueryOptions,
   ): Promise<IControllerResponse<TDoc> | null> {
     const cacheConfig = this.resolveCacheConfig("byId");
     const qc = req.server?.queryCache;
@@ -782,7 +782,7 @@ export class BaseCrudController<
 
   /** Execute list query through hooks (extracted for cache revalidation) */
   protected async executeListQuery(
-    options: ParsedQuery,
+    options: ControllerQueryOptions,
     req: IRequestContext,
   ): Promise<ListResult<TDoc>> {
     const hooks = this.getHooks(req);
@@ -827,7 +827,7 @@ export class BaseCrudController<
   /** Execute get query through hooks (extracted for cache revalidation) */
   protected async executeGetQuery(
     id: string,
-    options: ParsedQuery,
+    options: ControllerQueryOptions,
     req: IRequestContext,
   ): Promise<{ doc: TDoc | null; reason: FetchDenialReason | null }> {
     const hooks = this.getHooks(req);
@@ -836,7 +836,10 @@ export class BaseCrudController<
         id,
         req,
         this.repository,
-        options,
+        // fetchDetailed reads only the QueryOptions subset (select/populate/lean);
+        // the resolved options are a superset. `user` differs (unknown vs Record)
+        // but is unused on this path.
+        options as unknown as QueryOptions,
       );
       return result;
     };

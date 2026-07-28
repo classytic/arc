@@ -109,11 +109,11 @@ describe("Mixed per-operation permissions", () => {
           if (roles.includes("admin")) return true;
           // Only author can update
           return {
-            granted: true,
-            filters: { authorId: ctx.user.id ?? ctx.user._id },
+            effect: "allow",
+            policy: { authorId: ctx.user.id ?? ctx.user._id },
           };
         },
-        delete: () => ({ granted: false, reason: "Posts cannot be deleted — archive instead" }),
+        delete: () => ({ effect: "deny", reason: "Posts cannot be deleted — archive instead" }),
       },
       schemaOptions: {
         fieldRules: {
@@ -389,7 +389,7 @@ describe("Composite permission patterns", () => {
           // Org admin sees everything in their org (tenantField handles scoping)
           if (roles.includes("admin")) return true;
           // Regular member sees only published
-          return { granted: true, filters: { status: "published" } };
+          return { effect: "allow", policy: { status: "published" } };
         },
       },
       schemaOptions: {

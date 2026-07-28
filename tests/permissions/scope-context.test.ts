@@ -111,22 +111,22 @@ describe("requireScopeContext('key') — presence check", () => {
 
   it("denies when key is missing", () => {
     const result = check(makeMemberCtx({ context: { otherKey: "x" } }));
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
     expect((result as { reason: string }).reason).toContain("branchId");
   });
 
   it("denies when context is undefined entirely", () => {
     const result = check(makeMemberCtx({}));
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
     expect((result as { reason: string }).reason).toContain("Scope context required");
   });
 
   it("denies for public scope", () => {
-    expect(check(makePublicCtx())).toMatchObject({ granted: false });
+    expect(check(makePublicCtx())).toMatchObject({ effect: "deny" });
   });
 
   it("denies for authenticated-without-context scope", () => {
-    expect(check(makeAuthenticatedCtx({ userId: "u1" }))).toMatchObject({ granted: false });
+    expect(check(makeAuthenticatedCtx({ userId: "u1" }))).toMatchObject({ effect: "deny" });
   });
 });
 
@@ -143,7 +143,7 @@ describe("requireScopeContext('key', 'value') — exact value match", () => {
 
   it("denies when value mismatches", () => {
     const result = check(makeMemberCtx({ context: { region: "us" } }));
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
     const reason = (result as { reason: string }).reason;
     expect(reason).toContain("region");
     expect(reason).toContain("eu");
@@ -152,7 +152,7 @@ describe("requireScopeContext('key', 'value') — exact value match", () => {
 
   it("denies when key is missing", () => {
     const result = check(makeMemberCtx({ context: { otherKey: "x" } }));
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
   });
 });
 
@@ -173,7 +173,7 @@ describe("requireScopeContext({ ... }) — object form, AND semantics", () => {
     const result = check(
       makeMemberCtx({ context: { branchId: "eng-paris", projectId: "p-WRONG" } }),
     );
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
     const reason = (result as { reason: string }).reason;
     expect(reason).toContain("projectId");
   });
@@ -181,7 +181,7 @@ describe("requireScopeContext({ ... }) — object form, AND semantics", () => {
   it("denies when ONE of multiple keys is missing", () => {
     const check = requireScopeContext({ branchId: "eng-paris", projectId: "p-1" });
     const result = check(makeMemberCtx({ context: { branchId: "eng-paris" } }));
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
     const reason = (result as { reason: string }).reason;
     expect(reason).toContain("projectId");
     expect(reason).toContain("missing");
@@ -196,10 +196,10 @@ describe("requireScopeContext({ ... }) — object form, AND semantics", () => {
     });
     expect(check(makeMemberCtx({ context: { branchId: "anything", region: "eu" } }))).toBe(true);
     expect(check(makeMemberCtx({ context: { branchId: "anything", region: "us" } }))).toMatchObject(
-      { granted: false },
+      { effect: "deny" },
     );
     expect(check(makeMemberCtx({ context: { region: "eu" } }))).toMatchObject({
-      granted: false,
+      effect: "deny",
     });
   });
 });
@@ -279,7 +279,7 @@ describe("real-world scenarios — Postman-style fan-out + per-team projects", (
     });
 
     expect(requireScopeContext({ region: "eu", branchId: "acme-paris" })(ctx)).toBe(true);
-    expect(requireScopeContext("region", "us")(ctx)).toMatchObject({ granted: false });
+    expect(requireScopeContext("region", "us")(ctx)).toMatchObject({ effect: "deny" });
   });
 
   it("user without project context can't access project-scoped routes", () => {
@@ -289,6 +289,6 @@ describe("real-world scenarios — Postman-style fan-out + per-team projects", (
       organizationId: "workspace-A",
       context: { teamId: "team-backend" }, // no projectId
     });
-    expect(requireScopeContext("projectId")(ctx)).toMatchObject({ granted: false });
+    expect(requireScopeContext("projectId")(ctx)).toMatchObject({ effect: "deny" });
   });
 });

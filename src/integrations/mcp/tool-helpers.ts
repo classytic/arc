@@ -8,16 +8,15 @@
 
 import type { ErrorContract } from "@classytic/repo-core/errors";
 import { isHttpError, toErrorContract } from "@classytic/repo-core/errors";
-import type { FastifyRequest } from "fastify";
 import { BaseController } from "../../core/BaseController.js";
 import type { ResourceDefinition } from "../../core/defineResource.js";
-import { normalizePermissionResult } from "../../permissions/applyPermissionResult.js";
+import { evaluatePermissionDecision } from "../../permissions/applyPermissionResult.js";
 import {
   applyFieldReadPermissions,
   type FieldPermissionMap,
   resolveEffectiveRoles,
 } from "../../permissions/fields.js";
-import type { PermissionCheck, PermissionResult } from "../../permissions/types.js";
+import type { AuthorizationDecision, PermissionCheck } from "../../permissions/types.js";
 import { isElevated, isMember, type RequestScope } from "../../scope/types.js";
 import type { IControllerResponse } from "../../types/index.js";
 import { isArcError } from "../../utils/errors.js";
@@ -27,13 +26,14 @@ import type { CallToolResult, McpAuthResult } from "./types.js";
 /**
  * Evaluate a resource's permission check in MCP context.
  *
- * Returns the full normalized `PermissionResult` so the caller can honor
- * ALL side-effects (filters + scope) consistently with CRUD/action routes.
- * Returns `null` when no permission is defined (= allow, no side effects).
+ * Returns the full normalized {@link AuthorizationDecision} so the caller can
+ * honor ALL side-effects (data policy + scope) consistently with CRUD/action
+ * routes. Returns `null` when no permission is defined (= allow, no side effects).
  *
- * Promoting booleans to `PermissionResult` via the shared
- * `normalizePermissionResult` helper keeps the contract aligned with the
- * rest of arc — one normalization path for every call site.
+ * This is the MCP transport adapter: it builds a `PermissionContext` from the
+ * MCP session and delegates the actual decision to the ONE transport-neutral
+ * `evaluatePermissionDecision` — same normalization + exception mapping every
+ * surface uses, so MCP enforcement can't drift from HTTP/aggregation.
  */
 export async function evaluatePermission(
   check: PermissionCheck | undefined,
@@ -41,43 +41,24 @@ export async function evaluatePermission(
   resource: string,
   action: string,
   input: Record<string, unknown>,
-): Promise<PermissionResult | null> {
+): Promise<AuthorizationDecision | null> {
   if (!check) return null;
 
   const user = session ? { id: session.userId, _id: session.userId, ...session } : null;
-  // Thread the resolved scope through BOTH conventions arc reads from:
-  //   - `request.scope` — used by permission helpers (`requireOrgMembership()`,
-  //     `requireOrgRole()`) via `getRequestScope(req) = req.scope ?? PUBLIC_SCOPE`
-  //   - `request.metadata._scope` — used by controllers / repo / query layer
-  //     via `getControllerScope(req) = req.metadata?._scope ?? PUBLIC_SCOPE`
-  //
-  // Setting only one of these silently broke MCP permissions: HTTP paths
-  // populate both (auth adapters set `request.scope`; `buildRequestContext`
-  // sets `metadata._scope`), but the MCP `fakeRequest` here was setting
-  // neither — so every authenticated MCP call rejected as "Organization
-  // membership required" even when `session.organizationId` was present.
-  const scope = buildScope(session);
-  const fakeRequest = {
-    user,
-    headers: {},
-    params: {},
-    query: {},
-    body: input,
-    scope,
-    metadata: { _scope: scope },
-  } as unknown as FastifyRequest;
 
-  const result = await check({
+  // MCP has NO Fastify request (arc 2.30, P6). It builds a transport-neutral
+  // PermissionContext directly: `scope` (first-class, from the session) is the
+  // identity channel `scopeOf(ctx)` reads, and `data` carries the tool input.
+  // No synthetic request — built-in permissions depend only on these facts.
+  return evaluatePermissionDecision(check, {
     user,
-    request: fakeRequest,
+    scope: buildScope(session),
     resource,
     action,
     resourceId: typeof input.id === "string" ? input.id : undefined,
     params: {},
     data: input,
   });
-
-  return normalizePermissionResult(result);
 }
 
 /**
@@ -92,7 +73,7 @@ export async function evaluatePermission(
  *    `requireOrgRole()` and `BodySanitizer` bypass logic.
  *  - Effective roles = session roles ∪ org roles (member scope only),
  *    via the shared `resolveEffectiveRoles`.
- *  - `scopeOverride` (a `PermissionResult.scope`) follows the same
+ *  - `scopeOverride` (a decision's `scope`) follows the same
  *    non-downgrade rule as `buildRequestContext`: honored only when the
  *    session-derived scope is `public`.
  *

@@ -5,8 +5,9 @@
 
 import type { FastifyInstance } from "fastify";
 import type { EventHandler } from "../../events/EventTransport.js";
+import { wrapWithBoundary } from "../../events/subscribe-helpers.js";
 import { resolveContribution } from "./resolve.js";
-import type { ArcModule } from "./types.js";
+import type { ArcModule, EventHandlerDefinition } from "./types.js";
 
 /** Minimal view of the event bus the handlers arm needs (arc's `fastify.events`). */
 interface EventBusLike {
@@ -49,9 +50,10 @@ export async function subscribeModuleEventHandlers(
           }
           owner.set(def.name, m.name);
         }
+        const handler = applyBoundary(def, m.name, fastify);
         const patterns = Array.isArray(def.event) ? def.event : [def.event as string];
         for (const pattern of patterns) {
-          unsubscribes.push(await bus.subscribe(pattern, def.handler));
+          unsubscribes.push(await bus.subscribe(pattern, handler));
         }
       }
     }
@@ -66,6 +68,30 @@ export async function subscribeModuleEventHandlers(
     }
     throw err;
   }
+}
+
+/**
+ * Apply the declaration's opt-in error boundary. Without `boundary`, the raw
+ * handler is subscribed and a throw reaches the transport — which is what makes
+ * the durable path work (unacked → redelivered → DLQ). With it, failures are
+ * logged through `fastify.log` and swallowed, for handlers whose retry would
+ * only delay the next event's resync.
+ *
+ * The boundary label falls back to `<module>.<pattern>` so an unnamed handler
+ * still produces an attributable log line instead of "anonymous".
+ */
+function applyBoundary(
+  def: EventHandlerDefinition,
+  moduleName: string,
+  fastify: FastifyInstance,
+): EventHandler {
+  if (!def.boundary) return def.handler;
+  const onError = typeof def.boundary === "object" ? def.boundary.onError : undefined;
+  return wrapWithBoundary(def.handler, {
+    logger: fastify.log,
+    name: def.name ?? `${moduleName}.${String(def.event)}`,
+    ...(onError ? { onError } : {}),
+  });
 }
 
 /** Best-effort reverse-order teardown; every unsubscribe is attempted. */

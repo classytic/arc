@@ -22,6 +22,12 @@
 // --- Arc-specific assertions -----------------------------------------------
 export type { ArcAssertion, ArcResponseLike } from "./assertions.js";
 export { expectArc } from "./assertions.js";
+// --- Authorization conformance (cross-surface enforcement parity) -----------
+export type {
+  AuthorizationConformance,
+  SurfaceObservation,
+} from "./authorizationConformance.js";
+export { runAuthorizationConformance } from "./authorizationConformance.js";
 // --- Auth sessions ----------------------------------------------------------
 export type { RoleConfig, TestAuthProvider, TestAuthSession } from "./authSession.js";
 export {
@@ -57,7 +63,6 @@ export type {
   TestkitContext,
 } from "./bootModuleApp.js";
 export { bootModuleApp, mongoMemoryDatabase } from "./bootModuleApp.js";
-
 // --- Fixtures ---------------------------------------------------------------
 export type {
   FixtureDestroyer,

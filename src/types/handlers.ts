@@ -119,11 +119,9 @@ export interface ServerAccessor {
 /**
  * First-class projection of `request._scope` for controller handlers.
  *
- * **v2.10.6:** previously, pulling tenant/user/role info from inside a
- * controller override meant digging through `req.metadata._scope` and
- * calling `getOrgId(scope)` / `getUserId(user)` manually. This projection
- * lifts the two fields most hosts need directly onto `req` so cross-kit
- * controller code reads:
+ * Lifts the two fields most hosts need directly onto `req`, so a controller
+ * override never digs through `req.metadata._scope` and calls
+ * `getOrgId(scope)` / `getUserId(user)` by hand:
  *
  * ```ts
  * async create(req: IRequestContext) {
@@ -341,11 +339,11 @@ export interface IController<TDoc = unknown> {
  * Flexible controller interface — accepts controllers with any handler style,
  * including class instances with extra methods / private fields.
  *
- * **v2.10.6:** the previous `[key: string]: unknown` index signature made
- * real class instances fail structural assignment (`new ScrapController()`
- * needed a `as unknown as ControllerLike` cast, because class instances
- * don't have an index signature). Dropped — arc only invokes the CRUD
- * methods at runtime, so the rest of the shape is the caller's concern.
+ * Deliberately NO index signature: one would make real class instances fail
+ * structural assignment (`new ScrapController()` would need an
+ * `as unknown as ControllerLike` cast, because class instances don't have
+ * one). Arc only invokes the CRUD methods at runtime, so the rest of the
+ * shape is the caller's concern.
  *
  * The five CRUD slots stay optional so partial controllers (e.g. read-only)
  * assign too. Additional domain methods on the controller are allowed by

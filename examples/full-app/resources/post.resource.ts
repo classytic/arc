@@ -2,13 +2,18 @@
  * Post Resource
  *
  * Public-readable, owner-writable posts.
- * Demonstrates: ownedByUser preset, custom actions, field rules.
+ * Demonstrates: requireOwnership with a role bypass, custom actions, field rules.
  */
 
 import mongoose from "mongoose";
 import { defineResource } from "../../../src/core/index.js";
 import { createMongooseAdapter } from "@classytic/mongokit/adapter";
-import { allowPublic, requireAuth, requireRoles } from "../../../src/permissions/index.js";
+import {
+  allowPublic,
+  requireAuth,
+  requireOwnership,
+  requireRoles,
+} from "../../../src/permissions/index.js";
 import { Repository } from "@classytic/mongokit";
 import { NotFoundError } from "../../../src/utils/errors.js";
 
@@ -37,8 +42,6 @@ export default defineResource({
 
   adapter: createMongooseAdapter(PostModel, postRepository),
 
-  presets: ["ownedByUser"],
-
   // Audit only deletes (skip noisy creates/updates for posts)
   audit: { operations: ["delete"] },
 
@@ -46,7 +49,12 @@ export default defineResource({
     list: allowPublic(),
     get: allowPublic(),
     create: requireAuth(),
-    update: requireAuth(), // ownedByUser preset enforces ownership
+    // Ownership as a PERMISSION, not the `ownedByUser` middleware preset: only
+    // this form expresses "the owner, or an admin". The preset bypasses for
+    // elevated platform scope alone, and its default `ownerField` is `userId`
+    // — naming this schema's `createdBy` is required either way, since a
+    // mismatched field makes every record look unowned, and unowned is denied.
+    update: requireOwnership("createdBy", { bypassRoles: ["admin"] }),
     delete: requireRoles(["admin"]),
   },
 

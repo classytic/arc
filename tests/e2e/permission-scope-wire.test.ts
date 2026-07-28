@@ -1,5 +1,5 @@
 /**
- * PermissionResult.scope → tenantField isolation E2E
+ * AuthorizationDecision.scope → tenantField isolation E2E
  *
  * Regression test for the reported issue: when a custom permission check
  * (e.g. API key auth) tries to isolate tenants via `filters`, it works for
@@ -7,8 +7,8 @@
  * `tenantField` filtering reads from `metadata._scope`, NOT from
  * `_policyFilters`.
  *
- * The fix: `PermissionResult.scope` — the permission check returns a
- * `service` scope alongside `granted: true`, Arc writes it to `request.scope`,
+ * The fix: `AuthorizationDecision.scope` — the permission check returns a
+ * `service` scope alongside `effect: "allow"`, Arc writes it to `request.scope`,
  * and the full BaseController pipeline applies tenant isolation automatically.
  *
  * This test proves:
@@ -41,19 +41,19 @@ const CLIENTS: Record<string, { clientId: string; organizationId: string }> = {
 
 /**
  * The pattern under test: a custom API-key permission check that installs
- * a `service` scope via PermissionResult.scope. No separate auth plugin,
+ * a `service` scope via AuthorizationDecision.scope. No separate auth plugin,
  * no faking a user identity, no manual tenant filter plumbing.
  */
 function requireApiKey(): PermissionCheck {
   return async ({ request }) => {
     const apiKey = request.headers["x-api-key"] as string | undefined;
-    if (!apiKey) return { granted: false, reason: "Missing API key" };
+    if (!apiKey) return { effect: "deny", reason: "Missing API key" };
 
     const client = CLIENTS[apiKey];
-    if (!client) return { granted: false, reason: "Invalid API key" };
+    if (!client) return { effect: "deny", reason: "Invalid API key" };
 
     return {
-      granted: true,
+      effect: "allow",
       scope: {
         kind: "service",
         clientId: client.clientId,
@@ -64,7 +64,7 @@ function requireApiKey(): PermissionCheck {
   };
 }
 
-describe("PermissionResult.scope → tenantField isolation", () => {
+describe("AuthorizationDecision.scope → tenantField isolation", () => {
   let app: FastifyInstance;
   let Job: mongoose.Model<{ title: string; companyId: string }>;
 
@@ -102,7 +102,7 @@ describe("PermissionResult.scope → tenantField isolation", () => {
         update: requireApiKey(),
         delete: requireApiKey(),
       },
-      // The permission check sets the scope via PermissionResult.scope, so
+      // The permission check sets the scope via AuthorizationDecision.scope, so
       // BaseController.create auto-injects `companyId` via its tenant-injection path
       schemaOptions: {
         fieldRules: {

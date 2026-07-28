@@ -87,6 +87,7 @@
       "ArcRequest",
       "ArcUpdateResult",
       "AuthPluginOptions",
+      "AuthorizationDecision",
       "BaseController",
       "BaseControllerOptions",
       "BaseCrudController",
@@ -108,6 +109,7 @@
       "DEFAULT_SORT",
       "DEFAULT_TENANT_FIELD",
       "DEFAULT_UPDATE_METHOD",
+      "DataPolicy",
       "DynamicPermissionMatrix",
       "DynamicPermissionMatrixConfig",
       "EventDefinition",
@@ -146,7 +148,6 @@
       "PaginationResult",
       "PermissionCheck",
       "PermissionContext",
-      "PermissionResult",
       "PresetFunction",
       "PresetResult",
       "QueryParserInterface",
@@ -218,7 +219,7 @@
       "version",
       "when"
     ],
-    "typesHash": "031e18e0c0bc4905"
+    "typesHash": "d0ded2c87b002d87"
   },
   "./permissions": {
     "stability": "stable",
@@ -226,22 +227,31 @@
       "GRANT_MODES",
       "adminOnly",
       "allOf",
+      "allow",
       "allowPublic",
       "anyOf",
+      "applyAuthorizationDecision",
       "applyFieldReadPermissions",
       "applyFieldWritePermissions",
       "applyPermissionResult",
       "authenticated",
+      "collectPublicSurface",
+      "conjoinPolicyFilters",
       "createDynamicPermissionMatrix",
       "createOrgPermissions",
       "createRoleHierarchy",
+      "deny",
       "denyAll",
+      "describePermission",
+      "describePermissionMap",
+      "evaluatePermissionDecision",
+      "explainAccess",
       "fields",
       "fullPublic",
       "getUserRoles",
       "modeSatisfies",
-      "normalizePermissionResult",
       "normalizeRoles",
+      "normalizeToDecision",
       "not",
       "ownerWithAdminBypass",
       "permissionMatrix",
@@ -264,10 +274,14 @@
       "requireTeamMembership",
       "resolveEffectiveRoles",
       "roles",
+      "scopeOf",
       "when"
     ],
     "types": [
+      "AccessExplanation",
+      "AuthorizationDecision",
       "ConnectEventsOptions",
+      "DataPolicy",
       "DynamicPermissionMatrix",
       "DynamicPermissionMatrixConfig",
       "FieldPermission",
@@ -277,9 +291,10 @@
       "GrantMode",
       "GrantResolution",
       "PermissionCheck",
+      "PermissionCheckReturn",
       "PermissionContext",
       "PermissionEventBus",
-      "PermissionResult",
+      "PermissionRequirement",
       "RequireAgentScopeOptions",
       "RequireGrantOptions",
       "RequireMandateOptions",
@@ -287,22 +302,31 @@
       "UserBase",
       "adminOnly",
       "allOf",
+      "allow",
       "allowPublic",
       "anyOf",
+      "applyAuthorizationDecision",
       "applyFieldReadPermissions",
       "applyFieldWritePermissions",
       "applyPermissionResult",
       "authenticated",
+      "collectPublicSurface",
+      "conjoinPolicyFilters",
       "createDynamicPermissionMatrix",
       "createOrgPermissions",
       "createRoleHierarchy",
+      "deny",
       "denyAll",
+      "describePermission",
+      "describePermissionMap",
+      "evaluatePermissionDecision",
+      "explainAccess",
       "fields",
       "fullPublic",
       "getUserRoles",
       "modeSatisfies",
-      "normalizePermissionResult",
       "normalizeRoles",
+      "normalizeToDecision",
       "not",
       "ownerWithAdminBypass",
       "permissionMatrix",
@@ -325,9 +349,10 @@
       "requireTeamMembership",
       "resolveEffectiveRoles",
       "roles",
+      "scopeOf",
       "when"
     ],
-    "typesHash": "a6fab00772ce9ce6"
+    "typesHash": "1c2a6e0562b567be"
   },
   "./cache": {
     "stability": "stable",
@@ -377,7 +402,7 @@
     "stability": "stable",
     "runtime": [],
     "types": [],
-    "typesHash": "9a4d306e99acadbb"
+    "typesHash": "8c127f2504d37907"
   },
   "./types/storage": {
     "stability": "stable",
@@ -522,7 +547,7 @@
       "sendControllerResponse",
       "validateResourceConfig"
     ],
-    "typesHash": "300f06962df65d89"
+    "typesHash": "95c588b03c6434e5"
   },
   "./presets": {
     "stability": "stable",
@@ -579,7 +604,7 @@
       "softDeletePreset",
       "treePreset"
     ],
-    "typesHash": "9053b9b832d852d8"
+    "typesHash": "3c43037f5ad3423c"
   },
   "./presets/tenant": {
     "stability": "stable",
@@ -591,7 +616,7 @@
       "TenantFieldSpec",
       "multiTenantPreset"
     ],
-    "typesHash": "0ef4e022aa913352"
+    "typesHash": "46d9d4a5dc0b0d25"
   },
   "./presets/files-upload": {
     "stability": "stable",
@@ -611,7 +636,7 @@
       "StorageUploadInput",
       "filesUploadPreset"
     ],
-    "typesHash": "739d0519d7cb3d71"
+    "typesHash": "36e6c879c9b838fe"
   },
   "./presets/search": {
     "stability": "stable",
@@ -626,7 +651,7 @@
       "SearchableRepository",
       "searchPreset"
     ],
-    "typesHash": "ce823ceaa69ae77f"
+    "typesHash": "6e8a920afaefd1fc"
   },
   "./auth": {
     "stability": "stable",
@@ -661,7 +686,7 @@
       "extractBetterAuthOpenApi",
       "mirrorTrustedOriginsFromCors"
     ],
-    "typesHash": "ecbdaf3106cc2aa1"
+    "typesHash": "36bb08a2c9893c36"
   },
   "./hooks": {
     "stability": "stable",
@@ -694,7 +719,7 @@
       "createHookSystem",
       "defineHook"
     ],
-    "typesHash": "776926c1e066fba4"
+    "typesHash": "22f0974f3bd61d47"
   },
   "./middleware": {
     "stability": "stable",
@@ -711,7 +736,7 @@
       "multipartBody",
       "sortMiddlewares"
     ],
-    "typesHash": "58f600eb17d8ab1d"
+    "typesHash": "0eabd0b270fec5e1"
   },
   "./pipeline": {
     "stability": "stable",
@@ -737,7 +762,7 @@
       "pipe",
       "transform"
     ],
-    "typesHash": "f656240a44ba866c"
+    "typesHash": "6fac363edef0b54d"
   },
   "./context": {
     "stability": "stable",
@@ -812,7 +837,7 @@
       "introspectionPlugin",
       "introspectionPluginFn"
     ],
-    "typesHash": "abfd54ceb63d9043"
+    "typesHash": "eddd14d61586c372"
   },
   "./utils": {
     "stability": "stable",
@@ -963,7 +988,7 @@
       "toJsonSchema",
       "withCompensation"
     ],
-    "typesHash": "145193a86c706b1c"
+    "typesHash": "07ba042454af2c8d"
   },
   "./cli": {
     "stability": "stable",
@@ -1070,7 +1095,7 @@
       "versioningPlugin",
       "versioningPluginFn"
     ],
-    "typesHash": "00187601b8875af5"
+    "typesHash": "b63efd5c98b963c2"
   },
   "./plugins/tracing": {
     "stability": "stable",
@@ -1114,7 +1139,7 @@
       "createAuditEntry",
       "repositoryAsAuditStore"
     ],
-    "typesHash": "72cb1b1e9e73020a"
+    "typesHash": "37faf3559e560164"
   },
   "./docs": {
     "stability": "stable",
@@ -1137,7 +1162,7 @@
       "scalarPlugin",
       "scalarPluginFn"
     ],
-    "typesHash": "8c3610212abce599"
+    "typesHash": "c78199f617289798"
   },
   "./encryption": {
     "stability": "stable",
@@ -1261,6 +1286,7 @@
       "RedisStreamLike",
       "RedisStreamTransportOptions",
       "RelayResult",
+      "RepositoryOutboxStoreOptions",
       "RetryOptions",
       "ValidationResult",
       "WrapWithBoundaryOptions",
@@ -1278,7 +1304,7 @@
       "wrapWithBoundary",
       "wrapWithSchema"
     ],
-    "typesHash": "3f6919a13ce10322"
+    "typesHash": "7678a19cd654c4c8"
   },
   "./events/redis": {
     "stability": "stable",
@@ -1329,6 +1355,7 @@
       "mongoMemoryDatabase",
       "preloadResources",
       "preloadResourcesAsync",
+      "runAuthorizationConformance",
       "runStorageContract",
       "safeParseBody",
       "setupBetterAuthTestApp",
@@ -1339,6 +1366,7 @@
       "ArcResponseLike",
       "AuthMode",
       "AuthResponse",
+      "AuthorizationConformance",
       "BetterAuthTestHelpers",
       "BetterAuthTestHelpersOptions",
       "BetterAuthTestUser",
@@ -1362,6 +1390,7 @@
       "SignUpInput",
       "StorageContractSetup",
       "StorageContractSetupResult",
+      "SurfaceObservation",
       "TestAppContext",
       "TestAuthProvider",
       "TestAuthSession",
@@ -1390,12 +1419,13 @@
       "mongoMemoryDatabase",
       "preloadResources",
       "preloadResourcesAsync",
+      "runAuthorizationConformance",
       "runStorageContract",
       "safeParseBody",
       "setupBetterAuthTestApp",
       "waitFor"
     ],
-    "typesHash": "d99c6eb063915c83"
+    "typesHash": "a840fa8463117581"
   },
   "./testing/storage": {
     "stability": "stable",
@@ -1490,7 +1520,7 @@
       "testingPreset",
       "toFetchHandler"
     ],
-    "typesHash": "8ccac82c4873bf8a"
+    "typesHash": "187803dd190fcf0c"
   },
   "./schemas": {
     "stability": "stable",
@@ -1550,7 +1580,7 @@
       "defineMigration",
       "withSchemaVersion"
     ],
-    "typesHash": "8ebf1692062127f5"
+    "typesHash": "b90fd76466efb6b2"
   },
   "./discovery": {
     "stability": "stable",
@@ -1571,7 +1601,7 @@
     "stability": "stable",
     "runtime": [],
     "types": [],
-    "typesHash": "021da892998c1c89"
+    "typesHash": "8b5cf0074613abde"
   },
   "./integrations/streamline": {
     "stability": "stable",
@@ -1925,7 +1955,7 @@
       "toCallToolResult",
       "toCallToolSuccess"
     ],
-    "typesHash": "bddcb64f6a38f176"
+    "typesHash": "e0dd52fb9a78c6c7"
   },
   "./mcp/testing": {
     "stability": "stable",
@@ -1937,7 +1967,7 @@
       "TestMcpClientOptions",
       "createTestMcpClient"
     ],
-    "typesHash": "bcb0f342541cb966"
+    "typesHash": "099056e8a074d2d2"
   },
   "./scim": {
     "stability": "stable",
@@ -2038,7 +2068,7 @@
       "usagePeriod",
       "usagePlugin"
     ],
-    "typesHash": "bd86f174db8751d0"
+    "typesHash": "c0ba1c83a075f7f7"
   },
   "./cleanup": {
     "stability": "stable",
@@ -2124,7 +2154,7 @@
       "createDataCleanupModule",
       "recipeFromSteps"
     ],
-    "typesHash": "c591a5f440a761c4"
+    "typesHash": "5e64ff52fffaf620"
   },
   "./testing/outbox": {
     "stability": "stable",

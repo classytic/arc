@@ -329,12 +329,12 @@ describe("resourceToTools", () => {
   // ============================================================================
 
   describe("permission filters → _policyFilters", () => {
-    it("passes PermissionResult.filters into controller request context", async () => {
+    it("passes AuthorizationDecision.filters into controller request context", async () => {
       const resource = mockResource({
         permissions: {
           list: (() => ({
-            granted: true,
-            filters: { projectId: "proj-123", userId: "user-456" },
+            effect: "allow",
+            policy: { projectId: "proj-123", userId: "user-456" },
           })) as any,
         },
       });
@@ -355,18 +355,18 @@ describe("resourceToTools", () => {
       });
     });
 
-    // Regression pin: PermissionResult.scope must reach the controller as
+    // Regression pin: AuthorizationDecision.scope must reach the controller as
     // metadata._scope. Before the fix, evaluatePermission() in resourceToTools
     // only extracted `filters` and silently dropped `scope`, breaking custom
     // API-key auth in MCP. Dedicated regression file:
     // tests/integrations/mcp/mcp-permission-scope.test.ts. This inline
     // assertion exists so anyone reading the canonical resourceToTools test
     // file sees the contract pinned beside the existing filter cases.
-    it("propagates PermissionResult.scope into controller metadata._scope", async () => {
+    it("propagates AuthorizationDecision.scope into controller metadata._scope", async () => {
       const resource = mockResource({
         permissions: {
           list: (() => ({
-            granted: true,
+            effect: "allow",
             scope: {
               kind: "service",
               clientId: "client-acme",
@@ -396,7 +396,7 @@ describe("resourceToTools", () => {
       const resource = mockResource({
         permissions: {
           list: (() => ({
-            granted: true,
+            effect: "allow",
             scope: {
               kind: "service",
               clientId: "should-not-apply",
@@ -424,11 +424,11 @@ describe("resourceToTools", () => {
       expect(ctx.metadata._scope.organizationId).toBe("org-session");
     });
 
-    it("denies access when permission check returns granted: false", async () => {
+    it("denies access when permission check returns a deny decision", async () => {
       const resource = mockResource({
         permissions: {
           create: (() => ({
-            granted: false,
+            effect: "deny",
             reason: "Not authorized",
           })) as any,
         },
@@ -493,8 +493,8 @@ describe("resourceToTools", () => {
       const resource = mockResource({
         permissions: {
           list: (async () => ({
-            granted: true,
-            filters: { ownerId: "async-user" },
+            effect: "allow",
+            policy: { ownerId: "async-user" },
           })) as any,
         },
       });

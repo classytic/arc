@@ -9,7 +9,7 @@
  *      verbatim (priority defaults to 10).
  *   2. Inline `config.hooks.beforeCreate` / `afterCreate` / etc.
  *      Authored by the user on the original `ResourceConfig`.
- *      Wrapped in a `ResourceHookContext` projection (v2.10.8) so
+ *      Wrapped in a `ResourceHookContext` projection so
  *      authors can read `scope` / `context` without reaching into
  *      internal request fields.
  *
@@ -19,8 +19,7 @@
  * edits.
  */
 
-import { buildRequestScopeProjection } from "../../scope/projection.js";
-import type { RequestScope } from "../../scope/types.js";
+import type { buildRequestScopeProjection } from "../../scope/projection.js";
 import type { AnyRecord, RequestContext, ResourceConfig, UserBase } from "../../types/index.js";
 import type { InternalResourceConfig } from "./config.js";
 
@@ -94,10 +93,9 @@ const INLINE_HOOK_SPECS: ReadonlyArray<{
 ];
 
 /**
- * Project a raw HookSystem context into a `ResourceHookContext` for
- * inline `config.hooks.*` handlers. The projection lifts `scope`
- * out of `context._scope` so authors don't reach into internal
- * fields.
+ * Project a raw HookSystem context into a `ResourceHookContext` for inline
+ * `config.hooks.*` handlers. `scope` rides in already computed — `HookContext`
+ * carries the same projection — so the two surfaces cannot drift.
  */
 function buildHookContext(ctx: AnyRecord): {
   data: AnyRecord;
@@ -107,12 +105,11 @@ function buildHookContext(ctx: AnyRecord): {
   meta: AnyRecord | undefined;
 } {
   const context = ctx.context as RequestContext | undefined;
-  const rawScope = (context as { _scope?: RequestScope } | undefined)?._scope;
   return {
     data: (ctx.data ?? ctx.result ?? {}) as AnyRecord,
     user: ctx.user as UserBase | undefined,
     context: context as unknown as AnyRecord | undefined,
-    scope: buildRequestScopeProjection(rawScope),
+    scope: ctx.scope as ReturnType<typeof buildRequestScopeProjection>,
     meta: ctx.meta as AnyRecord | undefined,
   };
 }

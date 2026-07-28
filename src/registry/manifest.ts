@@ -1,5 +1,5 @@
 /**
- * Resource manifest for frontend code generators (v2.15.5).
+ * Resource manifest for frontend code generators.
  *
  * Every host that hand-rolls a `createCrudApi('foo')` helper on the frontend
  * ends up rewriting the same shim for declarative actions: `postAction(id,

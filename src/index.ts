@@ -219,13 +219,14 @@ export type {
 // to enforce the "root = essentials only" policy.
 // ============================================================================
 export type {
+  AuthorizationDecision,
+  DataPolicy,
   DynamicPermissionMatrix,
   DynamicPermissionMatrixConfig,
   FieldPermission,
   FieldPermissionMap,
   PermissionCheck,
   PermissionContext,
-  PermissionResult,
 } from "./permissions/index.js";
 // ============================================================================
 // Permission System — commonly used with defineResource (pure functions)

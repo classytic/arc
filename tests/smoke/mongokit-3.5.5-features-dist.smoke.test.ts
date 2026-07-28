@@ -90,23 +90,23 @@ describe("MongoKit 3.5.5 features — built dist smoke test", () => {
     // package's `sideEffects: false` lets bundlers tree-shake this away
     // for users who never import it. Internal Arc call sites bypass the
     // barrel and import "./applyPermissionResult.js" directly.
-    const { applyPermissionResult, normalizePermissionResult } = await import(
+    const { applyPermissionResult, normalizeToDecision } = await import(
       "../../dist/permissions/index.mjs"
     );
 
     const req: Record<string, unknown> = {};
-    const result = normalizePermissionResult({
-      granted: true,
+    const decision = normalizeToDecision({
+      effect: "allow",
       scope: {
         kind: "service",
         clientId: "client-1",
         organizationId: "org-1",
         scopes: ["jobs:write"],
       },
-      filters: { projectId: "proj-1" },
+      policy: { projectId: "proj-1" },
     });
 
-    applyPermissionResult(result, req as Parameters<typeof applyPermissionResult>[1]);
+    applyPermissionResult(decision, req as Parameters<typeof applyPermissionResult>[1]);
 
     expect(req.scope).toEqual({
       kind: "service",

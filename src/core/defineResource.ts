@@ -149,8 +149,23 @@ export function defineResource<TDoc = AnyRecord>(
   // Post-preset diagnostic: CRUD ops that will mount with NO permission
   // gate (public-by-omission). Must read `resolvedConfig` — presets may
   // inject permissions, and flagging those would be a false positive.
+  //
+  // Strict mode (resource `strictPermissions: true` OR the
+  // `ARC_STRICT_PERMISSIONS` env) upgrades an ungated WRITE from a warning to a
+  // FATAL error, so unauthenticated writes cannot ship silently. Off by default
+  // — existing hosts keep the warn behavior until they opt in.
   if (!normalisedConfig.skipValidation) {
-    diagnostics = diagnostics.concat(collectUngatedCrudDiagnostics(resolvedConfig));
+    const strict =
+      resolvedConfig.strictPermissions ?? process.env.ARC_STRICT_PERMISSIONS === "true";
+    diagnostics = diagnostics.concat(collectUngatedCrudDiagnostics(resolvedConfig, strict));
+  }
+
+  // Fatal diagnostics (severity: "error") fail boot at define-time — the same
+  // synchronous UX as `validateCustomRoutePermissions`. Aggregate all of them so
+  // the host sees every offending resource slot at once.
+  const fatal = diagnostics.filter((d) => d.severity === "error");
+  if (fatal.length > 0) {
+    throw new Error(fatal.map((d) => d.message).join("\n\n"));
   }
 
   // Phase 4 — reuse user controller or auto-create BaseController.

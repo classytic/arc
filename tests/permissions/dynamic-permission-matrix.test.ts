@@ -65,7 +65,7 @@ describe("createDynamicPermissionMatrix", () => {
     const check = perms.can({ product: ["delete"] });
     const result = await check(makeCtx({ orgId: "org1", orgRoles: ["admin"] }));
     expect(result).toEqual({
-      granted: false,
+      effect: "deny",
       reason: "Missing permission: product:delete",
     });
   });
@@ -115,13 +115,13 @@ describe("createDynamicPermissionMatrix", () => {
     const check = perms.canAction("product", "create");
 
     const unauth = await check(makeCtx({ user: null }));
-    expect(unauth).toEqual({ granted: false, reason: "Authentication required" });
+    expect(unauth).toEqual({ effect: "deny", reason: "Authentication required" });
 
     const noOrg = await check(makeCtx({ user: { id: "u1", role: [] } }));
-    expect(noOrg).toEqual({ granted: false, reason: "Organization membership required" });
+    expect(noOrg).toEqual({ effect: "deny", reason: "Organization membership required" });
 
     const noMembership = await check(makeCtx({ orgId: "org1", orgRoles: [] }));
-    expect(noMembership).toEqual({ granted: false, reason: "Not a member of this organization" });
+    expect(noMembership).toEqual({ effect: "deny", reason: "Not a member of this organization" });
   });
 
   it("caches resolved matrix when cache ttl is enabled", async () => {
@@ -173,7 +173,7 @@ describe("createDynamicPermissionMatrix", () => {
     const check = perms.canAction("product", "create");
     const result = await check(makeCtx({ orgId: "org1", orgRoles: ["admin"] }));
     expect(result).toEqual({
-      granted: false,
+      effect: "deny",
       reason: "Permission matrix resolution failed: DB unavailable",
     });
   });

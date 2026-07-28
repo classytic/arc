@@ -42,9 +42,10 @@ export type { BaseControllerOptions } from "../core/BaseController.js";
 // Permissions — types only (functions live on `@classytic/arc/permissions`)
 // ──────────────────────────────────────────────────────────────────────
 export type {
+  AuthorizationDecision,
+  DataPolicy,
   PermissionCheck,
   PermissionContext,
-  PermissionResult,
   UserBase,
 } from "../permissions/types.js";
 // ──────────────────────────────────────────────────────────────────────

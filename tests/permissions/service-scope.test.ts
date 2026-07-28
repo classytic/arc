@@ -41,7 +41,7 @@ describe("requireOrgMembership() — service scope (Gap 1a)", () => {
   const check = requireOrgMembership();
 
   it("grants a service scope bound to an organization", () => {
-    // Pre-2.7.0 this returned { granted: false, reason: "Organization membership required" }
+    // Pre-2.7.0 this returned { effect: "deny", reason: "Organization membership required" }
     // because the helper checked `isMember || isElevated` and ignored isService.
     const result = check(makeServiceCtx({ organizationId: "org-acme" }));
     expect(result).toBe(true);
@@ -64,14 +64,14 @@ describe("requireOrgMembership() — service scope (Gap 1a)", () => {
 
   it("still denies unauthenticated requests", () => {
     expect(check(makePublicCtx())).toEqual({
-      granted: false,
+      effect: "deny",
       reason: "Authentication required",
     });
   });
 
   it("still denies authenticated-without-org users", () => {
     expect(check(makeAuthenticatedCtx({ userId: "u1" }))).toEqual({
-      granted: false,
+      effect: "deny",
       reason: "Organization membership required",
     });
   });
@@ -87,7 +87,7 @@ describe("requireOrgRole() — service scope policy (Gap 1b)", () => {
   it("denies a service scope with a clear guidance reason", () => {
     // The reason must point at requireServiceScope so users know how to fix it.
     const result = check(makeServiceCtx({ organizationId: "org-acme" }));
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
     const reason = (result as { reason: string }).reason;
     expect(reason).toContain("Service scopes");
     expect(reason).toContain("requireServiceScope");
@@ -103,7 +103,7 @@ describe("requireOrgRole() — service scope policy (Gap 1b)", () => {
         scopes: ["admin"], // intentionally confusing
       }),
     );
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
   });
 
   it("still grants elevated bypass", () => {
@@ -117,7 +117,7 @@ describe("requireOrgRole() — service scope policy (Gap 1b)", () => {
 
   it("still denies non-matching member roles (no regression)", () => {
     const result = check(makeMemberCtx({ orgRoles: ["viewer"] }));
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
   });
 });
 
@@ -129,13 +129,13 @@ describe("anyOf(requireOrgRole, requireServiceScope) — documented mixed-route 
   const check = anyOf(requireOrgRole("admin"), requireServiceScope("jobs:write"));
 
   // Helper: anyOf is async, and the granted form may be either `true` (when
-  // a child returns boolean true) or `{ granted: true, ... }` (when a child
-  // returns a PermissionResult). Normalize both into a boolean for assertions.
+  // a child returns boolean true) or `{ effect: "allow", ... }` (when a child
+  // returns a AuthorizationDecision). Normalize both into a boolean for assertions.
   const isGranted = async (ctx: PermissionContext): Promise<boolean> => {
     const result = await check(ctx);
     if (result === true) return true;
     if (typeof result === "object" && result !== null) {
-      return (result as { granted?: boolean }).granted === true;
+      return (result as { effect?: string }).effect === "allow";
     }
     return false;
   };
@@ -150,12 +150,12 @@ describe("anyOf(requireOrgRole, requireServiceScope) — documented mixed-route 
 
   it("denies a service scope without the right OAuth scope", async () => {
     const result = await check(makeServiceCtx({ scopes: ["jobs:read"] }));
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
   });
 
   it("denies a member without the required role and no service scope", async () => {
     const result = await check(makeMemberCtx({ orgRoles: ["viewer"] }));
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
   });
 });
 
@@ -184,7 +184,7 @@ describe("requireServiceScope() — new helper (Gap 3)", () => {
   it("denies when service scope is missing the required scope", () => {
     const check = requireServiceScope("jobs:write");
     const result = check(makeServiceCtx({ scopes: ["jobs:read"] }));
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
     const reason = (result as { reason: string }).reason;
     expect(reason).toContain("jobs:write");
     expect(reason).toContain("jobs:read"); // shows what was actually granted
@@ -193,7 +193,7 @@ describe("requireServiceScope() — new helper (Gap 3)", () => {
   it("denies when service scope has no scopes at all", () => {
     const check = requireServiceScope("jobs:write");
     const result = check(makeServiceCtx({ scopes: undefined }));
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
     const reason = (result as { reason: string }).reason;
     expect(reason).toContain("none");
   });
@@ -201,7 +201,7 @@ describe("requireServiceScope() — new helper (Gap 3)", () => {
   it("denies when scope is member (humans use requireOrgRole, not requireServiceScope)", () => {
     const check = requireServiceScope("jobs:write");
     const result = check(makeMemberCtx({ orgRoles: ["admin"] }));
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
     const reason = (result as { reason: string }).reason;
     expect(reason).toContain("Service identity required");
     expect(reason).toContain("requireOrgRole");
@@ -209,12 +209,12 @@ describe("requireServiceScope() — new helper (Gap 3)", () => {
 
   it("denies when scope is authenticated (no service identity)", () => {
     const check = requireServiceScope("jobs:write");
-    expect(check(makeAuthenticatedCtx({ userId: "u1" }))).toMatchObject({ granted: false });
+    expect(check(makeAuthenticatedCtx({ userId: "u1" }))).toMatchObject({ effect: "deny" });
   });
 
   it("denies when scope is public", () => {
     const check = requireServiceScope("jobs:write");
-    expect(check(makePublicCtx())).toMatchObject({ granted: false });
+    expect(check(makePublicCtx())).toMatchObject({ effect: "deny" });
   });
 
   it("grants elevated scope as a bypass (platform admin acts regardless)", () => {
@@ -261,6 +261,6 @@ describe("integration — API key with org isolation (the original motivating ca
     });
 
     expect(membershipCheck(ctx)).toBe(true);
-    expect(scopeCheck(ctx)).toMatchObject({ granted: false });
+    expect(scopeCheck(ctx)).toMatchObject({ effect: "deny" });
   });
 });

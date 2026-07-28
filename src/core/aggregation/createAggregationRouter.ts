@@ -17,15 +17,13 @@
  */
 
 import type { FastifyReply, FastifyRequest, FastifySchema, RouteHandlerMethod } from "fastify";
+import { evaluateAndApplyPermission } from "../../permissions/applyPermissionResult.js";
 import type { FieldPermissionMap } from "../../permissions/fields.js";
-import type {
-  PermissionCheck,
-  PermissionContext,
-  PermissionResult,
-} from "../../permissions/types.js";
+import type { PermissionCheck, PermissionContext } from "../../permissions/types.js";
+import { getRequestScope } from "../../scope/types.js";
 import type { FastifyWithDecorators } from "../../types/fastify.js";
 import type { AnyRecord, RouteSchemaOptions, UserBase } from "../../types/index.js";
-import { createError, ForbiddenError, UnauthorizedError } from "../../utils/errors.js";
+import { createError } from "../../utils/errors.js";
 import {
   buildArcDecorator,
   buildAuthMiddleware,
@@ -174,27 +172,29 @@ function registerOne(
   // Per-aggregation auth — derived from the declaration's permissions.
   const authMw = buildAuthMiddleware(fastify, config.permissions);
 
-  // Per-aggregation permission gate. Aggregations don't use the CRUD
-  // permission helper because there's no `op` concept here — the check
-  // is the declaration's own `permissions` function applied to the
-  // request scope. Returns can be `boolean` (legacy) or
-  // `PermissionResult` (with `reason`/`filters`/`scope`); both shapes
-  // normalize through `normalizePermissionResult`.
+  // Per-aggregation permission gate. Aggregations have no `op`, so the gate
+  // is the declaration's own `permissions` check applied to the request scope.
+  // It runs through the SAME evaluation + enforcement seam as CRUD/actions:
+  // normalize to an AuthorizationDecision, fail closed on deny, and on allow
+  // apply the decision's `scope` + `policy` onto the request via
+  // `applyAuthorizationDecision` — so a permission that restricts CRUD reads
+  // restricts aggregation queries identically (the handler threads
+  // `request._policyFilters` into the aggregation filter).
   const permissionFn = config.permissions;
-  const permissionMw: RouteHandlerMethod = async (req, _reply): Promise<void> => {
+  const permissionMw: RouteHandlerMethod = async (req, reply): Promise<void> => {
     const ctx = buildPermissionContextLite(req, normalized.name);
-    const raw = await permissionFn(ctx);
-    const granted = normalizePermissionGranted(raw);
-    if (!granted) {
-      const status = (req as { user?: unknown }).user ? 403 : 401;
-      const reason = normalizePermissionReason(raw);
-      if (status === 401) {
-        throw new UnauthorizedError(
-          reason ?? "Authentication required to access this aggregation.",
-        );
-      }
-      throw new ForbiddenError(reason ?? "You do not have permission to access this aggregation.");
-    }
+    // Delegate to the ONE shared evaluator (identical to CRUD + actions): it
+    // normalizes the decision, maps thrown ArcErrors to structured responses and
+    // any other throw to a fail-closed 403 (never a 500), clamps the denial
+    // reason, and on allow installs the decision's scope + policy. On deny it
+    // sends the reply, which short-circuits the Fastify route — the aggregation
+    // handler never runs. No per-surface evaluation logic to drift.
+    await evaluateAndApplyPermission(permissionFn, ctx, req, reply, {
+      defaultDenialMessage: (user) =>
+        user
+          ? "You do not have permission to access this aggregation."
+          : "Authentication required to access this aggregation.",
+    });
   };
 
   // Cache / idempotency middleware — read paths only. Aggregations are
@@ -272,20 +272,9 @@ function buildPermissionContextLite(
   };
   return {
     user: reqWithExtras.user ?? null,
+    scope: getRequestScope(req),
     request: req,
     resource: reqWithExtras.arc?.resource ?? "aggregation",
     action: `aggregation:${aggregationName}`,
   };
-}
-
-/** PermissionCheck returns `boolean | PermissionResult`. Pull `granted`. */
-function normalizePermissionGranted(raw: boolean | PermissionResult): boolean {
-  if (typeof raw === "boolean") return raw;
-  return raw.granted;
-}
-
-/** Pull `reason` when the check returned a structured `PermissionResult`. */
-function normalizePermissionReason(raw: boolean | PermissionResult): string | undefined {
-  if (typeof raw === "boolean") return undefined;
-  return raw.reason;
 }

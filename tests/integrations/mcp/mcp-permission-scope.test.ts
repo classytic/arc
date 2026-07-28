@@ -1,15 +1,15 @@
 /**
- * Regression: MCP tool handlers must honor PermissionResult.scope.
+ * Regression: MCP tool handlers must honor AuthorizationDecision.scope.
  *
  * Before the fix, `evaluatePermission` in resourceToTools.ts only extracted
- * `filters` from the PermissionResult and silently dropped `scope`. That
- * meant a permission check returning `{ granted: true, scope: serviceScope }`
+ * `filters` from the AuthorizationDecision and silently dropped `scope`. That
+ * meant a permission check returning `{ effect: "allow", scope: serviceScope }`
  * would reach the controller with `metadata._scope === { kind: "public" }`,
  * and tenant isolation was silently bypassed.
  *
- * Now `evaluatePermission` returns the full normalized PermissionResult and
+ * Now `evaluatePermission` returns the full normalized AuthorizationDecision and
  * `buildRequestContext` honors the scope override (with the same non-downgrade
- * rule as `applyPermissionResult`). This test pins that contract.
+ * rule as `applyAuthorizationDecision`). This test pins that contract.
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -99,14 +99,14 @@ const SERVICE_SCOPE: RequestScope = {
   scopes: ["jobs:write"],
 };
 
-describe("MCP resourceToTools — PermissionResult.scope propagation", () => {
+describe("MCP resourceToTools — AuthorizationDecision.scope propagation", () => {
   it("installs scope from permission result when MCP session is anonymous", async () => {
     const { calls, controller } = makeRecordingController();
 
     const requireApiKey: PermissionCheck = async () => ({
-      granted: true,
+      effect: "allow",
       scope: SERVICE_SCOPE,
-      filters: { projectId: "proj-1" },
+      policy: { projectId: "proj-1" },
     });
 
     const resource = makeResource(
@@ -137,7 +137,7 @@ describe("MCP resourceToTools — PermissionResult.scope propagation", () => {
   it("installs scope for get operations as well", async () => {
     const { calls, controller } = makeRecordingController();
     const check: PermissionCheck = async () => ({
-      granted: true,
+      effect: "allow",
       scope: SERVICE_SCOPE,
     });
 
@@ -170,7 +170,7 @@ describe("MCP resourceToTools — PermissionResult.scope propagation", () => {
     };
 
     const check: PermissionCheck = async () => ({
-      granted: true,
+      effect: "allow",
       // This would try to install a narrower scope, but the existing
       // session-derived scope must win (it came from a more authoritative source).
       scope: {
@@ -205,7 +205,7 @@ describe("MCP resourceToTools — PermissionResult.scope propagation", () => {
   it("returns permission-denied response when check rejects", async () => {
     const { calls, controller } = makeRecordingController();
     const check: PermissionCheck = async () => ({
-      granted: false,
+      effect: "deny",
       reason: "Invalid API key",
     });
 
@@ -235,8 +235,8 @@ describe("MCP resourceToTools — PermissionResult.scope propagation", () => {
   it("propagates filters even when no scope is provided", async () => {
     const { calls, controller } = makeRecordingController();
     const check: PermissionCheck = async () => ({
-      granted: true,
-      filters: { ownerId: "u1" },
+      effect: "allow",
+      policy: { ownerId: "u1" },
     });
 
     const resource = makeResource(

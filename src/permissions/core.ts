@@ -6,16 +6,38 @@
  * `./scope.js`; the dynamic matrix lives in `./dynamic.js`.
  */
 
-import type { FastifyRequest } from "fastify";
 import type { RequestScope } from "../scope/types.js";
-import {
-  getRequestScope as getScope,
-  getUserId as getScopeUserId,
-  isElevated,
-  isMember,
-} from "../scope/types.js";
-import type { PermissionCheck, PermissionContext, PermissionResult } from "./types.js";
+import { getUserId as getScopeUserId, isElevated, isMember } from "../scope/types.js";
+import { normalizeToDecision } from "./applyPermissionResult.js";
+import { scopeOf } from "./context.js";
+import { conjoinPolicyFilters } from "./filter-merge.js";
+import type { AuthorizationDecision, PermissionCheck, PermissionContext } from "./types.js";
 import { getUserRoles } from "./types.js";
+
+// ============================================================================
+// Decision constructors (arc v3) — the canonical way a check expresses intent
+// ============================================================================
+
+/**
+ * Build an `allow` {@link AuthorizationDecision}, optionally attaching a row-level
+ * `policy` and/or a `scope` to install. The idiomatic "grant" return for arc
+ * 2.30 checks (parallels Cedar's `permit`).
+ *
+ * @example
+ * return allow();                                  // simple grant
+ * return allow({ policy: { ownerId: userId } });   // grant + row policy
+ */
+export function allow(extra?: Omit<AuthorizationDecision, "effect">): AuthorizationDecision {
+  return extra ? { effect: "allow", ...extra } : { effect: "allow" };
+}
+
+/**
+ * Build a `deny` {@link AuthorizationDecision} with an optional human-readable
+ * reason (parallels Cedar's `forbid`). The idiomatic "refuse" return.
+ */
+export function deny(reason?: string): AuthorizationDecision {
+  return reason ? { effect: "deny", reason } : { effect: "deny" };
+}
 
 /**
  * Normalize a `string | [readonly string[]]` rest-args tuple into a single
@@ -61,7 +83,7 @@ export function allowPublic(): PermissionCheck {
 export function requireAuth(): PermissionCheck {
   const check: PermissionCheck = (ctx) => {
     if (!ctx.user) {
-      return { granted: false, reason: "Authentication required" };
+      return deny("Authentication required");
     }
     return true;
   };
@@ -128,7 +150,7 @@ export function requireRoles(
 
   const check: PermissionCheck = (ctx) => {
     if (!ctx.user) {
-      return { granted: false, reason: "Authentication required" };
+      return deny("Authentication required");
     }
 
     const userRoles = getUserRoles(ctx.user);
@@ -142,17 +164,14 @@ export function requireRoles(
     }
 
     if (includeOrgRoles) {
-      const scope = getScope(ctx.request);
+      const scope = scopeOf(ctx);
       if (isElevated(scope)) return true;
       if (isMember(scope) && roles.some((r) => scope.orgRoles.includes(r))) {
         return true;
       }
     }
 
-    return {
-      granted: false,
-      reason: `Required roles: ${roles.join(", ")}`,
-    };
+    return deny(`Required roles: ${roles.join(", ")}`);
   };
   check._roles = roles;
   return check;
@@ -168,7 +187,7 @@ export function roles(...args: string[] | [readonly string[]]): PermissionCheck 
 
   const check: PermissionCheck = (ctx) => {
     if (!ctx.user) {
-      return { granted: false, reason: "Authentication required" };
+      return deny("Authentication required");
     }
 
     const userRoles = getUserRoles(ctx.user);
@@ -176,16 +195,13 @@ export function roles(...args: string[] | [readonly string[]]): PermissionCheck 
       return true;
     }
 
-    const scope = getScope(ctx.request);
+    const scope = scopeOf(ctx);
     if (isElevated(scope)) return true;
     if (isMember(scope) && roleList.some((r) => scope.orgRoles.includes(r))) {
       return true;
     }
 
-    return {
-      granted: false,
-      reason: `Required roles: ${roleList.join(", ")}`,
-    };
+    return deny(`Required roles: ${roleList.join(", ")}`);
   };
   check._roles = roleList;
   return check;
@@ -209,7 +225,7 @@ export function requireOwnership<TDoc = Record<string, unknown>>(
 ): PermissionCheck<TDoc> {
   return (ctx) => {
     if (!ctx.user) {
-      return { granted: false, reason: "Authentication required" };
+      return deny("Authentication required");
     }
 
     const userRoles = getUserRoles(ctx.user);
@@ -218,25 +234,30 @@ export function requireOwnership<TDoc = Record<string, unknown>>(
       return true;
     }
 
-    const userId = getScopeUserId(getScope(ctx.request)) ?? ctx.user.id ?? ctx.user._id;
+    const userId = getScopeUserId(scopeOf(ctx)) ?? ctx.user.id ?? ctx.user._id;
     if (!userId) {
-      return { granted: false, reason: "User identity missing (no id or _id)" };
+      return deny("User identity missing (no id or _id)");
     }
-    return {
-      granted: true,
-      filters: { [ownerField]: userId },
-    };
+    // Grant + row-level data policy scoping queries to the caller's own records.
+    return allow({ policy: { [ownerField]: userId } });
   };
 }
 
 /**
  * Combine multiple checks — ALL must pass (AND logic).
  *
- * Each child runs against the **accumulated** state of previous children:
- *   - `filters` from earlier children merge into the next child's `_policyFilters`
- *   - `scope` from earlier children installs on the request before the next child runs
+ * Evaluation is PURE — nothing is written to the request. Each child runs
+ * against the accumulated state of previous children, threaded through a fresh
+ * child context:
+ *   - `policy` from earlier children is CONJOINED (logical AND) — a later child
+ *     can add or narrow restrictions but never silently replaces an earlier
+ *     child's constraint on the same key (conflicting values are preserved under
+ *     `$and`; see `conjoinPolicyFilters`)
+ *   - `scope` installed by an earlier child is visible to the next through
+ *     `scopeOf(ctx)`, and never downgrades an already-authoritative scope
  *
- * The final result carries both merged `filters` and merged `scope`.
+ * The returned decision carries the merged `policy` + `scope`; the enforcement
+ * point (`applyAuthorizationDecision`) applies them to the request once.
  *
  * @example
  * ```typescript
@@ -247,59 +268,68 @@ export function requireOwnership<TDoc = Record<string, unknown>>(
  * ```
  */
 export function allOf(...checks: PermissionCheck[]): PermissionCheck {
-  return async (ctx) => {
+  const check: PermissionCheck = async (ctx) => {
+    // PURE evaluation (arc 2.30): no request mutation, no rollback. Each branch's
+    // scope/policy is threaded to the NEXT branch through a fresh child context,
+    // so `allOf(requireApiKey(), requireServiceScope(...))` lets branch 2 read
+    // branch 1's installed scope via `scopeOf(childCtx)` — without touching the
+    // shared request. The composed decision carries the merged policy + scope;
+    // the enforcement point (PEP) applies it once.
     let mergedFilters: Record<string, unknown> = {};
     let installedScope: RequestScope | undefined;
+    // `threaded` = the scope visible to the current branch. Starts from the
+    // incoming context; upgrades when a branch installs a stronger scope over an
+    // absent/public one (the non-downgrade rule).
+    let threaded = ctx.scope;
+    let childCtx = ctx;
 
-    const sink = ctx.request as FastifyRequest & {
-      _policyFilters?: Record<string, unknown>;
-      scope?: RequestScope;
-    };
-    const originalFilters = sink._policyFilters;
-    const originalScope = sink.scope;
+    for (const inner of checks) {
+      const decision = normalizeToDecision(await inner(childCtx));
 
-    try {
-      for (const check of checks) {
-        const result = await check(ctx);
-        const normalized: PermissionResult =
-          typeof result === "boolean" ? { granted: result } : result;
+      if (decision.effect !== "allow") return deny(decision.reason);
 
-        if (!normalized.granted) {
-          sink._policyFilters = originalFilters;
-          sink.scope = originalScope;
-          return normalized;
-        }
-
-        if (normalized.filters) {
-          mergedFilters = { ...mergedFilters, ...normalized.filters };
-          sink._policyFilters = {
-            ...(sink._policyFilters ?? {}),
-            ...normalized.filters,
-          };
-        }
-
-        if (normalized.scope) {
-          const current = sink.scope;
-          if (!current || current.kind === "public") {
-            sink.scope = normalized.scope;
-            installedScope = normalized.scope;
-          } else if (!installedScope) {
-            installedScope = normalized.scope;
-          }
-        }
+      if (decision.policy) {
+        // AND semantics: every branch's data policy is a restriction that must
+        // hold. Conjoin (never overwrite) so an earlier branch's constraint on a
+        // key is preserved when a later branch constrains the same key.
+        mergedFilters = conjoinPolicyFilters(mergedFilters, decision.policy);
       }
-    } catch (err) {
-      sink._policyFilters = originalFilters;
-      sink.scope = originalScope;
-      throw err;
+
+      if (decision.scope && (!threaded || threaded.kind === "public")) {
+        // Install a stronger scope over an absent/public one, and thread it to
+        // subsequent branches. Never downgrade an already-authoritative scope.
+        threaded = decision.scope;
+        installedScope = decision.scope;
+      } else if (decision.scope && !installedScope) {
+        installedScope = decision.scope;
+      }
+
+      if (threaded !== childCtx.scope) childCtx = { ...childCtx, scope: threaded };
     }
 
-    return {
-      granted: true,
-      filters: Object.keys(mergedFilters).length > 0 ? mergedFilters : undefined,
-      scope: installedScope,
-    };
+    return allow({
+      ...(Object.keys(mergedFilters).length > 0 ? { policy: mergedFilters } : {}),
+      ...(installedScope ? { scope: installedScope } : {}),
+    });
   };
+
+  // Introspection meta — allOf grants only if ALL branches do (intersection).
+  // Role introspection is well-defined only for the common single-role-branch
+  // shape (e.g. allOf(requireFlowMode(...), requireRoles(...))) where the other
+  // branches impose orthogonal constraints (flow-mode, ownership). With 0 or >1
+  // role branches the role intersection is ambiguous, so we leave meta unset.
+  const roleBranches = checks.filter(
+    (c) => (c._roles?.length ?? 0) > 0 || (c._orgRoles?.length ?? 0) > 0,
+  );
+  if (checks.length > 0 && checks.every((c) => c._isPublic)) {
+    check._isPublic = true;
+  } else if (roleBranches.length === 1) {
+    const [rb] = roleBranches;
+    if (rb?._roles?.length) check._roles = [...rb._roles];
+    if (rb?._orgRoles?.length) check._orgRoles = [...rb._orgRoles];
+  }
+
+  return check;
 }
 
 /**
@@ -313,28 +343,47 @@ export function allOf(...checks: PermissionCheck[]): PermissionCheck {
  * ```
  */
 export function anyOf(...checks: PermissionCheck[]): PermissionCheck {
-  return async (ctx) => {
+  const check: PermissionCheck = async (ctx) => {
     const reasons: string[] = [];
 
-    for (const check of checks) {
-      const result = await check(ctx);
-      const normalized: PermissionResult =
-        typeof result === "boolean" ? { granted: result } : result;
+    for (const inner of checks) {
+      const decision = normalizeToDecision(await inner(ctx));
 
-      if (normalized.granted) {
-        return normalized;
+      if (decision.effect === "allow") {
+        // Preserve the granting branch's data policy + scope in the decision.
+        return allow({
+          ...(decision.policy ? { policy: decision.policy } : {}),
+          ...(decision.scope ? { scope: decision.scope } : {}),
+        });
       }
 
-      if (normalized.reason) {
-        reasons.push(normalized.reason);
+      if (decision.reason) {
+        reasons.push(decision.reason);
       }
     }
 
-    return {
-      granted: false,
-      reason: reasons.join("; "),
-    };
+    return deny(reasons.join("; "));
   };
+
+  // Introspection meta (PermissionCheckMeta) — anyOf grants if ANY branch does,
+  // so the allowed principals are the UNION of the branches'. Public if any
+  // branch is public. Roles are emitted only when EVERY branch is role-gated: an
+  // authenticated/custom branch broadens beyond any role list, so we leave meta
+  // unset (introspects as "authenticated") rather than under-report access.
+  if (checks.some((c) => c._isPublic)) {
+    check._isPublic = true;
+  } else if (checks.every((c) => (c._roles?.length ?? 0) > 0 || (c._orgRoles?.length ?? 0) > 0)) {
+    const roles = new Set<string>();
+    const orgRoles = new Set<string>();
+    for (const c of checks) {
+      for (const r of c._roles ?? []) roles.add(r);
+      for (const r of c._orgRoles ?? []) orgRoles.add(r);
+    }
+    if (roles.size > 0) check._roles = [...roles];
+    if (orgRoles.size > 0) check._orgRoles = [...orgRoles];
+  }
+
+  return check;
 }
 
 /**
@@ -355,9 +404,8 @@ export function anyOf(...checks: PermissionCheck[]): PermissionCheck {
  */
 export function not(check: PermissionCheck, reason = "Access denied"): PermissionCheck {
   return async (ctx) => {
-    const result = await check(ctx);
-    const normalized: PermissionResult = typeof result === "boolean" ? { granted: result } : result;
-    return normalized.granted ? { granted: false, reason } : true;
+    const decision = normalizeToDecision(await check(ctx));
+    return decision.effect === "allow" ? deny(reason) : true;
   };
 }
 
@@ -370,7 +418,7 @@ export function not(check: PermissionCheck, reason = "Access denied"): Permissio
  * ```
  */
 export function denyAll(reason = "Access denied"): PermissionCheck {
-  return () => ({ granted: false, reason });
+  return () => deny(reason);
 }
 
 /**
@@ -388,9 +436,6 @@ export function when<TDoc = Record<string, unknown>>(
 ): PermissionCheck<TDoc> {
   return async (ctx) => {
     const result = await condition(ctx);
-    return {
-      granted: result,
-      reason: result ? undefined : "Condition not met",
-    };
+    return result ? allow() : deny("Condition not met");
   };
 }

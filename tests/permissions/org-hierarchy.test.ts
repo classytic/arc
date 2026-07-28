@@ -198,14 +198,14 @@ describe("requireOrgInScope(staticTarget)", () => {
         ancestorOrgIds: ["org-eu"],
       }),
     );
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
     const reason = (result as { reason: string }).reason;
     expect(reason).toContain("org-amazon");
   });
 
   it("denies for public scope", () => {
     const check = requireOrgInScope("org-paris");
-    expect(check(makePublicCtx())).toMatchObject({ granted: false });
+    expect(check(makePublicCtx())).toMatchObject({ effect: "deny" });
   });
 
   it("grants service scopes when target matches current or ancestor", () => {
@@ -264,7 +264,7 @@ describe("requireOrgInScope(extractor)", () => {
         params: { orgId: "org-amazon" },
       }),
     );
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
   });
 
   it("denies when extractor returns undefined (target unresolvable)", () => {
@@ -278,7 +278,7 @@ describe("requireOrgInScope(extractor)", () => {
         // no params override — extractor returns undefined
       }),
     );
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
     const reason = (result as { reason: string }).reason;
     expect(reason).toContain("target");
   });
@@ -328,7 +328,7 @@ describe("real-world: holding company → subsidiary → branch", () => {
 
     // A sibling subsidiary is NOT in the chain — must be denied
     expect(requireOrgInScope("org-acme-asia")(ctx)).toMatchObject({
-      granted: false,
+      effect: "deny",
     });
   });
 
@@ -353,6 +353,6 @@ describe("real-world: holding company → subsidiary → branch", () => {
       ancestorOrgIds: tenantList,
       params: { orgId: "tenant-not-managed" },
     });
-    expect(check(ctxOutsider)).toMatchObject({ granted: false });
+    expect(check(ctxOutsider)).toMatchObject({ effect: "deny" });
   });
 });

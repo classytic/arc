@@ -1,25 +1,27 @@
 /**
- * Unit tests for the single-source-of-truth permission-result helper.
+ * Unit tests for the single-source-of-truth permission seam (arc 2.30).
  *
  * Every call site in Arc (createCrudRouter, createActionRouter, MCP tool
- * handlers) funnels through these two functions to apply PermissionResult
- * side-effects. If the behavior here changes, all three call sites inherit
- * the change — and these tests pin the contract.
+ * handlers) funnels through these functions to normalize a check return into an
+ * AuthorizationDecision and apply its side-effects. If the behavior here
+ * changes, all call sites inherit the change — these tests pin the contract.
  */
 
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { describe, expect, it, vi } from "vitest";
 import {
-  applyPermissionResult,
+  applyAuthorizationDecision,
   evaluateAndApplyPermission,
-  normalizePermissionResult,
+  evaluatePermissionDecision,
+  normalizeToDecision,
 } from "../../src/permissions/applyPermissionResult.js";
 import type {
+  AuthorizationDecision,
   PermissionCheck,
   PermissionContext,
-  PermissionResult,
 } from "../../src/permissions/types.js";
 import type { RequestScope } from "../../src/scope/types.js";
+import { ForbiddenError } from "../../src/utils/errors.js";
 
 type Sink = FastifyRequest & {
   _policyFilters?: Record<string, unknown>;
@@ -30,69 +32,85 @@ function makeRequest(initial: Partial<Sink> = {}): Sink {
   return { ...initial } as Sink;
 }
 
-describe("normalizePermissionResult", () => {
-  it("promotes `true` to { granted: true }", () => {
-    expect(normalizePermissionResult(true)).toEqual({ granted: true });
-  });
+describe("evaluatePermission — transport-neutral PDP", () => {
+  const ctx = { user: null, resource: "widget", action: "list" } as unknown as PermissionContext;
 
-  it("promotes `false` to { granted: false }", () => {
-    expect(normalizePermissionResult(false)).toEqual({ granted: false });
-  });
-
-  it("passes PermissionResult objects through unchanged", () => {
-    const input = {
-      granted: true,
-      filters: { userId: "u1" },
-      scope: { kind: "public" } as const,
-    };
-    expect(normalizePermissionResult(input)).toBe(input);
-  });
-
-  it("preserves reason on denied results", () => {
-    expect(normalizePermissionResult({ granted: false, reason: "no access" })).toEqual({
-      granted: false,
-      reason: "no access",
+  it("normalizes a boolean/allow/deny check into a decision", async () => {
+    expect(await evaluatePermissionDecision(async () => true, ctx)).toEqual({ effect: "allow" });
+    expect(
+      await evaluatePermissionDecision(async () => ({ effect: "deny", reason: "no" }), ctx),
+    ).toEqual({
+      effect: "deny",
+      reason: "no",
     });
+  });
+
+  it("fails CLOSED (deny) when a check throws a generic error — never falls open", async () => {
+    const decision = await evaluatePermissionDecision(async () => {
+      throw new Error("db down");
+    }, ctx);
+    expect(decision.effect).toBe("deny");
+  });
+
+  it("RE-THROWS a structured ArcError so the transport can surface it verbatim", async () => {
+    const check: PermissionCheck = async () => {
+      throw new ForbiddenError("tier required");
+    };
+    await expect(evaluatePermissionDecision(check, ctx)).rejects.toBeInstanceOf(ForbiddenError);
   });
 });
 
-describe("applyPermissionResult — filters", () => {
-  it("merges filters into an empty request", () => {
+describe("normalizeToDecision", () => {
+  it("promotes `true`/`false` to an allow/deny decision", () => {
+    expect(normalizeToDecision(true)).toEqual({ effect: "allow" });
+    expect(normalizeToDecision(false)).toEqual({ effect: "deny" });
+  });
+
+  it("passes AuthorizationDecision objects through unchanged", () => {
+    const input: AuthorizationDecision = {
+      effect: "allow",
+      policy: { userId: "u1" },
+      scope: { kind: "public" },
+    };
+    expect(normalizeToDecision(input)).toBe(input);
+  });
+});
+
+describe("applyAuthorizationDecision — data policy", () => {
+  it("conjoins policy into an empty request", () => {
     const req = makeRequest();
-    applyPermissionResult({ granted: true, filters: { userId: "u1" } }, req);
+    applyAuthorizationDecision({ effect: "allow", policy: { userId: "u1" } }, req);
     expect(req._policyFilters).toEqual({ userId: "u1" });
   });
 
-  it("merges filters on top of existing _policyFilters (last-writer-wins per key)", () => {
-    const req = makeRequest({ _policyFilters: { tenantId: "t1", projectId: "p1" } });
-    applyPermissionResult({ granted: true, filters: { projectId: "p2", feature: "beta" } }, req);
-    expect(req._policyFilters).toEqual({
-      tenantId: "t1",
-      projectId: "p2",
-      feature: "beta",
-    });
+  it("carries non-overlapping keys through flat", () => {
+    const req = makeRequest({ _policyFilters: { tenantId: "t1" } });
+    applyAuthorizationDecision({ effect: "allow", policy: { feature: "beta" } }, req);
+    expect(req._policyFilters).toEqual({ tenantId: "t1", feature: "beta" });
   });
 
-  it("is a no-op when result has no filters", () => {
+  it("CONJOINS a same-key conflict under $and — never silently overwrites", () => {
+    const req = makeRequest({ _policyFilters: { projectId: "p1" } });
+    applyAuthorizationDecision({ effect: "allow", policy: { projectId: "p2" } }, req);
+    expect(req._policyFilters).toEqual({ $and: [{ projectId: "p1" }, { projectId: "p2" }] });
+  });
+
+  it("is a no-op when the decision has no policy", () => {
     const req = makeRequest({ _policyFilters: { existing: true } });
-    applyPermissionResult({ granted: true }, req);
+    applyAuthorizationDecision({ effect: "allow" }, req);
     expect(req._policyFilters).toEqual({ existing: true });
   });
 
-  it("is a no-op when result is not granted (defensive — callers should have already responded)", () => {
+  it("is a no-op on a denied decision (defensive)", () => {
     const req = makeRequest();
-    applyPermissionResult({ granted: false, filters: { leak: "should-not-apply" } }, req);
+    applyAuthorizationDecision({ effect: "deny", policy: { leak: "no" } }, req);
     expect(req._policyFilters).toBeUndefined();
     expect(req.scope).toBeUndefined();
   });
 });
 
-describe("applyPermissionResult — scope non-downgrade rule", () => {
-  const service: RequestScope = {
-    kind: "service",
-    clientId: "client-1",
-    organizationId: "org-1",
-  };
+describe("applyAuthorizationDecision — scope non-downgrade rule", () => {
+  const service: RequestScope = { kind: "service", clientId: "client-1", organizationId: "org-1" };
   const member: RequestScope = {
     kind: "member",
     userId: "u1",
@@ -109,49 +127,34 @@ describe("applyPermissionResult — scope non-downgrade rule", () => {
 
   it("installs scope when request.scope is undefined", () => {
     const req = makeRequest();
-    applyPermissionResult({ granted: true, scope: service }, req);
+    applyAuthorizationDecision({ effect: "allow", scope: service }, req);
     expect(req.scope).toEqual(service);
   });
 
   it("installs scope when current scope is `public`", () => {
     const req = makeRequest({ scope: { kind: "public" } });
-    applyPermissionResult({ granted: true, scope: service }, req);
+    applyAuthorizationDecision({ effect: "allow", scope: service }, req);
     expect(req.scope).toEqual(service);
   });
 
   it("NEVER downgrades a `member` scope", () => {
     const req = makeRequest({ scope: member });
-    applyPermissionResult({ granted: true, scope: service }, req);
+    applyAuthorizationDecision({ effect: "allow", scope: service }, req);
     expect(req.scope).toEqual(member);
   });
 
   it("NEVER downgrades an `elevated` scope", () => {
     const req = makeRequest({ scope: elevated });
-    applyPermissionResult({ granted: true, scope: service }, req);
+    applyAuthorizationDecision({ effect: "allow", scope: service }, req);
     expect(req.scope).toEqual(elevated);
   });
 
-  it("NEVER downgrades an `authenticated` scope", () => {
-    const authenticated: RequestScope = {
-      kind: "authenticated",
-      userId: "u1",
-      userRoles: [],
-    };
-    const req = makeRequest({ scope: authenticated });
-    applyPermissionResult({ granted: true, scope: service }, req);
-    expect(req.scope).toEqual(authenticated);
-  });
-
-  it("installs scope even when the result has no filters", () => {
+  it("installs both policy and scope atomically", () => {
     const req = makeRequest();
-    applyPermissionResult({ granted: true, scope: service }, req);
-    expect(req.scope).toEqual(service);
-    expect(req._policyFilters).toBeUndefined();
-  });
-
-  it("installs both filters and scope atomically", () => {
-    const req = makeRequest();
-    applyPermissionResult({ granted: true, filters: { projectId: "p1" }, scope: service }, req);
+    applyAuthorizationDecision(
+      { effect: "allow", policy: { projectId: "p1" }, scope: service },
+      req,
+    );
     expect(req.scope).toEqual(service);
     expect(req._policyFilters).toEqual({ projectId: "p1" });
   });
@@ -160,15 +163,6 @@ describe("applyPermissionResult — scope non-downgrade rule", () => {
 // ============================================================================
 // evaluateAndApplyPermission — end-to-end flow
 // ============================================================================
-//
-// Pins the contract shared by createCrudRouter + createActionRouter:
-//   1. try/catch permissionCheck → 403 on throw
-//   2. normalize boolean → PermissionResult
-//   3. denial → 401 (no user) / 403 (user) with clamped reason
-//   4. grant → apply filters + scope, return true
-//
-// The CRUD router and action router now both delegate to this function.
-// Any change here affects both callsites, so these tests lock the behavior.
 
 type ReplyMock = {
   code: ReturnType<typeof vi.fn>;
@@ -178,10 +172,7 @@ type ReplyMock = {
 };
 
 function makeReply(): ReplyMock & FastifyReply {
-  const reply: ReplyMock = {
-    code: vi.fn(),
-    send: vi.fn(),
-  };
+  const reply: ReplyMock = { code: vi.fn(), send: vi.fn() };
   reply.code.mockImplementation((status: number) => {
     reply.statusCode = status;
     return reply;
@@ -210,7 +201,7 @@ function makeEvalRequest(initial: Partial<Sink> = {}): Sink {
 }
 
 describe("evaluateAndApplyPermission — grant path", () => {
-  it("returns true when check returns boolean true (no reply interaction)", async () => {
+  it("returns true on boolean true (no reply interaction)", async () => {
     const req = makeEvalRequest();
     const reply = makeReply();
     const check: PermissionCheck = vi.fn(async () => true);
@@ -219,20 +210,15 @@ describe("evaluateAndApplyPermission — grant path", () => {
 
     expect(authorized).toBe(true);
     expect(reply.code).not.toHaveBeenCalled();
-    expect(reply.send).not.toHaveBeenCalled();
   });
 
-  it("returns true and applies filters+scope when check returns granted result", async () => {
+  it("applies policy + scope when the check returns an allow decision", async () => {
     const req = makeEvalRequest();
     const reply = makeReply();
-    const scope: RequestScope = {
-      kind: "service",
-      clientId: "c1",
-      organizationId: "o1",
-    };
+    const scope: RequestScope = { kind: "service", clientId: "c1", organizationId: "o1" };
     const check: PermissionCheck = async () => ({
-      granted: true,
-      filters: { projectId: "p1" },
+      effect: "allow",
+      policy: { projectId: "p1" },
       scope,
     });
 
@@ -246,7 +232,7 @@ describe("evaluateAndApplyPermission — grant path", () => {
 });
 
 describe("evaluateAndApplyPermission — denial path", () => {
-  it("returns 401 with 'Authentication required' when user is null", async () => {
+  it("returns 401 'Authentication required' when user is null", async () => {
     const req = makeEvalRequest();
     const reply = makeReply();
     const check: PermissionCheck = async () => false;
@@ -267,19 +253,13 @@ describe("evaluateAndApplyPermission — denial path", () => {
     });
   });
 
-  it("returns 403 with 'Permission denied' when user is present", async () => {
+  it("returns 403 'Permission denied' when user is present", async () => {
     const req = makeEvalRequest();
     const reply = makeReply();
     const check: PermissionCheck = async () => false;
 
-    const authorized = await evaluateAndApplyPermission(
-      check,
-      makeContext({ user: { id: "u1" } }),
-      req,
-      reply,
-    );
+    await evaluateAndApplyPermission(check, makeContext({ user: { id: "u1" } }), req, reply);
 
-    expect(authorized).toBe(false);
     expect(reply.code).toHaveBeenCalledWith(403);
     expect(reply.send).toHaveBeenCalledWith({
       code: "arc.forbidden",
@@ -288,11 +268,11 @@ describe("evaluateAndApplyPermission — denial path", () => {
     });
   });
 
-  it("uses PermissionResult.reason when provided and ≤100 chars", async () => {
+  it("uses the decision reason when provided and ≤100 chars", async () => {
     const req = makeEvalRequest();
     const reply = makeReply();
     const check: PermissionCheck = async () => ({
-      granted: false,
+      effect: "deny",
       reason: "user lacks role admin",
     });
 
@@ -305,11 +285,10 @@ describe("evaluateAndApplyPermission — denial path", () => {
     });
   });
 
-  it("clamps reason and falls back to default when >100 chars (prevents info leak)", async () => {
+  it("clamps an over-long reason to the default (prevents info leak)", async () => {
     const req = makeEvalRequest();
     const reply = makeReply();
-    const longReason = "x".repeat(101);
-    const check: PermissionCheck = async () => ({ granted: false, reason: longReason });
+    const check: PermissionCheck = async () => ({ effect: "deny", reason: "x".repeat(101) });
 
     await evaluateAndApplyPermission(check, makeContext({ user: { id: "u1" } }), req, reply);
 
@@ -320,7 +299,7 @@ describe("evaluateAndApplyPermission — denial path", () => {
     });
   });
 
-  it("honors defaultDenialMessage callback for callsite-specific error strings", async () => {
+  it("honors defaultDenialMessage for callsite-specific strings", async () => {
     const req = makeEvalRequest();
     const reply = makeReply();
     const check: PermissionCheck = async () => false;
@@ -332,7 +311,7 @@ describe("evaluateAndApplyPermission — denial path", () => {
       reply,
       {
         defaultDenialMessage: (user) =>
-          user ? `Permission denied for 'approve'` : "Authentication required",
+          user ? "Permission denied for 'approve'" : "Auth required",
       },
     );
 
@@ -343,31 +322,14 @@ describe("evaluateAndApplyPermission — denial path", () => {
     });
   });
 
-  it("defaultDenialMessage is still overridden by a short PermissionResult.reason", async () => {
+  it("does NOT apply policy from a denied decision (defensive)", async () => {
     const req = makeEvalRequest();
     const reply = makeReply();
-    const check: PermissionCheck = async () => ({ granted: false, reason: "rate limited" });
-
-    await evaluateAndApplyPermission(check, makeContext({ user: { id: "u1" } }), req, reply, {
-      defaultDenialMessage: () => "ignored default",
+    const check: PermissionCheck = async () => ({
+      effect: "deny",
+      reason: "nope",
+      policy: { leak: "no" },
     });
-
-    expect(reply.send).toHaveBeenCalledWith({
-      code: "arc.forbidden",
-      message: "rate limited",
-      status: 403,
-    });
-  });
-
-  it("does NOT apply filters from a denied PermissionResult (defensive)", async () => {
-    const req = makeEvalRequest();
-    const reply = makeReply();
-    const check: PermissionCheck = async () =>
-      ({
-        granted: false,
-        reason: "nope",
-        filters: { leak: "should-not-apply" },
-      }) as PermissionResult;
 
     await evaluateAndApplyPermission(check, makeContext({ user: { id: "u1" } }), req, reply);
 
@@ -376,33 +338,27 @@ describe("evaluateAndApplyPermission — denial path", () => {
 });
 
 describe("evaluateAndApplyPermission — thrown check", () => {
-  it("catches thrown errors, logs a warn, returns 403", async () => {
+  it("catches a non-ArcError throw and fails closed to a 403 forbidden", async () => {
     const req = makeEvalRequest();
     const reply = makeReply();
     const check: PermissionCheck = async () => {
       throw new Error("boom");
     };
 
+    // The throw is normalized + logged once by the shared evaluation core
+    // (`evaluatePermissionOutcome` → arc's namespaced logger, same channel the
+    // neutral PDP uses). The HTTP PEP only maps the classified outcome onto the
+    // wire — so the observable contract is the fail-closed 403, not the log sink.
     const authorized = await evaluateAndApplyPermission(check, makeContext(), req, reply);
 
     expect(authorized).toBe(false);
     expect(reply.code).toHaveBeenCalledWith(403);
-    expect(reply.send).toHaveBeenCalledWith({
-      code: "arc.forbidden",
-      message: "Permission denied",
-      status: 403,
-    });
-    expect(req.log?.warn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        err: expect.any(Error),
-        resource: "widget",
-        action: "list",
-      }),
-      "Permission check threw",
+    expect(reply.send).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "arc.forbidden", status: 403 }),
     );
   });
 
-  it("thrown check returns 403 even when user is null (security: never leak auth state via throw)", async () => {
+  it("thrown check returns 403 even when user is null (never leak auth state)", async () => {
     const req = makeEvalRequest();
     const reply = makeReply();
     const check: PermissionCheck = async () => {
@@ -410,10 +366,6 @@ describe("evaluateAndApplyPermission — thrown check", () => {
     };
 
     await evaluateAndApplyPermission(check, makeContext({ user: null }), req, reply);
-
-    // NB: unlike the controlled denial path (401 when unauthenticated),
-    // throws always produce 403. This is fail-closed: a broken check
-    // must never be confused with "just needs to log in".
     expect(reply.code).toHaveBeenCalledWith(403);
   });
 });

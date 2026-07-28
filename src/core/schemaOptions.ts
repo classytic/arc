@@ -111,7 +111,7 @@ function stripFromRequired(
 
 /**
  * Strip framework-injected fields from the `required[]` list of every
- * body-shaped slot in an adapter's generated schemas (v2.11.0).
+ * body-shaped slot in an adapter's generated schemas.
  *
  * A "framework-injected field" is any field marked `systemManaged: true`
  * in `schemaOptions.fieldRules`. Arc populates those fields from the

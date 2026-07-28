@@ -17,16 +17,19 @@
  */
 
 /**
- * One non-fatal diagnostic produced during resource validation.
+ * One diagnostic produced during resource validation.
  *
- * - `severity`: log level the host logger uses (`warn` for misconfigurations
- *   the host should clean up, `info` for deprecation hints).
+ * - `severity`: `error` is FATAL — `defineResource()` throws at define-time,
+ *   the resource never boots (used by strict security invariants like ungated
+ *   CRUD under `strictPermissions`). `warn` flags a misconfiguration the host
+ *   should clean up; `info` is a deprecation hint. `warn`/`info` are non-fatal
+ *   and flushed through the host logger on first mount.
  * - `code`: stable identifier for the diagnostic — hosts and tests can match
  *   on this without parsing the human-readable message.
  * - `message`: pre-formatted line, resource name already interpolated.
  */
 export interface ResourceDiagnostic {
-  severity: "warn" | "info";
+  severity: "error" | "warn" | "info";
   code: string;
   message: string;
 }

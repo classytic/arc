@@ -20,6 +20,16 @@ export interface PresetResult {
   /** Preset routes — merged into the resource's `routes` array. */
   routes?: RouteDefinition[] | ((permissions: ResourcePermissions) => RouteDefinition[]);
   middlewares?: MiddlewareConfig;
+  /**
+   * Permission gates the preset contributes as SECURE DEFAULTS. Merged per-op
+   * into the resource's `permissions`, but ONLY for operations the host has not
+   * explicitly gated — the host's own permission always wins. Lets a preset make
+   * authorization part of the permission/introspection model (required auth at
+   * `onRequest`, MCP parity) instead of relying on middleware alone. Example:
+   * `ownedByUser` injects `requireAuth()` on update/delete so an ownership
+   * resource is never public-by-omission.
+   */
+  permissions?: Partial<ResourcePermissions>;
   schemaOptions?: RouteSchemaOptions;
   controllerOptions?: Record<string, unknown>;
   hooks?: PresetHook[];

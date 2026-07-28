@@ -8,6 +8,7 @@ import type { FastifyReply, FastifyRequest, RouteHandlerMethod } from "fastify";
 
 import { evaluateAndApplyPermission } from "../../permissions/applyPermissionResult.js";
 import type { PermissionCheck, PermissionContext } from "../../permissions/types.js";
+import { getRequestScope } from "../../scope/types.js";
 import type { RequestWithExtras, UserLike } from "../../types/index.js";
 import { createError } from "../../utils/errors.js";
 
@@ -29,6 +30,9 @@ export function buildPermissionContext(
   const params = req.params as Record<string, string> | undefined;
   return {
     user: (reqWithExtras.user as UserLike | undefined) ?? null,
+    // First-class scope so checks read `scopeOf(ctx)` and combinators can thread
+    // it purely — the raw `request` is the escape hatch, not the scope source.
+    scope: getRequestScope(req),
     request: req,
     resource: opts.resource,
     action: opts.action,

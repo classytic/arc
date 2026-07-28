@@ -5,7 +5,8 @@
  * Allows intercepting and modifying data at various points.
  */
 
-import type { AnyRecord, RequestContext, UserBase } from "../types/index.js";
+import { buildRequestScopeProjection, type RequestScopeProjection } from "../scope/projection.js";
+import type { AnyRecord, ArcInternalMetadata, RequestContext, UserBase } from "../types/index.js";
 
 // ============================================================================
 // Hook Types
@@ -23,6 +24,23 @@ export interface HookContext<T = AnyRecord> {
   user?: UserBase;
   context?: RequestContext;
   meta?: AnyRecord;
+  /**
+   * Tenant/user projection of the validated `RequestScope` — the same shape
+   * `ResourceHookContext.scope` and `IRequestContext.scope` expose, from the
+   * same helper, so every surface reads identity identically.
+   *
+   * THIS is the identity source in a global hook. `ctx.user` comes from the
+   * auth adapter and is not scope-validated; the canonical `updatedBy` hook is
+   * `ctx.scope?.userId`, not `ctx.user?.id`. `undefined` on public/unscoped
+   * routes. Branch on `scope.kind` via `ctx.context._scope` when you need the
+   * full discriminated union.
+   */
+  scope?: RequestScopeProjection;
+}
+
+/** Lift the validated scope out of the request context (undefined when unscoped). */
+function scopeOf(context: RequestContext | undefined): RequestScopeProjection | undefined {
+  return buildRequestScopeProjection((context as ArcInternalMetadata | undefined)?._scope);
 }
 
 export type HookHandler<T = AnyRecord> = (
@@ -80,17 +98,11 @@ export class HookSystem {
     this.warn = options?.logger?.warn ?? noop;
   }
 
-  /**
-   * Generate hook key
-   */
   private getKey(resource: string, operation: HookOperation, phase: HookPhase): string {
     return `${resource}:${operation}:${phase}`;
   }
 
-  /**
-   * Register a hook
-   * Supports both object parameter and positional arguments
-   */
+  /** Supports both the object-parameter and positional argument forms. */
   register<T = AnyRecord>(
     resourceOrOptions:
       | string
@@ -178,9 +190,6 @@ export class HookSystem {
     };
   }
 
-  /**
-   * Register before hook
-   */
   before<T = AnyRecord>(
     resource: string,
     operation: HookOperation,
@@ -190,9 +199,6 @@ export class HookSystem {
     return this.register(resource, operation, "before", handler, priority);
   }
 
-  /**
-   * Register after hook
-   */
   after<T = AnyRecord>(
     resource: string,
     operation: HookOperation,
@@ -256,6 +262,7 @@ export class HookSystem {
           data,
           user: options?.user,
           context: options?.context,
+          scope: scopeOf(options?.context),
           meta: options?.meta,
         };
         return (hook.handler as unknown as AroundHookHandler<T>)(ctx, next);
@@ -266,9 +273,6 @@ export class HookSystem {
     return next();
   }
 
-  /**
-   * Execute hooks for a given context
-   */
   async execute<T = AnyRecord>(ctx: HookContext<T>): Promise<T | undefined> {
     const key = this.getKey(ctx.resource, ctx.operation, ctx.phase);
     const hooks = this.hooks.get(key) ?? [];
@@ -297,6 +301,7 @@ export class HookSystem {
         result: ctx.result as AnyRecord | AnyRecord[] | undefined,
         user: ctx.user,
         context: ctx.context,
+        scope: ctx.scope ?? scopeOf(ctx.context),
         meta: ctx.meta,
       };
       const hookResult = await hook.handler(handlerContext);
@@ -308,9 +313,6 @@ export class HookSystem {
     return result;
   }
 
-  /**
-   * Execute before hooks
-   */
   async executeBefore<T = AnyRecord>(
     resource: string,
     operation: HookOperation,
@@ -334,10 +336,7 @@ export class HookSystem {
     return result ?? data;
   }
 
-  /**
-   * Execute after hooks
-   * Errors in after hooks are logged but don't fail the request
-   */
+  /** Errors in after hooks are logged but never fail the request. */
   async executeAfter<T = AnyRecord>(
     resource: string,
     operation: HookOperation,
@@ -456,9 +455,6 @@ export class HookSystem {
     return result;
   }
 
-  /**
-   * Get all registered hooks
-   */
   getAll(): HookRegistration[] {
     const all: HookRegistration[] = [];
     for (const hooks of this.hooks.values()) {
@@ -467,9 +463,6 @@ export class HookSystem {
     return all;
   }
 
-  /**
-   * Get hooks for a specific resource
-   */
   getForResource(resource: string): HookRegistration[] {
     const all: HookRegistration[] = [];
     for (const [key, hooks] of this.hooks.entries()) {
@@ -558,16 +551,10 @@ export class HookSystem {
     return (this.hooks.get(key)?.length ?? 0) > 0;
   }
 
-  /**
-   * Clear all hooks
-   */
   clear(): void {
     this.hooks.clear();
   }
 
-  /**
-   * Clear hooks for a specific resource
-   */
   clearResource(resource: string): void {
     for (const key of this.hooks.keys()) {
       if (key.startsWith(`${resource}:`)) {

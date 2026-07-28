@@ -13,8 +13,8 @@
  *     never match when malformed) → typed {@link GrantMode} union
  *   - per-item ACL checks on list responses (their readdir returns
  *     unfiltered children; the UI stats each item — N+1) → resolutions
- *     return `filters` that compose into THE list query via
- *     `PermissionResult.filters` (one paginated, permission-correct query)
+ *     return a row `policy` that composes into THE list query via the
+ *     decision's `policy` → `_policyFilters` (one paginated, correct query)
  *   - un-revocable capability tokens → share links should reference a
  *     grant ROW (`subjectType: 'link'`); delete the row, the link dies
  *
@@ -47,7 +47,8 @@
  * ```
  */
 
-import type { PermissionCheck, PermissionContext, PermissionResult } from "./types.js";
+import { allow, deny } from "./core.js";
+import type { AuthorizationDecision, PermissionCheck, PermissionContext } from "./types.js";
 import { getUserRoles } from "./types.js";
 
 /**
@@ -82,7 +83,7 @@ export function modeSatisfies(held: string | undefined, required: GrantMode): bo
  * - `{ mode }` — the strongest mode the caller holds on `ctx.resourceId`;
  *   the combinator applies the lattice against the required mode.
  * - `{ filters }` — list-shaped resolution: row filters that scope the
- *   query to visible records (flows through `PermissionResult.filters` →
+ *   query to visible records (flows through the decision's `policy` →
  *   `_policyFilters` → the repository query). Grants access with the
  *   filters attached.
  * - `{ mode, filters }` — mode gates; filters ride along when it passes.
@@ -128,7 +129,7 @@ export interface RequireGrantOptions {
 export function requireGrant(options: RequireGrantOptions): PermissionCheck {
   const { mode: required, resolve, bypassRoles } = options;
 
-  return async (ctx: PermissionContext): Promise<boolean | PermissionResult> => {
+  return async (ctx: PermissionContext): Promise<boolean | AuthorizationDecision> => {
     if (bypassRoles && ctx.user && getUserRoles(ctx.user).some((r) => bypassRoles.includes(r))) {
       return true;
     }
@@ -139,11 +140,11 @@ export function requireGrant(options: RequireGrantOptions): PermissionCheck {
     } catch (err) {
       // Fail-closed: a broken grant store must read as "no grant", never
       // as open access. The real error is logged for the operator.
-      ctx.request.log?.warn?.(
+      ctx.request?.log?.warn?.(
         { err, resource: ctx.resource, action: ctx.action },
         "requireGrant: resolve threw — denying (fail-closed)",
       );
-      return { granted: false, reason: "Grant lookup failed" };
+      return deny("Grant lookup failed");
     }
 
     if (typeof resolution === "boolean") {
@@ -152,20 +153,21 @@ export function requireGrant(options: RequireGrantOptions): PermissionCheck {
 
     const { mode: held, filters, reason } = resolution;
 
-    // Mode present → lattice check; filters (if any) ride along on grant.
+    // Mode present → lattice check; filters (if any) ride along on grant as the
+    // row-level data policy.
     if (held !== undefined) {
       if (!modeSatisfies(held, required)) {
-        return { granted: false, ...(reason ? { reason } : {}) };
+        return deny(reason);
       }
-      return { granted: true, ...(filters ? { filters } : {}) };
+      return allow(filters ? { policy: filters } : undefined);
     }
 
     // List-shaped resolution: filters scope the query — that IS the grant.
     if (filters !== undefined) {
-      return { granted: true, filters };
+      return allow({ policy: filters });
     }
 
     // Neither mode nor filters — fail closed.
-    return { granted: false, ...(reason ? { reason } : {}) };
+    return deny(reason);
   };
 }

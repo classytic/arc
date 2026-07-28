@@ -2,9 +2,43 @@
 
 **Summary**: v2.10 split the `permissions/` module into `core`, `scope`, `dynamic`. Public import path `@classytic/arc/permissions` is unchanged.
 **Sources**: src/permissions/.
-**Last updated**: 2026-07-15 (`requireGrant` per-record grants — 2.22).
+**Last updated**: 2026-07-28 (decision contract + AND-composed, kit-portable policy filters — 2.30).
 
 ---
+
+## The decision contract (2.30)
+
+A check returns `boolean | AuthorizationDecision` — pure data, never a mutation:
+
+```ts
+import { allow, deny, scopeOf } from "@classytic/arc/permissions";
+
+const canRead: PermissionCheck = (ctx) =>
+  isMember(scopeOf(ctx)) ? allow({ policy: { orgId: getOrgId(scopeOf(ctx)) } }) : deny("not a member");
+```
+
+- **PDP** `evaluatePermissionDecision(check, ctx)` — transport-neutral evaluation. No request needed, so MCP / jobs / websockets share it.
+- **PEP** `applyAuthorizationDecision(decision, req)` — the ONE place a decision's effects land (`policy` → `_policyFilters`, `scope` → `request.scope`, never downgrading existing auth).
+
+Read scope via `scopeOf(ctx)`, never `ctx.request` — that is what lets a combinator hand a child a new context instead of mutating the request, and what makes non-HTTP transports resolve identity.
+
+`PermissionResult` / `normalizePermissionResult` were REMOVED in 2.30 → `AuthorizationDecision` / `normalizeToDecision`.
+
+## Policy filters
+
+Filters from independent sources (tenant preset, ownership grant, an `allOf` branch, a host check) compose with **logical AND** via `conjoinPolicyFilters`. A plain object spread is NOT AND — same key from two sources meant the later silently replaced the earlier, widening a restriction another layer imposed.
+
+Arc emits a Mongo-style operator dialect (`$or`, `$in`, `$and`), normalized at the repository boundary so non-Mongo kits (SQLiteKit, PGKit) don't treat `$and` as a column name.
+
+## Static analysis (no request)
+
+`describePermission` / `describePermissionMap` / `explainAccess` / `collectPublicSurface` answer "who can do X" from metadata. `allow`/`deny` are definitive; `conditional` means the gate reads request-time state and must not be guessed. Use instead of hand-rolling a `/permissions/matrix` endpoint.
+
+`runAuthorizationConformance` ([[testing]]) proves CRUD and aggregation enforce one permission identically.
+
+## Ownership is fail-closed (2.30)
+
+`ownedByUser` denies with no identity, and denies a record whose `ownerField` is empty (`missingOwner: "allow"` is a bounded legacy opt-in). **The default `ownerField` is `userId`** — a mismatched name makes every record look unowned. For "the owner, or an admin" use `requireOwnership(field, { bypassRoles: [...] })`; the middleware preset bypasses only for elevated platform scope.
 
 ## Layout (v2.10)
 

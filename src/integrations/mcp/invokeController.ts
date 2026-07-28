@@ -251,7 +251,7 @@ export async function invokeController(
       actionName,
       input,
     );
-    if (permResult && !permResult.granted) {
+    if (permResult && permResult.effect !== "allow") {
       return permissionDeniedResult({
         resource: resourceName,
         operation: actionName,
@@ -265,7 +265,7 @@ export async function invokeController(
         input,
         session,
         op,
-        permResult?.filters as Record<string, unknown> | undefined,
+        permResult?.policy,
         permResult?.scope as RequestScope | undefined,
         buildContextExtras(options),
       );

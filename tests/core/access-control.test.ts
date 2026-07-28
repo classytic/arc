@@ -425,13 +425,23 @@ describe("AccessControl", () => {
       expect(ac.checkOwnership({ createdBy: "user-2", name: "Test" }, req)).toBe(false);
     });
 
-    it("returns true when owner field is not present on item", () => {
+    it("FAIL-CLOSED: denies when owner field is absent on the item (default)", () => {
       const ac = createAccessControl();
       const req = createReq({
         _ownershipCheck: { field: "createdBy", userId: "user-1" },
       });
 
-      // If the field doesn't exist on the item, ownership is not enforced
+      // A record with no owner value is NOT modifiable through an ownership-gated
+      // route by default — silently allowing unowned records is not ownership.
+      expect(ac.checkOwnership({ name: "Test" }, req)).toBe(false);
+    });
+
+    it("allows an unowned record only under the explicit missingOwner:'allow' opt-in", () => {
+      const ac = createAccessControl();
+      const req = createReq({
+        _ownershipCheck: { field: "createdBy", userId: "user-1", missingOwner: "allow" },
+      });
+
       expect(ac.checkOwnership({ name: "Test" }, req)).toBe(true);
     });
 

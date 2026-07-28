@@ -10,12 +10,9 @@ import type { AnyRecord } from "../base.js";
  * Hook context passed to resource-level hook handlers. Mirrors
  * HookSystem's HookContext but with a simpler API for inline use.
  *
- * **v2.10.8:** `context` and a first-class `scope` projection are now
- * forwarded from the internal `HookContext`. Before this release, inline
- * `config.hooks` handlers had no way to reach the caller's tenant or
- * user info — they had to bypass the documented API and push directly
- * into `resource._pendingHooks` to get the raw internal shape. Now the
- * documented DX is complete:
+ * `context` and a first-class `scope` projection are forwarded from the
+ * internal `HookContext`, so an inline handler reaches the caller's tenant
+ * and user through the documented API:
  *
  * ```ts
  * hooks: {
@@ -50,7 +47,7 @@ export interface ResourceHookContext {
    * First-class projection of request scope — `{ organizationId?, userId?, orgRoles? }`.
    * Populated for every scoped request so multi-tenant hooks don't have to
    * drill into `context._scope.organizationId` themselves. Matches the
-   * identically-named field on `IRequestContext` (v2.10.6) so the same
+   * identically-named field on `IRequestContext` so the same
    * read pattern works in controllers and hooks.
    */
   scope?: {

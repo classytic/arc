@@ -263,10 +263,8 @@ describe("CRUD route-table regression", () => {
         list: allowPublic(),
         get: allowPublic(),
         // Non-public permission — will require auth via fastify.authenticate
-        create: async ({ user }) => ({
-          granted: Boolean(user),
-          reason: "requires login",
-        }),
+        create: async ({ user }) =>
+          user ? { effect: "allow" } : { effect: "deny", reason: "requires login" },
         update: allowPublic(),
         delete: allowPublic(),
       },

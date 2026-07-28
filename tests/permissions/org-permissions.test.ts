@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   anyOf,
   createOrgPermissions,
+  normalizeToDecision,
   type PermissionContext,
   requireOrgMembership,
   requireOrgRole,
@@ -60,12 +61,12 @@ describe("requireOrgMembership", () => {
 
   it("denies unauthenticated users", () => {
     const result = check(makeCtx({ user: null }));
-    expect(result).toEqual({ granted: false, reason: "Authentication required" });
+    expect(result).toEqual({ effect: "deny", reason: "Authentication required" });
   });
 
   it("denies when no active organization", () => {
     const result = check(makeCtx({ user: { id: "u1", role: [] } }));
-    expect(result).toEqual({ granted: false, reason: "Organization membership required" });
+    expect(result).toEqual({ effect: "deny", reason: "Organization membership required" });
   });
 
   it("grants when org set even with no roles (membership means scope is member)", () => {
@@ -97,13 +98,13 @@ describe("requireOrgRole", () => {
   it("denies unauthenticated users", () => {
     const check = requireOrgRole("admin");
     const result = check(makeCtx({ user: null }));
-    expect(result).toEqual({ granted: false, reason: "Authentication required" });
+    expect(result).toEqual({ effect: "deny", reason: "Authentication required" });
   });
 
   it("denies when user has wrong org role", () => {
     const check = requireOrgRole("admin", "owner");
     const result = check(makeCtx({ orgId: "org1", orgRoles: ["member"] }));
-    expect(result).toEqual({ granted: false, reason: "Required org roles: admin, owner" });
+    expect(result).toEqual({ effect: "deny", reason: "Required org roles: admin, owner" });
   });
 
   it("grants when user has matching org role", () => {
@@ -121,7 +122,7 @@ describe("requireOrgRole", () => {
   it("denies when no active organization", () => {
     const check = requireOrgRole("admin");
     const result = check(makeCtx());
-    expect(result).toEqual({ granted: false, reason: "Organization membership required" });
+    expect(result).toEqual({ effect: "deny", reason: "Organization membership required" });
   });
 
   // ──────────────────────────────────────────────────────────────
@@ -146,7 +147,7 @@ describe("requireOrgRole", () => {
   it("denies when user has multiple roles but none match", () => {
     const check = requireOrgRole("owner");
     const result = check(makeCtx({ orgId: "org1", orgRoles: ["admin", "member"] }));
-    expect(result).toEqual({ granted: false, reason: "Required org roles: owner" });
+    expect(result).toEqual({ effect: "deny", reason: "Required org roles: owner" });
   });
 
   it("grants with multiple required roles when user has one matching", () => {
@@ -167,13 +168,13 @@ describe("requireOrgRole", () => {
 
     // Global superadmin should pass via requireRoles
     const result = await combined(makeCtx({ user: { id: "u1", role: ["superadmin"] } }));
-    const norm1 = typeof result === "boolean" ? { granted: result } : result;
-    expect(norm1.granted).toBe(true);
+    const norm1 = normalizeToDecision(result);
+    expect(norm1.effect).toBe("allow");
 
     // Org admin should pass via requireOrgRole
     const result2 = await combined(makeCtx({ orgId: "org1", orgRoles: ["admin"] }));
-    const norm2 = typeof result2 === "boolean" ? { granted: result2 } : result2;
-    expect(norm2.granted).toBe(true);
+    const norm2 = normalizeToDecision(result2);
+    expect(norm2.effect).toBe("allow");
   });
 });
 
@@ -211,7 +212,7 @@ describe("createOrgPermissions", () => {
       const check = perms.can({ product: ["delete"] });
       const result = check(makeCtx({ orgId: "org1", orgRoles: ["admin"] }));
       expect(result).toEqual({
-        granted: false,
+        effect: "deny",
         reason: "Missing permissions: product:[delete]",
       });
     });
@@ -220,7 +221,7 @@ describe("createOrgPermissions", () => {
       const check = perms.can({ product: ["create"] });
       const result = check(makeCtx({ orgId: "org1", orgRoles: ["member"] }));
       expect(result).toEqual({
-        granted: false,
+        effect: "deny",
         reason: "Missing permissions: product:[create]",
       });
     });
@@ -253,7 +254,7 @@ describe("createOrgPermissions", () => {
       const check = perms.can({ product: ["delete"] });
       const result = check(makeCtx({ orgId: "org1", orgRoles: ["admin", "member"] }));
       expect(result).toEqual({
-        granted: false,
+        effect: "deny",
         reason: "Missing permissions: product:[delete]",
       });
     });
@@ -261,13 +262,13 @@ describe("createOrgPermissions", () => {
     it("denies when no active organization", () => {
       const check = perms.can({ product: ["create"] });
       const result = check(makeCtx());
-      expect(result).toEqual({ granted: false, reason: "Organization membership required" });
+      expect(result).toEqual({ effect: "deny", reason: "Organization membership required" });
     });
 
     it("denies unauthenticated users", () => {
       const check = perms.can({ product: ["create"] });
       const result = check(makeCtx({ user: null }));
-      expect(result).toEqual({ granted: false, reason: "Authentication required" });
+      expect(result).toEqual({ effect: "deny", reason: "Authentication required" });
     });
   });
 
@@ -322,7 +323,7 @@ describe("roles() — unified platform + org check", () => {
       }),
     );
     // Reason must NOT expose held roles (security: action routes return this to clients)
-    expect(result).toEqual({ granted: false, reason: "Required roles: admin" });
+    expect(result).toEqual({ effect: "deny", reason: "Required roles: admin" });
   });
 
   it("grants elevated scope always", () => {
@@ -334,7 +335,7 @@ describe("roles() — unified platform + org check", () => {
   it("denies unauthenticated", () => {
     const check = roles("admin");
     const result = check(makeCtx({ user: null }));
-    expect(result).toEqual({ granted: false, reason: "Authentication required" });
+    expect(result).toEqual({ effect: "deny", reason: "Authentication required" });
   });
 
   it("supports multiple roles (any match)", () => {
@@ -437,7 +438,7 @@ describe("requireRoles with includeOrgRoles option (2.7.1+: defaults to true)", 
       }),
     );
     // Org role ignored — user has no platform 'admin'
-    expect(result).toEqual({ granted: false, reason: "Required roles: admin" });
+    expect(result).toEqual({ effect: "deny", reason: "Required roles: admin" });
   });
 
   it("explicit includeOrgRoles: true (now redundant but still works)", () => {
@@ -467,7 +468,7 @@ describe("requireRoles with includeOrgRoles option (2.7.1+: defaults to true)", 
         orgRoles: ["member"],
       }),
     );
-    expect(result).toEqual({ granted: false, reason: "Required roles: admin" });
+    expect(result).toEqual({ effect: "deny", reason: "Required roles: admin" });
   });
 
   // ── Variadic form (new in 2.7.1) ──
@@ -485,7 +486,7 @@ describe("requireRoles with includeOrgRoles option (2.7.1+: defaults to true)", 
     expect(check(makeCtx({ user: { id: "u1", role: "editor" } }))).toBe(true);
     expect(check(makeCtx({ user: { id: "u1", role: "admin" } }))).toBe(true);
     expect(check(makeCtx({ user: { id: "u1", role: "viewer" } }))).toEqual({
-      granted: false,
+      effect: "deny",
       reason: "Required roles: admin, editor",
     });
   });

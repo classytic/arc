@@ -41,7 +41,7 @@ import type { DataAdapter } from "@classytic/repo-core/adapter";
 import type { AnyRecord, ResourceConfig } from "../../types/index.js";
 
 /**
- * Structural adapter boundary — the `ControllerLike` pattern (v2.10.6)
+ * Structural adapter boundary — the `ControllerLike` pattern
  * applied to adapters. `DataAdapter<T>` is invariant in `T`, so a
  * `DataAdapter<HydratedDocument<IProduct>>` built by the HOST does not
  * assign to a module's `DataAdapter<AnyRecord>` slot; before this type,

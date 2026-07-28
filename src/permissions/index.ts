@@ -2,7 +2,7 @@
  * Permission System — clean, function-based, composable.
  *
  * Every permission check is a `PermissionCheck` function returning
- * `boolean | PermissionResult`. Compose with `allOf`, `anyOf`, `not`,
+ * a `boolean` or an `AuthorizationDecision`. Compose with `allOf`, `anyOf`, `not`,
  * `when`, `denyAll`. No inheritance, no classes, no global state.
  *
  * ## File map
@@ -42,14 +42,24 @@ export { requireAgentScope, requireDPoP, requireMandate } from "./agent.js";
 // sites (createCrudRouter, createActionRouter, MCP resourceToTools)
 // import these directly from "./applyPermissionResult.js".
 // ──────────────────────────────────────────────────────────────────────
-export { applyPermissionResult, normalizePermissionResult } from "./applyPermissionResult.js";
+export {
+  applyAuthorizationDecision,
+  /** @deprecated use `applyAuthorizationDecision` */
+  applyPermissionResult,
+  evaluatePermissionDecision,
+  normalizeToDecision,
+  type PermissionCheckReturn,
+} from "./applyPermissionResult.js";
+export { scopeOf } from "./context.js";
 // ──────────────────────────────────────────────────────────────────────
 // Core primitives — auth/role/ownership + combinators
 // ──────────────────────────────────────────────────────────────────────
 export {
   allOf,
+  allow,
   allowPublic,
   anyOf,
+  deny,
   denyAll,
   not,
   requireAuth,
@@ -69,6 +79,17 @@ export type {
 } from "./dynamic.js";
 export { createDynamicPermissionMatrix, createOrgPermissions } from "./dynamic.js";
 // ──────────────────────────────────────────────────────────────────────
+// Static authorization analysis — explain / introspect without a request
+// ──────────────────────────────────────────────────────────────────────
+export {
+  type AccessExplanation,
+  collectPublicSurface,
+  describePermission,
+  describePermissionMap,
+  explainAccess,
+  type PermissionRequirement,
+} from "./explain.js";
+// ──────────────────────────────────────────────────────────────────────
 // Field-level permissions
 // ──────────────────────────────────────────────────────────────────────
 export type {
@@ -82,6 +103,7 @@ export {
   fields,
   resolveEffectiveRoles,
 } from "./fields.js";
+export { conjoinPolicyFilters } from "./filter-merge.js";
 // ──────────────────────────────────────────────────────────────────────
 // Per-record grants — subject × record × mode (record sharing)
 // ──────────────────────────────────────────────────────────────────────
@@ -107,9 +129,10 @@ export {
 // Types
 // ──────────────────────────────────────────────────────────────────────
 export type {
+  AuthorizationDecision,
+  DataPolicy,
   PermissionCheck,
   PermissionContext,
-  PermissionResult,
   UserBase,
 } from "./types.js";
 export { getUserRoles, normalizeRoles } from "./types.js";

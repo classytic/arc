@@ -4,7 +4,7 @@
  * Handles ID filtering, policy filter checking, org/tenant scope validation,
  * ownership verification, and fetch-with-access-control patterns.
  *
- * ## Policy-filter enforcement model (v2.10.6)
+ * ## Policy-filter enforcement model
  *
  * Arc delegates policy-filter matching to the **database** on every primary
  * fetch: `buildIdFilter` composes a compound filter (id + `_policyFilters` +
@@ -28,6 +28,7 @@
  * syntax to rows shaped by a different dialect silently misclassified).
  */
 
+import type { Filter } from "@classytic/repo-core/filter";
 import type { QueryOptions } from "@classytic/repo-core/repository";
 import { DEFAULT_ID_FIELD } from "../constants.js";
 import { arcLog } from "../logger/index.js";
@@ -40,6 +41,7 @@ import type {
 } from "../types/index.js";
 import { createDomainError } from "../utils/errors.js";
 import { simpleEqualityMatcher } from "../utils/simpleEqualityMatcher.js";
+import { toRepositoryFilter } from "./repositoryFilter.js";
 
 const log = arcLog("access-control");
 
@@ -78,7 +80,7 @@ export interface AccessControlConfig {
 /** Minimal repository interface for access-controlled fetch operations */
 export interface AccessControlRepository {
   getById(id: string, options?: QueryOptions): Promise<unknown>;
-  getOne?: (filter: AnyRecord, options?: QueryOptions) => Promise<unknown>;
+  getOne?: (filter: AnyRecord | Filter, options?: QueryOptions) => Promise<unknown>;
 }
 
 // ============================================================================
@@ -115,7 +117,7 @@ export class AccessControl {
    * Build filter for single-item operations (get/update/delete)
    * Combines ID filter with policy/org filters for proper security enforcement
    */
-  buildIdFilter(id: string, req: IRequestContext): AnyRecord {
+  buildIdFilter(id: string, req: IRequestContext): AnyRecord | Filter {
     const filter: AnyRecord = { [this.idField]: id };
     const arcContext = this._meta(req);
 
@@ -133,7 +135,12 @@ export class AccessControl {
       filter[this.tenantField] = orgId;
     }
 
-    return filter;
+    // Normalize to portable Filter IR when the compound carries `$`-operators
+    // (e.g. `requireGrant`'s `$or`, `conjoinPolicyFilters`' `$and`). Flat
+    // equality — the common case — is returned unchanged. Without this, a
+    // non-Mongo kit's query path chokes on the `$`-record. See
+    // {@link toRepositoryFilter}.
+    return toRepositoryFilter(filter);
   }
 
   /**
@@ -247,9 +254,13 @@ export class AccessControl {
     // Ownership check would need to be passed via req.metadata
     const ownershipCheck = this._meta(req)?._ownershipCheck;
     if (!item || !ownershipCheck) return true;
-    const { field, userId } = ownershipCheck;
+    const { field, userId, missingOwner } = ownershipCheck;
     const itemOwnerId = item[field];
-    if (!itemOwnerId) return true;
+    // FAIL-CLOSED: a record with no owner value is NOT modifiable through an
+    // ownership-gated route by default. Only the explicit `missingOwner: "allow"`
+    // legacy/compat opt-in permits it — silently allowing unowned records is the
+    // opposite of an ownership guarantee.
+    if (!itemOwnerId) return missingOwner === "allow";
     return String(itemOwnerId) === String(userId);
   }
 

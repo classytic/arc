@@ -2,7 +2,7 @@
  * `defineErrorMapper<T>()` — typed helper for registering `ErrorMapper`s in
  * the `errorMappers` array of `errorHandlerPlugin` without a cast.
  *
- * **Why this exists (v2.10.6):** `ErrorMapper<T>` types `toResponse(err: T)`
+ * **Why this exists:** `ErrorMapper<T>` types `toResponse(err: T)`
  * — a contravariant position. When you put `ErrorMapper<FlowError>` into an
  * `ErrorMapper[]` (which defaults to `ErrorMapper<Error>`), TS refuses the
  * assignment because `(err: Error) => X` is NOT assignable to

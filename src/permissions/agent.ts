@@ -32,14 +32,9 @@
  * ```
  */
 
-import {
-  getDPoPJkt,
-  getMandate,
-  getRequestScope as getScope,
-  isElevated,
-  isService,
-  type Mandate,
-} from "../scope/types.js";
+import { getDPoPJkt, getMandate, isElevated, isService, type Mandate } from "../scope/types.js";
+import { scopeOf } from "./context.js";
+import { deny } from "./core.js";
 import type { PermissionCheck, PermissionContext } from "./types.js";
 
 /** Default grace window for mandate `expiresAt` — accommodates clock skew. */
@@ -66,27 +61,23 @@ const DEFAULT_TTL_GRACE_MS = 30_000;
  */
 export function requireDPoP<TDoc = Record<string, unknown>>(): PermissionCheck<TDoc> {
   const check: PermissionCheck<TDoc> = (ctx) => {
-    const scope = getScope(ctx.request);
+    const scope = scopeOf(ctx);
 
     if (isElevated(scope)) return true;
 
     if (!isService(scope)) {
-      return {
-        granted: false,
-        reason:
-          "DPoP-bound service identity required. Configure your authenticate callback " +
+      return deny(
+        "DPoP-bound service identity required. Configure your authenticate callback " +
           "to set scope.dpopJkt after verifying the DPoP proof header (RFC 9449).",
-      };
+      );
     }
 
     const jkt = getDPoPJkt(scope);
     if (!jkt) {
-      return {
-        granted: false,
-        reason:
-          "Sender-constrained credential required (DPoP). " +
+      return deny(
+        "Sender-constrained credential required (DPoP). " +
           "Inbound token is bearer; replay-resistance is mandatory on this endpoint.",
-      };
+      );
     }
 
     return true;
@@ -189,63 +180,47 @@ export function requireMandate<TDoc = Record<string, unknown>>(
   const noElevatedBypass = opts.noElevatedBypass === true;
 
   const check: PermissionCheck<TDoc> = (ctx) => {
-    const scope = getScope(ctx.request);
+    const scope = scopeOf(ctx);
 
     if (isElevated(scope) && !noElevatedBypass) return true;
 
     const mandate = getMandate(scope);
     if (!mandate) {
-      return {
-        granted: false,
-        reason:
-          `Capability mandate required (${capability}). ` +
+      return deny(
+        `Capability mandate required (${capability}). ` +
           "Configure your authenticate callback to populate request.scope.mandate " +
           "after verifying the mandate JWT/VC.",
-      };
+      );
     }
 
     if (mandate.capability !== capability) {
-      return {
-        granted: false,
-        reason: `Mandate authorizes "${mandate.capability}", not "${capability}"`,
-      };
+      return deny(`Mandate authorizes "${mandate.capability}", not "${capability}"`);
     }
 
     if (mandate.expiresAt !== undefined && Date.now() > mandate.expiresAt + ttlGrace) {
-      return {
-        granted: false,
-        reason: `Mandate expired at ${new Date(mandate.expiresAt).toISOString()}`,
-      };
+      return deny(`Mandate expired at ${new Date(mandate.expiresAt).toISOString()}`);
     }
 
     if (opts.audience) {
       const required = typeof opts.audience === "function" ? opts.audience(ctx) : opts.audience;
       if (required && mandate.audience && mandate.audience !== required) {
-        return {
-          granted: false,
-          reason: `Mandate is bound to "${mandate.audience}", not "${required}"`,
-        };
+        return deny(`Mandate is bound to "${mandate.audience}", not "${required}"`);
       }
       if (required && !mandate.audience) {
-        return {
-          granted: false,
-          reason: `Mandate must be bound to "${required}" (no audience claim)`,
-        };
+        return deny(`Mandate must be bound to "${required}" (no audience claim)`);
       }
     }
 
     if (opts.validateAmount) {
       const result = opts.validateAmount(ctx, mandate);
       if (result !== true) {
-        return {
-          granted: false,
-          reason:
-            typeof result === "string"
-              ? result
-              : `Action exceeds mandate cap ${mandate.cap}${
-                  mandate.currency ? ` ${mandate.currency}` : ""
-                }`,
-        };
+        return deny(
+          typeof result === "string"
+            ? result
+            : `Action exceeds mandate cap ${mandate.cap}${
+                mandate.currency ? ` ${mandate.currency}` : ""
+              }`,
+        );
       }
     }
 
@@ -331,7 +306,7 @@ export function requireAgentScope<TDoc = Record<string, unknown>>(
   const requiredScopes = scopes && scopes.length > 0 ? [...scopes] : null;
 
   const check: PermissionCheck<TDoc> = async (ctx) => {
-    const scope = getScope(ctx.request);
+    const scope = scopeOf(ctx);
 
     // Elevated bypass — same posture as the underlying mandate check, kept
     // here so we can short-circuit the OAuth-scope check for platform admins.
@@ -342,41 +317,34 @@ export function requireAgentScope<TDoc = Record<string, unknown>>(
     // the leaf's "mandate required" message — clearer error for the actual
     // misconfiguration, even though the leaves would also deny.
     if (!isService(scope)) {
-      return {
-        granted: false,
-        reason:
-          "Service identity required (machine principal). " +
+      return deny(
+        "Service identity required (machine principal). " +
           "Agent flows must authenticate as a service, not a logged-in user.",
-      };
+      );
     }
 
     if (requiredScopes) {
       const granted = scope.scopes ?? [];
       const hasAny = requiredScopes.some((s) => granted.includes(s));
       if (!hasAny) {
-        return {
-          granted: false,
-          reason: `Service identity is missing required OAuth scope(s): ${requiredScopes.join(", ")}`,
-        };
+        return deny(
+          `Service identity is missing required OAuth scope(s): ${requiredScopes.join(", ")}`,
+        );
       }
     }
 
-    // Delegate to the leaves — each returns true | PermissionResult. We
+    // Delegate to the leaves — each returns a boolean | AuthorizationDecision. We
     // surface the first denial verbatim so the reason string maps 1:1 to
     // the underlying helper's vocabulary.
     const mandateResult = await mandateCheck(ctx);
     if (mandateResult !== true) {
-      return typeof mandateResult === "object"
-        ? mandateResult
-        : { granted: false, reason: "Mandate check failed" };
+      return typeof mandateResult === "object" ? mandateResult : deny("Mandate check failed");
     }
 
     if (dpopCheck) {
       const dpopResult = await dpopCheck(ctx);
       if (dpopResult !== true) {
-        return typeof dpopResult === "object"
-          ? dpopResult
-          : { granted: false, reason: "DPoP binding required" };
+        return typeof dpopResult === "object" ? dpopResult : deny("DPoP binding required");
       }
     }
 

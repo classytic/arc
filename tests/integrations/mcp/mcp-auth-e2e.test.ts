@@ -399,7 +399,7 @@ describe("Auth rejection scenarios", () => {
 });
 
 // ============================================================================
-// 5. Permission Filters — PermissionResult.filters → _policyFilters
+// 5. Permission Filters — AuthorizationDecision.filters → _policyFilters
 // ============================================================================
 
 describe("Permission filters flow into _policyFilters", () => {
@@ -455,10 +455,10 @@ describe("Permission filters flow into _policyFilters", () => {
     ]);
 
     // Permission: user can only see tasks in their org + branch
-    const scopedPermission = (ctx: { user: { id?: string } | null }) => ({
-      granted: !!ctx.user,
-      filters: { orgId: "org-a", branchId: "br-1" },
-    });
+    const scopedPermission = (ctx: { user: { id?: string } | null }) =>
+      ctx.user
+        ? { effect: "allow" as const, policy: { orgId: "org-a", branchId: "br-1" } }
+        : { effect: "deny" as const };
 
     const resource = createTaskResource({
       list: scopedPermission,
@@ -484,7 +484,7 @@ describe("Permission filters flow into _policyFilters", () => {
 
   it("permission denial blocks MCP tool call entirely", async () => {
     const resource = createTaskResource({
-      create: () => ({ granted: false, reason: "Read-only access" }),
+      create: () => ({ effect: "deny", reason: "Read-only access" }),
       list: () => true,
     });
 
@@ -532,9 +532,9 @@ describe("Permission filters flow into _policyFilters", () => {
     // Permission returns filters based on who's calling
     const userScopedPerm = (ctx: { user: { id?: string } | null }) => {
       if (!ctx.user) return false;
-      if (ctx.user.id === "alice") return { granted: true, filters: { branchId: "main" } };
-      if (ctx.user.id === "bob") return { granted: true, filters: { branchId: "dev" } };
-      return { granted: false, reason: "Unknown user" };
+      if (ctx.user.id === "alice") return { effect: "allow", policy: { branchId: "main" } };
+      if (ctx.user.id === "bob") return { effect: "allow", policy: { branchId: "dev" } };
+      return { effect: "deny", reason: "Unknown user" };
     };
 
     const resource = createTaskResource({
@@ -579,8 +579,8 @@ describe("Permission filters flow into _policyFilters", () => {
       await new Promise((r) => setTimeout(r, 10));
       if (!ctx.user) return false;
       return {
-        granted: true,
-        filters: { orgId: "org-z", branchId: "release" },
+        effect: "allow",
+        policy: { orgId: "org-z", branchId: "release" },
       };
     };
 

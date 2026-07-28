@@ -18,7 +18,7 @@ import { allowPublic } from "../../../src/permissions/index.js";
 import type { PermissionCheck } from "../../../src/types/index.js";
 
 function denied(): PermissionCheck {
-  const fn = (() => ({ granted: false, reason: "nope" })) as PermissionCheck;
+  const fn = (() => ({ effect: "deny", reason: "nope" })) as PermissionCheck;
   return fn;
 }
 
@@ -383,7 +383,7 @@ describe("MCP: action tool evaluatePermission honors scope + filters", () => {
     // Permission that returns a scope override — only applies when session
     // scope is public (same semantics as buildRequestContext scopeOverride)
     const enrichingPerm = (() => ({
-      granted: true,
+      effect: "allow",
       scope: { kind: "member", tenantId: "tenant-X", organizationId: "org-perm" },
     })) as PermissionCheck;
 
@@ -415,8 +415,8 @@ describe("MCP: action tool evaluatePermission honors scope + filters", () => {
     let receivedReq: Record<string, unknown> | undefined;
 
     const filteringPerm = (() => ({
-      granted: true,
-      filters: { region: "EU" },
+      effect: "allow",
+      policy: { region: "EU" },
     })) as PermissionCheck;
 
     const resource = makeResourceWithActions({

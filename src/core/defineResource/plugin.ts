@@ -395,7 +395,14 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
     // re-emit the same warnings.
     if (isFirstMount && resource._diagnostics?.length) {
       for (const diagnostic of resource._diagnostics) {
-        const level = diagnostic.severity === "info" ? "info" : "warn";
+        // `error`-severity diagnostics are fatal and already threw at
+        // define-time (they never reach a booting resource); map defensively.
+        const level =
+          diagnostic.severity === "info"
+            ? "info"
+            : diagnostic.severity === "error"
+              ? "error"
+              : "warn";
         fastify.log?.[level]?.(diagnostic.message);
       }
     }

@@ -2,7 +2,7 @@
 
 **Summary**: `HookSystem` runs before/after callbacks on resource operations. ~720 lines; the main lifecycle engine.
 **Sources**: src/hooks/HookSystem.ts.
-**Last updated**: 2026-04-21.
+**Last updated**: 2026-07-28 (`HookContext.scope` — 2.29).
 
 ---
 
@@ -23,6 +23,18 @@ hooks: {
 - `before*` can mutate input or throw to abort.
 - `after*` runs post-op; typical place to emit [[events]] or invalidate [[cache]].
 - Hooks receive `{ input, ctx, scope, resource }`. `scope` is the [[request-scope]].
+
+## Global hooks
+
+`fastify.arc.hooks.before('*', 'update', fn)` registers a cross-cutting hook over every resource. Its `HookContext` carries the SAME `scope` projection as the per-resource form (2.29) — one helper feeds `HookContext.scope`, `ResourceHookContext.scope`, and `IRequestContext.scope`, so the three cannot drift.
+
+```ts
+fastify.arc.hooks.before("*", "update", async (ctx) => {
+  if (ctx.scope?.userId && ctx.data) ctx.data.updatedBy = ctx.scope.userId;
+});
+```
+
+**Read identity from `ctx.scope`, never `ctx.user`.** `ctx.user` is whatever the auth adapter attached and is not scope-validated. `ctx.scope` is `undefined` on public/unscoped routes; branch on `scope.kind` via `ctx.context._scope` for the full discriminated union.
 
 ## Introspection
 

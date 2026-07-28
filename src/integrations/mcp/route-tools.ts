@@ -114,8 +114,8 @@ export interface CustomRouteToolOptions {
  *
  * Enforces the same contract as the REST route:
  *   1. **Permission evaluation** via the shared `evaluatePermission` — the
- *      exact path CRUD and action MCP tools use. Filters and scope from a
- *      `PermissionResult` thread through `buildRequestContext`.
+ *      exact path CRUD and action MCP tools use. Policy and scope from the
+ *      `AuthorizationDecision` thread through `buildRequestContext`.
  *   2. **Pipeline integration** — function handlers run inside
  *      `executePipeline` with the same steps the HTTP path resolves.
  *   3. **Controller dispatch** for string handlers.
@@ -173,7 +173,7 @@ export function createCustomRouteHandler(
       operationName,
       input,
     );
-    if (permResult && !permResult.granted) {
+    if (permResult && permResult.effect !== "allow") {
       return permissionDeniedResult({
         resource: resourceName,
         operation: operationName,
@@ -192,7 +192,7 @@ export function createCustomRouteHandler(
         input,
         session,
         kind,
-        permResult?.filters,
+        permResult?.policy,
         permResult?.scope,
         contextExtras,
       );

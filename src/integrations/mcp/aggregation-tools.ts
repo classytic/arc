@@ -262,7 +262,7 @@ function createAggregationToolHandler(args: CreateHandlerArgs): ToolDefinition["
       `aggregation:${normalized.name}`,
       input,
     );
-    if (permResult && !permResult.granted) {
+    if (permResult && permResult.effect !== "allow") {
       return permissionDeniedResult({
         resource: resourceName,
         operation: `aggregation:${normalized.name}`,
@@ -278,19 +278,16 @@ function createAggregationToolHandler(args: CreateHandlerArgs): ToolDefinition["
     const filterInput = (input.filter as Record<string, unknown> | undefined) ?? {};
     const tenantOptions = buildOptionsFromSession(ctx.session);
 
-    // Permission filters ride along on the tenant options bag — kit
-    // plugins (multi-tenant, audit) read them on the options side.
-    if (permResult?.filters) {
-      // Don't overwrite tenant scope; permission filters narrow further.
-      Object.assign(tenantOptions, { _policyFilters: permResult.filters });
-    }
-
     const result = await executeAggregation(
       normalized,
       { repo, buildOptions: () => tenantOptions },
       {
         query: filterInput,
         tenantOptions,
+        // The decision's row-level policy is conjoined into the aggregation
+        // filter by the shared executor — identical enforcement to the Fastify
+        // route and to CRUD/actions.
+        policyFilter: permResult?.policy,
       },
     );
 

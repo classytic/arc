@@ -325,6 +325,18 @@ export interface ResourceConfig<TDoc = AnyRecord> {
   /** Don't register in introspection */
   skipRegistry?: boolean;
   /**
+   * Fail-closed permission invariant. When `true`, any enabled CRUD WRITE
+   * (create/update/delete) that mounts WITHOUT a permission gate is a FATAL
+   * define-time error — `defineResource()` throws instead of shipping an
+   * unauthenticated write with only a warning. Reads that are ungated stay a
+   * non-fatal `info` hint (public catalogs are legitimate).
+   *
+   * Off by default (public-by-omission still only warns) so existing hosts are
+   * not broken. Opt in per-resource here, or app-wide via the
+   * `ARC_STRICT_PERMISSIONS=true` env — the recommended production posture.
+   */
+  strictPermissions?: boolean;
+  /**
    * Default `limit` value when the request omits `?limit=`. Default 20.
    * Surfaced at the resource level (rather than only via a custom
    * `queryParser`) so hosts can declare it inline next to the resource

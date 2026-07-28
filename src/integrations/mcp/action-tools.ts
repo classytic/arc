@@ -153,7 +153,7 @@ export function createActionToolHandler(
       actionName,
       input,
     );
-    if (permResult && !permResult.granted) {
+    if (permResult && permResult.effect !== "allow") {
       return permissionDeniedResult({
         resource: resourceName,
         operation: `action.${actionName}`,
@@ -169,7 +169,7 @@ export function createActionToolHandler(
       inputWithAction,
       session,
       "action",
-      permResult?.filters,
+      permResult?.policy,
       permResult?.scope,
       contextExtras,
     );

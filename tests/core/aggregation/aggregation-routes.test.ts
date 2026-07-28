@@ -186,7 +186,7 @@ describe("aggregation routes — end-to-end", () => {
     });
   });
 
-  it("bracket-shorthand operators translate to canonical Mongo-shape", async () => {
+  it("bracket-shorthand operators translate to portable Filter IR", async () => {
     // Regression: arc 2.14.x and earlier shallow-merged the qs-parsed
     // nested object `{ createdAt: { gte, lte } }` straight into
     // AggRequest.filter. Mongokit < 3.13.1 then matched it as `$eq` of
@@ -207,21 +207,36 @@ describe("aggregation routes — end-to-end", () => {
         `&priority[in]=high,urgent`,
     });
 
+    // 2.30: arc normalizes the `$`-dialect to the portable repo-core Filter IR
+    // at the repository boundary — the same step the CRUD list path performs —
+    // so MongoKit, SQLiteKit and PGKit all receive one shape. Assert on the IR
+    // NODES; the values are what carry the semantics.
     const calledWith = aggregateStub.mock.calls[0][0];
-    const filter = calledWith.filter as Record<string, unknown>;
-    expect(filter.status).toBe("pending");
-    // Range operators → canonical $gte/$lte with ISO strings coerced to Date
-    const createdAt = filter.createdAt as Record<string, unknown>;
-    expect(createdAt.$gte).toBeInstanceOf(Date);
-    expect(createdAt.$lte).toBeInstanceOf(Date);
-    expect((createdAt.$gte as Date).toISOString()).toBe(from);
-    expect((createdAt.$lte as Date).toISOString()).toBe(to);
-    // Non-range operators preserve their value verbatim under $-prefix
-    const priority = filter.priority as Record<string, unknown>;
-    expect(priority.$in).toBeDefined();
-    // Bare shorthand keys (no `$`) must not leak through
-    expect((createdAt as { gte?: unknown }).gte).toBeUndefined();
-    expect((createdAt as { lte?: unknown }).lte).toBeUndefined();
+    const ir = calledWith.filter as { op: string; children?: unknown[] };
+    expect(ir.op).toBe("and");
+
+    const leaves = (ir.children ?? []) as Array<{
+      op: string;
+      field?: string;
+      value?: unknown;
+      values?: unknown[];
+    }>;
+    const leaf = (op: string, field: string) => leaves.find((l) => l.op === op && l.field === field);
+
+    expect(leaf("eq", "status")?.value).toBe("pending");
+    // Range operators keep their ISO strings coerced to Date — a BSON Date
+    // field never matches a string, so losing this is silent empty results.
+    expect(leaf("gte", "createdAt")?.value).toBeInstanceOf(Date);
+    expect(leaf("lte", "createdAt")?.value).toBeInstanceOf(Date);
+    expect((leaf("gte", "createdAt")?.value as Date).toISOString()).toBe(from);
+    expect((leaf("lte", "createdAt")?.value as Date).toISOString()).toBe(to);
+    // Multi-value operators keep their list.
+    expect(leaf("in", "priority")?.values).toEqual(["high", "urgent"]);
+    // No raw `$`-dialect survives to the kit. (`"gte"` DOES appear — it is the
+    // IR's own op name — so only the `$`-prefixed form is disqualifying.)
+    const serialized = JSON.stringify(calledWith.filter);
+    expect(serialized).not.toContain("$gte");
+    expect(serialized).not.toContain("$in");
   });
 
   it("non-operator nested objects are NOT misinterpreted as shorthand", async () => {

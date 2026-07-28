@@ -2,7 +2,7 @@
  * allOf() scope chaining — regression suite for the custom-auth composition bug.
  *
  * Bug (pre-2.7.1): allOf() evaluated each child against the original
- * PermissionContext. A child returning `{ granted: true, scope: ... }` had its
+ * PermissionContext. A child returning `{ effect: "allow", scope: ... }` had its
  * scope silently dropped, AND the next child still saw the original
  * (typically public) scope. This broke documented patterns like
  *
@@ -11,16 +11,17 @@
  * because requireOrgMembership() couldn't see the service scope installed by
  * requireApiKey().
  *
- * Fix: allOf() now installs each granted child's scope on `request.scope`
- * before invoking the next child, merges filters in real time, returns the
- * accumulated scope on the final result, AND restores the request state on
- * denial so partial runs don't leak side effects.
+ * Fix (arc 2.31, PURE evaluation): allOf() threads each granted child's scope to
+ * the NEXT child through a fresh child context (`scopeOf(ctx)`), never mutating
+ * the request. It returns the accumulated scope + conjoined policy on the final
+ * decision; the enforcement point applies it once. No request mutation → no
+ * rollback needed, and `not(allOf(...))` / parallel evaluation are sound.
  */
 
 import type { FastifyRequest } from "fastify";
 import { describe, expect, it } from "vitest";
-import { allOf, allowPublic } from "../../src/permissions/index.js";
-import type { PermissionCheck, PermissionResult } from "../../src/permissions/types.js";
+import { allOf, allowPublic, scopeOf } from "../../src/permissions/index.js";
+import type { AuthorizationDecision, PermissionCheck } from "../../src/permissions/types.js";
 import { isService, type RequestScope } from "../../src/scope/types.js";
 
 // ============================================================================
@@ -54,9 +55,9 @@ const requireApiKey =
   (): PermissionCheck =>
   async ({ request }) => {
     const key = (request.headers as Record<string, string | undefined>)["x-api-key"];
-    if (key !== "test-key") return { granted: false, reason: "Invalid API key" };
+    if (key !== "test-key") return { effect: "deny", reason: "Invalid API key" };
     return {
-      granted: true,
+      effect: "allow",
       scope: {
         kind: "service",
         clientId: "client-1",
@@ -71,15 +72,15 @@ const requireUserAuth =
   (): PermissionCheck =>
   async ({ request }) => {
     return {
-      granted: true,
+      effect: "allow",
       scope: {
         kind: "member",
         userId: "user-1",
         organizationId: "org-acme",
         orgRoles: ["admin"],
       } as RequestScope,
-      filters: { tenantTag: "alpha" },
-    } as PermissionResult;
+      policy: { tenantTag: "alpha" },
+    } as AuthorizationDecision;
   };
 
 // ============================================================================
@@ -93,35 +94,36 @@ describe("allOf() — scope chaining between children (regression for 2.7.1)", (
     // by allOf() before the next child ran.
     //
     // We use a small inline check that asserts the scope is service-kind with
-    // the expected org id. Pre-fix this returned { granted: false }; post-fix
+    // the expected org id. Pre-fix this returned { effect: "deny" }; post-fix
     // it sees the installed service scope and grants.
     const requireServiceScopeForOrg =
       (orgId: string): PermissionCheck =>
-      async ({ request }) => {
-        const scope = (request as { scope?: RequestScope }).scope;
+      async (ctx) => {
+        // Reads the threaded scope from the CONTEXT (pure) — not the request.
+        const scope = scopeOf(ctx);
         if (!scope || !isService(scope)) {
-          return { granted: false, reason: "Service scope required" };
+          return { effect: "deny", reason: "Service scope required" };
         }
         if (scope.organizationId !== orgId) {
-          return { granted: false, reason: "Wrong org" };
+          return { effect: "deny", reason: "Wrong org" };
         }
-        return { granted: true };
+        return { effect: "allow" };
       };
 
     const check = allOf(requireApiKey(), requireServiceScopeForOrg("org-acme"));
     const ctx = makeCtx();
 
     const result = await check(ctx);
-    expect(result).toMatchObject({ granted: true });
+    expect(result).toMatchObject({ effect: "allow" });
   });
 
   it("returns the merged scope on the final result so outer middleware sees it", async () => {
     const check = allOf(requireApiKey());
     const ctx = makeCtx();
 
-    const result = (await check(ctx)) as PermissionResult;
+    const result = (await check(ctx)) as AuthorizationDecision;
 
-    expect(result.granted).toBe(true);
+    expect(result.effect).toBe("allow");
     expect(result.scope).toMatchObject({
       kind: "service",
       clientId: "client-1",
@@ -131,44 +133,70 @@ describe("allOf() — scope chaining between children (regression for 2.7.1)", (
 
   it("merges filters from sequential children into the final result", async () => {
     const ownsTag: PermissionCheck = async () => ({
-      granted: true,
-      filters: { tag: "alpha" },
+      effect: "allow",
+      policy: { tag: "alpha" },
     });
     const ownsRegion: PermissionCheck = async () => ({
-      granted: true,
-      filters: { region: "us-east" },
+      effect: "allow",
+      policy: { region: "us-east" },
     });
 
     const check = allOf(ownsTag, ownsRegion);
-    const result = (await check(makeCtx())) as PermissionResult;
+    const result = (await check(makeCtx())) as AuthorizationDecision;
 
-    expect(result.granted).toBe(true);
-    expect(result.filters).toEqual({ tag: "alpha", region: "us-east" });
+    expect(result.effect).toBe("allow");
+    expect(result.policy).toEqual({ tag: "alpha", region: "us-east" });
   });
 
-  it("applies filters between children so later children see accumulated _policyFilters", async () => {
-    let observed: Record<string, unknown> | undefined;
+  it("CONJOINS conflicting same-key filters across children (AND, never last-writer-wins)", async () => {
+    // Two branches restrict the SAME key differently. allOf is logical AND, so
+    // BOTH restrictions must survive — a bare overwrite would let the second
+    // branch silently widen past the first. Regression guard for the row-level
+    // security composition fix.
+    const branchA: PermissionCheck = async () => ({
+      effect: "allow",
+      policy: { organizationId: "org-a" },
+    });
+    const branchB: PermissionCheck = async () => ({
+      effect: "allow",
+      policy: { organizationId: "org-b" },
+    });
+
+    const check = allOf(branchA, branchB);
+    const result = (await check(makeCtx())) as AuthorizationDecision;
+
+    expect(result.effect).toBe("allow");
+    expect(result.policy).toEqual({
+      $and: [{ organizationId: "org-a" }, { organizationId: "org-b" }],
+    });
+  });
+
+  it("threads an earlier child's SCOPE to a later child via context (identity chaining)", async () => {
+    // Pure model: identity (scope) threads to later siblings through the context;
+    // row policy is a RESULT concern (composed on the decision), NOT leaked to a
+    // sibling's request. This asserts the identity-chaining contract that real
+    // custom-auth patterns (`allOf(requireApiKey(), requireServiceScope(...))`)
+    // depend on — the second child observes the first child's installed scope.
+    let observedKind: string | undefined;
 
     const first: PermissionCheck = async () => ({
-      granted: true,
-      filters: { region: "us-east" },
+      effect: "allow",
+      scope: { kind: "service", clientId: "c1", organizationId: "o1", scopes: [] } as RequestScope,
     });
-    const second: PermissionCheck = async ({ request }) => {
-      observed = (request as { _policyFilters?: Record<string, unknown> })._policyFilters;
-      return { granted: true };
+    const second: PermissionCheck = async (ctx) => {
+      observedKind = scopeOf(ctx).kind;
+      return { effect: "allow" };
     };
 
-    const check = allOf(first, second);
-    await check(makeCtx());
-
-    expect(observed).toEqual({ region: "us-east" });
+    await allOf(first, second)(makeCtx());
+    expect(observedKind).toBe("service");
   });
 
   it("does NOT downgrade an already-installed authoritative scope (member > service)", async () => {
     // The request already has a member scope (e.g. set by Better Auth).
     // The first allOf() child returns a service scope. allOf() must NOT
     // overwrite the member scope with the service scope (mirrors
-    // applyPermissionResult's "no downgrade" rule).
+    // applyAuthorizationDecision's "no downgrade" rule).
     const ctx = makeCtx({
       scope: {
         kind: "member",
@@ -187,8 +215,8 @@ describe("allOf() — scope chaining between children (regression for 2.7.1)", (
 
   it("on denial: restores request state — no leaked filters or scope from earlier children", async () => {
     const granting: PermissionCheck = async () => ({
-      granted: true,
-      filters: { region: "us-east" },
+      effect: "allow",
+      policy: { region: "us-east" },
       scope: {
         kind: "service",
         clientId: "c1",
@@ -197,7 +225,7 @@ describe("allOf() — scope chaining between children (regression for 2.7.1)", (
       } as RequestScope,
     });
     const denying: PermissionCheck = async () => ({
-      granted: false,
+      effect: "deny",
       reason: "Nope",
     });
 
@@ -205,7 +233,7 @@ describe("allOf() — scope chaining between children (regression for 2.7.1)", (
     const check = allOf(granting, denying);
     const result = await check(ctx);
 
-    expect(result).toMatchObject({ granted: false, reason: "Nope" });
+    expect(result).toMatchObject({ effect: "deny", reason: "Nope" });
 
     // Crucial: even though `granting` ran successfully, the request must be
     // back to its original state — no leaked filters or scope.
@@ -216,8 +244,8 @@ describe("allOf() — scope chaining between children (regression for 2.7.1)", (
 
   it("on thrown error in a child: restores request state", async () => {
     const granting: PermissionCheck = async () => ({
-      granted: true,
-      filters: { tag: "alpha" },
+      effect: "allow",
+      policy: { tag: "alpha" },
       scope: {
         kind: "service",
         clientId: "c1",
@@ -242,12 +270,12 @@ describe("allOf() — scope chaining between children (regression for 2.7.1)", (
   it("preserves the public-scope short-circuit (allowPublic + something) still works", async () => {
     const check = allOf(allowPublic(), allowPublic());
     const result = await check(makeCtx());
-    expect(result).toMatchObject({ granted: true });
+    expect(result).toMatchObject({ effect: "allow" });
   });
 
   it("two service-scope children: first wins (no downgrade between siblings)", async () => {
     const auth1: PermissionCheck = async () => ({
-      granted: true,
+      effect: "allow",
       scope: {
         kind: "service",
         clientId: "c1",
@@ -256,7 +284,7 @@ describe("allOf() — scope chaining between children (regression for 2.7.1)", (
       } as RequestScope,
     });
     const auth2: PermissionCheck = async () => ({
-      granted: true,
+      effect: "allow",
       scope: {
         kind: "service",
         clientId: "c2",
@@ -265,12 +293,12 @@ describe("allOf() — scope chaining between children (regression for 2.7.1)", (
       } as RequestScope,
     });
 
-    const ctx = makeCtx();
-    await allOf(auth1, auth2)(ctx);
+    const result = (await allOf(auth1, auth2)(makeCtx())) as AuthorizationDecision;
 
-    // First scope wins because installed scope (kind=service) is not "public",
-    // so the second child's scope is NOT installed onto the request.
-    const installed = (ctx.request as { scope?: RequestScope }).scope;
+    // First scope wins (non-downgrade): once a non-public scope is installed, a
+    // later sibling's scope does not override it. The composed decision carries
+    // the FIRST child's scope.
+    const installed = result.scope;
     expect(installed?.kind).toBe("service");
     if (installed?.kind === "service") {
       expect(installed.clientId).toBe("c1");

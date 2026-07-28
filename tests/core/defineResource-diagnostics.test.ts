@@ -291,11 +291,11 @@ describe("defineResource — boot-time diagnostics", () => {
       expect(byOmission(resource)).toHaveLength(0);
     });
 
-    it("middleware-only presets do NOT count as gates (ownedByUser sans auth is still public)", () => {
-      // ownedByUser injects ownership MIDDLEWARE, not permission checks —
-      // and the ownership check no-ops for anonymous requests (`if (!user)
-      // return`). Without an auth permission the write routes are still
-      // publicly reachable, so the diagnostic must keep warning.
+    it("ownedByUser injects requireAuth on update/delete — those ops are NOT public-by-omission", () => {
+      // ownedByUser now contributes a `requireAuth()` permission (secure
+      // default) for the mutating ops, so authorization is in the permission
+      // model, not middleware-only. update/delete are gated; only the still-
+      // ungated `create` write triggers the diagnostic.
       const resource = defineResource({
         name: "owned",
         adapter: noopAdapter(),
@@ -304,6 +304,76 @@ describe("defineResource — boot-time diagnostics", () => {
       const diags = byOmission(resource);
       expect(diags).toHaveLength(1);
       expect(diags[0]?.severity).toBe("warn");
+      // update/delete are gated by the injected requireAuth; the warning is
+      // about `create` (+ ungated reads), NOT update/delete.
+      expect(diags[0]?.message).toContain("create");
+      expect(diags[0]?.message).not.toMatch(/update, delete/);
+    });
+
+    it("a host's own update/delete permission overrides the preset's injected default (host wins)", () => {
+      const resource = defineResource({
+        name: "owned-strict",
+        adapter: noopAdapter(),
+        presets: ["ownedByUser"],
+        permissions: { create: allowPublic(), update: allowPublic(), delete: allowPublic() },
+      });
+      // Every write explicitly gated (host declarations win) → only reads ungated → info.
+      const diags = byOmission(resource);
+      expect(diags[0]?.severity).toBe("info");
+    });
+
+    describe("strictPermissions (fail-closed CRUD)", () => {
+      it("THROWS at define-time when an ungated WRITE mounts under strictPermissions", () => {
+        expect(() =>
+          defineResource({
+            name: "strict-wideopen",
+            adapter: noopAdapter(),
+            strictPermissions: true,
+          }),
+        ).toThrow(/create, update, delete|no permission gate/);
+      });
+
+      it("does NOT throw when every write is gated under strictPermissions", () => {
+        expect(() =>
+          defineResource({
+            name: "strict-gated",
+            adapter: noopAdapter(),
+            strictPermissions: true,
+            permissions: fullyGated(),
+          }),
+        ).not.toThrow();
+      });
+
+      it("ungated READS stay non-fatal (info) even under strictPermissions", () => {
+        // Public catalogs are legitimate — strict mode only fails ungated writes.
+        const resource = defineResource({
+          name: "strict-catalog",
+          adapter: noopAdapter(),
+          strictPermissions: true,
+          permissions: { create: allowPublic(), update: allowPublic(), delete: allowPublic() },
+        });
+        const diags = byOmission(resource);
+        expect(diags[0]?.severity).toBe("info");
+      });
+
+      it("honors the ARC_STRICT_PERMISSIONS env as the app-wide switch", () => {
+        const prev = process.env.ARC_STRICT_PERMISSIONS;
+        process.env.ARC_STRICT_PERMISSIONS = "true";
+        try {
+          expect(() =>
+            defineResource({ name: "env-strict-wideopen", adapter: noopAdapter() }),
+          ).toThrow(/no permission gate|create, update, delete/);
+        } finally {
+          if (prev === undefined) delete process.env.ARC_STRICT_PERMISSIONS;
+          else process.env.ARC_STRICT_PERMISSIONS = prev;
+        }
+      });
+
+      it("default (no strict) still only WARNS — existing hosts are not broken", () => {
+        expect(() =>
+          defineResource({ name: "lax-wideopen", adapter: noopAdapter() }),
+        ).not.toThrow();
+      });
     });
   });
 

@@ -68,9 +68,6 @@ export interface StateMachine {
     metadata?: Record<string, unknown>,
   ): void;
 
-  /**
-   * Clear history
-   */
   clearHistory?(): void;
 
   /**

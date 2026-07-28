@@ -65,13 +65,13 @@ describe("requireGrant — resolution contract", () => {
       mode: "read",
       resolve: () => ({ mode: "write" }),
     })(ctx());
-    expect(granted).toEqual({ granted: true });
+    expect(granted).toEqual({ effect: "allow" });
 
     const denied = await requireGrant({
       mode: "write",
       resolve: () => ({ mode: "read", reason: "read-only share" }),
     })(ctx());
-    expect(denied).toEqual({ granted: false, reason: "read-only share" });
+    expect(denied).toEqual({ effect: "deny", reason: "read-only share" });
   });
 
   it("filters ride along when the mode gate passes", async () => {
@@ -79,7 +79,7 @@ describe("requireGrant — resolution contract", () => {
       mode: "list",
       resolve: () => ({ mode: "read", filters: { orgId: "o1" } }),
     })(ctx({ action: "list" }));
-    expect(result).toEqual({ granted: true, filters: { orgId: "o1" } });
+    expect(result).toEqual({ effect: "allow", policy: { orgId: "o1" } });
   });
 
   it("filters-only resolution grants with the filters (list-shaped)", async () => {
@@ -87,12 +87,12 @@ describe("requireGrant — resolution contract", () => {
     const result = await requireGrant({ mode: "list", resolve: () => ({ filters }) })(
       ctx({ action: "list" }),
     );
-    expect(result).toEqual({ granted: true, filters });
+    expect(result).toEqual({ effect: "allow", policy: filters });
   });
 
   it("empty resolution denies (fail-closed)", async () => {
     const result = await requireGrant({ mode: "read", resolve: () => ({}) })(ctx());
-    expect(result).toEqual({ granted: false });
+    expect(result).toEqual({ effect: "deny" });
   });
 
   it("resolver throw denies with a generic reason (fail-closed, logged)", async () => {
@@ -102,7 +102,7 @@ describe("requireGrant — resolution contract", () => {
         throw new Error("grants table on fire: mongodb://admin:secret@internal");
       },
     })(ctx());
-    expect(result).toEqual({ granted: false, reason: "Grant lookup failed" });
+    expect(result).toEqual({ effect: "deny", reason: "Grant lookup failed" });
   });
 
   it("bypassRoles skip the resolver entirely", async () => {
@@ -130,7 +130,7 @@ describe("requireGrant — resolution contract", () => {
         return { mode: "read" };
       },
     });
-    expect(await check(ctx({ user: null }))).toEqual({ granted: true });
+    expect(await check(ctx({ user: null }))).toEqual({ effect: "allow" });
     expect(seen).toEqual(["anon"]);
   });
 });

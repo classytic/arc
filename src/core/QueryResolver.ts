@@ -10,6 +10,7 @@
 
 import { DEFAULT_LIMIT, DEFAULT_SORT, DEFAULT_TENANT_FIELD } from "../constants.js";
 import { arcLog } from "../logger/index.js";
+import { conjoinPolicyFilters } from "../permissions/filter-merge.js";
 import { getOrgId as getOrgIdFromScope } from "../scope/types.js";
 import type {
   AnyRecord,
@@ -23,6 +24,7 @@ import type {
 } from "../types/index.js";
 import { ArcQueryParser } from "../utils/queryParser.js";
 import { collectReadBlockedFields } from "./fieldRulePredicates.js";
+import { toRepositoryFilter } from "./repositoryFilter.js";
 
 // ============================================================================
 // Configuration
@@ -141,23 +143,35 @@ export class QueryResolver {
     // Sanitize blocked fields regardless of format
     const rawSelect = parsed.select ?? (req.query?.select as string | undefined);
 
-    // Build filters with org + policy scope applied
-    const filters = { ...(parsed.filters as AnyRecord) };
-
-    // Policy filters (set by permission middleware via req.metadata._policyFilters)
+    // Build filters with policy + tenant scope applied. Both `parsed.filters`
+    // (parser output) and `_policyFilters` (permission layer) are records in the
+    // Mongo operator dialect — never repo-core IR (that appears only after the
+    // `toRepositoryFilter` step below). So we compose them with
+    // `conjoinPolicyFilters` (logical AND) rather than `Object.assign`: a
+    // security restriction can never be silently overwritten by a same-key
+    // user-supplied filter, and vice-versa. Records only in, IR out.
     const policyFilters = arcContext?._policyFilters;
-    if (policyFilters) {
-      Object.assign(filters, policyFilters);
-    }
+    let filters: AnyRecord = conjoinPolicyFilters(
+      parsed.filters as AnyRecord | undefined,
+      policyFilters,
+    );
 
-    // Org/tenant scope -- derived from request.scope via metadata
-    // Skip for platform-universal resources (tenantField: false)
+    // Org/tenant scope -- derived from request.scope via metadata.
+    // Skip for platform-universal resources (tenantField: false).
     const scope = arcContext?._scope;
     const orgId = scope ? getOrgIdFromScope(scope) : undefined;
     if (this.tenantField && orgId && !policyFilters?.[this.tenantField]) {
-      // Only set if not already set by multiTenant preset
-      filters[this.tenantField] = orgId;
+      // Only set if not already set by multiTenant preset — conjoined, so it
+      // can't clobber (or be clobbered by) an existing constraint on the key.
+      filters = conjoinPolicyFilters(filters, { [this.tenantField]: orgId });
     }
+
+    // Normalize `$`-operator policy/query filters (`$or` from requireGrant,
+    // `$and` from conjoinPolicyFilters, `$gte` from the Mongo-dialect parser)
+    // to the portable repo-core Filter IR so every kit's query path compiles
+    // them. Flat equality filters pass through unchanged. See
+    // {@link toRepositoryFilter}.
+    const portableFilters = toRepositoryFilter(filters);
 
     return {
       page,
@@ -169,7 +183,7 @@ export class QueryResolver {
       populateOptions: this.sanitizePopulateOptions(parsed.populateOptions, this.schemaOptions),
       // Lookup/join options from MongoKit 3.4+ QueryParser (maps to $lookup / SQL JOIN)
       lookups: this.sanitizeLookups(parsed.lookups, this.schemaOptions),
-      filters,
+      filters: portableFilters,
       // MongoKit features
       search: parsed.search,
       after: parsed.after,

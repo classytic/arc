@@ -63,9 +63,9 @@ export interface McpContextExtras {
  * | delete    | { id }     | {}                   | undefined           |
  *
  * **scopeOverride** — when a permission check (e.g. `requireApiKey()`) returns
- * `PermissionResult.scope`, the MCP tool handler must install it on the request
- * context the same way CRUD/action routes do. This parameter follows the exact
- * same non-downgrade rule as `applyPermissionResult`: it overrides only when
+ * an `AuthorizationDecision.scope`, the MCP tool handler must install it on the
+ * request context the same way CRUD/action routes do. This parameter follows the exact
+ * same non-downgrade rule as `applyAuthorizationDecision`: it overrides only when
  * the session-derived scope is `public` (i.e. MCP called with `auth: false`).
  * An authenticated session scope is never overwritten.
  */
@@ -79,7 +79,7 @@ export function buildRequestContext(
 ): IRequestContext {
   const sessionScope = buildScope(auth);
   // Honor scopeOverride only when session is still public (same rule as
-  // applyPermissionResult). This prevents a permission check from downgrading
+  // applyAuthorizationDecision). This prevents a permission check from downgrading
   // an authenticated Better-Auth session to a narrower service scope.
   const scope: RequestScope =
     scopeOverride && sessionScope.kind === "public" ? scopeOverride : sessionScope;

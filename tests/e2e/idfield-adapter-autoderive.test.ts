@@ -75,11 +75,11 @@ describe("BaseController — idField auto-derive from adapter.repository", () =>
       // NOTE: intentionally NOT setting idField here. The PR asserts that
       // auto-derive from repository.idField should populate this.
       permissions: {
-        list: () => ({ granted: true }),
-        get: () => ({ granted: true }),
-        create: () => ({ granted: true }),
-        update: () => ({ granted: true }),
-        delete: () => ({ granted: true }),
+        list: () => ({ effect: "allow" }),
+        get: () => ({ effect: "allow" }),
+        create: () => ({ effect: "allow" }),
+        update: () => ({ effect: "allow" }),
+        delete: () => ({ effect: "allow" }),
       },
     });
 
@@ -236,13 +236,13 @@ describe("fetchWithAccessControl — permission-filter asymmetry is the real 404
           adapter,
           permissions: {
             // Read = wide open. Same as the PR reporter's `allowPublic()`.
-            list: () => ({ granted: true }),
-            get: () => ({ granted: true }),
+            list: () => ({ effect: "allow" }),
+            get: () => ({ effect: "allow" }),
             // Write = granted, BUT injects a filter that excludes docs with
             // projectId set. Mimics the reporter's `requireApiKeyNoProject()`.
-            create: () => ({ granted: true }),
-            update: () => ({ granted: true, filters: { projectId: null } }),
-            delete: () => ({ granted: true, filters: { projectId: null } }),
+            create: () => ({ effect: "allow" }),
+            update: () => ({ effect: "allow", policy: { projectId: null } }),
+            delete: () => ({ effect: "allow", policy: { projectId: null } }),
           },
         }),
       ],

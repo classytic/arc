@@ -142,14 +142,22 @@ const WRITE_OPERATIONS = new Set<string>(["create", "update", "delete"]);
  * wiring, ...) count as gates and don't false-positive.
  *
  * Severity ladder:
- *   - `warn` when any enabled WRITE op (create/update/delete) is ungated —
- *     this is real exposure the host must acknowledge.
+ *   - `error` when any enabled WRITE op is ungated AND `strict` is on — the
+ *     resource fails boot (`defineResource()` throws). This is the fail-closed
+ *     production invariant: an unauthenticated write must never ship silently.
+ *   - `warn` (default) when any enabled WRITE op (create/update/delete) is
+ *     ungated — real exposure the host must acknowledge, but non-fatal so
+ *     existing hosts are not broken.
  *   - `info` when only reads are ungated — public catalogs
  *     (`referenceData: true`) are a legitimate shape, but the host should
  *     still state intent with `permissions.fullPublic()` / `allowPublic()`.
+ *
+ * `strict` is opt-in (resource `strictPermissions: true` or the
+ * `ARC_STRICT_PERMISSIONS` env), so the default behavior is unchanged.
  */
 export function collectUngatedCrudDiagnostics<TDoc>(
   config: InternalResourceConfig<TDoc>,
+  strict = false,
 ): ResourceDiagnostic[] {
   if (config.disableDefaultRoutes) return [];
   const disabled = new Set(config.disabledRoutes ?? []);
@@ -160,13 +168,20 @@ export function collectUngatedCrudDiagnostics<TDoc>(
   if (ungated.length === 0) return [];
 
   const hasUngatedWrite = ungated.some((op) => WRITE_OPERATIONS.has(op));
+  const severity: ResourceDiagnostic["severity"] = hasUngatedWrite
+    ? strict
+      ? "error"
+      : "warn"
+    : "info";
   return [
     {
-      severity: hasUngatedWrite ? "warn" : "info",
+      severity,
       code: "crud-public-by-omission",
       message:
         `[Arc] Resource '${config.name}' mounts ${ungated.length} CRUD route(s) with no permission gate: ${ungated.join(", ")}.\n` +
-        `An omitted permission mounts the route WITHOUT auth. State intent explicitly:\n` +
+        (severity === "error"
+          ? "strictPermissions is on and an ungated WRITE is fatal. State intent explicitly:\n"
+          : "An omitted permission mounts the route WITHOUT auth. State intent explicitly:\n") +
         `  permissions: permissions.fullPublic()     // intentionally public\n` +
         `  permissions: permissions.authenticated()  // require auth on every op\n` +
         `  permissions: { ${ungated[0]}: requireAuth(), ... }  // per-operation`,

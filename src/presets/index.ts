@@ -304,6 +304,19 @@ function mergePreset<TDoc = AnyRecord>(
     }
   }
 
+  // Merge preset-injected permissions as SECURE DEFAULTS — fill only the ops the
+  // host did NOT explicitly gate (host permission always wins). This lets a
+  // preset put authorization in the permission/introspection model (required
+  // auth at onRequest, MCP parity) rather than relying on middleware alone. See
+  // PresetResult.permissions.
+  if (preset.permissions) {
+    const merged = { ...result.permissions } as Record<string, unknown>;
+    for (const [op, check] of Object.entries(preset.permissions)) {
+      if (merged[op] === undefined && check !== undefined) merged[op] = check;
+    }
+    result.permissions = merged as ResourceConfig<TDoc>["permissions"];
+  }
+
   // Merge schema options (deep-merge fieldRules so presets accumulate rules)
   if (preset.schemaOptions) {
     result.schemaOptions = {

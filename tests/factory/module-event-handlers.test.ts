@@ -184,3 +184,132 @@ describe("defineModule — eventHandlers", () => {
     await app.close();
   });
 });
+
+/**
+ * `boundary` — the opt-in error containment on a handler declaration.
+ *
+ * Without it a throw must REACH the transport: that is what leaves a Redis
+ * Streams message unacked so it redelivers and eventually DLQs. With it, the
+ * failure is logged and swallowed — the fire-and-forget case (projections,
+ * notification fan-out) that would otherwise push a module author back to an
+ * imperative `subscribeWithBoundary` in `afterResources`, losing arc's
+ * teardown-before-onClose guarantee.
+ *
+ * These assert at the SUBSCRIPTION seam (the handler arc hands the transport),
+ * not through `app.events.publish` — publishing is fire-and-forget (`failOpen`)
+ * and the built-in transports catch handler errors themselves, so neither can
+ * show whether the throw would have escaped to a transport that doesn't.
+ */
+describe("defineModule — eventHandlers boundary", () => {
+  /** Boot one module with `def`, returning the handler arc actually subscribed. */
+  async function subscribedHandler(def: Record<string, unknown>) {
+    const captured: Array<(e: unknown) => Promise<void>> = [];
+    const app = await createApp({
+      auth: false,
+      logger: false,
+      stores: {
+        events: {
+          name: "capture",
+          publish: async () => {},
+          subscribe: async (_p: string, h: (e: unknown) => Promise<void>) => {
+            captured.push(h);
+            return () => {};
+          },
+        } as never,
+      },
+      modules: [defineModule({ name: "search", eventHandlers: [def as never] })],
+    });
+    await app.ready();
+    expect(captured).toHaveLength(1);
+    return { app, handler: captured[0] as (e: unknown) => Promise<void> };
+  }
+
+  const EVENT = { type: "product:created", payload: {}, meta: { id: "evt-1" } };
+
+  const throwing = async () => {
+    throw new Error("reindex failed");
+  };
+
+  it("without `boundary`, a handler throw reaches the transport (durable retry stays intact)", async () => {
+    const { app, handler } = await subscribedHandler({
+      name: "search.raw",
+      event: "product:created",
+      handler: throwing,
+    });
+
+    await expect(handler(EVENT)).rejects.toThrow("reindex failed");
+    await app.close();
+  });
+
+  it("`boundary: true` contains the throw and logs it through fastify.log", async () => {
+    const { app, handler } = await subscribedHandler({
+      name: "search.reindex",
+      event: "product:created",
+      handler: throwing,
+      boundary: true,
+    });
+    // `logger: false` gives a no-op logger; patch the sink the boundary uses.
+    const error = vi.fn();
+    (app.log as unknown as { error: unknown }).error = error;
+
+    await expect(handler(EVENT)).resolves.toBeUndefined();
+    expect(error).toHaveBeenCalledOnce();
+    // The declaration's `name` labels the log line — not "anonymous".
+    expect(String(error.mock.calls[0]?.[0])).toContain("search.reindex");
+    await app.close();
+  });
+
+  it("`boundary: { onError }` routes failures to the sink instead of the log", async () => {
+    const onError = vi.fn();
+    const { app, handler } = await subscribedHandler({
+      event: "product:created",
+      handler: throwing,
+      boundary: { onError },
+    });
+
+    await expect(handler(EVENT)).resolves.toBeUndefined();
+    expect(onError).toHaveBeenCalledOnce();
+    const [err, event] = onError.mock.calls[0] as [Error, { type: string }];
+    expect(err.message).toBe("reindex failed");
+    expect(event.type).toBe("product:created");
+    await app.close();
+  });
+
+  it("labels an UNNAMED bounded handler `<module>.<pattern>`, never 'anonymous'", async () => {
+    const { app, handler } = await subscribedHandler({
+      event: "product:created",
+      handler: throwing,
+      boundary: true,
+    });
+    const error = vi.fn();
+    (app.log as unknown as { error: unknown }).error = error;
+
+    await handler(EVENT);
+    expect(String(error.mock.calls[0]?.[0])).toContain("search.product:created");
+    await app.close();
+  });
+
+  it("a bounded handler still receives events normally when it does not throw", async () => {
+    const seen: string[] = [];
+    const app = await createApp({
+      auth: false,
+      logger: false,
+      modules: [
+        defineModule({
+          name: "search",
+          eventHandlers: [
+            {
+              event: "product:created",
+              handler: async (e) => seen.push((e as { type: string }).type),
+              boundary: true,
+            },
+          ],
+        }),
+      ],
+    });
+    await app.ready();
+    await app.events.publish("product:created", {});
+    expect(seen).toEqual(["product:created"]);
+    await app.close();
+  });
+});

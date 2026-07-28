@@ -13,7 +13,10 @@
 import { randomUUID } from "node:crypto";
 import type { CacheLogger, CacheStore } from "../cache/interface.js";
 import { MemoryCacheStore } from "../cache/memory.js";
-import { getRequestScope as getScope, isElevated, isMember } from "../scope/types.js";
+import { arcLog } from "../logger/index.js";
+import { isElevated, isMember } from "../scope/types.js";
+import { scopeOf } from "./context.js";
+import { deny } from "./core.js";
 import { requireOrgMembership, requireOrgRole, requireTeamMembership } from "./scope.js";
 import type { PermissionCheck, PermissionContext } from "./types.js";
 
@@ -146,14 +149,14 @@ export function createOrgPermissions(config: {
     can(permissions: Record<string, string[]>): PermissionCheck {
       return (ctx) => {
         if (!ctx.user) {
-          return { granted: false, reason: "Authentication required" };
+          return deny("Authentication required");
         }
 
-        const scope = getScope(ctx.request);
+        const scope = scopeOf(ctx);
         if (isElevated(scope)) return true;
 
         if (!isMember(scope)) {
-          return { granted: false, reason: "Organization membership required" };
+          return deny("Organization membership required");
         }
 
         if (hasPermissions(scope.orgRoles, permissions)) {
@@ -163,10 +166,7 @@ export function createOrgPermissions(config: {
         const needed = Object.entries(permissions)
           .map(([r, a]) => `${r}:[${a.join(",")}]`)
           .join(", ");
-        return {
-          granted: false,
-          reason: `Missing permissions: ${needed}`,
-        };
+        return deny(`Missing permissions: ${needed}`);
       };
     },
 
@@ -199,7 +199,9 @@ export function createOrgPermissions(config: {
 export function createDynamicPermissionMatrix(
   config: DynamicPermissionMatrixConfig,
 ): DynamicPermissionMatrix {
-  const logger = config.logger ?? console;
+  // Injected logger wins; otherwise arc's namespaced logger (host-controlled,
+  // silenceable) — never the global `console`, which bypasses arc's log config.
+  const logger = config.logger ?? arcLog("permissions:dynamic");
   const configuredTtlSeconds = config.cache?.ttlSeconds ?? 0;
   const hasExternalStore = !!config.cacheStore;
   const cacheTtlSeconds =
@@ -329,19 +331,19 @@ export function createDynamicPermissionMatrix(
   function can(required: Record<string, readonly string[]>): PermissionCheck {
     return async (ctx) => {
       if (!ctx.user) {
-        return { granted: false, reason: "Authentication required" };
+        return deny("Authentication required");
       }
 
-      const scope = getScope(ctx.request);
+      const scope = scopeOf(ctx);
       if (isElevated(scope)) return true;
 
       if (!isMember(scope)) {
-        return { granted: false, reason: "Organization membership required" };
+        return deny("Organization membership required");
       }
 
       const orgRoles = scope.orgRoles;
       if (orgRoles.length === 0) {
-        return { granted: false, reason: "Not a member of this organization" };
+        return deny("Not a member of this organization");
       }
 
       let matrix: Record<string, Record<string, readonly string[]>>;
@@ -349,20 +351,14 @@ export function createDynamicPermissionMatrix(
         matrix = await resolveMatrix(ctx, scope.organizationId, orgRoles);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return {
-          granted: false,
-          reason: `Permission matrix resolution failed: ${message}`,
-        };
+        return deny(`Permission matrix resolution failed: ${message}`);
       }
 
       for (const [resource, actions] of Object.entries(required)) {
         for (const action of actions) {
           const granted = orgRoles.some((role) => roleAllows(matrix, role, resource, action));
           if (!granted) {
-            return {
-              granted: false,
-              reason: `Missing permission: ${resource}:${action}`,
-            };
+            return deny(`Missing permission: ${resource}:${action}`);
           }
         }
       }

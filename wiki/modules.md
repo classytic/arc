@@ -18,8 +18,13 @@ interface ArcModule {
   plugins?(fastify): void | Promise<void>;         // infra registration (before bootstrap)
   bootstrap?(fastify): TExports | Promise<TExports>; // engine/singleton init; return = public export
   resources?: ResourceLike[] | ((fastify) => ResourceLike[] | Promise<...>);
-  afterResources?(fastify): void | Promise<void>; // event subscriptions, cross-wiring
+  afterResources?(fastify): void | Promise<void>; // cross-wiring arc has no arm for
   onClose?(fastify): void | Promise<void>;        // teardown (engine.destroy, timers)
+  errorMappers?: readonly ErrorMapper[];           // 2.21 — see below
+  healthChecks?: readonly HealthCheck[];           // 2.24 self-describing arms
+  eventHandlers?: Contribution<EventHandlerDefinition>;  //  ↑ prefer over afterResources
+  workflows?: Contribution<unknown>;               //  ↑ opaque; streamline gives it meaning
+  scheduledJobs?: Contribution<ScheduleDefinition>;//  ↑
 }
 
 type ArcModuleInput = ArcModule | Promise<ArcModule> | (() => ArcModule | Promise<ArcModule>);
@@ -84,7 +89,7 @@ export function createAccountingModule(deps: AccountingModuleDeps): ArcModule {
     },
     resources: () =>
       buildAccountingResources({ engine, permissions: deps.permissions }),
-    afterResources: (f) => wireAccountingEvents(engine, deps.eventTransport),
+    eventHandlers: () => accountingEventHandlers(engine), // NOT afterResources
     onClose: () => engine.destroy(),
   });
 }
@@ -135,6 +140,37 @@ app's error handler at boot, AFTER host-declared mappers (host keeps
 priority). Composing a module is now sufficient for its domain errors to
 cross the wire as mapped contracts; the composition root no longer lists
 every domain package's error classes.
+
+### Self-describing arms (2.24) — `healthChecks` · `eventHandlers` · `workflows` · `scheduledJobs`
+
+Four additive declarations that keep the composition root thin. Arc collects
+them across the graph in `dependsOn` order, fails boot on a duplicate name
+(attributing both owners), and merges into the single health / schedule tables.
+Each is an array OR a factory `(fastify) => …` resolved AFTER bootstraps, so it
+can close over a booted engine instead of a global getter.
+
+```ts
+defineModule({ name: "search",
+  healthChecks:  [{ name: "search.index", check: () => index.isReady() }],
+  eventHandlers: [{ name: "search.reindex", event: "product:*", handler: reindex, boundary: true }],
+  scheduledJobs: [{ name: "search.compact", every: 3_600_000, handler: compact }],
+})
+```
+
+**Why `eventHandlers` beats subscribing in `afterResources`:** arc retains every
+unsubscribe and runs them at shutdown BEFORE any module `onClose`, while the
+engines those handlers dispatch into are still alive. A module's own `onClose`
+cannot promise that — it races the modules it depends on.
+
+**`boundary` (2.29)** wraps the handler in `wrapWithBoundary`: the throw is
+logged through `fastify.log` (`{ err, event, eventId, handler }`) and swallowed,
+and an unnamed handler is labelled `<module>.<pattern>`, never `anonymous`.
+**Off by default** — a throw reaching the transport is what leaves a Redis
+Streams message unacked so it redelivers and DLQs; swallowing by default would
+downgrade every module handler to best-effort. Opt in for fire-and-forget work
+(projections, cache invalidation, notification fan-out) where a failure must not
+block the ack. `{ onError }` swaps the log for a metrics/alert sink, inside the
+boundary — a throwing `onError` is itself caught.
 
 ## Dynamic modules (the next/dynamic idea, backend-shaped)
 

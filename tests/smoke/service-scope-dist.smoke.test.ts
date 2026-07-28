@@ -77,20 +77,20 @@ describe("service scope + PermissionResult.scope — built dist smoke test", () 
     const pub = allowPublic();
     expect(typeof pub).toBe("function");
 
-    // Build a permission result manually — test the shape the framework expects
-    const permissionResult = {
-      granted: true,
+    // Build an AuthorizationDecision manually — the shape the framework expects.
+    const decision = {
+      effect: "allow" as const,
       scope: {
         kind: "service" as const,
         clientId: "client-x",
         organizationId: "org-x",
       },
-      filters: { projectId: "proj-1" },
+      policy: { projectId: "proj-1" },
     };
 
-    expect(permissionResult.granted).toBe(true);
-    expect(permissionResult.scope?.kind).toBe("service");
-    expect(permissionResult.filters?.projectId).toBe("proj-1");
+    expect(decision.effect).toBe("allow");
+    expect(decision.scope?.kind).toBe("service");
+    expect(decision.policy?.projectId).toBe("proj-1");
   });
 
   it("scope helpers are accessible via the @classytic/arc/scope subpath (not root)", async () => {

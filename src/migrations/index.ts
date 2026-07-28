@@ -534,9 +534,6 @@ export class MigrationRunner {
     return this.store.getApplied();
   }
 
-  /**
-   * Get pending migrations
-   */
   async getPendingMigrations(migrations: Migration[]): Promise<Migration[]> {
     const applied = await this.store.getApplied();
     const appliedVersions = new Set(applied.map((m) => `${m.resource}:${m.version}`));

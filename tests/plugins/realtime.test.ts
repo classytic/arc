@@ -491,7 +491,7 @@ describe("Realtime Plugin", () => {
         name: "grantdoc",
         adapter: stubAdapter() as never,
         permissions: {
-          list: () => ({ granted: true, filters: { $or: [{ ownerId: "u1" }] } }),
+          list: () => ({ effect: "allow", policy: { $or: [{ ownerId: "u1" }] } }),
         },
       }),
     ]);
@@ -515,7 +515,7 @@ describe("Realtime Plugin", () => {
         name: "grantdoc",
         adapter: stubAdapter({ matchesFilter }) as never,
         permissions: {
-          list: () => ({ granted: true, filters: { $or: [{ ownerId: "u1" }] } }),
+          list: () => ({ effect: "allow", policy: { $or: [{ ownerId: "u1" }] } }),
           create: allowPublic(),
         },
       }),
@@ -587,7 +587,7 @@ describe("Realtime Plugin", () => {
       defineResource({
         name: "secret",
         adapter: stubAdapter() as never,
-        permissions: { list: () => ({ granted: false, reason: "nope" }) },
+        permissions: { list: () => ({ effect: "deny", reason: "nope" }) },
       }),
     ]);
 

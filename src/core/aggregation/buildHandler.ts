@@ -20,7 +20,9 @@
 import type { ErrorContract } from "@classytic/repo-core/errors";
 import type { AggRequest, AggResult } from "@classytic/repo-core/repository";
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { conjoinPolicyFilters } from "../../permissions/filter-merge.js";
 import type { AnyRecord } from "../../types/index.js";
+import { toRepositoryFilter } from "../repositoryFilter.js";
 import {
   adapterSupportsAggregate,
   compileAggRequest,
@@ -62,6 +64,16 @@ export interface AggregationExecuteContext {
    * builds an equivalent from the session's request context.
    */
   tenantOptions: AnyRecord;
+  /**
+   * Row-level data policy from the resolved `AuthorizationDecision`
+   * (`decision.policy` → `request._policyFilters`). Conjoined into the
+   * aggregation filter so a permission that restricts CRUD reads
+   * (ownership, per-record grants, org scoping) restricts aggregation
+   * queries IDENTICALLY — the same enforcement on every surface. Both the
+   * Fastify wrapper and the MCP tool supply it; kits compile it into the
+   * `$match` alongside tenant scope.
+   */
+  policyFilter?: Record<string, unknown>;
 }
 
 /**
@@ -103,7 +115,7 @@ export async function executeAggregation(
   const { repo } = deps;
   const config = normalized.base;
   const aggregationName = normalized.name;
-  const { query, tenantOptions } = ctx;
+  const { query, tenantOptions, policyFilter } = ctx;
 
   // ── Safety guards ────────────────────────────────────────────────
   const guardError = checkRequestGuards(query, config);
@@ -112,7 +124,11 @@ export async function executeAggregation(
   }
 
   // ── Compile runtime AggRequest ───────────────────────────────────
-  const callerFilter = extractCallerFilter(query);
+  // Conjoin the permission's row-level data policy with the caller filter
+  // (AND semantics — a permission restriction is never widened by a URL
+  // filter). This is the SAME row-policy application CRUD list performs via
+  // QueryResolver; folding it here makes aggregation enforcement identical.
+  const callerFilter = conjoinPolicyFilters(extractCallerFilter(query), policyFilter);
   // Pass the raw query through so `compileAggRequest` can read
   // `?limit=N` when the aggregation declares URL-driven limits via
   // `defaultLimit` / `maxLimit`. When neither is declared, the query
@@ -168,12 +184,29 @@ export async function executeAggregation(
   // for backwards compatibility with kits whose `aggregate()` is
   // still single-arg — kits with the two-arg signature get scope on
   // both channels and the merge is idempotent.
+  // Normalize the `$`-operator dialect to the portable Filter IR at the
+  // REPOSITORY boundary — the same step `QueryResolver` performs for list, so
+  // both surfaces hand the kit an identical filter. Without it, a policy
+  // carrying operators (`$or` from `requireGrant`, `$and` from a conjoined
+  // conflict) reached SQLiteKit / PGKit as a raw record whose `$and` reads as a
+  // literal column name, while list — already normalized — worked. Flat
+  // equality passes through unchanged, so the common case is untouched.
+  //
+  // Deliberately here and not before the `materialized` hook above: that hook is
+  // a HOST callback, not a repository, and its `filter` is arc's documented
+  // Mongo-record dialect. Normalizing earlier would silently change that
+  // contract.
+  const aggReqForRepo: AggRequest =
+    aggReq.filter && typeof aggReq.filter === "object"
+      ? { ...aggReq, filter: toRepositoryFilter(aggReq.filter as AnyRecord) }
+      : aggReq;
+
   let result: AggResult<AnyRecord>;
   try {
     const repoLike = repo as {
       aggregate: (req: AggRequest, options?: AnyRecord) => Promise<AggResult<AnyRecord>>;
     };
-    result = await repoLike.aggregate(aggReq, tenantOptions);
+    result = await repoLike.aggregate(aggReqForRepo, tenantOptions);
   } catch (err) {
     return mapAggregateError(err, aggregationName);
   }
@@ -229,8 +262,16 @@ export function buildAggregationHandler(
   return async (request: FastifyRequest, reply: FastifyReply): Promise<unknown> => {
     const query = (request.query ?? {}) as Record<string, unknown>;
     const tenantOptions = buildOptions(request);
+    // Row-level policy installed on the request by the permission middleware
+    // (`applyAuthorizationDecision` → `request._policyFilters`). Threaded into the
+    // executor so aggregation enforcement matches CRUD/actions.
+    const policyFilter = (request as { _policyFilters?: Record<string, unknown> })._policyFilters;
 
-    const result = await executeAggregation(normalized, deps, { query, tenantOptions });
+    const result = await executeAggregation(normalized, deps, {
+      query,
+      tenantOptions,
+      policyFilter,
+    });
 
     reply.status(result.status);
     if (result.headers) {
@@ -364,6 +405,26 @@ const OPERATOR_SHORTHAND: Record<string, string> = {
 };
 
 const SHORTHAND_RANGE_OPS = new Set(["gt", "gte", "lt", "lte"]);
+/**
+ * Operators whose operand MUST be a list. A URL carries `priority[in]=high,urgent`
+ * as ONE string, and `$in` against a non-array is invalid — MongoDB rejects it,
+ * and the portable Filter IR would spread the string into characters. Split it
+ * the same way `ArcQueryParser` does for the CRUD list route, which is the
+ * contract this expansion claims to match.
+ */
+const SHORTHAND_LIST_OPS = new Set(["in", "nin"]);
+
+/** Normalize a list-operator operand to an array (URL string → split on commas). */
+function toOperandList(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((v) => v.trim())
+      .filter((v) => v.length > 0);
+  }
+  return [value];
+}
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
 
 function tryCoerceDate(v: unknown): unknown {
@@ -391,7 +452,9 @@ function expandShorthandOperators(value: unknown): unknown {
   for (const [op, opVal] of Object.entries(nested)) {
     const mongoOp = OPERATOR_SHORTHAND[op];
     if (!mongoOp) continue;
-    expanded[mongoOp] = SHORTHAND_RANGE_OPS.has(op) ? tryCoerceDate(opVal) : opVal;
+    if (SHORTHAND_RANGE_OPS.has(op)) expanded[mongoOp] = tryCoerceDate(opVal);
+    else if (SHORTHAND_LIST_OPS.has(op)) expanded[mongoOp] = toOperandList(opVal);
+    else expanded[mongoOp] = opVal;
   }
   return expanded;
 }

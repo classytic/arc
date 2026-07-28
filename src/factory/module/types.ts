@@ -54,7 +54,7 @@
  */
 
 import type { FastifyInstance } from "fastify";
-import type { EventHandler } from "../../events/EventTransport.js";
+import type { DomainEvent, EventHandler } from "../../events/EventTransport.js";
 import type { ErrorMapper } from "../../plugins/errorHandler.js";
 import type { HealthCheck } from "../../plugins/health.js";
 import type { ScheduleDefinition } from "../../plugins/schedules.js";
@@ -86,6 +86,35 @@ export interface EventHandlerDefinition {
    * `inventory.order-created`; Arc does not silently rewrite public names.
    */
   name?: string;
+  /**
+   * Contain handler failures inside an error boundary — arc wraps `handler`
+   * with `wrapWithBoundary`, so a throw is logged (through `fastify.log`, with
+   * `{ err, event, eventId, handler }`) and swallowed instead of reaching the
+   * transport.
+   *
+   * **Off by default, deliberately.** Reaching the transport is what makes the
+   * durable path work: `RedisStreamTransport` leaves the message unacked, so it
+   * is redelivered and eventually DLQ'd. Silently swallowing by default would
+   * turn every module handler into best-effort delivery.
+   *
+   * Turn it ON for fire-and-forget work — projections, cache invalidation,
+   * notification fan-out — where a failure must not block the ack and a retry
+   * would only delay the next event's resync. That is precisely the case where
+   * a module author would otherwise abandon this arm for an imperative
+   * `subscribeWithBoundary` call in `afterResources` and lose arc's
+   * teardown-before-`onClose` guarantee.
+   *
+   * ```ts
+   * defineModule({ name: "search", eventHandlers: [
+   *   { name: "search.reindex", event: "product:*", handler: reindex, boundary: true },
+   * ] })
+   * ```
+   *
+   * The object form adds an `onError` sink (metrics / alerting) in place of the
+   * default log; it runs INSIDE the boundary, so a throwing `onError` is itself
+   * caught and logged rather than escaping.
+   */
+  boundary?: boolean | { onError?: (error: Error, event: DomainEvent) => void | Promise<void> };
 }
 
 export interface ArcModule<TExports = unknown> {

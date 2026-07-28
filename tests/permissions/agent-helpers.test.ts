@@ -30,17 +30,17 @@ describe("requireDPoP()", () => {
 
   it("denies service scope without dpopJkt", async () => {
     const result = await check(makeServiceCtx({}));
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
   });
 
   it("denies member scope (humans don't carry DPoP)", async () => {
     const result = await check(makeMemberCtx({}));
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
   });
 
   it("denies public scope", async () => {
     const result = await check(makePublicCtx());
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
   });
 
   it("grants elevated scope (platform admin bypass)", async () => {
@@ -80,7 +80,7 @@ describe("requireMandate(capability, opts?)", () => {
       }),
     );
     expect(result).toMatchObject({
-      granted: false,
+      effect: "deny",
       reason: expect.stringContaining("data.export"),
     });
   });
@@ -88,7 +88,7 @@ describe("requireMandate(capability, opts?)", () => {
   it("denies when no mandate is present", async () => {
     const check = requireMandate("payment.charge");
     const result = await check(makeServiceCtx({}));
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
   });
 
   it("denies when mandate has expired (past grace window)", async () => {
@@ -99,7 +99,7 @@ describe("requireMandate(capability, opts?)", () => {
       }),
     );
     expect(result).toMatchObject({
-      granted: false,
+      effect: "deny",
       reason: expect.stringContaining("expired"),
     });
   });
@@ -128,7 +128,7 @@ describe("requireMandate(capability, opts?)", () => {
         mandate: { id: "m1", capability: "payment.charge", audience: "invoice:INV-99" },
       }),
     );
-    expect(denied).toMatchObject({ granted: false });
+    expect(denied).toMatchObject({ effect: "deny" });
   });
 
   it("validates audience binding via function extractor", async () => {
@@ -152,7 +152,7 @@ describe("requireMandate(capability, opts?)", () => {
         mandate: { id: "m1", capability: "payment.charge" }, // no audience
       }),
     );
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
   });
 
   it("invokes validateAmount and respects deny + custom reason", async () => {
@@ -171,7 +171,7 @@ describe("requireMandate(capability, opts?)", () => {
     (ctx as unknown as { data: { amount: number } }).data = { amount: 200 };
     const result = await check(ctx);
     expect(result).toMatchObject({
-      granted: false,
+      effect: "deny",
       reason: "Amount 200 exceeds cap 100",
     });
   });
@@ -184,7 +184,7 @@ describe("requireMandate(capability, opts?)", () => {
   it("noElevatedBypass: true forces elevated through the check", async () => {
     const check = requireMandate("payment.charge", { noElevatedBypass: true });
     const result = await check(makeElevatedCtx({}));
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
   });
 
   it("tags _mandateCapability metadata", () => {
@@ -230,7 +230,7 @@ describe("requireAgentScope({ capability, scopes, requireDPoP })", () => {
       }),
     );
     expect(result).toMatchObject({
-      granted: false,
+      effect: "deny",
       reason: expect.stringContaining("payment.write"),
     });
   });
@@ -242,7 +242,7 @@ describe("requireAgentScope({ capability, scopes, requireDPoP })", () => {
         mandate: { id: "m1", capability: "payment.charge" },
       }),
     );
-    expect(result).toMatchObject({ granted: false });
+    expect(result).toMatchObject({ effect: "deny" });
   });
 
   it("allows opting out of DPoP", async () => {
@@ -260,9 +260,9 @@ describe("requireAgentScope({ capability, scopes, requireDPoP })", () => {
 
   it("denies non-service scopes", async () => {
     const check = requireAgentScope({ capability: "payment.charge", requireDPoP: false });
-    expect(await check(makeMemberCtx({}))).toMatchObject({ granted: false });
-    expect(await check(makeAuthenticatedCtx({}))).toMatchObject({ granted: false });
-    expect(await check(makePublicCtx())).toMatchObject({ granted: false });
+    expect(await check(makeMemberCtx({}))).toMatchObject({ effect: "deny" });
+    expect(await check(makeAuthenticatedCtx({}))).toMatchObject({ effect: "deny" });
+    expect(await check(makePublicCtx())).toMatchObject({ effect: "deny" });
   });
 
   it("elevated bypasses the whole composite by default", async () => {

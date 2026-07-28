@@ -342,8 +342,8 @@ describe("Better Auth Org Context Bridge", () => {
     await app.ready();
 
     await app.inject({ method: "GET", url: "/test" });
-    const result = capturedResult as { granted: boolean; reason: string };
-    expect(result.granted).toBe(false);
+    const result = capturedResult as { effect: string; reason: string };
+    expect(result.effect).toBe("deny");
     expect(result.reason).toContain("Required org roles");
   });
 

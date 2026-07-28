@@ -4,6 +4,7 @@
  * service context.
  */
 
+import type { Filter } from "@classytic/repo-core/filter";
 import "./base.js";
 
 /**
@@ -28,7 +29,7 @@ export interface ArcInternalMetadata extends RequestContext {
   /** Request scope from scope resolution */
   _scope?: import("../scope/types.js").RequestScope;
   /** Ownership check config from ownedByUser preset */
-  _ownershipCheck?: { field: string; userId: string };
+  _ownershipCheck?: { field: string; userId: string; missingOwner?: "deny" | "allow" };
   /** Arc instance references (hooks, field permissions, etc.) */
   arc?: {
     hooks?: import("../hooks/HookSystem.js").HookSystem;
@@ -61,7 +62,13 @@ export interface ControllerQueryOptions {
    */
   lookups?: LookupOption[];
   select?: string | string[] | Record<string, 0 | 1>;
-  filters?: Record<string, unknown>;
+  /**
+   * Resolved row filter. Flat equality filters are a plain record; filters
+   * carrying `$`-operators (`$or`/`$and`/`$gte`) are normalized to the portable
+   * repo-core `Filter` IR at the repository boundary (see `toRepositoryFilter`)
+   * so every kit compiles them. Repositories accept both (`FilterInput`).
+   */
+  filters?: Record<string, unknown> | Filter;
   search?: string;
   lean?: boolean;
   after?: string;
@@ -120,6 +127,14 @@ export interface PopulateOption {
  * parsers (MongoKit, PrismaKit) add fields without breaking Arc's types.
  */
 export interface ParsedQuery {
+  /**
+   * Row filter — a plain record in the parser's operator dialect. This is the
+   * PARSER contract: a `QueryParser` (arc built-in, MongoKit, PrismaKit) emits a
+   * record, never repo-core `Filter` IR. IR appears only AFTER security
+   * composition, on `ControllerQueryOptions.filters` (via `toRepositoryFilter`).
+   * Keeping this record-only means `QueryResolver` never has to guess whether a
+   * parsed filter is an IR node it must not blindly spread tenant/policy onto.
+   */
   filters?: Record<string, unknown>;
   limit?: number;
   sort?: string | Record<string, 1 | -1>;

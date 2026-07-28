@@ -1,13 +1,12 @@
 /**
  * Permission Scope — checks bound to RequestScope.
  *
- * All read `request.scope` populated by an auth adapter (Better Auth bridge,
- * JWT custom auth, or an upstream permission check returning
- * `PermissionResult.scope`).
+ * All read the request scope via `scopeOf(ctx)` - populated by an auth adapter
+ * (Better Auth bridge, JWT custom auth) or threaded from an upstream check's
+ * `AuthorizationDecision.scope`.
  */
 
 import {
-  getRequestScope as getScope,
   getScopeContext,
   getScopeContextMap,
   getServiceScopes,
@@ -18,7 +17,8 @@ import {
   isOrgInScope,
   isService,
 } from "../scope/types.js";
-import { normalizeVariadicOrArray } from "./core.js";
+import { scopeOf } from "./context.js";
+import { deny, normalizeVariadicOrArray } from "./core.js";
 import type { PermissionCheck, PermissionContext } from "./types.js";
 
 /**
@@ -40,13 +40,13 @@ import type { PermissionCheck, PermissionContext } from "./types.js";
  */
 export function requireOrgMembership<TDoc = Record<string, unknown>>(): PermissionCheck<TDoc> {
   const check: PermissionCheck<TDoc> = (ctx) => {
-    const scope = getScope(ctx.request);
+    const scope = scopeOf(ctx);
     if (hasOrgAccess(scope)) return true;
 
     if (!ctx.user) {
-      return { granted: false, reason: "Authentication required" };
+      return deny("Authentication required");
     }
-    return { granted: false, reason: "Organization membership required" };
+    return deny("Organization membership required");
   };
   check._orgPermission = "membership";
   return check;
@@ -77,36 +77,31 @@ export function requireOrgRole<TDoc = Record<string, unknown>>(
   const roles = normalizeVariadicOrArray(args);
 
   const check: PermissionCheck<TDoc> = (ctx) => {
-    const scope = getScope(ctx.request);
+    const scope = scopeOf(ctx);
 
     if (isElevated(scope)) return true;
 
     if (isService(scope)) {
-      return {
-        granted: false,
-        reason:
-          "Service scopes (API keys) cannot satisfy requireOrgRole. " +
+      return deny(
+        "Service scopes (API keys) cannot satisfy requireOrgRole. " +
           "Use requireServiceScope(...) for machine identities, or compose " +
           "with anyOf(requireOrgRole(...), requireServiceScope(...)) to accept both.",
-      };
+      );
     }
 
     if (!ctx.user) {
-      return { granted: false, reason: "Authentication required" };
+      return deny("Authentication required");
     }
 
     if (!isMember(scope)) {
-      return { granted: false, reason: "Organization membership required" };
+      return deny("Organization membership required");
     }
 
     if (roles.some((r) => scope.orgRoles.includes(r))) {
       return true;
     }
 
-    return {
-      granted: false,
-      reason: `Required org roles: ${roles.join(", ")}`,
-    };
+    return deny(`Required org roles: ${roles.join(", ")}`);
   };
   check._orgRoles = roles;
   return check;
@@ -147,18 +142,16 @@ export function requireServiceScope<TDoc = Record<string, unknown>>(
   }
 
   const check: PermissionCheck<TDoc> = (ctx) => {
-    const scope = getScope(ctx.request);
+    const scope = scopeOf(ctx);
 
     if (isElevated(scope)) return true;
 
     if (!isService(scope)) {
-      return {
-        granted: false,
-        reason:
-          "Service identity required (API key). " +
+      return deny(
+        "Service identity required (API key). " +
           "For human users, use requireOrgRole(...) or compose with " +
           "anyOf(requireOrgRole(...), requireServiceScope(...)).",
-      };
+      );
     }
 
     const granted = getServiceScopes(scope);
@@ -166,10 +159,9 @@ export function requireServiceScope<TDoc = Record<string, unknown>>(
       return true;
     }
 
-    return {
-      granted: false,
-      reason: `Required service scopes: ${required.join(", ")} (granted: ${granted.length > 0 ? granted.join(", ") : "none"})`,
-    };
+    return deny(
+      `Required service scopes: ${required.join(", ")} (granted: ${granted.length > 0 ? granted.join(", ") : "none"})`,
+    );
   };
   check._serviceScopes = required;
   return check;
@@ -224,34 +216,26 @@ export function requireScopeContext<TDoc = Record<string, unknown>>(
   }
 
   const check: PermissionCheck<TDoc> = (ctx) => {
-    const scope = getScope(ctx.request);
+    const scope = scopeOf(ctx);
 
     if (isElevated(scope)) return true;
 
     const ctxMap = getScopeContextMap(scope);
     if (!ctxMap) {
-      return {
-        granted: false,
-        reason:
-          "Scope context required (member, service, or elevated scope). " +
+      return deny(
+        "Scope context required (member, service, or elevated scope). " +
           "Populate request.scope.context in your auth function.",
-      };
+      );
     }
 
     for (const key of requiredKeys) {
       const expected = required[key];
       const actual = getScopeContext(scope, key);
       if (actual === undefined) {
-        return {
-          granted: false,
-          reason: `Required scope context key "${key}" is missing`,
-        };
+        return deny(`Required scope context key "${key}" is missing`);
       }
       if (expected !== undefined && actual !== expected) {
-        return {
-          granted: false,
-          reason: `Required scope context "${key}" must equal "${expected}" (got "${actual}")`,
-        };
+        return deny(`Required scope context "${key}" must equal "${expected}" (got "${actual}")`);
       }
     }
 
@@ -272,8 +256,8 @@ export function requireScopeContext<TDoc = Record<string, unknown>>(
  *
  * **Two call shapes:**
  * ```typescript
- * requireOrgInScope('acme-holding')                          // static
- * requireOrgInScope((ctx) => ctx.request.params.orgId)       // dynamic
+ * requireOrgInScope('acme-holding')                    // static
+ * requireOrgInScope((ctx) => ctx.params?.orgId)        // dynamic — from ctx facts, not the raw request
  * ```
  *
  * `elevated` scope grants unconditionally (cross-org bypass).
@@ -281,9 +265,9 @@ export function requireScopeContext<TDoc = Record<string, unknown>>(
  * @example
  * ```typescript
  * permissions: {
- *   list: requireOrgInScope((ctx) => ctx.request.params.orgId),
+ *   list: requireOrgInScope((ctx) => ctx.params?.orgId),
  *   create: allOf(
- *     requireOrgInScope((ctx) => ctx.request.body?.organizationId),
+ *     requireOrgInScope((ctx) => (ctx.data as { organizationId?: string })?.organizationId),
  *     requireOrgRole('admin'),
  *   ),
  * }
@@ -299,24 +283,18 @@ export function requireOrgInScope<TDoc = Record<string, unknown>>(
   }
 
   const check: PermissionCheck<TDoc> = (ctx) => {
-    const scope = getScope(ctx.request);
+    const scope = scopeOf(ctx);
 
     if (isElevated(scope)) return true;
 
     const targetOrgId = typeof target === "function" ? target(ctx) : target;
     if (!targetOrgId) {
-      return {
-        granted: false,
-        reason: "requireOrgInScope: target org id could not be resolved from the request",
-      };
+      return deny("requireOrgInScope: target org id could not be resolved from the request");
     }
 
     if (isOrgInScope(scope, targetOrgId)) return true;
 
-    return {
-      granted: false,
-      reason: `Target organization "${targetOrgId}" is not in the caller's org hierarchy`,
-    };
+    return deny(`Target organization "${targetOrgId}" is not in the caller's org hierarchy`);
   };
 
   check._orgInScopeTarget = target;
@@ -339,19 +317,19 @@ export function requireOrgInScope<TDoc = Record<string, unknown>>(
 export function requireTeamMembership<TDoc = Record<string, unknown>>(): PermissionCheck<TDoc> {
   const check: PermissionCheck<TDoc> = (ctx) => {
     if (!ctx.user) {
-      return { granted: false, reason: "Authentication required" };
+      return deny("Authentication required");
     }
 
-    const scope = getScope(ctx.request);
+    const scope = scopeOf(ctx);
     if (isElevated(scope)) return true;
 
     if (!isMember(scope)) {
-      return { granted: false, reason: "Organization membership required" };
+      return deny("Organization membership required");
     }
 
     const teamId = getTeamId(scope);
     if (!teamId) {
-      return { granted: false, reason: "No active team" };
+      return deny("No active team");
     }
 
     return true;

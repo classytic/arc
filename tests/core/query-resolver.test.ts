@@ -659,4 +659,44 @@ describe("QueryResolver", () => {
       expect(result.filters?.organizationId).toBe("injected-org");
     });
   });
+
+  // --------------------------------------------------------------------------
+  // Security-filter conjunction — user query + policy + tenant all AND together
+  // (regression: a security restriction must never be silently overwritten by a
+  //  same-key URL filter, and the parser dialect is records only — never IR)
+  // --------------------------------------------------------------------------
+  describe("security filter conjunction (never last-writer-wins)", () => {
+    it("conjoins a URL filter, an ownership $or policy, and tenant scope — all survive", () => {
+      const resolver = createResolver({ tenantField: "organizationId" });
+      const req = createReq({ query: { status: "active" } });
+      const meta: ArcInternalMetadata = {
+        _policyFilters: { $or: [{ ownerId: "u1" }, { _id: { $in: ["a", "b"] } }] },
+        _scope: { kind: "member", userId: "u1", organizationId: "org-1", orgRoles: [] },
+      };
+
+      const s = JSON.stringify(resolver.resolve(req, meta).filters);
+      // Every restriction is present — none dropped by an Object.assign overwrite.
+      expect(s).toContain("status"); // user query
+      expect(s).toContain("ownerId"); // ownership policy
+      expect(s).toContain("organizationId"); // tenant scope
+      // Composed as a logical AND (repo-core IR), not a flat merge.
+      expect(s).toMatch(/"op":"and"|\$and/);
+    });
+
+    it("a same-key URL filter cannot overwrite a policy restriction on that key", () => {
+      const resolver = createResolver({ tenantField: "organizationId" });
+      // Attacker supplies ?region=EVIL; the permission policy pins region=safe.
+      const req = createReq({ query: { region: "EVIL" } });
+      const meta: ArcInternalMetadata = {
+        _policyFilters: { region: "safe" },
+        _scope: { kind: "member", userId: "u1", organizationId: "org-1", orgRoles: [] },
+      };
+
+      const s = JSON.stringify(resolver.resolve(req, meta).filters);
+      // The policy value survives; the conflicting values are conjoined
+      // (unsatisfiable → zero rows), never a silent EVIL-wins overwrite.
+      expect(s).toContain("safe");
+      expect(s).toMatch(/"op":"and"|\$and/);
+    });
+  });
 });
