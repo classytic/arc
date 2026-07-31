@@ -151,9 +151,8 @@ describe("routeGuards on defineResource", () => {
         {
           method: "GET",
           path: "/stats",
-          raw: true,
           permissions: allowPublic(),
-          handler: async (_req, reply) => {
+          rawHandler: async (_req, reply) => {
             reply.send({ count: await ItemModel.countDocuments() });
           },
         },

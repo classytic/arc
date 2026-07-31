@@ -3,7 +3,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createApp, defineModule } from "../../src/factory/index.js";
+import { createApp, defineModule, getModuleExports } from "../../src/factory/index.js";
 import schedulesPlugin from "../../src/plugins/schedules.js";
 
 const noop = async () => {};
@@ -67,7 +67,10 @@ describe("defineModule — scheduledJobs", () => {
           bootstrap: () => ({ tag: "orders" }),
           scheduledJobs: (fastify) => {
             resolutions++;
-            const tag = (fastify.arc?.modules?.orders as { tag: string }).tag;
+            // Read the sibling export through the PUBLIC accessor — this is
+            // the pattern module authors should copy, and it proves the
+            // factory runs after bootstraps (getModuleExports throws if not).
+            const { tag } = getModuleExports<{ tag: string }>(fastify, "orders");
             return [{ name: `${tag}.sweep`, every: 1_000, handler: noop }];
           },
         }),

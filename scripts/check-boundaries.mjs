@@ -11,6 +11,11 @@
  *  2. CYCLES — no import cycles between top-level modules, EXCEPT pairs
  *     listed in KNOWN_CYCLES (pre-existing, tracked for burn-down; a new
  *     cycle fails immediately).
+ *  3. DB-AGNOSTIC — src/ imports no database driver or storage kit. Arc talks
+ *     to `@classytic/repo-core` contracts only; every kit-specific adapter
+ *     ships from its own kit. This was a documented rule with no gate, which
+ *     is the state a rule rots in — one `import mongoose` in a helper and arc
+ *     silently acquires a driver dependency every non-Mongo host inherits.
  *
  * Run: node scripts/check-boundaries.mjs           (verify — CI/prepublish)
  *      node scripts/check-boundaries.mjs --graph   (print the module graph)
@@ -186,6 +191,97 @@ function findCycles(node, stack, visited) {
 }
 for (const key of seenCycles) {
   errors.push(`CYCLE: ${key} — runtime import cycle between top-level modules`);
+}
+
+// ── 3. DB-agnostic ──────────────────────────────────────────────────────
+
+/**
+ * Database drivers and storage kits. Arc imports NONE of these: it consumes
+ * `@classytic/repo-core`'s contracts (`RepositoryLike`, `DataAdapter`, the
+ * filter / pagination IR) and every kit supplies its own adapter.
+ */
+const FORBIDDEN_DEPS = [
+  /^mongoose$/,
+  /^mongodb$/,
+  /^@classytic\/(mongokit|sqlitekit|prismakit|pgkit|mysqlkit|webdb-kit)(\/|$)/,
+  /^(pg|postgres|mysql|mysql2|better-sqlite3|sqlite3)$/,
+  /^drizzle-orm(\/|$)/,
+  /^@prisma\/client$/,
+  /^(typeorm|sequelize|knex|kysely)$/,
+];
+
+/**
+ * Directories whose whole purpose is EMITTING host code. `arc init` / `arc
+ * generate` write `import mongoose from 'mongoose'` into the app they scaffold —
+ * arc writing an app, not arc importing a driver. Those templates are nested
+ * backtick strings that no regex strips reliably, so they are skipped wholesale
+ * rather than scanned badly.
+ */
+const EMITS_HOST_CODE = ["cli/commands/generate", "cli/commands/init"];
+
+/**
+ * Files permitted a LAZY driver import, with the reason.
+ *
+ * The distinction the gate draws is static vs dynamic, because that is the
+ * distinction that reaches a consumer: a top-level `import mongoose` makes the
+ * driver a hard dependency of anyone importing the module, while an
+ * `await import()` inside a function costs nothing until called. `mongoose` and
+ * `mongodb-memory-server` are devDependencies — arc's runtime deps are
+ * fastify-plugin, qs, secure-json-parse and nothing else.
+ */
+const LAZY_DRIVER_ALLOWED = new Map([
+  [
+    "testing/bootModuleApp.ts",
+    "mongoMemoryDatabase is the DEFAULT test database, overridable via `database: TestDatabaseFactory`; the import is lazy and missing packages fail with an actionable error",
+  ],
+  [
+    "testing/testApp.ts",
+    "createTestApp's opt-in `connectMongoose` / in-memory Mongo convenience; lazy, and unused unless the option is set",
+  ],
+]);
+
+const STATIC_SPEC_RE = /(?:^|\n)\s*(?:import|export)[^;\n]*?from\s*["']([^"']+)["']/g;
+const DYNAMIC_SPEC_RE = /(?:import|require)\s*\(\s*["']([^"']+)["']/g;
+
+const usedLazyAllowances = new Set();
+
+for (const file of files) {
+  const rel = path.relative(SRC, file).replaceAll("\\", "/");
+  if (EMITS_HOST_CODE.some((dir) => rel.startsWith(`${dir}/`))) continue;
+
+  // Strip comments — a docblock example showing a host's
+  // `import('mongoose').mongo.Db` is documentation, not a dependency. Comments
+  // do not nest, so unlike template literals they strip reliably.
+  const code = readFileSync(file, "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^[ \t]*\/\/.*$/gm, "");
+  const scan = (re, kind) => {
+    re.lastIndex = 0;
+    let match = re.exec(code);
+    while (match !== null) {
+      const spec = match[1];
+      if (FORBIDDEN_DEPS.some((r) => r.test(spec))) {
+        if (kind === "dynamic" && LAZY_DRIVER_ALLOWED.has(rel)) {
+          usedLazyAllowances.add(rel);
+        } else {
+          errors.push(
+            `DB-AGNOSTIC: ${rel} has a ${kind} import of "${spec}". Arc is ` +
+              "database-agnostic — consume the @classytic/repo-core contract and let the " +
+              "kit ship its own adapter. A lazy `await import()` behind an injectable " +
+              "port may be allowlisted in LAZY_DRIVER_ALLOWED with a reason.",
+          );
+        }
+      }
+      match = re.exec(code);
+    }
+  };
+  scan(STATIC_SPEC_RE, "static");
+  scan(DYNAMIC_SPEC_RE, "dynamic");
+}
+
+const staleLazy = [...LAZY_DRIVER_ALLOWED.keys()].filter((k) => !usedLazyAllowances.has(k));
+if (staleLazy.length > 0) {
+  console.log(`ℹ LAZY_DRIVER_ALLOWED no longer needed (remove them): ${staleLazy.join(", ")}`);
 }
 
 // ── output ──────────────────────────────────────────────────────────────

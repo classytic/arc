@@ -13,7 +13,7 @@
  * - Framework-agnostic controllers via adapter pattern
  */
 
-import type { FastifySchema, RouteHandlerMethod } from "fastify";
+import type { FastifyInstance, FastifySchema, RouteHandlerMethod } from "fastify";
 
 import { CRUD_OPERATIONS, DEFAULT_UPDATE_METHOD } from "../constants.js";
 import type { PermissionCheck } from "../permissions/types.js";
@@ -60,7 +60,7 @@ import {
 
 /**
  * Mount custom routes (from presets or user-defined `routes`) on Fastify.
- * `wrapHandler` is derived inline from `!route.raw`.
+ * `wrapHandler` is derived inline from whether `rawHandler` was set.
  */
 function createCustomRoutes<TDoc = unknown>(
   fastify: FastifyWithDecorators,
@@ -84,7 +84,7 @@ function createCustomRoutes<TDoc = unknown>(
     tenantScopeMw?: readonly RouteHandlerMethod[];
     /**
      * Resource-level field permissions (`defineResource({ fields })`).
-     * When set + the route is body-bearing + `route.raw !== true` +
+     * When set + the route is body-bearing + no `rawHandler` +
      * `route.fieldWrite !== false`, a field-write preHandler is appended
      * to the route's chain so custom routes match auto-CRUD's enforcement.
      */
@@ -114,6 +114,20 @@ function createCustomRoutes<TDoc = unknown>(
   } = options;
 
   for (const route of routes) {
+    // 2.31 — `raw` was REMOVED in favour of the `handler` / `rawHandler` split.
+    // Ignoring a leftover flag silently pipeline-wraps a Fastify-native handler,
+    // which is precisely the failure mode the split exists to eliminate — and
+    // TypeScript catches it only in sources recompiled against 2.31, NOT in a
+    // dependency whose published dist still carries `raw: true`. So it is fatal
+    // at boot, where the message can name the route.
+    if ("raw" in route) {
+      throw new Error(
+        `Route ${route.method} ${route.path}: \`raw\` was removed in arc 2.31 — the FIELD now carries the intent. ` +
+          "Move the function to `rawHandler` (Fastify-native `(request, reply)`) or leave it in `handler` " +
+          "(arc pipeline, `(ctx)`), and delete the flag. If this route comes from a dependency, that package " +
+          "needs a release built against arc >=2.31.",
+      );
+    }
     // 2.16 — `controllerMethod` (typed function-ref) is mutually exclusive
     // with `handler`. Resolve one of the two into a single dispatch target
     // BEFORE the rest of the per-route wiring, so the downstream code
@@ -121,7 +135,7 @@ function createCustomRoutes<TDoc = unknown>(
     const routeWithRefs = route as typeof route & {
       controllerMethod?: (controller: unknown) => unknown;
     };
-    const hasHandler = route.handler !== undefined;
+    const hasHandler = route.handler !== undefined || route.rawHandler !== undefined;
     const hasControllerMethod = typeof routeWithRefs.controllerMethod === "function";
     if (hasHandler && hasControllerMethod) {
       throw new Error(
@@ -131,8 +145,8 @@ function createCustomRoutes<TDoc = unknown>(
     }
     if (!hasHandler && !hasControllerMethod) {
       throw new Error(
-        `Route ${route.method} ${route.path}: must declare either \`handler\` (string / function) or ` +
-          "`controllerMethod: (c) => c.method` (typed function-ref form).",
+        `Route ${route.method} ${route.path}: must declare one of \`handler\` (arc pipeline), ` +
+          "`rawHandler` (Fastify-native), or `controllerMethod: (c) => c.method` (typed function-ref form).",
       );
     }
 
@@ -141,7 +155,7 @@ function createCustomRoutes<TDoc = unknown>(
     // controller is available, or if the function returns a non-function
     // (defensive — TS catches this normally, but a host might still
     // forget to return the method).
-    let resolvedHandler: RouteDefinition["handler"];
+    let resolvedHandler: RouteDefinition["handler"] | RouteHandlerMethod;
     if (hasControllerMethod) {
       if (!controller) {
         throw new Error(
@@ -161,7 +175,15 @@ function createCustomRoutes<TDoc = unknown>(
         | ControllerHandler
         | RouteHandlerMethod;
     } else {
-      resolvedHandler = route.handler;
+      // `rawHandler` and `handler` are mutually exclusive — the field IS the
+      // declaration of which execution model this route uses.
+      if (route.rawHandler && route.handler) {
+        throw new Error(
+          `Route ${route.method} ${route.path}: set either \`handler\` (arc pipeline) ` +
+            "or `rawHandler` (Fastify-native), not both.",
+        );
+      }
+      resolvedHandler = route.rawHandler ?? route.handler;
     }
 
     // Derive logical operation name for pipeline keys and permission actions.
@@ -172,9 +194,11 @@ function createCustomRoutes<TDoc = unknown>(
         ? resolvedHandler
         : `${route.method.toLowerCase()}${route.path.replace(/[/:]/g, "_")}`);
 
-    // Derive pipeline wrapping from `raw`: `raw: true` → no wrap;
-    // anything else (default) → arc pipeline wraps the handler.
-    const wrapHandler = !route.raw;
+    // The chosen FIELD decides the execution model. `controllerMethod` may
+    // return either shape, so it keeps the pipeline (its documented behaviour)
+    // unless the host declared `rawHandler` instead.
+    const isRaw = route.rawHandler !== undefined;
+    const wrapHandler = !isRaw;
 
     let handler: RouteHandlerMethod;
 
@@ -270,10 +294,10 @@ function createCustomRoutes<TDoc = unknown>(
     // custom routes. Auto-CRUD gets this for free via `BodySanitizer` inside
     // `BaseController`; without this step a custom `POST /users/promote`
     // bypassed `writableBy(['admin'])` rules and silently accepted
-    // restricted fields. `raw: true` opts out of the pipeline entirely;
+    // restricted fields. `rawHandler` opts out of the pipeline entirely;
     // `fieldWrite: false` is the per-route escape hatch.
     const shouldApplyFieldWrite =
-      route.raw !== true &&
+      !isRaw &&
       (route as { fieldWrite?: boolean }).fieldWrite !== false &&
       methodCarriesBody(route.method);
     if (shouldApplyFieldWrite) {
@@ -316,7 +340,7 @@ function createCustomRoutes<TDoc = unknown>(
         schema: schema as FastifySchema,
         ...routeHookOptions(hooks),
         handler: isStream
-          ? async (request, reply) => {
+          ? async function streamRoute(this: FastifyInstance, request, reply) {
               // Pre-set SSE headers via `reply.raw` so handlers that write
               // to `reply.raw` directly (the legacy pattern) keep working.
               // `pipeUIMessageStreamToReply` re-applies them via
@@ -324,10 +348,14 @@ function createCustomRoutes<TDoc = unknown>(
               reply.raw.setHeader("Content-Type", "text/event-stream");
               reply.raw.setHeader("Cache-Control", "no-cache");
               reply.raw.setHeader("Connection", "keep-alive");
-              const result = await (handler as (req: unknown, rep: unknown) => unknown)(
-                request,
-                reply,
-              );
+              // `.call(this, …)` — Fastify binds the instance as `this` when it
+              // invokes a handler, and `RawRouteHandler` declares that context.
+              // Calling the inner handler bare would silently drop it, so the
+              // SAME handler would read `this.myDecorator` fine as a plain raw
+              // route and break the moment `streamResponse` was switched on.
+              const result = await (
+                handler as (this: unknown, req: unknown, rep: unknown) => unknown
+              ).call(this, request, reply);
               // Auto-pipe a returned ReadableStream so AI-SDK callers don't
               // hand-roll `JsonToSseTransformStream`. Handlers that already
               // wrote to `reply.raw` return undefined / a value that isn't a
@@ -350,6 +378,7 @@ function createCustomRoutes<TDoc = unknown>(
         ...buildRouteConfig(
           route.rateLimit !== undefined ? buildRateLimitConfig(route.rateLimit) : rateLimitConfig,
           extensions,
+          route.cors,
         ),
       },
       { resourceName, op: opName },

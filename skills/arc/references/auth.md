@@ -484,6 +484,9 @@ auth: false
 import {
   allowPublic, requireAuth, requireRoles, requireOwnership,
   requireOrgMembership, requireOrgRole, requireTeamMembership,
+  // Platform-only role gate — an ORG role can never satisfy it. Required by
+  // globally-scoped surfaces (jobsPlugin managementRoutes) that cannot filter by tenant.
+  requirePlatformRole,
   allOf, anyOf, when, denyAll,
 } from '@classytic/arc';
 ```

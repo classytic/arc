@@ -28,24 +28,58 @@ import type { PermissionCheck } from "./types.js";
  * - `public` — `allowPublic()`; anyone passes.
  * - `roles` — grants if the caller holds ANY of these (platform OR org roles,
  *   unioned — matches how `requireRoles`/`requireOrgRole`/`anyOf` compose).
+ * - `scoped` — grants only within a caller SCOPE dimension (`_scopeContext`,
+ *   e.g. `{ branchRole: "head_office" }`), optionally combined with `roles`. The
+ *   scope dimensions are known statically even though their per-request VALUES
+ *   aren't, so a consumer that holds the caller's scope (a FE that knows the
+ *   active branch's role) can decide it client-side — the piece a flat `roles`
+ *   requirement could not express.
  * - `authenticated` — the check reads request-time facts (custom auth, service
- *   scope, ownership, scope-context, grants) that no static analysis can decide;
- *   the definitive answer is computed per request. Treat as "server decides".
+ *   scope, ownership, grants) that no static analysis can decide; the definitive
+ *   answer is computed per request. Treat as "server decides".
  */
 export type PermissionRequirement =
   | { readonly kind: "public" }
-  | { readonly kind: "roles"; readonly roles: readonly string[] }
+  | {
+      readonly kind: "roles";
+      readonly roles: readonly string[];
+      /**
+       * `true` when these roles are NECESSARY but not SUFFICIENT — the gate is an
+       * `allOf(...)` that also carries an opaque runtime branch (ownership /
+       * custom / dynamic / flow-mode …). A role MATCH is then `conditional`, not a
+       * definitive `allow`; a MISMATCH is still a definitive `deny`.
+       */
+      readonly conditional?: boolean;
+    }
+  | {
+      readonly kind: "scoped";
+      /** Required scope dimensions: `value` string = must equal; `undefined` = must be present. */
+      readonly scope: Readonly<Record<string, string | undefined>>;
+      /** Roles ALSO required alongside the scope (union of platform + org roles), if any. */
+      readonly roles?: readonly string[];
+      /** See `roles.conditional` — the composite also has an opaque/contradictory branch. */
+      readonly conditional?: boolean;
+    }
   | { readonly kind: "authenticated" };
 
 /**
  * Extract a check's static requirement from its `PermissionCheckMeta`. Public
- * wins; then the union of platform + org roles a role gate declares; otherwise
- * "authenticated" (auth-required / custom / request-time checks).
+ * wins; then a scope-context gate (optionally with roles); then the union of
+ * platform + org roles a role gate declares; otherwise "authenticated"
+ * (auth-required / custom / request-time checks). An `allOf` that couldn't be
+ * fully captured statically carries `conditional: true` (see `_conditional`).
  */
 export function describePermission(check: PermissionCheck): PermissionRequirement {
   if (check._isPublic) return { kind: "public" };
   const roles = [...(check._roles ?? []), ...(check._orgRoles ?? [])];
-  if (roles.length > 0) return { kind: "roles", roles };
+  const scope = check._scopeContext;
+  const conditional = check._conditional ? true : undefined;
+  if (scope && Object.keys(scope).length > 0) {
+    return roles.length > 0
+      ? { kind: "scoped", scope, roles, conditional }
+      : { kind: "scoped", scope, conditional };
+  }
+  if (roles.length > 0) return { kind: "roles", roles, conditional };
   return { kind: "authenticated" };
 }
 
@@ -75,7 +109,12 @@ export interface AccessExplanation {
  */
 export function explainAccess(
   check: PermissionCheck,
-  principal?: { roles?: readonly string[]; orgRoles?: readonly string[] },
+  principal?: {
+    roles?: readonly string[];
+    orgRoles?: readonly string[];
+    /** The caller's scope-context values (e.g. `{ branchRole: "head_office" }`) — supply to decide a `scoped` gate. */
+    scope?: Readonly<Record<string, string | undefined>>;
+  },
 ): AccessExplanation {
   const requirement = describePermission(check);
 
@@ -89,19 +128,75 @@ export function explainAccess(
       requirement,
     };
   }
+
+  const held = new Set([...(principal?.roles ?? []), ...(principal?.orgRoles ?? [])]);
+
+  if (requirement.kind === "scoped") {
+    const scopeReason = describeScope(requirement.scope);
+    const rolesReason = requirement.roles?.length
+      ? `role(s) ${requirement.roles.join(", ")} + `
+      : "";
+    // A missing co-required role is a definitive deny even before scope.
+    if (requirement.roles?.length && principal && !requirement.roles.some((r) => held.has(r))) {
+      return { decision: "deny", reason: `requires ${rolesReason}${scopeReason}`, requirement };
+    }
+    // Without the caller's scope the deciding fact is unknown — per request.
+    if (!principal?.scope) {
+      return {
+        decision: "conditional",
+        reason: `requires ${rolesReason}${scopeReason}`,
+        requirement,
+      };
+    }
+    // A scope MISMATCH is a definitive deny — the necessary scope failed
+    // (contradictory-conjunction gates land here for at least one branch too).
+    const scopeOk = Object.entries(requirement.scope).every(([dim, val]) =>
+      val === undefined ? principal.scope?.[dim] !== undefined : principal.scope?.[dim] === val,
+    );
+    if (!scopeOk) {
+      return { decision: "deny", reason: `requires ${rolesReason}${scopeReason}`, requirement };
+    }
+    // Scope (and role) satisfied. If an opaque branch remains, holding them is
+    // necessary but not sufficient → conditional; otherwise a genuine allow.
+    if (requirement.conditional) {
+      return {
+        decision: "conditional",
+        reason: `in scope ${scopeReason}; additional runtime conditions apply`,
+        requirement,
+      };
+    }
+    return { decision: "allow", reason: `granted in scope: ${scopeReason}`, requirement };
+  }
+
   // roles
+  const rolesText = `requires one of: ${requirement.roles.join(", ")}`;
   if (!principal) {
+    return { decision: "conditional", reason: rolesText, requirement };
+  }
+  const matched = requirement.roles.filter((r) => held.has(r));
+  if (matched.length === 0) {
+    // A necessary role is absent — definitive deny whether or not the composite
+    // has other conditions (the conjunction can't pass without the role).
+    return { decision: "deny", reason: rolesText, requirement };
+  }
+  // Role held. If the gate is an `allOf` with an opaque runtime branch, holding
+  // the role is necessary but NOT sufficient — the ownership/custom/dynamic check
+  // still decides per request, so this is `conditional`, not a static `allow`.
+  if (requirement.conditional) {
     return {
       decision: "conditional",
-      reason: `requires one of: ${requirement.roles.join(", ")}`,
+      reason: `has role(s) ${matched.join(", ")}; additional runtime conditions apply`,
       requirement,
     };
   }
-  const held = new Set([...(principal.roles ?? []), ...(principal.orgRoles ?? [])]);
-  const matched = requirement.roles.filter((r) => held.has(r));
-  return matched.length > 0
-    ? { decision: "allow", reason: `granted via role(s): ${matched.join(", ")}`, requirement }
-    : { decision: "deny", reason: `requires one of: ${requirement.roles.join(", ")}`, requirement };
+  return { decision: "allow", reason: `granted via role(s): ${matched.join(", ")}`, requirement };
+}
+
+/** Render a scope-context requirement as a readable clause: `branchRole=head_office`. */
+function describeScope(scope: Readonly<Record<string, string | undefined>>): string {
+  return Object.entries(scope)
+    .map(([dim, val]) => (val === undefined ? `${dim} (any)` : `${dim}=${val}`))
+    .join(", ");
 }
 
 /**

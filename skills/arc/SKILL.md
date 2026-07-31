@@ -123,7 +123,7 @@ export default defineResource({
 
   routes: [
     { method: 'GET',  path: '/featured', handler: 'getFeatured', permissions: allowPublic() },
-    { method: 'POST', path: '/webhook',  handler: webhookFn, raw: true, permissions: requireAuth() },
+    { method: 'POST', path: '/webhook',  rawHandler: webhookFn, permissions: requireAuth() },
   ],
   actions: {
     approve: { handler: approveOrder, permissions: requireRoles(['admin']) },
@@ -132,6 +132,20 @@ export default defineResource({
 ```
 
 **Auto-generated:** `GET /`, `GET /:id`, `POST /`, `PATCH /:id`, `DELETE /:id`. Presets add their own routes (see table below).
+
+### Custom routes: `handler` vs `rawHandler`
+
+A route declares its execution model by WHICH FIELD it fills — there is no `raw` flag (removed in 2.31).
+
+| Field | Signature | Behaviour |
+|---|---|---|
+| `handler` | `(ctx: IRequestContext)` or a controller-method name | Arc pipeline: envelope shaping, field-write permissions, MCP tool by default |
+| `rawHandler` | `(request, reply)` or a controller-method name | Fastify-native: owns the response, no pipeline, no MCP unless `mcpHandler` is set |
+| `controllerMethod` | `(c: MyController) => c.method` | Typed ref for the pipeline — TS catches typos |
+
+Declaring both `handler` and `rawHandler` throws at boot. `streamResponse: true` requires `rawHandler` (the handler is invoked with `(request, reply)` and owns the socket).
+
+Inline `rawHandler` parameters infer — no `req: FastifyRequest` annotation — and typed generics (`FastifyRequest<{ Body: CreateBody }>`) assign without a cast.
 
 **Resource shorthands:**
 
@@ -317,8 +331,8 @@ defineResource({
   name: 'procurement',
   routeGuards: [tenantGuard.preHandler],
   routes: [{
-    method: 'GET', path: '/summary', raw: true, permissions: requireAuth(),
-    handler: async (req, reply) => {
+    method: 'GET', path: '/summary', permissions: requireAuth(),
+    rawHandler: async (req, reply) => {
       const { orgId } = tenantGuard.from(req);
       reply.send({ orgId });
     },
@@ -570,9 +584,9 @@ defineResource({
   name: 'chat',
   customRoutesOnly: true,
   routes: [{
-    method: 'POST', path: '/', streamResponse: true, raw: true,
+    method: 'POST', path: '/', streamResponse: true,
     permissions: requireAuth(),
-    handler: async (req) => {
+    rawHandler: async (req) => {
       const result = streamText({ model, messages: req.body.messages });
       return result.toUIMessageStream();  // arc pipes it for you
     },
@@ -692,7 +706,7 @@ import { envelope } from '@classytic/arc';
 import { multipartBody } from '@classytic/arc/middleware';
 
 // Typed request — no `(req as any).user`
-handler: async (req: ArcRequest, reply) => { req.user?.id; req.scope; req.signal; }
+rawHandler: async (req: ArcRequest, reply) => { req.user?.id; req.scope; req.signal; }
 
 // File upload — no-op for JSON requests, safe to always add
 defineResource({
@@ -706,10 +720,10 @@ defineResource({
   },
 });
 
-// SSE — preAuth runs before auth (EventSource can't set headers); raw: true streams the response
+// SSE — preAuth runs before auth (EventSource can't set headers); rawHandler streams the response
 routes: [
   { preAuth: [(req) => { req.headers.authorization = `Bearer ${req.query.token}`; }] },
-  { method: 'GET', path: '/stream', raw: true, handler: async (req, reply) => reply.send(stream) },
+  { method: 'GET', path: '/stream', rawHandler: async (req, reply) => reply.send(stream) },
 ]
 
 // Per-route rate limit (2.20) — overrides the resource/app default for ONE endpoint.

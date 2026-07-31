@@ -89,9 +89,23 @@ export {
 } from "./mocks.js";
 // --- Vitest preload helper --------------------------------------------------
 export { preloadResources, preloadResourcesAsync } from "./preloadResources.js";
+/** The ONE role gate for package tests — see its module docblock. */
+export { scopeRoleGate } from "./scopeRoleGate.js";
 // --- Storage adapter contract ----------------------------------------------
 export type { StorageContractSetup, StorageContractSetupResult } from "./storageContract.js";
 export { runStorageContract } from "./storageContract.js";
+/**
+ * Test-actor seam — how an injected request becomes somebody. Exported from the
+ * TESTING entrypoint only; `createApp` never installs the hook, so a forged header
+ * can never be identity in a real build.
+ */
+export {
+  scopeFromTestActor,
+  TEST_ACTOR_HEADER,
+  type TestActor,
+  testActorAuth,
+  testActorHeaders,
+} from "./testActor.js";
 // --- Test app + lifecycle ---------------------------------------------------
 export type { AuthMode, CreateTestAppOptions, DbMode, TestAppContext } from "./testApp.js";
 export { createMinimalTestApp, createTestApp } from "./testApp.js";

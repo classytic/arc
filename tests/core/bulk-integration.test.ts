@@ -233,6 +233,40 @@ describe("Bulk Preset", () => {
       );
     });
 
+    it("conjoins the permission policy with the caller filter — a policy is never overwritten (security)", async () => {
+      const { BaseController } = await import("../../src/core/BaseController.js");
+      const repo = createMockRepo({
+        updateMany: vi.fn().mockResolvedValue({ matchedCount: 0, modifiedCount: 0 }),
+      });
+      const controller = new BaseController(repo, { resourceName: "product" });
+
+      // Non-overlapping: policy row-restriction AND caller filter both enforced.
+      const ctx = await createReqCtx({
+        filter: { status: "draft" },
+        data: { $set: { status: "published" } },
+      });
+      (ctx.metadata as Record<string, unknown>)._policyFilters = { ownerId: "u1" };
+      await controller.bulkUpdate(ctx);
+      expect((repo.updateMany as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+        status: "draft",
+        ownerId: "u1",
+      });
+
+      // Conflict: a caller trying to widen past the policy's ownerId can't — BOTH
+      // constraints survive under `$and`, so the update can't touch other owners' rows.
+      const attack = await createReqCtx({
+        filter: { ownerId: "someone-else" },
+        data: { $set: { x: 1 } },
+      });
+      (attack.metadata as Record<string, unknown>)._policyFilters = { ownerId: "u1" };
+      await controller.bulkUpdate(attack);
+      const serialized = JSON.stringify(
+        (repo.updateMany as ReturnType<typeof vi.fn>).mock.calls[1][0],
+      );
+      expect(serialized).toContain("u1");
+      expect(serialized).toContain("someone-else");
+    });
+
     it("throws 400 when filter is empty", async () => {
       const { BaseController } = await import("../../src/core/BaseController.js");
       const repo = createMockRepo({ updateMany: vi.fn() });

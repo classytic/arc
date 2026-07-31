@@ -62,10 +62,11 @@ describe("filesUploadPreset — configuration", () => {
     ]);
   });
 
-  it("marks every route as raw so JSON envelope wrapping is bypassed", () => {
+  it("declares every route via rawHandler so JSON envelope wrapping is bypassed", () => {
     const routes = resolveRoutes(filesUploadPreset({ storage: fakeStorage() }));
     for (const route of routes) {
-      expect(route.raw).toBe(true);
+      expect(route.rawHandler).toBeTypeOf("function");
+      expect(route.handler).toBeUndefined();
     }
   });
 

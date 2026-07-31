@@ -10,6 +10,7 @@ import { createMemoryLockAdapter } from "@classytic/repo-core/lock";
 import Fastify from "fastify";
 import { describe, expect, it } from "vitest";
 import schedulesPlugin from "../../src/plugins/schedules.js";
+import { waitFor } from "../../src/testing/mocks.js";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -27,9 +28,11 @@ describe("schedulesPlugin", () => {
       schedules: [{ name: "tick", every: 25, runOnStart: true, handler: () => void runs++ }],
     });
 
-    await sleep(120);
+    // Waits for the CLAIM ("fires repeatedly"), not for a duration — returns as
+    // soon as the third tick lands and tolerates a stalled loop instead of
+    // encoding a guess about how fast the pool is.
+    await waitFor(() => runs >= 3, { label: "3 scheduler ticks" });
     const observed = runs;
-    expect(observed).toBeGreaterThanOrEqual(3);
 
     await app.close();
     const atClose = runs;
@@ -198,13 +201,17 @@ describe("schedules — lease renewal", () => {
           leaseMs: 60, // renew interval = 30ms
           runOnStart: true,
           handler: async () => {
-            await sleep(110); // outruns leaseMs — needs ≥2 renewals
+            // Long enough to span several renew intervals; the assertion below
+            // waits for the renewals rather than for this duration.
+            await sleep(240);
           },
         },
       ],
     });
     await app.ready();
-    await sleep(160);
+    await waitFor(() => acquires.filter((a) => a.name === "arc:schedule:long-sweep").length >= 3, {
+      label: "initial acquire + 2 lease renewals",
+    });
 
     const forSchedule = acquires.filter((a) => a.name === "arc:schedule:long-sweep");
     // 1 initial acquire + at least 2 renewals, all same holder + lease.
@@ -279,13 +286,19 @@ describe("schedules — lease renewal", () => {
       ],
     });
     await app.ready();
-    await sleep(260); // handler + trailing renewal settle
+    // Wait for the renewal loop to have actually run, not for a duration.
+    await waitFor(() => maxInFlight >= 1, { label: "at least one lock acquire" });
 
     // setInterval would stack calls every 15ms against a 40ms backend; the
     // serialized loop keeps at most one in flight.
     expect(maxInFlight).toBe(1);
-    expect(inFlight).toBe(0); // teardown awaited the in-flight renewal
+
+    // Assert the drain AFTER close. Checking `inFlight` before it only asked
+    // whether the trailing renewal happened to finish inside the sleep window —
+    // a race that fails under load. Closing first tests the actual guarantee:
+    // teardown awaits the renewal that is in flight.
     await app.close();
+    expect(inFlight).toBe(0);
   });
 
   it("fast handlers under lock behave as before (single acquire per tick)", async () => {

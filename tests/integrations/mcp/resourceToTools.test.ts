@@ -267,7 +267,7 @@ describe("resourceToTools", () => {
   // ============================================================================
 
   describe("mcpHandler on additional routes", () => {
-    it("picks up mcpHandler from raw:false routes", async () => {
+    it("picks up mcpHandler from rawHandler routes", async () => {
       const mcpHandler = vi.fn().mockResolvedValue({
         content: [{ type: "text", text: '{"count": 42}' }],
       });
@@ -278,8 +278,7 @@ describe("resourceToTools", () => {
             {
               method: "GET",
               path: "/stats",
-              handler: () => {},
-              raw: true,
+              rawHandler: () => {},
               permissions: () => ({ allowed: true }),
               operation: "stats",
               summary: "Get product stats",
@@ -301,15 +300,14 @@ describe("resourceToTools", () => {
       expect(mcpHandler).toHaveBeenCalledWith({ filter: "active" });
     });
 
-    it("ignores raw:false routes without mcpHandler", () => {
+    it("ignores rawHandler routes without mcpHandler", () => {
       const tools = resourceToTools(
         mockResource({
           routes: [
             {
               method: "GET",
               path: "/stats",
-              handler: () => {},
-              raw: true,
+              rawHandler: () => {},
               permissions: () => ({ allowed: true }),
             } as any,
           ],

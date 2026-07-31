@@ -13,6 +13,12 @@
       "skillPath": "skills/fastify/SKILL.md",
       "computedHash": "269924684709b8c6f50a569ef988e66031efb822ef92cba6c8dfa160e54ed4d4"
     },
+    "tsdown": {
+      "source": "antfu/skills",
+      "sourceType": "github",
+      "skillPath": "skills/tsdown/SKILL.md",
+      "computedHash": "2183b9019058744215ab8b1261e34833653b5864da159bc022e3b9ad2f706aa5"
+    },
     "visa-best-practices": {
       "source": "visa/ai",
       "sourceType": "github",

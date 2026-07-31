@@ -78,7 +78,7 @@ export {
 } from "./responseSchemas.js";
 // Cross-runtime scheduling helper
 export { scheduleBackground } from "./runtime.js";
-export type { JsonSchemaTarget } from "./schemaConverter.js";
+export type { JsonSchemaTarget, SchemaIo } from "./schemaConverter.js";
 // Schema Converter
 export {
   convertOpenApiSchemas,

@@ -418,7 +418,7 @@ function toNotFound(err: unknown, resource: string, id: string): Error {
 /**
  * Create a files-upload preset bound to a `Storage` adapter.
  *
- * The preset uses `raw: true` routes so binary responses bypass arc's JSON
+ * The preset declares every route via `rawHandler` so binary responses bypass arc's JSON
  * envelope. Upload still returns the standard `{ success: true, data }`
  * envelope manually because the response is structured metadata, not bytes.
  */
@@ -465,8 +465,7 @@ export function filesUploadPreset(options: FilesUploadPresetOptions): PresetResu
               requiredFields: [deps.fieldName],
             }),
           ],
-          raw: true,
-          handler: makeUploadHandler(deps),
+          rawHandler: makeUploadHandler(deps),
           // No response schema — the envelope shape is stable and Fastify's
           // AJV strict mode would reject the adapter-defined `metadata` bag.
         });
@@ -480,8 +479,7 @@ export function filesUploadPreset(options: FilesUploadPresetOptions): PresetResu
           summary: "Download a file",
           description: "Streams the stored bytes. Supports single-range `Range: bytes=start-end`.",
           permissions: options.permissions?.read ?? permissions.get ?? allowPublic(),
-          raw: true,
-          handler: makeReadHandler(deps),
+          rawHandler: makeReadHandler(deps),
           // MCP tool generation skipped — binary routes aren't useful as MCP tools.
           mcp: false,
         });
@@ -494,8 +492,7 @@ export function filesUploadPreset(options: FilesUploadPresetOptions): PresetResu
           operation: "filesUpload.delete",
           summary: "Delete a file",
           permissions: options.permissions?.delete ?? permissions.delete ?? requireAuth(),
-          raw: true,
-          handler: makeDeleteHandler(deps),
+          rawHandler: makeDeleteHandler(deps),
         });
       }
 

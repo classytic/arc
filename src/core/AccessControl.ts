@@ -32,6 +32,7 @@ import type { Filter } from "@classytic/repo-core/filter";
 import type { QueryOptions } from "@classytic/repo-core/repository";
 import { DEFAULT_ID_FIELD } from "../constants.js";
 import { arcLog } from "../logger/index.js";
+import { conjoinPolicyFilters } from "../permissions/filter-merge.js";
 import { getOrgId as getOrgIdFromScope } from "../scope/types.js";
 import type {
   AnyRecord,
@@ -118,21 +119,29 @@ export class AccessControl {
    * Combines ID filter with policy/org filters for proper security enforcement
    */
   buildIdFilter(id: string, req: IRequestContext): AnyRecord | Filter {
-    const filter: AnyRecord = { [this.idField]: id };
+    // The route's target id, the permission policy, and the tenant scope are
+    // INDEPENDENT restrictions — conjoin them with AND, never mutate/overwrite.
+    // A bare `Object.assign(filter, policyFilters)` let a policy carrying
+    // `{ [idField]: 'A' }` REPLACE the route's `{ [idField]: 'B' }`, so a policy
+    // could redirect the lookup to a different record. With conjunction, a policy
+    // that pins a different id yields an unsatisfiable `$and` (returns nothing —
+    // fail-closed), and one layer can never erase another's constraint.
+    let filter: AnyRecord = { [this.idField]: id };
     const arcContext = this._meta(req);
 
-    // Apply policy filters (set by permission middleware via req.metadata._policyFilters)
+    // Permission policy (set by the permission middleware via `_policyFilters`).
     const policyFilters = arcContext?._policyFilters;
     if (policyFilters) {
-      Object.assign(filter, policyFilters);
+      filter = conjoinPolicyFilters(filter, policyFilters) as AnyRecord;
     }
 
-    // Apply org/tenant scope filter — derived from request.scope
-    // Skip for platform-universal resources (tenantField: false)
+    // Org/tenant scope — derived from request.scope; skip for platform-universal
+    // resources (tenantField: false). Conjoined too (same-value dedupes; a policy
+    // that already pinned the tenant is idempotent, a different one fail-closes).
     const scope = arcContext?._scope;
     const orgId = scope ? getOrgIdFromScope(scope) : undefined;
-    if (this.tenantField && orgId && !policyFilters?.[this.tenantField]) {
-      filter[this.tenantField] = orgId;
+    if (this.tenantField && orgId) {
+      filter = conjoinPolicyFilters(filter, { [this.tenantField]: orgId }) as AnyRecord;
     }
 
     // Normalize to portable Filter IR when the compound carries `$`-operators

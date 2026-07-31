@@ -179,7 +179,7 @@ describe("RouteDefinition.controllerMethod — typed function refs", () => {
           } as any,
         ],
       }),
-    ).toThrow(/must declare either `handler`.*or `controllerMethod`/);
+    ).toThrow(/must declare one of `handler`.*`rawHandler`.*or `controllerMethod`/s);
   });
 
   it("throws when controllerMethod returns a non-function", async () => {

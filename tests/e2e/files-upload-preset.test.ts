@@ -334,8 +334,7 @@ describe("filesUploadPreset — user route coexistence", () => {
           path: "/stats",
           summary: "Storage stats",
           permissions: allowPublic(),
-          raw: true,
-          handler: async (_req: unknown, reply: { send: (body: unknown) => unknown }) =>
+          rawHandler: async (_req: unknown, reply: { send: (body: unknown) => unknown }) =>
             // No-envelope: emit raw stats payload.
             reply.send({ rows: backing.rows.size }),
         },

@@ -143,39 +143,44 @@ describe("createDynamicPermissionMatrix", () => {
     expect(resolver).toHaveBeenCalledTimes(2);
   });
 
-  it("uses custom cache key when provided", async () => {
+  it("uses a custom cache key, but AUTO-NAMESPACES it per org (tenant isolation)", async () => {
     const resolver = vi.fn(async () => roleMap);
     const perms = createDynamicPermissionMatrix({
       resolveRolePermissions: resolver,
       cache: {
         ttlSeconds: 60,
+        // A bare per-user key with NO org — arc must still isolate by tenant.
         key: (ctx) => String((ctx.user as { id?: string } | null)?.id ?? "anon"),
       },
     });
 
     const check = perms.canAction("product", "create");
-    expect(
-      await check(makeCtx({ orgId: "orgA", orgRoles: ["admin"], user: { id: "u1", role: [] } })),
-    ).toBe(true);
-    expect(
-      await check(makeCtx({ orgId: "orgB", orgRoles: ["admin"], user: { id: "u1", role: [] } })),
-    ).toBe(true);
-    expect(resolver).toHaveBeenCalledTimes(1);
+    // Same user, DIFFERENT orgs → arc namespaces the custom key by org, so each
+    // org resolves its OWN matrix. Org B must NEVER read org A's cached matrix.
+    await check(makeCtx({ orgId: "orgA", orgRoles: ["admin"], user: { id: "u1", role: [] } }));
+    await check(makeCtx({ orgId: "orgB", orgRoles: ["admin"], user: { id: "u1", role: [] } }));
+    expect(resolver).toHaveBeenCalledTimes(2);
+
+    // Re-hitting org A is a cache hit (same namespaced key) — no third resolve.
+    await check(makeCtx({ orgId: "orgA", orgRoles: ["admin"], user: { id: "u1", role: [] } }));
+    expect(resolver).toHaveBeenCalledTimes(2);
   });
 
-  it("denies with clear reason when matrix resolver throws", async () => {
+  it("fails closed with a GENERIC reason when the resolver throws — no internal leak", async () => {
     const perms = createDynamicPermissionMatrix({
       resolveRolePermissions: async () => {
-        throw new Error("DB unavailable");
+        throw new Error("DB unavailable at mongodb://secret-host:27017");
       },
     });
 
     const check = perms.canAction("product", "create");
     const result = await check(makeCtx({ orgId: "org1", orgRoles: ["admin"] }));
-    expect(result).toEqual({
-      effect: "deny",
-      reason: "Permission matrix resolution failed: DB unavailable",
-    });
+    expect(typeof result === "object" ? result.effect : result).toBe("deny");
+    // The underlying exception text (host, driver internals) must NOT reach the client.
+    const reason = typeof result === "object" ? (result.reason ?? "") : "";
+    expect(reason).not.toContain("mongodb://");
+    expect(reason).not.toContain("DB unavailable");
+    expect(reason).toBe("Permission policy is temporarily unavailable");
   });
 
   it("uses external cache store adapter when provided", async () => {
@@ -205,6 +210,76 @@ describe("createDynamicPermissionMatrix", () => {
     expect(get).toHaveBeenCalledTimes(1);
     expect(set).toHaveBeenCalledTimes(1);
     expect(resolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("FALLBACK (no store.clear): invalidateByOrg evicts a custom-keyed matrix via the org index", async () => {
+    const deleted: string[] = [];
+    // A store WITHOUT `clear` — forces the per-key fallback path.
+    const cacheStore: CacheStore<Record<string, Record<string, readonly string[]>>> = {
+      name: "mock-cache",
+      get: async () => undefined,
+      set: async () => {},
+      delete: async (key: string) => {
+        deleted.push(key);
+      },
+    };
+
+    const perms = createDynamicPermissionMatrix({
+      resolveRolePermissions: async () => roleMap,
+      cacheStore,
+      // A host key with NO `orgId::` prefix — a prefix scan alone would miss it.
+      cache: { ttlSeconds: 60, key: (ctx) => `user:${ctx.user?.id}` },
+    });
+
+    await perms.canAction("product", "create")(makeCtx({ orgId: "org1", orgRoles: ["admin"] }));
+    // The custom key is auto-namespaced by org (+ roles), found via the org index.
+    await perms.invalidateByOrg("org1");
+    expect(deleted.some((k) => k.includes("user:u1") && k.startsWith("org1::"))).toBe(true);
+  });
+
+  it("PREFERRED (store.clear): invalidateByOrg is restart-safe/cross-node via a prefix clear", async () => {
+    // A SHARED store (stand-in for Redis) with prefix-aware `clear`.
+    const store = new Map<string, unknown>();
+    const clearedPatterns: string[] = [];
+    const shared: CacheStore<Record<string, Record<string, readonly string[]>>> = {
+      name: "shared",
+      get: async (k) =>
+        store.get(k) as Record<string, Record<string, readonly string[]>> | undefined,
+      set: async (k, v) => {
+        store.set(k, v);
+      },
+      delete: async (k) => {
+        store.delete(k);
+      },
+      clear: async (pattern?: string) => {
+        clearedPatterns.push(pattern ?? "*");
+        if (!pattern) return void store.clear();
+        const prefix = pattern.replace(/\*$/, "");
+        for (const k of [...store.keys()]) if (k.startsWith(prefix)) store.delete(k);
+      },
+    };
+
+    // Node A populates the shared store for org1.
+    const nodeA = createDynamicPermissionMatrix({
+      resolveRolePermissions: async () => roleMap,
+      cacheStore: shared,
+      cache: { ttlSeconds: 60, key: (ctx) => `user:${ctx.user?.id}` },
+    });
+    await nodeA.canAction("product", "create")(makeCtx({ orgId: "org1", orgRoles: ["admin"] }));
+    expect([...store.keys()].some((k) => k.startsWith("org1::"))).toBe(true);
+
+    // A FRESH process (empty in-process index) sharing the same store revokes.
+    const nodeB = createDynamicPermissionMatrix({
+      resolveRolePermissions: async () => roleMap,
+      cacheStore: shared,
+      cache: { ttlSeconds: 60, key: (ctx) => `user:${ctx.user?.id}` },
+    });
+    await nodeB.invalidateByOrg("org1");
+
+    // It cleared via the prefix pattern (NOT a per-key delete from a lost index),
+    // and the shared store holds no org1 key — even though nodeB never saw it.
+    expect(clearedPatterns).toContain("org1::*");
+    expect([...store.keys()].some((k) => k.startsWith("org1::"))).toBe(false);
   });
 
   // ─── Cross-Node Event Invalidation ──────────────────────────────
@@ -397,5 +472,55 @@ describe("createDynamicPermissionMatrix", () => {
 
       await perms.disconnectEvents();
     });
+  });
+});
+
+/**
+ * Cache bookkeeping must stay bounded on a READ-MOSTLY node.
+ *
+ * `trackedKeys` / `orgKeyIndex` exist so `invalidateByOrg` can evict a
+ * custom-keyed matrix that a prefix scan would miss. They are populated on cache
+ * HIT as well as on write — a node that only ever reads a shared Redis cache
+ * would otherwise hold nothing to invalidate. That makes the cap load-bearing:
+ * while it lived in the write path, a node serving hits and rarely setting
+ * accumulated one entry per distinct org/user/role combination it had ever seen,
+ * for the process lifetime, outliving the cache entries themselves (the external
+ * store expires those on its own schedule).
+ */
+describe("dynamic matrix — bookkeeping stays bounded on cache hits", () => {
+  it("evicts tracked keys rather than accumulating one per org seen", async () => {
+    const value = { admin: { product: ["create"] } };
+    const deleted: string[] = [];
+    // No `clear` on purpose: that forces `invalidateByOrg` down the per-key
+    // fallback, which deletes exactly what the in-process index still tracks —
+    // making the bookkeeping observable without exposing a diagnostic.
+    const store = {
+      get: async () => value,
+      set: async () => {},
+      delete: async (k: string) => {
+        deleted.push(k);
+      },
+    } as unknown as CacheStore<Record<string, Record<string, readonly string[]>>>;
+
+    const resolveRolePermissions = vi.fn(async () => value);
+    const perms = createDynamicPermissionMatrix({
+      resolveRolePermissions,
+      cacheStore: store,
+      cache: { ttlSeconds: 300, maxEntries: 25 },
+    });
+    const check = perms.can({ product: ["create"] });
+
+    // Far more distinct orgs than the cap — every lookup a HIT, so the write
+    // path (where the cap used to live) never runs.
+    for (let i = 0; i < 400; i++) {
+      await check(makeCtx({ orgId: `org-${i}`, orgRoles: ["admin"] }));
+    }
+    expect(resolveRolePermissions).not.toHaveBeenCalled();
+
+    for (let i = 0; i < 400; i++) await perms.invalidateByOrg(`org-${i}`);
+
+    // Bounded bookkeeping cannot still be tracking 400 orgs' keys. Before the
+    // fix this was 400; the cap is 25.
+    expect(deleted.length).toBeLessThanOrEqual(25);
   });
 });

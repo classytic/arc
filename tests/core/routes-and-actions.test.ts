@@ -61,16 +61,14 @@ describe("v2.8: routes + actions", () => {
           path: "/stats",
           summary: "Item statistics",
           permissions: allowPublic(),
-          handler: async (_req, reply) => reply.send({ total: 99 }),
-          raw: true,
+          rawHandler: async (_req, reply) => reply.send({ total: 99 }),
         },
         {
           method: "POST",
           path: "/bulk-activate",
           summary: "Activate all items",
           permissions: allowPublic(),
-          handler: async (_req, reply) => reply.send({ activated: 5 }),
-          raw: true,
+          rawHandler: async (_req, reply) => reply.send({ activated: 5 }),
         },
       ],
 
@@ -290,8 +288,7 @@ describe("v2.8: routes — extended", () => {
           path: "/raw-info",
           summary: "Raw info",
           permissions: allowPublic(),
-          handler: async (_req, reply) => reply.send({ rawField: "rawValue" }),
-          raw: true,
+          rawHandler: async (_req, reply) => reply.send({ rawField: "rawValue" }),
         },
         {
           method: "GET",
@@ -305,27 +302,24 @@ describe("v2.8: routes — extended", () => {
           path: "/protected",
           summary: "Protected route",
           permissions: requireRoles(["admin"]),
-          handler: async (_req, reply) => reply.send({ secret: true }),
-          raw: true,
+          rawHandler: async (_req, reply) => reply.send({ secret: true }),
         },
         {
           method: "POST",
           path: "/other",
           summary: "Another route",
           permissions: allowPublic(),
-          handler: async (_req, reply) => reply.send({ other: true }),
-          raw: true,
+          rawHandler: async (_req, reply) => reply.send({ other: true }),
         },
         {
           method: "GET",
           path: "/stream-test",
           summary: "Stream endpoint",
           permissions: allowPublic(),
-          handler: async (_req, reply) => {
+          rawHandler: async (_req, reply) => {
             reply.raw.write("data: hello\n\n");
             reply.raw.end();
           },
-          raw: true,
           streamResponse: true,
         },
         {
@@ -333,8 +327,7 @@ describe("v2.8: routes — extended", () => {
           path: "/no-mcp",
           summary: "No MCP",
           permissions: allowPublic(),
-          handler: async (_req, reply) => reply.send({ ok: true }),
-          raw: true,
+          rawHandler: async (_req, reply) => reply.send({ ok: true }),
           mcp: false,
         },
       ],
@@ -368,8 +361,8 @@ describe("v2.8: routes — extended", () => {
     expect(body.total).toBe(42);
   });
 
-  // 2. Route with raw: true bypasses pipeline
-  it("route with raw: true returns raw response (no wrapper)", async () => {
+  // 2. A `rawHandler` route bypasses the pipeline
+  it("`rawHandler` route returns a raw response (no wrapper)", async () => {
     const res = await app.inject({ method: "GET", url: "/route-ext/raw-info" });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
@@ -378,8 +371,8 @@ describe("v2.8: routes — extended", () => {
     expect(body.success).toBeUndefined();
   });
 
-  // 3. Route without raw defaults to pipeline mode
-  it("route without raw defaults to pipeline mode", async () => {
+  // 3. A `handler` route runs the pipeline
+  it("`handler` route runs in pipeline mode", async () => {
     const res = await app.inject({ method: "GET", url: "/route-ext/pipeline-info" });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
@@ -424,8 +417,7 @@ describe("v2.8: routes — extended", () => {
           path: "/hidden",
           summary: "Hidden from MCP",
           permissions: allowPublic(),
-          handler: async (_req, reply) => reply.send({ ok: true }),
-          raw: true,
+          rawHandler: async (_req, reply) => reply.send({ ok: true }),
           mcp: false,
         },
       ],
@@ -468,8 +460,7 @@ describe("v2.8: actions — extended", () => {
           path: "/summary",
           summary: "Order summary",
           permissions: allowPublic(),
-          handler: async (_req, reply) => reply.send({ total: 10 }),
-          raw: true,
+          rawHandler: async (_req, reply) => reply.send({ total: 10 }),
         },
       ],
       actions: {
@@ -710,8 +701,7 @@ describe("v2.8: edge cases", () => {
           path: "/status",
           summary: "Health status",
           permissions: allowPublic(),
-          handler: async (_req, reply) => reply.send({ status: "ok" }),
-          raw: true,
+          rawHandler: async (_req, reply) => reply.send({ status: "ok" }),
         },
       ],
     });
@@ -1000,8 +990,7 @@ describe("v2.8: type safety", () => {
       method: "GET",
       path: "/raw",
       permissions: allowPublic(),
-      handler: async (_req, reply) => reply.send({ ok: true }),
-      raw: true,
+      rawHandler: async (_req, reply) => reply.send({ ok: true }),
     };
 
     // Pipeline handler (no raw)
@@ -1020,8 +1009,49 @@ describe("v2.8: type safety", () => {
       handler: "getStats",
     };
 
-    expect(rawRoute.raw).toBe(true);
-    expect(pipelineRoute.raw).toBeUndefined();
+    expect(rawRoute.rawHandler).toBeTypeOf("function");
+    expect(rawRoute.handler).toBeUndefined();
+    expect(pipelineRoute.rawHandler).toBeUndefined();
+    expect(pipelineRoute.handler).toBeTypeOf("function");
     expect(typeof stringRoute.handler).toBe("string");
+  });
+});
+
+describe("2.31: removed `raw` flag is fatal, not ignored", () => {
+  // A dependency whose published dist predates 2.31 still emits `raw: true`.
+  // Ignoring it would pipeline-wrap a Fastify-native handler and 500 at
+  // request time — the exact silent mismatch the field split removes. tsc
+  // can't see it (the dist is already compiled), so boot has to.
+  const staleRoute = {
+    method: "GET" as const,
+    path: "/legacy",
+    raw: true, // arc:allow-removed-raw — the fixture IS the removed shape
+    handler: async (_req: unknown, reply: { send: (v: unknown) => void }) => reply.send({ ok: 1 }),
+    permissions: allowPublic(),
+  };
+
+  it("reports the stale flag from defineResource() validation", () => {
+    expect(() =>
+      defineResource({
+        name: "stale-flag",
+        disableDefaultRoutes: true,
+        routes: [staleRoute] as unknown as Parameters<typeof defineResource>[0]["routes"],
+      }),
+    ).toThrow(/`raw` was removed in arc 2\.31/);
+  });
+
+  it("names the route so the offending dependency is identifiable", () => {
+    let message = "";
+    try {
+      defineResource({
+        name: "stale-flag-2",
+        disableDefaultRoutes: true,
+        routes: [staleRoute] as unknown as Parameters<typeof defineResource>[0]["routes"],
+      });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain("routes[0].raw");
+    expect(message).toContain("rawHandler");
   });
 });

@@ -60,6 +60,10 @@ import {
   allowPublic, requireAuth, requireRoles, requireOwnership,
   requireOrgMembership, requireOrgRole, requireTeamMembership,
   requireServiceScope, requireScopeContext, requireOrgInScope,
+  // Platform-only role gate — an ORG role can never satisfy it. Required by
+  // globally-scoped surfaces (jobsPlugin managementRoutes) that cannot filter by tenant.
+  requirePlatformRole,
+
   // Agent-auth (2.13) — DPoP + capability mandates (AP2 / x402 / MCP)
   requireAgentScope, requireMandate, requireDPoP,
   type RequireAgentScopeOptions, type RequireMandateOptions,

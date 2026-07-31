@@ -28,6 +28,11 @@ export async function setupApp(): Promise<FastifyInstance> {
     },
     // Quiet under test — these example tests also run in arc's main suite.
     logger: false,
+    // Load shedding is a PRODUCTION behaviour, and these tests assert CRUD and
+    // permissions. Running inside arc's parallel suite saturates the event loop
+    // often enough that under-pressure returned 503 for a valid request — a
+    // failure about pool scheduling wearing the costume of a resource bug.
+    underPressure: false,
     // Auto-discover all *.resource.ts files in the resources directory.
     // Resolves relative to THIS file — works in src/ (dev) and dist/ (prod).
     resources: await loadResources(new URL("../resources", import.meta.url).href),

@@ -541,7 +541,7 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
         }
 
         // Pass routes as-is to createCrudRouter. String handler resolution
-        // and `wrapHandler` derivation (from `!route.raw`) happen inside
+        // and `wrapHandler` derivation (from the presence of `rawHandler`) happen inside
         // createCrudRouter.
         createCrudRouter(typedInstance, resource.controller as unknown as CrudController<TDoc>, {
           tag: resource.tag,

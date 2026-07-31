@@ -178,6 +178,13 @@ describe("Repository Contract — mongokit 3.6 reference", () => {
     await connection.asPromise();
 
     ProductModel = connection.model<IProduct>("ContractProduct", productSchema);
+    // Mongoose builds declared indexes in the BACKGROUND after the model
+    // compiles, so a `$near` query can reach the server before the `2dsphere`
+    // index exists — MongoDB then answers "unable to find index for $geoNear
+    // query". `init()` resolves once index creation has finished, which is the
+    // difference between a deterministic suite and one that fails only under
+    // parallel load.
+    await ProductModel.init();
 
     repo = new Repository<IProduct>(ProductModel, [
       methodRegistryPlugin(),

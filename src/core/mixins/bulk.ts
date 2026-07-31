@@ -16,6 +16,7 @@
  * ```
  */
 
+import { conjoinPolicyFilters } from "../../permissions/filter-merge.js";
 import { getOrgId as getOrgIdFromScope, isElevated } from "../../scope/types.js";
 import type {
   AnyRecord,
@@ -141,10 +142,14 @@ export function BulkMixin<TBase extends Constructor<BaseCrudController>>(
       userFilter: Record<string, unknown>,
       req: IRequestContext,
     ): Record<string, unknown> | null {
-      const filter: Record<string, unknown> = { ...userFilter };
+      // Caller filter, permission policy, and tenant scope are INDEPENDENT
+      // restrictions — conjoin with AND, never overwrite. A bare
+      // `Object.assign`/`filter[tenantField] = orgId` let a policy replace a
+      // caller constraint (or the tenant assignment clobber a policy's tenant
+      // constraint), so a bulk update/delete could hit rows the policy excluded.
+      // Conjunction guarantees every layer's restriction is enforced together.
       const arcContext = this.meta(req);
-      const policyFilters = arcContext?._policyFilters;
-      if (policyFilters) Object.assign(filter, policyFilters);
+      let filter = conjoinPolicyFilters(userFilter, arcContext?._policyFilters);
 
       if (this.tenantField) {
         const scope = arcContext?._scope;
@@ -153,7 +158,7 @@ export function BulkMixin<TBase extends Constructor<BaseCrudController>>(
         if (isElevated(scope)) return filter;
         const orgId = getOrgIdFromScope(scope);
         if (!orgId) return null;
-        filter[this.tenantField] = orgId;
+        filter = conjoinPolicyFilters(filter, { [this.tenantField]: orgId });
       }
       return filter;
     }

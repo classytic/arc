@@ -451,9 +451,8 @@ defineResource({
     {
       method: 'GET',
       path: '/:id/download',
-      handler: 'downloadFile',       // Fastify request/reply
+      rawHandler: 'downloadFile',    // Fastify request/reply — skips the arc pipeline
       permissions: requireAuth(),
-      raw: true,                     // skip arc pipeline
       summary: 'Download product file',
     },
     {
@@ -488,7 +487,7 @@ class ProductController extends BaseController {
 }
 ```
 
-**Fastify Native Pattern** (`raw: true`):
+**Fastify Native Pattern** (`rawHandler`):
 
 ```typescript
 class ProductController extends BaseController {

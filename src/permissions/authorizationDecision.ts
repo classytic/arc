@@ -58,7 +58,32 @@ export type PermissionCheckReturn = boolean | AuthorizationDecision;
  * pipeline only ever handles decisions.
  */
 export function normalizeToDecision(result: PermissionCheckReturn): AuthorizationDecision {
-  return typeof result === "boolean" ? { effect: result ? "allow" : "deny" } : result;
+  if (typeof result === "boolean") return { effect: result ? "allow" : "deny" };
+  /**
+   * A returned object MUST carry an `effect`. Without this guard a foreign shape — the
+   * pre-2.30 `{ granted: true }`, a hand-rolled `{ allowed: true }`, a stray Promise
+   * someone forgot to await — passed through as a decision with no effect and was read
+   * as DENY. A gate that says yes and is silently overruled is the worst available
+   * failure: nine `@classytic/arc-*` test suites went red at once and every symptom
+   * pointed at authentication rather than at the return shape.
+   *
+   * Throwing lands in `failed` (fail-closed, still a denial), so behaviour is unchanged
+   * for anything already correct — but the reason now names itself instead of hiding.
+   */
+  const effect = (result as { effect?: unknown } | null)?.effect;
+  // Validate the VALUE, not merely the key. Testing `"effect" in result` alone
+  // lets `{ effect: "permit" }` or `{ effect: undefined }` through, and every
+  // downstream branch is `effect !== "allow"` — so a typo becomes exactly the
+  // silent deny this guard exists to abolish, only one field further along.
+  if (result === null || typeof result !== "object" || (effect !== "allow" && effect !== "deny")) {
+    throw new Error(
+      "[arc] a permission check returned an unrecognized shape: " +
+        `${JSON.stringify(result)}. Return a boolean or an AuthorizationDecision ` +
+        "({ effect: 'allow' | 'deny', ... }). The pre-2.30 { granted } shape is no " +
+        "longer accepted — it normalized to a silent deny.",
+    );
+  }
+  return result;
 }
 
 // ============================================================================
@@ -209,13 +234,6 @@ export function applyAuthorizationDecision(
   // every enforcement surface. Do not fill it without a dispatcher + a real
   // consumer (see designs/authorization-architecture.md).
 }
-
-/**
- * @deprecated Renamed to {@link applyAuthorizationDecision} — the contract is an
- * `AuthorizationDecision`, not a `PermissionResult`. This alias is kept for
- * back-compat and will be removed in a future major.
- */
-export const applyPermissionResult = applyAuthorizationDecision;
 
 // ============================================================================
 // Evaluate + apply (end-to-end permission flow)

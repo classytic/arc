@@ -4,7 +4,7 @@
  * Boots a real resource with `fields: { ... }` and custom `routes:`, then
  * verifies that POSTing a restricted field returns 403 (default policy)
  * for non-admin callers and passes through for admin callers. Also pins
- * the per-route `fieldWrite: false` opt-out and the `raw: true` bypass.
+ * the per-route `fieldWrite: false` opt-out and the `rawHandler` bypass.
  */
 import type { StandardRepo } from "@classytic/repo-core/repository";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -81,8 +81,7 @@ describe("Custom routes — field-write enforcement (integration)", () => {
           method: "POST",
           path: "/raw-promote",
           permissions: allowPublic(),
-          raw: true,
-          handler: async (_req, reply) => {
+          rawHandler: async (_req, reply) => {
             return reply.send({ ok: true });
           },
         },
@@ -165,7 +164,7 @@ describe("Custom routes — field-write enforcement (integration)", () => {
     expect(body.received).toEqual({ name: "x", role: "admin" });
   });
 
-  it("`raw: true` routes bypass field-write enforcement", async () => {
+  it("`rawHandler` routes bypass field-write enforcement", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/users/raw-promote",

@@ -696,8 +696,7 @@ defineResource({
     method: 'POST',
     path: '/:id/checkout',
     permissions: requireAuth(),
-    raw: true,
-    handler: async (request, reply) => {
+    rawHandler: async (request, reply) => {
       const result = await withCompensation('checkout', steps, { orderId: request.params.id });
       if (!result.success) return reply.code(422).send({ error: result.error });
       return reply.send({ data: result.results });

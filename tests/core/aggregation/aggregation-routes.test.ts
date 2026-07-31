@@ -221,7 +221,8 @@ describe("aggregation routes — end-to-end", () => {
       value?: unknown;
       values?: unknown[];
     }>;
-    const leaf = (op: string, field: string) => leaves.find((l) => l.op === op && l.field === field);
+    const leaf = (op: string, field: string) =>
+      leaves.find((l) => l.op === op && l.field === field);
 
     expect(leaf("eq", "status")?.value).toBe("pending");
     // Range operators keep their ISO strings coerced to Date — a BSON Date

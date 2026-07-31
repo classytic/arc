@@ -489,3 +489,143 @@ describe("convertRouteSchema", () => {
     });
   });
 });
+
+describe("toJsonSchema — plain JSON Schema fast path strips $schema", () => {
+  /**
+   * A pre-converted schema must normalize the same way a Zod one does.
+   *
+   * The Zod branch already dropped `$schema` because Fastify's AJV tries to resolve
+   * an unknown draft URI as a registered ref. A caller who writes
+   * `z.toJSONSchema(mySchema)` before handing it to a route lands on the FAST PATH
+   * instead, so the normalization was skipped exactly when it was needed — and the
+   * result is a BOOT failure naming a URI the author never typed.
+   */
+  it("drops a 2020-12 $schema that Fastify's AJV cannot resolve", () => {
+    const converted = toJsonSchema({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: { name: { type: "string" } },
+    });
+    expect(converted).toBeDefined();
+    expect(converted).not.toHaveProperty("$schema");
+    // Everything else survives — this normalizes, it does not rebuild.
+    expect(converted?.type).toBe("object");
+    expect(converted?.properties).toEqual({ name: { type: "string" } });
+  });
+
+  it("does NOT mutate the caller's object", () => {
+    // Route schemas are commonly module-level constants shared across several
+    // routes (or exported for a contract test). Deleting a key from the input as a
+    // side effect of asking for a conversion would edit the caller's own constant.
+    const original = {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object" as const,
+    };
+    toJsonSchema(original);
+    expect(original.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
+  });
+
+  it("passes a $schema-free JSON Schema through by identity", () => {
+    // No clone when there is nothing to strip — the fast path stays a fast path.
+    const plain = { type: "object" as const, properties: {} };
+    expect(toJsonSchema(plain)).toBe(plain);
+  });
+});
+
+// ============================================================================
+// Tests: input vs output direction (`io`)
+// ============================================================================
+
+/**
+ * A Zod schema has two shapes. Converting a REQUEST slot as `output` — Zod's
+ * default, and what arc did before — marks every `.default()` field `required`,
+ * so a legal request that omits one is rejected with a 400 naming a property the
+ * client was never meant to send. Responses stay `output`: they describe what
+ * the handler returns, after defaults and transforms have applied.
+ */
+describe("schema conversion direction (io)", () => {
+  beforeAll(async () => {
+    await ensureSchemaConverter();
+  });
+
+  const body = z.object({
+    title: z.string(),
+    status: z.string().default("draft"),
+  });
+
+  it("a request body does NOT require a field that has a default", () => {
+    const converted = convertRouteSchema({ body }) as {
+      body: { required?: string[]; properties: Record<string, unknown> };
+    };
+    expect(converted.body.required).toEqual(["title"]);
+    expect(converted.body.required).not.toContain("status");
+    // The default is still advertised, so docs and clients can see it.
+    expect(converted.body.properties.status).toMatchObject({ default: "draft" });
+  });
+
+  it("querystring, params and headers convert as input too", () => {
+    const converted = convertRouteSchema({
+      querystring: body,
+      params: body,
+      headers: body,
+    }) as Record<string, { required?: string[] }>;
+    for (const slot of ["querystring", "params", "headers"]) {
+      expect(converted[slot]?.required, `${slot} should not require a defaulted field`).toEqual([
+        "title",
+      ]);
+    }
+  });
+
+  it("a response keeps OUTPUT shape — the server always returns the defaulted field", () => {
+    const converted = convertRouteSchema({ response: { 200: body } }) as {
+      response: Record<string, { required?: string[] }>;
+    };
+    expect(converted.response[200]?.required).toEqual(["title", "status"]);
+  });
+
+  it("a transformed field keeps its INPUT type instead of degrading to {}", () => {
+    // In output mode a transform is unrepresentable: with `unrepresentable: 'any'`
+    // it becomes `{}` — validation silently switched off for that property.
+    const withTransform = z.object({ tags: z.string().transform((s) => s.split(",")) });
+    const asInput = toJsonSchema(withTransform, "draft-7", "warn", "input") as {
+      properties: Record<string, unknown>;
+    };
+    const asOutput = toJsonSchema(withTransform, "draft-7", "warn", "output") as {
+      properties: Record<string, unknown>;
+    };
+
+    expect(asInput.properties.tags).toMatchObject({ type: "string" });
+    expect(asOutput.properties.tags).toEqual({});
+  });
+
+  it("documents a create body as input and the entity as output", () => {
+    const converted = convertOpenApiSchemas({ createBody: body, entity: body }) as Record<
+      string,
+      { required?: string[] }
+    >;
+    expect(converted.createBody?.required).toEqual(["title"]);
+    expect(converted.entity?.required).toEqual(["title", "status"]);
+  });
+
+  it("z.strictObject still rejects unknown keys on a request; z.object does not", () => {
+    // Deliberate: `z.object()` STRIPS unknown keys rather than erroring, so extra
+    // keys are legal input and input mode omits `additionalProperties: false`.
+    // A contract that must reject them says so with `z.strictObject()`.
+    const loose = convertRouteSchema({ body: z.object({ a: z.string() }) }) as {
+      body: Record<string, unknown>;
+    };
+    const strict = convertRouteSchema({ body: z.strictObject({ a: z.string() }) }) as {
+      body: Record<string, unknown>;
+    };
+    expect(loose.body.additionalProperties).toBeUndefined();
+    expect(strict.body.additionalProperties).toBe(false);
+  });
+
+  it("openapi-3.1 maps to the 2020-12 dialect rather than falling through unrecognized", () => {
+    // Zod's `target` accepts any string (`{} & string`), so an unknown value is
+    // not rejected — it just matches no internal branch. Pinning the mapping
+    // keeps 3.1 output intentional; 3.1 aligned with JSON Schema 2020-12.
+    const tuple = z.tuple([z.string(), z.number()]);
+    expect(toJsonSchema(tuple, "openapi-3.1")).toEqual(toJsonSchema(tuple, "draft-2020-12"));
+  });
+});

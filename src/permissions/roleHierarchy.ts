@@ -39,31 +39,51 @@ export interface RoleHierarchy {
  * Circular references are handled safely (visited set).
  */
 export function createRoleHierarchy(map: Record<string, readonly string[]>): RoleHierarchy {
-  // Pre-compute the full expansion for each role (with circular protection)
+  // Memo of each role's FULL transitive expansion. Only fully-independent
+  // expansions are cached (see below) so the memo is always context-free correct.
   const cache = new Map<string, string[]>();
 
-  function resolveRole(role: string, visited: Set<string>): string[] {
-    if (visited.has(role)) return []; // circular protection
-    visited.add(role);
+  /**
+   * Resolve a role's transitive expansion.
+   *
+   * `stack` is the CURRENT recursion path (a DFS stack), NOT a shared visited
+   * accumulator: a role is added on entry and REMOVED on exit, so sibling
+   * branches never pollute each other. Without this, a diamond `A→B→D`, `A→C→D`
+   * would let B's traversal leave `D` in a shared set, making C's `D` look like a
+   * back-edge and caching `C` WITHOUT `D` — a nondeterministic under-grant.
+   *
+   * Returns `cyclic` = whether a back-edge into `stack` was cut anywhere in the
+   * subtree. A cyclic subtree's result depends on the entry path, so it is NOT
+   * cached (recomputed each call — correct, if unmemoized). Acyclic subtrees (the
+   * norm) cache safely.
+   */
+  function resolveRole(role: string, stack: Set<string>): { roles: string[]; cyclic: boolean } {
+    if (stack.has(role)) return { roles: [], cyclic: true }; // back-edge — cut
 
     const cached = cache.get(role);
-    if (cached) return cached;
+    if (cached) return { roles: cached, cyclic: false };
 
     const children = map[role];
     if (!children || children.length === 0) {
       cache.set(role, [role]);
-      return [role];
+      return { roles: [role], cyclic: false };
     }
 
+    stack.add(role);
     const result = [role];
+    let cyclic = false;
     for (const child of children) {
-      result.push(...resolveRole(child, visited));
+      const childResult = resolveRole(child, stack);
+      result.push(...childResult.roles);
+      if (childResult.cyclic) cyclic = true;
     }
+    stack.delete(role); // exit — restore the stack for siblings
 
-    // Deduplicate
     const deduped = [...new Set(result)];
-    cache.set(role, deduped);
-    return deduped;
+    // Cache ONLY when no back-edge was cut in this subtree — a cut result is
+    // entry-path-dependent and would poison a later lookup from another path.
+    if (!cyclic) cache.set(role, deduped);
+    return { roles: deduped, cyclic };
   }
 
   return {
@@ -72,7 +92,7 @@ export function createRoleHierarchy(map: Record<string, readonly string[]>): Rol
 
       const all = new Set<string>();
       for (const role of roles) {
-        for (const expanded of resolveRole(role, new Set())) {
+        for (const expanded of resolveRole(role, new Set()).roles) {
           all.add(expanded);
         }
       }

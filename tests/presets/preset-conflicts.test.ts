@@ -25,7 +25,6 @@ function presetWithRoutes(name: string, routes: Array<{ method: string; path: st
       path: r.path,
       handler: async () => ({ success: true }),
       permissions: (() => true) as any,
-      raw: false as const,
     })),
   };
 }

@@ -127,8 +127,7 @@ function expandHistory<TDoc>(config: ResourceConfig<TDoc>): ResourceConfig<TDoc>
     method: "GET" as const,
     path: "/:id/history",
     summary: `Change history for a ${resourceName} record (audit-backed timeline)`,
-    raw: true as const,
-    handler: async (request: FastifyRequest, reply: FastifyReply) => {
+    rawHandler: async (request: FastifyRequest, reply: FastifyReply) => {
       const audit = (request.server as unknown as { audit?: AuditQuerySurface }).audit;
       if (!audit?.query || audit._noop === true) {
         return reply.code(503).send({

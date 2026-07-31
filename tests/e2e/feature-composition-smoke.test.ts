@@ -175,9 +175,8 @@ function buildApp() {
       {
         method: "GET",
         path: "/summary",
-        raw: true,
         permissions: allowPublic(),
-        handler: async (req, reply) => {
+        rawHandler: async (req, reply) => {
           const { orgId, actorId } = orgGuard.from(req);
           const total = await ProcurementModel.countDocuments({ deletedAt: null });
           const draft = await ProcurementModel.countDocuments({

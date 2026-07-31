@@ -38,6 +38,13 @@ export interface SurfaceObservation {
 export interface AuthorizationConformance {
   /** `GET /confs` — the CRUD list surface. */
   list: SurfaceObservation;
+  /**
+   * `GET /confs/:id` — the SINGLE-RECORD surface. Its `filter` is the compound
+   * `buildIdFilter` output (route id AND policy AND tenant), so a policy that
+   * tried to redirect/widen the target would show here — the surface the
+   * filter-overwrite class of bug lives on.
+   */
+  get: SurfaceObservation;
   /** `GET /confs/aggregations/tally` — the aggregation surface. */
   aggregation: SurfaceObservation;
   /** Close the throwaway app. Always call (e.g. in `finally`). */
@@ -56,6 +63,7 @@ export async function runAuthorizationConformance(opts: {
 }): Promise<AuthorizationConformance> {
   const rows = opts.rows ?? [{ _id: "1" }];
   let listFilter: AnyRecord | undefined;
+  let getFilter: AnyRecord | undefined;
   let aggFilter: AnyRecord | undefined;
 
   const repo = createMockRepository<AnyRecord>({
@@ -71,6 +79,13 @@ export async function runAuthorizationConformance(opts: {
         hasNext: false,
         hasPrev: false,
       };
+    }) as never,
+    // The single-record read path: AccessControl.buildIdFilter → getOne(compound).
+    // Capturing the compound filter here is what proves a policy can't redirect
+    // or widen the route's target id (the filter-overwrite regression surface).
+    getOne: (async (filter: AnyRecord) => {
+      getFilter = filter;
+      return rows[0] ?? null;
     }) as never,
     aggregate: (async (req: { filter?: AnyRecord } = {}) => {
       aggFilter = req.filter;
@@ -113,10 +128,12 @@ export async function runAuthorizationConformance(opts: {
   await app.ready();
 
   const list = await app.inject({ method: "GET", url: "/confs" });
+  const get = await app.inject({ method: "GET", url: "/confs/1" });
   const aggregation = await app.inject({ method: "GET", url: "/confs/aggregations/tally" });
 
   return {
     list: { status: list.statusCode, filter: listFilter },
+    get: { status: get.statusCode, filter: getFilter },
     aggregation: { status: aggregation.statusCode, filter: aggFilter },
     close: () => app.close(),
   };

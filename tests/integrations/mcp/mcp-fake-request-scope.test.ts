@@ -16,7 +16,7 @@
  *     `buildRequestContext`) and threads the resolved scope through BOTH
  *     `request.scope` AND `request.metadata._scope`.
  *   - This matches what HTTP paths do (auth adapter sets `request.scope`;
- *     `applyPermissionResult` then mirrors to `metadata._scope`).
+ *     `applyAuthorizationDecision` then mirrors to `metadata._scope`).
  *
  * This file pins both bug surfaces independently.
  */

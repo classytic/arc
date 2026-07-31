@@ -17,7 +17,7 @@ import Fastify from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
-import { allowPublic } from "../../src/permissions/index.js";
+import { allowPublic, deny } from "../../src/permissions/index.js";
 import type { PermissionCheck, PermissionContext } from "../../src/permissions/types.js";
 import { createDomainError } from "../../src/utils/errors.js";
 import {
@@ -60,7 +60,11 @@ const asyncThrowingPermission: PermissionCheck = async (_ctx: PermissionContext)
 
 /** Always denies (normal behavior) */
 const denyPermission: PermissionCheck = async (_ctx: PermissionContext) => {
-  return { granted: false, reason: "Not allowed" };
+  // A DECIDED deny, not a thrown one — that distinction is the point of the
+  // test below: a decided deny without a user is 401, while a check that THROWS
+  // is 403 even when anonymous (a broken gate is a hard denial, not an
+  // invitation to authenticate).
+  return deny("Not allowed");
 };
 
 /** Always allows */

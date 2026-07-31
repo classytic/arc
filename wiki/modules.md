@@ -18,8 +18,9 @@ interface ArcModule {
   plugins?(fastify): void | Promise<void>;         // infra registration (before bootstrap)
   bootstrap?(fastify): TExports | Promise<TExports>; // engine/singleton init; return = public export
   resources?: ResourceLike[] | ((fastify) => ResourceLike[] | Promise<...>);
+  owns?: readonly string[];                        // app resources this module supersedes
   afterResources?(fastify): void | Promise<void>; // cross-wiring arc has no arm for
-  onClose?(fastify): void | Promise<void>;        // teardown (engine.destroy, timers)
+  onClose?(fastify): void | Promise<void>;        // teardown; also runs on boot rollback
   errorMappers?: readonly ErrorMapper[];           // 2.21 — see below
   healthChecks?: readonly HealthCheck[];           // 2.24 self-describing arms
   eventHandlers?: Contribution<EventHandlerDefinition>;  //  ↑ prefer over afterResources
@@ -71,8 +72,69 @@ that single hook registers last, it fires before the DB/Redis plugins from
 `app plugins()` (whose own `onClose` runs last under LIFO), so the underlying
 connections are still live during both module and app teardown.
 
+**Boot is transactional (2.31).** That single teardown hook registers at the
+END of the lifecycle, so a failure *before* it — a later module's `bootstrap`,
+app `bootstrap[]`, a resources factory, `afterResources` — used to leave an
+already-initialized module's clients, timers, and engines running with no
+teardown path at all. Arc now tracks every module that **entered** an init
+phase (`plugins` OR `bootstrap`) — entered, not completed, so a callback that
+allocates and *then* throws is covered too — and, on any boot failure:
+
+1. unsubscribes live module event handlers (engines still alive), then
+2. closes initialized modules in **reverse composition order**, then
+3. rethrows the **original** boot error — cleanup failures are logged, never
+   substituted for the real cause.
+
+Every closer runs **at most once** across the rollback and shutdown paths, and
+one throwing closer never blocks the others (best-effort). Shutdown is
+best-effort too: a throwing module closer is logged, the remaining closers and
+app `onClose` still run, and the first close error is rethrown from
+`fastify.close()` afterwards.
+
+> **Write closers defensively.** Rollback fires after a PARTIAL init — your
+> `bootstrap` opened a client and threw on the next line, or your `plugins`
+> ran but `bootstrap` never did. Guard everything init may not have reached:
+> `client?.close()`, not `client.close()`.
+
+```ts
+let client: Client | undefined;
+defineModule({
+  name: "billing",
+  bootstrap: async () => {
+    client = await openClient();   // allocated…
+    await migrate(client);         // …and this may throw
+  },
+  onClose: async () => { await client?.close(); },  // still runs
+});
+```
+
 Module resources flow through arc's normal registration (prefix, dedup,
 OpenAPI, audit) — never special-cased.
+
+### `owns` — superseding an app resource, verified
+
+`owns: ["order"]` declares that this module authoritatively provides the
+app-level `order` resource; arc DROPS the app's same-named fork so the module's
+version registers. That replaces a host-side hand-maintained "which resources
+did modules take over" filter list with a colocated per-module declaration.
+
+**The claim is enforced (2.31).** Arc resolves module resources first and fails
+boot if a claimed name is not among the ones the *claiming* module supplies:
+
+```ts
+defineModule({ name: "orders", owns: ["order"], resources: [] })
+// ✗ boot fails: declares owns: ["order"] but its own `resources` do not supply that name
+```
+
+Unconditional, not gated behind `strictResources` — `owns` is an explicit
+authoritative claim, unlike the far softer duplicate-discovery case. An unmet
+claim deletes the app's route and leaves nothing serving it: a silent 404 in
+production. A *sibling* module supplying the name does not satisfy the claim;
+ownership is local to its declarant, which is the colocation the arm exists for.
+
+Still tolerant on the app side: `owns` a name with no matching app resource is a
+no-op, so a module may pre-declare before any fork exists — it just has to
+supply the resource itself.
 
 ## Authoring convention (the forRoot analog, without the container)
 
@@ -233,6 +295,89 @@ built?" We answer it without runtime machinery, in three layers:
    const acct = getModuleExports(fastify, "accounting"); // → AccountingEngine, no cast
    const order = getModuleExports<OrderEngine>(fastify, "order"); // or inline
    ```
+
+   ### OPTIONAL and DEFERRED sibling reads (2.32)
+
+   `getModuleExports` is the right read only when the dependency is required AND
+   already bootstrapped. Two other shapes are just as common, and hosts were
+   hand-rolling both as `(f as unknown as { arc?: { modules?: Record<string, unknown> } }).arc?.modules?.x`
+   — a double cast that loses registry typing, survives a typo in the module
+   name, and cannot be grepped for:
+
+   | Read | Use when |
+   |---|---|
+   | `getModuleExports(f, name)` | required, and the sibling has bootstrapped (throws with the recorded-module list) |
+   | `getOptionalModuleExports(f, name)` | the module is genuinely OPTIONAL — `undefined`, no throw, no cast |
+   | `hasModuleExports(f, name)` | a readiness predicate (`ready: () => …`) — "did a bootstrap record an export?" |
+   | `hasModule(f, name)` | "is this module COMPOSED?" — true for resource-only / exportless modules |
+   | `getModuleState(f, name)` | its lifecycle state (see below) — for doctor/registry introspection |
+   | `lazyModuleExports(f, name)` | the read is WIRED at composition time and USED later; optional |
+   | `lazyRequiredModuleExports(f, name)` | same, but a hard dependency — presence validated eagerly, export read deferred |
+
+   **Presence ≠ exports.** `hasModuleExports` answers whether a *public export*
+   was recorded — a resource-only module (no `bootstrap`, or one returning
+   `undefined`) is composed yet looks absent to it. `hasModule` /
+   `getModuleState` read `arc.moduleStates`, populated for every composed module
+   the moment the graph validates:
+
+   ```
+   resolved ──► bootstrapping ──► ready ──► closing ──► closed
+                     │                                     │
+                     └────────────► failed ◄───────────────┘
+   ```
+
+   Two semantics worth knowing. `closed` tracks the **application** lifecycle,
+   not just module-owned cleanup — a module with no `onClose` still reaches
+   `closed` after `app.close()` rather than sitting at `ready` forever. And
+   **`failed` is sticky**: a module whose init threw is closed by the rollback,
+   but that successful cleanup does not rewrite it to `closed`, because "this
+   module failed to initialize" is the fact an operator needs.
+
+   One flat union can't express both dimensions — "failed to init, cleaned up
+   fine" and "inited fine, failed to clean up" both read as `failed`. Splitting
+   them needs a separate failure record (`{ phase, error }`), not more union
+   members; deferred until the introspection surface has a real consumer.
+
+   **`lazyRequiredModuleExports` defers the READ, not the REQUIREMENT (2.31).**
+   A lazily-required module is still a hard dependency, so a name that is not in
+   the composed graph throws where the accessor is *created* — at boot — instead
+   of surviving startup and failing on the first request or event. Only the
+   export read (has `bootstrap` returned yet?) is deferred.
+
+   **Convention for hard sibling dependencies — also declare `dependsOn`:**
+
+   | Shape | Declare |
+   |---|---|
+   | Hard, read during `bootstrap` | `dependsOn: ["order"]` + `getModuleExports` |
+   | Hard, read at request/event time | `dependsOn: ["order"]` + `lazyRequiredModuleExports` |
+   | Optional integration | `lazyModuleExports` / `getOptionalModuleExports`, no edge |
+
+   `dependsOn` orders composition (the sibling's engine exists before yours
+   initializes); the lazy accessor only defers the read. They are complementary,
+   not alternatives.
+
+   **Why the lazy pair exists.** Plenty of wiring is *registered* earlier than it
+   *runs*: an `eventHandlers` factory, a bridge accessor handed to another
+   module, a hook added during bootstrap and fired per request. Such a factory
+   can execute before the sibling it needs has bootstrapped, so a sibling engine
+   captured into a local at that moment is `undefined` — and stays `undefined`
+   for the process lifetime even though the sibling came up milliseconds later.
+   That failure is **silent by construction**: the consumer sees a null bridge
+   and reads it as "this deployment has no inventory / no revenue engine", a
+   legitimate configuration. The lazy getter re-reads while the module is absent,
+   memoizes the first resolved value, and **never memoizes absence**.
+
+   ```ts
+   const inventory = lazyModuleExports<FlowEngine>(fastify, "inventory");
+   return {
+     flowBridge: () =>
+       inventory() ? createFlowEngineBridge({ getFlowEngine: () => inventory()! }) : null,
+     ready: () => inventory() !== undefined, // drawer-only deployment: legitimately false
+   };
+   ```
+
+   Use `dependsOn` when the edge is hard and the module set is fixed; use
+   `lazyModuleExports` when the sibling may not be composed at all.
 
 ## dependsOn — composition order without list-position coupling (2.20)
 

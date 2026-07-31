@@ -11,6 +11,8 @@
  */
 
 /** Repeat schedule — cron pattern or fixed interval. Explicit timezone is required. */
+import type { PermissionCheck } from "../../permissions/types.js";
+
 export interface JobRepeatOptions {
   /** Cron pattern (e.g. '0 9 * * *' = every day 09:00). Mutually exclusive with `every`. */
   pattern?: string;
@@ -127,6 +129,63 @@ export interface JobsPluginOptions {
   jobs: JobDefinition[];
   /** URL prefix for job management endpoints (default: '/jobs') */
   prefix?: string;
+  /**
+   * Job management HTTP endpoints (`GET <prefix>/stats`,
+   * `GET <prefix>/:queue/:id/status`).
+   *
+   * **Disabled by default.** A job status carries `returnValue` and
+   * `failedReason` — the handler's own output and error text, which routinely
+   * hold export URLs, billing results, model output, recipient addresses, or
+   * internal stack detail. Serving that unauthenticated turns a job id into a
+   * read primitive over other tenants' work.
+   *
+   * Enable it deliberately, with a permission check:
+   *
+   * ```ts
+   * managementRoutes: { operatorPermission: requireRoles(["platform-ops"]) }
+   * ```
+   *
+   * Queue-level counts are also available through the metrics/health
+   * integration, which does not expose individual jobs.
+   */
+  managementRoutes?:
+    | false
+    | {
+        /**
+         * REQUIRED — arc will not mount an unguarded management surface.
+         *
+         * **This is an OPERATOR surface, not a tenant-facing one.** A BullMQ job
+         * carries no framework-level tenant identity, and `getStatus` fetches
+         * straight by queue + id, so a row-level `policy` on the decision has
+         * nothing to filter: `requireOrgRole("manager")` would let a manager in
+         * org A read a known job handle from org B. `/stats` is inherently
+         * global for the same reason.
+         *
+         * Gate it on an operator role — `requireRoles(["platform-ops"])` — and
+         * keep tenant-facing job status in a resource that owns its own row
+         * policy. Arc REFUSES a request whose decision carries a `policy`
+         * rather than silently ignoring it.
+         */
+        operatorPermission: PermissionCheck;
+        /**
+         * Accept an `operatorPermission` that arc cannot prove is platform-only.
+         *
+         * By default the gate must carry `_platformOnly` (i.e. come from
+         * `requirePlatformRole`), because that property is unprovable from
+         * outside: `requireOrgRole("manager")` and the default
+         * `requireRoles(["ops"])` both return a bare allow with no policy, so a
+         * manager in org A passes and reads a known handle from org B. Boot fails
+         * rather than serving a surface whose guard reads as tenant-scoped.
+         *
+         * Set this only for a custom check you have verified consults platform
+         * identity alone.
+         */
+        allowUnverifiedOperatorPermission?: boolean;
+        /** Include the handler's return value in a status response. Default `false`. */
+        exposeResult?: boolean;
+        /** Include `failedReason` in a status response. Default `false`. */
+        exposeFailureReason?: boolean;
+      };
   /** Bridge job events to Arc's event bus (default: true) */
   bridgeEvents?: boolean;
   /** Default job options applied to all jobs */
@@ -144,16 +203,30 @@ export interface JobDispatcher {
     name: string,
     data: TData,
     options?: JobDispatchOptions,
-  ): Promise<{ jobId: string }>;
+  ): Promise<JobHandle>;
   getQueue(name: string): unknown | null;
   getStats(): Promise<Record<string, QueueStats>>;
   /**
    * Fetch a point-in-time status snapshot for a job by its ID.
-   * Searches across all registered queues.
-   * Returns `null` if the job doesn't exist or has been removed by retention policy.
+   * QUEUE-QUALIFIED: BullMQ job ids are local to their queue, so an id alone
+   * cannot identify a job. `dispatch()` returns the queue name alongside the id
+   * for exactly this reason.
+   *
+   * Returns `null` if the queue is not registered, or the job doesn't exist /
+   * has been removed by retention policy.
    */
-  getStatus(jobId: string): Promise<JobStatus | null>;
+  getStatus(queue: string, jobId: string): Promise<JobStatus | null>;
   close(): Promise<void>;
+}
+
+/**
+ * A dispatched job's address. The queue is part of the identity because BullMQ
+ * ids are queue-local — two queues can both hold `"123"`.
+ */
+export interface JobHandle {
+  /** Registered job name (= queue name). */
+  queue: string;
+  jobId: string;
 }
 
 export interface QueueStats {

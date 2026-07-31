@@ -152,6 +152,13 @@ export interface ArcModule<TExports = unknown> {
    * *importing* a dependent until its dependency is ready. Use a thunk to gate
    * whether a module is imported at all (region/tier packs); use `dependsOn`
    * to order modules that are already selected.
+   *
+   * **Convention: every HARD sibling dependency belongs here** — including
+   * ones read lazily. `lazyRequiredModuleExports` defers the export READ to
+   * first use (and eagerly validates the module is composed), but only
+   * `dependsOn` orders composition so the sibling's engine exists before
+   * yours initializes. Omit the edge only for genuinely optional
+   * integrations (`lazyModuleExports` / `getOptionalModuleExports`).
    */
   readonly dependsOn?: readonly string[];
 
@@ -223,15 +230,21 @@ export interface ArcModule<TExports = unknown> {
    * Semantics:
    *   - Purely a supersede-the-app-fork switch — it filters the *app* resource
    *     list, never the module's own `resources` (those always register).
-   *   - Static + declarative: read at compose time, so it works regardless of
-   *     whether `resources` is an array or a post-bootstrap factory (no early
-   *     factory resolution, no boot-order coupling).
-   *   - Idempotent + tolerant: an `owns` entry with no matching app resource is
-   *     a silent no-op — a module may pre-declare a name before any fork exists.
+   *   - Idempotent + tolerant on the APP side: an `owns` entry with no matching
+   *     app resource is a silent no-op — a module may pre-declare a name before
+   *     any fork exists.
    *   - Collected across ALL modules; the app-side supersession is their union.
    *
-   * Contract: if you `owns` a name, PROVIDE it (in this module's `resources`).
-   * Dropping the app fork without supplying a replacement removes the route.
+   * **Contract (ENFORCED at boot): if you `owns` a name, PROVIDE it** — in
+   * THIS module's own `resources`. Arc resolves module resources first and
+   * fails boot when a claimed name is not among them, naming the module, the
+   * unmet names, and what it did supply. Without that check, a typo or a
+   * resource deleted without updating `owns` booted "successfully" with the
+   * app's route silently removed and nothing serving it.
+   *
+   * A sibling module supplying the name does NOT satisfy the claim — ownership
+   * is local to the module that declares it, which is the colocation this arm
+   * exists for.
    */
   readonly owns?: readonly string[];
 
@@ -327,9 +340,34 @@ export interface ArcModule<TExports = unknown> {
   readonly scheduledJobs?: ModuleContribution<ScheduleDefinition>;
 
   /**
-   * Teardown — registered as a Fastify `onClose` hook. Destroy engines, stop
-   * timers, flush the module's outbox. Modules close in REVERSE list order
-   * (last composed, first closed), mirroring init.
+   * Teardown — destroy engines, stop timers, flush the module's outbox.
+   * Modules close in REVERSE composition order (last composed, first closed),
+   * mirroring init, BEFORE the app-level `onClose` and before infra plugins'
+   * own close hooks (so teardown still sees a live DB/Redis).
+   *
+   * Boot is transactional: if any phase fails mid-boot — including THIS
+   * module's own `plugins`/`bootstrap` — arc immediately closes every module
+   * that entered an init phase, this closer included, in reverse order, then
+   * rethrows the original boot error. A closer runs AT MOST ONCE across the
+   * rollback and shutdown paths, and one throwing closer never blocks the
+   * rest (best-effort; failures are logged).
+   *
+   * Because rollback fires after a PARTIAL init — your `bootstrap` opened a
+   * client and threw on the next line, or your `plugins` ran but `bootstrap`
+   * never did — write closers defensively. Guard everything init may not have
+   * reached: `client?.close()`, not `client.close()`.
+   *
+   * ```ts
+   * let client: Client | undefined;
+   * defineModule({
+   *   name: "billing",
+   *   bootstrap: async () => {
+   *     client = await openClient();   // allocated…
+   *     await migrate(client);         // …and this may throw
+   *   },
+   *   onClose: async () => { await client?.close(); },  // still runs
+   * });
+   * ```
    */
   onClose?: (fastify: FastifyInstance) => void | Promise<void>;
 }

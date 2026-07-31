@@ -40,16 +40,14 @@ export { requireAgentScope, requireDPoP, requireMandate } from "./agent.js";
 // Exported because the package has `sideEffects: false`, so ESM
 // tree-shaking eliminates unused re-exports for end users. Internal call
 // sites (createCrudRouter, createActionRouter, MCP resourceToTools)
-// import these directly from "./applyPermissionResult.js".
+// import these directly from "./authorizationDecision.js".
 // ──────────────────────────────────────────────────────────────────────
 export {
   applyAuthorizationDecision,
-  /** @deprecated use `applyAuthorizationDecision` */
-  applyPermissionResult,
   evaluatePermissionDecision,
   normalizeToDecision,
   type PermissionCheckReturn,
-} from "./applyPermissionResult.js";
+} from "./authorizationDecision.js";
 export { scopeOf } from "./context.js";
 // ──────────────────────────────────────────────────────────────────────
 // Core primitives — auth/role/ownership + combinators
@@ -64,6 +62,7 @@ export {
   not,
   requireAuth,
   requireOwnership,
+  requirePlatformRole,
   requireRoles,
   roles,
   when,

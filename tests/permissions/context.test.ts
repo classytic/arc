@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { evaluatePermissionDecision } from "../../src/permissions/applyPermissionResult.js";
+import { evaluatePermissionDecision } from "../../src/permissions/authorizationDecision.js";
 import { scopeOf } from "../../src/permissions/context.js";
 import { requireOrgRole } from "../../src/permissions/index.js";
 import type { PermissionContext } from "../../src/permissions/types.js";

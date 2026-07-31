@@ -112,10 +112,30 @@ function createMockWorkflow(id = "test-workflow", overrides?: Partial<WorkflowLi
 // SSE Helper
 // ============================================================================
 
-function fetchSSE(url: string, timeoutMs = 300): Promise<{ statusCode: number; body: string }> {
-  return new Promise((resolve, reject) => {
+/**
+ * Read an SSE stream.
+ *
+ * Returns `connected` — resolved once the response headers arrive, i.e. the
+ * subscription actually exists server-side. A test that emits before that races
+ * the subscribe and loses the frame; sleeping "long enough" first is the same
+ * guess that flakes under load.
+ *
+ * `until` ends the read as soon as the body carries what is being asserted, so
+ * `timeoutMs` is a ceiling rather than the cost of every run.
+ */
+function fetchSSE(
+  url: string,
+  timeoutMs = 300,
+  until?: (body: string) => boolean,
+): Promise<{ statusCode: number; body: string }> & { connected: Promise<void> } {
+  let markConnected: () => void = () => {};
+  const connected = new Promise<void>((r) => {
+    markConnected = r;
+  });
+  const promise = new Promise<{ statusCode: number; body: string }>((resolve, reject) => {
     const req = http.get(url, (res) => {
       let body = "";
+      markConnected();
       const timer = setTimeout(() => {
         res.destroy();
         req.destroy();
@@ -123,6 +143,12 @@ function fetchSSE(url: string, timeoutMs = 300): Promise<{ statusCode: number; b
       }, timeoutMs);
       res.on("data", (chunk: Buffer) => {
         body += chunk.toString();
+        if (until?.(body)) {
+          clearTimeout(timer);
+          res.destroy();
+          req.destroy();
+          resolve({ statusCode: res.statusCode!, body });
+        }
       });
       res.on("end", () => {
         clearTimeout(timer);
@@ -132,6 +158,7 @@ function fetchSSE(url: string, timeoutMs = 300): Promise<{ statusCode: number; b
     });
     req.on("error", reject);
   });
+  return Object.assign(promise, { connected });
 }
 
 // ============================================================================
@@ -993,8 +1020,14 @@ describe("SSE delivers ctx.stream frames (streamline >= 2.6)", () => {
 
     const run = await wf.start({ prompt: "hi" });
 
-    const ssePromise = fetchSSE(`http://localhost:${port}/workflows/ai/runs/${run._id}/stream`);
-    await new Promise((r) => setTimeout(r, 60));
+    // Ends on the awaited frame; waits for the SUBSCRIPTION rather than guessing
+    // it is ready after 60ms, which loses the frame whenever the pool is busy.
+    const ssePromise = fetchSSE(
+      `http://localhost:${port}/workflows/ai/runs/${run._id}/stream`,
+      3000,
+      (body) => body.includes('"token":"hel"'),
+    );
+    await ssePromise.connected;
 
     // Frame for THIS run — must be delivered.
     (wf.container!.eventBus as EventEmitter).emit("step:stream", {

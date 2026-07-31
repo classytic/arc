@@ -173,8 +173,7 @@ export function createDataCleanupModule(deps: DataCleanupModuleDeps): ArcModule<
         path: "/recipes",
         summary: "List available cleanup recipes",
         permissions: view,
-        raw: true,
-        handler: async (_req: FastifyRequest, reply: FastifyReply) => {
+        rawHandler: async (_req: FastifyRequest, reply: FastifyReply) => {
           return reply.send({ recipes: registry.introspect() });
         },
       },
@@ -183,9 +182,8 @@ export function createDataCleanupModule(deps: DataCleanupModuleDeps): ArcModule<
         path: "/preview",
         summary: "Preview a cleanup plan (no mutation)",
         permissions: view,
-        raw: true,
         schema: { body: previewBodySchema },
-        handler: async (req: FastifyRequest, reply: FastifyReply) => {
+        rawHandler: async (req: FastifyRequest, reply: FastifyReply) => {
           const r = req as RequestWithExtras;
           const body = req.body as { recipe: string; parameters?: Record<string, unknown> };
           const plan = await service.preview({
@@ -202,9 +200,8 @@ export function createDataCleanupModule(deps: DataCleanupModuleDeps): ArcModule<
         path: "/runs",
         summary: "Execute a confirmed cleanup plan",
         permissions: execute,
-        raw: true,
         schema: { body: runsBodySchema },
-        handler: async (req: FastifyRequest, reply: FastifyReply) => {
+        rawHandler: async (req: FastifyRequest, reply: FastifyReply) => {
           const r = req as RequestWithExtras;
           const body = req.body as {
             recipe: string;
@@ -230,9 +227,8 @@ export function createDataCleanupModule(deps: DataCleanupModuleDeps): ArcModule<
         path: "/runs/:id",
         summary: "Observe a cleanup run",
         permissions: view,
-        raw: true,
         schema: { params: runIdParamsSchema },
-        handler: async (req: FastifyRequest, reply: FastifyReply) => {
+        rawHandler: async (req: FastifyRequest, reply: FastifyReply) => {
           const { id } = req.params as { id: string };
           return reply.send(await service.getRun(id));
         },
@@ -242,9 +238,8 @@ export function createDataCleanupModule(deps: DataCleanupModuleDeps): ArcModule<
         path: "/runs/:id/action",
         summary: "Cancel or retry a cleanup run",
         permissions: manage,
-        raw: true,
         schema: { params: runIdParamsSchema, body: actionBodySchema },
-        handler: async (req: FastifyRequest, reply: FastifyReply) => {
+        rawHandler: async (req: FastifyRequest, reply: FastifyReply) => {
           // Attribution is required for a control action (fail-closed).
           const actionActor = resolveActor(req as RequestWithExtras);
           const { id } = req.params as { id: string };

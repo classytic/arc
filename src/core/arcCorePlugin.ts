@@ -72,6 +72,14 @@ export interface ArcCore {
   modules?: Partial<import("../factory/module/index.js").ArcModuleRegistry> &
     Record<string, unknown>;
   /**
+   * Lifecycle state per composed module (null-proto map, populated by
+   * `registerResources` the moment the graph is validated — so it answers
+   * "is this module composed?" even for resource-only modules that never
+   * record an export). Read via `hasModule(fastify, name)` /
+   * `getModuleState(fastify, name)`; the map itself is internal.
+   */
+  moduleStates?: Record<string, import("../factory/module/index.js").ModuleState>;
+  /**
    * Module-contributed readiness checks, collected in dependency order and
    * frozen by `createApp`. The API role merges these into its `healthPlugin`;
    * `createWorker` reads this to give its probe listener the identical union

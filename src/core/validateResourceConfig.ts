@@ -199,14 +199,16 @@ function validateRouteHandlers(
   const ctrl = controller as Record<string, unknown>;
 
   for (const route of routes) {
-    if (typeof route.handler === "string") {
-      if (typeof ctrl[route.handler] !== "function") {
-        errors.push({
-          field: `routes[${route.method} ${route.path}]`,
-          message: `Handler "${route.handler}" not found on controller`,
-          suggestion: `Add method "${route.handler}" to controller or use a function handler`,
-        });
-      }
+    // Both fields accept a controller-method NAME; only the calling convention
+    // differs, so the lookup must cover either.
+    const named = typeof route.handler === "string" ? route.handler : route.rawHandler;
+    if (typeof named !== "string") continue;
+    if (typeof ctrl[named] !== "function") {
+      errors.push({
+        field: `routes[${route.method} ${route.path}]`,
+        message: `Handler "${named}" not found on controller`,
+        suggestion: `Add method "${named}" to controller or use a function handler`,
+      });
     }
   }
 }
@@ -221,9 +223,8 @@ function validatePermissionKeys(
 
   // Add keys from custom routes
   for (const route of config.routes ?? []) {
-    if (typeof route.handler === "string") {
-      validKeys.add(route.handler);
-    }
+    if (typeof route.handler === "string") validKeys.add(route.handler);
+    if (typeof route.rawHandler === "string") validKeys.add(route.rawHandler);
   }
 
   // Add preset-specific keys
@@ -409,12 +410,58 @@ function validateRoutes(routes: RouteDefinition[], errors: ConfigError[]): void 
     const routeWithRefs = route as typeof route & {
       controllerMethod?: unknown;
     };
-    if (!route.handler && typeof routeWithRefs.controllerMethod !== "function") {
+    if (
+      !route.handler &&
+      !route.rawHandler &&
+      typeof routeWithRefs.controllerMethod !== "function"
+    ) {
       errors.push({
         field: `routes[${i}].handler`,
-        message: "Route must declare either `handler` (string / function) or `controllerMethod`",
+        message:
+          "Route must declare one of `handler` (arc pipeline), `rawHandler` (Fastify-native), or `controllerMethod`",
         suggestion:
           "Prefer `controllerMethod: (c: MyController) => c.method` for typed handler refs.",
+      });
+    }
+    // The two execution models are mutually exclusive — declaring both is
+    // ambiguous about whether arc wraps the response.
+    if (route.handler && route.rawHandler) {
+      errors.push({
+        field: `routes[${i}].rawHandler`,
+        message: "Route declares BOTH `handler` and `rawHandler`",
+        suggestion:
+          "Use `handler` for the arc pipeline (receives IRequestContext) or `rawHandler` for a Fastify-native handler (receives request, reply) — not both.",
+      });
+    }
+
+    // 2.31 — `raw` removed. Reported here so a config with several stale routes
+    // lists them all at once; `createCrudRouter` throws on the first as the
+    // backstop for routes that never pass through this validator (preset- and
+    // module-contributed ones).
+    if ("raw" in route) {
+      errors.push({
+        field: `routes[${i}].raw`,
+        message: "`raw` was removed in arc 2.31 — the field now carries the intent",
+        suggestion:
+          "Move the function to `rawHandler` (Fastify-native) or leave it in `handler` (arc pipeline), and delete the flag. If the route comes from a dependency, that package needs a release built against arc >=2.31.",
+      });
+    }
+
+    // `streamResponse` invokes the handler with `(request, reply)` and lets it
+    // own the response — that IS the raw model, so it REQUIRES `rawHandler`.
+    // Stated as a positive invariant rather than "reject `handler`": the router
+    // derives `isRaw` from `rawHandler` alone, so a `controllerMethod` route
+    // would otherwise validate, get pipeline-wrapped, and then be handed to the
+    // streaming wrapper — a third execution model nobody declared.
+    if (
+      (route as { streamResponse?: boolean }).streamResponse === true &&
+      route.rawHandler === undefined
+    ) {
+      errors.push({
+        field: `routes[${i}].streamResponse`,
+        message: "`streamResponse: true` requires `rawHandler`",
+        suggestion:
+          "Streaming routes are invoked with `(request, reply)` and own the socket — declare the function as `rawHandler` (not `handler` or `controllerMethod`).",
       });
     }
 

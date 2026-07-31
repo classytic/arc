@@ -105,7 +105,7 @@ export class ResourceRegistry {
         summary: r.summary,
         description: r.description,
         permissions: r.permissions,
-        raw: r.raw,
+        raw: r.rawHandler !== undefined,
         schema: r.schema,
       })),
       events: Object.keys(resource.events ?? {}),

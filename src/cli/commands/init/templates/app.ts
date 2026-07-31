@@ -167,6 +167,11 @@ export async function createAppInstance()${ts ? ": Promise<FastifyInstance>" : "
     preset: config.env === 'production' ? (${config.edge ? "'edge'" : "'production'"}) : 'development',
     resources,
     resourcePrefix: '/api',
+    // Arc registers the error handler itself (CastError → 400, validation →
+    // 422, duplicate key → 409). Configure it HERE — registering
+    // errorHandlerPlugin again in your own plugins file overrides arc's in the
+    // same scope and boots with an FSTWRN004 warning.
+    errorHandler: { includeStack: config.isDev },
     ${authConfig}
     cors: {
       origin: config.cors.origins,

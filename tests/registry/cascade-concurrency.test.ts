@@ -130,16 +130,15 @@ describe("cascade concurrency", () => {
       buildResource({ name: "c", adapter: c, onTenantDelete: { strategy: { type: "hard" } } }),
     );
 
-    const t0 = Date.now();
     await cascadeDeleteForOrganization(registry, { organizationId: ORG, concurrency: 3 });
-    const elapsed = Date.now() - t0;
 
     const all = [...a.intervals, ...b.intervals, ...c.intervals];
     expect(all).toHaveLength(3);
+    // Overlapping execution intervals ARE the proof of parallelism — the wall
+    // clock only ever restated it, and less reliably: a busy pool pushed a
+    // genuinely parallel run past the sequential threshold it was meant to
+    // disprove (125ms observed against a 120ms bound).
     expect(anyOverlap(all)).toBe(true);
-    // Wall time should be ~50ms (parallel) not ~150ms (sequential).
-    // Generous threshold accommodates CI jitter.
-    expect(elapsed).toBeLessThan(120);
   });
 
   it("priority barrier — all priority-10 finish before any priority-50 starts", async () => {

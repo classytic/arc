@@ -10,7 +10,7 @@ import type { ErrorContract } from "@classytic/repo-core/errors";
 import { isHttpError, toErrorContract } from "@classytic/repo-core/errors";
 import { BaseController } from "../../core/BaseController.js";
 import type { ResourceDefinition } from "../../core/defineResource.js";
-import { evaluatePermissionDecision } from "../../permissions/applyPermissionResult.js";
+import { evaluatePermissionDecision } from "../../permissions/authorizationDecision.js";
 import {
   applyFieldReadPermissions,
   type FieldPermissionMap,

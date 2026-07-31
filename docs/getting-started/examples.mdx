@@ -75,9 +75,8 @@ export const postResource = defineResource({
     {
       method: 'POST',
       path: '/:id/publish',
-      raw: true,
       permissions: requireAuth(),
-      handler: async (req, reply) => {
+      rawHandler: async (req, reply) => {
         const post = await PostModel.findByIdAndUpdate(
           req.params.id,
           { status: 'published' },

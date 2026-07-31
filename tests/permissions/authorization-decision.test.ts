@@ -9,9 +9,9 @@
 import type { FastifyRequest } from "fastify";
 import { describe, expect, it } from "vitest";
 import {
-  applyPermissionResult,
+  applyAuthorizationDecision,
   normalizeToDecision,
-} from "../../src/permissions/applyPermissionResult.js";
+} from "../../src/permissions/authorizationDecision.js";
 import { allow, deny } from "../../src/permissions/core.js";
 import type { RequestScope } from "../../src/scope/types.js";
 
@@ -27,6 +27,30 @@ describe("normalizeToDecision", () => {
   it("passes a decision through unchanged", () => {
     const d = { effect: "allow", policy: { organizationId: "o1" } } as const;
     expect(normalizeToDecision(d)).toBe(d);
+  });
+
+  /**
+   * This is a RUNTIME framework boundary: JavaScript hosts and loosely-typed
+   * integrations reach it with shapes TypeScript would have rejected. Every
+   * downstream branch is `effect !== "allow"`, so anything that slips past the
+   * guard becomes an implicit deny — the exact silent failure the guard exists
+   * to abolish. Validating the VALUE rather than the key's presence is what
+   * makes the promise ("you get a migration error") true.
+   */
+  it.each([
+    ["the pre-2.30 shape", { granted: true }],
+    ["a hand-rolled shape", { allowed: true }],
+    ["a misspelled effect", { effect: "permit" }],
+    ["an explicitly undefined effect", { effect: undefined }],
+    ["null", null],
+    ["a stray unawaited Promise", Promise.resolve(true)],
+  ])("throws a migration error for %s", (_label, value) => {
+    expect(() => normalizeToDecision(value as never)).toThrow(/unrecognized shape/);
+  });
+
+  it("accepts both valid effects", () => {
+    expect(normalizeToDecision({ effect: "allow" })).toEqual({ effect: "allow" });
+    expect(normalizeToDecision({ effect: "deny" })).toEqual({ effect: "deny" });
   });
 });
 
@@ -50,16 +74,16 @@ describe("allow() / deny() constructors", () => {
   });
 });
 
-describe("applyPermissionResult applies a decision", () => {
+describe("applyAuthorizationDecision applies a decision", () => {
   it("conjoins the data policy into _policyFilters on allow", () => {
     const r = req();
-    applyPermissionResult(allow({ policy: { userId: "u1" } }), r);
+    applyAuthorizationDecision(allow({ policy: { userId: "u1" } }), r);
     expect(r._policyFilters).toEqual({ userId: "u1" });
   });
 
   it("no-ops on deny", () => {
     const r = req();
-    applyPermissionResult(deny("x"), r);
+    applyAuthorizationDecision(deny("x"), r);
     expect(r._policyFilters).toBeUndefined();
   });
 
@@ -73,11 +97,11 @@ describe("applyPermissionResult applies a decision", () => {
       orgRoles: ["admin"],
     };
     const fresh = req();
-    applyPermissionResult(allow({ scope: service }), fresh);
+    applyAuthorizationDecision(allow({ scope: service }), fresh);
     expect(fresh.scope).toEqual(service);
 
     const authed = req({ scope: member });
-    applyPermissionResult(allow({ scope: service }), authed);
+    applyAuthorizationDecision(allow({ scope: service }), authed);
     expect(authed.scope).toEqual(member);
   });
 });

@@ -164,8 +164,27 @@ export type PermissionCheck<TDoc = Record<string, unknown>> = ((
 export interface PermissionCheckMeta {
   /** Set by allowPublic() — marks the endpoint as publicly accessible */
   _isPublic?: boolean;
+  /**
+   * Set by requireAuth() — a pure identity gate (must be signed in) that adds NO
+   * row-level or environmental condition. Marked so `allOf` does not mistake it
+   * for an opaque runtime branch and needlessly taint the composite `conditional`.
+   */
+  _requiresAuth?: boolean;
   /** Set by requireRoles() — the roles required for access */
   _roles?: readonly string[];
+  /**
+   * Set by `requirePlatformRole()` — this gate consults PLATFORM roles only and
+   * can never be satisfied by an organization role.
+   *
+   * It exists because that property is otherwise unprovable from outside a
+   * check. `requireRoles(["ops"])` accepts an ORG role named `ops` by default,
+   * and `requireOrgRole("manager")` grants any org's manager — both return a
+   * bare allow with no policy, so a surface that must be platform-wide cannot
+   * tell them apart from a genuine operator gate by inspecting the decision.
+   * A global surface (see `jobsPlugin`'s `managementRoutes`) requires this
+   * marker at boot rather than trusting the caller's intent.
+   */
+  _platformOnly?: boolean;
   /** Set by requireOrgMembership() — org-level permission type */
   _orgPermission?: string;
   /** Set by requireOrgRole() — the org roles required for access */
@@ -213,4 +232,16 @@ export interface PermissionCheckMeta {
     scopes?: readonly string[];
     dpop: boolean;
   };
+  /**
+   * Set by `allOf(...)` when its surfaced role/scope meta is NECESSARY but NOT
+   * SUFFICIENT — the conjunction also contains an opaque runtime branch
+   * (ownership / custom / dynamic / flow-mode / quota …) or a contradictory
+   * constraint that flat metadata can't capture. `describePermission` propagates
+   * it as `conditional: true`, so `explainAccess` reports a role/scope MATCH as
+   * `conditional` (server decides) instead of a definitive — and unsound —
+   * `allow`. A role/scope MISMATCH is still a definitive `deny` (a necessary
+   * condition failed). Without this flag a composed gate could tell a UI "you can"
+   * when the runtime check will refuse.
+   */
+  _conditional?: boolean;
 }

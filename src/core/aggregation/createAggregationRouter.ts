@@ -17,7 +17,7 @@
  */
 
 import type { FastifyReply, FastifyRequest, FastifySchema, RouteHandlerMethod } from "fastify";
-import { evaluateAndApplyPermission } from "../../permissions/applyPermissionResult.js";
+import { evaluateAndApplyPermission } from "../../permissions/authorizationDecision.js";
 import type { FieldPermissionMap } from "../../permissions/fields.js";
 import type { PermissionCheck, PermissionContext } from "../../permissions/types.js";
 import { getRequestScope } from "../../scope/types.js";

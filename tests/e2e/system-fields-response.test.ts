@@ -141,6 +141,42 @@ async function buildTestApp(opts: {
 // 1. System Field Protection + Response Format
 // ============================================================================
 
+/**
+ * Extract the new document's id, asserting the create actually succeeded.
+ *
+ * Reading `_id` off an unchecked response yields `undefined` when the write
+ * failed, and the test then fails on the FOLLOWING request with a 404 — pointing
+ * at the read while the fault was the write, and hiding the server's actual
+ * error. Assert here so the failure names itself.
+ */
+function createdId(res: { statusCode: number; body: string }): string {
+  if (res.statusCode !== 201 && res.statusCode !== 200) {
+    throw new Error(`create failed with ${res.statusCode}: ${res.body}`);
+  }
+  const id = JSON.parse(res.body)._id;
+  if (typeof id !== "string" || id.length === 0) {
+    throw new Error(`create returned no _id: ${res.body}`);
+  }
+  return id;
+}
+
+/**
+ * ONE database lifecycle for the whole file. Each suite previously ran its own
+ * `setupTestDatabase()`/`teardownTestDatabase()`, which connected and
+ * disconnected mongoose's SHARED default connection four times per run while the
+ * model registry — which is global and survives `disconnect()` — kept handing
+ * back models bound to the connection that had just been torn down. Suites still
+ * clear their own collection in `afterAll`; they use distinct model names, so
+ * one database serves all of them.
+ */
+beforeAll(async () => {
+  await setupTestDatabase();
+});
+
+afterAll(async () => {
+  await teardownTestDatabase();
+});
+
 describe("System Fields & Response Format E2E", () => {
   let app: TestApp;
   let TaskModel: mongoose.Model<any>;
@@ -158,7 +194,6 @@ describe("System Fields & Response Format E2E", () => {
   );
 
   beforeAll(async () => {
-    await setupTestDatabase();
     const result = await buildTestApp({
       name: "task",
       schema: TaskSchema,
@@ -171,7 +206,6 @@ describe("System Fields & Response Format E2E", () => {
   afterAll(async () => {
     await TaskModel.deleteMany({});
     await app?.close();
-    await teardownTestDatabase();
   });
 
   // --------------------------------------------------------------------------
@@ -465,7 +499,7 @@ describe("System Fields & Response Format E2E", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: { title: "To Delete" },
     });
-    const itemId = JSON.parse(createRes.body)._id;
+    const itemId = createdId(createRes);
 
     const res = await app.inject({
       method: "DELETE",
@@ -537,7 +571,6 @@ describe("FieldRules E2E", () => {
   );
 
   beforeAll(async () => {
-    await setupTestDatabase();
     const result = await buildTestApp({
       name: "product",
       schema: ProductSchema,
@@ -558,7 +591,6 @@ describe("FieldRules E2E", () => {
   afterAll(async () => {
     await ProductModel.deleteMany({});
     await app?.close();
-    await teardownTestDatabase();
   });
 
   it("systemManaged field is stripped from create body", async () => {
@@ -627,7 +659,7 @@ describe("FieldRules E2E", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: { name: "Doohickey", price: 5.99 },
     });
-    const itemId = JSON.parse(createRes.body)._id;
+    const itemId = createdId(createRes);
 
     // Try to update the readonly field
     const res = await app.inject({
@@ -663,7 +695,7 @@ describe("FieldRules E2E", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: { name: "Thingamajig", price: 3.5 },
     });
-    const itemId = JSON.parse(createRes.body)._id;
+    const itemId = createdId(createRes);
 
     // Try to update the systemManaged field
     const res = await app.inject({
@@ -730,7 +762,7 @@ describe("FieldRules E2E", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: { name: "Readable SKU", price: 7.5 },
     });
-    const itemId = JSON.parse(createRes.body)._id;
+    const itemId = createdId(createRes);
 
     // Get it — readonly fields should be visible in reads
     const res = await app.inject({
@@ -765,7 +797,6 @@ describe("Auto-Injected Fields E2E", () => {
   );
 
   beforeAll(async () => {
-    await setupTestDatabase();
     const result = await buildTestApp({
       name: "note",
       schema: NoteSchema,
@@ -778,7 +809,6 @@ describe("Auto-Injected Fields E2E", () => {
   afterAll(async () => {
     await NoteModel.deleteMany({});
     await app?.close();
-    await teardownTestDatabase();
   });
 
   it("create injects createdBy from authenticated user", async () => {
@@ -833,7 +863,7 @@ describe("Auto-Injected Fields E2E", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: { content: "Original" },
     });
-    const noteId = JSON.parse(createRes.body)._id;
+    const noteId = createdId(createRes);
 
     // Update note
     const res = await app.inject({
@@ -861,7 +891,7 @@ describe("Auto-Injected Fields E2E", () => {
       headers: { authorization: `Bearer ${tokenA}` },
       payload: { content: "Created by A" },
     });
-    const noteId = JSON.parse(createRes.body)._id;
+    const noteId = createdId(createRes);
     expect(JSON.parse(createRes.body).createdBy).toBe(USER_A);
 
     // User B in same org updates (superadmin to bypass ownership if needed)
@@ -945,8 +975,6 @@ describe("Ownership & Access Control Response Format", () => {
   );
 
   beforeAll(async () => {
-    await setupTestDatabase();
-
     const Model = mongoose.models.SFDoc || mongoose.model("SFDoc", DocSchema);
     const repo = createMockRepository(Model);
     const ctrl = new BaseController(repo);
@@ -987,7 +1015,6 @@ describe("Ownership & Access Control Response Format", () => {
   afterAll(async () => {
     await DocModel.deleteMany({});
     await app?.close();
-    await teardownTestDatabase();
   });
 
   it("non-owner cannot update another users resource (policy filter → 404)", async () => {
@@ -1003,7 +1030,7 @@ describe("Ownership & Access Control Response Format", () => {
       headers: { authorization: `Bearer ${tokenA}` },
       payload: { title: "Owned by A" },
     });
-    const docId = JSON.parse(createRes.body)._id;
+    const docId = createdId(createRes);
 
     // User B tries to update (same org, but not owner)
     // requireOwnership applies policy filter { createdBy: USER_B } → doc not found
@@ -1035,7 +1062,7 @@ describe("Ownership & Access Control Response Format", () => {
       headers: { authorization: `Bearer ${tokenA}` },
       payload: { title: "Protected Doc" },
     });
-    const docId = JSON.parse(createRes.body)._id;
+    const docId = createdId(createRes);
 
     // User B tries to delete — policy filter scopes query, doc invisible to B
     const tokenB = app.auth.issueTokens({
@@ -1065,7 +1092,7 @@ describe("Ownership & Access Control Response Format", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: { title: "My Doc" },
     });
-    const docId = JSON.parse(createRes.body)._id;
+    const docId = createdId(createRes);
 
     const updateRes = await app.inject({
       method: "PATCH",
@@ -1091,7 +1118,7 @@ describe("Ownership & Access Control Response Format", () => {
       headers: { authorization: `Bearer ${tokenA}` },
       payload: { title: "Admin Override Test" },
     });
-    const docId = JSON.parse(createRes.body)._id;
+    const docId = createdId(createRes);
 
     // Superadmin updates
     const adminToken = app.auth.issueTokens({

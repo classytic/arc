@@ -1,7 +1,7 @@
 /**
  * bootModuleApp (2.22) — the module-composability harness, upstreamed
  * from the spine testkit. Pins: context factory receives a LIVE
- * connection + mongoUri, modules (incl. async thunks inside arrays)
+ * connection + uri, modules (incl. async thunks inside arrays)
  * boot into a real app, exports land at arc.modules.<name>, and
  * close() tears everything down.
  */
@@ -22,7 +22,7 @@ describe("bootModuleApp", () => {
         async () =>
           defineModule({
             name: "demo",
-            bootstrap: () => ({ engineReady: true, uri: ctx.mongoUri }),
+            bootstrap: () => ({ engineReady: true, uri: ctx.uri }),
           }),
       ];
     });
@@ -33,14 +33,14 @@ describe("bootModuleApp", () => {
   });
 
   it("hands the factory a live in-memory DB context", () => {
-    expect(seenCtx?.mongoUri).toMatch(/^mongodb:\/\//);
+    expect(seenCtx?.uri).toMatch(/^mongodb:\/\//);
     expect(seenCtx?.connection).toBeTruthy();
   });
 
   it("boots a real arc app with the module's export registered", () => {
     const demo = t.exports<{ engineReady: boolean; uri: string }>("demo");
     expect(demo.engineReady).toBe(true);
-    expect(demo.uri).toBe(t.mongoUri);
+    expect(demo.uri).toBe(t.uri);
   });
 
   it("exports() throws helpfully for unknown module names", () => {

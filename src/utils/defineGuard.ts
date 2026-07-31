@@ -22,7 +22,7 @@
  * defineResource({
  *   routeGuards: [flowGuard.preHandler],
  *   routes: [{
- *     method: 'GET', path: '/', raw: true,
+ *     method: 'GET', path: '/',
  *     handler: async (req, reply) => {
  *       const ctx = flowGuard.from(req); // typed as { orgId: string; actorId: string }
  *       reply.send({ org: ctx.orgId });

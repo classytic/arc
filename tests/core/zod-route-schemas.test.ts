@@ -61,12 +61,11 @@ describe("zod v4 schemas in customSchemas + custom routes", () => {
               method: "POST",
               path: "/echo",
               permissions: allowPublic(),
-              raw: true,
               schema: {
                 body: z.object({ label: z.string().min(2) }),
                 response: { 200: z.object({ ok: z.boolean(), label: z.string() }) },
               },
-              handler: async (req, reply) =>
+              rawHandler: async (req, reply) =>
                 reply.send({
                   ok: true,
                   label: (req.body as { label: string }).label,
@@ -76,11 +75,10 @@ describe("zod v4 schemas in customSchemas + custom routes", () => {
               method: "GET",
               path: "/typed-query",
               permissions: allowPublic(),
-              raw: true,
               schema: {
                 querystring: z.object({ n: z.coerce.number() }),
               },
-              handler: async (req, reply) =>
+              rawHandler: async (req, reply) =>
                 reply.send({ received: typeof (req.query as { n: unknown }).n }),
             },
           ],

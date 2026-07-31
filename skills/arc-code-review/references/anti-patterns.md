@@ -627,7 +627,7 @@ output_mode: content
 
 **Why critical:** `verifySignature(body, ...)` throws `TypeError` if body isn't string/Buffer. Parsed body silently fails verification → forged webhooks accepted.
 
-**Fix:** `verifySignature(req.rawBody, ...)`. Mark webhook routes `raw: true` and ensure `@fastify/raw-body` is registered (arc registers it automatically when needed).
+**Fix:** `verifySignature(req.rawBody, ...)`. Declare webhook routes via `rawHandler` and ensure `@fastify/raw-body` is registered (arc registers it automatically when needed).
 
 ---
 
@@ -655,10 +655,10 @@ Or `presets: [{ name: 'filesUpload', storage, allowedMimeTypes, maxFileSize }]`.
 ```typescript
 routes: [
   {
-    method: 'GET', path: '/stream', raw: true,
+    method: 'GET', path: '/stream',
     preAuth: [(req) => { req.headers.authorization = `Bearer ${req.query.token}`; }],
     permissions: requireAuth(),
-    handler: async (req, reply) => reply.send(stream),
+    rawHandler: async (req, reply) => reply.send(stream),
   },
 ],
 ```

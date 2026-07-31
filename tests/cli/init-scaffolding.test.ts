@@ -90,6 +90,41 @@ describe("arc init — JWT + Single Tenant", () => {
     expect(guide).toContain("doubles as AGENTS.md");
   });
 
+  /**
+   * A brand-new app must boot CLEAN. `createApp` already registers the error
+   * handler, so a scaffold that registers it again overrides arc's in the same
+   * scope and greets the user with `FSTWRN004` on day one — a scary warning with
+   * no visible cause, on code they did not write.
+   *
+   * The distinction the scaffold has to keep straight: docs plugins are the HOST
+   * opting in (keep them), the error handler is ARC's (configure, never
+   * re-register).
+   */
+  it("does NOT re-register arc's error handler — that warns FSTWRN004 on boot", async () => {
+    const plugins = await fs.readFile(path.join(projectPath, "src/plugins/index.ts"), "utf-8");
+    expect(plugins).not.toContain("errorHandlerPlugin");
+    // The opt-in plugins stay — this is not "the scaffold registers nothing".
+    expect(plugins).toContain("openApiPlugin");
+    expect(plugins).toContain("scalarPlugin");
+  });
+
+  it("configures the error handler through createApp instead", async () => {
+    const app = await fs.readFile(path.join(projectPath, "src/app.ts"), "utf-8");
+    expect(app).toContain("errorHandler: { includeStack: config.isDev }");
+  });
+
+  it("leaves no unused binding behind in the generated plugins file", async () => {
+    // Removing the only runtime consumer of `config` would otherwise leave a
+    // dangling destructure — trading a Fastify warning for a lint error.
+    const plugins = await fs.readFile(path.join(projectPath, "src/plugins/index.ts"), "utf-8");
+    const body = plugins.slice(plugins.indexOf("export async function registerPlugins"));
+    const uncommented = body
+      .split(/\r?\n/)
+      .filter((l) => !l.trim().startsWith("//"))
+      .join("\n");
+    expect(uncommented).not.toContain("const { config } = deps");
+  });
+
   it("should create core directories", async () => {
     const dirs = [
       "src",
@@ -195,6 +230,20 @@ describe("arc init — JWT + Single Tenant", () => {
     expect(await exists(path.join(authDir, "auth.resource.ts"))).toBe(true);
     expect(await exists(path.join(authDir, "auth.handlers.ts"))).toBe(true);
     expect(await exists(path.join(authDir, "auth.schemas.ts"))).toBe(true);
+  });
+
+  it("generates auth routes against the CURRENT route API, not the removed `raw` flag", async () => {
+    // Templates are backtick STRINGS — tsc type-checks the template, never the
+    // app it emits, and the rest of this suite only asserts that generated
+    // files exist. That blind spot let `arc init` keep emitting `raw: true`
+    // through a green typecheck after the flag was removed in 2.31, so every
+    // scaffolded project started life failing its own `npm run typecheck`.
+    const authResource = await fs.readFile(
+      path.join(projectPath, "src/resources/auth/auth.resource.ts"),
+      "utf-8",
+    );
+    expect(authResource).not.toContain("raw: true"); // arc:allow-removed-raw — asserting its ABSENCE
+    expect(authResource).toContain("rawHandler:");
   });
 
   it("should create app entry files", async () => {

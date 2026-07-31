@@ -502,7 +502,6 @@ defineResource({
     {
       method: 'POST',
       path: '/extract',
-      raw: true,
       permissions: requireAuth(),
       preHandler: [
         multipartBody({
@@ -511,7 +510,7 @@ defineResource({
           requiredFields: ['file'], // 400 if missing — no handler guard needed
         }),
       ],
-      handler: async (req, reply) => {
+      rawHandler: async (req, reply) => {
         const file = (req.body as any)._files.file; // guaranteed by middleware
         const result = await ocr.extract(file.buffer, file.mimetype);
         return reply.send({ success: true, data: result });

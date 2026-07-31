@@ -6,7 +6,7 @@
  *
  * 1. `mcpHandler` (full bypass) — caller-supplied function owns the whole
  *    tool result; pipeline is not invoked.
- * 2. Function handler with `raw: false/undefined` — arc's pipeline wrapper
+ * 2. Function in `handler` (the arc pipeline) — arc's pipeline wrapper
  *    runs normally, and the envelope is serialized into the tool result.
  * 3. String handler — looks up a method on the controller by name.
  */

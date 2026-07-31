@@ -1,8 +1,8 @@
 # Testing
 
-**Summary**: Vitest + `mongodb-memory-server`. Mirror src structure. Always run targeted tests; never the full suite during dev. Perf runs in its own lane. `test:main` = plain `vitest run` — vitest **projects** split the suite into `parallel` + `ws-serial` (websocket files run with `fileParallelism: false` automatically; no manual `--no-file-parallelism` needed, ~40s wall clock).
+**Summary**: Vitest + `mongodb-memory-server`. Mirror src structure. Always run targeted tests; never the full suite during dev. Perf runs in its own lane. `test:main` = plain `vitest run` — vitest **projects** split the suite into `parallel` + `timing-serial` (files whose assertions depend on real elapsed time — websocket, and any other file in the `TIMING_SENSITIVE` holding pen — run with `fileParallelism: false` automatically; no manual `--no-file-parallelism` needed, ~40s wall clock). A file leaves the pen by replacing positive sleeps with condition-based waits; see the timing-lane section below.
 **Sources**: tests/, vitest.config.ts, vitest.perf.config.ts, src/testing/.
-**Last updated**: 2026-07-14 (`bootModuleApp` — 2.22).
+**Last updated**: 2026-07-31 (condition-based waits — the flake standard).
 
 ---
 
@@ -100,6 +100,48 @@ Run the tightest subset. If you change file X, run the matching row. See CLAUDE.
 - OTel: `describe.skip` when `@opentelemetry/api` not installed.
 - Test success AND failure. Error messages are part of the API contract.
 - `toMatchObject` for partial assertions when docs have dynamic fields.
+
+## Async assertions — never `sleep` then assert
+
+```ts
+await sleep(300);
+expect(runs).toBeGreaterThanOrEqual(3);        // ✗ asserts a DURATION
+
+await waitFor(() => runs >= 3, { label: "3 scheduler ticks" });   // ✓ asserts the CLAIM
+```
+
+A fixed delay encodes a guess about scheduling. Too short and it flakes the
+moment the pool is busy; too long and every run pays for the worst case — and
+because the guess is per-test, the failure lands on a different file each run and
+reads as a product bug. Every flake chased in the 2.31 cycle was this shape.
+
+A condition-based wait returns the instant the effect lands (so it is usually
+*faster*) and can only fail with "this never happened", which is the thing worth
+asserting. Pass `label` — a bare timeout reports only its own duration.
+
+- `waitFor(fn, { label })` — `@classytic/arc/testing`. For values a test can observe.
+- `fetchSSE(url, ceiling, until)` — for streams: ends on the awaited frame. Its
+  `connected` promise resolves when the subscription exists server-side; await
+  that before emitting rather than sleeping and hoping the subscribe won the race.
+
+### Proving concurrency
+
+`expect(elapsed).toBeLessThan(120)` to show three 50ms tasks ran in parallel
+measures the RUNNER, not the code — a loaded pool pushed a genuinely parallel run
+to 218ms, past the serial threshold it was meant to disprove. Count overlap
+instead:
+
+```ts
+let inFlight = 0, maxInFlight = 0;
+// in the handler: inFlight++; maxInFlight = Math.max(maxInFlight, inFlight); … inFlight--;
+expect(maxInFlight).toBe(3);   // they overlapped — the actual claim
+expect(inFlight).toBe(0);      // and all settled
+```
+
+Genuinely wall-clock-bound suites (real sockets) are serialized via
+`TIMING_SENSITIVE` in [vitest.config.ts](../vitest.config.ts). That list is a
+holding pen, not a destination: **converting a file's waits is how it leaves.**
+Widen the list rather than padding a sleep; shrink it by converting.
 
 ## Related
 - [[commands]] — `test:main` vs `test:perf` vs `test:ci`

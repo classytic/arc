@@ -87,7 +87,7 @@ describe("ResourceRegistry", () => {
     const registry = new ResourceRegistry();
     registry.register(
       mockResource("users", {
-        routes: [{ method: "POST", path: "/approve", handler: "approve", raw: false }],
+        routes: [{ method: "POST", path: "/approve", handler: "approve" }],
       }),
     );
     const entry = registry.get("users")!;

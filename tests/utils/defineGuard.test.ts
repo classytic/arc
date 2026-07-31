@@ -84,9 +84,8 @@ describe("defineGuard", () => {
         {
           method: "GET",
           path: "/context",
-          raw: true,
           permissions: allowPublic(),
-          handler: async (req, reply) => {
+          rawHandler: async (req, reply) => {
             const org = orgGuard.from(req);
             const actor = actorGuard.from(req);
             reply.send({ orgId: org.orgId, actorId: actor.actorId });
@@ -202,9 +201,8 @@ describe("defineGuard", () => {
         {
           method: "GET",
           path: "/who",
-          raw: true,
           permissions: allowPublic(),
-          handler: async (req, reply) => {
+          rawHandler: async (req, reply) => {
             const actor = actorGuard.from(req);
             reply.send({ actor: actor.actorId });
           },

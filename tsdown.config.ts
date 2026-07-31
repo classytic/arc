@@ -1,7 +1,24 @@
-import { defineConfig } from "tsdown";
 import { readFileSync } from "node:fs";
+import { defineConfig } from "tsdown";
 
-const { version } = JSON.parse(readFileSync("./package.json", "utf-8"));
+const { name, version, license, homepage } = JSON.parse(readFileSync("./package.json", "utf-8"));
+
+/**
+ * Attribution banner prepended to every emitted JS chunk.
+ *
+ * Derived from package.json rather than written out, so it cannot go stale — the
+ * version changes every release, and a hardcoded string would quietly start
+ * lying on the first one someone forgot to update.
+ *
+ * `/*!` (not `/*`) is the load-bearing detail: minifiers treat it as a legal
+ * comment and preserve it. Arc does not minify its own output, but a host
+ * bundling arc into an application does, and that is precisely the build where
+ * the attribution would otherwise vanish.
+ *
+ * JS only. The `.d.mts` files are read by tooling, not people, and arc emits 200+
+ * of them — a banner there is noise that also perturbs the api-surface snapshot.
+ */
+const banner = `/*! ${name} v${version} | ${license} | ${homepage} */`;
 
 export default defineConfig({
   entry: [
@@ -118,6 +135,7 @@ export default defineConfig({
   dts: true,
   sourcemap: false,
   clean: true,
+  banner: { js: banner },
 
   treeshake: true,
   target: "node22",
@@ -128,10 +146,17 @@ export default defineConfig({
   deps: {
     // arc bundles NOTHING from node_modules — every dependency, peer
     // dependency (required + optional), and dev-only integration stays
-    // external. This is the single source of truth for "never bundle a
-    // peer": it externalizes by resolved path, so it cannot drift from
-    // package.json and needs no hand-maintained allowlist. New peers are
+    // external. Externalizing by RESOLVED PATH means it cannot drift from
+    // package.json and needs no hand-maintained allowlist; new peers are
     // covered automatically.
+    //
+    // tsdown deprecates this in favour of `neverBundle: true`, but that option
+    // is a UNION (`true | ExternalOption`) — taking `true` would mean dropping
+    // the pattern list below, and `true` keeps a dependency external only when
+    // it RESOLVES INTO node_modules. A workspace `@classytic/*` symlink
+    // resolves outside it, so the two are not interchangeable here and the
+    // migration would silently start bundling peers. Revisit when tsdown allows
+    // both, or when it exposes a resolved-path predicate.
     skipNodeModulesBundle: true,
 
     // Belt-and-suspenders for workspace/linked deps that resolve OUTSIDE

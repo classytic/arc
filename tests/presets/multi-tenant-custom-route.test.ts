@@ -140,8 +140,7 @@ describe("multiTenantPreset — custom-route tenantScope opt-in", () => {
           path: "/",
           permissions: allowPublic(),
           tenantScope: true,
-          raw: true,
-          handler: async (req: FastifyRequest, reply: FastifyReply) => {
+          rawHandler: async (req: FastifyRequest, reply: FastifyReply) => {
             observed = {
               tenantFields: (req as unknown as { _tenantFields?: Record<string, unknown> })
                 ._tenantFields,
@@ -183,8 +182,7 @@ describe("multiTenantPreset — custom-route tenantScope opt-in", () => {
           path: "/",
           permissions: allowPublic(),
           tenantScope: true,
-          raw: true,
-          handler: async (_req: FastifyRequest, reply: FastifyReply) => {
+          rawHandler: async (_req: FastifyRequest, reply: FastifyReply) => {
             reply.code(200).send({ ok: true });
           },
         },
@@ -225,8 +223,7 @@ describe("multiTenantPreset — custom-route tenantScope opt-in", () => {
             path: "/",
             permissions: allowPublic(),
             tenantScope: true,
-            raw: true,
-            handler: async (_req: FastifyRequest, reply: FastifyReply) => {
+            rawHandler: async (_req: FastifyRequest, reply: FastifyReply) => {
               reply.send({ ok: true });
             },
           },
@@ -253,8 +250,7 @@ describe("multiTenantPreset — custom-route tenantScope opt-in", () => {
           // tenant middlewares. Existing public-facing routes (webhooks,
           // health checks) stay reachable without tenant context.
           permissions: allowPublic(),
-          raw: true,
-          handler: async (req: FastifyRequest, reply: FastifyReply) => {
+          rawHandler: async (req: FastifyRequest, reply: FastifyReply) => {
             observed = {
               tenantFields: (req as unknown as { _tenantFields?: Record<string, unknown> })
                 ._tenantFields,

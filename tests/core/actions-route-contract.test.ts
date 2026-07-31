@@ -297,16 +297,14 @@ describe("v2.8.1: metadata preservation", () => {
           method: "GET",
           path: "/hidden-from-mcp",
           permissions: allowPublic(),
-          handler: async (_req, reply) => reply.send({ ok: true }),
-          raw: true,
+          rawHandler: async (_req, reply) => reply.send({ ok: true }),
           mcp: false,
         },
         {
           method: "GET",
           path: "/with-annotations",
           permissions: allowPublic(),
-          handler: async (_req, reply) => reply.send({ ok: true }),
-          raw: true,
+          rawHandler: async (_req, reply) => reply.send({ ok: true }),
           mcp: {
             description: "Custom MCP description",
             annotations: { readOnlyHint: true, idempotentHint: true },
@@ -329,9 +327,8 @@ describe("v2.8.1: metadata preservation", () => {
         method: "GET" as const,
         path: "/stats",
         permissions: allowPublic(),
-        handler: async (_req: unknown, reply: { send: (x: unknown) => void }) =>
+        rawHandler: async (_req: unknown, reply: { send: (x: unknown) => void }) =>
           reply.send({ ok: true }),
-        raw: true,
         description: "Stats endpoint",
         tags: ["analytics"],
         mcp: false as const,

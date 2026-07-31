@@ -123,17 +123,45 @@ describe("AccessControl", () => {
       });
     });
 
-    it("does not override org scope if already in policy filters", () => {
+    it("conjoins a policy org with the scope org — neither silently overrides the other", () => {
+      // Same value in policy + scope → idempotent, deduped to one flat constraint.
+      const same = createAccessControl();
+      const f1 = same.buildIdFilter(
+        "abc123",
+        createReq({
+          _policyFilters: { organizationId: "org-1" },
+          _scope: { kind: "member", organizationId: "org-1", orgRoles: [] },
+        }),
+      );
+      expect(f1).toEqual({ _id: "abc123", organizationId: "org-1" });
+
+      // DIFFERENT values → a genuine conflict. Both constraints are preserved
+      // (AND), so the query fails closed instead of the policy silently redirecting
+      // the lookup to another tenant. This is the overwrite class the security
+      // review flagged: no layer may erase another layer's constraint.
+      const diff = createAccessControl();
+      const f2 = diff.buildIdFilter(
+        "abc123",
+        createReq({
+          _policyFilters: { organizationId: "policy-org" },
+          _scope: { kind: "member", organizationId: "scope-org", orgRoles: [] },
+        }),
+      );
+      const serialized = JSON.stringify(f2);
+      expect(serialized).toContain("policy-org");
+      expect(serialized).toContain("scope-org");
+    });
+
+    it("a policy filter can NEVER redirect the route's target id (security)", () => {
+      // Route asks for record "B"; a policy that pins `_id: "A"` must not be able
+      // to swap the lookup to a DIFFERENT record. Conjunction preserves both, so
+      // the compound is unsatisfiable (returns nothing) rather than fetching "A".
       const ac = createAccessControl();
-      const req = createReq({
-        _policyFilters: { organizationId: "policy-org" },
-        _scope: { kind: "member", organizationId: "scope-org", orgRoles: [] },
-      });
-
-      const filter = ac.buildIdFilter("abc123", req);
-
-      // Policy filter wins; org scope should NOT overwrite
-      expect(filter.organizationId).toBe("policy-org");
+      const filter = ac.buildIdFilter("B", createReq({ _policyFilters: { _id: "A" } }));
+      const serialized = JSON.stringify(filter);
+      expect(serialized).toContain("B"); // the route id is retained
+      // It did NOT collapse to a bare `{ _id: "A" }` — the route id survives.
+      expect(filter).not.toEqual({ _id: "A" });
     });
 
     it("uses custom idField", () => {

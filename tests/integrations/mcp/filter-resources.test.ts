@@ -4,7 +4,7 @@
  *
  * Three intent layers (covered here):
  *   1. Per-resource `mcp: false` — local opt-out, authoritative.
- *   2. Plugin-level `expose` / `include` allowlist — default-deny.
+ *   2. Plugin-level `expose` allowlist — default-deny.
  *   3. Plugin-level `exclude` blocklist — default-allow (drift-prone).
  *
  * Layer 1 always wins so adding a never-expose resource is a one-file
@@ -53,22 +53,6 @@ describe("filterResourcesForMcp", () => {
     });
   });
 
-  describe("`include` legacy alias", () => {
-    it("behaves like `expose` for back-compat", () => {
-      const resources = [r("a"), r("b"), r("c")];
-      expect(filterResourcesForMcp(resources, { include: ["b"] }).map((x) => x.name)).toEqual([
-        "b",
-      ]);
-    });
-
-    it("local `mcp: false` overrides `include` too", () => {
-      const resources = [r("a"), r("b", false)];
-      expect(filterResourcesForMcp(resources, { include: ["a", "b"] }).map((x) => x.name)).toEqual([
-        "a",
-      ]);
-    });
-  });
-
   describe("`exclude` blocklist", () => {
     it("removes the blocklisted names", () => {
       const resources = [r("a"), r("b"), r("c")];
@@ -87,12 +71,6 @@ describe("filterResourcesForMcp", () => {
   });
 
   describe("error states", () => {
-    it("throws when both `expose` and `include` are supplied", () => {
-      expect(() => filterResourcesForMcp([r("a")], { expose: ["a"], include: ["a"] })).toThrowError(
-        /either `expose` .* or `include`/,
-      );
-    });
-
     it("throws when `expose` is combined with `exclude`", () => {
       expect(() => filterResourcesForMcp([r("a")], { expose: ["a"], exclude: ["b"] })).toThrowError(
         /`expose` is default-deny/,

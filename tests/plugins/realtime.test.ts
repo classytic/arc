@@ -28,6 +28,7 @@ import { allowPublic, fields, requireOwnership } from "../../src/permissions/ind
 import {
   buildChangeFrame,
   connectionDeadlineMs,
+  DEFAULT_MAX_CONNECTION_MS,
   type DeliveryPolicy,
   resolveDelivery,
   resolveRowMatcher,
@@ -230,6 +231,18 @@ describe("connectionDeadlineMs — permission-staleness bound", () => {
   it("clamps to Node's setTimeout ceiling for far-future expiry", () => {
     const exp = now / 1000 + 60 * 24 * 3600; // 60 days
     expect(connectionDeadlineMs({ exp }, undefined, now)).toBe(2_147_483_647);
+  });
+
+  it("the plugin's DEFAULT lease is a finite 30-min bound applied on omission", () => {
+    // The plugin resolves `maxConnectionMs = DEFAULT_MAX_CONNECTION_MS` when the
+    // option is omitted, so an exp-less (session/cookie) feed is NEVER unbounded.
+    // Proven here without a 30-min wait: the default is finite, and feeding it to
+    // the pure deadline fn yields that finite bound (what the plugin passes).
+    expect(DEFAULT_MAX_CONNECTION_MS).toBe(30 * 60_000);
+    expect(Number.isFinite(DEFAULT_MAX_CONNECTION_MS)).toBe(true);
+    expect(connectionDeadlineMs({ id: "u1" }, DEFAULT_MAX_CONNECTION_MS, now)).toBe(
+      DEFAULT_MAX_CONNECTION_MS,
+    );
   });
 });
 

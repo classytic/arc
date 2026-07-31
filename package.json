@@ -1,541 +1,549 @@
 {
-	"name": "@classytic/arc",
-	"version": "2.30.0",
-	"description": "Resource-oriented backend framework for Fastify - clean, minimal, powerful, tree-shakable",
-	"type": "module",
-	"exports": {
-		".": {
-			"types": "./dist/index.d.mts",
-			"default": "./dist/index.mjs"
-		},
-		"./permissions": {
-			"types": "./dist/permissions/index.d.mts",
-			"default": "./dist/permissions/index.mjs"
-		},
-		"./cache": {
-			"types": "./dist/cache/index.d.mts",
-			"default": "./dist/cache/index.mjs"
-		},
-		"./types": {
-			"types": "./dist/types/index.d.mts",
-			"default": "./dist/types/index.mjs"
-		},
-		"./types/storage": {
-			"types": "./dist/types/storage.d.mts",
-			"default": "./dist/types/storage.mjs"
-		},
-		"./core": {
-			"types": "./dist/core/index.d.mts",
-			"default": "./dist/core/index.mjs"
-		},
-		"./presets": {
-			"types": "./dist/presets/index.d.mts",
-			"default": "./dist/presets/index.mjs"
-		},
-		"./presets/tenant": {
-			"types": "./dist/presets/multiTenant.d.mts",
-			"default": "./dist/presets/multiTenant.mjs"
-		},
-		"./presets/files-upload": {
-			"types": "./dist/presets/filesUpload.d.mts",
-			"default": "./dist/presets/filesUpload.mjs"
-		},
-		"./presets/search": {
-			"types": "./dist/presets/search.d.mts",
-			"default": "./dist/presets/search.mjs"
-		},
-		"./auth": {
-			"types": "./dist/auth/index.d.mts",
-			"default": "./dist/auth/index.mjs"
-		},
-		"./hooks": {
-			"types": "./dist/hooks/index.d.mts",
-			"default": "./dist/hooks/index.mjs"
-		},
-		"./middleware": {
-			"types": "./dist/middleware/index.d.mts",
-			"default": "./dist/middleware/index.mjs"
-		},
-		"./pipeline": {
-			"types": "./dist/pipeline/index.d.mts",
-			"default": "./dist/pipeline/index.mjs"
-		},
-		"./context": {
-			"types": "./dist/context/index.d.mts",
-			"default": "./dist/context/index.mjs"
-		},
-		"./logger": {
-			"types": "./dist/logger/index.d.mts",
-			"default": "./dist/logger/index.mjs"
-		},
-		"./registry": {
-			"types": "./dist/registry/index.d.mts",
-			"default": "./dist/registry/index.mjs"
-		},
-		"./utils": {
-			"types": "./dist/utils/index.d.mts",
-			"default": "./dist/utils/index.mjs"
-		},
-		"./cli": {
-			"types": "./dist/cli/index.d.mts",
-			"default": "./dist/cli/index.mjs"
-		},
-		"./plugins": {
-			"types": "./dist/plugins/index.d.mts",
-			"default": "./dist/plugins/index.mjs"
-		},
-		"./plugins/tracing": {
-			"types": "./dist/plugins/tracing-entry.d.mts",
-			"default": "./dist/plugins/tracing-entry.mjs"
-		},
-		"./audit": {
-			"types": "./dist/audit/index.d.mts",
-			"default": "./dist/audit/index.mjs"
-		},
-		"./docs": {
-			"types": "./dist/docs/index.d.mts",
-			"default": "./dist/docs/index.mjs"
-		},
-		"./encryption": {
-			"types": "./dist/encryption/index.d.mts",
-			"default": "./dist/encryption/index.mjs"
-		},
-		"./idempotency": {
-			"types": "./dist/idempotency/index.d.mts",
-			"default": "./dist/idempotency/index.mjs"
-		},
-		"./idempotency/redis": {
-			"types": "./dist/idempotency/redis.d.mts",
-			"default": "./dist/idempotency/redis.mjs"
-		},
-		"./events": {
-			"types": "./dist/events/index.d.mts",
-			"default": "./dist/events/index.mjs"
-		},
-		"./events/redis": {
-			"types": "./dist/events/transports/redis.d.mts",
-			"default": "./dist/events/transports/redis.mjs"
-		},
-		"./events/redis-stream": {
-			"types": "./dist/events/transports/redis-stream-entry.d.mts",
-			"default": "./dist/events/transports/redis-stream-entry.mjs"
-		},
-		"./testing": {
-			"types": "./dist/testing/index.d.mts",
-			"default": "./dist/testing/index.mjs"
-		},
-		"./testing/storage": {
-			"types": "./dist/testing/storageContract.d.mts",
-			"default": "./dist/testing/storageContract.mjs"
-		},
-		"./testing/cleanup": {
-			"types": "./dist/testing/cleanupStoreContract.d.mts",
-			"default": "./dist/testing/cleanupStoreContract.mjs"
-		},
-		"./factory": {
-			"types": "./dist/factory/index.d.mts",
-			"default": "./dist/factory/index.mjs"
-		},
-		"./schemas": {
-			"types": "./dist/schemas/index.d.mts",
-			"default": "./dist/schemas/index.mjs"
-		},
-		"./migrations": {
-			"types": "./dist/migrations/index.d.mts",
-			"default": "./dist/migrations/index.mjs"
-		},
-		"./discovery": {
-			"types": "./dist/discovery/index.d.mts",
-			"default": "./dist/discovery/index.mjs"
-		},
-		"./integrations": {
-			"types": "./dist/integrations/index.d.mts",
-			"default": "./dist/integrations/index.mjs"
-		},
-		"./integrations/streamline": {
-			"types": "./dist/integrations/streamline.d.mts",
-			"default": "./dist/integrations/streamline.mjs"
-		},
-		"./integrations/websocket": {
-			"types": "./dist/integrations/websocket.d.mts",
-			"default": "./dist/integrations/websocket.mjs"
-		},
-		"./integrations/websocket-redis": {
-			"types": "./dist/integrations/websocket-redis.d.mts",
-			"default": "./dist/integrations/websocket-redis.mjs"
-		},
-		"./integrations/websocket-pushref-redis": {
-			"types": "./dist/integrations/websocket-pushref-redis.d.mts",
-			"default": "./dist/integrations/websocket-pushref-redis.mjs"
-		},
-		"./integrations/jobs": {
-			"types": "./dist/integrations/jobs/index.d.mts",
-			"default": "./dist/integrations/jobs/index.mjs"
-		},
-		"./integrations/event-gateway": {
-			"types": "./dist/integrations/event-gateway.d.mts",
-			"default": "./dist/integrations/event-gateway.mjs"
-		},
-		"./integrations/webhooks": {
-			"types": "./dist/integrations/webhooks.d.mts",
-			"default": "./dist/integrations/webhooks.mjs"
-		},
-		"./auth/redis": {
-			"types": "./dist/auth/redis-session.d.mts",
-			"default": "./dist/auth/redis-session.mjs"
-		},
-		"./plugins/response-cache": {
-			"types": "./dist/plugins/response-cache.d.mts",
-			"default": "./dist/plugins/response-cache.mjs"
-		},
-		"./scope": {
-			"types": "./dist/scope/index.d.mts",
-			"default": "./dist/scope/index.mjs"
-		},
-		"./mcp": {
-			"types": "./dist/integrations/mcp/index.d.mts",
-			"default": "./dist/integrations/mcp/index.mjs"
-		},
-		"./mcp/testing": {
-			"types": "./dist/integrations/mcp/testing.d.mts",
-			"default": "./dist/integrations/mcp/testing.mjs"
-		},
-		"./scim": {
-			"types": "./dist/scim/index.d.mts",
-			"default": "./dist/scim/index.mjs"
-		},
-		"./auth/audit": {
-			"types": "./dist/auth/audit.d.mts",
-			"default": "./dist/auth/audit.mjs"
-		},
-		"./sync": {
-			"types": "./dist/sync/changelog.d.mts",
-			"default": "./dist/sync/changelog.mjs"
-		},
-		"./usage": {
-			"types": "./dist/usage/index.d.mts",
-			"default": "./dist/usage/index.mjs"
-		},
-		"./cleanup": {
-			"types": "./dist/cleanup/index.d.mts",
-			"default": "./dist/cleanup/index.mjs"
-		},
-		"./testing/outbox": {
-			"types": "./dist/testing/outboxStoreContract.d.mts",
-			"default": "./dist/testing/outboxStoreContract.mjs"
-		}
-	},
-	"main": "./dist/index.mjs",
-	"types": "./dist/index.d.mts",
-	"bin": {
-		"arc": "./bin/arc.js"
-	},
-	"publishConfig": {
-		"access": "public"
-	},
-	"sideEffects": false,
-	"arc": {
-		"subpathStability": {
-			".": "stable",
-			"./permissions": "stable",
-			"./cache": "stable",
-			"./cleanup": "stable",
-			"./types": "stable",
-			"./types/storage": "stable",
-			"./core": "stable",
-			"./presets": "stable",
-			"./presets/tenant": "stable",
-			"./presets/files-upload": "stable",
-			"./presets/search": "stable",
-			"./auth": "stable",
-			"./hooks": "stable",
-			"./middleware": "stable",
-			"./pipeline": "stable",
-			"./context": "stable",
-			"./logger": "stable",
-			"./registry": "stable",
-			"./utils": "stable",
-			"./cli": "stable",
-			"./plugins": "stable",
-			"./plugins/tracing": "stable",
-			"./audit": "stable",
-			"./docs": "stable",
-			"./encryption": "stable",
-			"./idempotency": "stable",
-			"./idempotency/redis": "stable",
-			"./events": "stable",
-			"./events/redis": "stable",
-			"./events/redis-stream": "stable",
-			"./testing": "stable",
-			"./testing/storage": "stable",
-			"./testing/cleanup": "stable",
-			"./factory": "stable",
-			"./schemas": "stable",
-			"./migrations": "stable",
-			"./discovery": "stable",
-			"./integrations": "stable",
-			"./integrations/streamline": "stable",
-			"./integrations/websocket": "stable",
-			"./integrations/websocket-redis": "stable",
-			"./integrations/websocket-pushref-redis": "stable",
-			"./integrations/jobs": "stable",
-			"./integrations/event-gateway": "experimental",
-			"./integrations/webhooks": "stable",
-			"./auth/redis": "stable",
-			"./plugins/response-cache": "stable",
-			"./scope": "stable",
-			"./mcp": "stable",
-			"./mcp/testing": "stable",
-			"./scim": "stable",
-			"./auth/audit": "stable",
-			"./sync": "experimental",
-			"./usage": "experimental",
-			"./testing/outbox": "stable"
-		}
-	},
-	"files": [
-		"dist",
-		"bin",
-		"skills",
-		"llms.txt"
-	],
-	"scripts": {
-		"build": "tsdown",
-		"dev": "tsdown --watch",
-		"typecheck": "npm run typecheck:src && npm run typecheck:types && npm run check:type-lane",
-		"typecheck:src": "tsc --noEmit",
-		"check:type-lane": "node scripts/check-type-lane.mjs",
-		"lint": "biome check src/",
-		"lint:fix": "biome check --fix src/",
-		"lint:all": "biome check src/ tests/",
-		"test": "vitest run",
-		"test:main": "vitest run",
-		"test:main:serial": "vitest run --no-file-parallelism",
-		"test:perf": "node --expose-gc ./node_modules/vitest/vitest.mjs run --config vitest.perf.config.ts --no-file-parallelism",
-		"test:ci": "npm run test:main && npm run test:perf",
-		"test:watch": "vitest",
-		"test:ui": "vitest --ui",
-		"typecheck:types": "tsc -p tsconfig.types.json",
-		"api:surface": "node scripts/check-api-surface.mjs --update",
-		"check:api-surface": "node scripts/check-api-surface.mjs",
-		"check:package": "publint && attw --pack . --profile esm-only",
-		"test:coverage": "vitest run --coverage",
-		"test:fast": "vitest run tests/core tests/hooks tests/utils tests/plugins tests/cache tests/events",
-		"test:contract": "vitest run tests/contract tests/adapters tests/types",
-		"test:integration": "vitest run tests/integrations tests/factory tests/auth",
-		"test:e2e": "vitest run tests/e2e tests/scenarios tests/smoke",
-		"test:changed": "vitest run --changed",
-		"test:reliability": "vitest run tests/cache tests/events tests/migrations tests/plugins/schedules.test.ts tests/plugins/health.test.ts tests/utils/circuit-breaker.test.ts tests/utils/compensation-hooks.test.ts tests/integrations/jobs-timeout.test.ts",
-		"test:smoke:ws": "vitest run tests/integrations/websocket/smoke.test.ts",
-		"test:smoke:redis": "node scripts/smoke-ws-redis.mjs",
-		"smoke": "node scripts/smoke-test.mjs",
-		"smoke:consumer": "node scripts/smoke-test.mjs --consumer",
-		"push": "classytic-push",
-		"release:tag": "node -e \"require('child_process').execSync('npm run push -- v'+require('./package.json').version,{stdio:'inherit'})\"",
-		"release": "npm run push -- main && npm run release:tag && npm publish",
-		"check:peer-skew": "node scripts/check-peer-skew.mjs",
-		"check:docs-drift": "node scripts/check-docs-drift.mjs",
-		"check:boundaries": "node scripts/check-boundaries.mjs",
-		"prepublishOnly": "npm run check:peer-skew && npm run check:docs-drift && npm run check:boundaries && npm run typecheck && npm run lint && npm run build && npm run check:api-surface && npm run check:package && npm run test:ci && npm run smoke:consumer"
-	},
-	"engines": {
-		"node": ">=22"
-	},
-	"peerDependencies": {
-		"@classytic/primitives": ">=0.15.0",
-		"@classytic/repo-core": ">=0.17.0",
-		"@classytic/streamline": ">=2.8.0",
-		"@fastify/cors": ">=11.0.0",
-		"@fastify/helmet": ">=13.0.0",
-		"@fastify/jwt": ">=10.0.0",
-		"@fastify/multipart": ">=9.0.0",
-		"@fastify/rate-limit": ">=10.0.0",
-		"@fastify/sensible": ">=6.0.0",
-		"@fastify/type-provider-typebox": ">=6.0.0",
-		"@fastify/under-pressure": ">=9.0.0",
-		"@fastify/websocket": ">=11.0.0",
-		"@modelcontextprotocol/sdk": ">=1.28.0",
-		"@opentelemetry/api": ">=1.9.0",
-		"@opentelemetry/auto-instrumentations-node": ">=0.40.0",
-		"@opentelemetry/exporter-trace-otlp-http": ">=0.50.0",
-		"@opentelemetry/instrumentation-http": ">=0.50.0",
-		"@opentelemetry/instrumentation-mongodb": ">=0.40.0",
-		"@opentelemetry/sdk-node": ">=0.50.0",
-		"better-auth": ">=1.6.2",
-		"bullmq": ">=5.0.0",
-		"fastify": ">=5.8.5",
-		"fastify-raw-body": ">=5.0.0",
-		"h3-js": ">=4.0.0",
-		"ioredis": ">=5.0.0",
-		"jose": ">=5.0.0",
-		"pino-pretty": ">=13.0.0",
-		"typebox": ">=1.0.0",
-		"zod": ">=4.0.0"
-	},
-	"peerDependenciesMeta": {
-		"better-auth": {
-			"optional": true
-		},
-		"@fastify/cors": {
-			"optional": true
-		},
-		"@fastify/helmet": {
-			"optional": true
-		},
-		"@fastify/jwt": {
-			"optional": true
-		},
-		"@fastify/rate-limit": {
-			"optional": true
-		},
-		"@fastify/sensible": {
-			"optional": true
-		},
-		"@fastify/under-pressure": {
-			"optional": true
-		},
-		"@fastify/multipart": {
-			"optional": true
-		},
-		"@fastify/websocket": {
-			"optional": true
-		},
-		"fastify-raw-body": {
-			"optional": true
-		},
-		"h3-js": {
-			"optional": true
-		},
-		"pino-pretty": {
-			"optional": true
-		},
-		"@opentelemetry/api": {
-			"optional": true
-		},
-		"@opentelemetry/sdk-node": {
-			"optional": true
-		},
-		"@opentelemetry/exporter-trace-otlp-http": {
-			"optional": true
-		},
-		"@opentelemetry/instrumentation-http": {
-			"optional": true
-		},
-		"@opentelemetry/instrumentation-mongodb": {
-			"optional": true
-		},
-		"@opentelemetry/auto-instrumentations-node": {
-			"optional": true
-		},
-		"ioredis": {
-			"optional": true
-		},
-		"jose": {
-			"optional": true
-		},
-		"typebox": {
-			"optional": true
-		},
-		"@fastify/type-provider-typebox": {
-			"optional": true
-		},
-		"bullmq": {
-			"optional": true
-		},
-		"@classytic/streamline": {
-			"optional": true
-		},
-		"zod": {
-			"optional": true
-		},
-		"@modelcontextprotocol/sdk": {
-			"optional": true
-		}
-	},
-	"dependencies": {
-		"fastify-plugin": "^6.0.0",
-		"qs": "^6.15.2",
-		"secure-json-parse": "^4.1.0"
-	},
-	"devDependencies": {
-		"@arethetypeswrong/cli": "^0.18.5",
-		"@better-auth/drizzle-adapter": "^1.6.19",
-		"@better-auth/mongo-adapter": "^1.6.19",
-		"@biomejs/biome": "^2.5.5",
-		"@classytic/dev-tools": "^0.2.0",
-		"@classytic/gitkit": ">=0.1.0",
-		"@classytic/mongokit": "^3.28.0",
-		"@classytic/pgkit": "^0.1.0",
-		"@classytic/primitives": "^0.15.0",
-		"@classytic/repo-core": "^0.17.0",
-		"@classytic/sqlitekit": "^0.6.0",
-		"@classytic/streamline": "^2.8.2",
-		"@electric-sql/pglite": "^0.5.4",
-		"@fastify/cors": "^11.2.0",
-		"@fastify/helmet": "^13.0.2",
-		"@fastify/jwt": "^10.1.0",
-		"@fastify/multipart": "^10.0.0",
-		"@fastify/rate-limit": "^11.0.0",
-		"@fastify/sensible": "^6.0.4",
-		"@fastify/type-provider-typebox": "^6.1.0",
-		"@fastify/under-pressure": "^9.0.3",
-		"@fastify/websocket": "^11.2.0",
-		"@modelcontextprotocol/sdk": "^1.29.0",
-		"@opentelemetry/api": "^1.9.1",
-		"@types/node": "^22.19.21",
-		"@types/qs": "^6.15.1",
-		"@vitest/coverage-v8": "^4.1.9",
-		"ajv": "^8.20.0",
-		"better-auth": "^1.6.25",
-		"better-sqlite3": "^12.11.1",
-		"bullmq": "^5.81.2",
-		"dotenv": "^17.4.2",
-		"drizzle-orm": "^0.45.2",
-		"fast-check": "^4.8.0",
-		"fastify": "^5.10.0",
-		"fastify-raw-body": "^5.0.0",
-		"h3-js": "^4.4.0",
-		"ioredis": "^5.11.1",
-		"jose": "^6.2.3",
-		"jsonwebtoken": "^9.0.3",
-		"knip": "^6.17.1",
-		"mongodb": "^7.3.0",
-		"mongodb-memory-server": "^11.2.0",
-		"mongoose": "^9.7.1",
-		"publint": "^0.3.21",
-		"tsdown": "^0.22.14",
-		"typebox": "^1.3.6",
-		"typescript": "^7.0.2",
-		"vitest": "^4.1.10",
-		"ws": "^8.21.0",
-		"zod": "^4.4.3"
-	},
-	"config": {
-		"mongodbMemoryServer": {
-			"disablePostinstall": "1"
-		}
-	},
-	"keywords": [
-		"fastify",
-		"mongodb",
-		"mongoose",
-		"crud",
-		"rest",
-		"api",
-		"framework",
-		"resource",
-		"multi-tenant",
-		"typescript",
-		"tree-shakable",
-		"serverless",
-		"websocket",
-		"jobs",
-		"workflow"
-	],
-	"author": "Classytic",
-	"license": "MIT",
-	"repository": {
-		"type": "git",
-		"url": "git+https://github.com/classytic/arc.git"
-	}
+  "name": "@classytic/arc",
+  "version": "2.31.0",
+  "description": "Resource-oriented backend framework for Fastify - clean, minimal, powerful, tree-shakable",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./permissions": {
+      "types": "./dist/permissions/index.d.mts",
+      "default": "./dist/permissions/index.mjs"
+    },
+    "./cache": {
+      "types": "./dist/cache/index.d.mts",
+      "default": "./dist/cache/index.mjs"
+    },
+    "./types": {
+      "types": "./dist/types/index.d.mts",
+      "default": "./dist/types/index.mjs"
+    },
+    "./types/storage": {
+      "types": "./dist/types/storage.d.mts",
+      "default": "./dist/types/storage.mjs"
+    },
+    "./core": {
+      "types": "./dist/core/index.d.mts",
+      "default": "./dist/core/index.mjs"
+    },
+    "./presets": {
+      "types": "./dist/presets/index.d.mts",
+      "default": "./dist/presets/index.mjs"
+    },
+    "./presets/tenant": {
+      "types": "./dist/presets/multiTenant.d.mts",
+      "default": "./dist/presets/multiTenant.mjs"
+    },
+    "./presets/files-upload": {
+      "types": "./dist/presets/filesUpload.d.mts",
+      "default": "./dist/presets/filesUpload.mjs"
+    },
+    "./presets/search": {
+      "types": "./dist/presets/search.d.mts",
+      "default": "./dist/presets/search.mjs"
+    },
+    "./auth": {
+      "types": "./dist/auth/index.d.mts",
+      "default": "./dist/auth/index.mjs"
+    },
+    "./hooks": {
+      "types": "./dist/hooks/index.d.mts",
+      "default": "./dist/hooks/index.mjs"
+    },
+    "./middleware": {
+      "types": "./dist/middleware/index.d.mts",
+      "default": "./dist/middleware/index.mjs"
+    },
+    "./pipeline": {
+      "types": "./dist/pipeline/index.d.mts",
+      "default": "./dist/pipeline/index.mjs"
+    },
+    "./context": {
+      "types": "./dist/context/index.d.mts",
+      "default": "./dist/context/index.mjs"
+    },
+    "./logger": {
+      "types": "./dist/logger/index.d.mts",
+      "default": "./dist/logger/index.mjs"
+    },
+    "./registry": {
+      "types": "./dist/registry/index.d.mts",
+      "default": "./dist/registry/index.mjs"
+    },
+    "./utils": {
+      "types": "./dist/utils/index.d.mts",
+      "default": "./dist/utils/index.mjs"
+    },
+    "./cli": {
+      "types": "./dist/cli/index.d.mts",
+      "default": "./dist/cli/index.mjs"
+    },
+    "./plugins": {
+      "types": "./dist/plugins/index.d.mts",
+      "default": "./dist/plugins/index.mjs"
+    },
+    "./plugins/tracing": {
+      "types": "./dist/plugins/tracing-entry.d.mts",
+      "default": "./dist/plugins/tracing-entry.mjs"
+    },
+    "./audit": {
+      "types": "./dist/audit/index.d.mts",
+      "default": "./dist/audit/index.mjs"
+    },
+    "./docs": {
+      "types": "./dist/docs/index.d.mts",
+      "default": "./dist/docs/index.mjs"
+    },
+    "./encryption": {
+      "types": "./dist/encryption/index.d.mts",
+      "default": "./dist/encryption/index.mjs"
+    },
+    "./idempotency": {
+      "types": "./dist/idempotency/index.d.mts",
+      "default": "./dist/idempotency/index.mjs"
+    },
+    "./idempotency/redis": {
+      "types": "./dist/idempotency/redis.d.mts",
+      "default": "./dist/idempotency/redis.mjs"
+    },
+    "./events": {
+      "types": "./dist/events/index.d.mts",
+      "default": "./dist/events/index.mjs"
+    },
+    "./events/redis": {
+      "types": "./dist/events/transports/redis.d.mts",
+      "default": "./dist/events/transports/redis.mjs"
+    },
+    "./events/redis-stream": {
+      "types": "./dist/events/transports/redis-stream-entry.d.mts",
+      "default": "./dist/events/transports/redis-stream-entry.mjs"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.mts",
+      "default": "./dist/testing/index.mjs"
+    },
+    "./testing/storage": {
+      "types": "./dist/testing/storageContract.d.mts",
+      "default": "./dist/testing/storageContract.mjs"
+    },
+    "./testing/cleanup": {
+      "types": "./dist/testing/cleanupStoreContract.d.mts",
+      "default": "./dist/testing/cleanupStoreContract.mjs"
+    },
+    "./factory": {
+      "types": "./dist/factory/index.d.mts",
+      "default": "./dist/factory/index.mjs"
+    },
+    "./schemas": {
+      "types": "./dist/schemas/index.d.mts",
+      "default": "./dist/schemas/index.mjs"
+    },
+    "./migrations": {
+      "types": "./dist/migrations/index.d.mts",
+      "default": "./dist/migrations/index.mjs"
+    },
+    "./discovery": {
+      "types": "./dist/discovery/index.d.mts",
+      "default": "./dist/discovery/index.mjs"
+    },
+    "./integrations": {
+      "types": "./dist/integrations/index.d.mts",
+      "default": "./dist/integrations/index.mjs"
+    },
+    "./integrations/streamline": {
+      "types": "./dist/integrations/streamline.d.mts",
+      "default": "./dist/integrations/streamline.mjs"
+    },
+    "./integrations/websocket": {
+      "types": "./dist/integrations/websocket.d.mts",
+      "default": "./dist/integrations/websocket.mjs"
+    },
+    "./integrations/websocket-redis": {
+      "types": "./dist/integrations/websocket-redis.d.mts",
+      "default": "./dist/integrations/websocket-redis.mjs"
+    },
+    "./integrations/websocket-pushref-redis": {
+      "types": "./dist/integrations/websocket-pushref-redis.d.mts",
+      "default": "./dist/integrations/websocket-pushref-redis.mjs"
+    },
+    "./integrations/jobs": {
+      "types": "./dist/integrations/jobs/index.d.mts",
+      "default": "./dist/integrations/jobs/index.mjs"
+    },
+    "./integrations/event-gateway": {
+      "types": "./dist/integrations/event-gateway.d.mts",
+      "default": "./dist/integrations/event-gateway.mjs"
+    },
+    "./integrations/webhooks": {
+      "types": "./dist/integrations/webhooks.d.mts",
+      "default": "./dist/integrations/webhooks.mjs"
+    },
+    "./auth/redis": {
+      "types": "./dist/auth/redis-session.d.mts",
+      "default": "./dist/auth/redis-session.mjs"
+    },
+    "./plugins/response-cache": {
+      "types": "./dist/plugins/response-cache.d.mts",
+      "default": "./dist/plugins/response-cache.mjs"
+    },
+    "./scope": {
+      "types": "./dist/scope/index.d.mts",
+      "default": "./dist/scope/index.mjs"
+    },
+    "./mcp": {
+      "types": "./dist/integrations/mcp/index.d.mts",
+      "default": "./dist/integrations/mcp/index.mjs"
+    },
+    "./mcp/testing": {
+      "types": "./dist/integrations/mcp/testing.d.mts",
+      "default": "./dist/integrations/mcp/testing.mjs"
+    },
+    "./scim": {
+      "types": "./dist/scim/index.d.mts",
+      "default": "./dist/scim/index.mjs"
+    },
+    "./auth/audit": {
+      "types": "./dist/auth/audit.d.mts",
+      "default": "./dist/auth/audit.mjs"
+    },
+    "./sync": {
+      "types": "./dist/sync/changelog.d.mts",
+      "default": "./dist/sync/changelog.mjs"
+    },
+    "./usage": {
+      "types": "./dist/usage/index.d.mts",
+      "default": "./dist/usage/index.mjs"
+    },
+    "./cleanup": {
+      "types": "./dist/cleanup/index.d.mts",
+      "default": "./dist/cleanup/index.mjs"
+    },
+    "./testing/outbox": {
+      "types": "./dist/testing/outboxStoreContract.d.mts",
+      "default": "./dist/testing/outboxStoreContract.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "bin": {
+    "arc": "./bin/arc.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "arc": {
+    "subpathStability": {
+      ".": "stable",
+      "./permissions": "stable",
+      "./cache": "stable",
+      "./cleanup": "stable",
+      "./types": "stable",
+      "./types/storage": "stable",
+      "./core": "stable",
+      "./presets": "stable",
+      "./presets/tenant": "stable",
+      "./presets/files-upload": "stable",
+      "./presets/search": "stable",
+      "./auth": "stable",
+      "./hooks": "stable",
+      "./middleware": "stable",
+      "./pipeline": "stable",
+      "./context": "stable",
+      "./logger": "stable",
+      "./registry": "stable",
+      "./utils": "stable",
+      "./cli": "stable",
+      "./plugins": "stable",
+      "./plugins/tracing": "stable",
+      "./audit": "stable",
+      "./docs": "stable",
+      "./encryption": "stable",
+      "./idempotency": "stable",
+      "./idempotency/redis": "stable",
+      "./events": "stable",
+      "./events/redis": "stable",
+      "./events/redis-stream": "stable",
+      "./testing": "stable",
+      "./testing/storage": "stable",
+      "./testing/cleanup": "stable",
+      "./factory": "stable",
+      "./schemas": "stable",
+      "./migrations": "stable",
+      "./discovery": "stable",
+      "./integrations": "stable",
+      "./integrations/streamline": "stable",
+      "./integrations/websocket": "stable",
+      "./integrations/websocket-redis": "stable",
+      "./integrations/websocket-pushref-redis": "stable",
+      "./integrations/jobs": "stable",
+      "./integrations/event-gateway": "experimental",
+      "./integrations/webhooks": "stable",
+      "./auth/redis": "stable",
+      "./plugins/response-cache": "stable",
+      "./scope": "stable",
+      "./mcp": "stable",
+      "./mcp/testing": "stable",
+      "./scim": "stable",
+      "./auth/audit": "stable",
+      "./sync": "experimental",
+      "./usage": "experimental",
+      "./testing/outbox": "stable"
+    }
+  },
+  "files": [
+    "dist",
+    "bin",
+    "skills",
+    "llms.txt",
+    "TRADEMARK.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "typecheck": "npm run typecheck:src && npm run typecheck:types && npm run check:type-lane",
+    "typecheck:src": "tsc --noEmit",
+    "check:type-lane": "node scripts/check-type-lane.mjs",
+    "lint": "biome check src/",
+    "lint:fix": "biome check --fix src/",
+    "lint:all": "biome check src/ tests/",
+    "test": "vitest run",
+    "test:main": "vitest run",
+    "test:main:serial": "vitest run --no-file-parallelism",
+    "test:perf": "node --expose-gc ./node_modules/vitest/vitest.mjs run --config vitest.perf.config.ts --no-file-parallelism",
+    "test:ci": "npm run test:main && npm run test:perf",
+    "test:watch": "vitest",
+    "test:ui": "vitest --ui",
+    "typecheck:types": "tsc -p tsconfig.types.json",
+    "api:surface": "node scripts/check-api-surface.mjs --update",
+    "check:api-surface": "node scripts/check-api-surface.mjs",
+    "check:package": "publint && attw --pack . --profile esm-only",
+    "test:coverage": "vitest run --coverage",
+    "test:fast": "vitest run tests/core tests/hooks tests/utils tests/plugins tests/cache tests/events",
+    "test:contract": "vitest run tests/contract tests/adapters tests/types",
+    "test:integration": "vitest run tests/integrations tests/factory tests/auth",
+    "test:e2e": "vitest run tests/e2e tests/scenarios tests/smoke",
+    "test:changed": "vitest run --changed",
+    "test:reliability": "vitest run tests/cache tests/events tests/migrations tests/plugins/schedules.test.ts tests/plugins/health.test.ts tests/utils/circuit-breaker.test.ts tests/utils/compensation-hooks.test.ts tests/integrations/jobs-timeout.test.ts",
+    "test:smoke:ws": "vitest run tests/integrations/websocket/smoke.test.ts",
+    "test:smoke:redis": "node scripts/smoke-ws-redis.mjs",
+    "smoke": "node scripts/smoke-test.mjs",
+    "smoke:consumer": "node scripts/smoke-test.mjs --consumer",
+    "push": "classytic-push",
+    "release:tag": "node -e \"require('child_process').execSync('npm run push -- v'+require('./package.json').version,{stdio:'inherit'})\"",
+    "release": "npm run push -- main && npm run release:tag && npm publish",
+    "check:peer-skew": "node scripts/check-peer-skew.mjs",
+    "check:docs-drift": "node scripts/check-docs-drift.mjs",
+    "check:boundaries": "node scripts/check-boundaries.mjs",
+    "prepublishOnly": "npm run check:peer-skew && npm run check:docs-drift && npm run check:route-api && npm run check:boundaries && npm run typecheck && npm run lint && npm run build && npm run check:api-surface && npm run check:package && npm run test:ci && npm run smoke:consumer",
+    "check:route-api": "node scripts/check-removed-route-api.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "peerDependencies": {
+    "@classytic/primitives": ">=0.18.0",
+    "@classytic/repo-core": ">=0.17.0",
+    "@classytic/streamline": ">=2.8.0",
+    "@fastify/cors": ">=11.0.0",
+    "@fastify/helmet": ">=13.0.0",
+    "@fastify/jwt": ">=10.0.0",
+    "@fastify/multipart": ">=9.0.0",
+    "@fastify/rate-limit": ">=10.0.0",
+    "@fastify/sensible": ">=6.0.0",
+    "@fastify/type-provider-typebox": ">=6.0.0",
+    "@fastify/under-pressure": ">=9.0.0",
+    "@fastify/websocket": ">=11.0.0",
+    "@modelcontextprotocol/sdk": ">=1.28.0",
+    "@opentelemetry/api": ">=1.9.0",
+    "@opentelemetry/auto-instrumentations-node": ">=0.40.0",
+    "@opentelemetry/exporter-trace-otlp-http": ">=0.50.0",
+    "@opentelemetry/instrumentation-http": ">=0.50.0",
+    "@opentelemetry/instrumentation-mongodb": ">=0.40.0",
+    "@opentelemetry/sdk-node": ">=0.50.0",
+    "better-auth": ">=1.6.2",
+    "bullmq": ">=5.0.0",
+    "fastify": ">=5.8.5",
+    "fastify-raw-body": ">=5.0.0",
+    "h3-js": ">=4.0.0",
+    "ioredis": ">=5.0.0",
+    "jose": ">=5.0.0",
+    "pino-pretty": ">=13.0.0",
+    "typebox": ">=1.0.0",
+    "zod": ">=4.4.0",
+    "@fastify/static": ">=8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "better-auth": {
+      "optional": true
+    },
+    "@fastify/cors": {
+      "optional": true
+    },
+    "@fastify/helmet": {
+      "optional": true
+    },
+    "@fastify/jwt": {
+      "optional": true
+    },
+    "@fastify/rate-limit": {
+      "optional": true
+    },
+    "@fastify/sensible": {
+      "optional": true
+    },
+    "@fastify/under-pressure": {
+      "optional": true
+    },
+    "@fastify/multipart": {
+      "optional": true
+    },
+    "@fastify/websocket": {
+      "optional": true
+    },
+    "fastify-raw-body": {
+      "optional": true
+    },
+    "h3-js": {
+      "optional": true
+    },
+    "pino-pretty": {
+      "optional": true
+    },
+    "@opentelemetry/api": {
+      "optional": true
+    },
+    "@opentelemetry/sdk-node": {
+      "optional": true
+    },
+    "@opentelemetry/exporter-trace-otlp-http": {
+      "optional": true
+    },
+    "@opentelemetry/instrumentation-http": {
+      "optional": true
+    },
+    "@opentelemetry/instrumentation-mongodb": {
+      "optional": true
+    },
+    "@opentelemetry/auto-instrumentations-node": {
+      "optional": true
+    },
+    "ioredis": {
+      "optional": true
+    },
+    "jose": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    },
+    "@fastify/type-provider-typebox": {
+      "optional": true
+    },
+    "bullmq": {
+      "optional": true
+    },
+    "@classytic/streamline": {
+      "optional": true
+    },
+    "zod": {
+      "optional": true
+    },
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "@fastify/static": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "fastify-plugin": "^6.0.0",
+    "qs": "^6.15.2",
+    "secure-json-parse": "^4.1.0"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
+    "@better-auth/drizzle-adapter": "^1.6.19",
+    "@better-auth/mongo-adapter": "^1.6.19",
+    "@biomejs/biome": "^2.5.5",
+    "@classytic/dev-tools": "^0.2.0",
+    "@classytic/gitkit": ">=0.1.0",
+    "@classytic/mongokit": "^3.28.0",
+    "@classytic/pgkit": "^0.1.0",
+    "@classytic/primitives": "^0.18.0",
+    "@classytic/repo-core": "^0.17.0",
+    "@classytic/sqlitekit": "^0.6.0",
+    "@classytic/streamline": "^2.8.2",
+    "@electric-sql/pglite": "^0.5.4",
+    "@fastify/cors": "^11.2.0",
+    "@fastify/helmet": "^13.0.2",
+    "@fastify/jwt": "^10.1.0",
+    "@fastify/multipart": "^10.0.0",
+    "@fastify/rate-limit": "^11.0.0",
+    "@fastify/sensible": "^6.0.4",
+    "@fastify/static": "^10.1.2",
+    "@fastify/type-provider-typebox": "^6.1.0",
+    "@fastify/under-pressure": "^9.0.3",
+    "@fastify/websocket": "^11.2.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@opentelemetry/api": "^1.9.1",
+    "@types/node": "^22.19.21",
+    "@types/qs": "^6.15.1",
+    "@vitest/coverage-v8": "^4.1.9",
+    "ajv": "^8.20.0",
+    "better-auth": "^1.6.25",
+    "better-sqlite3": "^12.11.1",
+    "bullmq": "^5.81.2",
+    "dotenv": "^17.4.2",
+    "drizzle-orm": "^0.45.2",
+    "fast-check": "^4.8.0",
+    "fastify": "^5.10.0",
+    "fastify-raw-body": "^5.0.0",
+    "h3-js": "^4.4.0",
+    "ioredis": "^5.11.1",
+    "jose": "^6.2.3",
+    "jsonwebtoken": "^9.0.3",
+    "knip": "^6.17.1",
+    "mongodb": "^7.3.0",
+    "mongodb-memory-server": "^11.2.0",
+    "mongoose": "^9.7.1",
+    "publint": "^0.3.21",
+    "tsdown": "^0.22.14",
+    "typebox": "^1.3.6",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10",
+    "ws": "^8.21.0",
+    "zod": "^4.4.3"
+  },
+  "config": {
+    "mongodbMemoryServer": {
+      "disablePostinstall": "1"
+    }
+  },
+  "keywords": [
+    "fastify",
+    "mongodb",
+    "mongoose",
+    "crud",
+    "rest",
+    "api",
+    "framework",
+    "resource",
+    "multi-tenant",
+    "typescript",
+    "tree-shakable",
+    "serverless",
+    "websocket",
+    "jobs",
+    "workflow"
+  ],
+  "author": "Classytic",
+  "license": "MIT",
+  "homepage": "https://classytic.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/classytic/arc.git"
+  }
 }

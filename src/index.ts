@@ -317,6 +317,7 @@ export type {
   // bundlers without the direct root export.
   QueryParserInterface,
   RateLimitConfig,
+  RawRouteHandler,
   // Registry
   RegistryEntry,
   RegistryStats,

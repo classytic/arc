@@ -204,7 +204,6 @@ describe("preAuth on routes", () => {
         {
           method: "GET" as const,
           path: "/stream",
-          raw: true,
           permissions: allowPublic(),
           preAuth: [
             (req: FastifyRequest) => {
@@ -212,7 +211,7 @@ describe("preAuth on routes", () => {
               if (token) req.headers.authorization = `Bearer ${token}`;
             },
           ],
-          handler: async (_req: FastifyRequest, reply: FastifyReply) => {
+          rawHandler: async (_req: FastifyRequest, reply: FastifyReply) => {
             reply.send({ ok: true });
           },
         },
@@ -243,10 +242,9 @@ describe("streamResponse flag on routes", () => {
         {
           method: "GET" as const,
           path: "/events",
-          raw: true,
           streamResponse: true,
           permissions: allowPublic(),
-          handler: async (_req: FastifyRequest, reply: FastifyReply) => {
+          rawHandler: async (_req: FastifyRequest, reply: FastifyReply) => {
             reply.raw.write("data: hello\n\n");
             reply.raw.end();
           },

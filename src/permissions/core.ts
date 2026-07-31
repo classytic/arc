@@ -8,7 +8,7 @@
 
 import type { RequestScope } from "../scope/types.js";
 import { getUserId as getScopeUserId, isElevated, isMember } from "../scope/types.js";
-import { normalizeToDecision } from "./applyPermissionResult.js";
+import { normalizeToDecision } from "./authorizationDecision.js";
 import { scopeOf } from "./context.js";
 import { conjoinPolicyFilters } from "./filter-merge.js";
 import type { AuthorizationDecision, PermissionCheck, PermissionContext } from "./types.js";
@@ -87,6 +87,9 @@ export function requireAuth(): PermissionCheck {
     }
     return true;
   };
+  // Pure identity gate — no row-level/environmental condition. Marked so `allOf`
+  // doesn't treat it as an opaque branch (see the conditional-taint logic there).
+  check._requiresAuth = true;
   return check;
 }
 
@@ -174,6 +177,40 @@ export function requireRoles(
     return deny(`Required roles: ${roles.join(", ")}`);
   };
   check._roles = roles;
+  return check;
+}
+
+/**
+ * Require a PLATFORM role — global roles only. An organization role can never
+ * satisfy this gate.
+ *
+ * `requireRoles(["ops"])` also accepts an ORG role named `ops` (that is its
+ * documented default), and `requireOrgRole("manager")` grants ANY organization's
+ * manager. Both return a bare allow with no policy, so a surface that is global
+ * by construction — a queue dashboard, a cluster-wide operations endpoint —
+ * cannot distinguish them from a real operator gate by looking at the decision.
+ * That makes "platform-only" a property the check has to DECLARE, which is what
+ * `_platformOnly` records and what such a surface can then require.
+ *
+ * Elevated scope passes: platform admin is the identity this gate is for.
+ *
+ * @example
+ * permissions: { list: requirePlatformRole("platform-ops") }
+ */
+export function requirePlatformRole(...args: string[] | [readonly string[]]): PermissionCheck {
+  const roles = normalizeVariadicOrArray(args);
+
+  const check: PermissionCheck = (ctx) => {
+    // Deliberately reads `scopeOf(ctx)` for elevation and `ctx.user` for roles —
+    // and NEVER `scope.orgRoles`. That omission is the whole contract.
+    if (isElevated(scopeOf(ctx))) return true;
+    if (!ctx.user) return deny("Authentication required");
+    const userRoles = getUserRoles(ctx.user);
+    if (roles.some((r) => userRoles.includes(r))) return true;
+    return deny(`Required platform roles: ${roles.join(", ")}`);
+  };
+  check._roles = roles;
+  check._platformOnly = true;
   return check;
 }
 
@@ -329,6 +366,48 @@ export function allOf(...checks: PermissionCheck[]): PermissionCheck {
     if (rb?._orgRoles?.length) check._orgRoles = [...rb._orgRoles];
   }
 
+  // Scope-context is CONJUNCTIVE under allOf — every branch's required scope
+  // dimensions must ALL hold, so merge them. This lets a composed HQ gate
+  // `allOf(requireRoles('admin'), requireScopeContext('branchRole','head_office'))`
+  // introspect as a `scoped` requirement carrying BOTH the roles (above) and the
+  // branch-role dimension — "admin AND head-office", not just "admin".
+  const scopeContext: Record<string, string | undefined> = {};
+  let scopeConflict = false;
+  for (const c of checks) {
+    for (const [dim, val] of Object.entries(c._scopeContext ?? {})) {
+      // A second branch demanding a DIFFERENT value for the same dimension is a
+      // contradiction (e.g. branchRole hq AND sub) — unsatisfiable at runtime.
+      // Flag it so the composite is never reported as a definitive allow.
+      if (dim in scopeContext && scopeContext[dim] !== val) scopeConflict = true;
+      else scopeContext[dim] = val;
+    }
+  }
+  if (Object.keys(scopeContext).length > 0) check._scopeContext = scopeContext;
+
+  // SOUNDNESS (necessary vs sufficient): the surfaced role/scope meta describes
+  // only the branches that EXPOSE meta. If any OTHER branch constrains at runtime
+  // without exposing role/scope meta — ownership, a custom predicate, a dynamic
+  // matrix, flow-mode, quota — then holding the role / matching the scope is
+  // NECESSARY but not SUFFICIENT: the opaque branch can still deny. Mark the
+  // composite `conditional` so `explainAccess` never upgrades a partial match to a
+  // definitive `allow`. `requireAuth()` alone is not "opaque" in this sense (it
+  // adds no row-level condition beyond being signed in), so it doesn't taint.
+  const hasMetaSurface = (c: PermissionCheck): boolean =>
+    Boolean(
+      c._isPublic ||
+        c._roles?.length ||
+        c._orgRoles?.length ||
+        (c._scopeContext && Object.keys(c._scopeContext).length > 0),
+    );
+  const opaqueBranch = checks.some((c) => !hasMetaSurface(c) && !c._requiresAuth);
+  // Also PROPAGATE a nested child's own conditionality: an already-conditional
+  // child (e.g. `allOf(requireRoles(...), requireOwnership(...))`) exposes role
+  // meta, so it isn't "opaque" above — but its surfaced roles are themselves
+  // necessary-not-sufficient. Without this, `allOf(inner, requireAuth())` would
+  // drop `inner`'s conditionality and `explainAccess` could report a false allow.
+  const childConditional = checks.some((c) => c._conditional);
+  if (opaqueBranch || scopeConflict || childConditional) check._conditional = true;
+
   return check;
 }
 
@@ -381,6 +460,14 @@ export function anyOf(...checks: PermissionCheck[]): PermissionCheck {
     }
     if (roles.size > 0) check._roles = [...roles];
     if (orgRoles.size > 0) check._orgRoles = [...orgRoles];
+    // If ANY granting branch is itself conditional (e.g.
+    // `anyOf(allOf(requireRoles('admin'), requireOwnership(...)), ...)`), then
+    // holding a unioned role is NOT sufficient — that branch's opaque condition
+    // still decides. Mark the whole disjunction conditional so `explainAccess`
+    // can't report a false `allow`. Conservative by design: it also downgrades an
+    // unconditional sibling branch to conditional (a single boolean can't say
+    // "admin→allow, editor→conditional"); the precise fix is an expression AST.
+    if (checks.some((c) => c._conditional)) check._conditional = true;
   }
 
   return check;

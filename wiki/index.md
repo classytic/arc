@@ -12,7 +12,7 @@ One-line hooks per page. Load only what you need.
 ## Core
 - [core](core.md) — `defineResource`, `BaseController`, `QueryResolver`, `createCrudRouter`
 - [factory](factory.md) — `createApp` entry point + resource loading
-- [modules](modules.md) — `defineModule` domain composition, typed exports (`getModuleExports`), self-describing arms (`eventHandlers` + `boundary`, `healthChecks`, `scheduledJobs`, `errorMappers`), thunk-lazy packs, no-DI-container thesis
+- [modules](modules.md) — `defineModule` domain composition, typed exports (`getModuleExports`), transactional boot + rollback, lifecycle states (`hasModule`/`getModuleState`), self-describing arms (`eventHandlers` + `boundary`, `healthChecks`, `scheduledJobs`, `errorMappers`), thunk-lazy packs, no-DI-container thesis
 - [engine-backed-resources](engine-backed-resources.md) — factory-export pattern for async-booted engines (catalog / flow / revenue / etc.)
 - [adapters](adapters.md) — adapter contract in repo-core; every kit (mongokit, sqlitekit, prismakit, custom) ships its adapter factory at `@classytic/<kit>/adapter`; arc 2.12 has zero kit-bound adapters
 - [types](types.md) — `request.user`, generics, `unknown` defaults, `AnyRecord`
@@ -34,9 +34,10 @@ One-line hooks per page. Load only what you need.
 - [mcp](mcp.md) — Model Context Protocol tool generation
 
 ## Quality
-- [schema-pipeline](schema-pipeline.md) — how validation + OpenAPI/MCP schemas assemble; the 2.21 part-level precedence rule; which knob for which situation
-- [testing](testing.md) — test mapping, harness, never-run-full-suite rule
+- [schema-pipeline](schema-pipeline.md) — how validation + OpenAPI/MCP schemas assemble; Zod input/output conversion direction; the 2.21 part-level precedence rule; which knob for which situation
+- [testing](testing.md) — test mapping, harness, never-run-full-suite rule, condition-based async waits
 - [gotchas](gotchas.md) — numbered trap list (fail-closed, at-least-once, etc.)
+- [static-assets](static-assets.md) — `assets` roots, the CORP trap, cache presets, per-route CORS
 - [security](security.md) — checklist when touching auth/perms/data
 
 ## API lifecycle

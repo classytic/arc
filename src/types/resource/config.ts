@@ -117,7 +117,7 @@ export interface ResourceConfig<TDoc = AnyRecord> {
    * object, primitive) is supported via auto-envelope (2.17+) but the
    * explicit envelope is the canonical contract — declared `fields:`
    * permissions, custom `status`, `meta`, and `headers` only work when
-   * you return the envelope. Set `raw: true` on a route to opt out of
+   * you return the envelope. Declare a route's function via `rawHandler` to opt out of
    * arc's pipeline entirely (custom streaming, SSE, manual `reply.send()`).
    *
    * **Path collisions with auto-CRUD are detected at `defineResource()` time.**
@@ -132,7 +132,7 @@ export interface ResourceConfig<TDoc = AnyRecord> {
    * ```typescript
    * routes: [
    *   { method: 'GET', path: '/stats', handler: 'getStats', permissions: auth() },
-   *   { method: 'POST', path: '/webhook', handler: webhookFn, raw: true, permissions: auth() },
+   *   { method: 'POST', path: '/webhook', rawHandler: webhookFn, permissions: auth() },
    * ]
    * ```
    *

@@ -77,7 +77,7 @@ export interface JWTPayload {
 // `@classytic/repo-core/errors`) via the global error handler.
 
 /**
- * Typed Fastify request with Arc decorations. Use in `raw: true` handlers
+ * Typed Fastify request with Arc decorations. Use in `rawHandler` routes
  * instead of `(req as any).user`.
  *
  * @example

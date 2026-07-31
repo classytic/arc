@@ -44,6 +44,7 @@ import qs from "qs";
 import { arcLog, configureArcLogger, createPinoWriter } from "../logger/index.js";
 import { createRequestIdGenerator } from "../plugins/requestId.js";
 import { parseJsonBody } from "../utils/jsonBody.js";
+import { registerAssetRoots } from "./assets.js";
 import { collectModuleHealthChecks, orderModules, resolveModule } from "./module/index.js";
 import { getPreset } from "./presets.js";
 import { registerArcCore, registerArcPlugins } from "./registerArcPlugins.js";
@@ -239,8 +240,54 @@ function validateDistributedRuntime(options: CreateAppOptions): string[] {
  * 10. afterResources() — post-registration wiring
  * 11. onReady/onClose  — lifecycle hooks
  * ```
+ *
+ * **Boot is all-or-nothing.** If any phase throws, the partially-built
+ * instance is closed before the error propagates — see the wrapper below.
  */
 export async function createApp(options: CreateAppOptions): Promise<FastifyInstance> {
+  // The instance escapes `buildApp` the moment Fastify constructs it, so a
+  // throw from ANY later phase still has something to close.
+  let partial: FastifyInstance | undefined;
+  try {
+    return await buildApp(options, (instance) => {
+      partial = instance;
+    });
+  } catch (err) {
+    // ── Failed-boot cleanup ──
+    //
+    // Phases 2–6 register plugins that take PROCESS-level and connection-level
+    // resources: gracefulShutdown adds SIGTERM/SIGINT listeners, and host
+    // `plugins()` typically opens a DB/Redis connection. Every one of those
+    // releases itself in an `onClose` hook — but a rejected `createApp` never
+    // hands the caller an instance to close, so before this the half-built app
+    // was orphaned with its listeners and sockets still held. (Measured: three
+    // failed boots leaked three SIGTERM listeners; three clean boot+close
+    // cycles leaked none.) Long-running hosts that retry boot, and test suites
+    // that assert on boot failures, both accumulated them.
+    //
+    // Module closers already ran in registerResources' rollback and are
+    // once-guarded, so this cannot double-close them.
+    //
+    // Best-effort and strictly subordinate: a failure to clean up is logged,
+    // never thrown, so the ORIGINAL boot error is what the caller sees.
+    if (partial) {
+      try {
+        await partial.close();
+      } catch (closeErr) {
+        partial.log?.error?.(
+          { err: closeErr },
+          "[arc] cleanup of a partially-booted app failed; original boot error follows",
+        );
+      }
+    }
+    throw err;
+  }
+}
+
+async function buildApp(
+  options: CreateAppOptions,
+  onInstance: (instance: FastifyInstance) => void,
+): Promise<FastifyInstance> {
   // ── 0. Logger + validation ──
 
   if (options.debug !== undefined && options.debug !== false) {
@@ -363,6 +410,11 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     },
   });
 
+  // Publish the instance to the caller IMMEDIATELY — every phase below can
+  // throw, and each one may leave process listeners / sockets behind that only
+  // `close()` releases. See the failed-boot cleanup in `createApp`.
+  onInstance(fastify);
+
   // Route arc's internal logger (`arcLog`) through the host's pino instance
   // so framework warnings inherit the app's transports, level, AND redaction
   // — the console fallback bypassed all three. `logger: false` keeps the
@@ -424,6 +476,14 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
   // ── 2. Security plugins (opt-out) ──
   await registerSecurityPlugins(fastify, config);
+
+  // ── 2.5 Static asset roots ──
+  // AFTER security: helmet sets its headers in an `onRequest` hook while
+  // `@fastify/static`'s `setHeaders` runs at send time, so the per-prefix
+  // Cross-Origin-Resource-Policy override wins over the app-wide default.
+  if (config.assets?.length) {
+    await registerAssetRoots(fastify, config.assets);
+  }
 
   // ── 3. Utility plugins ──
   await registerUtilityPlugins(fastify, config);

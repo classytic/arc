@@ -181,6 +181,18 @@ export function repositoryAsOutboxStore(
     );
 
   return {
+    /**
+     * Transactional: `save` forwards `options.session` to the backing
+     * repository's `create`, so the event row joins the caller's transaction on
+     * the SAME connection and commits or rolls back with the domain write.
+     *
+     * Declared explicitly because `OutboxWriteOptions.session` is best-effort by
+     * contract — a caller cannot infer atomicity from the presence of an outbox,
+     * only from this flag. See `OutboxStore.transactionalSave` in
+     * `@classytic/primitives/outbox`.
+     */
+    transactionalSave: true,
+
     async save(event: DomainEvent, options?: OutboxWriteOptions): Promise<void> {
       if (!event?.type || typeof event.type !== "string") {
         throw new InvalidOutboxEventError("event.type is required");

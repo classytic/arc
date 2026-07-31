@@ -48,6 +48,11 @@ const PLUGIN_REGISTRY: Record<
     loader: () => import("fastify-raw-body").then((m) => m.default),
     optional: true,
   },
+  static: {
+    package: "@fastify/static",
+    loader: () => import("@fastify/static").then((m) => m.default),
+    optional: true,
+  },
 };
 
 /**
@@ -62,7 +67,7 @@ export async function loadPlugin(
   logger?: { warn: (msg: string) => void },
 ): Promise<FastifyPlugin>;
 export async function loadPlugin(
-  name: "multipart" | "rawBody",
+  name: "multipart" | "rawBody" | "static",
   logger?: { warn: (msg: string) => void },
 ): Promise<FastifyPlugin | null>;
 export async function loadPlugin(

@@ -110,7 +110,6 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
   //                          `exclude` (a default-allow opt-out). ──
   const enabledResources = filterResourcesForMcp(options.resources, {
     expose: options.expose,
-    include: options.include,
     exclude: options.exclude,
   });
 
@@ -558,12 +557,11 @@ function registerStatefulRoutes(
 }
 
 // ============================================================================
-// Resource filter (default-deny `expose` vs legacy `include`/`exclude`)
+// Resource filter (default-deny `expose` vs default-allow `exclude`)
 // ============================================================================
 
 interface ResourceFilterInputs {
   readonly expose?: readonly string[];
-  readonly include?: readonly string[];
   readonly exclude?: readonly string[];
 }
 
@@ -593,28 +591,24 @@ export function filterResourcesForMcp<T extends { name: string; mcp?: boolean }>
   resources: readonly T[],
   inputs: ResourceFilterInputs,
 ): T[] {
-  const { expose, include, exclude } = inputs;
+  const { expose, exclude } = inputs;
 
-  if (expose && include) {
-    throw new Error(
-      "mcpPlugin: pass either `expose` (preferred) or `include` (legacy alias), not both.",
-    );
-  }
   if (expose && exclude) {
     throw new Error(
-      "mcpPlugin: `expose` is default-deny — `exclude` is redundant. Drop `exclude` " +
-        "or switch to `include`/`exclude` for default-allow semantics.",
+      "mcpPlugin: `expose` is default-deny (an allowlist) — `exclude` is redundant " +
+        "alongside it. Use `expose` to name what to surface, OR `exclude` to drop " +
+        "specific resources from the default-allow set. Not both.",
     );
   }
 
   // 1. Per-resource opt-out (`defineResource({ mcp: false })`) — authoritative.
   //    Filter these out first so the plugin-level lists only see eligible
-  //    resources; an `expose`/`include` allowlist that names an opted-out
+  //    resources; an `expose` allowlist that names an opted-out
   //    resource still drops it. Treats `mcp: undefined` as "default allow".
   const eligible = resources.filter((r) => r.mcp !== false);
 
   // 2. Plugin-level selection over what remains.
-  const allow = expose ?? include;
+  const allow = expose;
   if (allow) {
     const allowSet = new Set(allow);
     return eligible.filter((r) => allowSet.has(r.name));

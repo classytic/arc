@@ -27,10 +27,9 @@ describe("streamResponse auto-pipe", () => {
         {
           method: "POST",
           path: "/stream",
-          raw: true,
           streamResponse: true,
           permissions: allowPublic(),
-          handler: async () => {
+          rawHandler: async () => {
             return new ReadableStream<unknown>({
               start(controller) {
                 controller.enqueue({ type: "start" });
@@ -75,10 +74,9 @@ describe("streamResponse auto-pipe", () => {
         {
           method: "POST",
           path: "/s",
-          raw: true,
           streamResponse: true,
           permissions: allowPublic(),
-          handler: async () =>
+          rawHandler: async () =>
             new ReadableStream<unknown>({
               start(c) {
                 c.enqueue({ ok: true });
@@ -110,10 +108,9 @@ describe("streamResponse auto-pipe", () => {
         {
           method: "GET",
           path: "/raw",
-          raw: true,
           streamResponse: true,
           permissions: allowPublic(),
-          handler: async (_req, reply) => {
+          rawHandler: async (_req, reply) => {
             reply.raw.write("event: legacy\ndata: ok\n\n");
             reply.raw.end();
           },
@@ -128,5 +125,104 @@ describe("streamResponse auto-pipe", () => {
     const res = await app.inject({ method: "GET", url: "/logs/raw" });
     expect(res.statusCode).toBe(200);
     expect(res.body).toContain("event: legacy");
+  });
+});
+
+describe("streamResponse execution-model invariant", () => {
+  // `streamResponse` invokes the handler with `(request, reply)` and hands it
+  // the socket. Stated as "requires rawHandler", not "rejects handler" — the
+  // router derives raw-ness from `rawHandler` alone, so a `controllerMethod`
+  // route would otherwise validate, get pipeline-wrapped, and then be fed to
+  // the streaming wrapper as a third execution model nobody declared.
+  const base = { method: "GET" as const, path: "/s", permissions: allowPublic() };
+
+  it("rejects streamResponse + pipeline `handler`", () => {
+    expect(() =>
+      defineResource({
+        name: "stream-pipeline",
+        disableDefaultRoutes: true,
+        routes: [{ ...base, streamResponse: true, handler: async () => ({ data: 1 }) }],
+      }),
+    ).toThrow(/`streamResponse: true` requires `rawHandler`/);
+  });
+
+  it("rejects streamResponse + `controllerMethod`", () => {
+    expect(() =>
+      defineResource({
+        name: "stream-ctrl-method",
+        disableDefaultRoutes: true,
+        controller: { stream: async () => ({ data: 1 }) } as never,
+        routes: [
+          {
+            ...base,
+            streamResponse: true,
+            controllerMethod: (c: unknown) => (c as { stream: never }).stream,
+          },
+        ],
+      }),
+    ).toThrow(/`streamResponse: true` requires `rawHandler`/);
+  });
+
+  it("rejects streamResponse with no handler at all", () => {
+    expect(() =>
+      defineResource({
+        name: "stream-none",
+        disableDefaultRoutes: true,
+        routes: [{ ...base, streamResponse: true } as never],
+      }),
+    ).toThrow(/`streamResponse: true` requires `rawHandler`/);
+  });
+
+  it("accepts streamResponse + `rawHandler`", () => {
+    expect(() =>
+      defineResource({
+        name: "stream-ok",
+        disableDefaultRoutes: true,
+        routes: [
+          {
+            ...base,
+            streamResponse: true,
+            rawHandler: async (_req, reply) => {
+              reply.raw.end();
+            },
+          },
+        ],
+      }),
+    ).not.toThrow();
+  });
+
+  it("preserves Fastify's instance as `this` inside the streaming wrapper", async () => {
+    // Fastify binds the instance when it invokes a handler, and
+    // `RawRouteHandler` declares that context. The wrapper calls the inner
+    // handler itself, so without `.call(this, …)` the SAME handler would read
+    // a decorator fine as a plain raw route and break once `streamResponse`
+    // was switched on.
+    const resource = defineResource({
+      name: "stream-this",
+      disableDefaultRoutes: true,
+      routes: [
+        {
+          method: "GET",
+          path: "/who",
+          permissions: allowPublic(),
+          streamResponse: true,
+          rawHandler: async function (this: { fromDecorator?: string }, _req, reply) {
+            reply.raw.write(`data: ${this?.fromDecorator ?? "MISSING"}\n\n`);
+            reply.raw.end();
+          },
+        },
+      ],
+    });
+
+    const app = Fastify({ logger: false });
+    app.decorate("fromDecorator", "decorated");
+    await app.register(resource.toPlugin());
+    await app.ready();
+
+    const res = await app.inject({ method: "GET", url: "/stream-thiss/who" });
+    expect(res.body).toContain("data: decorated");
+    expect(res.body).not.toContain("MISSING");
+
+    await app.close();
   });
 });

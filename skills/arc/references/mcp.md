@@ -568,12 +568,12 @@ Use to verify the MCP server is alive before configuring Claude CLI.
 
 ### ArcRequest — Typed Fastify Request
 
-For `raw: true` routes, use `ArcRequest` instead of `(req as any).user`:
+For `rawHandler` routes, use `ArcRequest` instead of `(req as any).user`:
 
 ```typescript
 import type { ArcRequest } from '@classytic/arc';
 
-handler: async (req: ArcRequest, reply) => {
+rawHandler: async (req: ArcRequest, reply) => {
   req.user?.id;                    // typed
   req.scope.organizationId;        // typed (when member)
   req.signal;                      // AbortSignal (Fastify 5 built-in)
@@ -585,7 +585,7 @@ handler: async (req: ArcRequest, reply) => {
 ```typescript
 import { envelope } from '@classytic/arc';
 
-handler: async (req, reply) => {
+rawHandler: async (req, reply) => {
   const data = await service.getResults();
   return reply.send(envelope(data));
   // → { data }
@@ -601,7 +601,7 @@ Eliminates duplicated `req.user.organizationId || req.headers['x-organization-id
 ```typescript
 import { getOrgContext } from '@classytic/arc/scope';
 
-handler: async (req, reply) => {
+rawHandler: async (req, reply) => {
   const { userId, organizationId, roles, orgRoles } = getOrgContext(req);
   // Works regardless of auth type (JWT, Better Auth, custom)
 }
@@ -628,13 +628,12 @@ Run before auth middleware. Use for promoting `?token=` to `Authorization` heade
 routes: [{
   method: 'GET',
   path: '/stream',
-  raw: true,
   permissions: requireAuth(),
   preAuth: [(req) => {
     const token = req.query?.token;
     if (token) req.headers.authorization = `Bearer ${token}`;
   }],
-  handler: sseHandler,
+  rawHandler: sseHandler,
 }]
 ```
 
@@ -648,7 +647,7 @@ routes: [{
   path: '/stream',
   streamResponse: true,        // SSE headers + no { success, data } wrapper
   permissions: requireAuth(),
-  handler: async (request, reply) => {
+  rawHandler: async (request, reply) => {
     const { stream } = await generateStream({ abortSignal: request.signal });
     return reply.send(stream);
   },

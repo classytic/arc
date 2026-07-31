@@ -324,8 +324,7 @@ describe("createApp — resources factory form", () => {
             {
               method: "POST",
               path: "/",
-              handler: async (_req, reply) => reply.send({ success: true }),
-              raw: true,
+              rawHandler: async (_req, reply) => reply.send({ success: true }),
               permissions: allowPublic(),
             },
           ],

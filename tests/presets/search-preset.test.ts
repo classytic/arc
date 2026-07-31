@@ -143,7 +143,7 @@ describe("searchPreset — auto-wire from `repository`", () => {
     const callRoute = async (path: string, body: unknown) => {
       const route = routes.find((r) => r.path === path);
       if (!route) throw new Error(`route ${path} not found`);
-      const fn = route.handler as (r: unknown) => Promise<unknown>;
+      const fn = (route.rawHandler ?? route.handler) as (r: unknown) => Promise<unknown>;
       return fn({ body, params: {}, query: {} });
     };
 
@@ -184,7 +184,7 @@ describe("searchPreset — auto-wire from `repository`", () => {
       search: { handler: override },
     });
     const routes = extractRoutes(preset);
-    const fn = routes[0]?.handler as (r: unknown) => Promise<unknown>;
+    const fn = (routes[0]?.rawHandler ?? routes[0]?.handler) as (r: unknown) => Promise<unknown>;
     const out = (await fn({ body: {}, params: {}, query: {} })) as {
       success: boolean;
       data: string;
@@ -282,7 +282,7 @@ describe("searchPreset — envelope wrapping", () => {
 
     type Ctx = Parameters<(typeof routes)[number]["handler"] & object>[0];
     const req = { body: { query: "hello" }, params: {}, query: {} } as unknown as Ctx;
-    const fn = routes[0]?.handler as (r: Ctx) => Promise<unknown>;
+    const fn = (routes[0]?.rawHandler ?? routes[0]?.handler) as (r: Ctx) => Promise<unknown>;
     const out = await fn(req);
 
     expect(handler).toHaveBeenCalledTimes(1);
@@ -295,7 +295,7 @@ describe("searchPreset — envelope wrapping", () => {
   it("passes through an IControllerResponse shape the handler already emits", async () => {
     const response = { data: ["x"], meta: { total: 1 } };
     const routes = extractRoutes(searchPreset({ search: { handler: async () => response } }));
-    const fn = routes[0]?.handler as (r: unknown) => Promise<unknown>;
+    const fn = (routes[0]?.rawHandler ?? routes[0]?.handler) as (r: unknown) => Promise<unknown>;
     const out = await fn({ body: {}, params: {}, query: {} });
     expect(out).toBe(response); // same reference — not re-wrapped
   });
@@ -311,7 +311,7 @@ describe("searchPreset — envelope wrapping", () => {
         },
       }),
     );
-    const fn = routes[0]?.handler as (r: unknown) => Promise<unknown>;
+    const fn = (routes[0]?.rawHandler ?? routes[0]?.handler) as (r: unknown) => Promise<unknown>;
     await expect(fn({ body: {}, params: {}, query: {} })).rejects.toBe(boom);
   });
 });

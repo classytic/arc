@@ -17,7 +17,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
-import { defineModule, getModuleExports } from "../../src/factory/module/index.js";
+import {
+  defineModule,
+  getModuleExports,
+  getOptionalModuleExports,
+  hasModuleExports,
+  lazyModuleExports,
+  lazyRequiredModuleExports,
+} from "../../src/factory/module/index.js";
 import { allowPublic } from "../../src/permissions/index.js";
 import {
   createMockModel,
@@ -436,12 +443,167 @@ describe("createApp — modules", () => {
     await app.close();
   });
 
+  // ── Optional / deferred sibling resolution ─────────────────────────────────
+  //
+  // These pin the contract hosts were hand-rolling as
+  // `(f as unknown as { arc?: { modules?: Record<string, unknown> } }).arc?.modules?.x`
+  // — a cast that loses registry typing and, worse, invites capturing the value
+  // ONCE at composition time (see the lazy tests below).
+
+  it("getOptionalModuleExports returns undefined for an uncomposed module (no throw)", async () => {
+    const producer = defineModule({ name: "producer", bootstrap: () => ({ engine: "live" }) });
+    const app = await createApp({ preset: "testing", auth: false, modules: [producer] });
+    await app.ready();
+
+    expect(getOptionalModuleExports<{ engine: string }>(app, "producer")).toEqual({
+      engine: "live",
+    });
+    expect(getOptionalModuleExports(app, "ghost")).toBeUndefined();
+    // …and no cast was needed to ask, which is the whole point.
+    expect(hasModuleExports(app, "producer")).toBe(true);
+    expect(hasModuleExports(app, "ghost")).toBe(false);
+
+    await app.close();
+  });
+
+  it("getOptionalModuleExports does not walk the prototype chain", async () => {
+    const producer = defineModule({ name: "producer", bootstrap: () => ({ engine: "live" }) });
+    const app = await createApp({ preset: "testing", auth: false, modules: [producer] });
+    await app.ready();
+
+    // A module named like an Object.prototype member must read as ABSENT, not as
+    // a function inherited from the prototype (which would be a live-looking
+    // "engine" that silently does nothing).
+    expect(getOptionalModuleExports(app, "toString")).toBeUndefined();
+    expect(getOptionalModuleExports(app, "constructor")).toBeUndefined();
+    expect(hasModuleExports(app, "__proto__")).toBe(false);
+
+    await app.close();
+  });
+
+  it("getOptionalModuleExports works on an app composed with no modules at all", async () => {
+    // `fastify.arc.modules` is never created in this shape — the accessor must
+    // answer "absent", not crash on an undefined map.
+    const app = await createApp({ preset: "testing", auth: false });
+    await app.ready();
+
+    expect(getOptionalModuleExports(app, "anything")).toBeUndefined();
+    expect(hasModuleExports(app, "anything")).toBe(false);
+    expect(lazyModuleExports(app, "anything")()).toBeUndefined();
+
+    await app.close();
+  });
+
+  it("lazyModuleExports resolves at FIRST USE, so compose order cannot matter", async () => {
+    // `consumer` is composed BEFORE `producer`, and captures its accessor during
+    // its own bootstrap — i.e. before the sibling exists. An eager read here is
+    // the silent bug: undefined forever, read as "that module isn't deployed".
+    let read: (() => { engine: string } | undefined) | undefined;
+    let eagerlyCaptured: unknown = "not-run";
+
+    const consumer = defineModule({
+      name: "consumer",
+      bootstrap: (f) => {
+        eagerlyCaptured = getOptionalModuleExports(f, "producer"); // the WRONG shape
+        read = lazyModuleExports<{ engine: string }>(f, "producer"); // the right one
+        // Not resolvable yet — the point of the deferral.
+        expect(read()).toBeUndefined();
+      },
+    });
+    const producer = defineModule({ name: "producer", bootstrap: () => ({ engine: "live" }) });
+
+    const app = await createApp({
+      preset: "testing",
+      auth: false,
+      modules: [consumer, producer],
+    });
+    await app.ready();
+
+    // The eager read latched absence; the lazy one now sees the live engine.
+    expect(eagerlyCaptured).toBeUndefined();
+    expect(read?.()).toEqual({ engine: "live" });
+
+    await app.close();
+  });
+
+  it("lazyModuleExports memoizes the resolved value but never memoizes absence", async () => {
+    const producer = defineModule({ name: "producer", bootstrap: () => ({ engine: "live" }) });
+    const app = await createApp({ preset: "testing", auth: false, modules: [producer] });
+    await app.ready();
+
+    const ghost = lazyModuleExports(app, "ghost");
+    expect(ghost()).toBeUndefined();
+    // Simulate the sibling arriving late (the deferred-registration case).
+    const arc = app.arc as { modules?: Record<string, unknown> };
+    (arc.modules as Record<string, unknown>).ghost = { engine: "late" };
+    expect(ghost()).toEqual({ engine: "late" });
+
+    // Resolved values are cached — the steady-state read is a closure read, not
+    // a registry lookup per request.
+    const live = lazyModuleExports(app, "producer");
+    const first = live();
+    (arc.modules as Record<string, unknown>).producer = { engine: "swapped" };
+    expect(live()).toBe(first);
+
+    delete (arc.modules as Record<string, unknown>).ghost;
+    await app.close();
+  });
+
+  it("lazyRequiredModuleExports defers the fail-fast throw to first use", async () => {
+    let read: (() => { engine: string }) | undefined;
+    const consumer = defineModule({
+      name: "consumer",
+      bootstrap: (f) => {
+        // Constructing the accessor must NOT throw, even though the sibling has
+        // not bootstrapped — otherwise a correct composition boot-crashes purely
+        // because of list order.
+        read = lazyRequiredModuleExports<{ engine: string }>(f, "producer");
+      },
+    });
+    const producer = defineModule({ name: "producer", bootstrap: () => ({ engine: "live" }) });
+
+    const app = await createApp({
+      preset: "testing",
+      auth: false,
+      modules: [consumer, producer],
+    });
+    await app.ready();
+    expect(read?.()).toEqual({ engine: "live" });
+
+    // PRESENCE, unlike the export read, is validated EAGERLY (2.31): a
+    // lazily-required module is still a hard dependency, so a name that is not
+    // in the composed graph fails where the accessor is created rather than
+    // surviving startup and failing on the first request. See
+    // tests/factory/module-teardown.test.ts for the boot-time variant.
+    expect(() => lazyRequiredModuleExports(app, "ghost")).toThrow(
+      /"ghost" is not in the composed module graph/,
+    );
+
+    // A composed module that recorded no export still defers to first use,
+    // with getModuleExports' message quality.
+    const arc = app.arc as { moduleStates?: Record<string, string> };
+    (arc.moduleStates as Record<string, string>).exportless = "ready";
+    const missing = lazyRequiredModuleExports(app, "exportless");
+    expect(() => missing()).toThrow(/no public export recorded for module "exportless"/);
+    expect(() => missing()).toThrow(/producer/);
+
+    await app.close();
+  });
+
   it("duplicate module names throw (fail-fast, same strictness as resources)", async () => {
     const a = defineModule({ name: "dupe", bootstrap: () => ({ n: 1 }) });
     const b = defineModule({ name: "dupe", bootstrap: () => ({ n: 2 }) });
     await expect(createApp({ preset: "testing", auth: false, modules: [a, b] })).rejects.toThrow(
       /Duplicate module name "dupe"/,
     );
+  });
+
+  it("rejects an empty / whitespace-only module name", async () => {
+    for (const name of ["", "   "]) {
+      await expect(
+        createApp({ preset: "testing", auth: false, modules: [defineModule({ name })] }),
+      ).rejects.toThrow(/empty \(or whitespace-only\) `name`/);
+    }
   });
 
   it("no modules — behaves exactly as before (backward compat)", async () => {
@@ -484,9 +646,8 @@ describe("createApp — modules", () => {
         {
           method: "GET",
           path: "/ping",
-          raw: true,
           permissions: allowPublic(),
-          handler: async (_req, reply) => reply.send({ from: "module" }),
+          rawHandler: async (_req, reply) => reply.send({ from: "module" }),
         },
       ],
     });
@@ -521,11 +682,14 @@ describe("createApp — modules", () => {
     await app.close();
   });
 
-  it("`owns` a name with no matching app resource is a silent no-op", async () => {
+  it("`owns` a name with no matching APP resource is a silent no-op (module still supplies it)", async () => {
     const solo = defineModule({
       name: "solo",
-      owns: ["neverForked"], // pre-declared; no app resource of this name exists
-      resources: [makeResource("solo")],
+      // Pre-declared: no app resource of this name exists to supersede. That
+      // side is tolerant. The module must still SUPPLY the name — see the
+      // unmet-claim tests below.
+      owns: ["neverForked"],
+      resources: [makeResource("solo"), makeResource("neverForked")],
     });
 
     const app = await createApp({
@@ -540,8 +704,76 @@ describe("createApp — modules", () => {
 
     expect((await app.inject({ method: "GET", url: "/api/v1/solos" })).statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: "/api/v1/keeps" })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/v1/neverForkeds" })).statusCode).toBe(200);
 
     await app.close();
+  });
+
+  // An unmet `owns` claim DELETES the app's route and leaves nothing serving
+  // it — a silent production 404. `owns` is an explicit authoritative claim, so
+  // this is checked unconditionally (not gated behind `strictResources`, which
+  // governs the far softer duplicate-discovery case).
+
+  it("fails boot when a module `owns` a name its STATIC resources do not supply", async () => {
+    await expect(
+      createApp({
+        logger: false,
+        preset: "testing",
+        auth: false,
+        modules: [defineModule({ name: "orders", owns: ["order"], resources: [] })],
+        resources: [makeResource("order")], // would be silently deleted
+      }),
+    ).rejects.toThrow(/module "orders" declares owns: \["order"\].*do not supply/s);
+  });
+
+  it("fails boot when a module `owns` a name its FACTORY resources do not supply", async () => {
+    await expect(
+      createApp({
+        logger: false,
+        preset: "testing",
+        auth: false,
+        modules: [
+          defineModule({
+            name: "orders",
+            owns: ["order"],
+            resources: async () => [makeResource("somethingElse")],
+          }),
+        ],
+        resources: [makeResource("order")],
+      }),
+    ).rejects.toThrow(/module "orders" declares owns: \["order"\].*do not supply/s);
+  });
+
+  it("a SIBLING module supplying the name does not satisfy the claim (ownership is local)", async () => {
+    await expect(
+      createApp({
+        logger: false,
+        preset: "testing",
+        auth: false,
+        modules: [
+          defineModule({ name: "claimer", owns: ["order"], resources: [] }),
+          // Supplies "order", but did not claim it — the claim stays unmet.
+          defineModule({ name: "provider", resources: [makeResource("order")] }),
+        ],
+      }),
+    ).rejects.toThrow(/module "claimer" declares owns: \["order"\]/);
+  });
+
+  it("names every unmet claim, and reports what the module DID supply", async () => {
+    await expect(
+      createApp({
+        logger: false,
+        preset: "testing",
+        auth: false,
+        modules: [
+          defineModule({
+            name: "orders",
+            owns: ["order", "quotation", "rfq"],
+            resources: [makeResource("order")], // only one of three
+          }),
+        ],
+      }),
+    ).rejects.toThrow(/"quotation", "rfq".*Resources supplied by "orders": order/s);
   });
 
   it("supersession is the UNION across all modules; unowned app resources survive", async () => {

@@ -208,16 +208,18 @@ export function resourceToTools(
       | ((input: Record<string, unknown>) => Promise<CallToolResult>)
       | undefined;
 
-    const wrapHandler = !route.raw;
+    // A `rawHandler` route owns its own response, so there is no arc pipeline
+    // result for MCP to bridge.
+    const wrapHandler = route.rawHandler === undefined;
     if (!wrapHandler && !mcpHandler) continue;
     // 2.15.5 — GET routes are now auto-bridged to MCP via the shared
     // pipeline path (see `operationKindForRoute` in `route-tools.ts`).
     // Pre-2.15.5 every collection-style GET route forced authors to write
     // a parallel `mcpHandler` that hand-serialised the same data the HTTP
     // handler returned. The exclusion below stays only for the niche
-    // case of a raw GET route with no `mcpHandler` — without `route.raw`
-    // false AND no `mcpHandler`, the auto-bridge can wrap the handler
-    // identically to a POST.
+    // case of a `rawHandler` GET route with no `mcpHandler` — for a pipeline
+    // `handler` with no `mcpHandler`, the auto-bridge wraps it identically
+    // to a POST.
     if (!mcpHandler && typeof route.handler === "string" && !controller) continue;
 
     // 2.16 — resolve `controllerMethod` (typed function-ref form) into
@@ -231,7 +233,11 @@ export function resourceToTools(
     const routeWithRef = route as typeof route & {
       controllerMethod?: (controller: unknown) => unknown;
     };
-    let resolvedRouteHandler = route.handler;
+    // A `rawHandler` route only gets here WITH an `mcpHandler` (the guard
+    // above skips the rest), so the resolved value is used purely to prove the
+    // route has a dispatch target.
+    let resolvedRouteHandler: RouteDefinition["handler"] | RouteDefinition["rawHandler"] =
+      route.handler ?? route.rawHandler;
     if (typeof routeWithRef.controllerMethod === "function" && !resolvedRouteHandler) {
       if (!controller) continue; // No controller → can't resolve the ref; skip MCP tool.
       const referenced = routeWithRef.controllerMethod(controller);

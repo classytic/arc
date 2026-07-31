@@ -76,10 +76,9 @@ export const productResource = defineResource({
     {
       method: 'GET',
       path: '/search',
-      raw: true,
       permissions: allowPublic(),
       summary: 'Search products by name',
-      handler: async (req, reply) => {
+      rawHandler: async (req, reply) => {
         const { q } = req.query as { q: string };
         const results = await Product.find({
           name: { $regex: q, $options: 'i' },

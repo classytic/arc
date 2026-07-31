@@ -35,7 +35,6 @@ export interface TestMcpClientOptions {
     | "resources"
     | "overrides"
     | "expose"
-    | "include"
     | "exclude"
     | "toolNamePrefix"
     | "extraTools"
@@ -105,7 +104,6 @@ export async function createTestMcpClient(
   const overrides = pluginOpts.overrides ?? {};
   const enabledResources = filterResourcesForMcp(pluginOpts.resources ?? [], {
     expose: pluginOpts.expose,
-    include: pluginOpts.include,
     exclude: pluginOpts.exclude,
   });
 

@@ -73,10 +73,9 @@ export default defineResource({
     {
       method: "POST",
       path: "/:id/publish",
-      raw: true,
       permissions: requireAuth(),
       summary: "Publish a draft post",
-      handler: async (req, reply) => {
+      rawHandler: async (req, reply) => {
         const { id } = req.params as { id: string };
         const post = await PostModel.findByIdAndUpdate(
           id,

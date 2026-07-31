@@ -6,7 +6,7 @@
 import type { FastifyInstance } from "fastify";
 import type { EventHandler } from "../../events/EventTransport.js";
 import { wrapWithBoundary } from "../../events/subscribe-helpers.js";
-import { resolveContribution } from "./resolve.js";
+import { resolveModuleArm } from "./resolve.js";
 import type { ArcModule, EventHandlerDefinition } from "./types.js";
 
 /** Minimal view of the event bus the handlers arm needs (arc's `fastify.events`). */
@@ -32,7 +32,7 @@ export async function subscribeModuleEventHandlers(
   const owner = new Map<string, string>();
   try {
     for (const m of modules) {
-      const handlers = await resolveContribution(m.eventHandlers, fastify);
+      const handlers = await resolveModuleArm(m, "eventHandlers", m.eventHandlers, fastify);
       if (handlers.length === 0) continue;
       const bus = (fastify as unknown as { events?: EventBusLike }).events;
       if (!bus) {

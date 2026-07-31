@@ -8,7 +8,7 @@
 import type { FastifyInstance } from "fastify";
 import { type HealthCheck, mergeHealthChecks } from "../../plugins/health.js";
 import type { ScheduleDefinition } from "../../plugins/schedules.js";
-import { resolveContribution } from "./resolve.js";
+import { resolveModuleArm } from "./resolve.js";
 import type { ArcModule } from "./types.js";
 
 /**
@@ -41,7 +41,7 @@ export async function collectModuleWorkflows(
 ): Promise<unknown[]> {
   const out: unknown[] = [];
   for (const m of modules) {
-    const wfs = await resolveContribution(m.workflows, fastify);
+    const wfs = await resolveModuleArm(m, "workflows", m.workflows, fastify);
     out.push(...wfs);
   }
   return out;
@@ -60,7 +60,7 @@ export async function collectModuleScheduledJobs(
   const owner = new Map<string, string>();
   const out: ScheduleDefinition[] = [];
   for (const m of modules) {
-    const jobs = await resolveContribution(m.scheduledJobs, fastify);
+    const jobs = await resolveModuleArm(m, "scheduledJobs", m.scheduledJobs, fastify);
     for (const job of jobs) {
       const prior = owner.get(job.name);
       if (prior !== undefined) {

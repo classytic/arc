@@ -25,7 +25,7 @@
  *
  * defineResource({
  *   routes: [{
- *     method: 'GET', path: '/report', raw: true,
+ *     method: 'GET', path: '/report',
  *     permissions: requireAuth(),
  *     handler: getReport,
  *   }],

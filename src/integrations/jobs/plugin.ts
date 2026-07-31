@@ -6,8 +6,9 @@
  * Job processing needs a persistent process and Redis — NOT serverless.
  */
 
-import type { FastifyInstance, FastifyPluginAsync } from "fastify";
+import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
+import { evaluateAndApplyPermission } from "../../permissions/authorizationDecision.js";
 import { executeTimedHandler } from "./execution.js";
 import { type RepeatSpec, removeStaleRepeatSchedulers } from "./repeat.js";
 import type {
@@ -107,6 +108,100 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
   const workers = new Map<string, InstanceType<typeof Worker>>();
   // Tracks which job IDs are currently held by a maxConcurrent semaphore (active but not yet executing).
   const throttledJobs = new Map<string, Set<string>>();
+
+  // Validate the WHOLE definition set before constructing a single BullMQ
+  // object. Every failure below is unrecoverable at runtime, and allocating
+  // queues/workers first would leave live Redis connections behind when we throw.
+  const seenNames = new Set<string>();
+  for (const job of jobs) {
+    if (typeof job.name !== "string" || job.name.trim() === "") {
+      throw new Error("[arc/jobs] a job definition has an empty name — names are the queue key.");
+    }
+    // Duplicates are silently destructive: the loop below creates a queue AND a
+    // worker per definition and overwrites the map entry, so BOTH workers stay
+    // live while only the last is tracked. Shutdown then closes one of them, the
+    // other keeps consuming, and dispatch resolves its config from the first
+    // definition while the maps hold the last — jobs processed by whichever
+    // worker wins the race.
+    if (seenNames.has(job.name)) {
+      throw new Error(
+        `[arc/jobs] duplicate job name "${job.name}". A name is the queue key, so two ` +
+          "definitions sharing one would leave an untracked worker consuming the same " +
+          "queue after shutdown. Rename one, or register it in a single definition.",
+      );
+    }
+    seenNames.add(job.name);
+
+    // Numeric guards. Each of these reaches BullMQ or arc's semaphore and fails
+    // as a hang or as unclear behaviour rather than an error.
+    const positiveInt = (v: unknown, field: string): void => {
+      if (v === undefined) return;
+      if (typeof v !== "number" || !Number.isInteger(v) || v <= 0) {
+        throw new Error(
+          `[arc/jobs] Job '${job.name}' has ${field}=${String(v)} — must be a positive integer.`,
+        );
+      }
+    };
+    const nonNegativeInt = (v: unknown, field: string): void => {
+      if (v === undefined) return;
+      if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+        throw new Error(
+          `[arc/jobs] Job '${job.name}' has ${field}=${String(v)} — must be a non-negative integer.`,
+        );
+      }
+    };
+    // `maxConcurrent <= 0` never releases a semaphore slot: the job waits forever
+    // with no error and no timeout.
+    positiveInt(job.maxConcurrent, "maxConcurrent");
+    positiveInt(job.concurrency, "concurrency");
+    positiveInt(job.timeout, "timeout");
+    nonNegativeInt(job.retries, "retries");
+    nonNegativeInt(job.cancelGraceMs, "cancelGraceMs");
+    if (job.rateLimit) {
+      positiveInt(job.rateLimit.max, "rateLimit.max");
+      positiveInt(job.rateLimit.duration, "rateLimit.duration");
+    }
+    // A negative backoff delay makes BullMQ's retry timing nonsensical.
+    if (job.backoff) nonNegativeInt(job.backoff.delay, "backoff.delay");
+    if (job.repeat) {
+      // `every: 0` / negative is a busy-loop or a schedule that never fires;
+      // `limit: 0` registers a repeatable that is dead on arrival; a blank
+      // pattern reaches the cron parser as a runtime surprise.
+      positiveInt(job.repeat.every, "repeat.every");
+      positiveInt(job.repeat.limit, "repeat.limit");
+      if (job.repeat.pattern !== undefined && job.repeat.pattern.trim() === "") {
+        throw new Error(`[arc/jobs] Job '${job.name}' has an empty repeat.pattern.`);
+      }
+    }
+  }
+
+  // Defaults are INHERITED by every job that omits the field, so an invalid
+  // default is the same failure multiplied across the registry — and it is not
+  // covered by the per-job loop above, which only sees explicitly-set values.
+  if (defaults) {
+    const d = defaults as {
+      retries?: unknown;
+      timeout?: unknown;
+      backoff?: { delay?: unknown };
+    };
+    const defaultPositiveInt = (v: unknown, field: string): void => {
+      if (v === undefined) return;
+      if (typeof v !== "number" || !Number.isInteger(v) || v <= 0) {
+        throw new Error(`[arc/jobs] defaults.${field}=${String(v)} — must be a positive integer.`);
+      }
+    };
+    const defaultNonNegativeInt = (v: unknown, field: string): void => {
+      if (v === undefined) return;
+      if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+        throw new Error(
+          `[arc/jobs] defaults.${field}=${String(v)} — must be a non-negative integer.`,
+        );
+      }
+    };
+    defaultNonNegativeInt(d.retries, "retries");
+    defaultPositiveInt(d.timeout, "timeout");
+    if (d.backoff) defaultNonNegativeInt(d.backoff.delay, "backoff.delay");
+  }
 
   // Validate repeat configuration up-front so misconfigured jobs fail fast
   // instead of silently running on server-local time (DST drift hazard).
@@ -348,7 +443,7 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
         repeat: jobDef?.repeat ?? opts.repeat,
       });
 
-      return { jobId: bullJob.id };
+      return { queue: name, jobId: bullJob.id };
     },
 
     getQueue(name) {
@@ -370,12 +465,17 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
       return stats;
     },
 
-    async getStatus(jobId) {
-      for (const [name, queue] of queues) {
+    async getStatus(queueName, jobId) {
+      // Queue-qualified by contract. BullMQ ids are queue-LOCAL, so scanning
+      // every queue for an id both returned an arbitrary winner when two queues
+      // held the same id and cost one Redis round trip per registered job type.
+      const queue = queues.get(queueName);
+      if (queue) {
+        const name = queueName;
         const job = await (
           queue as unknown as { getJob(id: string): Promise<Record<string, unknown> | undefined> }
         ).getJob(jobId);
-        if (!job) continue;
+        if (!job) return null;
 
         const state = (
           typeof (job as { getState?: () => Promise<string> }).getState === "function"
@@ -433,20 +533,103 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
     fastify.decorate("jobs", dispatcher);
   }
 
-  // Management endpoints
-  fastify.get(`${prefix}/stats`, async () => {
-    const stats = await dispatcher.getStats();
-    return { success: true, data: stats };
-  });
+  // ── Management endpoints — OFF unless the host asks for them ──
+  //
+  // A status carries `returnValue` and `failedReason`: the handler's own output
+  // and error text, which routinely hold export URLs, billing results, model
+  // output, recipient addresses, or internal stack detail. Mounting that
+  // unauthenticated turns a job id into a read primitive over other tenants'
+  // work, so the surface is opt-in AND the permission is mandatory — there is no
+  // shape of this option that yields an unguarded route.
+  const management = options.managementRoutes;
+  if (management) {
+    const gate = management.operatorPermission;
 
-  fastify.get(`${prefix}/:id/status`, async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const status = await dispatcher.getStatus(id);
-    if (!status) {
-      return reply.status(404).send({ success: false, error: "Job not found" });
+    // These routes are GLOBAL by construction: `/stats` spans every queue, and a
+    // job carries no tenant identity to filter by. A gate that grants per
+    // organization therefore reads as scoped while serving everyone —
+    // `requireOrgRole("manager")` lets org A's manager inspect org B's handle,
+    // and `requireRoles(["platform-ops"])` is satisfied by an ORG role of that
+    // name (its documented default). Neither returns a policy, so no
+    // per-request check can tell them apart from a real operator gate.
+    //
+    // So arc requires the check to DECLARE itself platform-only, and fails at
+    // boot when it cannot — a misconfigured operator surface should never reach
+    // the first request.
+    if (!gate._platformOnly && !management.allowUnverifiedOperatorPermission) {
+      throw new Error(
+        "[arc/jobs] managementRoutes.operatorPermission must be platform-only. These routes are " +
+          "global (jobs carry no tenant identity), so an org-role gate would let a member of one " +
+          "organization read another's jobs. Use requirePlatformRole('platform-ops') — or " +
+          "requireRoles([...], { includeOrgRoles: false }) with " +
+          "allowUnverifiedOperatorPermission: true if you have verified the check yourself.",
+      );
     }
-    return { success: true, data: status };
-  });
+    const guard = async (req: FastifyRequest, reply: FastifyReply): Promise<boolean> => {
+      const allowed = await evaluateAndApplyPermission(
+        gate,
+        {
+          user: (req.user ?? null) as never,
+          request: req as never,
+          resource: "jobs",
+          action: "read",
+        },
+        req,
+        reply,
+      );
+      if (!allowed) return false;
+
+      // A row-level policy has nothing to filter here: a BullMQ job carries no
+      // tenant identity and `getStatus` fetches straight by queue + id. Accepting
+      // one anyway would make `requireOrgRole("manager")` READ as tenant-scoped
+      // while actually serving every org's jobs. Arc's semantics say a policy is
+      // ENFORCED, so the honest choices are refuse or mislead.
+      const policy = (req as { _policyFilters?: Record<string, unknown> })._policyFilters;
+      if (policy && Object.keys(policy).length > 0) {
+        fastify.log.error(
+          "[arc/jobs] managementRoutes.operatorPermission returned a row-level policy, which this " +
+            "surface cannot apply — jobs carry no tenant identity. Gate it on an operator role " +
+            "(e.g. requireRoles(['platform-ops'])) and serve tenant-facing job status from a " +
+            "resource that owns its own row policy.",
+        );
+        await reply.status(403).send({
+          code: "arc.jobs.policy_unsupported",
+          message:
+            "Job management routes are an operator surface and cannot apply a row-level policy.",
+          status: 403,
+        });
+        return false;
+      }
+      return true;
+    };
+
+    fastify.get(`${prefix}/stats`, async (req, reply) => {
+      if (!(await guard(req, reply))) return reply;
+      return { stats: await dispatcher.getStats() };
+    });
+
+    // Queue-qualified: BullMQ ids are queue-LOCAL, so `/jobs/:id/status` had to
+    // scan every queue and returned whichever matched first — ambiguous when two
+    // queues hold the same id, and N sequential Redis round trips per request.
+    fastify.get(`${prefix}/:queue/:id/status`, async (req, reply) => {
+      if (!(await guard(req, reply))) return reply;
+      const { queue, id } = req.params as { queue: string; id: string };
+      const status = await dispatcher.getStatus(queue, id);
+      if (!status) {
+        return reply
+          .status(404)
+          .send({ code: "arc.not_found", message: "Job not found", status: 404 });
+      }
+      // Redact by default — the host opts into each sensitive field knowing what
+      // its own handlers return.
+      const { returnValue, failedReason, ...safe } = status;
+      return {
+        ...safe,
+        ...(management.exposeResult ? { returnValue } : {}),
+        ...(management.exposeFailureReason ? { failedReason } : {}),
+      };
+    });
+  }
 
   // Graceful shutdown
   fastify.addHook("onClose", async () => {

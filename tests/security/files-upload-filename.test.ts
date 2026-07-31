@@ -39,7 +39,7 @@ function getUploadHandler(sanitizeFilename?: FilenamePolicy): {
     typeof preset.routes === "function" ? preset.routes(permissions) : (preset.routes ?? []);
   const uploadRoute = (routes as RouteDefinition[]).find((r) => r.path === "/upload");
   if (!uploadRoute) throw new Error("upload route not produced by preset");
-  return { handler: uploadRoute.handler as RouteHandlerMethod, upload };
+  return { handler: (uploadRoute.rawHandler ?? uploadRoute.handler) as RouteHandlerMethod, upload };
 }
 
 function makeRequest(filename: string): FastifyRequest {

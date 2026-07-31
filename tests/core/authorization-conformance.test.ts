@@ -13,18 +13,37 @@ import { allow, deny } from "../../src/permissions/index.js";
 import { runAuthorizationConformance } from "../../src/testing/authorizationConformance.js";
 
 describe("authorization conformance — CRUD list vs aggregation parity", () => {
-  it("a policy-bearing allow scopes BOTH surfaces with the SAME policy", async () => {
+  it("a policy-bearing allow scopes ALL surfaces (list, get-by-id, aggregation) with the SAME policy", async () => {
     const c = await runAuthorizationConformance({
       permission: () => allow({ policy: { ownerId: "u1" } }),
     });
     try {
       expect(c.list.status).toBe(200);
+      expect(c.get.status).toBe(200);
       expect(c.aggregation.status).toBe(200);
-      // The row policy reached the repository on BOTH surfaces, identically.
-      expect(JSON.stringify(c.list.filter ?? {})).toContain("ownerId");
-      expect(JSON.stringify(c.aggregation.filter ?? {})).toContain("ownerId");
-      expect(JSON.stringify(c.list.filter ?? {})).toContain("u1");
-      expect(JSON.stringify(c.aggregation.filter ?? {})).toContain("u1");
+      // The row policy reached the repository on EVERY surface, identically.
+      for (const surface of [c.list, c.get, c.aggregation]) {
+        expect(JSON.stringify(surface.filter ?? {})).toContain("ownerId");
+        expect(JSON.stringify(surface.filter ?? {})).toContain("u1");
+      }
+    } finally {
+      await c.close();
+    }
+  });
+
+  it("get-by-id CONJOINS the policy with the route id — a policy can't redirect the target", async () => {
+    // The single-record surface where the filter-overwrite class lived: a policy
+    // pinning a DIFFERENT id must not replace the route's `/confs/1`. Both survive
+    // (conjunction), so the compound carries id "1" AND the policy's "A".
+    const c = await runAuthorizationConformance({
+      permission: () => allow({ policy: { _id: "A" } }),
+    });
+    try {
+      expect(c.get.status).toBe(200);
+      const serialized = JSON.stringify(c.get.filter ?? {});
+      expect(serialized).toContain("1"); // the route id survives
+      expect(serialized).toContain("A"); // the policy is conjoined, not dropped
+      expect(c.get.filter).not.toEqual({ _id: "A" }); // did NOT overwrite the route id
     } finally {
       await c.close();
     }
@@ -61,9 +80,11 @@ describe("authorization conformance — CRUD list vs aggregation parity", () => 
     const c = await runAuthorizationConformance({ permission: () => deny("nope") });
     try {
       expect(c.list.status).toBe(c.aggregation.status);
+      expect(c.get.status).toBe(c.aggregation.status);
       expect([401, 403]).toContain(c.list.status);
-      // Denied → the query filter was never captured (repo not reached).
+      // Denied → the query filter was never captured on ANY surface (repo not reached).
       expect(c.list.filter).toBeUndefined();
+      expect(c.get.filter).toBeUndefined();
       expect(c.aggregation.filter).toBeUndefined();
     } finally {
       await c.close();

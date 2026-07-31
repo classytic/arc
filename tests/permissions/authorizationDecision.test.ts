@@ -14,7 +14,7 @@ import {
   evaluateAndApplyPermission,
   evaluatePermissionDecision,
   normalizeToDecision,
-} from "../../src/permissions/applyPermissionResult.js";
+} from "../../src/permissions/authorizationDecision.js";
 import type {
   AuthorizationDecision,
   PermissionCheck,

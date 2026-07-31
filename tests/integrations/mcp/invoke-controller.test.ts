@@ -315,7 +315,7 @@ describe("mcpHandlerAdapter — wraps any async function as a tool handler", () 
 // filterResourcesForMcp — `expose` default-deny precedence
 // ============================================================================
 
-describe("filterResourcesForMcp — expose / include / exclude precedence", () => {
+describe("filterResourcesForMcp — expose / exclude precedence", () => {
   const resources = [{ name: "post" }, { name: "tag" }, { name: "comment" }];
 
   it("expose acts as default-deny — only listed resources survive", () => {
@@ -328,11 +328,6 @@ describe("filterResourcesForMcp — expose / include / exclude precedence", () =
     expect(allowed).toEqual([]);
   });
 
-  it("include behaves identically to expose (legacy alias)", () => {
-    const allowed = filterResourcesForMcp(resources, { include: ["post", "tag"] });
-    expect(allowed.map((r) => r.name)).toEqual(["post", "tag"]);
-  });
-
   it("exclude filters out the listed names (default-allow)", () => {
     const allowed = filterResourcesForMcp(resources, { exclude: ["tag"] });
     expect(allowed.map((r) => r.name)).toEqual(["post", "comment"]);
@@ -341,12 +336,6 @@ describe("filterResourcesForMcp — expose / include / exclude precedence", () =
   it("no inputs surfaces every resource (default-allow)", () => {
     const allowed = filterResourcesForMcp(resources, {});
     expect(allowed).toEqual(resources);
-  });
-
-  it("throws when both `expose` and `include` are passed (conflict)", () => {
-    expect(() => filterResourcesForMcp(resources, { expose: ["post"], include: ["tag"] })).toThrow(
-      /expose.*include/i,
-    );
   });
 
   it("throws when `expose` is combined with `exclude` (default-deny + opt-out is incoherent)", () => {

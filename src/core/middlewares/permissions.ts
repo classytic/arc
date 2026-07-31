@@ -6,7 +6,7 @@
 
 import type { FastifyReply, FastifyRequest, RouteHandlerMethod } from "fastify";
 
-import { evaluateAndApplyPermission } from "../../permissions/applyPermissionResult.js";
+import { evaluateAndApplyPermission } from "../../permissions/authorizationDecision.js";
 import type { PermissionCheck, PermissionContext } from "../../permissions/types.js";
 import { getRequestScope } from "../../scope/types.js";
 import type { RequestWithExtras, UserLike } from "../../types/index.js";

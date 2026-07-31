@@ -65,16 +65,26 @@ describe("dispatchRealtimeToolCall", () => {
   });
 
   it("dispatches batched calls in parallel and preserves order", async () => {
+    // Observe OVERLAP directly rather than inferring it from elapsed time.
+    // "three 50ms tasks finish under 120ms" is only true on an unloaded machine —
+    // it measured the runner, not the dispatcher, and a busy pool pushed a
+    // genuinely-parallel run past the serial threshold (218ms observed).
+    // Peak in-flight count answers the actual question and cannot be starved.
+    let inFlight = 0;
+    let maxInFlight = 0;
+
     const slow = defineTool("slow", {
       description: "test",
       input: { ms: z.number() },
       handler: async ({ ms }) => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
         await new Promise((r) => setTimeout(r, ms));
+        inFlight--;
         return { content: [{ type: "text", text: String(ms) }] };
       },
     });
 
-    const start = Date.now();
     const responses = await dispatchRealtimeToolCall(
       [slow],
       [
@@ -83,11 +93,11 @@ describe("dispatchRealtimeToolCall", () => {
         { id: "c", name: "slow", arguments: { ms: 50 } },
       ],
     );
-    const elapsed = Date.now() - start;
 
+    // Order is preserved even though execution overlapped.
     expect(responses.map((r) => r.id)).toEqual(["a", "b", "c"]);
-    // Parallel — three 50ms tasks finish well under 150ms (serial would take ≥150).
-    expect(elapsed).toBeLessThan(120);
+    expect(maxInFlight).toBe(3);
+    expect(inFlight).toBe(0);
   });
 
   it("isolates per-call failures (one tool throwing does not break the batch)", async () => {

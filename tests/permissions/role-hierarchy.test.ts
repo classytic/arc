@@ -141,3 +141,35 @@ describe("empty hierarchy", () => {
     expect(hierarchy.includes(["admin"], "editor")).toBe(false);
   });
 });
+
+// ============================================================================
+// Diamond graph — cache determinism (regression)
+// ============================================================================
+
+describe("diamond-shaped inheritance (shared descendant)", () => {
+  // A → B → D  and  A → C → D. Expanding A first must NOT poison C's cache by
+  // leaving D marked "visited" from B's branch — C still inherits D.
+  const diamond = { A: ["B", "C"], B: ["D"], C: ["D"] };
+
+  it("every sibling path retains the shared descendant, regardless of traversal order", () => {
+    const h = createRoleHierarchy(diamond);
+    // Expand the parent first — this is what used to poison the C→D edge.
+    expect(h.expand(["A"]).sort()).toEqual(["A", "B", "C", "D"]);
+    // Then each branch independently — must still include D (cache not poisoned).
+    expect(h.expand(["C"]).sort()).toEqual(["C", "D"]);
+    expect(h.expand(["B"]).sort()).toEqual(["B", "D"]);
+    expect(h.includes(["C"], "D")).toBe(true);
+  });
+
+  it("is order-independent — expanding C first gives the same result", () => {
+    const h = createRoleHierarchy(diamond);
+    expect(h.expand(["C"]).sort()).toEqual(["C", "D"]);
+    expect(h.expand(["A"]).sort()).toEqual(["A", "B", "C", "D"]);
+  });
+
+  it("still terminates + stays correct on a cycle (A→B→A) without poisoning the cache", () => {
+    const h = createRoleHierarchy({ A: ["B"], B: ["A"] });
+    expect(h.expand(["A"]).sort()).toEqual(["A", "B"]);
+    expect(h.expand(["B"]).sort()).toEqual(["A", "B"]);
+  });
+});

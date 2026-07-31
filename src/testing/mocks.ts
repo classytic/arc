@@ -243,15 +243,30 @@ export function createSpy<T extends (...args: unknown[]) => unknown>(
 }
 
 /**
- * Wait for a condition to be true
+ * Wait until `condition` holds — the standard way to assert on asynchronous
+ * effects in arc's suites.
  *
- * Useful for async testing
+ * **Prefer this over `await sleep(n)` + assert.** A fixed delay encodes a guess
+ * about scheduling: too short and it flakes the moment the pool is busy, too
+ * long and every run pays for the worst case. Polling returns as soon as the
+ * effect lands, so the fast path stays fast and a loaded machine simply waits —
+ * and the failure mode becomes "this never happened", which is the thing worth
+ * asserting.
+ *
+ * Supply `label`: without it a timeout reports only its own duration, which is
+ * the least useful sentence a flaky test can print.
+ *
+ * @example
+ * await waitFor(() => runs >= 3, { label: "3 scheduler ticks" });
  */
 export async function waitFor(
   condition: () => boolean | Promise<boolean>,
-  options: { timeout?: number; interval?: number } = {},
+  options: { timeout?: number; interval?: number; label?: string } = {},
 ): Promise<void> {
-  const { timeout = 5000, interval = 100 } = options;
+  // 25ms rather than 100ms: polling is nearly free, while a coarse interval adds
+  // up to its own length of latency to every wait that would have succeeded
+  // immediately.
+  const { timeout = 5000, interval = 25, label } = options;
   const startTime = Date.now();
 
   while (Date.now() - startTime < timeout) {
@@ -261,7 +276,11 @@ export async function waitFor(
     await new Promise((resolve) => setTimeout(resolve, interval));
   }
 
-  throw new Error(`Timeout waiting for condition after ${timeout}ms`);
+  throw new Error(
+    label
+      ? `Timed out after ${timeout}ms waiting for: ${label}`
+      : `Timed out after ${timeout}ms waiting for a condition (pass "label" to name it)`,
+  );
 }
 
 /**

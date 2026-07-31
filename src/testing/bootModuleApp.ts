@@ -32,6 +32,7 @@ import { createApp } from "../factory/createApp.js";
 import type { ArcModuleInput } from "../factory/module/index.js";
 import { getModuleExports } from "../factory/module/index.js";
 import type { CreateAppOptions } from "../factory/types/index.js";
+import { type TestActor, testActorAuth } from "./testActor.js";
 
 /** Handed to a modules factory — the in-memory DB is live at call time. */
 /**
@@ -57,8 +58,6 @@ export type TestDatabaseFactory<TConn = unknown> = (opts: {
 export interface TestkitContext<TConn = unknown> {
   /** The provisioned database's connection string. */
   uri: string;
-  /** @deprecated Alias of `uri` from the Mongo-default era — prefer `uri`. */
-  mongoUri: string;
   /**
    * Driver connection handle (the default factory yields mongoose's
    * DEFAULT connection). Generic so DB-typed wrappers assert the driver
@@ -94,14 +93,21 @@ export interface BootModuleAppOptions<TConn = unknown> {
    * boot when a module genuinely exercises one).
    */
   app?: Partial<CreateAppOptions>;
+  /**
+   * Default actor for every injected request that carries no `x-test-actor` header.
+   *
+   * The harness boots with `auth: false`, so without this every request is
+   * `PUBLIC_SCOPE` and role-gated routes answer 401 — correct, but it left tests with
+   * no supported way to be somebody. See `testActor.ts` for why the seam lives in the
+   * testing entrypoint and can never be reached from production.
+   */
+  actor?: TestActor;
 }
 
 export interface ModuleTestApp<TConn = unknown> {
   app: FastifyInstance;
   /** The provisioned database's connection string. */
   uri: string;
-  /** @deprecated Alias of `uri` from the Mongo-default era — prefer `uri`. */
-  mongoUri: string;
   /** The mongoose `Connection` handed to the modules factory. */
   connection: TConn;
   /**
@@ -178,7 +184,6 @@ export async function bootModuleApp<TConn = unknown>(
 
   const ctx: TestkitContext<TConn> = {
     uri: db.uri,
-    mongoUri: db.uri,
     connection: db.connection,
   };
   // A bare function is ALWAYS the context factory; thunks ride inside arrays.
@@ -190,7 +195,17 @@ export async function bootModuleApp<TConn = unknown>(
   try {
     app = await createApp({
       preset: "testing",
-      auth: false,
+      /**
+       * The test actor is arc's AUTHENTICATOR rather than a bolted-on hook, so the scope
+       * lands at the phase the rest of the pipeline expects — tenant filtering and
+       * permission checks then behave exactly as they do in production.
+       *
+       * This replaces the old `auth: false`. The authenticator is inert for a request
+       * carrying no `x-test-actor` header and no configured default, so a suite that
+       * never mentions an actor behaves as it did before. `options.app` still wins, so a
+       * suite exercising real auth can override it.
+       */
+      auth: testActorAuth(options.actor),
       sensible: false,
       ...options.app,
       modules: list,
@@ -207,7 +222,6 @@ export async function bootModuleApp<TConn = unknown>(
   return {
     app,
     uri: db.uri,
-    mongoUri: db.uri,
     connection: db.connection,
     exports: <TExports = unknown>(name: string) => getModuleExports<TExports>(app, name),
     close: async () => {

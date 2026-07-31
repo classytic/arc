@@ -103,6 +103,7 @@ export type {
   IController,
   IControllerResponse,
   IRequestContext,
+  RawRouteHandler,
   RouteHandler,
 } from "./handlers.js";
 

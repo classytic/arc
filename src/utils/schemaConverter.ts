@@ -23,6 +23,32 @@
  *   Using `draft-7` fixes `.positive() / .negative() / .gt() / .lt()` out of the box.
  * - **`openapi-3.0`** — for OpenAPI doc generation (arc emits OpenAPI 3.0.3). Keeps
  *   the boolean exclusive form that 3.0 tooling expects.
+ *
+ * ## Input vs output (`io`)
+ *
+ * A Zod schema has TWO shapes and `z.toJSONSchema()` emits one of them. Getting
+ * this wrong is not cosmetic — it rejects legal traffic:
+ *
+ * ```ts
+ * z.object({ title: z.string(), status: z.string().default("draft") })
+ * // io: "output" → required: ["title", "status"]   ← a client omitting `status` is REJECTED
+ * // io: "input"  → required: ["title"]             ← correct: the default fills it in
+ * ```
+ *
+ * The same applies to `.transform()`: in output mode the node is unrepresentable
+ * and degrades to `{}` (no validation at all), while input mode emits the real
+ * input type. So arc converts by DIRECTION:
+ *
+ * - **request** (`body`, `querystring`, `params`, `headers`) → `io: "input"` —
+ *   validates what the client SENDS, before defaults/transforms/coercion apply.
+ * - **response** (and the `entity` doc shape) → `io: "output"` — describes what
+ *   the server RETURNS, after they apply.
+ *
+ * One deliberate consequence: a plain `z.object()` emits
+ * `additionalProperties: false` in output mode but NOT in input mode, because
+ * `z.object()` STRIPS unknown keys rather than rejecting them — so extra keys
+ * are legal input. Use `z.strictObject()` when the wire contract must reject
+ * them; it keeps `additionalProperties: false` in both modes.
  */
 
 import { arcLog } from "../logger/index.js";
@@ -39,11 +65,33 @@ const log = arcLog("schema");
  */
 export type JsonSchemaTarget = "draft-7" | "draft-2020-12" | "openapi-3.0" | "openapi-3.1";
 
+/**
+ * Which of a Zod schema's two shapes to emit. See the module docblock — this is
+ * the difference between accepting and rejecting a legal request.
+ */
+export type SchemaIo = "input" | "output";
+
 /** Default target for Fastify-consumed schemas (matches Fastify v5's default AJV draft). */
 const DEFAULT_FASTIFY_TARGET: JsonSchemaTarget = "draft-7";
 
 /** Default target for OpenAPI document generation (matches arc's emitted OpenAPI version). */
 const DEFAULT_OPENAPI_TARGET: JsonSchemaTarget = "openapi-3.0";
+
+/**
+ * Map arc's target onto one Zod actually branches on.
+ *
+ * Zod's `target` is typed `"draft-04" | "draft-07" | "draft-2020-12" |
+ * "openapi-3.0" | ({} & string)` — that last member accepts ANY string without
+ * narrowing, so an unrecognized value is not rejected, it just matches none of
+ * the internal `target === ...` branches and silently gets draft-2020-12
+ * behaviour. `"draft-7"` is safe (Zod normalizes the alias to `"draft-07"`),
+ * but `"openapi-3.1"` is neither official nor normalized. Mapping it explicitly
+ * keeps the fallback intentional rather than accidental — and it is the right
+ * dialect, since OpenAPI 3.1 aligned its Schema Object with JSON Schema 2020-12.
+ */
+function zodTarget(target: JsonSchemaTarget): string {
+  return target === "openapi-3.1" ? "draft-2020-12" : target;
+}
 
 // ============================================================================
 // Lazy Zod Import — loaded once at module init, only if installed
@@ -183,17 +231,43 @@ function unconvertible(
  *               Pass `openapi-3.0`/`openapi-3.1` for OpenAPI document generation.
  * @param mode   Failure policy for unconvertible Zod schemas — see
  *               {@link UnconvertibleMode}. Defaults to `'warn'`.
+ * @param io     Which shape to emit — see {@link SchemaIo} and the module
+ *               docblock. Defaults to `'output'`, matching Zod's own default;
+ *               arc's request-side call sites pass `'input'` explicitly.
  */
 export function toJsonSchema(
   input: unknown,
   target: JsonSchemaTarget = DEFAULT_FASTIFY_TARGET,
   mode: UnconvertibleMode = "warn",
+  io: SchemaIo = "output",
 ): Record<string, unknown> | undefined {
   if (input == null) return undefined;
   if (typeof input !== "object") return undefined;
 
-  // Fast path: already a plain JSON Schema → passthrough
-  if (isJsonSchema(input)) return input as Record<string, unknown>;
+  // Fast path: already a plain JSON Schema → passthrough.
+  //
+  // Still strip `$schema`. The Zod branch below removes it because Fastify's AJV
+  // cannot resolve an unknown draft URI as a registered ref — and a plain JSON
+  // Schema carrying one fails IDENTICALLY. That happens whenever a caller
+  // pre-converts (`z.toJSONSchema(mySchema)`) before handing the result to a
+  // route, which is a natural thing to write and lands here instead of in the Zod
+  // branch, so the normalization was skipped precisely when it was needed. The
+  // symptom is a BOOT failure — `no schema with key or ref
+  // ".../2020-12/schema"` — that names a URI the author never typed, so it reads
+  // as an arc bug rather than "drop this key".
+  //
+  // Cloned, never mutated in place: the input may be a module-level constant
+  // shared across several routes (or exported for a contract test), and deleting
+  // a key from it would edit the caller's own object as a side effect of asking
+  // for a conversion.
+  if (isJsonSchema(input)) {
+    const plain = input as Record<string, unknown>;
+    if ("$schema" in plain) {
+      const { $schema: _dropped, ...rest } = plain;
+      return rest;
+    }
+    return plain;
+  }
 
   // Zod v4 schema → native conversion
   if (isZodSchema(input)) {
@@ -214,7 +288,8 @@ export function toJsonSchema(
       // survives and no spurious "validation disabled" warning fires. Docs
       // fidelity is best-effort; the transform still runs at the auth layer.
       const converted = _toJSONSchema(input, {
-        target,
+        target: zodTarget(target),
+        io,
         unrepresentable: mode === "throw" ? "throw" : "any",
       });
       // Strip `$schema` meta — Fastify's AJV warns about unknown draft URIs under
@@ -226,10 +301,13 @@ export function toJsonSchema(
     } catch (cause) {
       return unconvertible(
         mode,
-        `z.toJSONSchema() failed for a Zod schema (target: ${target}): ${
+        `z.toJSONSchema() failed for a Zod schema (target: ${target}, io: ${io}): ${
           cause instanceof Error ? cause.message : String(cause)
-        }. Zod-only features with no JSON Schema equivalent (.refine/.transform/custom checks) ` +
-          "cannot express wire validation — enforce those in the handler or a pipeline step.",
+        }. Types with no JSON Schema equivalent cannot express wire validation. ` +
+          "For `z.date()` / `z.bigint()` on a REQUEST schema, use the wire-shaped form " +
+          "(`z.iso.datetime()` / `z.string()`) and convert in a hook — JSON has no date or " +
+          "bigint. For `.refine()` / `.transform()` / custom checks, enforce them in the " +
+          "handler or a pipeline step.",
         cause,
       );
     }
@@ -264,25 +342,33 @@ export function convertOpenApiSchemas(
   target: JsonSchemaTarget = DEFAULT_OPENAPI_TARGET,
 ): OpenApiSchemas {
   const result: OpenApiSchemas = {};
-  const schemaFields = [
-    "entity",
-    "createBody",
-    "updateBody",
-    "params",
-    "listQuery",
-    "response",
-  ] as const;
+  // Direction per slot: what the caller SENDS converts as input (defaults are
+  // not yet applied, transforms have not run); what the server RETURNS converts
+  // as output. Documenting a create body in output shape would list
+  // default-bearing fields as required — telling every client to send a value
+  // the server would have supplied.
+  const schemaFields = {
+    entity: "output",
+    createBody: "input",
+    updateBody: "input",
+    params: "input",
+    listQuery: "input",
+    response: "output",
+  } as const satisfies Record<string, SchemaIo>;
 
-  for (const field of schemaFields) {
+  for (const [field, io] of Object.entries(schemaFields) as [
+    keyof typeof schemaFields,
+    SchemaIo,
+  ][]) {
     const value = schemas[field];
     if (value !== undefined) {
-      result[field] = toJsonSchema(value, target) ?? value;
+      result[field] = toJsonSchema(value, target, "warn", io) ?? value;
     }
   }
 
   // Copy any extra fields as-is
   for (const [key, value] of Object.entries(schemas)) {
-    if (!schemaFields.includes(key as (typeof schemaFields)[number])) {
+    if (!(key in schemaFields)) {
       result[key] = value;
     }
   }
@@ -316,14 +402,19 @@ export function convertRouteSchema(
   // down over a third-party schema).
   const mode: UnconvertibleMode = target === DEFAULT_FASTIFY_TARGET ? "throw" : "warn";
 
-  // Convert top-level schema fields (body, querystring, params, headers)
+  // Request slots convert as INPUT — they validate the raw payload BEFORE any
+  // default is filled in or transform runs. Converting them as output (the Zod
+  // default, and what arc did before) marks every `.default()` field `required`,
+  // so a request that legitimately omits one is rejected with a 400 that names a
+  // property the client was never supposed to send.
   for (const field of ["body", "querystring", "params", "headers"] as const) {
     if (result[field] !== undefined) {
-      result[field] = toJsonSchema(result[field], target, mode) ?? result[field];
+      result[field] = toJsonSchema(result[field], target, mode, "input") ?? result[field];
     }
   }
 
-  // Convert response schemas (keyed by status code, e.g. { 200: zodSchema, 201: zodSchema })
+  // Convert response schemas (keyed by status code, e.g. { 200: zodSchema, 201: zodSchema }).
+  // These stay OUTPUT — they describe what the handler returns, post-transform.
   if (
     result.response !== undefined &&
     typeof result.response === "object" &&
@@ -332,7 +423,8 @@ export function convertRouteSchema(
     const responseObj = result.response as Record<string, unknown>;
     const convertedResponse: Record<string, unknown> = {};
     for (const [statusCode, responseSchema] of Object.entries(responseObj)) {
-      convertedResponse[statusCode] = toJsonSchema(responseSchema, target, mode) ?? responseSchema;
+      convertedResponse[statusCode] =
+        toJsonSchema(responseSchema, target, mode, "output") ?? responseSchema;
     }
     result.response = convertedResponse;
   }

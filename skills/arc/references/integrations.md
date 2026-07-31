@@ -71,10 +71,43 @@ await fastify.jobs.dispatch('process-image', { url: '...', width: 800 }, {
   removeOnComplete: true,
 });
 
+// dispatch returns a JobHandle — the queue is part of the identity because
+// BullMQ ids are queue-LOCAL (two queues can both hold "123").
+const { queue, jobId } = await fastify.jobs.dispatch('send-email', { to: 'a@b.com' });
+const status = await fastify.jobs.getStatus(queue, jobId);
+
 // Get stats
 const stats = await fastify.jobs.getStats();
 // { 'send-email': { waiting: 5, active: 2, completed: 100, failed: 3, delayed: 0 } }
 ```
+
+### Management routes (off by default)
+
+`GET /jobs/stats` and `GET /jobs/:queue/:id/status` are NOT mounted unless you
+ask for them. A status carries `returnValue` and `failedReason` — your handler's
+own output and error text — so an unauthenticated route turns a job id into a
+read primitive over other tenants' work.
+
+```typescript
+jobsPlugin({
+  connection,
+  jobs,
+  managementRoutes: {
+    // Must be PLATFORM-only, verified at boot. These routes are global: /stats
+    // spans every queue and a job carries no tenant identity, so an org-role
+    // gate would let org A's manager read org B's job.
+    operatorPermission: requirePlatformRole('platform-ops'),
+    exposeResult: false,        // default — opt in knowing what your handlers return
+    exposeFailureReason: false, // default
+  },
+});
+```
+
+`requireOrgRole('manager')` and the default `requireRoles(['platform-ops'])` are
+REFUSED at boot: both grant on an organization role and return no policy, so
+nothing at request time can tell them apart from a real operator gate. Use
+`requirePlatformRole`, or `allowUnverifiedOperatorPermission: true` for a custom
+check you have verified yourself.
 
 ### Timeout & DLQ
 

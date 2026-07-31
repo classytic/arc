@@ -18,9 +18,19 @@ import ssePlugin from "../../src/plugins/sse.js";
 // Helper: fetch SSE endpoint with timeout
 // ============================================================================
 
+/**
+ * Read an SSE stream.
+ *
+ * `until` is the important parameter: with it the read ends as soon as the body
+ * contains what the test is asserting, so `timeoutMs` becomes a CEILING rather
+ * than the duration every run pays. Without it a test is really asserting "the
+ * frame arrived inside N ms", which fails whenever the pool is busy — the same
+ * flake as `sleep(n)` + assert.
+ */
 function fetchSSE(
   url: string,
   timeoutMs = 500,
+  until?: (body: string) => boolean,
 ): Promise<{
   statusCode: number;
   headers: Record<string, string>;
@@ -40,6 +50,15 @@ function fetchSSE(
 
       res.on("data", (chunk) => {
         body += chunk.toString();
+        if (until?.(body)) {
+          clearTimeout(timer);
+          res.destroy();
+          resolve({
+            statusCode: res.statusCode!,
+            headers: res.headers as Record<string, string>,
+            body,
+          });
+        }
       });
       res.on("end", () => {
         clearTimeout(timer);
@@ -149,8 +168,13 @@ describe("SSE Plugin", () => {
       await app.listen({ port: 0, host: "127.0.0.1" });
 
       const address = app.server.address() as { port: number };
-      // Wait long enough for at least one heartbeat
-      const result = await fetchSSE(`http://127.0.0.1:${address.port}/events/stream`, 200);
+      // Ends on the first heartbeat; the 3s ceiling only matters if none ever
+      // arrives, which is the actual failure worth reporting.
+      const result = await fetchSSE(
+        `http://127.0.0.1:${address.port}/events/stream`,
+        3000,
+        (body) => body.includes(": heartbeat"),
+      );
 
       expect(result.body).toContain(": heartbeat");
     });

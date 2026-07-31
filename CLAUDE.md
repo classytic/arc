@@ -34,7 +34,7 @@ See [RELEASING.md](RELEASING.md) — canonical commit/push/publish steps for eve
 ## Non-negotiable rules
 
 - **No `console.log` in `src/`** (except `cli/`) — use logger injection.
-- **No DB driver imports anywhere in arc** — kit-specific adapters live in their kits (`@classytic/<kit>/adapter`). arc is DB-agnostic.
+- **No DB driver imports anywhere in arc** (enforced by `check:boundaries`; a lazy `await import()` behind an injectable port may be allowlisted in `LAZY_DRIVER_ALLOWED` with a reason) — kit-specific adapters live in their kits (`@classytic/<kit>/adapter`). arc is DB-agnostic.
 - **No `any`** — use `unknown`; `as unknown as X` is a last resort, not a shortcut.
 - **No `@ts-ignore`** — fix the type.
 - **No default exports** — named exports only (knip enforces). **Documented exception**: Fastify plugin entry files MAY `export default fp(plugin, …)` so `app.register(import('@classytic/arc/<subpath>'))` resolves via Node's import-default semantics. The exception is the *class* of `fp()`-wrapped plugin entries (auth, audit, events, plugins/*, scope/elevation, scim, docs, registry, idempotency, webhooks, core/arcCorePlugin — grep `export default fp` for the authoritative list), not a fixed name list. Each of those files ALSO ships a named export for hosts that prefer named imports. Non-plugin code follows the rule strictly.
@@ -118,7 +118,7 @@ Arc's boot order is **fixed** (do not reorder; do not skip slots):
 | Peer | Min | Required? |
 |------|-----|-----------|
 | fastify | >=5.8.5 | **Yes** |
-| @classytic/primitives | >=0.15.0 | **Yes** |
+| @classytic/primitives | >=0.18.0 | **Yes** |
 | @classytic/repo-core | >=0.17.0 | **Yes** |
 | better-auth | >=1.6.2 | No |
 | ioredis | >=5.0.0 | No |

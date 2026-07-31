@@ -74,8 +74,7 @@ describe("Zod + Fastify schema regression (exclusive numeric constraints)", () =
               score: z.number().gt(0).lt(1),
             }),
           },
-          handler: async (req, reply) => reply.send({ success: true, data: req.body }),
-          raw: true,
+          rawHandler: async (req, reply) => reply.send({ success: true, data: req.body }),
         },
       ],
     });

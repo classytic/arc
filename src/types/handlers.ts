@@ -5,10 +5,10 @@
  * 1. ControllerHandler - Arc's standard pattern (receives context object)
  * 2. FastifyHandler - Fastify native pattern (receives request, reply)
  *
- * Use `raw: false` for ControllerHandler, `raw: true` for FastifyHandler.
+ * Put a ControllerHandler in `handler`, a FastifyHandler in `rawHandler`.
  */
 
-import type { FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { UserBase } from "../permissions/types.js";
 import type { ArcHeaders } from "../utils/headers.js";
 import type { RequestContext } from "./index.js";
@@ -16,7 +16,7 @@ import type { RequestContext } from "./index.js";
 /**
  * Minimal server accessor — exposes safe, read-only server decorators.
  * Allows controller handlers to publish events, log, and audit
- * without switching to `raw: true`.
+ * without switching to `rawHandler`.
  */
 export interface ServerAccessor {
   /** Event bus — publish domain events from any handler */
@@ -201,7 +201,7 @@ export interface IRequestContext<
   metadata?: TMetadata;
   /**
    * Fastify server accessor — publish events, log, and audit
-   * from any handler without switching to `raw: true`.
+   * from any handler without switching to `rawHandler`.
    *
    * @example
    * ```typescript
@@ -238,7 +238,7 @@ export interface IControllerResponse<T = unknown> {
  * Controller handler — Arc's standard pattern.
  *
  * Receives a request context object, returns IControllerResponse.
- * Use with `raw: false` in routes.
+ * Use with `handler` in routes.
  *
  * **Generic parameters:**
  * - `TResponse` — shape of `IControllerResponse.data` (default: `unknown`)
@@ -275,7 +275,6 @@ export interface IControllerResponse<T = unknown> {
  *   path: '/products',
  *   handler: createProduct,
  *   permissions: requireAuth(),
- *   raw: false,  // Arc wraps this into Fastify handler
  * }]
  * ```
  */
@@ -290,7 +289,7 @@ export type ControllerHandler<
  * Fastify native handler
  *
  * Standard Fastify request/reply pattern.
- * Use with `raw: true` in routes.
+ * Use with `rawHandler` in routes.
  *
  * @example
  * ```typescript
@@ -303,12 +302,32 @@ export type ControllerHandler<
  * routes: [{
  *   method: 'GET',
  *   path: '/files/:id/download',
- *   handler: downloadFile,
+ *   rawHandler: downloadFile,
  *   permissions: requireAuth(),
- *   raw: true,  // Use as-is, no wrapping
  * }]
  * ```
  */
+export type RawRouteHandler = {
+  /**
+   * Fastify-native route handler — the type behind `RouteDefinition.rawHandler`.
+   *
+   * Declared with METHOD syntax and read back through an indexed access, which
+   * buys two properties a plain arrow alias can't have at once:
+   *
+   * - **Bivariant parameters.** `strictFunctionTypes` exempts method
+   *   declarations, so a handler annotated `FastifyRequest<{ Body: CreateBody }>`
+   *   assigns without a cast. Fastify's own `RouteHandlerMethod` is an arrow
+   *   alias, so it rejects those — hosts used to write `as any`.
+   * - **One call signature.** TypeScript contextually types parameters only
+   *   when a single constituent is callable, so inline
+   *   `rawHandler: async (request, reply) => …` infers instead of reporting
+   *   TS7006.
+   *
+   * The runtime always passes the real `(request, reply)` pair.
+   */
+  handler(this: FastifyInstance, request: FastifyRequest, reply: FastifyReply): unknown;
+}["handler"];
+
 export type FastifyHandler<RouteGeneric extends Record<string, unknown> = Record<string, unknown>> =
   (request: FastifyRequest<RouteGeneric>, reply: FastifyReply) => Promise<unknown> | unknown;
 

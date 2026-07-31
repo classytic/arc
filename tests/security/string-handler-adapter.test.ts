@@ -100,14 +100,12 @@ describe("Security: String Handler Response Adapter", () => {
           path: "/custom/:id",
           handler: "customAction", // STRING handler
           permissions: allowPublic(),
-          raw: false,
         },
         {
           method: "POST",
           path: "/error",
           handler: "errorAction", // STRING handler
           permissions: allowPublic(),
-          raw: false,
         },
       ],
     });
@@ -192,11 +190,10 @@ describe("Security: String Handler Response Adapter", () => {
         {
           method: "GET",
           path: "/direct",
-          handler: async (_request, reply) => {
+          rawHandler: async (_request, reply) => {
             return reply.send({ direct: true, method: "function" });
           },
           permissions: allowPublic(),
-          raw: true,
         },
       ],
     });
@@ -230,7 +227,6 @@ describe("Security: String Handler Response Adapter", () => {
             path: "/missing",
             handler: "nonExistentMethod", // Does not exist
             permissions: allowPublic(),
-            raw: false,
           },
         ],
       });
@@ -266,7 +262,6 @@ describe("Security: String Handler Response Adapter", () => {
           path: "/async/:id",
           handler: "asyncMethod",
           permissions: allowPublic(),
-          raw: false,
         },
       ],
     });
@@ -288,7 +283,7 @@ describe("Security: String Handler Response Adapter", () => {
     await app3.close();
   });
 
-  it("should handle Fastify-native pattern with raw: true", async () => {
+  it("should handle a Fastify-native controller method via `rawHandler`", async () => {
     // Controller using Fastify-native (req, reply) pattern - 2 parameters
     const fastifyNativeController = {
       getBySlug: async (req: any, reply: any) => {
@@ -307,9 +302,8 @@ describe("Security: String Handler Response Adapter", () => {
         {
           method: "GET",
           path: "/:slug",
-          handler: "getBySlug",
-          permissions: allowPublic(),
-          raw: true, // Explicit: Fastify-native handler
+          rawHandler: "getBySlug",
+          permissions: allowPublic(), // Explicit: Fastify-native handler
         },
       ],
     });
@@ -331,7 +325,7 @@ describe("Security: String Handler Response Adapter", () => {
     await app4.close();
   });
 
-  it("should handle IController pattern with raw: false", async () => {
+  it("should handle an IController controller method via `handler`", async () => {
     // Controller using IController (context) pattern - 1 parameter
     const iControllerStyleController = {
       getBySlug: async (context: any) => {
@@ -355,7 +349,6 @@ describe("Security: String Handler Response Adapter", () => {
           path: "/:slug",
           handler: "getBySlug",
           permissions: allowPublic(),
-          raw: false, // Explicit: IController handler
         },
       ],
     });
@@ -397,7 +390,6 @@ describe("Security: String Handler Response Adapter", () => {
           path: "/:slug",
           handler: "getBySlug",
           permissions: allowPublic(),
-          raw: false, // Force wrap despite Fastify-native - will break
         },
       ],
     });
@@ -417,7 +409,7 @@ describe("Security: String Handler Response Adapter", () => {
     await app6.close();
   });
 
-  it("should work when raw: true used for IController-style (handler receives req)", async () => {
+  it("should pass (req, reply) straight through when `rawHandler` names an IController-style method", async () => {
     // IController-style but force no wrapping
     const iControllerStyleController = {
       getBySlug: async (context: any) => {
@@ -436,9 +428,8 @@ describe("Security: String Handler Response Adapter", () => {
         {
           method: "GET",
           path: "/:slug",
-          handler: "getBySlug",
-          permissions: allowPublic(),
-          raw: true, // Force no wrap despite IController-style
+          rawHandler: "getBySlug",
+          permissions: allowPublic(), // Force no wrap despite IController-style
         },
       ],
     });

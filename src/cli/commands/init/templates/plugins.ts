@@ -22,7 +22,6 @@ export function pluginsIndexTemplate(config: ProjectConfig): string {
  */
 
 ${typeImport}${ts ? "import type { AppConfig } from '../config/index.js';\n" : ""}import { openApiPlugin, scalarPlugin } from '@classytic/arc/docs';
-import { errorHandlerPlugin } from '@classytic/arc/plugins';
 `;
 
   content += `
@@ -36,12 +35,9 @@ export async function registerPlugins(
   app${appType},
   deps${configType}
 )${ts ? ": Promise<void>" : ""} {
-  const { config } = deps;
-
-  // Error handling (CastError → 400, validation → 422, duplicate → 409)
-  await app.register(errorHandlerPlugin, {
-    includeStack: config.isDev,
-  });
+  // NOTE: no error handler here — arc registers it inside createApp().
+  // Configure it via createApp({ errorHandler: { includeStack } }) in app.ts.
+  // Registering it again would override arc's in the same scope (FSTWRN004).
 
   // API Documentation (Scalar UI)
   // OpenAPI spec: /_docs/openapi.json
@@ -57,8 +53,9 @@ export async function registerPlugins(
     theme: 'default',
   });
 
-  // Add your custom plugins here:
-  // await app.register(myCustomPlugin, { ...options });
+  // Add your custom plugins here — deps carries your config and services:
+  // const { config } = deps;
+  // await app.register(myCustomPlugin, { apiKey: config.someKey });
 }
 `;
 

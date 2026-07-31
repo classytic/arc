@@ -288,16 +288,14 @@ describe("disableDefaultRoutes — custom-routes-only resource", () => {
           path: "/stats",
           summary: "Custom stats endpoint",
           permissions: allowPublic(),
-          handler: async (_req, reply) => reply.send({ count: await Model.countDocuments() }),
-          raw: true,
+          rawHandler: async (_req, reply) => reply.send({ count: await Model.countDocuments() }),
         },
         {
           method: "POST",
           path: "/broadcast",
           summary: "Custom broadcast endpoint",
           permissions: requireRoles(["admin"]),
-          handler: async (_req, reply) => reply.send({ success: true, data: { sent: true } }),
-          raw: true,
+          rawHandler: async (_req, reply) => reply.send({ success: true, data: { sent: true } }),
         },
       ],
     });

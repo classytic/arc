@@ -134,8 +134,7 @@ defineResource({
     {
       method: 'GET',
       path: '/:id/download',
-      handler: 'downloadPDF',
-      raw: true,  // ✅ Native Fastify handler, no arc pipeline
+      rawHandler: 'downloadPDF',  // ✅ Native Fastify handler, no arc pipeline
       permissions: requireAuthenticated(),
     },
   ],
@@ -161,7 +160,7 @@ class VideoController {
   }
 }
 
-// Register as `raw: true` on the route — no arc pipeline wrap for streaming
+// Declare via `rawHandler` on the route — no arc pipeline wrap for streaming
 ```
 
 ### Example 3: Custom Content-Type (CSV Export)
@@ -185,7 +184,7 @@ class ExportController {
   }
 }
 
-// Register as `raw: true` on the route — raw Fastify handler for custom content-type
+// Declare via `rawHandler` on the route — raw Fastify handler for custom content-type
 ```
 
 ### Example 4: Redirect
@@ -203,7 +202,7 @@ class AuthController {
   }
 }
 
-// Register as `raw: true` on the route — raw Fastify handler for redirects
+// Declare via `rawHandler` on the route — raw Fastify handler for redirects
 ```
 
 ### Example 5: Server-Sent Events (SSE)
@@ -228,56 +227,51 @@ class NotificationController {
   }
 }
 
-// Register as `raw: true` on the route — raw Fastify handler for SSE
+// Declare via `rawHandler` on the route — raw Fastify handler for SSE
 ```
 
 ---
 
 ## Quick Decision Guide
 
-| Use Case | Pattern | `raw` flag |
+| Use Case | Pattern | Field |
 |----------|---------|-----------|
-| Standard GET/POST/PATCH/DELETE | Arc Context | omit (default) |
-| Business logic | Arc Context | omit |
-| JSON responses | Arc Context | omit |
-| File download | Native Fastify | `true` |
-| File upload | Native Fastify | `true` |
-| Streaming | Native Fastify | `true` |
-| Custom headers | Native Fastify | `true` |
-| Redirect | Native Fastify | `true` |
-| SSE/WebSocket | Native Fastify | `true` |
-| Custom content-type (CSV, XML, etc.) | Native Fastify | `true` |
+| Standard GET/POST/PATCH/DELETE | Arc Context | `handler` |
+| Business logic | Arc Context | `handler` |
+| JSON responses | Arc Context | `handler` |
+| File download | Native Fastify | `rawHandler` |
+| File upload | Native Fastify | `rawHandler` |
+| Streaming | Native Fastify | `rawHandler` |
+| Custom headers | Native Fastify | `rawHandler` |
+| Redirect | Native Fastify | `rawHandler` |
+| SSE/WebSocket | Native Fastify | `rawHandler` |
+| Custom content-type (CSV, XML, etc.) | Native Fastify | `rawHandler` |
 
 ---
 
 ## Common Mistakes
 
-### ❌ Mistake 1: Wrong `raw` value for the handler signature
+### ❌ Mistake 1: Putting a handler in the wrong field
+
+The field a route fills declares its calling convention. `handler` is the arc
+pipeline (one `IRequestContext`); `rawHandler` is Fastify-native
+(`request, reply`, owns the response). Mixing them is a **type error** for
+inline functions — but a controller-method NAME is a runtime lookup, so it is
+still worth getting right:
 
 ```typescript
-// Controller method returns IControllerResponse
-async getConfig(req: IRequestContext): Promise<IControllerResponse> {
-  return { success: true, data: config };
-}
-
-// But the route was marked `raw: true`
-routes: [{
-  handler: 'getConfig',
-  raw: true,  // ❌ WRONG! IRequestContext handlers need the arc pipeline
-}]
-```
-
-### ✅ Fix: Match `raw` to the method signature
-
-```typescript
-// IRequestContext handler → default (no `raw`) so arc wraps it
+// IRequestContext handler → `handler`, so arc wraps it
 async getConfig(req: IRequestContext): Promise<IControllerResponse> { ... }
-routes: [{ handler: 'getConfig' /* raw omitted */ }]
+routes: [{ handler: 'getConfig' }]
 
-// Fastify native handler → `raw: true` to bypass the pipeline
+// Fastify-native handler → `rawHandler`, bypassing the pipeline
 async downloadFile(req: FastifyRequest, reply: FastifyReply): Promise<void> { ... }
-routes: [{ handler: 'downloadFile', raw: true }]
+routes: [{ rawHandler: 'downloadFile' }]
 ```
+
+Declaring BOTH fields on one route throws at boot. Before arc 2.31 this was a
+`raw: boolean` flag beside a single `handler`, and both mismatches were legal
+and silent.
 
 ---
 
@@ -318,7 +312,7 @@ async getConfig(request: FastifyRequest, reply: FastifyReply): Promise<void> {
   });
 }
 
-// Route declared as `raw: true`
+// Declare the route via `rawHandler`
 ```
 
 ---
@@ -379,7 +373,7 @@ describe('ReportController', () => {
 
 ## Pattern 3: Mixins vs. `routes` — which one for preset-shaped endpoints?
 
-Arc ships four preset mixins (`SlugMixin`, `TreeMixin`, `SoftDeleteMixin`, `BulkMixin`) that auto-generate routes when the repository implements the corresponding methods (`getBySlug`, `getTree` / `getChildren`, `getDeleted` / `restore`, `bulkCreate` / etc.). You can also write the same endpoints by hand via `routes: [{ path: '/slug/:slug', raw: true, handler }]`.
+Arc ships four preset mixins (`SlugMixin`, `TreeMixin`, `SoftDeleteMixin`, `BulkMixin`) that auto-generate routes when the repository implements the corresponding methods (`getBySlug`, `getTree` / `getChildren`, `getDeleted` / `restore`, `bulkCreate` / etc.). You can also write the same endpoints by hand via `routes: [{ path: '/slug/:slug', rawHandler }]`.
 
 These two paths produce the same URL from a user's perspective but look completely different in the resource file — and there's a **silent hazard** if you mix them. Pick one per endpoint.
 
@@ -388,7 +382,7 @@ These two paths produce the same URL from a user's perspective but look complete
 | Need | Use |
 |------|------|
 | Slug lookup (`/slug/:slug`) on a repo with `getBySlug` | `SlugMixin` + `BaseCrudController` subclass |
-| Slug lookup with custom body (joins, projections, extra auth) | `routes: [{ path: '/slug/:slug', raw: true, handler }]` + **delete `adapter.getBySlug`** |
+| Slug lookup with custom body (joins, projections, extra auth) | `routes: [{ path: '/slug/:slug', rawHandler }]` + **delete `adapter.getBySlug`** |
 | Soft-delete endpoints (`/deleted`, `/:id/restore`) | `SoftDeleteMixin` + repo implements `getDeleted` + `restore` |
 | Tree traversal (`/tree`, `/:parent/children`) | `TreeMixin` + repo implements `getTree` + `getChildren` |
 | Bulk create/update/delete (`/bulk`, `/bulk/delete`) | `BulkMixin` + repo implements the bulk methods |
@@ -407,8 +401,8 @@ This is the most common cause of "dead repository methods" in arc codebases. Bef
 
 ## Summary
 
-- **Default to Arc Context Pattern** (omit `raw`, i.e. the default) for 90% of your routes
-- **Use Native Fastify Pattern** (set `raw: true`) only when you need:
+- **Default to Arc Context Pattern** (`handler`) for 90% of your routes
+- **Use Native Fastify Pattern** (`rawHandler`) only when you need:
   - File downloads/uploads
   - Streaming
   - Custom headers

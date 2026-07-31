@@ -23,25 +23,30 @@ import type {
 } from "../../src/types/index.js";
 
 // ============================================================================
-// 1. RouteDefinition.handler — accepts typed Fastify request generics
+// 1. RouteDefinition.rawHandler — accepts typed Fastify request generics
 // ============================================================================
 
-describe("RouteDefinition.handler type ergonomics", () => {
+const anyPermission = (() => true) as unknown as RouteDefinition["permissions"];
+
+describe("RouteDefinition.rawHandler type ergonomics", () => {
   it("should accept a plain FastifyRequest handler (no generics)", () => {
+    const handler = (_req: FastifyRequest, _reply: FastifyReply) => ({ ok: true });
+
     const route: RouteDefinition = {
       method: "GET",
       path: "/test",
-      handler: (_req: FastifyRequest, _reply: FastifyReply) => ({ ok: true }),
-      permissions: (() => true) as unknown as RouteDefinition["permissions"],
-      raw: true,
+      rawHandler: handler,
+      permissions: anyPermission,
     };
 
-    expect(route.handler).toBeTypeOf("function");
+    expect(route.rawHandler).toBe(handler);
   });
 
   it("should accept a typed FastifyRequest<{ Body }> handler without casting", () => {
-    // This is the key fix: previously required `as any` because
-    // FastifyRequest<{ Body: T }> is not assignable to FastifyRequest (invariant generic)
+    // FastifyRequest<{ Body: T }> is not assignable to FastifyRequest under a
+    // plain function type — this stays cast-free because `rawHandler` is typed
+    // as Fastify's own `RouteHandlerMethod`, whose method-syntax parameters are
+    // bivariant.
     type CreateBody = { name: string; email: string };
 
     const handler = (_req: FastifyRequest<{ Body: CreateBody }>, _reply: FastifyReply) => ({
@@ -51,12 +56,11 @@ describe("RouteDefinition.handler type ergonomics", () => {
     const route: RouteDefinition = {
       method: "POST",
       path: "/create",
-      handler,
-      permissions: (() => true) as unknown as RouteDefinition["permissions"],
-      raw: true,
+      rawHandler: handler,
+      permissions: anyPermission,
     };
 
-    expect(route.handler).toBe(handler);
+    expect(route.rawHandler).toBe(handler);
   });
 
   it("should accept a typed FastifyRequest<{ Params }> handler without casting", () => {
@@ -69,12 +73,11 @@ describe("RouteDefinition.handler type ergonomics", () => {
     const route: RouteDefinition = {
       method: "GET",
       path: "/:id/details",
-      handler,
-      permissions: (() => true) as unknown as RouteDefinition["permissions"],
-      raw: true,
+      rawHandler: handler,
+      permissions: anyPermission,
     };
 
-    expect(route.handler).toBe(handler);
+    expect(route.rawHandler).toBe(handler);
   });
 
   it("should accept a typed FastifyRequest<{ Querystring }> handler without casting", () => {
@@ -87,12 +90,11 @@ describe("RouteDefinition.handler type ergonomics", () => {
     const route: RouteDefinition = {
       method: "GET",
       path: "/search",
-      handler,
-      permissions: (() => true) as unknown as RouteDefinition["permissions"],
-      raw: true,
+      rawHandler: handler,
+      permissions: anyPermission,
     };
 
-    expect(route.handler).toBe(handler);
+    expect(route.rawHandler).toBe(handler);
   });
 
   it("should accept a fully typed FastifyRequest<{ Body, Params, Querystring }> handler", () => {
@@ -109,24 +111,48 @@ describe("RouteDefinition.handler type ergonomics", () => {
     const route: RouteDefinition = {
       method: "PUT",
       path: "/:id/process",
-      handler,
-      permissions: (() => true) as unknown as RouteDefinition["permissions"],
-      raw: true,
+      rawHandler: handler,
+      permissions: anyPermission,
     };
 
-    expect(route.handler).toBe(handler);
+    expect(route.rawHandler).toBe(handler);
   });
 
-  it("should still accept string handler names", () => {
+  it("should infer (request, reply) for an INLINE rawHandler — no annotations", () => {
+    // The reason `handler` and `rawHandler` are separate fields: a single field
+    // carrying both shapes is a union of function types, and TS contextually
+    // types a parameter only when exactly ONE union constituent has a call
+    // signature. `string | RouteHandlerMethod` has one, so this compiles with
+    // no `req: FastifyRequest` annotation (it reported TS7006 before the split).
     const route: RouteDefinition = {
+      method: "GET",
+      path: "/inline",
+      rawHandler: async (request, reply) => {
+        reply.header("x-url", request.url);
+        return { ok: true };
+      },
+      permissions: anyPermission,
+    };
+
+    expect(route.rawHandler).toBeTypeOf("function");
+  });
+
+  it("should accept a controller-method NAME in either field", () => {
+    const pipeline: RouteDefinition = {
       method: "GET",
       path: "/test",
       handler: "myControllerMethod",
-      permissions: (() => true) as unknown as RouteDefinition["permissions"],
-      raw: false,
+      permissions: anyPermission,
+    };
+    const native: RouteDefinition = {
+      method: "GET",
+      path: "/test-native",
+      rawHandler: "myFastifyNativeMethod",
+      permissions: anyPermission,
     };
 
-    expect(route.handler).toBe("myControllerMethod");
+    expect(pipeline.handler).toBe("myControllerMethod");
+    expect(native.rawHandler).toBe("myFastifyNativeMethod");
   });
 
   it("should still accept RouteHandlerMethod", () => {
@@ -137,12 +163,11 @@ describe("RouteDefinition.handler type ergonomics", () => {
     const route: RouteDefinition = {
       method: "GET",
       path: "/native",
-      handler: fastifyHandler,
-      permissions: (() => true) as unknown as RouteDefinition["permissions"],
-      raw: true,
+      rawHandler: fastifyHandler,
+      permissions: anyPermission,
     };
 
-    expect(route.handler).toBe(fastifyHandler);
+    expect(route.rawHandler).toBe(fastifyHandler);
   });
 });
 

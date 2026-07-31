@@ -217,6 +217,53 @@ export function createDynamicPermissionMatrix(
 
   const cacheStore = config.cacheStore ?? internalStore;
   const trackedKeys = new Set<string>();
+  // org → its cache keys. `invalidateByOrg` matches the DEFAULT key by `orgId::`
+  // prefix, but a host-supplied `cache.key(ctx)` need not carry the org, so a
+  // prefix scan alone would leave a custom-keyed matrix live until TTL — a
+  // revocation gap. This index records every key under the org it was resolved
+  // for (known at resolve time), so invalidation finds it regardless of key shape.
+  const orgKeyIndex = new Map<string, Set<string>>();
+  const maxTrackedKeys = config.cache?.maxEntries ?? 10_000;
+  /**
+   * Record a key and ENFORCE the cap in the same step.
+   *
+   * The cap has to live here rather than at the write site: a node that mostly
+   * READS a shared cache registers on every hit but may rarely set, so a
+   * cap applied only after a `set` never runs and the bookkeeping grows with
+   * every distinct org/user/role combination the node has ever seen — unbounded,
+   * and outliving the cache entries themselves, which the external store expires
+   * on its own schedule. Eviction is insertion-ordered (`Set` iteration order),
+   * so the oldest bookkeeping goes first; dropping a key only costs a missed
+   * local invalidation for an entry that will still expire by TTL.
+   */
+  const registerKey = (orgId: string | undefined, key: string): void => {
+    trackedKeys.add(key);
+    const bucket = orgId ?? "no-org";
+    let keys = orgKeyIndex.get(bucket);
+    if (!keys) {
+      keys = new Set<string>();
+      orgKeyIndex.set(bucket, keys);
+    }
+    keys.add(key);
+
+    if (trackedKeys.size > maxTrackedKeys) {
+      const overflow = trackedKeys.size - maxTrackedKeys;
+      const iter = trackedKeys.values();
+      for (let i = 0; i < overflow; i++) {
+        const oldest = iter.next().value;
+        if (oldest) forgetKey(oldest);
+      }
+    }
+  };
+  const forgetKey = (key: string): void => {
+    trackedKeys.delete(key);
+    for (const [bucket, keys] of orgKeyIndex) {
+      // Drop the bucket once empty — otherwise the org set leaks one entry per
+      // organization the node ever served, which is the same unbounded growth
+      // one level up.
+      if (keys.delete(key) && keys.size === 0) orgKeyIndex.delete(bucket);
+    }
+  };
 
   const nodeId = randomUUID().slice(0, 8);
   const DEFAULT_EVENT_TYPE = "arc.permissions.invalidated";
@@ -233,20 +280,49 @@ export function createDynamicPermissionMatrix(
   async function localInvalidateByOrg(orgId: string): Promise<void> {
     if (!cacheStore) return;
     const prefix = `${orgId}::`;
-    const toDelete: string[] = [];
+
+    // PREFERRED: store-native pattern delete. Every key for an org shares the
+    // `${orgId}::` prefix (default AND auto-namespaced custom keys), so one
+    // `clear("${orgId}::*")` removes them ALL directly in the shared store —
+    // regardless of which process wrote them. This makes revocation immediate,
+    // cross-node, and RESTART-SAFE (it does not depend on THIS process's
+    // in-memory `orgKeyIndex`, which a restarted node would have lost — the gap a
+    // purely process-local index leaves open). Redis adapters map this to
+    // SCAN+DEL; MemoryCacheStore glob-matches. We still clear local bookkeeping.
+    if (cacheStore.clear) {
+      try {
+        await cacheStore.clear(`${prefix}*`);
+        const keys = orgKeyIndex.get(orgId);
+        if (keys) for (const k of keys) trackedKeys.delete(k);
+        orgKeyIndex.delete(orgId);
+        return;
+      } catch (error) {
+        logger.warn(
+          `[DynamicPermissionMatrix] invalidateByOrg clear('${prefix}*') failed — falling back to per-key delete: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
+    // FALLBACK (store has no `clear`): best-effort per-key delete via the
+    // in-process index + a prefix scan of tracked keys. Correct for a single
+    // long-lived process; keys written by a SINCE-RESTARTED node without pattern
+    // support persist until TTL (documented — provide a `clear`-capable store,
+    // e.g. Redis, for a hard distributed-revocation guarantee).
+    const toDelete = new Set<string>(orgKeyIndex.get(orgId) ?? []);
     for (const key of trackedKeys) {
-      if (key.startsWith(prefix)) toDelete.push(key);
+      if (key.startsWith(prefix)) toDelete.add(key);
     }
     for (const key of toDelete) {
       try {
         await cacheStore.delete(key);
-        trackedKeys.delete(key);
+        forgetKey(key);
       } catch (error) {
         logger.warn(
           `[DynamicPermissionMatrix] invalidateByOrg delete failed for '${key}': ${error instanceof Error ? error.message : String(error)}`,
         );
       }
     }
+    orgKeyIndex.delete(orgId);
   }
 
   function isActionAllowed(actions: readonly string[] | undefined, action: string): boolean {
@@ -288,8 +364,15 @@ export function createDynamicPermissionMatrix(
       return config.resolveRolePermissions(ctx);
     }
 
+    // Custom keys are AUTO-NAMESPACED by org + normalized org-roles — the same
+    // isolation the default key guarantees. A host `cache.key(ctx)` that returns
+    // a bare `user:<id>` must NOT let org B read org A's cached matrix (both admin
+    // in A and B, different matrices), nor serve a stale matrix after the caller's
+    // roles change. The caller only needs to encode dimensions BEYOND org+roles.
     const customKey = config.cache?.key?.(ctx);
-    const cacheKey = customKey ?? buildDefaultCacheKey(ctx, orgId, orgRoles);
+    const cacheKey = customKey
+      ? `${orgId ?? "no-org"}::${(orgRoles ?? []).slice().sort().join(",")}::${customKey}`
+      : buildDefaultCacheKey(ctx, orgId, orgRoles);
 
     if (!cacheKey) {
       return config.resolveRolePermissions(ctx);
@@ -297,7 +380,14 @@ export function createDynamicPermissionMatrix(
 
     try {
       const hit = await cacheStore.get(cacheKey);
-      if (hit) return hit;
+      if (hit) {
+        // Register on HIT too: a process (node) that only ever READS a
+        // shared/distributed cache would otherwise never track the key and so
+        // could not evict it on an org invalidation — revoked access would
+        // linger until TTL. Registration is idempotent.
+        registerKey(orgId, cacheKey);
+        return hit;
+      }
     } catch (error) {
       logger.warn(
         `[DynamicPermissionMatrix] Cache get failed for '${cacheKey}': ${error instanceof Error ? error.message : String(error)}`,
@@ -308,17 +398,7 @@ export function createDynamicPermissionMatrix(
 
     try {
       await cacheStore.set(cacheKey, value, cacheTtlSeconds);
-      trackedKeys.add(cacheKey);
-
-      const maxTracked = config.cache?.maxEntries ?? 10_000;
-      if (trackedKeys.size > maxTracked) {
-        const overflow = trackedKeys.size - maxTracked;
-        const iter = trackedKeys.values();
-        for (let i = 0; i < overflow; i++) {
-          const oldest = iter.next().value;
-          if (oldest) trackedKeys.delete(oldest);
-        }
-      }
+      registerKey(orgId, cacheKey);
     } catch (error) {
       logger.warn(
         `[DynamicPermissionMatrix] Cache set failed for '${cacheKey}': ${error instanceof Error ? error.message : String(error)}`,
@@ -350,8 +430,13 @@ export function createDynamicPermissionMatrix(
       try {
         matrix = await resolveMatrix(ctx, scope.organizationId, orgRoles);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return deny(`Permission matrix resolution failed: ${message}`);
+        // Log the real cause internally; return a GENERIC denial. Echoing the
+        // resolver's exception text (DB errors, connection strings, stack hints)
+        // into the 4xx body leaks internals to the caller. Fail-closed either way.
+        logger.warn(
+          `[DynamicPermissionMatrix] matrix resolution failed for org '${scope.organizationId ?? "?"}': ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return deny("Permission policy is temporarily unavailable");
       }
 
       for (const [resource, actions] of Object.entries(required)) {
@@ -401,6 +486,7 @@ export function createDynamicPermissionMatrix(
         try {
           await cacheStore.clear();
           trackedKeys.clear();
+          orgKeyIndex.clear();
           return;
         } catch (error) {
           logger.warn(
@@ -419,6 +505,7 @@ export function createDynamicPermissionMatrix(
         }
       }
       trackedKeys.clear();
+      orgKeyIndex.clear();
     },
 
     async connectEvents(events: PermissionEventBus, options?: ConnectEventsOptions): Promise<void> {

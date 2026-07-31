@@ -8,6 +8,7 @@ import type { CacheStore } from "../../cache/interface.js";
 import type { EventTransport } from "../../events/EventTransport.js";
 import type { IdempotencyStore } from "../../idempotency/stores/interface.js";
 import type { ElevationOptions } from "../../scope/elevation.js";
+import type { AssetRoot } from "./assets.js";
 import type { AuthOption } from "./auth.js";
 import type { MultipartOptions, RawBodyOptions, UnderPressureOptions } from "./plugin-options.js";
 import type { CorsOptions, HelmetOptions, RateLimitOpts } from "./security.js";
@@ -307,6 +308,26 @@ export interface CreateAppOptions {
 
   /** Rate limiting. Set to false to disable. */
   rateLimit?: RateLimitOpts | false;
+
+  /**
+   * Static asset roots, each served by its own `@fastify/static` registration.
+   *
+   * Arc supplies POLICY (per-prefix `Cross-Origin-Resource-Policy`, cache preset,
+   * `Content-Disposition`) and delegates every transport mechanic — byte ranges,
+   * ETag/304, immutable directives, pre-compressed variants — to the plugin.
+   *
+   * ```ts
+   * assets: [{ prefix: "/uploads", root: "./var/uploads", crossOrigin: "same-site" }]
+   * ```
+   *
+   * **Why this exists:** arc's default security headers include
+   * `Cross-Origin-Resource-Policy: same-origin`, which makes a browser discard the
+   * response when a cross-origin document tries to embed it — even though the
+   * request returned 200 and CORS negotiated fine. A frontend on a different
+   * origin cannot render an uploaded image until CORP is relaxed for that prefix.
+   * Requires `@fastify/static`.
+   */
+  assets?: readonly AssetRoot[];
 
   // ============================================
   // Performance Plugins (opt-out)

@@ -320,11 +320,6 @@ export interface McpPluginOptions {
    * ```
    */
   expose?: string[];
-  /**
-   * @deprecated Use `expose` — same default-deny semantics with a clearer
-   * verb. Kept for backwards compatibility with pre-2.15.5 hosts.
-   */
-  include?: string[];
   /** Tool name prefix: 'crm' → 'crm_list_products' */
   toolNamePrefix?: string;
   /** Per-resource overrides (operations, descriptions, hideFields, names, toolNamePrefix) */

@@ -8,7 +8,7 @@
  *   - The geo operator suffixes (`location_near`, `location_withinRadius`,
  *     `location_geoWithin`, `location_nearSphere`) via the MCP integration's
  *     `expandOperatorKeys`
- *   - PermissionResult.scope propagation via `applyPermissionResult`
+ *   - AuthorizationDecision.scope propagation via `applyAuthorizationDecision`
  *   - Service scope helpers (`isService`, `getClientId`, `getServiceScopes`)
  *
  * No real DB, no real MongoKit instance — pure data-shape assertions against
@@ -85,12 +85,12 @@ describe("MongoKit 3.5.5 features — built dist smoke test", () => {
     });
   });
 
-  it("applyPermissionResult installs scope + filters from dist", async () => {
+  it("applyAuthorizationDecision installs scope + filters from dist", async () => {
     // Re-exported from the permissions barrel for discoverability. The
     // package's `sideEffects: false` lets bundlers tree-shake this away
     // for users who never import it. Internal Arc call sites bypass the
-    // barrel and import "./applyPermissionResult.js" directly.
-    const { applyPermissionResult, normalizeToDecision } = await import(
+    // barrel and import "./applyAuthorizationDecision.js" directly.
+    const { applyAuthorizationDecision, normalizeToDecision } = await import(
       "../../dist/permissions/index.mjs"
     );
 
@@ -106,7 +106,7 @@ describe("MongoKit 3.5.5 features — built dist smoke test", () => {
       policy: { projectId: "proj-1" },
     });
 
-    applyPermissionResult(decision, req as Parameters<typeof applyPermissionResult>[1]);
+    applyAuthorizationDecision(decision, req as Parameters<typeof applyAuthorizationDecision>[1]);
 
     expect(req.scope).toEqual({
       kind: "service",

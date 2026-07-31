@@ -83,7 +83,7 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest 
 import fp from "fastify-plugin";
 import type { DomainEvent } from "../events/EventTransport.js";
 import { arcLog } from "../logger/index.js";
-import { evaluateAndApplyPermission } from "../permissions/applyPermissionResult.js";
+import { evaluateAndApplyPermission } from "../permissions/authorizationDecision.js";
 import { applyFieldReadPermissions } from "../permissions/fields.js";
 import type { UserBase } from "../permissions/types.js";
 import { getUserRoles } from "../permissions/types.js";
@@ -142,7 +142,9 @@ export interface RealtimeOptions {
    * the feed when the auth token's `exp` passes (forcing reconnect +
    * re-authorization with fresh filters) — this option adds a cap for
    * session/cookie auth that carries no `exp`, or to tighten below the
-   * token TTL. Omit for token-exp-only bounding.
+   * token TTL. **Defaults to 30 min** ({@link DEFAULT_MAX_CONNECTION_MS}) so a
+   * feed is NEVER unbounded by omission; set a large explicit value (up to
+   * ~24.8 days) for a deliberately long-lived feed.
    */
   maxConnectionMs?: number;
 }
@@ -154,6 +156,16 @@ interface MatchingAdapter {
 
 /** Node's `setTimeout` ceiling (~24.8 days); larger delays fire immediately. */
 const MAX_TIMER_MS = 2_147_483_647;
+
+/**
+ * Secure default lease when no other bound applies (session/cookie auth with no
+ * token `exp`, and no explicit `maxConnectionMs`). A change feed snapshots its
+ * permission filters at connect, so without ANY ceiling a revoked caller would
+ * keep their old view forever. 30 minutes bounds that staleness while not
+ * churning connections. A host that truly wants a longer-lived feed sets
+ * `maxConnectionMs` explicitly (up to `MAX_TIMER_MS`).
+ */
+export const DEFAULT_MAX_CONNECTION_MS = 30 * 60_000;
 
 /**
  * Milliseconds from `now` until the feed should force-close to bound
@@ -337,7 +349,9 @@ const realtimePlugin: FastifyPluginAsync<RealtimeOptions> = async (
     resources: allowlist,
     operations = CHANGE_OPERATIONS,
     tokenQueryParam = "token",
-    maxConnectionMs,
+    // Secure default: bound EVERY feed's lifetime even when the auth carries no
+    // `exp`, so a revoked caller's snapshotted filters can't stay live forever.
+    maxConnectionMs = DEFAULT_MAX_CONNECTION_MS,
   } = opts;
 
   if (!fastify.hasDecorator("events")) {

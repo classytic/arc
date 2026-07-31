@@ -2,7 +2,7 @@
 
 **Summary**: How a resource's validation + OpenAPI/MCP schemas are assembled — two halves, six steps, one precedence rule. Read this BEFORE touching anything schema-shaped; the 2.21 precedence bug lived here for months because the layering was undocumented.
 **Sources**: src/core/defineResource/schemas.ts (registry half), src/core/defineResource/plugin.ts (route half), src/core/schemaOptions.ts.
-**Last updated**: 2026-07-13 (page created — 2.21).
+**Last updated**: 2026-07-29 (input/output conversion direction — 2.31).
 
 ---
 
@@ -54,3 +54,21 @@ Every schema slot arc accepts — `customSchemas.{op}.{body,querystring,params,r
 ## Related
 - [[core]] — defineResource phases
 - [[gotchas]] — `select` never normalized; systemManaged vs preserveForElevated
+
+
+## Zod conversion direction (2.31)
+
+A Zod schema has TWO shapes and `z.toJSONSchema()` emits one. Arc converts by direction:
+
+| Slot | `io` | Why |
+|---|---|---|
+| `body`, `querystring`, `params`, `headers`, `createBody`, `updateBody`, `listQuery` | `input` | validates what the client SENDS — before defaults fill in and transforms run |
+| `response`, `entity` | `output` | describes what the server RETURNS — after they apply |
+
+Zod's default is `output`. Converting a request with it marks every `.default()` field `required`, so a legal request omitting one is rejected with a 400 naming a property the client was never meant to send — and a `.transform()` degrades to `{}`, switching validation off for that property.
+
+**`z.object()` vs `z.strictObject()`**: input mode omits `additionalProperties: false` for a plain `z.object()`, because it STRIPS unknown keys rather than erroring — extra keys are legal input. Use `z.strictObject()` when the wire contract must reject them; it keeps the constraint in both modes.
+
+`.meta({ title, description, examples })` flows straight into the emitted JSON Schema (via `z.globalRegistry`), so OpenAPI and MCP descriptions come free — no parallel annotation layer.
+
+**Targets**: Zod types `target` as `… | ({} & string)`, so an unrecognized value is not rejected — it just matches no internal branch and silently falls back to draft-2020-12. `draft-7` is safe (Zod normalizes it to `draft-07`); `openapi-3.1` is not, so arc maps it to `draft-2020-12` explicitly — the correct dialect, since OAS 3.1 aligned with JSON Schema 2020-12.

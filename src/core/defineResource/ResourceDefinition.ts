@@ -423,7 +423,7 @@ export class ResourceDefinition<TDoc = AnyRecord> {
         summary: r.summary,
         description: r.description,
         permissions: r.permissions,
-        raw: r.raw,
+        raw: r.rawHandler !== undefined,
         schema: r.schema as Record<string, unknown>,
       })),
       routes: [], // Populated at runtime during registration

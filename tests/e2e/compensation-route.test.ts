@@ -68,8 +68,7 @@ describe("Compensation in Arc additionalRoute", () => {
           path: "/:id/checkout",
           summary: "Process order checkout with compensation",
           permissions: requireAuth(),
-          raw: true,
-          handler: async (request, reply) => {
+          rawHandler: async (request, reply) => {
             const { id } = request.params as { id: string };
             const order = await OrderModel.findById(id).lean();
             if (!order) {
@@ -126,8 +125,7 @@ describe("Compensation in Arc additionalRoute", () => {
           path: "/:id/checkout-fail",
           summary: "Checkout that always fails at payment step",
           permissions: requireAuth(),
-          raw: true,
-          handler: async (request, reply) => {
+          rawHandler: async (request, reply) => {
             const { id } = request.params as { id: string };
 
             const result = await withCompensation("checkout-fail", [

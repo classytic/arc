@@ -23,7 +23,7 @@ describe("Additional Route — Streaming & Flexibility", () => {
   // Raw Fastify handler (streaming)
   // ==========================================================================
 
-  describe("raw Fastify handler (raw: true)", () => {
+  describe("raw Fastify handler (`rawHandler`)", () => {
     it("supports NDJSON streaming via reply.raw", async () => {
       app = Fastify({ logger: false });
 

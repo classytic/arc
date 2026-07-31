@@ -4,8 +4,9 @@
  */
 
 import type { FastifyInstance, RouteHandlerMethod } from "fastify";
+import type { RouteCorsConfig } from "../../core/middlewares/rateLimit.js";
 import type { PermissionCheck } from "../../permissions/types.js";
-import type { ControllerHandler } from "../handlers.js";
+import type { ControllerHandler, RawRouteHandler } from "../handlers.js";
 import type { RateLimitConfig } from "./rate-limit.js";
 
 /** HTTP methods for custom routes. */
@@ -29,7 +30,7 @@ export interface RouteMcpConfig {
  *
  * - `handler: 'string'` → controller method → full Arc pipeline + MCP tool
  * - `handler: function` → inline handler → full Arc pipeline + MCP tool
- * - `raw: true` → raw Fastify handler → no pipeline, no MCP by default
+ * - `rawHandler` → raw Fastify handler → no pipeline, no MCP by default
  */
 export interface RouteDefinition {
   readonly method: RouteMethod;
@@ -38,26 +39,14 @@ export interface RouteDefinition {
   /**
    * Route handler.
    * - String: controller method name (Arc pipeline) — runtime lookup, no TS coverage on typos.
-   * - Function without `raw: true`: receives IRequestContext, returns IControllerResponse (Arc pipeline)
-   * - Function with `raw: true`: raw Fastify handler `(request, reply)`
+   * - Function: receives IRequestContext, returns IControllerResponse (Arc pipeline)
+   * - For a raw Fastify handler `(request, reply)`, use {@link rawHandler}
    *
    * Prefer `controllerMethod` (2.16) over the string form when you want the
    * compiler to catch typos. `handler` stays optional when `controllerMethod`
    * is set — exactly one of the two must be declared.
    */
-  readonly handler?:
-    | string
-    | ControllerHandler
-    | RouteHandlerMethod
-    // Raw-handler escape hatch. `never` in the contravariant parameter
-    // positions lets TYPED request generics assign without casting —
-    // `(req: FastifyRequest<{ Body: CreateBody }>, reply) => …` is not
-    // assignable to a `FastifyRequest<Record<string, unknown>>` parameter
-    // under strictFunctionTypes, but every concrete handler signature
-    // satisfies the `never`-parameter form (the same variance pattern as
-    // utils/circuitBreaker's AnyAsyncFn). Runtime always passes the real
-    // (request, reply) pair.
-    | ((request: never, reply: never) => unknown);
+  readonly handler?: string | ControllerHandler;
   /**
    * Typed function-reference handler (2.16). Receives the live controller
    * instance and returns the method to invoke — TypeScript catches typos
@@ -69,11 +58,15 @@ export interface RouteDefinition {
    * handlers go through), so there's no per-request lookup overhead.
    * The returned method is bound to the controller before dispatch.
    *
+   * PIPELINE-ONLY: the referenced method is invoked as a `ControllerHandler`
+   * (one `IRequestContext`), because the router derives "is this raw?" from
+   * {@link rawHandler} alone and this field is mutually exclusive with it.
+   * There is no flag that could make a `controllerMethod` route raw. For a
+   * Fastify-native controller method, put its NAME in `rawHandler` — the
+   * lookup is the same, and the field states the calling convention.
+   *
    * Mutually exclusive with `handler` — passing both throws at boot
-   * with a clear "pick one" message. The runtime contract on what the
-   * returned function accepts mirrors the `handler` rules: a plain
-   * `ControllerHandler` for pipeline routes, a raw Fastify handler when
-   * the route is `raw: true`.
+   * with a clear "pick one" message.
    *
    * Typed loosely (`(controller: unknown) => …`) at the type-system
    * boundary because `RouteDefinition` is not generic over the
@@ -97,14 +90,33 @@ export interface RouteDefinition {
    * });
    * ```
    */
-  readonly controllerMethod?: (controller: unknown) => ControllerHandler | RouteHandlerMethod;
+  readonly controllerMethod?: (controller: unknown) => ControllerHandler;
   /** Permission check — REQUIRED */
   readonly permissions: PermissionCheck;
   /**
-   * Raw mode — bypasses Arc pipeline. Handler receives raw Fastify
-   * request/reply. Default: false.
+   * Fastify-native handler — receives `(request, reply)` and owns the response.
+   * Bypasses arc's pipeline entirely: no `IControllerResponse` shaping, no
+   * field-write sanitization.
+   *
+   * Mutually exclusive with {@link handler}. The FIELD carries the intent, so
+   * there is no flag to forget: the previous `raw: boolean` let a Fastify-shaped
+   * function sit in `handler` without it (silently run through the pipeline) or
+   * a pipeline handler sit there with it (silently unwrapped), and neither
+   * mismatch was a type error.
+   *
+   * Splitting the two also restores inference. One field carrying both shapes
+   * meant a union of several function types, which has no single contextual
+   * signature — so an inline `handler: async (req) => …` reported TS7006 and
+   * every author annotated `req` by hand. Fastify types its own
+   * `RouteOptions.handler` as ONE function type for exactly this reason; see
+   * {@link RawRouteHandler} for why arc declares its own rather than reusing
+   * `RouteHandlerMethod` directly.
+   *
+   * Accepts a controller-method NAME as well, same as {@link handler} — the
+   * lookup is identical and only the calling convention differs, so a
+   * Fastify-native controller method stays reachable by name.
    */
-  readonly raw?: boolean;
+  readonly rawHandler?: string | RawRouteHandler;
   /** Logical operation name (pipeline keys, MCP tool naming). */
   readonly operation?: string;
   /** OpenAPI summary */
@@ -136,7 +148,8 @@ export interface RouteDefinition {
    */
   readonly tenantScope?: boolean;
   /**
-   * SSE streaming mode. Two handler shapes work:
+   * SSE streaming mode. Requires {@link rawHandler} — the handler is invoked
+   * with `(request, reply)` and owns the response. Two shapes work:
    *
    * - Write to `reply.raw` directly (NDJSON, custom SSE — historical contract).
    * - Return a Web `ReadableStream` (Vercel AI SDK's `result.toUIMessageStream()`,
@@ -167,7 +180,7 @@ export interface RouteDefinition {
    * `onFieldWriteDenied: 'reject' | 'strip'` setting governs how denials
    * are surfaced.
    *
-   * `raw: true` routes ALWAYS bypass this — they've opted out of the
+   * `rawHandler` routes ALWAYS bypass this — they've opted out of the
    * pipeline entirely.
    */
   readonly fieldWrite?: boolean;
@@ -190,6 +203,22 @@ export interface RouteDefinition {
    * it to a dedicated `routes:` entry, or rely on the resource-level limit.
    */
   readonly rateLimit?: RateLimitConfig | false;
+  /**
+   * Per-route CORS override, forwarded to `@fastify/cors` as
+   * `routeOptions.config.cors`. `undefined` inherits the app policy; `false`
+   * disables CORS for this route; an object replaces the app policy for it.
+   *
+   * Needed because one app-wide policy cannot serve both an API and a public
+   * asset: an API wants `credentials: true` with a pinned origin list, a public
+   * asset wants `origin: "*"`, and `*` + credentials is forbidden by the spec
+   * (arc throws at boot on that pair).
+   *
+   * ```ts
+   * { method: "GET", path: "/manifest.json", permissions: allowPublic(),
+   *   cors: { origin: "*", credentials: false }, handler }
+   * ```
+   */
+  readonly cors?: RouteCorsConfig;
   /**
    * Fastify route schema. Each slot (`body`, `querystring`, `params`,
    * `headers`, `response[status]`) accepts a plain JSON Schema object
