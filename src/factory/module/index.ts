@@ -11,6 +11,12 @@ export {
   collectModuleScheduledJobs,
   collectModuleWorkflows,
 } from "./contributions.js";
+export type {
+  ResolvedModuleDescriptor,
+  ResolvedModuleLifecycle,
+  ResolvedResourceDescriptor,
+} from "./descriptor.js";
+export { describeResolvedModule } from "./descriptor.js";
 export { subscribeModuleEventHandlers, unsubscribeModuleEventHandlers } from "./lifecycle.js";
 export { orderModules } from "./order.js";
 export { resolveContribution, resolveModule } from "./resolve.js";

@@ -97,6 +97,18 @@ export interface ArcCore {
    */
   moduleDefinitions?: readonly import("../factory/module/index.js").ArcModule[];
   /**
+   * RESOLVED module descriptors — what each module actually composed to
+   * (resources mounted, effective `owns`, lifecycle counts), published once
+   * boot has settled them.
+   *
+   * Read this rather than `moduleDefinitions` for anything that needs the real
+   * graph: a definition's `resources` may still be an unresolved factory and
+   * its `owns` may be `"provided"`, so the authoring shape cannot answer "what
+   * did this module actually mount?". Frozen, plain data — safe to clone, log,
+   * or hand to tooling.
+   */
+  moduleDescriptors?: readonly import("../factory/module/index.js").ResolvedModuleDescriptor[];
+  /**
    * Module-contributed recurring schedules, resolved once in dependency order
    * and frozen after bootstraps. The same definitions are executed by Arc's
    * schedules plugin and exposed here for introspection. Empty until collection.

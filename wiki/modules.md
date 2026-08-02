@@ -111,6 +111,27 @@ defineModule({
 Module resources flow through arc's normal registration (prefix, dedup,
 OpenAPI, audit) — never special-cased.
 
+### `owns: "provided"` — derived ownership (2.32)
+
+The default for any module whose supersession list IS its own resource set:
+
+```ts
+defineModule({ name: "order", owns: "provided", resources: () => [...] })
+```
+
+Arc makes resource resolution, name validation, ownership derivation and
+supersession **one atomic phase**: resources resolve exactly once, duplicate
+names within a module are rejected unconditionally, the effective `owns` is
+derived from what actually mounted, and only then are host forks dropped. The
+drift class below stops being *representable* rather than merely detected.
+
+Read the result from `arc.moduleDescriptors` — see [[factory]]. Do NOT re-derive
+it from `ArcModule`: an authoring definition's `resources` may still be an
+unresolved factory and its `owns` may be the literal `"provided"`.
+
+Keep the explicit array only when the list genuinely is not the module's own
+resource set (pre-declaring a name before any fork exists).
+
 ### `owns` — superseding an app resource, verified
 
 `owns: ["order"]` declares that this module authoritatively provides the

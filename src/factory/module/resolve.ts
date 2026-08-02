@@ -67,10 +67,22 @@ export async function resolveModuleArm<T>(
   contribution: ModuleContribution<T> | undefined,
   fastify: FastifyInstance,
 ): Promise<readonly T[]> {
+  let resolved: readonly T[];
   try {
-    return await resolveContribution(contribution, fastify);
+    resolved = await resolveContribution(contribution, fastify);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`[arc] module "${module.name}" ${arm} factory threw: ${msg}`, { cause: err });
   }
+  // Same reasoning as the resources factory: a non-array here becomes an
+  // unattributed spread/iteration error in the collector, naming neither the
+  // module nor the arm. Kept OUT of the try above so the message says "returned"
+  // rather than "threw" — the distinction tells the author where to look.
+  if (!Array.isArray(resolved)) {
+    throw new TypeError(
+      `[arc] module "${module.name}" ${arm} factory must return an array — received ` +
+        `${resolved === null ? "null" : typeof resolved}.`,
+    );
+  }
+  return resolved;
 }

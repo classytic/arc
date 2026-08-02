@@ -235,18 +235,37 @@ export interface ArcModule<TExports = unknown> {
    *     any fork exists.
    *   - Collected across ALL modules; the app-side supersession is their union.
    *
-   * **Contract (ENFORCED at boot): if you `owns` a name, PROVIDE it** — in
-   * THIS module's own `resources`. Arc resolves module resources first and
-   * fails boot when a claimed name is not among them, naming the module, the
-   * unmet names, and what it did supply. Without that check, a typo or a
-   * resource deleted without updating `owns` booted "successfully" with the
-   * app's route silently removed and nothing serving it.
+   * **Prefer `owns: "provided"`** (2.32) — arc derives the list from the
+   * resources this module actually returned, so the claim and the reality
+   * cannot disagree:
+   *
+   * ```ts
+   * defineModule({ name: "order", owns: "provided", resources: () => [...] })
+   * ```
+   *
+   * That is the whole arm for most modules. Resources are resolved exactly
+   * once, names are validated (duplicates within a module are rejected), the
+   * effective `owns` is derived, and supersession runs afterward — one atomic
+   * phase arc owns, rather than a rule each module re-states.
+   *
+   * **The explicit-array form is ENFORCED at boot: if you `owns` a name,
+   * PROVIDE it** — in THIS module's own `resources`. Arc fails boot when a
+   * claimed name is not among them, naming the module, the unmet names, and
+   * what it did supply. Without that check, a typo or a resource deleted
+   * without updating the list booted "successfully" with the app's route
+   * silently removed and nothing serving it. Two real cases, both silent 404s:
+   * a POS module claiming a checkout resource it mounted only when the host
+   * supplied a pipeline, and a device gateway claiming a name it never
+   * provided at all.
+   *
+   * Keep the explicit array only when the list is genuinely NOT the module's
+   * own resource set — e.g. pre-declaring a name before the fork exists.
    *
    * A sibling module supplying the name does NOT satisfy the claim — ownership
    * is local to the module that declares it, which is the colocation this arm
    * exists for.
    */
-  readonly owns?: readonly string[];
+  readonly owns?: readonly string[] | "provided";
 
   /**
    * The module's resources. Array or factory — the factory form runs AFTER all

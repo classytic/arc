@@ -56,11 +56,21 @@ export async function collectModuleWorkflows(
 export async function collectModuleScheduledJobs(
   fastify: FastifyInstance,
   modules: readonly ArcModule[],
+  /**
+   * Optional sink for per-module counts, filled as each arm resolves.
+   *
+   * Exists so `arc.moduleDescriptors` can report real numbers without
+   * resolving the factories a SECOND time — a contribution factory closes over
+   * booted engines and may register or allocate, so running it twice is not a
+   * free read. One resolution feeds both activation and introspection.
+   */
+  countsByModule?: Map<string, number>,
 ): Promise<ScheduleDefinition[]> {
   const owner = new Map<string, string>();
   const out: ScheduleDefinition[] = [];
   for (const m of modules) {
     const jobs = await resolveModuleArm(m, "scheduledJobs", m.scheduledJobs, fastify);
+    countsByModule?.set(m.name, jobs.length);
     for (const job of jobs) {
       const prior = owner.get(job.name);
       if (prior !== undefined) {

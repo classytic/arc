@@ -27,12 +27,19 @@ interface EventBusLike {
 export async function subscribeModuleEventHandlers(
   fastify: FastifyInstance,
   modules: readonly ArcModule[],
+  /**
+   * Optional sink for per-module handler counts, filled as each arm resolves.
+   * Lets `arc.moduleDescriptors` report real numbers without resolving the
+   * factories a SECOND time — see the note on `collectModuleScheduledJobs`.
+   */
+  countsByModule?: Map<string, number>,
 ): Promise<Array<() => void | Promise<void>>> {
   const unsubscribes: Array<() => void | Promise<void>> = [];
   const owner = new Map<string, string>();
   try {
     for (const m of modules) {
       const handlers = await resolveModuleArm(m, "eventHandlers", m.eventHandlers, fastify);
+      countsByModule?.set(m.name, handlers.length);
       if (handlers.length === 0) continue;
       const bus = (fastify as unknown as { events?: EventBusLike }).events;
       if (!bus) {

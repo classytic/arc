@@ -69,13 +69,23 @@ export type {
   RelayResult,
 } from "./outbox.js";
 export { EventOutbox, exponentialBackoff, MemoryOutboxStore } from "./outbox.js";
+export type { OutboxModuleExports, OutboxModuleOptions } from "./outbox-module.js";
+/**
+ * The outbox as a MODULE — the store becomes a `dependsOn` slot instead of a value the host
+ * threads into every consumer by hand. Two hosts independently missed one consumer that way and
+ * silently lost the revenue trigger; see the module docblock.
+ */
+export { createOutboxModule } from "./outbox-module.js";
 /**
  * Repository → OutboxStore adapter. Exposed so consumers can build and
  * decorate the repo-backed store before passing it to {@link EventOutbox}
  * (metrics, tracing, multi-transport fan-out). Passing `{ repository }` to
  * the constructor remains the one-liner path for the common case.
  */
-export type { RepositoryOutboxStoreOptions } from "./repository-outbox-adapter.js";
+export type {
+  RepositoryOutboxStore,
+  RepositoryOutboxStoreOptions,
+} from "./repository-outbox-adapter.js";
 export { repositoryAsOutboxStore } from "./repository-outbox-adapter.js";
 export type { RetryOptions } from "./retry.js";
 // Retry & Dead Letter Queue (transport-agnostic)
@@ -92,7 +102,6 @@ export {
   wrapWithBoundary,
   wrapWithSchema,
 } from "./subscribe-helpers.js";
-
 // Redis transports — use dedicated subpaths to avoid pulling ioredis:
 //   import { RedisEventTransport } from '@classytic/arc/events/redis';
 //   import { RedisStreamTransport } from '@classytic/arc/events/redis-stream';

@@ -153,6 +153,7 @@
       "QueryParserInterface",
       "RESERVED_QUERY_PARAMS",
       "RateLimitConfig",
+      "RawRouteHandler",
       "RegistryEntry",
       "RegistryStats",
       "RequestContext",
@@ -219,7 +220,7 @@
       "version",
       "when"
     ],
-    "typesHash": "90058b408b2cfd37"
+    "typesHash": "fde35532f5c6122e"
   },
   "./permissions": {
     "stability": "stable",
@@ -402,7 +403,7 @@
     "stability": "stable",
     "runtime": [],
     "types": [],
-    "typesHash": "b9f534d09360f283"
+    "typesHash": "b4ef1bba232fae49"
   },
   "./types/storage": {
     "stability": "stable",
@@ -547,7 +548,7 @@
       "sendControllerResponse",
       "validateResourceConfig"
     ],
-    "typesHash": "d8baacbb50bb23d9"
+    "typesHash": "305808a4d9902f88"
   },
   "./presets": {
     "stability": "stable",
@@ -604,7 +605,7 @@
       "softDeletePreset",
       "treePreset"
     ],
-    "typesHash": "c89ca62222fd2c98"
+    "typesHash": "63c541596209ad22"
   },
   "./presets/tenant": {
     "stability": "stable",
@@ -616,7 +617,7 @@
       "TenantFieldSpec",
       "multiTenantPreset"
     ],
-    "typesHash": "8ce6bd780f577575"
+    "typesHash": "7ede822da1d5f6d1"
   },
   "./presets/files-upload": {
     "stability": "stable",
@@ -636,7 +637,7 @@
       "StorageUploadInput",
       "filesUploadPreset"
     ],
-    "typesHash": "7bf38c1a30f776be"
+    "typesHash": "8d942d514909e1cf"
   },
   "./presets/search": {
     "stability": "stable",
@@ -651,7 +652,7 @@
       "SearchableRepository",
       "searchPreset"
     ],
-    "typesHash": "71069a23d91a817b"
+    "typesHash": "c2778ccc6ed3cbb6"
   },
   "./auth": {
     "stability": "stable",
@@ -686,7 +687,7 @@
       "extractBetterAuthOpenApi",
       "mirrorTrustedOriginsFromCors"
     ],
-    "typesHash": "6141a5fb86fccb84"
+    "typesHash": "267577e936f155af"
   },
   "./hooks": {
     "stability": "stable",
@@ -719,7 +720,7 @@
       "createHookSystem",
       "defineHook"
     ],
-    "typesHash": "61caa078a2fc1ff3"
+    "typesHash": "5f8c5f2553d87513"
   },
   "./middleware": {
     "stability": "stable",
@@ -736,7 +737,7 @@
       "multipartBody",
       "sortMiddlewares"
     ],
-    "typesHash": "6c5d74fdb781265b"
+    "typesHash": "b9a5b3ab96f5a85b"
   },
   "./pipeline": {
     "stability": "stable",
@@ -762,7 +763,7 @@
       "pipe",
       "transform"
     ],
-    "typesHash": "e938c7859d7c25dc"
+    "typesHash": "9ac498e839c1afc3"
   },
   "./context": {
     "stability": "stable",
@@ -837,7 +838,7 @@
       "introspectionPlugin",
       "introspectionPluginFn"
     ],
-    "typesHash": "49d79545f0854ec9"
+    "typesHash": "a1b7b56c1e8256b8"
   },
   "./utils": {
     "stability": "stable",
@@ -989,7 +990,7 @@
       "toJsonSchema",
       "withCompensation"
     ],
-    "typesHash": "83f035bbaf7cd726"
+    "typesHash": "70853a7cfc7e26f8"
   },
   "./cli": {
     "stability": "stable",
@@ -1096,7 +1097,7 @@
       "versioningPlugin",
       "versioningPluginFn"
     ],
-    "typesHash": "03799bb5f495c79b"
+    "typesHash": "5af6063dd0419148"
   },
   "./plugins/tracing": {
     "stability": "stable",
@@ -1140,7 +1141,7 @@
       "createAuditEntry",
       "repositoryAsAuditStore"
     ],
-    "typesHash": "0740a20325b6ce1f"
+    "typesHash": "a6f9350ecc4bc4da"
   },
   "./docs": {
     "stability": "stable",
@@ -1163,7 +1164,7 @@
       "scalarPlugin",
       "scalarPluginFn"
     ],
-    "typesHash": "ac64022b1121481f"
+    "typesHash": "ebddfeba9606e985"
   },
   "./encryption": {
     "stability": "stable",
@@ -1248,6 +1249,7 @@
       "MemoryOutboxStore",
       "createDeadLetterPublisher",
       "createEventRegistry",
+      "createOutboxModule",
       "crudEventType",
       "defineEvent",
       "eventPlugin",
@@ -1279,6 +1281,8 @@
       "MemoryEventTransport",
       "MemoryEventTransportOptions",
       "MemoryOutboxStore",
+      "OutboxModuleExports",
+      "OutboxModuleOptions",
       "OutboxRelayErrorHandler",
       "OutboxRelayErrorKind",
       "PayloadOf",
@@ -1287,6 +1291,7 @@
       "RedisStreamLike",
       "RedisStreamTransportOptions",
       "RelayResult",
+      "RepositoryOutboxStore",
       "RepositoryOutboxStoreOptions",
       "RetryOptions",
       "ValidationResult",
@@ -1294,6 +1299,7 @@
       "WrapWithSchemaOptions",
       "createDeadLetterPublisher",
       "createEventRegistry",
+      "createOutboxModule",
       "crudEventType",
       "defineEvent",
       "eventPlugin",
@@ -1305,7 +1311,7 @@
       "wrapWithBoundary",
       "wrapWithSchema"
     ],
-    "typesHash": "8ee674e8cba2985c"
+    "typesHash": "7f0593ca0b64aa32"
   },
   "./events/redis": {
     "stability": "stable",
@@ -1437,7 +1443,7 @@
       "testActorHeaders",
       "waitFor"
     ],
-    "typesHash": "f98ba25ff6889f81"
+    "typesHash": "c38861b026a965e4"
   },
   "./testing/storage": {
     "stability": "stable",
@@ -1545,7 +1551,7 @@
       "testingPreset",
       "toFetchHandler"
     ],
-    "typesHash": "fb4208df7d9b10ff"
+    "typesHash": "e833d52635d9d861"
   },
   "./schemas": {
     "stability": "stable",
@@ -1626,7 +1632,7 @@
     "stability": "stable",
     "runtime": [],
     "types": [],
-    "typesHash": "5810f1fa75289d86"
+    "typesHash": "9c094d517ce4bff6"
   },
   "./integrations/streamline": {
     "stability": "stable",
@@ -1980,7 +1986,7 @@
       "toCallToolResult",
       "toCallToolSuccess"
     ],
-    "typesHash": "b358fe309e078c03"
+    "typesHash": "f1f778547aee3c03"
   },
   "./mcp/testing": {
     "stability": "stable",
@@ -1992,7 +1998,7 @@
       "TestMcpClientOptions",
       "createTestMcpClient"
     ],
-    "typesHash": "f1ada1c68129e49a"
+    "typesHash": "e8c6e5499e8d7ca1"
   },
   "./scim": {
     "stability": "stable",
@@ -2179,7 +2185,7 @@
       "createDataCleanupModule",
       "recipeFromSteps"
     ],
-    "typesHash": "b975443ecb019696"
+    "typesHash": "258626688c6f2cbc"
   },
   "./testing/outbox": {
     "stability": "stable",
@@ -2191,6 +2197,6 @@
       "OutboxStoreContractSetupResult",
       "runOutboxStoreContract"
     ],
-    "typesHash": "ce3c61662428edd9"
+    "typesHash": "52549432739f5ca6"
   }
 }

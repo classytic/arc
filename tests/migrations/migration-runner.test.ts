@@ -464,14 +464,23 @@ describe("MigrationRunner — distributed safety", () => {
         {},
         { store, lock, logger: silentLogger, lockLeaseMs: 40 }, // renew every 20ms
       );
+      const acquireCount = () => lock.calls.filter((c) => c === "acquire:arc:migrations").length;
+
+      // Hold the migration open UNTIL the renewals have actually landed, rather than
+      // sleeping 90ms and assuming the 20ms timer fired ~4 times. Under a loaded pool the
+      // timer callbacks are delayed, not the wall clock, so the fixed sleep could return
+      // with only the initial acquire — a starved test, not a broken renewal.
       const slow = migration("product", 1, {
         up: async () => {
-          await new Promise((r) => setTimeout(r, 90)); // outruns the 40ms lease
+          const deadline = Date.now() + 5_000;
+          while (acquireCount() < 3 && Date.now() < deadline) {
+            await new Promise((r) => setTimeout(r, 5));
+          }
         },
       });
       await runner.up([slow]);
 
-      const acquires = lock.calls.filter((c) => c === "acquire:arc:migrations").length;
+      const acquires = acquireCount();
       expect(acquires).toBeGreaterThanOrEqual(3); // initial + ≥2 renewals
       expect(lock.calls.at(-1)).toBe("release:arc:migrations");
       expect(lock.held.size).toBe(0);

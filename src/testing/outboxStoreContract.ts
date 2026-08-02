@@ -20,7 +20,13 @@
  *
  * runOutboxStoreContract('MongoOutboxStore', async () => {
  *   const store = new MongoOutboxStore(model);
- *   return { store, teardown: async () => model.deleteMany({}) };
+ *   return {
+ *     store,
+ *     // REQUIRED — run before every test; the suite's absolute assertions
+ *     // ("exactly zero pending") are meaningless without it.
+ *     reset: async () => { await model.deleteMany({}); },
+ *     teardown: async () => { await model.deleteMany({}); },
+ *   };
  * });
  * ```
  *
@@ -28,14 +34,20 @@
  * feature-detected: a store that does not implement one has those tests
  * skipped rather than failed, matching how arc's relay feature-detects them.
  *
- * This module statically imports `vitest`. Only load it from test code — arc's
- * production bundle never references this subpath, so the import tree stays
- * clean under tree-shaking.
+ * This module statically imports `vitest`, which arc declares as an OPTIONAL peer —
+ * install it to use this subpath. Only load it from test code: arc's production bundle
+ * never references this subpath, so the import tree stays clean under tree-shaking.
+ *
+ * That import is a deliberate coupling, shared with arc's other conformance suites
+ * (`testing/cleanup`, `testing/storage`). A framework-independent case specification
+ * plus a thin Vitest adapter would free Jest / `node:test` consumers, but it is worth
+ * doing across all three at once or not at all — one suite diverging is worse than the
+ * coupling.
  */
 
 import type { DomainEvent } from "@classytic/primitives/events";
 import { OutboxOwnershipError, type OutboxStore } from "@classytic/primitives/outbox";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 // ============================================================================
 // Types
@@ -45,8 +57,17 @@ export interface OutboxStoreContractSetupResult {
   store: OutboxStore;
   /** Called once after the suite. */
   teardown?: () => Promise<void>;
-  /** Empty the store between tests. Strongly recommended for isolation. */
-  reset?: () => Promise<void>;
+  /**
+   * Empty the store. REQUIRED, and run before every test.
+   *
+   * Not a recommendation: several assertions are absolute rather than relative —
+   * "exactly zero pending", "exactly two", "`oldestPendingAgeMs()` is null on an
+   * empty queue". Without a reset those read whatever the previous test left, so the
+   * suite passes on ORDER rather than on behaviour, and inserting one unrelated case
+   * turns a conforming store red. A store that cannot empty itself cannot be
+   * conformance-tested.
+   */
+  reset: () => Promise<void>;
 }
 
 export type OutboxStoreContractSetup = () => Promise<OutboxStoreContractSetupResult>;
@@ -76,7 +97,7 @@ export function runOutboxStoreContract(name: string, setup: OutboxStoreContractS
   describe(`OutboxStore contract: ${name}`, () => {
     let store: OutboxStore;
     let teardown: (() => Promise<void>) | undefined;
-    let reset: (() => Promise<void>) | undefined;
+    let reset: () => Promise<void>;
 
     beforeAll(async () => {
       const result = await setup();
@@ -89,9 +110,17 @@ export function runOutboxStoreContract(name: string, setup: OutboxStoreContractS
       if (teardown) await teardown();
     });
 
+    /**
+     * Isolation for EVERY test, not just the ones that call `seed()`. Resetting inside
+     * `seed()` left any test that asserts on an empty store — or that only reads —
+     * running against its predecessor's rows.
+     */
+    beforeEach(async () => {
+      await reset();
+    });
+
     /** Save n events, oldest first. */
     async function seed(n: number, type?: string): Promise<DomainEvent[]> {
-      if (reset) await reset();
       const events: DomainEvent[] = [];
       for (let i = 0; i < n; i++) {
         const e = event(type);
@@ -110,7 +139,6 @@ export function runOutboxStoreContract(name: string, setup: OutboxStoreContractS
       });
 
       it("THROWS rather than persisting an event with no `type`", async () => {
-        if (reset) await reset();
         const bad = { payload: {}, meta: { id: "no-type" } } as unknown as DomainEvent;
         await expect(store.save(bad)).rejects.toThrow();
         // And it must not have landed — a persisted malformed row would be
@@ -119,7 +147,6 @@ export function runOutboxStoreContract(name: string, setup: OutboxStoreContractS
       });
 
       it("THROWS rather than persisting an event with no `meta.id`", async () => {
-        if (reset) await reset();
         const bad = { type: "x", payload: {}, meta: {} } as unknown as DomainEvent;
         await expect(store.save(bad)).rejects.toThrow();
         expect((await store.getPending(10)).length).toBe(0);
@@ -213,7 +240,6 @@ export function runOutboxStoreContract(name: string, setup: OutboxStoreContractS
       });
 
       it("is a NO-OP for an unknown id — never an ownership error (invariant 4)", async () => {
-        if (reset) await reset();
         await expect(store.acknowledge("does-not-exist")).resolves.not.toThrow();
       });
 
@@ -335,6 +361,103 @@ export function runOutboxStoreContract(name: string, setup: OutboxStoreContractS
         await store.purge(0); // even with a zero cutoff, pending is off-limits
 
         expect((await store.getPending(10)).length).toBe(2);
+      });
+    });
+
+    // ── Operator surface ────────────────────────────────────────────────────
+    /**
+     * `requeue`, `countByStatus` and `oldestPendingAgeMs` were a HOST's three extra
+     * methods before they were contract members — which is why they are pinned here.
+     * A dead-letter row an operator cannot re-drive, or a health number that lies, fails
+     * silently: the operator concludes the queue is fine, and the whole point of the
+     * table is that somebody eventually looks.
+     */
+    describe("requeue", () => {
+      it("returns a dead-lettered event to pending and clears the attempt count", async ({
+        skip,
+      }) => {
+        if (!store.fail || !store.requeue) return skip();
+        const [e] = await seed(1);
+        const id = idOf(e as DomainEvent);
+        await store.fail(id, { message: "fatal" }, { deadLetter: true });
+        expect((await store.getPending(10)).length).toBe(0);
+
+        expect(await store.requeue(id)).toBe(true);
+
+        const pending = await store.getPending(10);
+        expect(pending.length).toBe(1);
+        // Re-driving with the old count would dead-letter again on the next blip, which
+        // reads as "the operator's fix did not work" when in fact it was never retried.
+        if (store.countByStatus) expect(await store.countByStatus("dead_letter")).toBe(0);
+      });
+
+      it("REFUSES a pending event — requeue is dead-letter-scoped", async ({ skip }) => {
+        if (!store.requeue) return skip();
+        const [e] = await seed(1);
+
+        // A row that is merely backing off must not have its attempts zeroed; the id
+        // alone cannot tell the two states apart, so the store must check status.
+        expect(await store.requeue(idOf(e as DomainEvent))).toBe(false);
+      });
+
+      it("is FALSE, not an error, for an unknown id", async ({ skip }) => {
+        if (!store.requeue) return skip();
+        // An operator working a worklist races the relay; an id already dealt with is an
+        // ordinary outcome, not an exception to handle.
+        expect(await store.requeue("no-such-event")).toBe(false);
+      });
+    });
+
+    describe("countByStatus", () => {
+      it("counts pending, and moves the count as events are delivered", async ({ skip }) => {
+        if (!store.countByStatus) return skip();
+        await seed(3);
+        expect(await store.countByStatus("pending")).toBe(3);
+
+        if (!store.claimPending) return skip();
+        const [claimed] = await store.claimPending({ consumerId: "c", limit: 1, leaseMs: 60_000 });
+        if (!claimed) return skip();
+        await store.acknowledge(idOf(claimed as DomainEvent), { consumerId: "c" });
+
+        expect(await store.countByStatus("pending")).toBe(2);
+        expect(await store.countByStatus("delivered")).toBe(1);
+      });
+
+      it("counts dead-lettered rows — the number an alert fires on", async ({ skip }) => {
+        if (!store.countByStatus || !store.fail) return skip();
+        expect(await store.countByStatus("dead_letter")).toBe(0);
+        const [e] = await seed(1);
+        await store.fail(idOf(e as DomainEvent), { message: "fatal" }, { deadLetter: true });
+
+        expect(await store.countByStatus("dead_letter")).toBe(1);
+      });
+    });
+
+    describe("oldestPendingAgeMs", () => {
+      it("is null on an empty queue, and a non-negative age once something pends", async ({
+        skip,
+      }) => {
+        if (!store.oldestPendingAgeMs) return skip();
+        expect(await store.oldestPendingAgeMs()).toBeNull();
+
+        await seed(1);
+        const age = await store.oldestPendingAgeMs();
+        expect(age).not.toBeNull();
+        expect(age ?? -1).toBeGreaterThanOrEqual(0);
+      });
+
+      it("ignores DELIVERED rows — it answers 'how long undelivered', not 'how old'", async ({
+        skip,
+      }) => {
+        if (!store.oldestPendingAgeMs) return skip();
+        if (!store.claimPending) return skip();
+        await seed(1);
+        const [claimed] = await store.claimPending({ consumerId: "c", limit: 1, leaseMs: 60_000 });
+        if (!claimed) return skip();
+        await store.acknowledge(idOf(claimed as DomainEvent), { consumerId: "c" });
+
+        // A delivered row still in the retention window must not keep the alert lit.
+        expect(await store.oldestPendingAgeMs()).toBeNull();
       });
     });
   });

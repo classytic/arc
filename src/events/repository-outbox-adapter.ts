@@ -64,6 +64,7 @@ import {
   type OutboxErrorInfo,
   type OutboxFailOptions,
   OutboxOwnershipError,
+  type OutboxStatus,
   type OutboxStore,
   type OutboxWriteOptions,
 } from "@classytic/primitives/outbox";
@@ -123,10 +124,28 @@ export interface RepositoryOutboxStoreOptions {
   readonly visibleAtField?: string;
 }
 
+/**
+ * What this adapter GUARANTEES, as opposed to what `OutboxStore` permits.
+ *
+ * Most of the contract is optional so a minimal or non-relational store can implement
+ * the floor and no more. This adapter implements all of it, and saying so in the type
+ * is not cosmetic: with a plain `OutboxStore` return every caller of `getDeadLettered`,
+ * `requeue` or `countByStatus` has to write `store.requeue?.(id)`, and the `?.` silently
+ * evaluates to `undefined` if the method ever disappears — an operator's replay that
+ * quietly does nothing and reports success.
+ */
+export type RepositoryOutboxStore = OutboxStore &
+  Required<
+    Pick<
+      OutboxStore,
+      "fail" | "getDeadLettered" | "purge" | "requeue" | "countByStatus" | "oldestPendingAgeMs"
+    >
+  >;
+
 export function repositoryAsOutboxStore(
   repository: RepositoryLike,
   options?: RepositoryOutboxStoreOptions,
-): OutboxStore {
+): RepositoryOutboxStore {
   const visibleAtField = options?.visibleAtField ?? DEFAULT_VISIBLE_AT_FIELD;
   const missing: string[] = [];
   if (typeof repository.create !== "function") missing.push("create");
@@ -440,6 +459,112 @@ export function repositoryAsOutboxStore(
         if (batch.length < DEFAULT_PURGE_BATCH) break;
       }
       return totalDeleted;
+    },
+
+    /**
+     * Re-drive one dead-lettered event — the other half of `fail({ deadLetter: true })`.
+     *
+     * Filtered on `status: 'dead_letter'` as well as the id, so this is a no-op on a row
+     * that is merely retrying. Requeuing a backing-off row would zero its attempt count
+     * and defeat the failure policy, and the id alone cannot distinguish the two.
+     *
+     * `attempts` resets because the operator's whole claim is that the CAUSE is fixed:
+     * carrying the old count forward would dead-letter the retry again after one more
+     * blip, which reads as "the fix did not work".
+     */
+    async requeue(eventId: string): Promise<boolean> {
+      const updated = await r.findOneAndUpdate(
+        and(eqFilter(idField, eventId), eqFilter("status", "dead_letter")),
+        update({
+          set: {
+            status: "pending",
+            attempts: 0,
+            leaseOwner: null,
+            leaseExpiresAt: null,
+            [visibleAtField]: new Date(),
+            lastError: null,
+          },
+        }),
+        { returnDocument: "after" },
+      );
+      return updated != null;
+    },
+
+    /** Rows in `status` — the count behind an operator dashboard or a dead-letter alert. */
+    async countByStatus(status: OutboxStatus): Promise<number> {
+      const filters = eqFilter("status", status);
+
+      // `count` is a StandardRepo OPTIONAL — every kit that has it answers this in one
+      // cheap query. Feature-detected rather than required, because making it mandatory
+      // would exclude kits from the outbox for the sake of a dashboard number.
+      const counter = (repository as { count?: (f: unknown) => Promise<number> }).count;
+      if (typeof counter === "function") return counter.call(repository, filters);
+
+      /**
+       * Fallback for a kit without `count`. Two shapes, and the difference decides the
+       * query — getting it wrong here produces a number that LIES, which is worse than
+       * no number at all: the operator reads a healthy dashboard and stops looking.
+       *
+       * A paginated kit reports the match count in its envelope, so one row is enough
+       * to read it — deliberately not a hydrate-and-length, since a `delivered` count
+       * would drag the whole retention window into memory for one integer.
+       *
+       * A kit that returns a BARE ARRAY has no envelope to read, so the rows ARE the
+       * count and every match has to come back. `unwrapDocs` documents that shape as
+       * real, so it is not hypothetical. `select: idField` keeps it to one column.
+       */
+      const probe = (await r.getAll({
+        filters,
+        page: 1,
+        limit: 1,
+        select: idField,
+      })) as { total?: number; meta?: { total?: number } } | unknown[] | null | undefined;
+
+      if (Array.isArray(probe)) {
+        // Bare array: re-read unbounded. Asking with `limit: 1` and returning
+        // `.length` would cap every answer at 1 — a 400-row backlog reporting as 1,
+        // and a dead-letter alert that can never fire.
+        const all = await r.getAll({ filters, select: idField });
+        return unwrapDocs(all).length;
+      }
+
+      const total = probe?.total ?? probe?.meta?.total;
+      if (typeof total === "number") return total;
+
+      /**
+       * An envelope in a shape neither branch recognises. Throwing beats returning 0:
+       * a zero is indistinguishable from a healthy queue, so it would silence exactly
+       * the alert this method exists to raise.
+       */
+      throw new Error(
+        "repositoryAsOutboxStore.countByStatus: the repository's `getAll` returned an " +
+          "envelope with no `total` (and is not a bare array), so the count cannot be " +
+          "read. Implement `count(filter)` on the repository — every kit that has it " +
+          "answers this in one query.",
+      );
+    },
+
+    /**
+     * Age of the oldest PENDING row, or `null` when the queue is empty.
+     *
+     * The signal a pending count cannot give: a count of 40 looks the same whether the
+     * relay is draining briskly or has been wedged for an hour behind one poison row.
+     *
+     * Measured from `createdAt`, not the last attempt — the question is how long the
+     * event has gone undelivered, and restarting the clock on every retry would make a
+     * permanently-failing row look permanently fresh, which is the exact row an alert
+     * exists to surface.
+     */
+    async oldestPendingAgeMs(): Promise<number | null> {
+      const result = await r.getAll({
+        filters: eqFilter("status", "pending"),
+        sort: { createdAt: 1 },
+        page: 1,
+        limit: 1,
+      });
+      const [oldest] = unwrapDocs<OutboxDoc>(result);
+      if (oldest?.createdAt == null) return null;
+      return Date.now() - new Date(oldest.createdAt).getTime();
     },
   };
 }

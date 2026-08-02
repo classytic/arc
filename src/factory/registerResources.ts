@@ -10,6 +10,7 @@ import {
   type ArcModule,
   collectModuleScheduledJobs,
   createModuleTeardown,
+  describeResolvedModule,
   initModuleStates,
   orderModules,
   resolveModule,
@@ -259,6 +260,12 @@ export async function registerResources(
     if (isResourcesFactory(config.resources)) {
       try {
         resolvedResources = await config.resources(fastify);
+        if (!Array.isArray(resolvedResources)) {
+          throw new TypeError(
+            "resources factory must return an array — received " +
+              `${resolvedResources === null ? "null" : typeof resolvedResources}`,
+          );
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         fastify.log.error(`Resources factory threw during boot: ${msg}`);
@@ -346,6 +353,7 @@ export async function registerResources(
     // claims. Ordering the other way round is what let a bad claim delete a
     // route with nothing to replace it.
     const moduleResourceNames = new Map<string, Set<string>>();
+    const perModuleResources = new Map<string, readonly ResourceLike[]>();
     const moduleResources: ResourceLike[] = [];
     for (const m of modules) {
       if (!m.resources) continue;
@@ -360,9 +368,36 @@ export async function registerResources(
           { cause: err },
         );
       }
+      // A JS consumer, a mistyped `as never`, or a factory that forgot to
+      // return can hand back `null` / an object / a Promise of the wrong
+      // shape. Without this the failure surfaces as an unattributed
+      // "is not iterable" three frames away, naming neither the module nor the
+      // arm. Validate at the boundary where the culprit is still known.
+      if (!Array.isArray(rs)) {
+        throw new TypeError(
+          `[arc] module "${m.name}" resources factory must return an array — received ` +
+            `${rs === null ? "null" : typeof rs}.`,
+        );
+      }
+      // Duplicate names WITHIN one module are always an authoring bug — arc
+      // registers one route group per name, so the second silently loses. The
+      // app-wide duplicate check below is opt-in (`strictResources`) because a
+      // host can legitimately have forks mid-migration; a module contradicting
+      // ITSELF has no such excuse, so this one is unconditional.
       const names = new Set<string>();
-      for (const r of rs) if (r.name != null) names.add(r.name);
+      for (const r of rs) {
+        if (r.name == null) continue;
+        if (names.has(r.name)) {
+          throw new Error(
+            `[arc] module "${m.name}" provides two resources named "${r.name}". ` +
+              "Resource names must be unique within a module — arc registers one route group " +
+              "per name, so the second would be dropped.",
+          );
+        }
+        names.add(r.name);
+      }
       moduleResourceNames.set(m.name, names);
+      perModuleResources.set(m.name, rs);
       moduleResources.push(...rs);
     }
 
@@ -386,9 +421,31 @@ export async function registerResources(
     // The claim must be satisfied by the CLAIMING module itself: cross-module
     // satisfaction would make ownership non-local and undo the colocation the
     // arm exists for.
+    // `owns: "provided"` (2.32) DERIVES the claim from what the module actually
+    // returned, so the two cannot disagree at all — the drift class above stops
+    // being representable rather than merely detected. Resolution already
+    // happened at §5a, so this is a lookup, not a second phase.
+    //
+    // Downstream (`@classytic/spine-kit`) had built an entire wrapper to
+    // approximate this by resolving resources itself before handing arc an
+    // array. That workaround exists only because arc read `owns` before
+    // resolving; with this it becomes unnecessary, and every arc module — not
+    // just ERP ones — gets the guarantee.
+    const effectiveOwns = new Map<string, readonly string[]>();
     for (const m of modules) {
-      if (!m.owns?.length) continue;
       const supplied = moduleResourceNames.get(m.name);
+      if (m.owns === "provided") {
+        if (!supplied?.size) {
+          throw new Error(
+            `[arc] module "${m.name}" declares \`owns: "provided"\` but supplies no named ` +
+              "resources. Either give it resources to own, or drop the `owns` entry — an empty " +
+              "claim is almost always a resources factory that returned early.",
+          );
+        }
+        effectiveOwns.set(m.name, [...supplied]);
+        continue;
+      }
+      if (!m.owns?.length) continue;
       const missing = m.owns.filter((name) => !supplied?.has(name));
       if (missing.length > 0) {
         const provided = supplied?.size ? [...supplied].join(", ") : "(none)";
@@ -397,17 +454,18 @@ export async function registerResources(
             "but its own `resources` do not supply " +
             `${missing.length === 1 ? "that name" : "those names"}. ` +
             "`owns` DROPS the app-level resource of that name, so an unmet claim removes the " +
-            "route entirely and nothing serves it. Provide it in this module's `resources`, or " +
-            "drop the `owns` entry.\n" +
+            "route entirely and nothing serves it. Provide it in this module's `resources`, " +
+            'drop the `owns` entry, or use `owns: "provided"` to derive it.\n' +
             `Resources supplied by "${m.name}": ${provided}.`,
         );
       }
+      effectiveOwns.set(m.name, m.owns);
     }
 
     if (modules.length && resolvedResources && resolvedResources.length > 0) {
       const owned = new Set<string>();
       for (const m of modules) {
-        for (const name of m.owns ?? []) owned.add(name);
+        for (const name of effectiveOwns.get(m.name) ?? []) owned.add(name);
       }
       if (owned.size > 0) {
         const before = resolvedResources.length;
@@ -424,6 +482,12 @@ export async function registerResources(
     if (moduleResources.length) {
       resolvedResources = [...moduleResources, ...(resolvedResources ?? [])];
     }
+
+    // Descriptors are PUBLISHED at §6c — after the contribution arms resolve —
+    // so their subscription/schedule counts are real. Publishing here (where
+    // the resource half is known) would have frozen them at zero, which is
+    // worse than omitting them: tooling cannot tell "no subscriptions" from
+    // "not counted yet".
 
     if (resolvedResources && resolvedResources.length > 0) {
       // Detect duplicate resource names early — a common mistake with loadResources + manual array
@@ -529,7 +593,8 @@ export async function registerResources(
     // Module schedules resolve exactly once, then flow through Arc's canonical
     // schedules plugin. Do this BEFORE event activation so invalid schedule
     // configuration cannot leave already-subscribed handlers behind.
-    const scheduledJobs = await collectModuleScheduledJobs(fastify, modules);
+    const scheduleCounts = new Map<string, number>();
+    const scheduledJobs = await collectModuleScheduledJobs(fastify, modules, scheduleCounts);
     if (scheduledJobs.length > 0) {
       if (config.arcPlugins?.schedules === false) {
         throw new Error(
@@ -559,7 +624,39 @@ export async function registerResources(
     // Module event handlers — transactional subscription in dependency order.
     // The helper rolls back its own partial activation; the outer catch below
     // rolls back if anything AFTER full activation fails.
-    eventUnsubscribes = await subscribeModuleEventHandlers(fastify, modules);
+    const subscriptionCounts = new Map<string, number>();
+    eventUnsubscribes = await subscribeModuleEventHandlers(fastify, modules, subscriptionCounts);
+
+    // ── 6c. Publish resolved descriptors ──
+    //
+    // Everything reported is now settled: resources resolved, duplicates
+    // rejected, `owns` effective, contribution arms resolved and counted.
+    // Consumers read THIS rather than re-deriving from `ArcModule`'s AUTHORING
+    // shape — which they cannot do correctly, since a resource factory hides
+    // its names until resolved and `owns` may be the literal `"provided"`.
+    //
+    // Counts come from the sinks the collectors filled during their single
+    // resolution pass; re-running those factories to introspect them would run
+    // host code twice.
+    if (fastify.arc) {
+      fastify.arc.moduleDescriptors = Object.freeze(
+        modules.map((m) =>
+          describeResolvedModule({
+            name: m.name,
+            dependsOn: m.dependsOn,
+            resources: perModuleResources.get(m.name) ?? [],
+            owns: effectiveOwns.get(m.name) ?? [],
+            lifecycle: {
+              hasClose: typeof m.onClose === "function",
+              subscriptions: subscriptionCounts.get(m.name) ?? 0,
+              scheduledJobs: scheduleCounts.get(m.name) ?? 0,
+              healthChecks: m.healthChecks?.length ?? 0,
+              exports: typeof m.bootstrap === "function",
+            },
+          }),
+        ),
+      );
+    }
 
     if (config.afterResources) {
       await config.afterResources(fastify);
