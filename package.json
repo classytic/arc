@@ -220,6 +220,10 @@
       "types": "./dist/cleanup/index.d.mts",
       "default": "./dist/cleanup/index.mjs"
     },
+    "./outbox-admin": {
+      "types": "./dist/outbox-admin/index.d.mts",
+      "default": "./dist/outbox-admin/index.mjs"
+    },
     "./testing/outbox": {
       "types": "./dist/testing/outboxStoreContract.d.mts",
       "default": "./dist/testing/outboxStoreContract.mjs"
@@ -290,7 +294,8 @@
       "./auth/audit": "stable",
       "./sync": "experimental",
       "./usage": "experimental",
-      "./testing/outbox": "stable"
+      "./testing/outbox": "stable",
+      "./outbox-admin": "experimental"
     }
   },
   "files": [

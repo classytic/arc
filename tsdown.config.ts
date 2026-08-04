@@ -130,6 +130,7 @@ export default defineConfig({
     // Data Cleanup Center — thin recipe framework (registry, plan digest,
     // run/evidence ports, orchestration service, resource factory)
     "src/cleanup/index.ts",
+    "src/outbox-admin/index.ts",
   ],
   format: ["esm"],
   dts: true,

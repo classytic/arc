@@ -76,16 +76,10 @@ export type { OutboxModuleExports, OutboxModuleOptions } from "./outbox-module.j
  * silently lost the revenue trigger; see the module docblock.
  */
 export { createOutboxModule } from "./outbox-module.js";
-/**
- * Operator surface over the outbox — health, dead-letter triage, replay.
- * Composed alongside `createOutboxModule`; see `outbox-admin-module.ts`.
- */
-export { createOutboxAdminModule } from "./outbox-admin-module.js";
-export type {
-  OutboxAdminModuleDeps,
-  OutboxAdminPermissions,
-  OutboxAdminStore,
-} from "./outbox-admin-module.js";
+// The operator surface over the outbox (health, dead-letter, replay) is NOT
+// re-exported here: it is a composition root that imports `core` and `factory`,
+// so exporting it from this layer-2 barrel would reopen a factory → events →
+// factory cycle. Import it from `@classytic/arc/outbox-admin`.
 /**
  * Repository → OutboxStore adapter. Exposed so consumers can build and
  * decorate the repo-backed store before passing it to {@link EventOutbox}

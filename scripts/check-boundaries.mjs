@@ -74,6 +74,12 @@ const LAYERS = {
   // `createDataCleanupModule` assembles a governance resource + service into a
   // mountable ArcModule — a composition root, and it imports `factory` (L5).
   cleanup: 5,
+  // `createOutboxAdminModule` assembles an operator resource over the outbox
+  // port into a mountable ArcModule. Same shape as `cleanup`: it needs
+  // `core` (L3) to define the resource and `factory` (L5) to read the relay
+  // from the module registry, so it is a composition root — not an events-layer
+  // sibling of `createOutboxModule`, which is a dependency slot.
+  "outbox-admin": 5,
 };
 
 /**

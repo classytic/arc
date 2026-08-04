@@ -34,15 +34,15 @@
  * them fails to compile instead.
  */
 
+import type { DeadLetteredEvent } from "@classytic/primitives/events";
+import type { OutboxStore } from "@classytic/primitives/outbox";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import { defineResource } from "../core/defineResource.js";
-import { defineModule } from "../factory/module/index.js";
-import { getModuleExports } from "../factory/module/index.js";
+import type { OutboxModuleExports } from "../events/outbox-module.js";
+import { defineModule, getModuleExports } from "../factory/module/index.js";
 import type { ArcModule } from "../factory/module/types.js";
 import type { PermissionCheck } from "../permissions/types.js";
-import type { FastifyReply, FastifyRequest } from "fastify";
 import { NotFoundError, ValidationError } from "../utils/errors.js";
-import type { OutboxStore } from "@classytic/primitives/outbox";
-import type { OutboxModuleExports } from "./outbox-module.js";
 
 /**
  * A store that can answer an operator's questions.
@@ -56,13 +56,17 @@ export type OutboxAdminStore = OutboxStore &
   >;
 
 export interface OutboxAdminPermissions {
-  /** Reading health and the dead-letter list. */
+  /**
+   * Reading health and the dead-letter list.
+   *
+   * MUST be platform-only — see `allowUnverifiedOperatorPermission`.
+   */
   view: PermissionCheck;
   /**
    * Replaying a dead-lettered event. Defaults to `view` when omitted — but
    * replay RE-DELIVERS an event that already failed five times, so a
    * deployment that separates read access from operational action should gate
-   * it distinctly.
+   * it distinctly. Also platform-only.
    */
   replay?: PermissionCheck;
 }
@@ -83,6 +87,84 @@ export interface OutboxAdminModuleDeps {
   owns?: readonly string[];
   /** Cap on `?limit`. Default 500 — a dead-letter list is for triage, not export. */
   maxDeadLetterLimit?: number;
+  /**
+   * Accept gates arc cannot prove are platform-only.
+   *
+   * By default both gates must carry `_platformOnly` (i.e. come from
+   * `requirePlatformRole`), and boot FAILS otherwise. The reason is the same
+   * one that hardened `integrations/jobs` in 2.31: these routes are global by
+   * construction. `getDeadLettered(limit)` takes no filter and an outbox row
+   * carries no tenant identity, so there is nothing to scope by. A gate that
+   * grants per organization therefore READS as scoped while serving everyone —
+   * `requireOrgRole('manager')` would let org A's manager read org B's failed
+   * events. Neither returns a policy, so no per-request check can tell a real
+   * operator gate from an org one.
+   *
+   * Set this only for a custom check you have verified consults platform
+   * identity alone.
+   */
+  allowUnverifiedOperatorPermission?: boolean;
+  /**
+   * Include each dead-lettered event's domain PAYLOAD in the listing.
+   * Default `false`.
+   *
+   * The payload is the original event body — in an ERP that is order totals,
+   * customer records and payment references. Triage needs the id, the event
+   * name, the attempt count and why it failed; it does not need the contents.
+   * Opt in only where the surface is genuinely platform-operator-only and you
+   * accept that the response carries business data.
+   */
+  exposePayload?: boolean;
+  /**
+   * Include the failure STACK TRACE alongside the error message.
+   * Default `false` — a stack names internal paths and framework versions.
+   */
+  exposeStack?: boolean;
+  /**
+   * Pending-event age (ms) past which the outbox reports unhealthy even with an
+   * empty dead-letter queue. Default 5 minutes.
+   */
+  relayLagUnhealthyMs?: number;
+}
+
+/** What a dead-lettered event looks like on the wire, once redacted. */
+interface RedactedDeadLetteredEvent {
+  event: { type: string; meta: unknown; payload?: unknown };
+  error: { message: string; code?: string; stack?: string };
+  attempts: number;
+  firstFailedAt: Date;
+  lastFailedAt: Date;
+  handlerName?: string;
+}
+
+/**
+ * Strip the domain payload and the stack unless explicitly opted in.
+ *
+ * Triage is answered by WHICH event failed, HOW MANY times, WHEN and WHY. The
+ * payload answers none of those and carries the business record; the stack
+ * names internal paths. Both are off by default, on the same reasoning that
+ * made `exposeResult` / `exposeFailureReason` opt-in for jobs.
+ */
+function redactDeadLettered(
+  e: DeadLetteredEvent,
+  opts: Pick<OutboxAdminModuleDeps, "exposePayload" | "exposeStack">,
+): RedactedDeadLetteredEvent {
+  return {
+    event: {
+      type: e.event.type,
+      meta: e.event.meta,
+      ...(opts.exposePayload ? { payload: e.event.payload } : {}),
+    },
+    error: {
+      message: e.error.message,
+      ...(e.error.code !== undefined ? { code: e.error.code } : {}),
+      ...(opts.exposeStack && e.error.stack !== undefined ? { stack: e.error.stack } : {}),
+    },
+    attempts: e.attempts,
+    firstFailedAt: e.firstFailedAt,
+    lastFailedAt: e.lastFailedAt,
+    ...(e.handlerName !== undefined ? { handlerName: e.handlerName } : {}),
+  };
 }
 
 export function createOutboxAdminModule(deps: OutboxAdminModuleDeps): ArcModule<void> {
@@ -91,6 +173,29 @@ export function createOutboxAdminModule(deps: OutboxAdminModuleDeps): ArcModule<
   const maxLimit = deps.maxDeadLetterLimit ?? 500;
   const view = deps.permissions.view;
   const replay = deps.permissions.replay ?? deps.permissions.view;
+  const lagUnhealthyMs = deps.relayLagUnhealthyMs ?? 5 * 60_000;
+
+  // Boot-time, not request-time: a misconfigured operator surface should never
+  // reach its first request. `_platformOnly` is unprovable from outside the
+  // check — both `requireOrgRole('manager')` and a default `requireRoles([...])`
+  // return a bare allow with no policy — so arc requires the gate to declare it.
+  if (!deps.allowUnverifiedOperatorPermission) {
+    for (const [label, gate] of [
+      ["view", view],
+      ["replay", replay],
+    ] as const) {
+      if (!gate._platformOnly) {
+        throw new Error(
+          `[arc/outbox-admin] permissions.${label} must be platform-only. These routes are ` +
+            "global (an outbox row carries no tenant identity and getDeadLettered takes no " +
+            "filter), so an org-role gate would let a member of one organization read " +
+            "another's failed events and their payloads. Use requirePlatformRole('platform-ops') " +
+            "— or requireRoles([...], { includeOrgRoles: false }) with " +
+            "allowUnverifiedOperatorPermission: true if you have verified the check yourself.",
+        );
+      }
+    }
+  }
 
   const resource = defineResource({
     name: moduleName,
@@ -111,10 +216,13 @@ export function createOutboxAdminModule(deps: OutboxAdminModuleDeps): ArcModule<
             deps.store.countByStatus("dead_letter"),
             deps.store.oldestPendingAgeMs(),
           ]);
-          // `healthy` keys off the dead-letter count alone: a backlog of pending
-          // events is a relay that is behind, which `relayLagMs` reports; a
-          // dead-lettered event is one nothing will retry.
-          return reply.send({ pending, deadLetter, relayLagMs, healthy: deadLetter === 0 });
+          // `healthy` folds BOTH signals. Keying it off the dead-letter count
+          // alone would report healthy: true for a relay wedged hours behind a
+          // single poison row — a health number that lies at exactly the moment
+          // someone is relying on it. A dead letter is unrecoverable without an
+          // operator; a stalled relay is recoverable but equally unattended.
+          const healthy = deadLetter === 0 && (relayLagMs === null || relayLagMs < lagUnhealthyMs);
+          return reply.send({ pending, deadLetter, relayLagMs, healthy });
         },
       },
       {
@@ -127,7 +235,11 @@ export function createOutboxAdminModule(deps: OutboxAdminModuleDeps): ArcModule<
           const parsed = Number(raw ?? 100);
           const limit = Math.min(Math.max(Number.isFinite(parsed) ? parsed : 100, 1), maxLimit);
           const events = await deps.store.getDeadLettered(limit);
-          return reply.send({ count: events.length, limit, events });
+          return reply.send({
+            count: events.length,
+            limit,
+            events: events.map((e) => redactDeadLettered(e, deps)),
+          });
         },
       },
       {
@@ -158,7 +270,17 @@ export function createOutboxAdminModule(deps: OutboxAdminModuleDeps): ArcModule<
             outboxModuleName,
           );
           const relayDelivered = await relay.relay();
-          return reply.send({ eventId, requeued: true, relayDelivered });
+          // `relayDelivered` counts the whole drained batch, not just this
+          // event — say so on the wire. An operator authorised to replay ONE id
+          // has, by pressing this, also triggered delivery of everything else
+          // pending, and a bare number invites reading it as "my event went out
+          // N times".
+          return reply.send({
+            eventId,
+            requeued: true,
+            relayDelivered,
+            note: "relayDelivered counts the entire drained batch, not this event alone",
+          });
         },
       },
     ],

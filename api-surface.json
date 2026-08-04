@@ -220,7 +220,7 @@
       "version",
       "when"
     ],
-    "typesHash": "fde35532f5c6122e"
+    "typesHash": "cf9360689fde4f6b"
   },
   "./permissions": {
     "stability": "stable",
@@ -548,7 +548,7 @@
       "sendControllerResponse",
       "validateResourceConfig"
     ],
-    "typesHash": "305808a4d9902f88"
+    "typesHash": "e674f44b2254a2f0"
   },
   "./presets": {
     "stability": "stable",
@@ -838,7 +838,7 @@
       "introspectionPlugin",
       "introspectionPluginFn"
     ],
-    "typesHash": "a1b7b56c1e8256b8"
+    "typesHash": "3b69e0cdcb0755ee"
   },
   "./utils": {
     "stability": "stable",
@@ -1097,7 +1097,7 @@
       "versioningPlugin",
       "versioningPluginFn"
     ],
-    "typesHash": "5af6063dd0419148"
+    "typesHash": "a49bfdf9f68a9b4e"
   },
   "./plugins/tracing": {
     "stability": "stable",
@@ -1311,7 +1311,7 @@
       "wrapWithBoundary",
       "wrapWithSchema"
     ],
-    "typesHash": "7f0593ca0b64aa32"
+    "typesHash": "85cb3e5e498a8c61"
   },
   "./events/redis": {
     "stability": "stable",
@@ -1443,7 +1443,7 @@
       "testActorHeaders",
       "waitFor"
     ],
-    "typesHash": "c38861b026a965e4"
+    "typesHash": "ec62810edf3ab336"
   },
   "./testing/storage": {
     "stability": "stable",
@@ -1479,6 +1479,7 @@
       "createApp",
       "createWorker",
       "defineModule",
+      "describeResolvedModule",
       "developmentPreset",
       "edgePreset",
       "getModuleExports",
@@ -1517,9 +1518,14 @@
       "JwtAuthOption",
       "LoadResourcesOptions",
       "ModuleContribution",
+      "ModuleDisposer",
+      "ModuleSetupContext",
       "ModuleState",
       "MultipartOptions",
       "RawBodyOptions",
+      "ResolvedModuleDescriptor",
+      "ResolvedModuleLifecycle",
+      "ResolvedResourceDescriptor",
       "ResourceLike",
       "ResourceModule",
       "UnderPressureOptions",
@@ -1530,6 +1536,7 @@
       "createApp",
       "createWorker",
       "defineModule",
+      "describeResolvedModule",
       "developmentPreset",
       "edgePreset",
       "getModuleExports",
@@ -1551,7 +1558,7 @@
       "testingPreset",
       "toFetchHandler"
     ],
-    "typesHash": "e833d52635d9d861"
+    "typesHash": "8eed03d5f5d5cf0d"
   },
   "./schemas": {
     "stability": "stable",
@@ -2185,7 +2192,20 @@
       "createDataCleanupModule",
       "recipeFromSteps"
     ],
-    "typesHash": "258626688c6f2cbc"
+    "typesHash": "699dc6c27e0403cb"
+  },
+  "./outbox-admin": {
+    "stability": "unlabelled",
+    "runtime": [
+      "createOutboxAdminModule"
+    ],
+    "types": [
+      "OutboxAdminModuleDeps",
+      "OutboxAdminPermissions",
+      "OutboxAdminStore",
+      "createOutboxAdminModule"
+    ],
+    "typesHash": "68fc87ca75657b4c"
   },
   "./testing/outbox": {
     "stability": "stable",
