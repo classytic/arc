@@ -77,6 +77,16 @@ export type { OutboxModuleExports, OutboxModuleOptions } from "./outbox-module.j
  */
 export { createOutboxModule } from "./outbox-module.js";
 /**
+ * Operator surface over the outbox — health, dead-letter triage, replay.
+ * Composed alongside `createOutboxModule`; see `outbox-admin-module.ts`.
+ */
+export { createOutboxAdminModule } from "./outbox-admin-module.js";
+export type {
+  OutboxAdminModuleDeps,
+  OutboxAdminPermissions,
+  OutboxAdminStore,
+} from "./outbox-admin-module.js";
+/**
  * Repository → OutboxStore adapter. Exposed so consumers can build and
  * decorate the repo-backed store before passing it to {@link EventOutbox}
  * (metrics, tracing, multi-transport fan-out). Passing `{ repository }` to
