@@ -142,6 +142,17 @@ export { getUserRoles, normalizeRoles } from "./types.js";
 import * as presets from "./presets.js";
 
 export {
+  buildPermissionMatrix,
+  introspectCheck,
+  introspectModule,
+  introspectRegistry,
+  type PermissionEntry,
+  type PermissionEntryType,
+  type PermissionMatrix,
+  type PermissionMatrixOptions,
+  type PermissionMatrixRegistry,
+} from "./matrix.js";
+export {
   adminOnly,
   authenticated,
   fullPublic,
@@ -151,7 +162,6 @@ export {
   publicReadAdminWrite,
   readOnly,
 } from "./presets.js";
-
 /**
  * Namespace alias for all preset bundles. Use either form:
  *

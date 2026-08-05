@@ -43,6 +43,11 @@ export interface AuthorizationConformance {
    * `buildIdFilter` output (route id AND policy AND tenant), so a policy that
    * tried to redirect/widen the target would show here — the surface the
    * filter-overwrite class of bug lives on.
+   *
+   * `filter` is `undefined` when the permission carries NO policy: `fetchDetailed`
+   * only builds a compound filter when there is something to compound, and takes a
+   * plain by-id read otherwise. `status` is meaningful on both paths — assert the
+   * filter only when the permission under test emits a policy.
    */
   get: SurfaceObservation;
   /** `GET /confs/aggregations/tally` — the aggregation surface. */
@@ -87,6 +92,21 @@ export async function runAuthorizationConformance(opts: {
       getFilter = filter;
       return rows[0] ?? null;
     }) as never,
+    /**
+     * The single-record read has TWO paths, and the harness must be able to observe both.
+     *
+     * `fetchDetailed` only builds a compound filter and calls `getOne` when there is something to
+     * compound — a row policy, a tenant field, or a non-default id field. A permission that simply
+     * ALLOWS (no policy) leaves `{ _id }` alone and takes the plain `getById` path instead. The base
+     * mock stubs that as `null`, so before this stub the `get` surface reported **404 on every
+     * policy-free allow** while `list` and `aggregation` reported 200.
+     *
+     * That reads as partial enforcement and it is not: it is the harness failing to answer. A host
+     * asserting `get.status === 200` for its own allow-gate — the obvious falsification case to pair
+     * with a deny-parity suite — was told its gate broke the single-record surface. Found from
+     * be-prod, whose conformance suite does exactly that.
+     */
+    getById: (async () => rows[0] ?? null) as never,
     aggregate: (async (req: { filter?: AnyRecord } = {}) => {
       aggFilter = req.filter;
       return { rows: [{ tally: rows.length }] };

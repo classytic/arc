@@ -9,6 +9,7 @@ import type { ResourceLike } from "./loadResources.js";
 import {
   type ArcModule,
   collectModuleScheduledJobs,
+  createDisposerRegistry,
   createModuleTeardown,
   describeResolvedModule,
   initModuleStates,
@@ -153,7 +154,10 @@ export async function registerResources(
   // Teardown controller — tracks which modules completed an init phase, and
   // once-guards every closer so the rollback path and the §7b shutdown hook
   // can never both run one (see module/teardown.ts).
-  const teardown = createModuleTeardown(fastify, modules);
+  // Per-module `defer` stacks. Handed to every setup phase; drained by the
+  // teardown controller on whichever path fires first (see module/disposers.ts).
+  const disposers = createDisposerRegistry(fastify);
+  const teardown = createModuleTeardown(fastify, modules, disposers);
   // Populated at §6; declared here so the catch below can unsubscribe
   // whatever fraction of the handlers went live before the failure.
   let eventUnsubscribes: Array<() => void | Promise<void>> = [];
@@ -177,7 +181,10 @@ export async function registerResources(
       // exists to release. Marking on success would leak it.
       teardown.markInitialized(m);
       try {
-        await m.plugins(fastify);
+        // A returned disposer is shorthand for a single `defer` — registered
+        // last, so it unwinds before anything the phase deferred by hand.
+        const returned = await m.plugins(fastify, disposers.contextFor(m.name));
+        if (typeof returned === "function") disposers.contextFor(m.name).defer(returned);
       } catch (err) {
         setModuleState(fastify, m.name, "failed");
         const msg = err instanceof Error ? err.message : String(err);
@@ -206,7 +213,7 @@ export async function registerResources(
         // A bootstrap return value is the module's PUBLIC EXPORT — recorded at
         // `fastify.arc.modules[name]` so later modules (dependsOn order = init
         // order) can wire cross-module ports without a DI container. (wiki/modules.md)
-        exported = await m.bootstrap(fastify);
+        exported = await m.bootstrap(fastify, disposers.contextFor(m.name));
       } catch (err) {
         setModuleState(fastify, m.name, "failed");
         const msg = err instanceof Error ? err.message : String(err);
@@ -584,7 +591,11 @@ export async function registerResources(
     for (const m of modules) {
       if (!m.afterResources) continue;
       try {
-        await m.afterResources(fastify);
+        // Every module is already teardown-eligible by now (the bootstrap loop
+        // marks even the bootstrap-less ones), so disposers deferred here are
+        // swept on both paths like any other.
+        const returned = await m.afterResources(fastify, disposers.contextFor(m.name));
+        if (typeof returned === "function") disposers.contextFor(m.name).defer(returned);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         throw new Error(`[arc] module "${m.name}" afterResources() threw: ${msg}`, { cause: err });

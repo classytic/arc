@@ -87,6 +87,11 @@ export {
   createTestTimer,
   waitFor,
 } from "./mocks.js";
+/**
+ * Setup context for tests that call a module's phases directly — collects the
+ * disposers a no-op `{ defer: () => {} }` would silently discard.
+ */
+export { createTestModuleSetup, type TestModuleSetup } from "./moduleSetup.js";
 // --- Vitest preload helper --------------------------------------------------
 export { preloadResources, preloadResourcesAsync } from "./preloadResources.js";
 /** The ONE role gate for package tests — see its module docblock. */

@@ -31,6 +31,31 @@ describe("authorization conformance — CRUD list vs aggregation parity", () => 
     }
   });
 
+  it("observes the get surface on the POLICY-FREE path too (plain by-id read)", async () => {
+    /**
+     * The single-record read has two paths: `fetchDetailed` compounds a filter and calls `getOne`
+     * only when there IS something to compound (policy, tenant field, non-default id field), and
+     * takes a plain `getById` otherwise. Every other case in this file carries a policy, so the
+     * plain path went unexercised — and the harness's mock left `getById` returning null, which made
+     * the `get` surface report **404 for any policy-free allow** while list and aggregation said 200.
+     *
+     * That is indistinguishable from partial enforcement, which is precisely what this suite exists
+     * to detect, so the harness was manufacturing the signal it is meant to measure. Reported from a
+     * host (be-prod) pairing its deny-parity suite with the obvious falsification case: assert an
+     * `allowPublic()` gate reaches all three surfaces.
+     */
+    const c = await runAuthorizationConformance({ permission: () => allow() });
+    try {
+      expect(c.list.status).toBe(200);
+      expect(c.get.status).toBe(200);
+      expect(c.aggregation.status).toBe(200);
+      // No policy to compound, so the compound path was never taken — documented, not a defect.
+      expect(c.get.filter).toBeUndefined();
+    } finally {
+      await c.close();
+    }
+  });
+
   it("get-by-id CONJOINS the policy with the route id — a policy can't redirect the target", async () => {
     // The single-record surface where the filter-overwrite class lived: a policy
     // pinning a DIFFERENT id must not replace the route's `/confs/1`. Both survive

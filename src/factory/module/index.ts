@@ -17,6 +17,16 @@ export type {
   ResolvedResourceDescriptor,
 } from "./descriptor.js";
 export { describeResolvedModule } from "./descriptor.js";
+// `DisposerRegistry` is deliberately NOT re-exported: it is the internal
+// registry `registerResources` builds and `teardown` drains, and both import it
+// straight from `./disposers.js`. Hosts only ever see `defer` via
+// `ModuleSetupContext`.
+export {
+  createDisposerRegistry,
+  type ModuleDisposer,
+  type ModuleSetupContext,
+} from "./disposers.js";
+export { extendModule, type ModuleExtension } from "./extend.js";
 export { subscribeModuleEventHandlers, unsubscribeModuleEventHandlers } from "./lifecycle.js";
 export { orderModules } from "./order.js";
 export { resolveContribution, resolveModule } from "./resolve.js";

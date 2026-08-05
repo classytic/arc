@@ -479,7 +479,7 @@ export async function updateUserProfile(request${ts ? ": FastifyRequest" : ""}, 
     delete updates.role;
     delete updates.organizations;
 
-    const user = await userRepository.Model.findByIdAndUpdate(userId, updates, { new: true });
+    const user = await userRepository.Model.findByIdAndUpdate(userId, updates, { returnDocument: 'after' });
     return reply.send(user);
   } catch (error) {
     request.log.error({ err: error }, 'Update profile error');

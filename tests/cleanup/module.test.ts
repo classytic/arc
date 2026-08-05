@@ -39,6 +39,54 @@ function makeModule(over: Partial<Parameters<typeof createDataCleanupModule>[0]>
   return { module, runStore, evidenceStore, queue };
 }
 
+/**
+ * A store is backed by a MODEL, and constructing one registers that model.
+ *
+ * `recipes` already accepted a thunk for that reason; the stores beside it did
+ * not, so a host had to build them — and register `CleanupRun` / `CleanupEvidence`
+ * / the fence / the policy collection — while the module graph was still being
+ * composed, ahead of graph validation and (in a mongoose host) ahead of the
+ * connection. Everything here is read inside the memoised `service()`, which is
+ * first built at `bootstrap`, so the thunk form must resolve there and NOT at
+ * construction.
+ */
+describe("store thunks resolve at bootstrap, not at construction", () => {
+  it("does not call the store factories while composing", () => {
+    let calls = 0;
+    createDataCleanupModule({
+      recipes: [draftsRecipe()],
+      runStore: () => {
+        calls++;
+        return memRunStore();
+      },
+      evidenceStore: () => {
+        calls++;
+        return memEvidenceStore();
+      },
+      permissions: { view: allow, execute: allow },
+    });
+    expect(calls).toBe(0);
+  });
+
+  it("resolves them once, and the service runs on what they returned", async () => {
+    let calls = 0;
+    const shared = memRunStore();
+    const { module } = makeModule({
+      runStore: () => {
+        calls++;
+        return shared;
+      },
+    });
+    const service = await (module.bootstrap as (f: unknown) => Promise<{ listRuns: unknown }>)({});
+    expect(calls).toBe(1);
+    expect(service).toBeTruthy();
+    // A second read must not build a second store — two would split the truth:
+    // a run recovered by one is invisible to the other's fence.
+    await (module.bootstrap as (f: unknown) => Promise<unknown>)({});
+    expect(calls).toBe(1);
+  });
+});
+
 function fakeReply() {
   const reply = {
     statusCode: 200,
@@ -101,6 +149,37 @@ describe("createDataCleanupModule — composition", () => {
 
   it("fails fast at construction on a duplicate recipe id", () => {
     expect(() => makeModule({ recipes: [draftsRecipe(), draftsRecipe()] })).toThrow(CleanupError);
+  });
+
+  it("a recipes THUNK is not called during construction — only at bootstrap", async () => {
+    /**
+     * The reason the thunk form exists. A host builds cleanup recipes by folding over
+     * its composed modules and calling their `preLivePurge()` / `cleanupSteps()` arms,
+     * and those arms read `engine.repositories`. Resolving that fold in this factory
+     * would force every contributing domain to allocate its engine before arc has
+     * validated the module graph — so a graph that then fails leaks all of them.
+     */
+    let calls = 0;
+    const { module } = makeModule({
+      recipes: () => {
+        calls++;
+        return [draftsRecipe()];
+      },
+    });
+    expect(calls).toBe(0);
+
+    await (module.bootstrap as () => Promise<unknown>)();
+    expect(calls).toBe(1);
+
+    // Memoized — bootstrap is the single resolution point.
+    await (module.bootstrap as () => Promise<unknown>)();
+    expect(calls).toBe(1);
+  });
+
+  it("a duplicate id in a THUNK still fails, at bootstrap", async () => {
+    // Deferral must not turn a boot failure into a silent one.
+    const { module } = makeModule({ recipes: () => [draftsRecipe(), draftsRecipe()] });
+    await expect((module.bootstrap as () => Promise<unknown>)()).rejects.toThrow(CleanupError);
   });
 
   it("mounts the operations resource at the default prefix with all five routes", () => {

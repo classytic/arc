@@ -58,6 +58,7 @@ describe("Public API Contract", () => {
       "./mcp/testing",
       "./middleware",
       "./migrations",
+      "./outbox-admin",
       "./permissions",
       "./pipeline",
       "./plugins",

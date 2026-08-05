@@ -40,6 +40,7 @@
  */
 
 import type { FastifyInstance } from "fastify";
+import type { DisposerRegistry } from "./disposers.js";
 import { setModuleState } from "./state.js";
 import type { ArcModule } from "./types.js";
 
@@ -72,6 +73,7 @@ export interface ModuleTeardown {
 export function createModuleTeardown(
   fastify: FastifyInstance,
   modules: readonly ArcModule[],
+  disposers?: DisposerRegistry,
 ): ModuleTeardown {
   // ELIGIBILITY only — never ordering. `modules` (the `orderModules`
   // topological sort) is the sole ordering authority, because marking order is
@@ -95,7 +97,11 @@ export function createModuleTeardown(
       const m = modules[index];
       if (!m || !initializedNames.has(m.name) || consumed.has(m.name)) continue;
       consumed.add(m.name);
-      if (!m.onClose) {
+      // Draining here is also the disposer once-guard (see disposers.ts): the
+      // first path to reach this module takes the stack, so a rollback followed
+      // by fastify.close() cannot run one disposer twice.
+      const stack = disposers?.take(m.name) ?? [];
+      if (!m.onClose && stack.length === 0) {
         // No module-owned cleanup, but the module's lifecycle still ENDED
         // here — leaving it at `ready` after app.close() would contradict the
         // documented state machine. (`failed` is sticky, so a module that
@@ -104,20 +110,46 @@ export function createModuleTeardown(
         continue;
       }
       setModuleState(fastify, m.name, "closing");
-      try {
-        await m.onClose(fastify);
-        setModuleState(fastify, m.name, "closed");
-      } catch (err) {
-        setModuleState(fastify, m.name, "failed");
-        errors.push(
-          new Error(
-            `[arc] module "${m.name}" onClose() threw during teardown: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-            { cause: err },
-          ),
-        );
+      let teardownFailed = false;
+      // `onClose` FIRST, then disposers LIFO — the module's outermost teardown
+      // destroys what `bootstrap` returned (the last thing it produced), so it
+      // leads the unwind. See the ordering note in disposers.ts.
+      if (m.onClose) {
+        try {
+          await m.onClose(fastify);
+        } catch (err) {
+          teardownFailed = true;
+          errors.push(
+            new Error(
+              `[arc] module "${m.name}" onClose() threw during teardown: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+              { cause: err },
+            ),
+          );
+        }
       }
+      // Best-effort, same as closers: one throwing disposer never blocks the
+      // ones behind it, and a failed `onClose` never skips them either — the
+      // resources they hold are exactly what still needs releasing.
+      for (let d = 0; d < stack.length; d++) {
+        const dispose = stack[d];
+        if (!dispose) continue;
+        try {
+          await dispose();
+        } catch (err) {
+          teardownFailed = true;
+          errors.push(
+            new Error(
+              `[arc] module "${m.name}" deferred disposer #${stack.length - d} threw during teardown: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+              { cause: err },
+            ),
+          );
+        }
+      }
+      setModuleState(fastify, m.name, teardownFailed ? "failed" : "closed");
     }
     return errors;
   }

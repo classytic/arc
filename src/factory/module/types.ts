@@ -59,6 +59,7 @@ import type { ErrorMapper } from "../../plugins/errorHandler.js";
 import type { HealthCheck } from "../../plugins/health.js";
 import type { ScheduleDefinition } from "../../plugins/schedules.js";
 import type { ResourceLike } from "../loadResources.js";
+import type { ModuleDisposer, ModuleSetupContext } from "./disposers.js";
 
 /**
  * A module's contribution of some arm (event handlers, scheduled jobs, …).
@@ -173,8 +174,21 @@ export interface ArcModule<TExports = unknown> {
    * published ecosystem packages: `plugins` = "register infra"; `bootstrap` =
    * "initialise engines (and return the public export)". Registering a plugin
    * inside `bootstrap` still works — this slot just makes the two distinct.
+   *
+   * Receives `{ defer }` to register teardown for anything it acquires, and
+   * may RETURN a single disposer as shorthand for the one-resource case:
+   *
+   * ```ts
+   * plugins: async (fastify) => {
+   *   const conn = await connect();
+   *   return () => conn.close();          // equivalent to defer(...)
+   * },
+   * ```
    */
-  plugins?: (fastify: FastifyInstance) => void | Promise<void>;
+  plugins?: (
+    fastify: FastifyInstance,
+    context: ModuleSetupContext,
+  ) => ModuleDisposer | undefined | Promise<ModuleDisposer | undefined>;
 
   /**
    * Domain error mappers this module ships (see `defineErrorMapper`). Merged
@@ -213,8 +227,26 @@ export interface ArcModule<TExports = unknown> {
    * // arc-invoice bootstrap, composed AFTER arc-accounting:
    * const acct = getModuleExports<AccountingEngine>(fastify, "accounting");
    * ```
+   *
+   * The return value is the module's export, so teardown here goes through
+   * `defer` (the second argument) rather than a returned disposer — register
+   * each resource the moment it exists and partial-init cleanup becomes exact
+   * instead of a chain of `?.` guards:
+   *
+   * ```ts
+   * bootstrap: async (fastify, { defer }) => {
+   *   const client = await openClient();
+   *   defer(() => client.close());
+   *   const engine = await createEngine(client);   // if this throws, only
+   *   defer(() => engine.stop());                  // the client is released
+   *   return engine;
+   * },
+   * ```
    */
-  bootstrap?: (fastify: FastifyInstance) => TExports | Promise<TExports>;
+  bootstrap?: (
+    fastify: FastifyInstance,
+    context: ModuleSetupContext,
+  ) => TExports | Promise<TExports>;
 
   /**
    * App-level resource NAMES this module authoritatively SUPERSEDES. When the
@@ -283,8 +315,15 @@ export interface ArcModule<TExports = unknown> {
    * Post-registration wiring — runs in the `afterResources` phase, once this
    * module's routes are mounted. Use for cross-resource event subscriptions the
    * module owns.
+   *
+   * Receives `{ defer }`, and may return a disposer, on the same terms as
+   * `plugins` — handy for wiring that must be unwound (a subscription, a
+   * listener) without hoisting a handle into module scope.
    */
-  afterResources?: (fastify: FastifyInstance) => void | Promise<void>;
+  afterResources?: (
+    fastify: FastifyInstance,
+    context: ModuleSetupContext,
+  ) => ModuleDisposer | undefined | Promise<ModuleDisposer | undefined>;
 
   /**
    * Readiness checks this module contributes to the app's
@@ -387,6 +426,14 @@ export interface ArcModule<TExports = unknown> {
    *   onClose: async () => { await client?.close(); },  // still runs
    * });
    * ```
+   *
+   * Prefer `defer` (the setup phases' second argument) for anything acquired
+   * step-by-step: it registers each teardown at the point of acquisition, so
+   * the runtime knows exactly what was reached and the `?.` guards above
+   * disappear. `onClose` remains the right slot for tearing down what
+   * `bootstrap` RETURNED — the module's engine — and runs FIRST, ahead of the
+   * module's deferred disposers (see `disposers.ts` for the ordering rule).
+   * The two compose; either alone is complete.
    */
   onClose?: (fastify: FastifyInstance) => void | Promise<void>;
 }

@@ -220,7 +220,7 @@
       "version",
       "when"
     ],
-    "typesHash": "cf9360689fde4f6b"
+    "typesHash": "b9be1305c6c4e214"
   },
   "./permissions": {
     "stability": "stable",
@@ -235,6 +235,7 @@
       "applyFieldReadPermissions",
       "applyFieldWritePermissions",
       "authenticated",
+      "buildPermissionMatrix",
       "collectPublicSurface",
       "conjoinPolicyFilters",
       "createDynamicPermissionMatrix",
@@ -249,6 +250,9 @@
       "fields",
       "fullPublic",
       "getUserRoles",
+      "introspectCheck",
+      "introspectModule",
+      "introspectRegistry",
       "modeSatisfies",
       "normalizeRoles",
       "normalizeToDecision",
@@ -294,7 +298,12 @@
       "PermissionCheck",
       "PermissionCheckReturn",
       "PermissionContext",
+      "PermissionEntry",
+      "PermissionEntryType",
       "PermissionEventBus",
+      "PermissionMatrix",
+      "PermissionMatrixOptions",
+      "PermissionMatrixRegistry",
       "PermissionRequirement",
       "RequireAgentScopeOptions",
       "RequireGrantOptions",
@@ -310,6 +319,7 @@
       "applyFieldReadPermissions",
       "applyFieldWritePermissions",
       "authenticated",
+      "buildPermissionMatrix",
       "collectPublicSurface",
       "conjoinPolicyFilters",
       "createDynamicPermissionMatrix",
@@ -324,6 +334,9 @@
       "fields",
       "fullPublic",
       "getUserRoles",
+      "introspectCheck",
+      "introspectModule",
+      "introspectRegistry",
       "modeSatisfies",
       "normalizeRoles",
       "normalizeToDecision",
@@ -353,7 +366,7 @@
       "scopeOf",
       "when"
     ],
-    "typesHash": "205ac655cb438b49"
+    "typesHash": "60e0f83d101c1302"
   },
   "./cache": {
     "stability": "stable",
@@ -548,7 +561,7 @@
       "sendControllerResponse",
       "validateResourceConfig"
     ],
-    "typesHash": "e674f44b2254a2f0"
+    "typesHash": "2c17cef15c46cb3e"
   },
   "./presets": {
     "stability": "stable",
@@ -838,7 +851,7 @@
       "introspectionPlugin",
       "introspectionPluginFn"
     ],
-    "typesHash": "3b69e0cdcb0755ee"
+    "typesHash": "1750ef6507981f8f"
   },
   "./utils": {
     "stability": "stable",
@@ -1097,7 +1110,7 @@
       "versioningPlugin",
       "versioningPluginFn"
     ],
-    "typesHash": "a49bfdf9f68a9b4e"
+    "typesHash": "7d767a6ddf13df26"
   },
   "./plugins/tracing": {
     "stability": "stable",
@@ -1311,7 +1324,7 @@
       "wrapWithBoundary",
       "wrapWithSchema"
     ],
-    "typesHash": "85cb3e5e498a8c61"
+    "typesHash": "4713b42cd006674e"
   },
   "./events/redis": {
     "stability": "stable",
@@ -1358,6 +1371,7 @@
       "createSpy",
       "createTestApp",
       "createTestFixtures",
+      "createTestModuleSetup",
       "createTestTimer",
       "expectArc",
       "mongoMemoryDatabase",
@@ -1411,6 +1425,7 @@
       "TestDatabase",
       "TestDatabaseFactory",
       "TestFixtures",
+      "TestModuleSetup",
       "TestkitContext",
       "bootModuleApp",
       "createBetterAuthProvider",
@@ -1428,6 +1443,7 @@
       "createSpy",
       "createTestApp",
       "createTestFixtures",
+      "createTestModuleSetup",
       "createTestTimer",
       "expectArc",
       "mongoMemoryDatabase",
@@ -1443,7 +1459,7 @@
       "testActorHeaders",
       "waitFor"
     ],
-    "typesHash": "ec62810edf3ab336"
+    "typesHash": "6ec4a6327cc7b9c1"
   },
   "./testing/storage": {
     "stability": "stable",
@@ -1482,6 +1498,7 @@
       "describeResolvedModule",
       "developmentPreset",
       "edgePreset",
+      "extendModule",
       "getModuleExports",
       "getModuleState",
       "getOptionalModuleExports",
@@ -1519,6 +1536,7 @@
       "LoadResourcesOptions",
       "ModuleContribution",
       "ModuleDisposer",
+      "ModuleExtension",
       "ModuleSetupContext",
       "ModuleState",
       "MultipartOptions",
@@ -1539,6 +1557,7 @@
       "describeResolvedModule",
       "developmentPreset",
       "edgePreset",
+      "extendModule",
       "getModuleExports",
       "getModuleState",
       "getOptionalModuleExports",
@@ -1558,7 +1577,7 @@
       "testingPreset",
       "toFetchHandler"
     ],
-    "typesHash": "8eed03d5f5d5cf0d"
+    "typesHash": "7ed9d423845d2b09"
   },
   "./schemas": {
     "stability": "stable",
@@ -2192,10 +2211,10 @@
       "createDataCleanupModule",
       "recipeFromSteps"
     ],
-    "typesHash": "699dc6c27e0403cb"
+    "typesHash": "8978a506a7c2f291"
   },
   "./outbox-admin": {
-    "stability": "unlabelled",
+    "stability": "experimental",
     "runtime": [
       "createOutboxAdminModule"
     ],
@@ -2205,7 +2224,7 @@
       "OutboxAdminStore",
       "createOutboxAdminModule"
     ],
-    "typesHash": "68fc87ca75657b4c"
+    "typesHash": "c363f397b4c34c68"
   },
   "./testing/outbox": {
     "stability": "stable",

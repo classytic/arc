@@ -15,12 +15,13 @@ publish one), the **composition unit** (verticals pick a list), and the
 interface ArcModule {
   name: string;
   dependsOn?: readonly string[];                   // compose-after edges → topological order
-  plugins?(fastify): void | Promise<void>;         // infra registration (before bootstrap)
-  bootstrap?(fastify): TExports | Promise<TExports>; // engine/singleton init; return = public export
+  plugins?(fastify, ctx): void | Disposer | Promise<...>;  // infra registration (before bootstrap)
+  bootstrap?(fastify, ctx): TExports | Promise<TExports>;  // engine/singleton init; return = public export
   resources?: ResourceLike[] | ((fastify) => ResourceLike[] | Promise<...>);
-  owns?: readonly string[];                        // app resources this module supersedes
-  afterResources?(fastify): void | Promise<void>; // cross-wiring arc has no arm for
+  owns?: readonly string[] | "provided";           // app resources this module supersedes
+  afterResources?(fastify, ctx): void | Disposer | Promise<...>; // cross-wiring arc has no arm for
   onClose?(fastify): void | Promise<void>;        // teardown; also runs on boot rollback
+  //  ctx = { defer(fn) } — 2.32 teardown at point of acquisition; see below
   errorMappers?: readonly ErrorMapper[];           // 2.21 — see below
   healthChecks?: readonly HealthCheck[];           // 2.24 self-describing arms
   eventHandlers?: Contribution<EventHandlerDefinition>;  //  ↑ prefer over afterResources
@@ -107,6 +108,41 @@ defineModule({
   onClose: async () => { await client?.close(); },  // still runs
 });
 ```
+
+**`defer` — teardown at the point of acquisition (2.32).** Every `?.` above
+encodes "init may not have reached this line", which is bookkeeping the runtime
+already has. Setup phases (`plugins`, `bootstrap`, `afterResources`) take a
+second argument with `defer`: register each teardown the moment the resource
+exists, and partial-init cleanup becomes exact instead of defensive.
+
+```ts
+defineModule({
+  name: "billing",
+  bootstrap: async (fastify, { defer }) => {
+    const client = await openClient();
+    defer(() => client.close());        // registered the moment it exists
+    const sub = await client.subscribe();
+    defer(() => sub.close());           // never registered if subscribe threw
+    return createEngine(client);
+  },
+});
+```
+
+`plugins` and `afterResources` may also just RETURN a disposer — shorthand for
+one `defer` when there is a single resource. `bootstrap` cannot: its return
+value is the module's public export.
+
+Disposers unwind **LIFO** (reverse registration), run on **both** teardown
+paths (rollback and shutdown), and **exactly once** — whichever path fires
+first drains the stack. A throwing disposer never blocks the ones behind it;
+the first error is rethrown after the sweep, same contract as `onClose`.
+
+**Ordering:** a module's `onClose` runs FIRST, then its disposers unwind. That
+is still LIFO — `onClose` tears down what `bootstrap` RETURNED, the last thing
+the module produced. Concretely: `plugins` defers a connection, `bootstrap`
+builds an engine over it, and the engine must stop before the connection closes
+underneath it. Want one strict chain with no special case? `defer` everything
+and omit `onClose`; either alone is complete.
 
 Module resources flow through arc's normal registration (prefix, dedup,
 OpenAPI, audit) — never special-cased.

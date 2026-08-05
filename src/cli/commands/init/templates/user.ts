@@ -265,7 +265,7 @@ class UserRepository extends Repository${ts ? "<UserDocument>" : ""} {
     return this.Model.findByIdAndUpdate(
       userId,
       { resetPasswordToken: token, resetPasswordExpires: expiresAt },
-      { new: true }
+      { returnDocument: 'after' }
     );
   }
 ${

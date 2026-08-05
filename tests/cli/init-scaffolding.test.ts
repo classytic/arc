@@ -246,6 +246,35 @@ describe("arc init — JWT + Single Tenant", () => {
     expect(authResource).toContain("rawHandler:");
   });
 
+  it("generates Mongoose writes with `returnDocument`, not the deprecated `new: true`", async () => {
+    // Same blind spot as the route API above: templates are strings, so neither
+    // tsc nor biome sees them. This one is worse than a deprecation — the
+    // generated profile handler sends the result of `findByIdAndUpdate`, and
+    // WITHOUT the option Mongoose returns the document as it was BEFORE the
+    // update. A PATCH that silently echoes stale data, with nothing thrown.
+    const authHandlers = await fs.readFile(
+      path.join(projectPath, "src/resources/auth/auth.handlers.ts"),
+      "utf-8",
+    );
+    const userRepo = await fs.readFile(
+      path.join(projectPath, "src/resources/user/user.repository.ts"),
+      "utf-8",
+    );
+
+    for (const [label, source] of [
+      ["auth.handlers.ts", authHandlers],
+      ["user.repository.ts", userRepo],
+    ] as const) {
+      expect(source, label).not.toContain("new: true");
+      expect(source, label).not.toContain("returnOriginal");
+      // Value asserted, not just the key — `returnDocument: 'before'` (or a
+      // typo) silently falls back to the pre-update document.
+      if (source.includes("findByIdAndUpdate")) {
+        expect(source, label).toContain("returnDocument: 'after'");
+      }
+    }
+  });
+
   it("should create app entry files", async () => {
     expect(await exists(path.join(projectPath, "src/app.ts"))).toBe(true);
     expect(await exists(path.join(projectPath, "src/index.ts"))).toBe(true);
