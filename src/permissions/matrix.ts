@@ -59,6 +59,16 @@ export interface PermissionMatrixRegistry {
     permissions?: Record<string, unknown>;
     actions?: ReadonlyArray<{ name: string; permissions?: unknown }>;
     aggregations?: ReadonlyArray<{ name: string; permissions?: unknown }>;
+    /**
+     * Custom routes. Only those declaring `capability` are published — see the
+     * loop in `introspectRegistry` for why a route needs an explicit name.
+     */
+    customRoutes?: ReadonlyArray<{
+      method: string;
+      path: string;
+      capability?: string;
+      permissions?: unknown;
+    }>;
   }>;
 }
 
@@ -140,6 +150,34 @@ export function introspectRegistry(
       if (typeof agg.permissions === "function") {
         map[`agg:${agg.name}`] = introspectCheck(agg.permissions as PermissionCheck);
       }
+    }
+    /**
+     * Custom routes that OPTED IN via `capability`.
+     *
+     * A route has no inherent name — only a method and a path — so it cannot be
+     * keyed automatically, and a path is not an identity. Without this, a
+     * resource whose gates live entirely on `routes[]` published nothing, was
+     * absent from the matrix, and every `can()` against it answered `false`:
+     * a UI gating on it hid the feature from everyone, admins included, and that
+     * reads as broken permissions rather than an unpublished key.
+     *
+     * The key is BARE, alongside `list`/`get`/`create`, so a consumer never has
+     * to know whether a verb is a route, an action or a CRUD slot.
+     */
+    for (const route of entry.customRoutes ?? []) {
+      const key = route.capability;
+      if (key === undefined || typeof route.permissions !== "function") continue;
+      if (map[key] !== undefined) {
+        // THROW, never overwrite: a silent collision makes one gate answer for a
+        // different verb, and the wrong answer is indistinguishable from the right one.
+        throw new Error(
+          `[arc] permission-matrix collision on resource "${entry.name}": ` +
+            `route ${route.method} ${route.path} declares capability "${key}", ` +
+            `which is already published by a CRUD slot, action or another route. ` +
+            `Rename the route's \`capability\`.`,
+        );
+      }
+      map[key] = introspectCheck(route.permissions as PermissionCheck);
     }
     if (Object.keys(map).length > 0) modules[entry.name] = map;
   }

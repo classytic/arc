@@ -84,7 +84,10 @@ describe("history: true — Phase-0 expansion", () => {
 
   it("handler answers 503 when the audit decoration is missing or no-op", async () => {
     const route = historyRouteOf({ name: "order", history: true });
-    const handler = (route.rawHandler ?? route.handler) as (req: unknown, reply: unknown) => Promise<unknown>;
+    const handler = (route.rawHandler ?? route.handler) as (
+      req: unknown,
+      reply: unknown,
+    ) => Promise<unknown>;
 
     const noDecoration = fakeReply();
     await handler({ server: {}, params: { id: "x" }, query: {} }, noDecoration);
@@ -102,7 +105,10 @@ describe("history: true — Phase-0 expansion", () => {
   it("handler pages the audit query for the one document", async () => {
     const query = vi.fn(async () => [{ action: "update" }]);
     const route = historyRouteOf({ name: "order", history: { limit: 25 } });
-    const handler = (route.rawHandler ?? route.handler) as (req: unknown, reply: unknown) => Promise<unknown>;
+    const handler = (route.rawHandler ?? route.handler) as (
+      req: unknown,
+      reply: unknown,
+    ) => Promise<unknown>;
 
     const reply = fakeReply();
     await handler(
@@ -121,7 +127,10 @@ describe("history: true — Phase-0 expansion", () => {
   it("caps the wire limit at 200", async () => {
     const query = vi.fn(async () => []);
     const route = historyRouteOf({ name: "order", history: true });
-    const handler = (route.rawHandler ?? route.handler) as (req: unknown, reply: unknown) => Promise<unknown>;
+    const handler = (route.rawHandler ?? route.handler) as (
+      req: unknown,
+      reply: unknown,
+    ) => Promise<unknown>;
     await handler(
       { server: { audit: { query } }, params: { id: "x" }, query: { limit: "9999" } },
       fakeReply(),

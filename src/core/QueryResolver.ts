@@ -8,6 +8,7 @@
  * Designed to be used standalone or composed into controllers.
  */
 
+import { isProductionEnv } from "@classytic/primitives/environment";
 import { DEFAULT_LIMIT, DEFAULT_SORT, DEFAULT_TENANT_FIELD } from "../constants.js";
 import { arcLog } from "../logger/index.js";
 import { conjoinPolicyFilters } from "../permissions/filter-merge.js";
@@ -72,7 +73,9 @@ const log = arcLog("query");
  */
 let notedDeniedJoins = false;
 function noteDeniedJoins(kind: "populate" | "lookups"): void {
-  if (notedDeniedJoins || process.env.NODE_ENV === "production") return;
+  // Shared classifier, not a raw comparison: with `NODE_ENV=prod` the raw form treated a production
+  // deployment as non-production and emitted this dev-only note in production logs.
+  if (notedDeniedJoins || isProductionEnv(process.env.NODE_ENV)) return;
   notedDeniedJoins = true;
   log.warn(
     `client requested ${kind} but no allowlist is configured — DENIED (2.24 default flip; ` +
@@ -88,6 +91,8 @@ function noteDeniedJoins(kind: "populate" | "lookups"): void {
 export class QueryResolver {
   private queryParser: QueryParserInterface;
   private maxLimit: number;
+  /** Set only when the HOST passed one — it outranks any parser's cap, at any time. */
+  private readonly explicitMaxLimit: number | undefined;
   private defaultLimit: number;
   /** `undefined` means "no default sort" (caller passed `false`). */
   private defaultSort: string | undefined;
@@ -96,7 +101,24 @@ export class QueryResolver {
 
   constructor(config: QueryResolverConfig = {}) {
     this.queryParser = config.queryParser ?? getDefaultQueryParser();
-    this.maxLimit = config.maxLimit ?? 100;
+    /**
+     * Precedence: explicit config → the PARSER's own cap → framework default.
+     *
+     * The middle term is the fix. A resource that writes
+     * `new QueryParser({ maxLimit: 1000 })` has already answered "how large may a page
+     * be?", and arc previously ignored that and applied 100 anyway. Three layers each
+     * capping independently, lowest wins, no signal — a chart-of-accounts picker
+     * returned 100 of 696 rows and rendered "No accounts found", while the resource
+     * AND the repository were both configured for 1000.
+     *
+     * Note it reads `config.queryParser`, NOT `this.queryParser`. The fallback default
+     * parser declares its own generous cap, so deferring to it would silently raise the
+     * ceiling from 100 to 1000 on every endpoint that never configured one — a widening
+     * nobody asked for. Only a parser the resource EXPLICITLY supplied counts as an
+     * answer; a test pins exactly this.
+     */
+    this.explicitMaxLimit = config.maxLimit;
+    this.maxLimit = config.maxLimit ?? config.queryParser?.maxLimit ?? 100;
     this.defaultLimit = config.defaultLimit ?? DEFAULT_LIMIT;
     // `false` → opt out entirely (no default sort). `undefined` → framework
     // default (`-createdAt`, mongokit convention). Any string passes through.
@@ -114,6 +136,22 @@ export class QueryResolver {
    */
   setParser(parser: QueryParserInterface): void {
     this.queryParser = parser;
+    /**
+     * The swapped-in parser's cap applies too — swapping is how most resources supply
+     * theirs.
+     *
+     * Deferring only in the constructor was not enough: `setQueryParser()` mutates the
+     * resolver in place so captured references stay valid, so a resource that declares
+     * `new QueryParser({ maxLimit: 1000 })` arrives HERE, not through `config`. The
+     * constructor-only version of this fix looked right, passed its unit tests, and
+     * changed nothing at runtime — the chart of accounts still served 100 of 696.
+     *
+     * An explicit `config.maxLimit` still wins; that is a host decision and outranks a
+     * package default either way.
+     */
+    if (this.explicitMaxLimit === undefined && parser.maxLimit !== undefined) {
+      this.maxLimit = parser.maxLimit;
+    }
   }
 
   /**

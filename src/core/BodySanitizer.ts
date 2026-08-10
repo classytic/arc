@@ -43,6 +43,20 @@ export interface BodySanitizerConfig {
    * Default: `'reject'` — surface the misconfiguration as a 403.
    */
   onFieldWriteDenied?: FieldWriteDenialPolicy;
+  /**
+   * What to do when an update body carries an `immutable` /
+   * `immutableAfterCreate` field. Default: `'strip'` — today's behaviour.
+   *
+   * `'reject'` throws a 403 instead of returning 200 with the field silently
+   * unchanged (observed live: `PATCH {"type":"rent"}` → 200, `"type":"purchase"`).
+   *
+   * NOT folded into {@link onFieldWriteDenied}, which defaults to `'reject'`:
+   * a full-object PATCH echoing an immutable field back UNCHANGED is legitimate,
+   * and the sanitizer has no stored document to distinguish it from a real
+   * change. Sharing that default would break those callers. Opt in per resource,
+   * or fleet-wide via `ARC_STRICT_IMMUTABLE_WRITES`.
+   */
+  onImmutableWrite?: FieldWriteDenialPolicy;
 }
 
 // ============================================================================
@@ -52,10 +66,16 @@ export interface BodySanitizerConfig {
 export class BodySanitizer {
   private schemaOptions: RouteSchemaOptions;
   private onFieldWriteDenied: FieldWriteDenialPolicy;
+  private onImmutableWrite: FieldWriteDenialPolicy;
 
   constructor(config: BodySanitizerConfig) {
     this.schemaOptions = config.schemaOptions;
     this.onFieldWriteDenied = config.onFieldWriteDenied ?? DEFAULT_FIELD_WRITE_DENIAL_POLICY;
+    // `??` not `||`: an explicit 'strip' must beat the env switch, so one
+    // resource can opt out of a fleet-wide setting.
+    this.onImmutableWrite =
+      config.onImmutableWrite ??
+      (process.env.ARC_STRICT_IMMUTABLE_WRITES === "true" ? "reject" : "strip");
   }
 
   /**
@@ -91,6 +111,7 @@ export class BodySanitizer {
     // field is the only way to pick a target org (defineResource auto-sets
     // this flag on `tenantField`; see src/core/defineResource.ts).
     const fieldRules = this.schemaOptions.fieldRules ?? {};
+    const immutableAttempts: string[] = [];
     for (const [field, rules] of Object.entries(fieldRules)) {
       const bypass = Boolean(rules.preserveForElevated) && scopeIsElevated;
       if ((rules.systemManaged || rules.readonly) && !bypass) {
@@ -98,8 +119,30 @@ export class BodySanitizer {
       }
       // Immutable fields cannot be changed after creation
       if (_operation === "update" && (rules.immutable || rules.immutableAfterCreate) && !bypass) {
+        // Only an ATTEMPT when the caller actually sent the field. This loop
+        // walks the RULES, not the body, so recording unconditionally would
+        // reject every update on any resource that merely DECLARES an immutable
+        // field — including bodies that never mention it.
+        if (Object.hasOwn(sanitized, field)) immutableAttempts.push(field);
         delete sanitized[field];
       }
+    }
+
+    // An immutable write was silently dropped and the caller told 200 — the
+    // field came back unchanged and nothing said why. arc ALREADY decided this
+    // class of write should surface rather than no-op (`onFieldWriteDenied`
+    // defaults to 'reject': "surface the misconfiguration as a 403"); immutable
+    // simply never routed through it.
+    //
+    // Opt-in and separate from `onFieldWriteDenied`, deliberately: a full-object
+    // PATCH that echoes an immutable field back UNCHANGED is legitimate and
+    // common, and the sanitizer cannot tell it from a real change because it
+    // has no stored document to compare against. Rejecting by default would
+    // break those callers. Hosts that send partial patches should turn it on.
+    if (immutableAttempts.length > 0 && this.onImmutableWrite === "reject") {
+      throw new ForbiddenError(
+        `Cannot modify immutable field${immutableAttempts.length === 1 ? "" : "s"}: ${immutableAttempts.join(", ")}`,
+      );
     }
 
     // Apply field-level write permissions.

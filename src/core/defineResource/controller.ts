@@ -100,6 +100,9 @@ function threadConfigureLifecycle<TDoc extends AnyRecord>(
   if (resolvedConfig.onFieldWriteDenied !== undefined && wasDeclared("onFieldWriteDenied")) {
     opts.onFieldWriteDenied = resolvedConfig.onFieldWriteDenied;
   }
+  if (resolvedConfig.onImmutableWrite !== undefined && wasDeclared("onImmutableWrite")) {
+    opts.onImmutableWrite = resolvedConfig.onImmutableWrite;
+  }
   if (resolvedConfig.queryParser !== undefined && wasDeclared("queryParser")) {
     opts.queryParser = resolvedConfig.queryParser;
   }
@@ -201,6 +204,9 @@ function warnOnDroppedAuthorOptions<TDoc extends AnyRecord>(
   if (resolvedConfig.onFieldWriteDenied !== undefined && isDeclared("onFieldWriteDenied")) {
     dropped.push("onFieldWriteDenied");
   }
+  if (resolvedConfig.onImmutableWrite !== undefined && isDeclared("onImmutableWrite")) {
+    dropped.push("onImmutableWrite");
+  }
 
   if (dropped.length === 0) return;
 
@@ -287,6 +293,7 @@ function buildBaseController<TDoc extends AnyRecord>(
     matchesFilter: adapter?.matchesFilter,
     cache: resolvedConfig.cache,
     onFieldWriteDenied: resolvedConfig.onFieldWriteDenied,
+    onImmutableWrite: resolvedConfig.onImmutableWrite,
     presetFields: resolvedConfig._controllerOptions
       ? {
           slugField: resolvedConfig._controllerOptions.slugField,

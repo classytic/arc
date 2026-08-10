@@ -423,6 +423,10 @@ export class ResourceDefinition<TDoc = AnyRecord> {
         summary: r.summary,
         description: r.description,
         permissions: r.permissions,
+        // Carried so `introspectRegistry` can publish this route's gate. Without
+        // it the gate is enforced but invisible, and a client gating on it denies
+        // everyone — see `capability` on RouteDefinition.
+        capability: r.capability,
         raw: r.rawHandler !== undefined,
         schema: r.schema as Record<string, unknown>,
       })),

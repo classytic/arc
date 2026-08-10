@@ -220,7 +220,7 @@
       "version",
       "when"
     ],
-    "typesHash": "b9be1305c6c4e214"
+    "typesHash": "d80fcfc656d2862f"
   },
   "./permissions": {
     "stability": "stable",
@@ -366,7 +366,7 @@
       "scopeOf",
       "when"
     ],
-    "typesHash": "60e0f83d101c1302"
+    "typesHash": "4c6064cae6004cb8"
   },
   "./cache": {
     "stability": "stable",
@@ -416,7 +416,7 @@
     "stability": "stable",
     "runtime": [],
     "types": [],
-    "typesHash": "b4ef1bba232fae49"
+    "typesHash": "d40bf59131f45f84"
   },
   "./types/storage": {
     "stability": "stable",
@@ -561,7 +561,7 @@
       "sendControllerResponse",
       "validateResourceConfig"
     ],
-    "typesHash": "2c17cef15c46cb3e"
+    "typesHash": "cbdca7624a811aaf"
   },
   "./presets": {
     "stability": "stable",
@@ -618,7 +618,7 @@
       "softDeletePreset",
       "treePreset"
     ],
-    "typesHash": "63c541596209ad22"
+    "typesHash": "49e28064c0524450"
   },
   "./presets/tenant": {
     "stability": "stable",
@@ -630,7 +630,7 @@
       "TenantFieldSpec",
       "multiTenantPreset"
     ],
-    "typesHash": "7ede822da1d5f6d1"
+    "typesHash": "6783e96bf6697400"
   },
   "./presets/files-upload": {
     "stability": "stable",
@@ -650,7 +650,7 @@
       "StorageUploadInput",
       "filesUploadPreset"
     ],
-    "typesHash": "8d942d514909e1cf"
+    "typesHash": "17bd5046c23c98d0"
   },
   "./presets/search": {
     "stability": "stable",
@@ -665,7 +665,7 @@
       "SearchableRepository",
       "searchPreset"
     ],
-    "typesHash": "c2778ccc6ed3cbb6"
+    "typesHash": "6673314a9477935a"
   },
   "./auth": {
     "stability": "stable",
@@ -700,7 +700,7 @@
       "extractBetterAuthOpenApi",
       "mirrorTrustedOriginsFromCors"
     ],
-    "typesHash": "267577e936f155af"
+    "typesHash": "27c52bd693f52d03"
   },
   "./hooks": {
     "stability": "stable",
@@ -733,7 +733,7 @@
       "createHookSystem",
       "defineHook"
     ],
-    "typesHash": "5f8c5f2553d87513"
+    "typesHash": "9a6fefcf29575ea8"
   },
   "./middleware": {
     "stability": "stable",
@@ -750,7 +750,7 @@
       "multipartBody",
       "sortMiddlewares"
     ],
-    "typesHash": "b9a5b3ab96f5a85b"
+    "typesHash": "54828c2843d0f979"
   },
   "./pipeline": {
     "stability": "stable",
@@ -776,7 +776,7 @@
       "pipe",
       "transform"
     ],
-    "typesHash": "9ac498e839c1afc3"
+    "typesHash": "62594068a1c1e2c1"
   },
   "./context": {
     "stability": "stable",
@@ -851,7 +851,7 @@
       "introspectionPlugin",
       "introspectionPluginFn"
     ],
-    "typesHash": "1750ef6507981f8f"
+    "typesHash": "741cb350598dcc2b"
   },
   "./utils": {
     "stability": "stable",
@@ -1003,7 +1003,7 @@
       "toJsonSchema",
       "withCompensation"
     ],
-    "typesHash": "70853a7cfc7e26f8"
+    "typesHash": "3741fb0a97b89d4c"
   },
   "./cli": {
     "stability": "stable",
@@ -1110,7 +1110,7 @@
       "versioningPlugin",
       "versioningPluginFn"
     ],
-    "typesHash": "7d767a6ddf13df26"
+    "typesHash": "066eb7d2bc413d19"
   },
   "./plugins/tracing": {
     "stability": "stable",
@@ -1154,7 +1154,7 @@
       "createAuditEntry",
       "repositoryAsAuditStore"
     ],
-    "typesHash": "a6f9350ecc4bc4da"
+    "typesHash": "5030509afa17e8f7"
   },
   "./docs": {
     "stability": "stable",
@@ -1177,7 +1177,7 @@
       "scalarPlugin",
       "scalarPluginFn"
     ],
-    "typesHash": "ebddfeba9606e985"
+    "typesHash": "15470fe007ea7fe7"
   },
   "./encryption": {
     "stability": "stable",
@@ -1324,7 +1324,7 @@
       "wrapWithBoundary",
       "wrapWithSchema"
     ],
-    "typesHash": "4713b42cd006674e"
+    "typesHash": "1da676cda690be58"
   },
   "./events/redis": {
     "stability": "stable",
@@ -1459,7 +1459,7 @@
       "testActorHeaders",
       "waitFor"
     ],
-    "typesHash": "6ec4a6327cc7b9c1"
+    "typesHash": "7dae1f804be00552"
   },
   "./testing/storage": {
     "stability": "stable",
@@ -1489,6 +1489,7 @@
     "stability": "stable",
     "runtime": [
       "ArcFactory",
+      "DEFAULT_LOGGER_REDACT_PATHS",
       "collectModuleHealthChecks",
       "collectModuleScheduledJobs",
       "collectModuleWorkflows",
@@ -1530,6 +1531,7 @@
       "CreateWorkerOptions",
       "CustomAuthenticatorOption",
       "CustomPluginAuthOption",
+      "DEFAULT_LOGGER_REDACT_PATHS",
       "EventHandlerDefinition",
       "FetchHandlerOptions",
       "JwtAuthOption",
@@ -1577,7 +1579,7 @@
       "testingPreset",
       "toFetchHandler"
     ],
-    "typesHash": "7ed9d423845d2b09"
+    "typesHash": "60665b238ffb7087"
   },
   "./schemas": {
     "stability": "stable",
@@ -1658,7 +1660,7 @@
     "stability": "stable",
     "runtime": [],
     "types": [],
-    "typesHash": "9c094d517ce4bff6"
+    "typesHash": "ec665b90ee625f26"
   },
   "./integrations/streamline": {
     "stability": "stable",
@@ -2012,7 +2014,7 @@
       "toCallToolResult",
       "toCallToolSuccess"
     ],
-    "typesHash": "f1f778547aee3c03"
+    "typesHash": "14f337ee73024222"
   },
   "./mcp/testing": {
     "stability": "stable",
@@ -2024,7 +2026,7 @@
       "TestMcpClientOptions",
       "createTestMcpClient"
     ],
-    "typesHash": "e8c6e5499e8d7ca1"
+    "typesHash": "f462765220751a1c"
   },
   "./scim": {
     "stability": "stable",
@@ -2211,7 +2213,7 @@
       "createDataCleanupModule",
       "recipeFromSteps"
     ],
-    "typesHash": "8978a506a7c2f291"
+    "typesHash": "ed89c73afa05c3c2"
   },
   "./outbox-admin": {
     "stability": "experimental",
@@ -2224,7 +2226,7 @@
       "OutboxAdminStore",
       "createOutboxAdminModule"
     ],
-    "typesHash": "c363f397b4c34c68"
+    "typesHash": "c5f1481b6709bed9"
   },
   "./testing/outbox": {
     "stability": "stable",

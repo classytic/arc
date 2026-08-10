@@ -103,6 +103,62 @@ describe("QueryCache Event-Driven Invalidation", () => {
     expect(orderV).toBeGreaterThan(0);
     expect(categoryV).toBe(0); // not affected
   });
+
+  /**
+   * NAMESPACED kernel events — the shape every `@classytic/*` kernel actually publishes
+   * (`catalog:category.created`, `revenue:payment.verified`, `access:entitlement.granted`).
+   *
+   * The subscriber derived the resource by slicing before the LAST dot, so
+   * `catalog:category.created` bumped `arc:ver:catalog:category` while every reader
+   * calls `getResourceVersion("category")` — `buildQueryKey` takes the arc RESOURCE
+   * NAME. Bump and read used different keys, so auto-invalidation never fired for ANY
+   * kernel-backed resource. Nothing errored; caches simply served stale data for a full
+   * `staleTime`.
+   */
+  it("bumps the RESOURCE version for a namespaced kernel event", async () => {
+    const qc = fastify.queryCache;
+    expect(await qc.getResourceVersion("category")).toBe(0);
+
+    await fastify.events.publish("catalog:category.created", { id: "c1" });
+
+    expect(await qc.getResourceVersion("category")).toBeGreaterThan(0);
+  });
+
+  /**
+   * The namespaced form is ALSO bumped. Over-invalidation is safe (a cache miss);
+   * under-invalidation is a correctness bug, so when a name is ambiguous the plugin
+   * errs toward invalidating more.
+   */
+  /**
+   * The split is UNCONDITIONAL — a prefix containing a dot still yields the bare
+   * name. Pinned because the docblock previously claimed the opposite guard, and a
+   * reader could "restore" it: narrowing the split removes invalidations, which is
+   * the only direction that can serve wrong data.
+   */
+  it("splits a dotted namespace prefix too, erring toward invalidating more", async () => {
+    const qc = fastify.queryCache;
+    expect(await qc.getResourceVersion("entity")).toBe(0);
+
+    await fastify.events.publish("some.thing:entity.created", { id: "e1" });
+
+    expect(await qc.getResourceVersion("entity")).toBeGreaterThan(0);
+    expect(await qc.getResourceVersion("some.thing:entity")).toBeGreaterThan(0);
+  });
+
+  it("also bumps the fully-qualified name, so either spelling invalidates", async () => {
+    const qc = fastify.queryCache;
+    await fastify.events.publish("catalog:category.updated", { id: "c1" });
+
+    expect(await qc.getResourceVersion("catalog:category")).toBeGreaterThan(0);
+  });
+
+  /** A namespace with no dot after it is not a CRUD event and must not bump anything. */
+  it("ignores a namespaced event whose suffix is not a CRUD verb", async () => {
+    const qc = fastify.queryCache;
+    await fastify.events.publish("catalog:category.viewed", { id: "c1" });
+
+    expect(await qc.getResourceVersion("category")).toBe(0);
+  });
 });
 
 describe("QueryCache Cross-Resource Invalidation", () => {

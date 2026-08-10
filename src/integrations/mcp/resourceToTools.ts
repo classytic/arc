@@ -116,6 +116,9 @@ export function resourceToTools(
     resource.schemaOptions?.filterableFields ?? resource.queryParser?.allowedFilterFields;
   const sortableFields = resource.queryParser?.allowedSortFields;
   const allowedOperators = resource.queryParser?.allowedOperators;
+  // The parser's cap is the resource's answer to "how large may a page be?" —
+  // the MCP schema must advertise THAT, not a second opinion.
+  const maxLimit = resource.queryParser?.maxLimit;
 
   const hasSoftDelete = resource._appliedPresets?.includes("softDelete") ?? false;
 
@@ -150,6 +153,7 @@ export function resourceToTools(
         extraHideFields: config.hideFields,
         filterableFields,
         allowedOperators,
+        maxLimit,
         adapterBodies,
       });
       // Advertise `_idempotencyKey` on mutating tools ONLY when a store is

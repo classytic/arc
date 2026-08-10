@@ -50,9 +50,11 @@ export function validateDefineResourceConfig<TDoc>(
   validatePermissionsShape(config);
   validateCustomRoutePermissions(config);
   validateActionsShape(config);
+  validateRouteCapabilities(config);
   return [
     ...collectRedundantFieldRuleDiagnostics(config),
     ...collectReservedFilterNameDiagnostics(config),
+    ...collectPaginationCapDiagnostics(config),
   ];
 }
 
@@ -97,6 +99,48 @@ function collectReservedFilterNameDiagnostics<TDoc>(
         "query params (page, limit, cursor, after, sort, search, select, populate). The query parser consumes " +
         "these names for pagination/projection, so filtering by them via the query string — and via the MCP list " +
         "tool — will NOT work. Rename the field(s), or drop them from `filterableFields` if the collision is intended.",
+    },
+  ];
+}
+
+/**
+ * Warn when the parser's page cap exceeds the repository's.
+ *
+ * Page size is capped in THREE independent places — the query parser, the
+ * repository's pagination engine, and arc — and none of them can see the others.
+ * The lowest silently wins, so a resource that declares 1000 and a repository
+ * left at its default 100 serves 100 rows with a `200` and no signal anywhere.
+ * That is not hypothetical: an account picker read 100 of 696 rows, filtered
+ * that arbitrary slice client-side, and rendered "No accounts found".
+ *
+ * arc is the only layer that holds BOTH, so it is the only one that can notice.
+ * A diagnostic rather than a throw: the mismatch is usually an unconfigured
+ * default rather than a mistake, and a published framework must not refuse to
+ * boot an app that works today — it just works less than the author intended.
+ *
+ * Read structurally, never by importing a kit: `repository._pagination.config`
+ * is mongokit's shape, and arc stays database-agnostic (`check:boundaries`).
+ * Any kit exposing the same shape gets the check for free; one that does not is
+ * simply skipped.
+ */
+function collectPaginationCapDiagnostics<TDoc>(config: ResourceConfig<TDoc>): ResourceDiagnostic[] {
+  const parserCap = (config.queryParser as { maxLimit?: unknown } | undefined)?.maxLimit;
+  if (typeof parserCap !== "number") return [];
+
+  const repo = (config.adapter as { repository?: unknown } | undefined)?.repository;
+  const repoCap = (repo as { _pagination?: { config?: { maxLimit?: unknown } } } | undefined)
+    ?._pagination?.config?.maxLimit;
+  if (typeof repoCap !== "number" || parserCap <= repoCap) return [];
+
+  return [
+    {
+      severity: "warn",
+      code: "pagination-cap-mismatch",
+      message:
+        `[Arc] Resource '${config.name}': the query parser allows ${parserCap} rows per page ` +
+        `but the repository caps at ${repoCap}, so ${repoCap} wins and larger pages are ` +
+        "truncated with a 200 and no error. Configure the repository's pagination " +
+        `\`maxLimit\` to ${parserCap} as well, or lower the parser's to match.`,
     },
   ];
 }
@@ -185,6 +229,49 @@ function collectRedundantFieldRuleDiagnostics<TDoc>(
     }
   }
   return diagnostics;
+}
+
+/**
+ * Route `capability` keys — must not collide with a CRUD slot, an action, an
+ * aggregation, or another route on the same resource.
+ *
+ * At BOOT, not at introspection. `introspectRegistry` also refuses a collision,
+ * but nothing inside arc calls it: it is a host API, and a host calls it from a
+ * permission-matrix endpoint. So the only thing catching a duplicate key was a
+ * 500 on that endpoint at REQUEST time — and because a UI reads its whole
+ * permission map from there, one static config typo took every client's gates
+ * out at once, in production, rather than failing the deploy.
+ *
+ * A duplicate `capability` is decidable from the config alone, so it belongs
+ * with the other boot checks. The introspection-side throw stays as a backstop
+ * for callers that build a registry entry by hand instead of via
+ * `defineResource`.
+ */
+function validateRouteCapabilities<TDoc>(config: ResourceConfig<TDoc>): void {
+  const routes = config.routes;
+  if (!routes?.length) return;
+
+  // Every key `introspectRegistry` will publish, in the order it publishes them.
+  const taken = new Map<string, string>();
+  for (const op of Object.keys(config.permissions ?? {})) taken.set(op, "CRUD slot");
+  for (const name of Object.keys(config.actions ?? {})) taken.set(`action:${name}`, "action");
+  for (const name of Object.keys(config.aggregations ?? {}))
+    taken.set(`agg:${name}`, "aggregation");
+
+  for (const route of routes) {
+    const key = route.capability;
+    if (key === undefined) continue;
+    const owner = taken.get(key);
+    if (owner !== undefined) {
+      throw new Error(
+        `[Arc] Resource '${config.name}': route ${route.method} ${route.path} declares ` +
+          `capability '${key}', which is already published by a ${owner}. ` +
+          "Two gates under one key means one answers for the other verb — rename the " +
+          "route's `capability`.",
+      );
+    }
+    taken.set(key, `route ${route.method} ${route.path}`);
+  }
 }
 
 /**

@@ -105,6 +105,11 @@ export class ResourceRegistry {
         summary: r.summary,
         description: r.description,
         permissions: r.permissions,
+        // Carried so `introspectRegistry` can PUBLISH this route's gate. Dropping
+        // it here is what made a route-only resource absent from the permission
+        // matrix — enforced, but invisible, so every `can()` against it denied
+        // everyone. See `capability` on RouteDefinition.
+        capability: r.capability,
         raw: r.rawHandler !== undefined,
         schema: r.schema,
       })),

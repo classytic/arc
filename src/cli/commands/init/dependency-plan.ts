@@ -32,11 +32,11 @@ export const SCAFFOLD_DEP_VERSIONS = {
   // pagination, adapter contract, and filter helpers from there).
   // `@classytic/primitives` is REQUIRED for events.
   core: {
-    "@classytic/arc": "^2.20.0",
+    "@classytic/arc": "^2.33.0",
     // 0.x carets never float across minors (^0.9.1 can't resolve 0.11.x),
     // so these MUST track published latest, not just arc's peer floors.
-    "@classytic/primitives": "^0.11.0",
-    "@classytic/repo-core": "^0.8.0",
+    "@classytic/primitives": "^0.21.0",
+    "@classytic/repo-core": "^0.21.0",
     "@fastify/cors": "^11.2.0",
     "@fastify/helmet": "^13.0.2",
     "@fastify/rate-limit": "^10.3.0",

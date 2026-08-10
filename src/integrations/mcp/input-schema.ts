@@ -34,6 +34,8 @@ export function buildInputSchema(
     extraHideFields?: string[];
     filterableFields?: readonly string[];
     allowedOperators?: readonly string[];
+    /** The resource's page cap, so the list tool advertises it rather than a literal. */
+    maxLimit?: number;
     /**
      * Raw JSON Schema body shapes from the adapter, used as a high-fidelity
      * source for create/update tool input schemas when no explicit fieldRules

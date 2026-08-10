@@ -14,6 +14,7 @@
  * });
  */
 
+import { isProductionEnv } from "@classytic/primitives/environment";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
 import { requestContext } from "../context/requestContext.js";
@@ -177,9 +178,12 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
   // Default validateMode: 'warn' when registry is provided, 'off' otherwise
   const validateMode = rawValidateMode ?? (registry ? "warn" : "off");
 
-  // Default duplicate-publish detector: on in non-production, off in prod
-  // unless explicitly enabled. See `EventPluginOptions.warnOnDuplicate` JSDoc.
-  const warnOnDuplicate = rawWarnOnDuplicate ?? process.env.NODE_ENV !== "production";
+  // Default duplicate-publish detector: on in non-production, off in prod unless explicitly
+  // enabled. See `EventPluginOptions.warnOnDuplicate` JSDoc.
+  //
+  // Shared classifier, not a raw comparison — `NODE_ENV=prod` read as non-production, so the
+  // detector (and its per-publish LRU bookkeeping) stayed ON in production.
+  const warnOnDuplicate = rawWarnOnDuplicate ?? !isProductionEnv(process.env.NODE_ENV);
 
   // 5-second LRU window — long enough to span retry backoffs, short enough
   // to catch the same logical request firing twice (dual-publish trap).

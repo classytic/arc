@@ -8,6 +8,11 @@ Detailed release notes now live under [changelog/](changelog/). This root file s
 
 See [changelog/v2.md](changelog/v2.md) for the full v2 release history.
 
+## 2.33
+
+- [2.33.0](changelog/v2.md#2330) — **`NODE_ENV=prod` disclosed error internals and dropped `Secure` from session cookies.** Both defaults compared against the long spelling only, so a deployment spelling it `prod` shipped stack traces AND the raw thrown message of a 500 to clients (a Mongo connection string, verified against the wire), and sent session tokens over plaintext HTTP. Error disclosure had three independent leaks in one four-line assembly: a host passing ANY `errorHandler` key lost the preset-derived `includeStack`; `exposeInternalMessages` was never derived at all; and an UNSET `preset` read as development. Now a merge with both switches derived, explicit `preset` winning, absence falling back to the environment. Classification moved to `@classytic/primitives/environment` (`classifyEnv`/`isProduction`/`isTest`/`isDevelopment`, both spellings, trimmed) — four behaviour sites plus the `arc init` template migrated, **no raw `NODE_ENV` comparison left outside CLI templates**; peer floor `primitives >=0.21.0`.
+- [2.33.0](changelog/v2.md#2330) — **Silent input drop closed on two paths.** An unknown filter key was DROPPED, and dropping a filter WIDENS — `?filters[status]=pending` returned 200 with every row `status:"verified"`, while `?status=pending` returned 0. A write to an `immutable` field was STRIPPED and reported 200 with the value unchanged. Both now refusable: `strictFilterFields` (`ARC_STRICT_QUERY_PARAMS`) throws `ValidationError`, `onImmutableWrite` (`ARC_STRICT_IMMUTABLE_WRITES`) throws `ForbiddenError`. Both **off by default** — arc is published and an unconditional throw would reject working requests; hosts opt in from their env-loader per the `ARC_STRICT_PERMISSIONS` precedent, and an explicit `false` beats the env.
+
 ## 2.32
 
 - [2.32.0](changelog/v2.md#2320) — **Module disposers (`defer`)**, `extendModule` safe composition, `buildPermissionMatrix` from live registry, `createTestModuleSetup`, outbox-admin promoted to L5 with hardened operator gate.

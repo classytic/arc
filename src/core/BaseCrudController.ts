@@ -155,12 +155,30 @@ export class BaseCrudController<
    */
   protected _defaultSort?: string | false;
   protected _onFieldWriteDenied?: FieldWriteDenialPolicy;
+  protected _onImmutableWrite?: FieldWriteDenialPolicy;
 
   constructor(repository: TRepository, options: BaseControllerOptions = {}) {
     this.repository = repository;
     this.schemaOptions = options.schemaOptions ?? {};
     this.queryParser = options.queryParser ?? getDefaultQueryParser();
-    this.maxLimit = options.maxLimit ?? 100;
+    /**
+     * The parser's cap is consulted BEFORE the framework default.
+     *
+     * A resource that hands us a parser has already stated how large a page it
+     * can serve — a bounded catalog like a chart of accounts declares 1000 so
+     * pickers can read it whole. Defaulting straight to 100 here silently
+     * overrode that: the resource asked for 1000, `QueryResolver` received a
+     * `maxLimit` of 100 that was indistinguishable from a host deliberately
+     * choosing 100, and the list came back truncated with a `200`. be-prod
+     * served 100 of 696 accounts that way, and every account picker in the
+     * product was short by 85% with nothing anywhere to report it.
+     *
+     * Order matters and is the whole point: an explicit `options.maxLimit` from
+     * the host still wins over the parser, and the parser wins over this
+     * framework floor. A general default must only ever fill a gap — never
+     * outrank something specific that was actually stated.
+     */
+    this.maxLimit = options.maxLimit ?? this.queryParser?.maxLimit ?? 100;
     this.defaultLimit = options.defaultLimit ?? DEFAULT_LIMIT;
     this.resourceName = options.resourceName;
     this.tenantField =
@@ -174,6 +192,7 @@ export class BaseCrudController<
     if (options.presetFields) this._presetFields = options.presetFields;
     this._defaultSort = options.defaultSort;
     this._onFieldWriteDenied = options.onFieldWriteDenied;
+    this._onImmutableWrite = options.onImmutableWrite;
 
     this.accessControl = new AccessControl({
       tenantField: this.tenantField,
@@ -183,6 +202,7 @@ export class BaseCrudController<
     this.bodySanitizer = new BodySanitizer({
       schemaOptions: this.schemaOptions,
       onFieldWriteDenied: this._onFieldWriteDenied,
+      onImmutableWrite: this._onImmutableWrite,
     });
     this.queryResolver = new QueryResolver({
       queryParser: this.queryParser,
@@ -274,6 +294,10 @@ export class BaseCrudController<
       rebuildBodySanitizer = true;
       rebuildQueryResolver = true;
     }
+    if (options.onImmutableWrite !== undefined) {
+      this._onImmutableWrite = options.onImmutableWrite;
+      rebuildBodySanitizer = true;
+    }
     if (options.onFieldWriteDenied !== undefined) {
       this._onFieldWriteDenied = options.onFieldWriteDenied;
       rebuildBodySanitizer = true;
@@ -311,6 +335,7 @@ export class BaseCrudController<
       this.bodySanitizer = new BodySanitizer({
         schemaOptions: this.schemaOptions,
         onFieldWriteDenied: this._onFieldWriteDenied,
+        onImmutableWrite: this._onImmutableWrite,
       });
     }
     if (rebuildQueryResolver) {

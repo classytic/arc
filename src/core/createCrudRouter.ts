@@ -59,6 +59,20 @@ import {
 // ============================================================================
 
 /**
+ * Fold a route's host-supplied `config` together with arc's derived one into the
+ * SINGLE `config` key Fastify reads. Returns arc's object untouched when the host
+ * supplied none, so the route options stay literally what was declared.
+ */
+function mergeRouteConfig(
+  hostConfig: Record<string, unknown> | undefined,
+  arcConfig: { config?: Record<string, unknown> },
+): { config?: Record<string, unknown> } {
+  if (!hostConfig) return arcConfig;
+  // Arc's keys last — see the call site for why they win a collision.
+  return { config: { ...hostConfig, ...(arcConfig.config ?? {}) } };
+}
+
+/**
  * Mount custom routes (from presets or user-defined `routes`) on Fastify.
  * `wrapHandler` is derived inline from whether `rawHandler` was set.
  */
@@ -372,13 +386,31 @@ function createCustomRoutes<TDoc = unknown>(
               return result;
             }
           : handler,
-        // Per-route rate limit overrides the resource default for THIS
-        // endpoint (custom routes are individual Fastify routes). `undefined`
-        // inherits the resource-level config; `false` disables; object applies.
-        ...buildRouteConfig(
-          route.rateLimit !== undefined ? buildRateLimitConfig(route.rateLimit) : rateLimitConfig,
-          extensions,
-          route.cors,
+        /**
+         * ONE `config` object, merging the host's `route.config` with arc's own
+         * derived keys (per-route rate limit, cors, `arcExtensions`).
+         *
+         * It has to be merged HERE because Fastify does not merge for us: it
+         * builds the context from a single `opts.config`
+         * (`{ ...opts.config, url, method }` — lib/route.js), so two spreads
+         * writing `config` means the later one silently replaces the earlier.
+         * Emitting them separately dropped `route.config` on every resource
+         * that declared extensions, a rate limit or per-route cors — which is
+         * the same silent-absence bug `config` was added to fix, just narrowed
+         * to the resources most likely to have it.
+         *
+         * Arc's derived keys win on collision: they come from the declared
+         * `route.rateLimit` / `route.cors` / `extensions` fields, so letting a
+         * hand-written `config.rateLimit` override them would give one setting
+         * two sources that can disagree.
+         */
+        ...mergeRouteConfig(
+          route.config,
+          buildRouteConfig(
+            route.rateLimit !== undefined ? buildRateLimitConfig(route.rateLimit) : rateLimitConfig,
+            extensions,
+            route.cors,
+          ),
         ),
       },
       { resourceName, op: opName },

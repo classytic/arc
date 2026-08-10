@@ -147,7 +147,7 @@ defineResource({
 defineResource({ name: 'pipeline', adapter, defaultLimit: 200, maxLimit: 500 });
 ```
 
-`?limit=` violations respond 400 with a cap-aware envelope: `message: "Query parameter 'limit' must be <= 500 (got 800) (cap is 500)"` plus `meta: { field: 'limit', cap: 500 }` so callers can self-correct without scraping the message.
+A `?limit=` above the cap is **clamped to it** and served, not rejected (changed in 2.33). Rejecting made the documented clamp unreachable and turned a benign over-ask into a 400 that callers commonly render as an empty list. The effective cap is carried in the OpenAPI parameter description, and the response's own `limit` reports what was applied.
 
 ---
 

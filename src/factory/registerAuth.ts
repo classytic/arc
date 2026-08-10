@@ -5,8 +5,9 @@
  * elevation plugin, and error handler.
  */
 
+import { isProductionEnv } from "@classytic/primitives/environment";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { ErrorMapper } from "../plugins/errorHandler.js";
+import type { ErrorHandlerOptions, ErrorMapper } from "../plugins/errorHandler.js";
 import { PUBLIC_SCOPE } from "../scope/types.js";
 import type { CreateAppOptions } from "./types/index.js";
 
@@ -140,10 +141,52 @@ export async function registerErrorHandler(
 ): Promise<void> {
   if (config.errorHandler === false) return;
   const { errorHandlerPlugin } = await import("../plugins/errorHandler.js");
-  let errorOpts =
-    typeof config.errorHandler === "object"
-      ? config.errorHandler
-      : { includeStack: config.preset !== "production" };
+
+  /**
+   * DISCLOSURE DEFAULTS MERGE — they used to be REPLACED, and that was two bugs.
+   *
+   * This was a ternary: an object from the host was used verbatim, otherwise
+   * `{ includeStack: config.preset !== "production" }`. Both branches leaked.
+   *
+   *   1. A host that passed ANY key — even just `errorMappers` — lost the preset-derived
+   *      `includeStack` and fell through to `errorHandlerPlugin`'s own default, which is
+   *      `!(process.env.NODE_ENV === "production")`. That comparison knows only the long
+   *      spelling, so under `NODE_ENV=prod` it yields `true` and stack traces ship to clients in
+   *      production. Nobody writing `errorHandler: { errorMappers: [...] }` could reasonably
+   *      expect it to change stack-trace exposure.
+   *   2. The derived branch never set `exposeInternalMessages` AT ALL, so that switch fell
+   *      through to the same raw read for EVERY arc app however it was configured. A truthy value
+   *      is what skips `wire.message = "Internal Server Error"` for a 500, putting the raw thrown
+   *      message — driver text, query fragments — on the wire.
+   *
+   * `preset` is the right source: it is the deployment's EXPLICIT declaration, and a specific
+   * setting must never be overridden by an ambient default. Host keys still win over `derived`,
+   * so an operator can widen deliberately; what they can no longer do is widen by accident.
+   *
+   *   3. And `preset` is OPTIONAL, so its ABSENCE must not read as "not production" either.
+   *      `config.preset !== "production"` is true for an unset preset, and plenty of hosts set
+   *      only `NODE_ENV` — which turns "the operator said nothing" into "the operator said
+   *      development", the widest possible reading of silence, on the two switches where being
+   *      wrong ships stack traces and raw driver text.
+   *
+   * So: an explicit `preset` wins; its absence falls back to the ENVIRONMENT rather than to a
+   * guess; and that fallback goes through `isProductionEnv` from the shared classifier, never a raw
+   * `process.env.NODE_ENV === "production"`. The raw form recognises only the long spelling, so a
+   * preset-less host on `NODE_ENV=prod` read as non-production and re-opened both switches — the
+   * same defect class this fallback exists to close, one layer in. Verified against a real 500 in
+   * every state, including a Mongo connection string reaching the response body before the fix
+   * (`tests/factory/error-disclosure-defaults.test.ts`).
+   */
+  const productionEnv =
+    config.preset !== undefined
+      ? config.preset === "production"
+      : isProductionEnv(process.env.NODE_ENV);
+  const derived: ErrorHandlerOptions = {
+    includeStack: !productionEnv,
+    exposeInternalMessages: !productionEnv,
+  };
+  let errorOpts: ErrorHandlerOptions =
+    typeof config.errorHandler === "object" ? { ...derived, ...config.errorHandler } : derived;
   if (moduleErrorMappers && moduleErrorMappers.length > 0) {
     errorOpts = {
       ...errorOpts,

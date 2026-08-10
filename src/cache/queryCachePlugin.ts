@@ -81,7 +81,41 @@ const queryCachePluginImpl: FastifyPluginAsync<QueryCachePluginOptions> = async 
   fastify.addHook("onReady", async () => {
     if (!hasEvents(fastify)) return;
 
-    // Auto-invalidate on CRUD events (product.created → bump product version)
+    /**
+     * Auto-invalidate on CRUD events — `product.created` bumps `product`, and
+     * `catalog:category.created` bumps BOTH `catalog:category` and `category`.
+     *
+     * ## Why the namespace has to be stripped
+     *
+     * This derived the resource as "everything before the last dot", which is right for
+     * an arc-native event (`product.created`) and wrong for every NAMESPACED one. Each
+     * `@classytic/*` kernel publishes `<domain>:<entity>.<verb>` —
+     * `catalog:category.created`, `revenue:payment.verified`,
+     * `access:entitlement.granted` — so the resource came out as `catalog:category` and
+     * the version bumped at `arc:ver:catalog:category`.
+     *
+     * Readers use the arc RESOURCE NAME: `buildQueryKey(resource, …)` folds in
+     * `getResourceVersion("category")`, i.e. `arc:ver:category`. Bump and read
+     * therefore used different keys and **auto-invalidation never fired for any
+     * kernel-backed resource** — no error, no warning, just caches serving stale data
+     * for a full `staleTime`. It was invisible precisely because the feature looks
+     * wired: the plugin is registered, events flow, a version does get bumped.
+     *
+     * ## Both names are bumped, on purpose
+     *
+     * Two namespaces could each own an `<entity>` of the same name (`catalog:category`
+     * and a hypothetical `cms:category`), so stripping is ambiguous. The asymmetry
+     * decides it: **over-invalidation costs a cache miss, under-invalidation serves
+     * wrong data.** Bumping both the qualified and the bare name means an unrelated
+     * namespace can at worst force an extra reload, and never a stale read. That is the
+     * same reasoning applied everywhere else here — a permissive default is only
+     * acceptable when the failure it causes is loud and cheap.
+     *
+     * By the same argument the split is UNCONDITIONAL: any `:` in the qualified
+     * name yields a bare candidate, including when the prefix itself contains a
+     * dot (`some.thing:entity` bumps `entity` too). Narrowing that would remove
+     * invalidations, which is the one direction that can serve wrong data.
+     */
     await fastify.events.subscribe("*", async (event) => {
       const type = (event as { type: string }).type;
       const dotIdx = type.lastIndexOf(".");
@@ -90,8 +124,15 @@ const queryCachePluginImpl: FastifyPluginAsync<QueryCachePluginOptions> = async 
       const suffix = type.slice(dotIdx + 1);
       if (!CRUD_SUFFIXES.has(suffix)) return;
 
-      const resource = type.slice(0, dotIdx);
-      await queryCache.bumpResourceVersion(resource);
+      const qualified = type.slice(0, dotIdx);
+      await queryCache.bumpResourceVersion(qualified);
+
+      const colonIdx = qualified.lastIndexOf(":");
+      if (colonIdx === -1) return;
+      const bare = qualified.slice(colonIdx + 1);
+      // Guard against `ns:` with nothing after it, and against re-bumping an identical name.
+      if (bare.length === 0 || bare === qualified) return;
+      await queryCache.bumpResourceVersion(bare);
     });
 
     // Wire cross-resource tag invalidation

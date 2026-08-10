@@ -38,6 +38,15 @@ export interface FieldRulesToZodOptions {
   filterableFields?: readonly string[];
   /** Allowed filter operators — generates `field[op]` entries in list mode (e.g., price[gt], price[lte]) */
   allowedOperators?: readonly string[];
+  /**
+   * The resource's page-size cap, for the `limit` field's `max` AND its description.
+   *
+   * Defaults to 100 only when the resource states nothing. Hardcoding 100 here made
+   * MCP a FOURTH independent cap: a resource configured for 1000 exposed a tool that
+   * rejected `limit: 500` outright and told the agent "max 100" — so the model was
+   * misinformed about the ceiling, not merely limited by it.
+   */
+  maxLimit?: number;
 }
 
 /** Single field rule entry from Arc's schemaOptions.fieldRules */
@@ -80,6 +89,13 @@ export const PROJECTION_FIELD: z.ZodTypeAny = z
 // Static pagination fields (shared across all list schemas)
 // ============================================================================
 
+/** Default page cap, used only when the resource declares none. */
+const DEFAULT_MCP_MAX_LIMIT = 100;
+
+/** `limit` is per-resource — see `maxLimit` on the options. */
+const limitField = (maxLimit: number): z.ZodTypeAny =>
+  z.number().int().min(1).max(maxLimit).optional().describe(`Items per page (max ${maxLimit})`);
+
 const PAGINATION_SHAPE: Record<string, z.ZodTypeAny> = {
   page: z
     .number()
@@ -87,7 +103,6 @@ const PAGINATION_SHAPE: Record<string, z.ZodTypeAny> = {
     .min(1)
     .optional()
     .describe("Page number (1-based). Ignored when `cursor` is set."),
-  limit: z.number().int().min(1).max(100).optional().describe("Items per page (max 100)"),
   cursor: z
     .string()
     .optional()
@@ -244,11 +259,15 @@ function buildListShape(
     hiddenFields = [],
     extraHideFields = [],
     allowedOperators,
+    maxLimit = DEFAULT_MCP_MAX_LIMIT,
   } = options;
   const allHidden = new Set([...hiddenFields, ...extraHideFields]);
 
   // Start with pagination fields
-  const shape: Record<string, z.ZodTypeAny> = { ...PAGINATION_SHAPE };
+  const shape: Record<string, z.ZodTypeAny> = {
+    ...PAGINATION_SHAPE,
+    limit: limitField(maxLimit),
+  };
 
   // Resource-dispatch verbs (REST parity with `?_count=true` etc. — same
   // list route, same permission gate + row filters + tenant scoping; the

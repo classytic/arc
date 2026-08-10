@@ -655,16 +655,22 @@ export interface AppConfig {
  * by config/env.${ts ? "ts" : "js"} (imported first in the entry points).
  */
 
+import { classifyEnv } from '@classytic/primitives/environment';
 import { z } from 'zod';
 
-// Normalize NODE_ENV to the three canonical values the rest of the app
-// reasons about (matches the env loader's prod/dev/test aliasing).
-const NodeEnv = z.preprocess((v) => {
-  const s = String(v ?? '').toLowerCase();
-  if (s === 'prod' || s === 'production') return 'production';
-  if (s === 'test' || s === 'qa') return 'test';
-  return 'development';
-}, z.enum(['development', 'production', 'test']));
+// NODE_ENV normalized to the three canonical values the rest of the app reasons about.
+//
+// \`classifyEnv\` is the SHARED classifier (a required arc peer, so it is already installed). It
+// accepts both spellings of each bucket — \`production\`/\`prod\` and \`test\`/\`qa\` — and trims
+// surrounding whitespace. Do not replace it with \`process.env.NODE_ENV === 'production'\`
+// anywhere in this app: that comparison knows only one spelling, and because almost every call
+// site asks the NEGATIVE question ("not production ⇒ relax"), the miss OPENS the relaxed path on
+// a real production deployment. That exact shape has shipped stack traces to clients, session
+// cookies without \`Secure\`, and non-transactional money writes.
+const NodeEnv = z.preprocess(
+  (v) => classifyEnv(typeof v === 'string' ? v : undefined),
+  z.enum(['development', 'production', 'test']),
+);
 
 const EnvSchema = z
   .object({

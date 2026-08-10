@@ -162,7 +162,7 @@ defineResource({ name: 'health', customRoutesOnly: true, routes: [...] });
 defineResource({ name: 'pipeline', adapter, defaultLimit: 200, maxLimit: 500 });
 ```
 
-400s on `?limit=` violations include the cap: `message: "Query parameter 'limit' must be <= 500 (got 800) (cap is 500)"` + `meta: { field: 'limit', cap: 500 }`.
+A `?limit=` above the cap is **clamped to it**, not rejected (2.33 — see Query parsing). The effective cap rides in the OpenAPI parameter description.
 
 ## fieldRules
 
@@ -304,6 +304,9 @@ Decorates `app.authenticate` / `app.optionalAuthenticate` / `app.authorize`.
 ## Authoritative gotchas
 
 - **Field-write reject (default).** Requests carrying non-writable fields → 403 with denied list. Opt into silent strip: `defineResource({ onFieldWriteDenied: 'strip' })`.
+- **Immutable writes are STRIPPED, not refused (default).** `PATCH {"type":"rent"}` on an `immutable` field returns 200 with the value unchanged. Opt into 403: `defineResource({ onImmutableWrite: 'reject' })`, or `ARC_STRICT_IMMUTABLE_WRITES=true`. Separate from `onFieldWriteDenied` because a full-object PATCH echoing an immutable field back UNCHANGED is legitimate, and the sanitizer has no stored document to tell that from a real change — turn it on if you send partial patches.
+- **Log redaction is REPLACED, not merged.** Setting `logger.redact` makes yours the whole policy; arc's defaults stop applying. Superset them: `import { DEFAULT_LOGGER_REDACT_PATHS } from '@classytic/arc/factory'` and spread it into your list, rather than hand-copying (a copy drifts — one host's had lost `*.passwordHash`).
+- **Error disclosure derives from `preset`, falling back to the environment.** `includeStack` and `exposeInternalMessages` are both derived, and host keys MERGE over them — stating one no longer resets the other. Direct `errorHandlerPlugin` registration skips the preset derivation entirely.
 - **multiTenant injects org on UPDATE.** Body `organizationId` is overwritten with caller's scope (closes tenant-hop).
 - **`request.user`** is `Record<string, unknown> | undefined`. Guard with `if (req.user)` on public routes.
 - **Arc reads singular `user.role`** (string, comma-separated, or array). Don't put a plural `roles` field on the model.
@@ -368,6 +371,28 @@ defineResource({
   schemaOptions: { query: { allowedPopulate: ['category'], allowedLookups: ['categories'] } },
 });
 ```
+
+**An unknown filter key is DROPPED by default, and dropping WIDENS.** `?filters[status]=pending`
+against a parser that does not whitelist `status` returns 200 with every row unfiltered — the
+caller asked to narrow and got a broader set. Refuse instead:
+
+```typescript
+new QueryParser({ allowedFilterFields: [...], strictFilterFields: true })  // 400 ValidationError
+```
+
+Off by default (an unconditional throw would reject requests that work today). Fleet-wide via
+`ARC_STRICT_QUERY_PARAMS=true`; an explicit `false` beats the env. Only the FILTER whitelist —
+a dropped sort or operator degrades ordering, it does not widen the row set.
+
+**`?limit` above the cap CLAMPS, it does not 400** (2.33). The parser and `QueryResolver` both
+clamp, and the querystring schema no longer emits `maximum` — it used to reject first, making the
+documented clamp unreachable and turning a benign over-ask into a 400 that callers render as an
+empty list. The cap is in the parameter description instead, so OpenAPI still shows it.
+
+**One cap, one owner.** Page size is capped by the parser, the repository's pagination engine and
+arc — lowest wins silently. Arc defers to the parser's `maxLimit` when the host states none, and
+WARNS at boot when the parser allows more than the repository (`pagination-cap-mismatch`).
+Configure both to the same number.
 
 ## Aggregations
 

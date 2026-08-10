@@ -28,6 +28,11 @@ export interface ResourceMetadata {
     summary?: string;
     description?: string;
     permissions?: PermissionCheck;
+    /**
+     * Matrix key this route's gate is published under. Absent ⇒ enforced but not
+     * advertised — see `capability` on `RouteDefinition`.
+     */
+    capability?: string;
     raw?: boolean;
     schema?: unknown;
   }>;

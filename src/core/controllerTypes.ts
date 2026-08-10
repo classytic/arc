@@ -208,6 +208,8 @@ export interface ControllerConfigurableOptions {
    * - `'strip'`: legacy silent-drop.
    */
   onFieldWriteDenied?: FieldWriteDenialPolicy;
+  /** Immutable-write policy — see `onImmutableWrite` on the resource config. */
+  onImmutableWrite?: FieldWriteDenialPolicy;
 }
 
 /**

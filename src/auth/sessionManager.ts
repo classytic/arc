@@ -35,6 +35,7 @@
  */
 
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { isProductionEnv } from "@classytic/primitives/environment";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
 
@@ -236,7 +237,19 @@ function buildSetCookieHeader(
     parts.push("HttpOnly");
   }
 
-  if (options.secure ?? process.env.NODE_ENV === "production") {
+  /**
+   * `Secure` defaults to "is this a production environment?" — via the shared classifier, NOT a
+   * raw `NODE_ENV === "production"` comparison.
+   *
+   * The raw form shipped session cookies WITHOUT `Secure` on any deployment using `NODE_ENV=prod`,
+   * because that comparison recognises only the long spelling. A cookie without `Secure` is sent
+   * over plaintext HTTP, so a session token becomes interceptable — and nothing anywhere reports
+   * it: the cookie is set, login works, the app behaves normally.
+   *
+   * `options.secure` still wins when stated (`??`), including an explicit `false` for local HTTP
+   * development. Only the DEFAULT changed, and only in the direction of being correct more often.
+   */
+  if (options.secure ?? isProductionEnv(process.env.NODE_ENV)) {
     parts.push("Secure");
   }
 

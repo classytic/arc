@@ -28,7 +28,25 @@
 // reflect that without forcing hosts to also import from /plugins.
 import "../types/fastify-augmentation.js";
 
-export { ArcFactory, createApp } from "./createApp.js";
+/**
+ * The redact paths arc layers into Fastify's pino when a host supplies none.
+ *
+ * Re-exported because hosts MUST be able to read it. `resolveLoggerConfig` treats a
+ * host-supplied `redact` as authoritative and steps aside entirely — so the moment a
+ * host sets its own, this list stops applying and the host's becomes the whole
+ * policy. A host is therefore expected to SUPERSET it, and until now could not:
+ * `DEFAULT_LOGGER_REDACT_PATHS` was declared `export const` in createApp.ts but
+ * reached no public entry point, so the only ways to check were to hand-copy it
+ * (a second list, which drifts) or to regex arc's content-hashed bundle (which
+ * silently mis-parses — it picks up `MEMORY_STORE_NAMES` and splits on the bundle's
+ * escaped quotes).
+ *
+ * be-prod's list had in fact drifted: it omitted `*.passwordHash`, so the same hash
+ * was censored through `fastify.log` and printed through the host's own logger.
+ * Nothing threw. Exporting the value is what lets a consumer's guard assert the
+ * superset against the REAL baseline instead of a copy of it.
+ */
+export { ArcFactory, createApp, DEFAULT_LOGGER_REDACT_PATHS } from "./createApp.js";
 export type {
   ArcWorker,
   CreateWorkerOptions,

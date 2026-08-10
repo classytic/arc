@@ -318,6 +318,7 @@ describe("defineResource → Fastify strict → OpenAPI integration", () => {
     const spec = res.json();
     const listParams = spec.paths["/products"].get.parameters as Array<{
       name: string;
+      description?: string;
       schema?: { type?: string; minimum?: number; maximum?: number };
     }>;
 
@@ -326,7 +327,24 @@ describe("defineResource → Fastify strict → OpenAPI integration", () => {
     const limit = listParams.find((p) => p.name === "limit");
     expect(page?.schema?.type).toBe("integer");
     expect(limit?.schema?.type).toBe("integer");
-    expect(limit?.schema?.maximum).toBe(100); // from QueryParser config
+
+    /**
+     * `limit` carries NO `maximum`, and that is the deliberate trade.
+     *
+     * Arc layers the parser's `getQuerySchema()` as the route's `listQuery`, and
+     * that one object is both what Fastify VALIDATES and what OpenAPI documents.
+     * While it carried `maximum`, Fastify rejected `?limit=200` with a 400 before
+     * the parser's documented clamp could run — and a caller that does not read the
+     * error body renders that as an empty list, a failure disguised as "no results".
+     *
+     * Losing the machine-readable constraint is a real cost: a client generator can
+     * no longer enforce the ceiling. It is the smaller cost. The cap moves into the
+     * description, which Swagger UI shows, and the runtime answer to an over-ask is
+     * now the obvious one — return the maximum. Mirrors mongokit's `buildQuerySchema`.
+     */
+    expect(limit?.schema?.maximum).toBeUndefined();
+    // The cap moves to the PARAMETER description, which Swagger UI renders.
+    expect((limit as { description?: string })?.description).toContain("100");
 
     await app.close();
   });

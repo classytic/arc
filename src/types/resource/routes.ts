@@ -94,6 +94,41 @@ export interface RouteDefinition {
   /** Permission check — REQUIRED */
   readonly permissions: PermissionCheck;
   /**
+   * PUBLISH this route's gate in the permission matrix, under this key.
+   *
+   * ## Why a route needs to opt in, when CRUD and actions do not
+   *
+   * `introspectRegistry` walks `permissions`, `actions` and `aggregations` —
+   * each of which has a stable NAME to key by. A route has only a method and a
+   * path, and a path is not an identity: `/recompute` becoming
+   * `/classification/recompute` would silently break every client gating on it.
+   * So routes were skipped, and the consequence was not a missing feature but an
+   * invisible one — a resource whose gates live entirely on `routes[]` publishes
+   * NOTHING, is absent from the matrix, and every `can()` against it returns
+   * `false`. A UI that gates on it hides the feature from everyone including
+   * admins, which reads as "my permissions are broken" rather than "this key was
+   * never published".
+   *
+   * Declaring `capability` gives the gate the stable name it was missing. The key
+   * is BARE, sitting alongside `list` / `get` / `create` — a consumer asks
+   * `can('sku-classification', 'recompute')` and does not need to know whether
+   * the verb is implemented as a route, an action or a CRUD slot.
+   *
+   * Omit it for routes nothing needs to gate a UI on (a health check, a public
+   * manifest). The route is still ENFORCED either way — this only controls
+   * whether clients can SEE the decision in advance.
+   *
+   * Collides with a CRUD slot, an `action:`, an `agg:` or another route on the
+   * same resource ⇒ `defineResource()` THROWS at boot. A silent overwrite would
+   * let one gate answer for a different verb, and `introspectRegistry` refuses
+   * the same collision as a backstop for hand-built registry entries.
+   *
+   * @example
+   * { method: 'POST', path: '/recompute', capability: 'recompute',
+   *   permissions: requireRoles(['admin']) }
+   */
+  readonly capability?: string;
+  /**
    * Fastify-native handler — receives `(request, reply)` and owns the response.
    * Bypasses arc's pipeline entirely: no `IControllerResponse` shaping, no
    * field-write sanitization.
@@ -232,6 +267,36 @@ export interface RouteDefinition {
     response?: Record<number | string, unknown>;
     [key: string]: unknown;
   };
+  /**
+   * Fastify route CONFIG — `reply.routeOptions.config` at request time.
+   *
+   * Fastify's own first-class route option (Reference/Routes.md § Config), passed
+   * straight through. Arc adds no semantics: it is the documented seam every Fastify
+   * plugin uses to take per-route options, and arc forwarding it is what makes those
+   * plugins reachable from a `defineResource` route at all.
+   *
+   * ## Why this is not optional polish
+   *
+   * Arc REGISTERS `fastify-raw-body` with `global: false` (see `registerSecurity`),
+   * which means a route opts in with `config: { rawBody: true }`. Without this field
+   * that opt-in had nowhere to live, so the plugin arc itself installs was
+   * unreachable from any resource — and a route that wrote it got no error, just a
+   * silently absent `request.rawBody`.
+   *
+   * The cost of that was found end-to-end, not by review: every HMAC-signed webhook
+   * verified its signature against a body it never received, so a real provider
+   * callback 401'd in production while every unit test passed.
+   *
+   * @example
+   * // Signature verification needs the exact transmitted bytes.
+   * { method: 'POST', path: '/webhooks', config: { rawBody: true }, rawHandler }
+   *
+   * @example
+   * // Anything a plugin reads per-route — rate-limit overrides, feature flags.
+   * { method: 'GET', path: '/report', config: { rateLimit: { max: 5 } } }
+   */
+  readonly config?: Record<string, unknown>;
+
   /**
    * MCP tool generation:
    * - omitted/true: auto-generate (non-raw routes only)

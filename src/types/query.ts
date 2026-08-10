@@ -175,6 +175,14 @@ export interface QueryParserInterface {
   allowedFilterFields?: readonly string[];
 
   /**
+   * Optional: the parser's own page-size cap.
+   *
+   * A parser that declares one has ANSWERED the question, and `QueryResolver` must
+   * defer to it rather than applying its own default on top — see the note there.
+   */
+  maxLimit?: number;
+
+  /**
    * Optional: Allowed filter operators whitelist. Used by MCP to enrich
    * list-tool descriptions. Values are human-readable keys: 'eq', 'ne',
    * 'gt', 'gte', 'lt', 'lte', 'in', 'nin', etc.

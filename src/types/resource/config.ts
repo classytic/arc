@@ -101,6 +101,18 @@ export interface ResourceConfig<TDoc = AnyRecord> {
    *   pre-2.9 code that relied on the permissive default.
    */
   onFieldWriteDenied?: "reject" | "strip";
+  /**
+   * What to do when an UPDATE body carries an `immutable` /
+   * `immutableAfterCreate` field. Default `'strip'`.
+   *
+   * `'reject'` answers 403 instead of 200-with-the-field-unchanged. Kept
+   * separate from `onFieldWriteDenied` (which defaults to `'reject'`) because a
+   * full-object PATCH echoing an immutable field back UNCHANGED is legitimate,
+   * and the sanitizer has no stored document to tell that from a real change.
+   * Hosts sending partial patches should turn it on; `ARC_STRICT_IMMUTABLE_WRITES`
+   * sets it fleet-wide.
+   */
+  onImmutableWrite?: "reject" | "strip";
   middlewares?: MiddlewareConfig;
   /**
    * PreHandler guards auto-applied to **every** route on this resource

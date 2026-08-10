@@ -130,7 +130,10 @@ function routeOf(m: ModuleOrHarness) {
 }
 
 async function invoke(route: RouteDefinition, req: Partial<FastifyRequest>, reply = fakeReply()) {
-  const handler = (route.rawHandler ?? route.handler) as (req: unknown, reply: unknown) => Promise<unknown>;
+  const handler = (route.rawHandler ?? route.handler) as (
+    req: unknown,
+    reply: unknown,
+  ) => Promise<unknown>;
   await handler(req, reply);
   return reply;
 }

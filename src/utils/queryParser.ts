@@ -37,6 +37,7 @@ import {
 } from "../constants.js";
 import { arcLog } from "../logger/index.js";
 import type { ParsedQuery, PopulateOption, QueryParserInterface } from "../types/index.js";
+import { ValidationError } from "./errors.js";
 import { type FilterDialect, MONGO_DIALECT } from "./filter-dialect.js";
 
 const log = arcLog("queryParser");
@@ -77,6 +78,29 @@ export interface ArcQueryParserOptions {
    * Also used by MCP to auto-derive filterable fields in tool schemas.
    */
   allowedFilterFields?: string[];
+  /**
+   * REFUSE a filter key that is not in {@link allowedFilterFields}, instead of
+   * dropping it (default: `false` — today's drop behaviour, kept because arc
+   * is published and an unconditional throw would reject requests that work).
+   *
+   * Dropping a filter does not fail, it **WIDENS**: the caller asked for a
+   * narrower set and is silently answered with a broader one, HTTP 200. Two
+   * live instances:
+   *
+   *   `?filters[status]=pending` → 200, every row `status:"verified"`
+   *   `?productId=…` (the param is `skuRef`) → a different product's 75 units,
+   *     filed for weeks as "quant leakage"
+   *
+   * Turn this on per-parser, or fleet-wide via `ARC_STRICT_QUERY_PARAMS`.
+   * Mirrors the `ARC_STRICT_PERMISSIONS` precedent: off by default here, and
+   * the HOST opts in from its env-loader so a forgotten `.env` line cannot
+   * silently disable enforcement.
+   *
+   * Only the FILTER whitelist is covered. `allowedSortFields` /
+   * `allowedOperators` keep dropping: a rejected sort or operator degrades
+   * ordering, it does not widen the row set.
+   */
+  strictFilterFields?: boolean;
   /**
    * Whitelist of fields that can be sorted on.
    * When set, sort fields not in this list are silently dropped.
@@ -127,7 +151,12 @@ export interface ArcQueryParserOptions {
  * For advanced MongoDB features ($lookup, aggregations), use MongoKit's QueryParser.
  */
 export class ArcQueryParser implements QueryParserInterface {
-  private readonly maxLimit: number;
+  /**
+   * PUBLIC, deliberately: `QueryResolver` reads it so it does not apply a second cap
+   * on top of this one. Three layers capping independently, lowest winning silently,
+   * is what made a 696-row chart of accounts render as 100.
+   */
+  readonly maxLimit: number;
   private readonly defaultLimit: number;
   private readonly maxRegexLength: number;
   private readonly maxSearchLength: number;
@@ -135,6 +164,7 @@ export class ArcQueryParser implements QueryParserInterface {
   private readonly _allowedFilterFields?: Set<string>;
   private readonly _allowedSortFields?: Set<string>;
   private readonly _allowedOperators?: Set<string>;
+  private readonly strictFilterFields: boolean;
 
   /** Allowed filter fields (used by MCP for auto-derive) */
   readonly allowedFilterFields?: readonly string[];
@@ -161,6 +191,11 @@ export class ArcQueryParser implements QueryParserInterface {
     this.maxRegexLength = options.maxRegexLength ?? MAX_REGEX_LENGTH;
     this.maxSearchLength = options.maxSearchLength ?? MAX_SEARCH_LENGTH;
     this.maxFilterDepth = options.maxFilterDepth ?? MAX_FILTER_DEPTH;
+    // `??` not `||`: an explicit `false` must beat the env, so a deployment can
+    // opt a single parser out of a fleet-wide switch. A general default must
+    // never override a specific instruction.
+    this.strictFilterFields =
+      options.strictFilterFields ?? process.env.ARC_STRICT_QUERY_PARAMS === "true";
 
     if (options.allowedFilterFields) {
       this._allowedFilterFields = new Set(options.allowedFilterFields);
@@ -428,7 +463,17 @@ export class ArcQueryParser implements QueryParserInterface {
     // whitelist — `price[gte]` and `price` should both be gated by the
     // `price` entry in `allowedFilterFields`.
     const bareKey = key.replace(/\[[a-z]+\]$/, "");
-    if (this._allowedFilterFields && !this._allowedFilterFields.has(bareKey)) return;
+    if (this._allowedFilterFields && !this._allowedFilterFields.has(bareKey)) {
+      // Dropping a filter WIDENS the result set — the caller asked to narrow
+      // and gets a broader answer with a 200. Under `strictFilterFields` we
+      // refuse instead. See the option's docblock for the two live incidents.
+      if (this.strictFilterFields) {
+        throw new ValidationError(
+          `Unknown filter field: ${bareKey}. Allowed: ${[...this._allowedFilterFields].sort().join(", ")}`,
+        );
+      }
+      return;
+    }
 
     // Enforce max filter depth (prevents filter bombs)
     if (this.exceedsDepth(value)) return;
@@ -601,10 +646,31 @@ export class ArcQueryParser implements QueryParserInterface {
         },
         limit: {
           type: "integer",
-          description: "Number of items per page",
+          /**
+           * The cap is DOCUMENTED here, not enforced — deliberately.
+           *
+           * Both layers that handle `limit` CLAMP it: this parser
+           * (`Math.min(…, this.maxLimit)`) and `QueryResolver`. Emitting
+           * `maximum` contradicted them, because arc layers this schema as the
+           * route's `listQuery` and Fastify validates the querystring BEFORE
+           * either runs — so the clamp was unreachable and `?limit=200` became a
+           * hard 400.
+           *
+           * That combination is worse than either policy alone. Asking for more
+           * rows than allowed is a benign over-ask with an obvious right answer
+           * (give the maximum); turning it into a validation failure means a UI
+           * passing a generous page size gets NOTHING, and a caller that does not
+           * inspect the error body renders it as an empty list — a 400 disguised
+           * as "no results", which is the hardest kind to find.
+           *
+           * A deployment wanting refusal instead of clamping should say so in the
+           * parser's policy, where both halves can agree, not in a schema that
+           * silently outranks them. Mirrors the same fix in mongokit's
+           * `buildQuerySchema`.
+           */
+          description: `Number of items per page (values above ${this.maxLimit} are capped to ${this.maxLimit})`,
           default: this.defaultLimit,
           minimum: 1,
-          maximum: this.maxLimit,
         },
         sort: {
           type: "string",

@@ -24,6 +24,7 @@
  * });
  */
 
+import { isProductionEnv } from "@classytic/primitives/environment";
 import type { ErrorContract, ErrorDetail } from "@classytic/repo-core/errors";
 import { isHttpError, toErrorContract } from "@classytic/repo-core/errors";
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -49,11 +50,22 @@ export interface ErrorMapper<T extends Error = Error> {
 }
 
 export interface ErrorHandlerOptions {
-  /** Include `meta.stack` on the wire (defaults to `NODE_ENV !== 'production'`). */
+  /**
+   * Include `meta.stack` on the wire.
+   *
+   * Under `createApp`, defaults from the resolved `preset` (falling back to the
+   * environment via `isProductionEnv`, which knows both `production` and `prod`).
+   * Registering this plugin DIRECTLY skips that, and the default is the
+   * environment alone.
+   */
   includeStack?: boolean;
   /**
-   * Ship the raw `error.message` of UNCLASSIFIED 500s on the wire
-   * (defaults to `NODE_ENV !== 'production'`).
+   * Ship the raw `error.message` of UNCLASSIFIED 500s on the wire.
+   *
+   * Same derivation as {@link includeStack}: the `preset` under `createApp`,
+   * otherwise the environment. Both are host keys, so stating one no longer
+   * silently resets the other — `registerErrorHandler` MERGES them over the
+   * derived pair instead of replacing it.
    *
    * Only the `arc.internal_error` fallback is affected — an unclassified
    * throw carries whatever some driver/library put in the message (connection
@@ -208,10 +220,21 @@ async function errorHandlerPluginFn(
   fastify: FastifyInstance,
   options: ErrorHandlerOptions = {},
 ): Promise<void> {
-  const isProduction = process.env.NODE_ENV === "production";
+  /**
+   * The FALLBACK for a plugin registered directly (`fastify.register(errorHandlerPlugin)`), which
+   * has no access to `createApp`'s resolved `preset`. Composed through `createApp`, both switches
+   * arrive already derived from the preset and this default never applies — see
+   * `factory/registerAuth.ts#registerErrorHandler`.
+   *
+   * Via the shared classifier, NOT `process.env.NODE_ENV === "production"`. That comparison
+   * recognises only the long spelling, so a deployment using `NODE_ENV=prod` got BOTH switches
+   * true: stack traces AND the raw thrown message of a 500 returned to clients, in production,
+   * with nothing to indicate it.
+   */
+  const productionEnv = isProductionEnv(process.env.NODE_ENV);
   const {
-    includeStack = !isProduction,
-    exposeInternalMessages = !isProduction,
+    includeStack = !productionEnv,
+    exposeInternalMessages = !productionEnv,
     onError,
     errorMap = {},
     errorMappers = [],
