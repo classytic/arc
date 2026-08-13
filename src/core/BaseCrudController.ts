@@ -20,7 +20,12 @@
  */
 
 import type { RepositoryLike } from "@classytic/repo-core/adapter";
-import type { PaginationParams, QueryOptions } from "@classytic/repo-core/repository";
+import {
+  type PaginationParams,
+  type QueryOptions,
+  retryingTransaction,
+  type StandardRepo,
+} from "@classytic/repo-core/repository";
 import { buildQueryKey } from "../cache/keys.js";
 import type { QueryCacheConfig } from "../cache/QueryCache.js";
 import { DEFAULT_ID_FIELD, DEFAULT_LIMIT, DEFAULT_TENANT_FIELD } from "../constants.js";
@@ -170,6 +175,8 @@ export class BaseCrudController<
    * one, which is the entire point of the seam.
    */
   protected _writes?: ResourceWrites;
+  /** Transactional write envelope — see `ResourceConfig.transactional`. */
+  protected _transactional = false;
 
   constructor(repository: TRepository, options: BaseControllerOptions = {}) {
     this.repository = repository;
@@ -208,6 +215,7 @@ export class BaseCrudController<
     this._onFieldWriteDenied = options.onFieldWriteDenied;
     this._onImmutableWrite = options.onImmutableWrite;
     this._writes = options.writes;
+    this._transactional = options.transactional === true;
 
     this.accessControl = new AccessControl({
       tenantField: this.tenantField,
@@ -352,6 +360,9 @@ export class BaseCrudController<
     }
     if (options.writes !== undefined) {
       this._writes = options.writes;
+    }
+    if (options.transactional !== undefined) {
+      this._transactional = options.transactional === true;
     }
 
     if (rebuildAccessControl) {
@@ -571,9 +582,27 @@ export class BaseCrudController<
     return executeHookedOp(this.hookOpContext(req), args, executor);
   }
 
+  /**
+   * Run a write's PERSISTENCE step, transactionally when the resource asked.
+   *
+   * Plain mode hands `fn` the live repository. Transactional mode runs it
+   * through repo-core's `retryingTransaction`: the callback receives the
+   * TX-BOUND repository (so declared verbs and repository calls join the same
+   * transaction), transient conflicts re-run `fn` with jittered bounded
+   * backoff, everything else — including `VersionConflictError` — surfaces
+   * once. Hooks stay OUTSIDE: before/around ran already and must not re-run;
+   * after-hooks run post-commit, which they already do by running after this.
+   */
+  protected runWritePersistence<T>(fn: (repo: TRepository) => Promise<T>): Promise<T> {
+    if (!this._transactional) return fn(this.repository);
+    return retryingTransaction(this.repository as unknown as StandardRepo<AnyRecord>, (txRepo) =>
+      fn(txRepo as unknown as TRepository),
+    );
+  }
+
   /** Assemble the `WriteContext` a `create` verb receives. */
-  protected writeContext(req: IRequestContext): WriteContext {
-    return { req, repository: this.repository as RepositoryLike<AnyRecord> };
+  protected writeContext(req: IRequestContext, repo: TRepository = this.repository): WriteContext {
+    return { req, repository: repo as RepositoryLike<AnyRecord> };
   }
 
   /**
@@ -594,10 +623,11 @@ export class BaseCrudController<
     req: IRequestContext,
     id: string,
     existing: unknown,
+    repo: TRepository = this.repository,
   ): MutationWriteContext {
     return {
       req,
-      repository: this.repository as RepositoryLike<AnyRecord>,
+      repository: repo as RepositoryLike<AnyRecord>,
       id,
       existing: existing as AnyRecord,
     };
@@ -975,13 +1005,15 @@ export class BaseCrudController<
       req,
       { op: "create", input: data },
       async (processed) =>
-        this._writes?.create
-          ? this._writes.create(processed as Partial<AnyRecord>, this.writeContext(req))
-          : this.repository.create(processed as Partial<TDoc>, {
-              user,
-              context: arcContext,
-              ...this.tenantRepoOptions(req),
-            }),
+        this.runWritePersistence((repo) =>
+          this._writes?.create
+            ? this._writes.create(processed as Partial<AnyRecord>, this.writeContext(req, repo))
+            : repo.create(processed as Partial<TDoc>, {
+                user,
+                context: arcContext,
+                ...this.tenantRepoOptions(req),
+              }),
+        ),
     );
 
     /**
@@ -1037,23 +1069,25 @@ export class BaseCrudController<
       req,
       { op: "update", input: data, meta: hookMeta },
       async (processed) =>
-        this._writes?.update
-          ? // `repoId`, NOT the route param. The verb stands exactly where
-            // `repository.update(repoId, …)` stood, and repo-core types that
-            // argument as the PRIMARY KEY. On a resource with a custom
-            // `idField` the two differ — the route carries a slug while the
-            // repository keys off `_id` — so passing `id` handed a domain
-            // command a value its own repository would not resolve.
-            this._writes.update(
-              repoId,
-              processed as Partial<AnyRecord>,
-              this.mutationWriteContext(req, repoId, existing),
-            )
-          : this.repository.update(repoId, processed as Partial<TDoc>, {
-              user,
-              context: arcContext,
-              ...this.tenantRepoOptions(req),
-            }),
+        this.runWritePersistence((repo) =>
+          this._writes?.update
+            ? // `repoId`, NOT the route param. The verb stands exactly where
+              // `repository.update(repoId, …)` stood, and repo-core types that
+              // argument as the PRIMARY KEY. On a resource with a custom
+              // `idField` the two differ — the route carries a slug while the
+              // repository keys off `_id` — so passing `id` handed a domain
+              // command a value its own repository would not resolve.
+              this._writes.update(
+                repoId,
+                processed as Partial<AnyRecord>,
+                this.mutationWriteContext(req, repoId, existing, repo),
+              )
+            : repo.update(repoId, processed as Partial<TDoc>, {
+                user,
+                context: arcContext,
+                ...this.tenantRepoOptions(req),
+              }),
+        ),
     );
 
     /**
@@ -1120,16 +1154,18 @@ export class BaseCrudController<
       req,
       { op: "delete", input: existing as AnyRecord, meta: hookMeta, pipeProcessedData: false },
       async () =>
-        this._writes?.delete
-          ? // `repoId` for the same reason as `update` — the verb replaces the
-            // repository call, so it receives the repository's primary key.
-            this._writes.delete(repoId, this.mutationWriteContext(req, repoId, existing))
-          : this.repository.delete(repoId, {
-              user,
-              context: arcContext,
-              ...this.tenantRepoOptions(req),
-              ...(deleteMode ? { mode: deleteMode } : {}),
-            }),
+        this.runWritePersistence((repo) =>
+          this._writes?.delete
+            ? // `repoId` for the same reason as `update` — the verb replaces the
+              // repository call, so it receives the repository's primary key.
+              this._writes.delete(repoId, this.mutationWriteContext(req, repoId, existing, repo))
+            : repo.delete(repoId, {
+                user,
+                context: arcContext,
+                ...this.tenantRepoOptions(req),
+                ...(deleteMode ? { mode: deleteMode } : {}),
+              }),
+        ),
     );
 
     // Repo contract: `delete()` returns DeleteResult on success, null on

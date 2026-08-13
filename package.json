@@ -352,7 +352,7 @@
   },
   "peerDependencies": {
     "@classytic/primitives": ">=0.21.0",
-    "@classytic/repo-core": ">=0.17.0",
+    "@classytic/repo-core": ">=0.23.0",
     "@classytic/streamline": ">=2.8.0",
     "@fastify/cors": ">=11.0.0",
     "@fastify/helmet": ">=13.0.0",
@@ -484,7 +484,7 @@
     "@classytic/mongokit": "^3.32.0",
     "@classytic/pgkit": "^0.1.0",
     "@classytic/primitives": "^0.21.0",
-    "@classytic/repo-core": "^0.21.0",
+    "@classytic/repo-core": "^0.23.0",
     "@classytic/sqlitekit": "^0.6.0",
     "@classytic/streamline": "^2.8.2",
     "@electric-sql/pglite": "^0.5.4",

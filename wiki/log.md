@@ -14,3 +14,4 @@ Full history: `git log -- wiki/` · release detail: [changelog/v2.md](../changel
 - 2026-08-02 — modules — disposer contract: `{ defer }` registers teardown at acquisition, LIFO on rollback+shutdown; onClose runs FIRST.
 - 2026-08-12 — events — outbox resolves the RAW transport (the `fastify.events` facade published nothing and fails open); no transport is boot-fatal.
 - 2026-08-13 — v3 — master plan added: four pillars (transactional truth, declared topology, one policy plane, proven guarantees), phased 0–4, non-goals declared. See v3.md §Master plan.
+- 2026-08-13 — core — transactional write envelope: `transactional: true` runs persistence in `retryingTransaction`, verbs get the tx-bound repo, hooks once, boot-fatal without `withTransaction`. changelog/v2.md#2340.

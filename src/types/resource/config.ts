@@ -81,6 +81,23 @@ export interface ResourceConfig<TDoc = AnyRecord> {
    * ```
    */
   writes?: ResourceWrites<TDoc>;
+  /**
+   * Run every CRUD write (and its declared verb) inside a repository
+   * transaction with TRANSIENT-conflict retry (repo-core
+   * `retryingTransaction`): begin → persistence/verb → commit, re-run on the
+   * kit-classified conflicts only, jittered bounded backoff.
+   *
+   * Contract: before/around hooks run ONCE (outside the retry); the
+   * persistence step may re-run, which is safe by construction when side
+   * effects go through the tx-bound repository (they roll back) or an outbox
+   * row; after-hooks run once, post-commit. A `VersionConflictError`
+   * (`ifVersion` CAS) is NOT transient and surfaces as 409.
+   *
+   * Boot-fatal when the adapter's repository has no `withTransaction`
+   * (capability `transactions: false`) — a requested transactional envelope
+   * that silently degrades is the defect, not a mode.
+   */
+  transactional?: boolean;
   queryParser?: unknown;
   permissions?: ResourcePermissions;
   schemaOptions?: RouteSchemaOptions;

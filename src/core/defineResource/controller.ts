@@ -41,6 +41,21 @@ export function resolveOrAutoCreateController<TDoc extends AnyRecord>(
 ): IController<TDoc> | undefined {
   const userController = resolvedConfig.controller;
 
+  // Transactional envelope requires withTransaction on the repository —
+  // BOOT-fatal on both branches (user-supplied and auto-built): a requested
+  // envelope that silently degrades to bare writes is the defect, not a mode.
+  if (resolvedConfig.transactional === true) {
+    const repoLike = repository as { withTransaction?: unknown } | null | undefined;
+    if (typeof repoLike?.withTransaction !== "function") {
+      throw new Error(
+        `Resource "${resolvedConfig.name}" declares \`transactional: true\` but its ` +
+          "repository has no `withTransaction` (capability `transactions: false` — D1, " +
+          "standalone Mongo). Wire a transactional kit, or remove the flag; arc will not " +
+          "silently drop a requested transaction envelope.",
+      );
+    }
+  }
+
   if (userController) {
     threadQueryParser(userController, resolvedConfig);
     // BEFORE any option threading: a resource whose declared write verbs
@@ -120,6 +135,10 @@ function threadConfigureLifecycle<TDoc extends AnyRecord>(
    */
   if (resolvedConfig.writes !== undefined) {
     opts.writes = resolvedConfig.writes;
+  }
+  // Same rule as `writes`: never inferred, presence IS the declaration.
+  if (resolvedConfig.transactional !== undefined) {
+    opts.transactional = resolvedConfig.transactional;
   }
   // matchesFilter and presetFields come from adapter / presets, not
   // user-declared fields — always forward when present.
@@ -315,6 +334,7 @@ function buildBaseController<TDoc extends AnyRecord>(
      * kernel's, so neither has to be re-implemented to reach the other.
      */
     writes: resolvedConfig.writes as BaseControllerOptions["writes"],
+    transactional: resolvedConfig.transactional === true,
     presetFields: resolvedConfig._controllerOptions
       ? {
           slugField: resolvedConfig._controllerOptions.slugField,

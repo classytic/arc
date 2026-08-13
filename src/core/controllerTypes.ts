@@ -222,6 +222,12 @@ export interface ControllerConfigurableOptions {
    * silently lose the resource's verbs just because it was hand-constructed.
    */
   writes?: ResourceWrites;
+  /**
+   * Transactional write envelope — see `ResourceConfig.transactional`.
+   * Configurable so a host-supplied controller receives it through
+   * `configure()` like `writes`.
+   */
+  transactional?: boolean;
 }
 
 /**

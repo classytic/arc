@@ -1,0 +1,231 @@
+/**
+ * TRANSACTIONAL WRITE ENVELOPE — `defineResource({ transactional: true })`.
+ *
+ * Pinned contract (Phase 1c of the transactional core):
+ *   1. The PERSISTENCE step (repository call OR declared verb) runs inside
+ *      `withTransaction`, receives the TX-BOUND repository, and re-runs on
+ *      kit-classified TRANSIENT conflicts only.
+ *   2. Hooks stay OUTSIDE the retry: before-hooks run ONCE (their side
+ *      effects must not repeat), after-hooks run ONCE, post-commit.
+ *   3. `VersionConflictError` is NOT transient — it surfaces, no retry.
+ *   4. `transactional: true` on a repository without `withTransaction` is
+ *      BOOT-fatal at registration, not a first-request surprise.
+ *   5. Untouched default: without the flag, no transaction is started.
+ */
+
+import type { DataAdapter } from "@classytic/repo-core/adapter";
+import { VersionConflictError } from "@classytic/repo-core/errors";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { BaseController } from "../../src/core/BaseController.js";
+import { defineResource } from "../../src/core/defineResource.js";
+import { HookSystem } from "../../src/hooks/HookSystem.js";
+import { allowPublic } from "../../src/permissions/core.js";
+import type { IRequestContext } from "../../src/types/index.js";
+import { mockUser, setupGlobalHooks } from "../setup.js";
+
+setupGlobalHooks();
+
+function createReq(hooks: HookSystem, overrides: Partial<IRequestContext> = {}): IRequestContext {
+  return {
+    query: {},
+    body: {},
+    params: {},
+    user: mockUser,
+    headers: {},
+    metadata: { arc: { hooks } },
+    ...overrides,
+  } as IRequestContext;
+}
+
+const transientErr = () =>
+  Object.assign(new Error("write conflict"), { errorLabels: ["TransientTransactionError"] });
+
+/**
+ * Repo double with a REAL withTransaction shape: hands the callback a
+ * distinct tx-bound repo object, so tests can assert which one the
+ * persistence step actually used.
+ */
+function txCapableRepo() {
+  const txRepo = {
+    __tx: true,
+    getById: vi.fn().mockResolvedValue({ _id: "inv-1", status: "draft" }),
+    create: vi.fn(async (d: Record<string, unknown>) => ({ _id: "inv-new", ...d })),
+    update: vi.fn(async (_id: string, d: Record<string, unknown>) => ({ _id: "inv-1", ...d })),
+    delete: vi.fn().mockResolvedValue({ success: true }),
+    // biome-ignore lint/suspicious/noExplicitAny: test double
+  } as any;
+  const repo = {
+    getById: vi.fn().mockResolvedValue({ _id: "inv-1", status: "draft" }),
+    getAll: vi.fn().mockResolvedValue({ method: "offset", data: [], total: 0 }),
+    create: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+    isTransientConflictError: (err: unknown) =>
+      Boolean(
+        err &&
+          typeof err === "object" &&
+          Array.isArray((err as { errorLabels?: unknown }).errorLabels) &&
+          ((err as { errorLabels: unknown[] }).errorLabels as string[]).includes(
+            "TransientTransactionError",
+          ),
+      ),
+    withTransaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(txRepo)),
+    // biome-ignore lint/suspicious/noExplicitAny: test double
+  } as any;
+  return { repo, txRepo };
+}
+
+describe("transactional write envelope", () => {
+  let hooks: HookSystem;
+  beforeEach(() => {
+    hooks = new HookSystem();
+  });
+
+  it("persistence uses the TX-BOUND repository, not the live one", async () => {
+    const { repo, txRepo } = txCapableRepo();
+    const controller = new BaseController(repo, {
+      resourceName: "invoice",
+      transactional: true,
+    });
+
+    await controller.create(createReq(hooks, { body: { partnerName: "Acme" } }));
+
+    expect(repo.withTransaction).toHaveBeenCalledTimes(1);
+    expect(txRepo.create).toHaveBeenCalledTimes(1);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it("a declared VERB receives the tx-bound repository in ctx", async () => {
+    const { repo, txRepo } = txCapableRepo();
+    let seenRepo: unknown;
+    const controller = new BaseController(repo, {
+      resourceName: "invoice",
+      transactional: true,
+      writes: {
+        create: async (_data, ctx) => {
+          seenRepo = ctx.repository;
+          return { _id: "x" } as never;
+        },
+      },
+    });
+
+    await controller.create(createReq(hooks, { body: { partnerName: "Acme" } }));
+    expect(seenRepo).toBe(txRepo);
+  });
+
+  it("a TRANSIENT conflict re-runs persistence; before-hook and after-hook run ONCE", async () => {
+    const { repo, txRepo } = txCapableRepo();
+    let attempts = 0;
+    txRepo.create.mockImplementation(async (d: Record<string, unknown>) => {
+      attempts++;
+      if (attempts === 1) throw transientErr();
+      return { _id: "inv-new", ...d };
+    });
+
+    const order: string[] = [];
+    hooks.register({
+      resource: "invoice",
+      operation: "create",
+      phase: "before",
+      // biome-ignore lint/suspicious/noExplicitAny: hook ctx shape
+      handler: (ctx: any) => {
+        order.push("before");
+        return ctx.data;
+      },
+    });
+    hooks.register({
+      resource: "invoice",
+      operation: "create",
+      phase: "after",
+      // biome-ignore lint/suspicious/noExplicitAny: hook ctx shape
+      handler: (ctx: any) => {
+        order.push("after");
+        return ctx.data;
+      },
+    });
+
+    const controller = new BaseController(repo, {
+      resourceName: "invoice",
+      transactional: true,
+    });
+    const res = await controller.create(createReq(hooks, { body: { partnerName: "Acme" } }));
+
+    expect(res.status).toBe(201);
+    expect(attempts).toBe(2); // persistence re-ran
+    expect(order).toEqual(["before", "after"]); // hooks did NOT
+    expect(repo.withTransaction).toHaveBeenCalledTimes(2); // one tx per attempt
+  });
+
+  it("VersionConflictError surfaces WITHOUT retry — CAS losers must re-read, not re-run", async () => {
+    const { repo, txRepo } = txCapableRepo();
+    txRepo.update.mockRejectedValue(new VersionConflictError({ expectedVersion: 3, id: "inv-1" }));
+
+    const controller = new BaseController(repo, {
+      resourceName: "invoice",
+      transactional: true,
+    });
+
+    await expect(
+      controller.update(createReq(hooks, { params: { id: "inv-1" }, body: { n: 1 } })),
+    ).rejects.toMatchObject({ code: "version_conflict" });
+    expect(txRepo.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("WITHOUT the flag nothing changes: live repo, no transaction", async () => {
+    const { repo, txRepo } = txCapableRepo();
+    repo.create.mockResolvedValue({ _id: "inv-new" });
+    const controller = new BaseController(repo, { resourceName: "invoice" });
+
+    await controller.create(createReq(hooks, { body: { partnerName: "Acme" } }));
+
+    expect(repo.withTransaction).not.toHaveBeenCalled();
+    expect(repo.create).toHaveBeenCalledTimes(1);
+    expect(txRepo.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("transactional: true at registration", () => {
+  const PERMISSIONS = {
+    list: allowPublic(),
+    get: allowPublic(),
+    create: allowPublic(),
+    update: allowPublic(),
+    delete: allowPublic(),
+  };
+
+  it("BOOT-fatal when the repository has no withTransaction", () => {
+    const bare = {
+      getById: async () => null,
+      getAll: async () => [],
+      create: async (d: unknown) => d,
+      update: async () => null,
+      delete: async () => false,
+    };
+    const adapter = { type: "custom", name: "mem", repository: bare } as unknown as DataAdapter<
+      Record<string, unknown>
+    >;
+    expect(() =>
+      defineResource({
+        name: "invoice",
+        adapter,
+        permissions: PERMISSIONS,
+        transactional: true,
+      }),
+    ).toThrow(/withTransaction/);
+  });
+
+  it("registers when the repository is transactional", () => {
+    const { repo } = txCapableRepo();
+    const adapter = { type: "custom", name: "mem", repository: repo } as unknown as DataAdapter<
+      Record<string, unknown>
+    >;
+    expect(() =>
+      defineResource({
+        name: "invoice",
+        adapter,
+        permissions: PERMISSIONS,
+        transactional: true,
+      }),
+    ).not.toThrow();
+  });
+});

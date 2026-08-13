@@ -6,7 +6,7 @@ Release **index** for `@classytic/arc` — one line per minor, newest first. Ful
 
 | Version | Headline |
 |---|---|
-| [2.34](changelog/v2.md#2340) | **Write verbs** — bind a CRUD slot to a domain command, pipeline intact; reachability is boot-fatal. Outbox published NOTHING through its default transport (fail-open facade → raw `EventTransport`); `onHandlerError:'throw'`; single-node topology declarable; relay id per instance. |
+| [2.34](changelog/v2.md#2340) | **Write verbs** + **transactional write envelope** (`transactional: true` — tx-bound repo into verbs, transient-conflict retry, hooks once, boot-fatal without `withTransaction`; ⚠ repo-core floor >=0.23.0) — bind a CRUD slot to a domain command, pipeline intact; reachability is boot-fatal. Outbox published NOTHING through its default transport (fail-open facade → raw `EventTransport`); `onHandlerError:'throw'`; single-node topology declarable; relay id per instance. |
 | [2.33](changelog/v2.md#2330) | ⚠ `NODE_ENV=prod` disclosed stack traces + raw 500 messages and dropped `Secure` cookies. Silent input drop closed on two paths (`strictFilterFields`, `onImmutableWrite`, both opt-in). |
 | [2.32](changelog/v2.md#2320) | Module disposers (`defer`), `extendModule`, `buildPermissionMatrix`, outbox-admin at L5. |
 | [2.31](changelog/v2.md#2310) | ⚠ `RouteDefinition.raw` removed — `handler` vs `rawHandler` (a leftover flag is boot-fatal). ⚠ Jobs management surface off by default + `requirePlatformRole()`. Zod converts by direction. Static assets. Deprecated aliases removed. |
