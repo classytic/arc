@@ -52,6 +52,17 @@ export interface WriteContext<TDoc = AnyRecord> {
    * usually closes over it directly instead of downcasting this one.
    */
   repository: RepositoryLike<TDoc>;
+  /**
+   * Present ONLY under `transactional: true`: the repo-core
+   * `TransactionHandle` for the transaction this write runs in.
+   * `uow.session` is the raw driver handle — the join point for work OUTSIDE
+   * the repository, canonically an outbox row:
+   * `outbox.store(event, { session: ctx.uow.session })` commits the event
+   * atomically with the business write. Connection-bound backends (SQLite)
+   * provide an empty handle; their tx-bound `ctx.repository` is the only
+   * join point.
+   */
+  uow?: { session?: unknown };
 }
 
 /**

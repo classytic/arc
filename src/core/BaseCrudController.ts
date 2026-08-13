@@ -593,16 +593,27 @@ export class BaseCrudController<
    * once. Hooks stay OUTSIDE: before/around ran already and must not re-run;
    * after-hooks run post-commit, which they already do by running after this.
    */
-  protected runWritePersistence<T>(fn: (repo: TRepository) => Promise<T>): Promise<T> {
+  protected runWritePersistence<T>(
+    fn: (repo: TRepository, uow?: { session?: unknown }) => Promise<T>,
+  ): Promise<T> {
     if (!this._transactional) return fn(this.repository);
-    return retryingTransaction(this.repository as unknown as StandardRepo<AnyRecord>, (txRepo) =>
-      fn(txRepo as unknown as TRepository),
+    return retryingTransaction(
+      this.repository as unknown as StandardRepo<AnyRecord>,
+      (txRepo, uow) => fn(txRepo as unknown as TRepository, uow),
     );
   }
 
   /** Assemble the `WriteContext` a `create` verb receives. */
-  protected writeContext(req: IRequestContext, repo: TRepository = this.repository): WriteContext {
-    return { req, repository: repo as RepositoryLike<AnyRecord> };
+  protected writeContext(
+    req: IRequestContext,
+    repo: TRepository = this.repository,
+    uow?: { session?: unknown },
+  ): WriteContext {
+    return {
+      req,
+      repository: repo as RepositoryLike<AnyRecord>,
+      ...(uow !== undefined ? { uow } : {}),
+    };
   }
 
   /**
@@ -624,12 +635,14 @@ export class BaseCrudController<
     id: string,
     existing: unknown,
     repo: TRepository = this.repository,
+    uow?: { session?: unknown },
   ): MutationWriteContext {
     return {
       req,
       repository: repo as RepositoryLike<AnyRecord>,
       id,
       existing: existing as AnyRecord,
+      ...(uow !== undefined ? { uow } : {}),
     };
   }
 
@@ -1005,9 +1018,12 @@ export class BaseCrudController<
       req,
       { op: "create", input: data },
       async (processed) =>
-        this.runWritePersistence((repo) =>
+        this.runWritePersistence((repo, uow) =>
           this._writes?.create
-            ? this._writes.create(processed as Partial<AnyRecord>, this.writeContext(req, repo))
+            ? this._writes.create(
+                processed as Partial<AnyRecord>,
+                this.writeContext(req, repo, uow),
+              )
             : repo.create(processed as Partial<TDoc>, {
                 user,
                 context: arcContext,
@@ -1069,7 +1085,7 @@ export class BaseCrudController<
       req,
       { op: "update", input: data, meta: hookMeta },
       async (processed) =>
-        this.runWritePersistence((repo) =>
+        this.runWritePersistence((repo, uow) =>
           this._writes?.update
             ? // `repoId`, NOT the route param. The verb stands exactly where
               // `repository.update(repoId, …)` stood, and repo-core types that
@@ -1080,7 +1096,7 @@ export class BaseCrudController<
               this._writes.update(
                 repoId,
                 processed as Partial<AnyRecord>,
-                this.mutationWriteContext(req, repoId, existing, repo),
+                this.mutationWriteContext(req, repoId, existing, repo, uow),
               )
             : repo.update(repoId, processed as Partial<TDoc>, {
                 user,
@@ -1154,11 +1170,14 @@ export class BaseCrudController<
       req,
       { op: "delete", input: existing as AnyRecord, meta: hookMeta, pipeProcessedData: false },
       async () =>
-        this.runWritePersistence((repo) =>
+        this.runWritePersistence((repo, uow) =>
           this._writes?.delete
             ? // `repoId` for the same reason as `update` — the verb replaces the
               // repository call, so it receives the repository's primary key.
-              this._writes.delete(repoId, this.mutationWriteContext(req, repoId, existing, repo))
+              this._writes.delete(
+                repoId,
+                this.mutationWriteContext(req, repoId, existing, repo, uow),
+              )
             : repo.delete(repoId, {
                 user,
                 context: arcContext,

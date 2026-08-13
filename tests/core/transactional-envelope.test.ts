@@ -95,15 +95,22 @@ describe("transactional write envelope", () => {
     expect(repo.create).not.toHaveBeenCalled();
   });
 
-  it("a declared VERB receives the tx-bound repository in ctx", async () => {
+  it("a declared VERB receives the tx-bound repository AND the TransactionHandle in ctx", async () => {
     const { repo, txRepo } = txCapableRepo();
+    // Kit contract (repo-core 0.23): withTransaction hands (txRepo, { session }).
+    repo.withTransaction.mockImplementation(
+      async (fn: (tx: unknown, uow?: unknown) => Promise<unknown>) =>
+        fn(txRepo, { session: "driver-session" }),
+    );
     let seenRepo: unknown;
+    let seenUow: unknown;
     const controller = new BaseController(repo, {
       resourceName: "invoice",
       transactional: true,
       writes: {
         create: async (_data, ctx) => {
           seenRepo = ctx.repository;
+          seenUow = ctx.uow;
           return { _id: "x" } as never;
         },
       },
@@ -111,6 +118,24 @@ describe("transactional write envelope", () => {
 
     await controller.create(createReq(hooks, { body: { partnerName: "Acme" } }));
     expect(seenRepo).toBe(txRepo);
+    // The outbox join point: outbox.store(event, { session: ctx.uow.session }).
+    expect(seenUow).toEqual({ session: "driver-session" });
+  });
+
+  it("WITHOUT the flag, ctx.uow is absent — no phantom transaction implied", async () => {
+    const { repo } = txCapableRepo();
+    let seenUow: unknown = "sentinel";
+    const controller = new BaseController(repo, {
+      resourceName: "invoice",
+      writes: {
+        create: async (_data, ctx) => {
+          seenUow = ctx.uow;
+          return { _id: "x" } as never;
+        },
+      },
+    });
+    await controller.create(createReq(hooks, { body: { partnerName: "Acme" } }));
+    expect(seenUow).toBeUndefined();
   });
 
   it("a TRANSIENT conflict re-runs persistence; before-hook and after-hook run ONCE", async () => {
