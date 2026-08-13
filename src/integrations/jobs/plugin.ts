@@ -64,7 +64,14 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
   fastify: FastifyInstance,
   options: JobsPluginOptions,
 ) => {
-  const { connection, jobs, prefix = "/jobs", bridgeEvents = true, defaults = {} } = options;
+  const {
+    connection,
+    jobs,
+    prefix = "/jobs",
+    bridgeEvents = true,
+    defaults = {},
+    mode = "both",
+  } = options;
 
   // Dynamic import of BullMQ (only when plugin is actually registered).
   // `bullmq` is a peer-optional dep; the ambient declaration in
@@ -224,7 +231,10 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
     }
   }
 
-  // Register each job as a queue + worker pair
+  // Register each job as a queue (+ worker unless producer-only).
+  // mode: 'producer' constructs NO Worker — an API replica that merely
+  // registered the plugin must not consume jobs it cannot be scaled for;
+  // dispatch() and stats still work through the queue.
   for (const job of jobs) {
     const queueName = job.name;
 
@@ -233,7 +243,11 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
     queues.set(queueName, queue);
 
     // Upsert the repeatable schedule up-front so it survives worker restart.
-    if (job.repeat) {
+    // WORKER-side ownership: a producer-only process must not own schedule
+    // reconciliation it cannot execute — its stale-scheduler sweep would
+    // fight the worker fleet's, and the enqueued repeats would sit
+    // unconsumed if no worker exists yet.
+    if (job.repeat && mode !== "producer") {
       const repeatOpts: RepeatSpec = {
         ...(job.repeat.pattern
           ? { pattern: job.repeat.pattern, tz: job.repeat.tz }
@@ -266,133 +280,135 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
       dlqQueues.set(dlqName, dlqQueue);
     }
 
-    // Create worker with timeout support
-    const jobTimeout = job.timeout ?? defaults.timeout;
-    const semaphore = job.maxConcurrent != null ? new Semaphore(job.maxConcurrent) : null;
-    const throttledSet: Set<string> = new Set();
-    throttledJobs.set(queueName, throttledSet);
+    if (mode !== "producer") {
+      // Create worker with timeout support
+      const jobTimeout = job.timeout ?? defaults.timeout;
+      const semaphore = job.maxConcurrent != null ? new Semaphore(job.maxConcurrent) : null;
+      const throttledSet: Set<string> = new Set();
+      throttledJobs.set(queueName, throttledSet);
 
-    const worker = new Worker(
-      queueName,
-      async (bullJob: { id?: string; attemptsMade?: number; data?: unknown }) => {
-        // Acquire semaphore slot before running the handler.
-        // Jobs that find all slots occupied wait here (state stays `active`
-        // in BullMQ but `throttled: true` in the status endpoint).
-        if (semaphore) {
-          if (semaphore.isFull) throttledSet.add(bullJob.id ?? "");
-          try {
-            await semaphore.acquire();
-          } finally {
-            throttledSet.delete(bullJob.id ?? "");
+      const worker = new Worker(
+        queueName,
+        async (bullJob: { id?: string; attemptsMade?: number; data?: unknown }) => {
+          // Acquire semaphore slot before running the handler.
+          // Jobs that find all slots occupied wait here (state stays `active`
+          // in BullMQ but `throttled: true` in the status endpoint).
+          if (semaphore) {
+            if (semaphore.isFull) throttledSet.add(bullJob.id ?? "");
+            try {
+              await semaphore.acquire();
+            } finally {
+              throttledSet.delete(bullJob.id ?? "");
+            }
           }
-        }
 
-        // Timeout + bulkhead semantics live in `executeTimedHandler`
-        // (execution.ts) — signal-based cancellation, settle-based
-        // slot release, grace-bounded hold. See that module's contract.
-        const result: unknown = await executeTimedHandler({
-          label: queueName,
-          ...(bullJob.id !== undefined ? { jobId: bullJob.id } : {}),
-          ...(jobTimeout !== undefined ? { timeoutMs: jobTimeout } : {}),
-          ...(job.cancelGraceMs !== undefined ? { cancelGraceMs: job.cancelGraceMs } : {}),
-          ...(semaphore ? { releaseSlot: () => semaphore.release() } : {}),
-          logger: fastify.log,
-          run: (signal) => {
-            const meta: JobMeta = {
-              jobId: bullJob.id ?? "",
-              attemptsMade: bullJob.attemptsMade ?? 0,
-              timestamp: Date.now(),
-              signal,
-            };
-            return job.handler(bullJob.data, meta);
-          },
-        });
+          // Timeout + bulkhead semantics live in `executeTimedHandler`
+          // (execution.ts) — signal-based cancellation, settle-based
+          // slot release, grace-bounded hold. See that module's contract.
+          const result: unknown = await executeTimedHandler({
+            label: queueName,
+            ...(bullJob.id !== undefined ? { jobId: bullJob.id } : {}),
+            ...(jobTimeout !== undefined ? { timeoutMs: jobTimeout } : {}),
+            ...(job.cancelGraceMs !== undefined ? { cancelGraceMs: job.cancelGraceMs } : {}),
+            ...(semaphore ? { releaseSlot: () => semaphore.release() } : {}),
+            logger: fastify.log,
+            run: (signal) => {
+              const meta: JobMeta = {
+                jobId: bullJob.id ?? "",
+                attemptsMade: bullJob.attemptsMade ?? 0,
+                timestamp: Date.now(),
+                signal,
+              };
+              return job.handler(bullJob.data, meta);
+            },
+          });
 
-        // Bridge completion event
+          // Bridge completion event
+          if (bridgeEvents && fastify.events?.publish) {
+            try {
+              await fastify.events.publish(`job.${queueName}.completed`, {
+                jobId: bullJob.id,
+                data: bullJob.data,
+                result,
+              });
+            } catch (err) {
+              fastify.log.warn(
+                { err, jobId: bullJob.id },
+                `Failed to publish job.${queueName}.completed event`,
+              );
+            }
+          }
+
+          return result;
+        },
+        {
+          connection,
+          concurrency: job.concurrency ?? 1,
+          limiter: job.rateLimit
+            ? { max: job.rateLimit.max, duration: job.rateLimit.duration }
+            : undefined,
+        },
+      );
+
+      // Bridge failure event + DLQ routing
+      worker.on(
+        "failed",
+        async (
+          bullJob: { id?: string; attemptsMade?: number; data?: unknown } | undefined,
+          error: Error,
+        ) => {
+          // Move to dead-letter queue when all retries are exhausted
+          const maxAttempts = job.retries ?? defaults.retries ?? 3;
+          if (dlqQueue && bullJob && (bullJob.attemptsMade ?? 0) >= maxAttempts) {
+            try {
+              await dlqQueue.add(`${queueName}:dead`, bullJob.data, {
+                jobId: `${bullJob.id}:dlq`,
+                removeOnComplete: false,
+              });
+              fastify.log.warn(
+                { jobId: bullJob.id, dlq: job.deadLetterQueue ?? `${queueName}:dead` },
+                `Job moved to dead-letter queue`,
+              );
+            } catch (dlqErr) {
+              fastify.log.error({ err: dlqErr, jobId: bullJob.id }, `Failed to move job to DLQ`);
+            }
+          }
+
+          if (bridgeEvents && fastify.events?.publish) {
+            try {
+              await fastify.events.publish(`job.${queueName}.failed`, {
+                jobId: bullJob?.id,
+                data: bullJob?.data,
+                error: error.message,
+                attemptsMade: bullJob?.attemptsMade,
+              });
+            } catch (err) {
+              fastify.log.warn(
+                { err, jobId: bullJob?.id },
+                `Failed to publish job.${queueName}.failed event`,
+              );
+            }
+          }
+        },
+      );
+
+      // Stalled-job detection — BullMQ fires this when a worker's lock lapses
+      // without a heartbeat, which usually means the worker process crashed.
+      // Surface it as a first-class event so operators can alert on silent
+      // failures (a failed handler is NOT always a stalled worker).
+      worker.on("stalled", async (jobId: string) => {
+        fastify.log.warn({ jobId, queue: queueName }, "Job stalled — worker may have crashed");
         if (bridgeEvents && fastify.events?.publish) {
           try {
-            await fastify.events.publish(`job.${queueName}.completed`, {
-              jobId: bullJob.id,
-              data: bullJob.data,
-              result,
-            });
+            await fastify.events.publish(`job.${queueName}.stalled`, { jobId });
           } catch (err) {
-            fastify.log.warn(
-              { err, jobId: bullJob.id },
-              `Failed to publish job.${queueName}.completed event`,
-            );
+            fastify.log.warn({ err, jobId }, `Failed to publish job.${queueName}.stalled event`);
           }
         }
+      });
 
-        return result;
-      },
-      {
-        connection,
-        concurrency: job.concurrency ?? 1,
-        limiter: job.rateLimit
-          ? { max: job.rateLimit.max, duration: job.rateLimit.duration }
-          : undefined,
-      },
-    );
-
-    // Bridge failure event + DLQ routing
-    worker.on(
-      "failed",
-      async (
-        bullJob: { id?: string; attemptsMade?: number; data?: unknown } | undefined,
-        error: Error,
-      ) => {
-        // Move to dead-letter queue when all retries are exhausted
-        const maxAttempts = job.retries ?? defaults.retries ?? 3;
-        if (dlqQueue && bullJob && (bullJob.attemptsMade ?? 0) >= maxAttempts) {
-          try {
-            await dlqQueue.add(`${queueName}:dead`, bullJob.data, {
-              jobId: `${bullJob.id}:dlq`,
-              removeOnComplete: false,
-            });
-            fastify.log.warn(
-              { jobId: bullJob.id, dlq: job.deadLetterQueue ?? `${queueName}:dead` },
-              `Job moved to dead-letter queue`,
-            );
-          } catch (dlqErr) {
-            fastify.log.error({ err: dlqErr, jobId: bullJob.id }, `Failed to move job to DLQ`);
-          }
-        }
-
-        if (bridgeEvents && fastify.events?.publish) {
-          try {
-            await fastify.events.publish(`job.${queueName}.failed`, {
-              jobId: bullJob?.id,
-              data: bullJob?.data,
-              error: error.message,
-              attemptsMade: bullJob?.attemptsMade,
-            });
-          } catch (err) {
-            fastify.log.warn(
-              { err, jobId: bullJob?.id },
-              `Failed to publish job.${queueName}.failed event`,
-            );
-          }
-        }
-      },
-    );
-
-    // Stalled-job detection — BullMQ fires this when a worker's lock lapses
-    // without a heartbeat, which usually means the worker process crashed.
-    // Surface it as a first-class event so operators can alert on silent
-    // failures (a failed handler is NOT always a stalled worker).
-    worker.on("stalled", async (jobId: string) => {
-      fastify.log.warn({ jobId, queue: queueName }, "Job stalled — worker may have crashed");
-      if (bridgeEvents && fastify.events?.publish) {
-        try {
-          await fastify.events.publish(`job.${queueName}.stalled`, { jobId });
-        } catch (err) {
-          fastify.log.warn({ err, jobId }, `Failed to publish job.${queueName}.stalled event`);
-        }
-      }
-    });
-
-    workers.set(queueName, worker);
+      workers.set(queueName, worker);
+    }
   }
 
   // Large payloads inflate Redis memory and slow every worker handoff.

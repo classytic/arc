@@ -127,6 +127,22 @@ export interface JobsPluginOptions {
   connection: { host: string; port: number; password?: string; db?: number } | unknown;
   /** Job definitions to register */
   jobs: JobDefinition[];
+  /**
+   * Which HALF of the queue this process owns. Phase 2 of the topology plan:
+   * an API replica that merely registered the plugin should not consume jobs.
+   *
+   * - `'both'` (default) — queues AND workers; the single-process case.
+   * - `'producer'` — queues only: `dispatch()` works, NO worker is
+   *   constructed, handlers never run here. For API fleets.
+   * - `'worker'` — workers AND queues (a worker needs its queue for DLQ +
+   *   dispatch-from-handler), HTTP dispatch still possible but the point is
+   *   consumption. For dedicated worker fleets.
+   *
+   * Repeatable schedules are registered by whichever side constructs
+   * WORKERS — a producer-only process must not own schedule reconciliation
+   * it cannot execute.
+   */
+  mode?: "both" | "producer" | "worker";
   /** URL prefix for job management endpoints (default: '/jobs') */
   prefix?: string;
   /**
