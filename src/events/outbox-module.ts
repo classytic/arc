@@ -32,6 +32,8 @@
  * The store contract is `@classytic/primitives/outbox`'s, not arc's — arc adapts to it rather
  * than owning it, which is why a kit (mongokit) can supply a store with no arc dependency.
  */
+import { randomBytes } from "node:crypto";
+import { hostname } from "node:os";
 import type { OutboxFailurePolicy, OutboxStore } from "@classytic/primitives/outbox";
 import type { FastifyInstance } from "fastify";
 /**
@@ -42,12 +44,37 @@ import type { FastifyInstance } from "fastify";
  * `scripts/check-boundaries.mjs` fails the build on both.
  */
 import type { ArcModule } from "../factory/module/types.js";
-import type { EventTransport } from "./EventTransport.js";
+import { type EventTransport, resolveEventTransport } from "./EventTransport.js";
 import type { OutboxRelayErrorHandler } from "./outbox/relay.js";
 import { EventOutbox } from "./outbox.js";
 
 /** Default relay cadence. Frequent enough that a retry is not a user-visible delay. */
 const DEFAULT_RELAY_EVERY_MS = 5_000;
+
+/**
+ * One relay identity per RELAY INSTANCE — `<name>:<hostname>:<pid>:<random>`.
+ *
+ * A lease identifies an independently executing CLAIMANT, not a crash domain.
+ * Arc lets two outbox modules coexist (`name` is the `dependsOn` key), each
+ * with its own schedule arm, and nothing stops two of them pointing at the
+ * same store: they tick independently, so they are two claimants and must be
+ * two identities. Scoping this per-process instead would have made the module
+ * WEAKER than the primitive it wraps — `EventOutbox`'s own fallback is already
+ * per-instance — and would leave the store unable to tell the two apart after
+ * a lease expiry, which is exactly the stale-owner hole this replaced.
+ *
+ * Every component earns its place: `name` distinguishes co-resident modules,
+ * `hostname:pid` makes a lease row legible in ops tooling, and the random
+ * suffix breaks the tie a container restart creates — same hostname, often the
+ * same pid, and the restarted process must not inherit a predecessor's
+ * identity while that predecessor's lease is still live.
+ *
+ * Called once per `bootstrap()`, so the id is stable across every tick of the
+ * relay it belongs to — which the lease depends on.
+ */
+function mintConsumerId(name: string): string {
+  return `${name}:${hostname()}:${process.pid}:${randomBytes(4).toString("hex")}`;
+}
 
 export interface OutboxModuleOptions {
   /**
@@ -56,8 +83,14 @@ export interface OutboxModuleOptions {
    */
   store: OutboxStore | ((fastify: FastifyInstance) => OutboxStore);
   /**
-   * Where relayed events are published. Omit to use `fastify.events` — the ordinary case; pass
-   * one only when the outbox must publish somewhere other than the app's own transport.
+   * Where relayed events are published. Omit to use the app's OWN transport — the ordinary case;
+   * pass one only when the outbox must publish somewhere else.
+   *
+   * The default resolves the RAW `EventTransport` the events plugin registered, never the
+   * `fastify.events` facade. The facade takes `(type, payload, meta?)` and swallows publish
+   * errors under `failOpen` — both fatal here: the first makes every relayed event fail its
+   * non-empty-string type guard, the second makes a failure read as success and acknowledges
+   * the row. See `ARC_EVENT_TRANSPORT`.
    */
   transport?: EventTransport | ((fastify: FastifyInstance) => EventTransport);
   /** Module name, and therefore the `dependsOn` key. Default `'outbox'`. */
@@ -72,10 +105,20 @@ export interface OutboxModuleOptions {
   /** Lease duration for a claimed batch, in ms. */
   leaseMs?: number;
   /**
-   * Consumer id recorded on the lease. Default `'arc-outbox-relay'`.
+   * Consumer id recorded on the lease. Default:
+   * `<name>:<hostname>:<pid>:<random>` — UNIQUE PER RELAY INSTANCE.
    *
-   * Give each relaying process a DISTINCT id when several run: the lease is what stops two
-   * relays publishing the same event, and it can only do that if they are distinguishable.
+   * The lease is what stops two relays publishing the same event, and it can
+   * only do that if they are distinguishable. The pre-2.34 default was the
+   * shared literal `'arc-outbox-relay'`, which QUIETLY violated the rule the
+   * doc stated: every process — and every co-resident module — was the same
+   * logical owner, so a lease that expired and was re-claimed elsewhere looked
+   * to the store's ownership check like the original owner never lost it. The
+   * stale-owner protection was pinned open.
+   *
+   * Set this explicitly only to make lease ownership legible in ops tooling
+   * (e.g. `billing-relay:pod-7`); whatever you set MUST stay distinct per
+   * relay, not merely per deployment.
    */
   consumerId?: string;
   /**
@@ -157,19 +200,48 @@ export function createOutboxModule(options: OutboxModuleOptions): ArcModule<Outb
 
     bootstrap: (fastify: FastifyInstance): OutboxModuleExports => {
       const store = typeof options.store === "function" ? options.store(fastify) : options.store;
+      /**
+       * The RAW transport, never `fastify.events`.
+       *
+       * This read used to be `(fastify as { events?: EventTransport }).events` — a cast across
+       * two INCOMPATIBLE shapes. The facade's `publish(type, payload, meta?)` took the relayed
+       * `DomainEvent` as its `type` argument and failed the non-empty-string guard, so the
+       * documented default path published NOTHING: subscribers saw nothing and every tick
+       * reported `publishFailed: 1` until the row dead-lettered. The cast is what let two
+       * mismatched signatures typecheck.
+       */
       const transport =
         options.transport === undefined
-          ? (fastify as unknown as { events?: EventTransport }).events
+          ? resolveEventTransport(fastify)
           : typeof options.transport === "function"
             ? options.transport(fastify)
             : options.transport;
 
+      /**
+       * No transport is BOOT-FATAL, because the alternative is invisible:
+       * `EventOutbox.relayBatch()` returns an empty result when it has none, so the
+       * module's schedule would tick forever, publish nothing, and let the store grow —
+       * a durable backlog nobody is draining, reported as healthy. The failure this
+       * module exists to prevent, arrived at from the other side.
+       */
+      if (transport === undefined) {
+        throw new Error(
+          `Outbox module "${name}" could not resolve an event transport, so its relay would ` +
+            "tick forever without publishing while the store grows. Register arc's events " +
+            "plugin (it is on by default — check `arcPlugins.events !== false`), or pass an " +
+            "explicit `transport` to `createOutboxModule`. Note the outbox needs the RAW " +
+            "EventTransport, not the `fastify.events` facade: the facade takes " +
+            "`(type, payload, meta?)` and fails open, which would acknowledge rows whose " +
+            "publish actually failed.",
+        );
+      }
+
       const relay = new EventOutbox({
         store,
-        ...(transport !== undefined ? { transport } : {}),
+        transport,
         ...(options.batchSize !== undefined ? { batchSize: options.batchSize } : {}),
         ...(options.leaseMs !== undefined ? { leaseMs: options.leaseMs } : {}),
-        consumerId: options.consumerId ?? "arc-outbox-relay",
+        consumerId: options.consumerId ?? mintConsumerId(name),
         ...(options.onError !== undefined ? { onError: options.onError } : {}),
         ...(options.failurePolicy !== undefined ? { failurePolicy: options.failurePolicy } : {}),
       });

@@ -12,6 +12,7 @@
  * that makes publishing exactly-once).
  */
 import { describe, expect, it, vi } from "vitest";
+import { ARC_EVENT_TRANSPORT, type EventTransport } from "../../src/events/EventTransport.js";
 import { MemoryOutboxStore } from "../../src/events/outbox.js";
 import { createOutboxModule } from "../../src/events/outbox-module.js";
 
@@ -22,8 +23,20 @@ interface ScheduleLike {
   handler: (f: unknown) => Promise<void> | void;
 }
 
-/** A minimal fastify stand-in — the module only reads `events` off it. */
-const app = (over: Record<string, unknown> = {}) => ({ events: undefined, ...over }) as never;
+/**
+ * A minimal fastify stand-in carrying the RAW transport under the symbol the
+ * events plugin decorates.
+ *
+ * It used to hand over `{ events }` — the request-facing facade — which is how
+ * the module came to publish through an incompatible signature. The module
+ * reads `ARC_EVENT_TRANSPORT` now, and a stand-in that supplies the facade
+ * instead would (correctly) fail to boot.
+ */
+const stubTransport = (): EventTransport =>
+  ({ name: "stub", publish: vi.fn(), subscribe: vi.fn() }) as unknown as EventTransport;
+
+const app = (over: Record<string, unknown> = {}) =>
+  ({ [ARC_EVENT_TRANSPORT]: stubTransport(), ...over }) as never;
 
 const schedules = (mod: ReturnType<typeof createOutboxModule>): ScheduleLike[] => {
   const arm = mod.scheduledJobs;
@@ -109,11 +122,27 @@ describe("createOutboxModule", () => {
     await expect(schedules(mod)[0]!.handler(app())).resolves.toBeUndefined();
   });
 
-  it("defaults the transport to the app's own `events`", () => {
+  it("defaults to the app's RAW transport, not the `fastify.events` facade", () => {
     // The ordinary case. Passing one explicitly is for publishing somewhere else.
-    const events = { publish: vi.fn(), subscribe: vi.fn() };
+    //
+    // Specifically the RAW transport: the facade takes `(type, payload, meta?)`
+    // and fails open, so relaying through it published nothing and would have
+    // acknowledged rows whose publish failed. `tests/events/outbox-memory-handling`
+    // walks the composed proof; this pins the resolution source.
+    const transport = stubTransport();
     const mod = createOutboxModule({ store: new MemoryOutboxStore() });
-    expect(() => mod.bootstrap!(app({ events }))).not.toThrow();
+    const { relay } = mod.bootstrap!(app({ [ARC_EVENT_TRANSPORT]: transport })) as {
+      relay: { transportName?: string };
+    };
+    expect(relay).toBeDefined();
+  });
+
+  it("REFUSES to boot with only the facade present — no silent no-op relay", () => {
+    // A relay without a transport returns an empty RelayResult, so the schedule
+    // would tick forever against a growing store while reporting healthy.
+    const mod = createOutboxModule({ store: new MemoryOutboxStore() });
+    const facadeOnly = { events: { publish: vi.fn(), subscribe: vi.fn() } } as never;
+    expect(() => mod.bootstrap!(facadeOnly)).toThrow(/could not resolve an event transport/);
   });
 
   it("honours a custom module name, so two outboxes can coexist", () => {
@@ -122,6 +151,57 @@ describe("createOutboxModule", () => {
     const mod = createOutboxModule({ store: new MemoryOutboxStore(), name: "audit-outbox" });
     expect(mod.name).toBe("audit-outbox");
     expect(schedules(mod)[0]!.name).toBe("audit-outbox.relay");
+  });
+});
+
+describe("createOutboxModule — lease identity", () => {
+  const relayOf = (mod: ReturnType<typeof createOutboxModule>) =>
+    (mod.bootstrap!(app()) as { relay: { consumerId: string } }).relay;
+
+  /**
+   * The lease is what stops two relays publishing the same event, and it can
+   * only do that if the relays are DISTINGUISHABLE. The pre-2.34 default was
+   * the shared literal `'arc-outbox-relay'` — run two replicas without
+   * setting `consumerId` and both are the same logical owner, so a lease that
+   * expires and is re-claimed by the other replica passes the ownership check
+   * as if it never moved. The default itself violated the rule its own doc
+   * stated.
+   */
+  it("defaults the consumer id to a unique identity, not a shared literal", () => {
+    const id = relayOf(createOutboxModule({ store: new MemoryOutboxStore() })).consumerId;
+
+    expect(id).not.toBe("arc-outbox-relay");
+    // Legible in lease rows: module name + hostname + pid + anti-restart suffix.
+    expect(id).toMatch(/^outbox:.+:\d+:[0-9a-f]{8}$/);
+    expect(id).toContain(`:${process.pid}:`);
+  });
+
+  /**
+   * PER RELAY INSTANCE, not per process. A lease identifies an independently
+   * executing CLAIMANT, and two co-resident modules have two independent
+   * schedule arms — nothing stops them pointing at the same store, and then a
+   * shared identity leaves the store unable to tell them apart after a lease
+   * expiry. Scoping this per-process would also make the module WEAKER than
+   * the primitive it wraps: `EventOutbox`'s own fallback is per-instance.
+   */
+  it("gives two co-resident modules DISTINCT identities", () => {
+    const a = relayOf(createOutboxModule({ store: new MemoryOutboxStore() })).consumerId;
+    const b = relayOf(createOutboxModule({ store: new MemoryOutboxStore() })).consumerId;
+    expect(a).not.toBe(b);
+  });
+
+  it("carries the module name, so a lease row says WHICH relay holds it", () => {
+    const id = relayOf(
+      createOutboxModule({ store: new MemoryOutboxStore(), name: "billing-outbox" }),
+    ).consumerId;
+    expect(id.startsWith("billing-outbox:")).toBe(true);
+  });
+
+  it("an explicit consumerId still wins — ops-legible names remain possible", () => {
+    const id = relayOf(
+      createOutboxModule({ store: new MemoryOutboxStore(), consumerId: "billing-relay:pod-7" }),
+    ).consumerId;
+    expect(id).toBe("billing-relay:pod-7");
   });
 });
 
@@ -135,7 +215,7 @@ describe("createOutboxModule — retry policy passthrough", () => {
      */
     const failurePolicy = vi.fn(() => ({ deadLetter: true as const }));
     const mod = createOutboxModule({ store: new MemoryOutboxStore(), failurePolicy });
-    const exp = mod.bootstrap!({ events: undefined } as never) as { relay: unknown };
+    const exp = mod.bootstrap!(app()) as { relay: unknown };
     // Reaching into the relay is deliberate: the alternative is driving a real failure through
     // the store, which tests EventOutbox rather than this module's wiring.
     expect((exp.relay as unknown as { _failurePolicy?: unknown })._failurePolicy).toBe(

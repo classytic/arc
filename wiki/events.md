@@ -29,7 +29,7 @@ import { EventMeta, DomainEvent, createEvent, createChildEvent } from '@classyti
 
 | Transport | Guarantee | Use |
 |---|---|---|
-| memory | in-process | dev/test |
+| memory | in-process | dev/test, or a DECLARED single-node deployment (`runtime: 'memory'` / `singleProcess: true` — see [[delivery-guarantees]]) |
 | Redis pub/sub | at-most-once | low-latency, lossy OK |
 | Redis Streams | at-least-once | durable; consumer groups track offsets |
 

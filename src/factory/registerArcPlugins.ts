@@ -45,6 +45,17 @@ export async function registerArcCore(
     const { default: eventPlugin } = await import("../events/eventPlugin.js");
     const eventOpts = typeof config.arcPlugins?.events === "object" ? config.arcPlugins.events : {};
     await fastify.register(eventPlugin, {
+      /**
+       * An EXPLICIT `runtime: 'memory'` is the host's single-instance
+       * declaration (its JSDoc says exactly that), so it flows down as the
+       * event plugin's `singleProcess` flag — one topology axis, declared
+       * once, no second knob to keep in sync. The comparison is against the
+       * literal, not the resolved default: `runtime` UNSET also means memory
+       * stores, but an unstated topology must keep the forgotten-default
+       * warn. `eventOpts` spreads after, so a direct
+       * `arcPlugins.events.singleProcess` still wins either way.
+       */
+      ...(config.runtime === "memory" ? { singleProcess: true } : {}),
       ...eventOpts,
       transport: config.stores?.events, // undefined → defaults to MemoryEventTransport
     });

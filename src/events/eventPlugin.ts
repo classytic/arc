@@ -22,6 +22,7 @@ import { arcLog } from "../logger/index.js";
 import { createDomainError } from "../utils/errors.js";
 import type { EventRegistry } from "./defineEvent.js";
 import {
+  ARC_EVENT_TRANSPORT,
   createEvent,
   type DomainEvent,
   type EventHandler,
@@ -33,6 +34,34 @@ import { createDeadLetterPublisher, type RetryOptions, withRetry } from "./retry
 export interface EventPluginOptions {
   /** Event transport (default: MemoryEventTransport) */
   transport?: EventTransport;
+  /**
+   * Declare that this deployment is ONE process on purpose — the in-memory
+   * transport is its intended configuration, not a forgotten default.
+   *
+   * A single-node host (a small SaaS on one VPS, an on-prem install, a
+   * personal deployment that cannot justify Redis) is a legitimate production
+   * topology: with one process there are no other instances to broadcast to,
+   * so the memory transport is not a compromise — it is exactly sufficient.
+   * Without this flag arc cannot tell that apart from the accidental default
+   * (a multi-replica deployment that forgot to configure Redis), so it warns
+   * on every boot. Setting `singleProcess: true` states the topology and
+   * downgrades the warn to a factual info line.
+   *
+   * What it does NOT change: in-process delivery semantics. Events still
+   * vanish with the process — subscribers that were offline missed them. For
+   * durable at-least-once delivery on a single node, pair this with the
+   * repository-backed outbox (`createOutboxModule` + `repositoryAsOutboxStore`):
+   * events are committed to YOUR database and relayed to the in-process
+   * subscribers, so a crash between write and delivery replays on restart —
+   * no Redis anywhere in that path.
+   *
+   * Scale-out later by swapping the transport (Redis Streams etc.) and
+   * removing this flag; handler code is transport-independent and unchanged.
+   *
+   * Ignored (with a warn) when a non-memory transport is configured — the
+   * declaration would be describing a topology the transport contradicts.
+   */
+  singleProcess?: boolean;
   /** Enable event logging (default: false) */
   logEvents?: boolean;
   /**
@@ -163,6 +192,7 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
 ) => {
   const {
     transport = new MemoryEventTransport(),
+    singleProcess = false,
     logEvents = false,
     failOpen = true,
     retry: retryOpts,
@@ -366,6 +396,31 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
     registry,
   });
 
+  /**
+   * The RAW transport, for machinery that must observe publish failure.
+   *
+   * `fastify.events` is a REQUEST-FACING FACADE, and two of its properties make
+   * it wrong for a relay to publish through:
+   *
+   *   1. Different signature — `publish(type, payload, meta?)` vs the
+   *      transport's `publish(event)`. Handing it a `DomainEvent` makes the
+   *      envelope the `type` argument, which fails the non-empty-string guard.
+   *      Measured on the default `createOutboxModule()` path: subscribers saw
+   *      NOTHING and every relay tick reported `publishFailed: 1`, so events
+   *      retried to dead-letter and never arrived.
+   *   2. Fail-open — the facade catches publish errors and only rethrows when
+   *      `failOpen: false`. That is correct for HTTP (a transport outage must
+   *      not fail a user's request) and fatal for an outbox: a swallowed error
+   *      reads as success, the row is acknowledged, and the durability the
+   *      outbox exists to provide is gone.
+   *
+   * So the boundary is explicit: **the facade may fail open; the relay must
+   * see the truth.** Decorated under a `Symbol.for` key — not part of the
+   * public `EventsDecorator` surface, and registry-keyed so it still resolves
+   * if a host's graph ends up with two arc copies.
+   */
+  fastify.decorate(ARC_EVENT_TRANSPORT, transport);
+
   // Cleanup on close
   fastify.addHook("onClose", async () => {
     try {
@@ -379,13 +434,42 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
     }
   });
 
-  // Log transport type
+  // Log transport type. The memory transport carries THREE distinct
+  // messages depending on what the host declared, because it has three
+  // distinct meanings:
+  //   - undeclared          → probably a forgotten default; warn every boot.
+  //   - singleProcess: true → a deliberate single-node topology; state the
+  //                           semantics once at info level and stop nagging.
+  //   - flag + real transport → the declaration contradicts the wiring; say so.
   if (transport.name === "memory") {
-    fastify.log?.warn?.(
-      "[Arc Events] Using in-memory transport. Events will not persist or scale across instances. " +
-        "For production, configure a durable transport (Redis, RabbitMQ, etc.)",
-    );
+    if (singleProcess) {
+      fastify.log?.info?.(
+        "[Arc Events] In-memory transport, declared single-process. Events are delivered " +
+          "in-process only and do not survive a crash or restart; subscribers in other " +
+          "processes (if any ever exist) will not receive them. For durability on this " +
+          "single node, pair with the repository-backed outbox (createOutboxModule + " +
+          "repositoryAsOutboxStore) — no Redis required. That covers a crash BEFORE " +
+          "publish; to also retry a THROWING handler, construct the transport with " +
+          "`onHandlerError: 'throw'` (by default a handler error is logged and the outbox " +
+          "row is still acknowledged).",
+      );
+    } else {
+      fastify.log?.warn?.(
+        "[Arc Events] Using in-memory transport. Events will not persist or scale across " +
+          "instances. If this deployment is intentionally a single process, declare it — " +
+          "`eventPlugin, { singleProcess: true }` — and this becomes a supported " +
+          "configuration instead of a warning. Otherwise configure a durable transport " +
+          "(Redis Streams, RabbitMQ, etc.)",
+      );
+    }
   } else {
+    if (singleProcess) {
+      fastify.log?.warn?.(
+        `[Arc Events] \`singleProcess: true\` is declared but the '${transport.name}' ` +
+          "transport is configured — a cross-instance transport contradicts a single-process " +
+          "declaration. The flag is ignored; remove it or switch back to the memory transport.",
+      );
+    }
     fastify.log?.debug?.(`[Arc Events] Using ${transport.name} transport`);
   }
 };

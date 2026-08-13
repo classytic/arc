@@ -65,9 +65,49 @@ export type {
 } from "@classytic/primitives/events";
 export { createChildEvent, createEvent } from "@classytic/primitives/events";
 
+/**
+ * Decorator key holding the RAW `EventTransport` an app registered.
+ *
+ * `fastify.events` is a request-facing FACADE — different signature
+ * (`publish(type, payload, meta?)`) and fail-open by design — so machinery
+ * that must observe publish failure (the outbox relay) resolves the transport
+ * through this key instead. `Symbol.for` so it still matches across two arc
+ * copies in one dependency graph; deliberately NOT on the public
+ * `EventsDecorator` surface.
+ */
+export const ARC_EVENT_TRANSPORT = Symbol.for("arc.eventTransport");
+
+/**
+ * Read the raw transport an app registered, or `undefined` when the events
+ * plugin was never registered (or predates this key).
+ *
+ * Callers decide what absence means: the outbox treats it as "no transport",
+ * which is a boot-time error rather than a silent no-op relay.
+ */
+export function resolveEventTransport(fastify: unknown): EventTransport | undefined {
+  if (typeof fastify !== "object" || fastify === null) return undefined;
+  const found = Reflect.get(fastify, ARC_EVENT_TRANSPORT);
+  return typeof found === "object" && found !== null ? (found as EventTransport) : undefined;
+}
+
 export interface MemoryEventTransportOptions {
   /** Logger for error/warning messages (default: console) */
   logger?: EventLogger;
+  /**
+   * What a THROWING subscriber does to `publish()`.
+   *
+   * - `'log'` (default) — logged, `publish()` still resolves. The
+   *   fire-and-forget bus contract: one broken analytics subscriber must not
+   *   fail a publisher's request.
+   * - `'throw'` — REJECTS with an `AggregateError` after running every
+   *   handler. Required for at-least-once PROCESSING: with this transport
+   *   `publish()` IS the handling, so a swallowed error reads to an outbox
+   *   relay as delivery and the row is acknowledged, never retried.
+   *
+   * Retry redelivers to ALL matching handlers (no per-handler cursor), so
+   * handlers must be idempotent. Every handler runs before the rejection.
+   */
+  onHandlerError?: "log" | "throw";
 }
 
 /**
@@ -81,9 +121,11 @@ export class MemoryEventTransport implements EventTransport {
   readonly name = "memory";
   private handlers = new Map<string, Set<EventHandler>>();
   private logger: EventLogger;
+  private onHandlerError: "log" | "throw";
 
   constructor(options?: MemoryEventTransportOptions) {
     this.logger = options?.logger ?? console;
+    this.onHandlerError = options?.onHandlerError ?? "log";
   }
 
   async publish(event: DomainEvent): Promise<void> {
@@ -99,12 +141,33 @@ export class MemoryEventTransport implements EventTransport {
     }
 
     // Execute handlers (catch errors so one handler doesn't block others).
+    // Errors are always collected, never allowed to abort the loop — under
+    // `onHandlerError: 'throw'` they surface AFTER every subscriber has had
+    // the event, because a failure must not deprive the others of it.
+    const failures: unknown[] = [];
     for (const handler of allHandlers) {
       try {
         await handler(event);
       } catch (err) {
         this.logger.error(`[EventTransport] Handler error for ${event.type}:`, err);
+        failures.push(err);
       }
+    }
+
+    /**
+     * Rejecting is what lets an OUTBOX see the failure. With this transport,
+     * `publish()` IS the handling — synchronous and in-process — so resolving
+     * after a handler threw tells the relay the event was delivered, and the
+     * row is acknowledged and never retried. Measured: handler throws once,
+     * `relayBatch()` reports `relayed: 1, publishFailed: 0`, and the next tick
+     * finds nothing. A broker-backed transport has no such ambiguity — publish
+     * means "durably handed off" and redelivery is the consumer group's job.
+     */
+    if (failures.length > 0 && this.onHandlerError === "throw") {
+      throw new AggregateError(
+        failures,
+        `[EventTransport] ${failures.length} handler(s) failed for ${event.type}`,
+      );
     }
   }
 

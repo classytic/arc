@@ -2,7 +2,7 @@
 
 **Summary**: One table for what every async channel actually guarantees — ordering, durability, delivery semantics, retries, dedup burden, backpressure, shutdown behavior, multi-replica behavior.
 **Sources**: src/events/, src/utils/sseStream.ts, src/plugins/sse.ts, src/plugins/realtime.ts, src/plugins/schedules.ts, src/integrations/jobs.ts, src/integrations/webhooks.ts.
-**Last updated**: 2026-07-21 (webhook retry option + distributed deployment checklist — wave-5 audit).
+**Last updated**: 2026-08-12 (single-node topology declaration, per-relay-instance identity, publication-vs-processing split, CRUD-event vs outbox rule).
 
 ---
 
@@ -27,6 +27,27 @@ Composition rules:
 - **Realtime/SSE are UX channels, not integration channels.** Anything a downstream system must not miss goes through outbox/Streams, never a socket.
 - **Idempotency plugin ≠ event dedup.** It gives exactly-once semantics to inbound HTTP mutations (fingerprint + lock + replay); it does nothing for outbound event consumers.
 - **Streams' `MAXLEN` trim is a silent-loss valve.** The default 10k cap keeps Redis memory bounded, but a consumer that falls more than `maxLen` entries behind loses the trimmed ones WITHOUT an error — at-least-once holds only inside the window. Size `maxLen` to worst-case consumer downtime × publish rate, or front it with the outbox (durable backlog) when loss is unacceptable.
+- **Automatic CRUD events ≠ transactional outbox events.** `eventStrategy` / `emitEvents` publish AFTER the repository write, outside any transaction, fire-and-forget (`failOpen: true`) — an integration convenience: a crash or transport outage between write and publish loses the event with the write already committed. A durable business guarantee requires the domain command to write the outbox row IN the same transaction/session as the business data (`outbox.store(event, { session })`); the relay publishes later. Do not read the auto-emission as guaranteed delivery — the two paths answer different questions.
+- **Relay identity is per RELAY INSTANCE.** `createOutboxModule`'s default `consumerId` is `<module-name>:<hostname>:<pid>:<random>` (2.34), minted at bootstrap and stable across that relay's ticks. A lease identifies an independently executing claimant, and two co-resident modules have two schedule arms — nothing stops both pointing at one store. The old shared literal made every replica AND every module the same logical owner, pinning the stale-owner check open. If you set it explicitly, keep it distinct per relay, not merely per deployment.
+- **The outbox relay does not publish through `fastify.events`.** That decorator is a request-facing facade: different signature (`publish(type, payload, meta?)`) and FAIL-OPEN by design, so a swallowed publish error would acknowledge a row that never arrived. The relay resolves the raw `EventTransport` instead (`ARC_EVENT_TRANSPORT`), and a module that cannot resolve one refuses to boot rather than ticking forever against a growing store. The split is deliberate: **the HTTP-facing facade may fail open; the relay must observe failure.**
+
+## Single-node deployment (no Redis)
+
+One process is a legitimate production topology, not a compromise: with no other instances to broadcast to, the memory transport is exactly sufficient. Declare it — `createApp({ runtime: 'memory' })` (explicitly, not by omission) or `eventPlugin, { singleProcess: true }` — and the boot-time memory-transport warn becomes an info line; undeclared memory stays a warning because it is indistinguishable from a multi-replica app that forgot Redis.
+
+Durability without Redis: **repository-backed outbox + memory transport**. Events commit to YOUR database (`createOutboxModule` + `repositoryAsOutboxStore`), the in-process relay publishes them to in-process subscribers, and a crash between write and publish replays from the DB on restart. Scale out later by swapping the transport (Redis Streams) and removing the declaration; handlers are transport-independent and unchanged.
+
+**Read the guarantee precisely — it has two halves, and only one is on by default:**
+
+| | default (`onHandlerError: 'log'`) | `onHandlerError: 'throw'` |
+|---|---|---|
+| Crash BEFORE publish | replayed from the DB | replayed from the DB |
+| Handler THROWS | row acknowledged, never retried | row left unacknowledged → `failurePolicy` retries / dead-letters |
+| Guarantee | at-least-once **publication** | at-least-once **processing** |
+
+The default is the fire-and-forget bus contract and is deliberate: one broken analytics subscriber must not fail a publisher's request. But with THIS transport `publish()` *is* the handling — subscribers run synchronously, in-process — so a swallowed handler error reads to the relay as a successful delivery. Measured: handler throws once, `relayBatch()` reports `relayed: 1, publishFailed: 0`, next tick finds nothing. Pass `new MemoryEventTransport({ onHandlerError: 'throw' })` when the outbox is meant to cover processing, and make handlers idempotent — a retry redelivers to ALL matching handlers, since the transport has no per-handler cursor.
+
+No such ambiguity exists on a broker: there, `publish()` means "durably handed off", acknowledging is correct, and redelivery is the consumer group's job.
 
 ## Distributed deployment checklist
 
