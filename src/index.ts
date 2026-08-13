@@ -304,6 +304,13 @@ export type {
   IRequestContext,
   JWTPayload,
   MiddlewareConfig,
+  // Write verbs — `ResourceConfig.writes` and the contexts verbs receive.
+  // `WriteContext` / `MutationWriteContext` are the return types of
+  // `BaseCrudController.writeContext()` / `.mutationWriteContext()`, both
+  // exported from THIS entry, so they have to be nameable from here too: a
+  // subclass author otherwise cannot declare them without reaching into
+  // `@classytic/arc/types`.
+  MutationWriteContext,
   OwnershipCheck,
   // Pagination discriminated union (arc-owned; individual shapes ship from repo-core)
   PaginationResult,
@@ -328,6 +335,7 @@ export type {
   // Resource
   ResourceConfig,
   ResourceMetadata,
+  ResourceWrites,
   // Controller
   RouteHandler,
   RouteHandlerMethod,
@@ -342,6 +350,8 @@ export type {
   UserOrganization,
   ValidateOptions,
   ValidationResult,
+  WriteContext,
+  WriteVerbKey,
   // Controller override utility types (v2.11) — let subclass authors write
   // `async create(ctx): ArcCreateResult<this> { ... }` without restating
   // the full `Promise<IControllerResponse<TDoc>>` shape. `this` threads the

@@ -1,6 +1,6 @@
 {
   "name": "@classytic/arc",
-  "version": "2.33.0",
+  "version": "2.34.0",
   "description": "Resource-oriented backend framework for Fastify - clean, minimal, powerful, tree-shakable",
   "type": "module",
   "exports": {
@@ -336,13 +336,14 @@
     "test:smoke:redis": "node scripts/smoke-ws-redis.mjs",
     "smoke": "node scripts/smoke-test.mjs",
     "smoke:consumer": "node scripts/smoke-test.mjs --consumer",
+    "smoke:mcp": "node scripts/mcp-e2e.mjs",
     "push": "classytic-push",
     "release:tag": "node -e \"require('child_process').execSync('npm run push -- v'+require('./package.json').version,{stdio:'inherit'})\"",
     "release": "npm run push -- main && npm run release:tag && npm publish",
     "check:peer-skew": "node scripts/check-peer-skew.mjs",
     "check:docs-drift": "node scripts/check-docs-drift.mjs",
     "check:boundaries": "node scripts/check-boundaries.mjs",
-    "prepublishOnly": "npm run check:peer-skew && npm run check:docs-drift && npm run check:route-api && npm run check:boundaries && npm run typecheck && npm run lint && npm run build && npm run check:api-surface && npm run check:forgotten-exports && npm run check:package && npm run test:ci && npm run smoke:consumer",
+    "prepublishOnly": "npm run check:peer-skew && npm run check:docs-drift && npm run check:route-api && npm run check:boundaries && npm run typecheck && npm run lint && npm run build && npm run check:api-surface && npm run check:forgotten-exports && npm run check:package && npm run test:ci && npm run smoke:consumer && npm run smoke:mcp",
     "check:route-api": "node scripts/check-removed-route-api.mjs",
     "check:forgotten-exports": "node scripts/check-forgotten-exports.mjs"
   },
@@ -480,7 +481,7 @@
     "@biomejs/biome": "^2.5.7",
     "@classytic/dev-tools": "^0.2.0",
     "@classytic/gitkit": ">=0.1.0",
-    "@classytic/mongokit": "^3.31.0",
+    "@classytic/mongokit": "^3.32.0",
     "@classytic/pgkit": "^0.1.0",
     "@classytic/primitives": "^0.21.0",
     "@classytic/repo-core": "^0.21.0",

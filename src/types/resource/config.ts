@@ -24,6 +24,7 @@ import type {
   RouteSchemaOptions,
 } from "./schemas.js";
 import type { OnTenantDeleteConfig } from "./tenant.js";
+import type { ResourceWrites } from "./writes.js";
 
 /** Standard controller type alias for CRUD operations. */
 export type CrudController<TDoc> = IController<TDoc>;
@@ -59,6 +60,27 @@ export interface ResourceConfig<TDoc = AnyRecord> {
   adapter?: DataAdapter<TDoc>;
   /** Controller instance — accepts any object with CRUD methods. */
   controller?: IController<TDoc> | ControllerLike;
+  /**
+   * Bind a CRUD write slot to a DOMAIN COMMAND, keeping arc's request
+   * pipeline. Arc still sanitizes against the resource's field rules, injects
+   * the tenant field, stamps the actor and runs the hook sandwich — then calls
+   * your verb where it would have called `repository.create/update/delete`.
+   *
+   * Reach for this whenever the kernel behind the resource owns a GUARDED
+   * write (a verb that refuses once a document is posted / closed / locked).
+   * Overriding the controller method instead silently drops the pipeline —
+   * see `ResourceWrites` for the two-way trap this closes.
+   *
+   * @example
+   * ```typescript
+   * writes: {
+   *   create: (data, ctx) => engine.invoices.createDraft(data, resolveCtx(ctx.req)),
+   *   update: (id, data, ctx) => engine.invoices.updateDraft(id, data, resolveCtx(ctx.req)),
+   *   delete: (id, ctx) => engine.invoices.deleteDraft(id, resolveCtx(ctx.req)),
+   * }
+   * ```
+   */
+  writes?: ResourceWrites<TDoc>;
   queryParser?: unknown;
   permissions?: ResourcePermissions;
   schemaOptions?: RouteSchemaOptions;

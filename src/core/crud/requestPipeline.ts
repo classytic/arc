@@ -143,6 +143,93 @@ export function buildTenantRepoOptions(
 }
 
 // ============================================================================
+// Write-method provenance
+// ============================================================================
+
+/**
+ * Marks a write method ARC installed.
+ *
+ * The constructor binds `create`/`update`/`delete`, so EVERY controller owns
+ * all three and the bound function is a fresh object per instance —
+ * `Object.hasOwn` and identity comparison both say nothing about overrides.
+ * Provenance does: a class field initialises after `super()` and REPLACES the
+ * bound method, mark and all.
+ *
+ * `Symbol.for` so it still matches across two arc copies in one graph.
+ */
+const ARC_BOUND_WRITE = Symbol.for("arc.boundWriteMethod");
+
+/**
+ * Marks a controller PROTOTYPE whose write methods dispatch declared verbs.
+ * `defineResource` refuses `writes` without it: a duck-typed `configure()`
+ * proves an options channel exists, not that anything dispatches from it.
+ * Lives on the prototype — one mark per class, zero per-instance cost.
+ */
+const ARC_WRITE_VERB_CAPABLE = Symbol.for("arc.writeVerbCapable");
+
+/** Tag a bound write method as arc's own. Returns the same function. */
+export function markArcBoundWrite<T>(fn: T): T {
+  Object.defineProperty(fn as object, ARC_BOUND_WRITE, {
+    value: true,
+    enumerable: false,
+    configurable: true,
+  });
+  return fn;
+}
+
+/** Did arc install this write method, as opposed to the host replacing it? */
+export function isArcBoundWrite(fn: unknown): boolean {
+  return typeof fn === "function" && Reflect.get(fn, ARC_BOUND_WRITE) === true;
+}
+
+/** Tag a controller class's prototype as write-verb capable. */
+export function markWriteVerbCapable(prototype: object): void {
+  Object.defineProperty(prototype, ARC_WRITE_VERB_CAPABLE, {
+    value: true,
+    enumerable: false,
+    configurable: true,
+  });
+}
+
+/** Do this controller's write methods dispatch declared write verbs? */
+export function isWriteVerbCapable(controller: unknown): boolean {
+  return (
+    typeof controller === "object" &&
+    controller !== null &&
+    Reflect.get(controller, ARC_WRITE_VERB_CAPABLE) === true
+  );
+}
+
+/**
+ * Which of `ops` did the host override?
+ *
+ * THE single implementation — the boot-fatal reachability check and the
+ * field-protection warn both consume it, so they cannot disagree.
+ *
+ * Two shapes: a prototype method (found by walking to the capability-marked
+ * prototype — every layer between is host-authored) and a class field / ctor
+ * assignment (found by provenance, since arc owns an own-property for all
+ * three regardless). Arc's own mixins define no write methods; a test pins it.
+ */
+export function detectOverriddenWriteSlots<TOp extends string>(
+  controller: object,
+  ops: readonly TOp[],
+): TOp[] {
+  const instance = controller as Record<string, unknown>;
+  return ops.filter((op) => {
+    // Class-field / constructor-assignment shape.
+    if (typeof instance[op] === "function" && !isArcBoundWrite(instance[op])) return true;
+    // Prototype-method shape.
+    let proto = Object.getPrototypeOf(controller) as object | null;
+    while (proto && !Object.hasOwn(proto, ARC_WRITE_VERB_CAPABLE)) {
+      if (Object.hasOwn(proto, op)) return true;
+      proto = Object.getPrototypeOf(proto) as object | null;
+    }
+    return false;
+  });
+}
+
+// ============================================================================
 // Mutation-target id translation + 404 building
 // ============================================================================
 

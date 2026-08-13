@@ -51,6 +51,8 @@ import {
   executeAfterHook,
   executeHookedOp,
   type HookedOpContext,
+  markArcBoundWrite,
+  markWriteVerbCapable,
   resolveMutationRepoId,
   resolveOpCacheConfig,
 } from "./crud/requestPipeline.js";
@@ -82,6 +84,11 @@ export type {
   ListResult,
 } from "./controllerTypes.js";
 
+import type {
+  MutationWriteContext,
+  ResourceWrites,
+  WriteContext,
+} from "../types/resource/writes.js";
 import type {
   BaseControllerOptions,
   CacheStatus,
@@ -156,6 +163,13 @@ export class BaseCrudController<
   protected _defaultSort?: string | false;
   protected _onFieldWriteDenied?: FieldWriteDenialPolicy;
   protected _onImmutableWrite?: FieldWriteDenialPolicy;
+  /**
+   * Domain commands bound to the write slots (`ResourceWrites`). Consulted at
+   * the PERSISTENCE step only — everything upstream of it (sanitizer, tenant
+   * injection, actor stamp, hook sandwich) runs exactly as it does without
+   * one, which is the entire point of the seam.
+   */
+  protected _writes?: ResourceWrites;
 
   constructor(repository: TRepository, options: BaseControllerOptions = {}) {
     this.repository = repository;
@@ -193,6 +207,7 @@ export class BaseCrudController<
     this._defaultSort = options.defaultSort;
     this._onFieldWriteDenied = options.onFieldWriteDenied;
     this._onImmutableWrite = options.onImmutableWrite;
+    this._writes = options.writes;
 
     this.accessControl = new AccessControl({
       tenantField: this.tenantField,
@@ -215,9 +230,21 @@ export class BaseCrudController<
 
     this.list = this.list.bind(this);
     this.get = this.get.bind(this);
-    this.create = this.create.bind(this);
-    this.update = this.update.bind(this);
-    this.delete = this.delete.bind(this);
+    /**
+     * The write methods are bound here, which means EVERY instance carries an
+     * own `create`/`update`/`delete` property — so "does it have an own
+     * property" cannot distinguish arc's binding from a host's override.
+     *
+     * Marking what arc installed makes the difference observable. A class-field
+     * override (`update = async (req) => …`) initialises AFTER `super()`
+     * returns and therefore REPLACES this bound method outright — the mark goes
+     * with it, which is exactly the signal `warnOnWriteMethodOverride` needs.
+     * A prototype-method override binds through here and stays marked; that
+     * shape is caught by the prototype comparison instead.
+     */
+    this.create = markArcBoundWrite(this.create.bind(this));
+    this.update = markArcBoundWrite(this.update.bind(this));
+    this.delete = markArcBoundWrite(this.delete.bind(this));
   }
 
   // ============================================================================
@@ -322,6 +349,9 @@ export class BaseCrudController<
     }
     if (options.presetFields !== undefined) {
       this._presetFields = options.presetFields;
+    }
+    if (options.writes !== undefined) {
+      this._writes = options.writes;
     }
 
     if (rebuildAccessControl) {
@@ -539,6 +569,38 @@ export class BaseCrudController<
     executor: (processed: TInput) => Promise<TResult>,
   ): Promise<TResult> {
     return executeHookedOp(this.hookOpContext(req), args, executor);
+  }
+
+  /** Assemble the `WriteContext` a `create` verb receives. */
+  protected writeContext(req: IRequestContext): WriteContext {
+    return { req, repository: this.repository as RepositoryLike<AnyRecord> };
+  }
+
+  /**
+   * Assemble the `MutationWriteContext` an `update` / `delete` verb receives.
+   *
+   * `existing` is the document arc ALREADY loaded to run its permission and
+   * tenant checks — `loadMutableTarget` throws before any verb runs when it
+   * cannot produce one, which is why the context types it required. Handing
+   * it over rather than letting the verb re-fetch is deliberate: a second
+   * read can observe a different document than the one the request was
+   * authorised against.
+   *
+   * `id` is the REPOSITORY PRIMARY KEY (`repoId`), never the raw route param —
+   * see the note on `MutationWriteContext.id`. Callers pass `resolveRepoId`'s
+   * output.
+   */
+  protected mutationWriteContext(
+    req: IRequestContext,
+    id: string,
+    existing: unknown,
+  ): MutationWriteContext {
+    return {
+      req,
+      repository: this.repository as RepositoryLike<AnyRecord>,
+      id,
+      existing: existing as AnyRecord,
+    };
   }
 
   /**
@@ -913,12 +975,34 @@ export class BaseCrudController<
       req,
       { op: "create", input: data },
       async (processed) =>
-        this.repository.create(processed as Partial<TDoc>, {
-          user,
-          context: arcContext,
-          ...this.tenantRepoOptions(req),
-        }),
+        this._writes?.create
+          ? this._writes.create(processed as Partial<AnyRecord>, this.writeContext(req))
+          : this.repository.create(processed as Partial<TDoc>, {
+              user,
+              context: arcContext,
+              ...this.tenantRepoOptions(req),
+            }),
     );
+
+    /**
+     * A create COMMAND must return the created document — enforced, because
+     * the alternative is quietly worse than any failure: a `201` carrying
+     * `undefined` data, after-hooks (audit, events, cache invalidation) fed a
+     * non-document, and a client that believes the write happened with no way
+     * to address what it created. TypeScript types the contract, but arc is a
+     * JavaScript runtime framework and a JS command returning nothing is one
+     * missing `return` away.
+     */
+    if (this._writes?.create && item == null) {
+      throw createError(
+        500,
+        `writes.create for resource "${this.resourceName ?? "unknown"}" returned ` +
+          `${item === null ? "null" : "undefined"} — a create command must return the ` +
+          "created document. Signal failure by throwing a typed error; a nullish return " +
+          "would otherwise answer 201 with no document.",
+        { code: "WRITE_VERB_CONTRACT_VIOLATION" },
+      );
+    }
 
     // create's after-hook runs unconditionally with the result as data —
     // matches the pre-extract behaviour at lines 892-895.
@@ -953,14 +1037,42 @@ export class BaseCrudController<
       req,
       { op: "update", input: data, meta: hookMeta },
       async (processed) =>
-        this.repository.update(repoId, processed as Partial<TDoc>, {
-          user,
-          context: arcContext,
-          ...this.tenantRepoOptions(req),
-        }),
+        this._writes?.update
+          ? // `repoId`, NOT the route param. The verb stands exactly where
+            // `repository.update(repoId, …)` stood, and repo-core types that
+            // argument as the PRIMARY KEY. On a resource with a custom
+            // `idField` the two differ — the route carries a slug while the
+            // repository keys off `_id` — so passing `id` handed a domain
+            // command a value its own repository would not resolve.
+            this._writes.update(
+              repoId,
+              processed as Partial<AnyRecord>,
+              this.mutationWriteContext(req, repoId, existing),
+            )
+          : this.repository.update(repoId, processed as Partial<TDoc>, {
+              user,
+              context: arcContext,
+              ...this.tenantRepoOptions(req),
+            }),
     );
 
-    if (!item) {
+    /**
+     * A declared verb signals "not found" by THROWING, so reaching this line
+     * means the command succeeded. Translating its `void` return into a 404
+     * would report failure for a write that happened — the repository's
+     * `null`-means-miss contract is the repository's, not a domain command's.
+     * Re-read so the response still carries the document.
+     */
+    const resolved = this._writes?.update
+      ? ((item ??
+          (await this.repository.getById(repoId, {
+            user,
+            context: arcContext,
+            ...this.tenantRepoOptions(req),
+          }))) as unknown)
+      : (item as unknown);
+
+    if (!resolved) {
       this.throwNotFound("NOT_FOUND");
     }
 
@@ -968,10 +1080,10 @@ export class BaseCrudController<
     // truthy result — matches the `if (item)` guard at the pre-extract
     // line 985. Skipping it on null preserves the contract that "after"
     // hooks observe a real, persisted change.
-    await this.runAfterHook(req, "update", item as AnyRecord, hookMeta);
+    await this.runAfterHook(req, "update", resolved as AnyRecord, hookMeta);
 
     return {
-      data: item as TDoc,
+      data: resolved as TDoc,
       status: 200,
       meta: { message: "Updated successfully" },
     };
@@ -1008,24 +1120,36 @@ export class BaseCrudController<
       req,
       { op: "delete", input: existing as AnyRecord, meta: hookMeta, pipeProcessedData: false },
       async () =>
-        this.repository.delete(repoId, {
-          user,
-          context: arcContext,
-          ...this.tenantRepoOptions(req),
-          ...(deleteMode ? { mode: deleteMode } : {}),
-        }),
+        this._writes?.delete
+          ? // `repoId` for the same reason as `update` — the verb replaces the
+            // repository call, so it receives the repository's primary key.
+            this._writes.delete(repoId, this.mutationWriteContext(req, repoId, existing))
+          : this.repository.delete(repoId, {
+              user,
+              context: arcContext,
+              ...this.tenantRepoOptions(req),
+              ...(deleteMode ? { mode: deleteMode } : {}),
+            }),
     );
 
     // Repo contract: `delete()` returns DeleteResult on success, null on
     // miss. Bulk-variant adapters that surface inline counts collapse to
     // null when nothing was removed, falling through this branch.
-    if (!result) {
+    //
+    // A DECLARED verb is exempt: `deleteDraft()` and friends return `void` and
+    // throw on a miss, so an empty return is success. Reading it as a miss
+    // would answer 404 for a delete that really removed the document — the
+    // same false-negative shape, one layer up.
+    if (!result && !this._writes?.delete) {
       this.throwNotFound("NOT_FOUND");
     }
 
     await this.runAfterHook(req, "delete", existing as AnyRecord, hookMeta);
 
-    const deleteResult = result as Record<string, unknown>;
+    // `?? {}` because a declared delete verb legitimately returns `void` —
+    // reading `.message` off it threw a TypeError that surfaced as a 500 on a
+    // delete that had already succeeded.
+    const deleteResult = (result ?? {}) as Record<string, unknown>;
     return {
       data: {
         message: (deleteResult.message as string) || "Deleted successfully",
@@ -1036,3 +1160,13 @@ export class BaseCrudController<
     };
   }
 }
+
+/**
+ * This class's write methods dispatch declared write verbs (`_writes`), so
+ * `defineResource` may accept a `writes` declaration for controllers built on
+ * it. One mark on the prototype — inherited by every subclass and mixin
+ * composition, zero per-instance cost. A duck-typed `configure()` is NOT this
+ * proof: it shows an options channel exists, not that anything dispatches
+ * `writes` out of it.
+ */
+markWriteVerbCapable(BaseCrudController.prototype);

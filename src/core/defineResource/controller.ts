@@ -25,7 +25,9 @@ import type {
   ResourceConfig,
 } from "../../types/index.js";
 import { BaseController } from "../BaseController.js";
+import type { BaseControllerOptions } from "../controllerTypes.js";
 import type { InternalResourceConfig } from "./config.js";
+import { enforceWriteVerbReachability, warnOnWriteMethodOverride } from "./writeVerbs.js";
 
 /**
  * Resolve the controller for the resource. See module docstring for
@@ -41,9 +43,13 @@ export function resolveOrAutoCreateController<TDoc extends AnyRecord>(
 
   if (userController) {
     threadQueryParser(userController, resolvedConfig);
+    // BEFORE any option threading: a resource whose declared write verbs
+    // cannot execute must fail with zero side effects to reason about.
+    enforceWriteVerbReachability(userController, resolvedConfig);
     threadConfigureLifecycle(userController, resolvedConfig, adapter);
     warnOnDroppedAuthorOptions(resolvedConfig);
     warnOnDroppedPresetOptions(resolvedConfig);
+    warnOnWriteMethodOverride(userController, resolvedConfig);
     return userController as unknown as IController<TDoc>;
   }
 
@@ -105,6 +111,15 @@ function threadConfigureLifecycle<TDoc extends AnyRecord>(
   }
   if (resolvedConfig.queryParser !== undefined && wasDeclared("queryParser")) {
     opts.queryParser = resolvedConfig.queryParser;
+  }
+  /**
+   * NOT gated on `_declaredKeys`: `writes` is never inferred or injected by a
+   * preset, so its presence IS the declaration. Gating it would mean a
+   * resource that declares write verbs alongside its own controller silently
+   * kept generic CRUD — the exact bypass the seam exists to close.
+   */
+  if (resolvedConfig.writes !== undefined) {
+    opts.writes = resolvedConfig.writes;
   }
   // matchesFilter and presetFields come from adapter / presets, not
   // user-declared fields — always forward when present.
@@ -294,6 +309,12 @@ function buildBaseController<TDoc extends AnyRecord>(
     cache: resolvedConfig.cache,
     onFieldWriteDenied: resolvedConfig.onFieldWriteDenied,
     onImmutableWrite: resolvedConfig.onImmutableWrite,
+    /**
+     * Domain commands for the write slots. Threaded here rather than
+     * subclassing: the pipeline stays arc's and the command stays the
+     * kernel's, so neither has to be re-implemented to reach the other.
+     */
+    writes: resolvedConfig.writes as BaseControllerOptions["writes"],
     presetFields: resolvedConfig._controllerOptions
       ? {
           slugField: resolvedConfig._controllerOptions.slugField,

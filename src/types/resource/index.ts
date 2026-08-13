@@ -38,3 +38,9 @@ export type {
   RouteSchemaOptions,
 } from "./schemas.js";
 export type { OnTenantDeleteConfig, ResolvedTenantPurge } from "./tenant.js";
+export type {
+  MutationWriteContext,
+  ResourceWrites,
+  WriteContext,
+  WriteVerbKey,
+} from "./writes.js";

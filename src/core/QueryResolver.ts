@@ -96,6 +96,7 @@ export class QueryResolver {
   private defaultLimit: number;
   /** `undefined` means "no default sort" (caller passed `false`). */
   private defaultSort: string | undefined;
+  private readonly explicitDefaultSort: boolean;
   private schemaOptions: RouteSchemaOptions;
   private tenantField: string | false;
 
@@ -124,6 +125,11 @@ export class QueryResolver {
     // default (`-createdAt`, mongokit convention). Any string passes through.
     this.defaultSort =
       config.defaultSort === false ? undefined : (config.defaultSort ?? DEFAULT_SORT);
+    // Whether the HOST named a default sort, as opposed to inheriting the
+    // framework's. Only the framework's is silently withdrawn when the parser
+    // forbids the field — a host's own choice gets a boot diagnostic instead,
+    // because a contradiction they wrote is theirs to resolve.
+    this.explicitDefaultSort = config.defaultSort !== undefined && config.defaultSort !== false;
     this.schemaOptions = config.schemaOptions ?? {};
     this.tenantField = config.tenantField !== undefined ? config.tenantField : DEFAULT_TENANT_FIELD;
   }
@@ -155,6 +161,33 @@ export class QueryResolver {
   }
 
   /**
+   * The default sort, but only when the parser permits the field.
+   *
+   * A resource declaring `allowedSortFields` has stated exactly what may be
+   * sorted on. Arc then applied its OWN default of `-createdAt` on top, and
+   * mongokit 3.31 REJECTS a sort outside the allowlist rather than dropping it —
+   * so every list call on such a resource answered 400, `Blocked sort field not
+   * in allowlist: createdAt`. REST and MCP alike; the endpoint was unusable, and
+   * nothing the caller sent could avoid it.
+   *
+   * A general default must never outrank a specific declaration, so the
+   * FRAMEWORK default withdraws. A HOST-declared `defaultSort` is left alone —
+   * that contradiction is its author's to resolve, and `defineResource` reports
+   * it as a boot diagnostic instead of arc silently picking a winner.
+   */
+  private permittedDefaultSort(): string | undefined {
+    const sort = this.defaultSort;
+    if (sort === undefined || this.explicitDefaultSort) return sort;
+    const allowed = this.queryParser.allowedSortFields;
+    if (!allowed || allowed.length === 0) return sort;
+    const fields = sort
+      .split(",")
+      .map((s) => s.trim().replace(/^-/, ""))
+      .filter(Boolean);
+    return fields.every((f) => allowed.includes(f)) ? sort : undefined;
+  }
+
+  /**
    * Resolve a request into parsed query options -- ONE parse per request.
    * Combines what was previously _buildContext + _parseQueryOptions + _applyFilters.
    */
@@ -175,7 +208,7 @@ export class QueryResolver {
       ? Object.entries(parsed.sort)
           .map(([k, v]) => (v === -1 ? `-${k}` : k))
           .join(",")
-      : this.defaultSort;
+      : this.permittedDefaultSort();
 
     // Preserve parsed select format (object from MongoKit, string from Arc parser)
     // Sanitize blocked fields regardless of format

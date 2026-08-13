@@ -45,7 +45,12 @@ try {
   // ── Setup: Model + Resource ──
   const { createApp } = await import("../dist/factory/index.mjs");
   const { defineResource } = await import("../dist/core/index.mjs");
-  const { createMongooseAdapter } = await import("../dist/adapters/index.mjs");
+  // From the KIT, not arc. Arc 2.12 removed `src/adapters/` entirely — every
+  // kit-specific adapter ships from its own package, and arc consumes only the
+  // `@classytic/repo-core` contract. This import kept pointing at the deleted
+  // path, so the CI step below has been dying at module-resolution since 2.12
+  // without exercising a single assertion.
+  const { createMongooseAdapter } = await import("@classytic/mongokit/adapter");
   const { BaseController } = await import("../dist/core/index.mjs");
   const { allowPublic } = await import("../dist/permissions/index.mjs");
   const { mcpPlugin, defineTool } = await import("../dist/integrations/mcp/index.mjs");
@@ -143,7 +148,7 @@ try {
   console.log("\n[4/6] CRUD operations...");
   const listResult = await client.callTool({ name: "list_items", arguments: {} });
   const listData = JSON.parse(listResult.content[0].text);
-  assert("list returns 3", listData.docs?.length === 3, `got ${listData.docs?.length}`);
+  assert("list returns 3", listData.data?.length === 3, `got ${listData.data?.length}`);
 
   const createResult = await client.callTool({ name: "create_item", arguments: { name: "Pen", price: 5, category: "office" } });
   const createParsed = JSON.parse(createResult.content[0].text);
@@ -167,7 +172,7 @@ try {
   console.log("\n[5/6] QueryParser filter integration...");
   const filterResult = await client.callTool({ name: "list_items", arguments: { category: "gadgets" } });
   const filtered = JSON.parse(filterResult.content[0].text);
-  assert("filter by category", filtered.docs?.length === 2, `got ${filtered.docs?.length}`);
+  assert("filter by category", filtered.data?.length === 2, `got ${filtered.data?.length}`);
 
   // ── 6. Custom tool ──
   console.log("\n[6/6] Custom tool...");

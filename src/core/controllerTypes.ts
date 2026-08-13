@@ -30,6 +30,7 @@ import type {
   ResourceCacheConfig,
   RouteSchemaOptions,
 } from "../types/index.js";
+import type { ResourceWrites } from "../types/resource/writes.js";
 import type { FieldWriteDenialPolicy } from "./BodySanitizer.js";
 
 /**
@@ -210,6 +211,17 @@ export interface ControllerConfigurableOptions {
   onFieldWriteDenied?: FieldWriteDenialPolicy;
   /** Immutable-write policy — see `onImmutableWrite` on the resource config. */
   onImmutableWrite?: FieldWriteDenialPolicy;
+  /**
+   * Domain commands bound to the create / update / delete slots. When a slot
+   * declares one, the controller runs its full pipeline and calls the verb
+   * instead of `repository.<op>` — see `ResourceWrites`.
+   *
+   * Configurable rather than construction-only so a HOST-SUPPLIED controller
+   * receives it through `configure()` too. A custom controller that keeps
+   * `BaseCrudController`'s write methods is the common case, and it must not
+   * silently lose the resource's verbs just because it was hand-constructed.
+   */
+  writes?: ResourceWrites;
 }
 
 /**

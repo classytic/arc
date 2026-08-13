@@ -169,9 +169,28 @@ export function createMockReply() {
 }
 
 /**
- * Create a mock controller for testing
+ * Create a mock controller for testing.
+ *
+ * The return type is ANNOTATED rather than inferred, and writing it out IS the
+ * fix: inference expands `Mock`'s default type argument to `Procedure`, which
+ * vitest declares in an internal sub-package arc does not depend on. The
+ * emitted declaration then referenced that package by name — resolvable under
+ * npm's hoisting because `vitest` (a real peer) drags it in, and broken under
+ * pnpm's strict layout, where a transitive dep is not reachable from a
+ * consumer's root.
+ *
+ * Bare `Mock` keeps the permissive ergonomics (`.mockResolvedValue(...)`, any
+ * arguments) while naming only `vitest`, which arc does declare. Same shape
+ * `MockRepository` above uses.
  */
-export function createMockController(repository: StandardRepo<AnyRecord>) {
+export function createMockController(repository: StandardRepo<AnyRecord>): {
+  repository: StandardRepo<AnyRecord>;
+  list: Mock;
+  get: Mock;
+  create: Mock;
+  update: Mock;
+  delete: Mock;
+} {
   return {
     repository,
     list: vi.fn(),

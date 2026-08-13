@@ -11,9 +11,10 @@
  * }
  */
 
-import { CRUD_OPERATIONS } from "../constants.js";
+import { CRUD_OPERATIONS, MUTATION_OPERATIONS } from "../constants.js";
 import { getAvailablePresets } from "../presets/index.js";
 import type { PresetResult, ResourceConfig, RouteDefinition } from "../types/index.js";
+import type { WriteVerbKey } from "../types/resource/writes.js";
 
 // ============================================================================
 // Types
@@ -105,6 +106,99 @@ export function validateResourceConfig(
         suggestion: "Provide either adapter for CRUD or routes for custom logic",
       });
     }
+  }
+
+  // ========================================
+  // Write verbs (`writes`) — a declared command must actually RUN
+  // ========================================
+  //
+  // Every failure mode here is quiet by construction: the resource reads as
+  // though the kernel's guarded verb owns the slot, and generic CRUD serves the
+  // route. The author would only find out when a posted document turned out to
+  // be editable — i.e. from the damage, not from the wiring. So malformed
+  // declarations are ERRORS, not warnings: arc is a JavaScript runtime
+  // framework, and `writes: { update: "updateDraft" }` or a typo'd
+  // `writes: { patch: … }` degrading into generic CRUD is a security
+  // regression, not a style issue.
+  //
+  // Shape validation only — reachability against the resolved CONTROLLER
+  // (capability, overridden slots) needs the instance and lives in
+  // `defineResource/writeVerbs.ts`.
+  if (config.writes) {
+    const writeVerbSlots = MUTATION_OPERATIONS satisfies readonly WriteVerbKey[];
+    const entries = Object.entries(config.writes as Record<string, unknown>);
+
+    const unknownKeys = entries
+      .map(([key]) => key)
+      .filter((key) => !(writeVerbSlots as readonly string[]).includes(key));
+    if (unknownKeys.length > 0) {
+      errors.push({
+        field: "writes",
+        message:
+          `Unknown write verb slot(s) [${unknownKeys.join(", ")}] — ` +
+          `only [${writeVerbSlots.join(", ")}] exist. An unknown slot is silently ` +
+          "never called, so the command it names guards nothing",
+        suggestion:
+          "Rename to a real slot (create/update/delete), or move the behaviour into a " +
+          "custom route / action",
+      });
+    }
+
+    const nonFunction = entries.filter(
+      ([key, value]) =>
+        (writeVerbSlots as readonly string[]).includes(key) && typeof value !== "function",
+    );
+    for (const [key, value] of nonFunction) {
+      errors.push({
+        field: `writes.${key}`,
+        message:
+          `Write verb "${key}" is declared but is ${value === undefined ? "undefined" : `a ${typeof value}`}, ` +
+          "not a function — generic repository CRUD would silently serve that slot instead " +
+          "of the command the config claims guards it",
+        suggestion:
+          "Pass the command function itself (e.g. `update: (id, data, ctx) => " +
+          "engine.updateDraft(id, data)`), or delete the entry",
+      });
+    }
+
+    const declared = writeVerbSlots.filter((op) => typeof config.writes?.[op] === "function");
+
+    if (entries.length === 0) {
+      warnings.push({
+        field: "writes",
+        message: "`writes` is declared but contains no verb functions",
+        suggestion: "Remove the empty `writes` block, or declare create/update/delete",
+      });
+    }
+
+    if (declared.length > 0 && config.disableDefaultRoutes) {
+      errors.push({
+        field: "writes",
+        message:
+          `Resource declares write verb(s) [${declared.join(", ")}] but ` +
+          "`disableDefaultRoutes: true` means no CRUD slot will call them",
+        suggestion:
+          "Drop `disableDefaultRoutes` so the slots mount, or move the command into a " +
+          "custom route / action and remove `writes`",
+      });
+    } else if (declared.length > 0) {
+      const notMounted = declared.filter((op) => disabledRoutes.has(op));
+      if (notMounted.length > 0) {
+        errors.push({
+          field: "writes",
+          message:
+            `Write verb(s) [${notMounted.join(", ")}] are declared but those CRUD ` +
+            "slots are disabled, so the verbs can never run",
+          suggestion:
+            `Remove [${notMounted.join(", ")}] from \`disabledRoutes\`, or delete the ` +
+            "matching `writes` entr(ies) — a command nothing calls is decoration",
+        });
+      }
+    }
+    // NOTE deliberately absent: a "writes requires an adapter" error. The
+    // generic "Data adapter is required when CRUD routes are enabled" check
+    // above already rejects every such config — proven by a control test —
+    // and a second error for the same root cause is noise, not safety.
   }
 
   // Legacy validation removed - adapter pattern handles this

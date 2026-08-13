@@ -166,6 +166,7 @@ export type {
   EventDefinition,
   FieldRule,
   MiddlewareConfig,
+  MutationWriteContext,
   OnTenantDeleteConfig,
   OpenApiSchemas,
   PresetFunction,
@@ -179,10 +180,13 @@ export type {
   ResourceHookContext,
   ResourceHooks,
   ResourcePermissions,
+  ResourceWrites,
   RouteDefinition,
   RouteMcpConfig,
   RouteMethod,
   RouteSchemaOptions,
+  WriteContext,
+  WriteVerbKey,
 } from "./resource/index.js";
 // ──────────────────────────────────────────────────────────────────────
 // Type-level utilities
