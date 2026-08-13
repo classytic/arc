@@ -245,6 +245,23 @@ function validateDistributedRuntime(options: CreateAppOptions): string[] {
  * instance is closed before the error propagates — see the wrapper below.
  */
 export async function createApp(options: CreateAppOptions): Promise<FastifyInstance> {
+  /**
+   * ROLE contradiction check — before anything constructs. A relay/scheduler
+   * process declaring HTTP resources is a wiring error, not a preference:
+   * those roles exist to NOT serve traffic, and mounting routes anyway would
+   * hide the misdeployment behind a working endpoint.
+   */
+  const declaredRole = options.role ?? "all";
+  if (
+    (declaredRole === "relay" || declaredRole === "scheduler") &&
+    (options.resources !== undefined || options.resourceDir !== undefined)
+  ) {
+    throw new Error(
+      `createApp: role '${declaredRole}' declares HTTP resources — a ${declaredRole} ` +
+        "process must not serve routes. Remove `resources`/`resourceDir`, or change the role.",
+    );
+  }
+
   // The instance escapes `buildApp` the moment Fastify constructs it, so a
   // throw from ANY later phase still has something to close.
   let partial: FastifyInstance | undefined;

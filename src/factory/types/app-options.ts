@@ -85,6 +85,24 @@ export interface CreateAppOptions {
   runtime?: "memory" | "distributed";
 
   /**
+   * Deployment ROLE of this process (topology plan, Phase 2). Decides which
+   * async machinery mounts; default `'all'` is the single-process case and
+   * changes nothing.
+   *
+   * - `'api'` / `'worker'` — no module schedule arms run here (the outbox
+   *   relay arm included); a worker fleet or scheduler deployment owns them.
+   *   Register `jobsPlugin({ mode })` to match ('api' → 'producer').
+   * - `'relay'` — ONLY `kind: 'relay'` schedule arms run (the outbox
+   *   relays); declaring HTTP `resources` is boot-fatal.
+   * - `'scheduler'` — every schedule arm runs; HTTP resources boot-fatal.
+   * - `'all'` — everything (default).
+   *
+   * A skipped arm is logged by name at boot so a misdeployed process is
+   * legible from its first lines.
+   */
+  role?: "api" | "worker" | "relay" | "scheduler" | "all";
+
+  /**
    * Store and transport instances for runtime profile validation.
    * When `runtime` is `'distributed'`, Arc validates that these are
    * not memory-backed. Provide Redis or other durable adapters.

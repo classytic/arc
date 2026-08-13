@@ -224,7 +224,7 @@
       "version",
       "when"
     ],
-    "typesHash": "f58e79ee44b0e794"
+    "typesHash": "507249b2de4e0f91"
   },
   "./permissions": {
     "stability": "stable",
@@ -565,7 +565,7 @@
       "sendControllerResponse",
       "validateResourceConfig"
     ],
-    "typesHash": "4b620f4c52251066"
+    "typesHash": "7e7b0539d3efaec1"
   },
   "./presets": {
     "stability": "stable",
@@ -855,7 +855,7 @@
       "introspectionPlugin",
       "introspectionPluginFn"
     ],
-    "typesHash": "320f9fa9b0e91b71"
+    "typesHash": "79b594df60077edf"
   },
   "./utils": {
     "stability": "stable",
@@ -1114,7 +1114,7 @@
       "versioningPlugin",
       "versioningPluginFn"
     ],
-    "typesHash": "6d447f423673d189"
+    "typesHash": "2e8a728d2109fccd"
   },
   "./plugins/tracing": {
     "stability": "stable",
@@ -1328,7 +1328,7 @@
       "wrapWithBoundary",
       "wrapWithSchema"
     ],
-    "typesHash": "98782dd8d0d06a8f"
+    "typesHash": "c7103f80d609a845"
   },
   "./events/redis": {
     "stability": "stable",
@@ -1463,7 +1463,7 @@
       "testActorHeaders",
       "waitFor"
     ],
-    "typesHash": "c7544a7e960923c9"
+    "typesHash": "f1483f92e32de06d"
   },
   "./testing/storage": {
     "stability": "stable",
@@ -1583,7 +1583,7 @@
       "testingPreset",
       "toFetchHandler"
     ],
-    "typesHash": "e19121efab3447a0"
+    "typesHash": "5d04637fbfab9ba1"
   },
   "./schemas": {
     "stability": "stable",
@@ -2217,7 +2217,7 @@
       "createDataCleanupModule",
       "recipeFromSteps"
     ],
-    "typesHash": "1cf0923887c56bb1"
+    "typesHash": "ed4cd4afaf2c7d70"
   },
   "./outbox-admin": {
     "stability": "experimental",
@@ -2230,7 +2230,7 @@
       "OutboxAdminStore",
       "createOutboxAdminModule"
     ],
-    "typesHash": "3857953a53d64f1b"
+    "typesHash": "555b720c981a2c39"
   },
   "./testing/outbox": {
     "stability": "stable",

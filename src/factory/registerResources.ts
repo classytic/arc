@@ -605,7 +605,29 @@ export async function registerResources(
     // schedules plugin. Do this BEFORE event activation so invalid schedule
     // configuration cannot leave already-subscribed handlers behind.
     const scheduleCounts = new Map<string, number>();
-    const scheduledJobs = await collectModuleScheduledJobs(fastify, modules, scheduleCounts);
+    const collectedJobs = await collectModuleScheduledJobs(fastify, modules, scheduleCounts);
+    /**
+     * ROLE gate (CreateAppOptions.role). Arms a role does not run are SKIPPED
+     * and logged by name, never fatal: a module legitimately declares arms
+     * that a different deployment of the same codebase executes. 'relay' runs
+     * only kind:'relay' arms (the outbox relays); 'api'/'worker' run none;
+     * 'scheduler'/'all' run everything.
+     */
+    const role = config.role ?? "all";
+    const scheduledJobs =
+      role === "scheduler" || role === "all"
+        ? collectedJobs
+        : role === "relay"
+          ? collectedJobs.filter((j) => j.kind === "relay")
+          : [];
+    const skipped = collectedJobs.filter((j) => !scheduledJobs.includes(j));
+    if (skipped.length > 0) {
+      fastify.log.info(
+        { role, skipped: skipped.map((j) => j.name) },
+        `[arc] role '${role}': ${skipped.length} schedule arm(s) not mounted here — a ` +
+          "deployment with the owning role runs them",
+      );
+    }
     if (scheduledJobs.length > 0) {
       if (config.arcPlugins?.schedules === false) {
         throw new Error(

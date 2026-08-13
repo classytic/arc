@@ -257,6 +257,7 @@ export function createOutboxModule(options: OutboxModuleOptions): ArcModule<Outb
     scheduledJobs: () => [
       {
         name: `${name}.relay`,
+        kind: "relay",
         every: relayEveryMs,
         runOnStart: options.runOnStart ?? true,
         handler: async (): Promise<void> => {

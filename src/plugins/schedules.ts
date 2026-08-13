@@ -57,6 +57,12 @@ export interface ScheduleDefinition {
   /** Fire once immediately when the app becomes ready (default: false). */
   runOnStart?: boolean;
   /**
+   * Topology tag: `'relay'` marks an arm a `role: 'relay'` process runs
+   * (outbox relays); everything else is `'job'` (default). See
+   * `CreateAppOptions.role`.
+   */
+  kind?: "relay" | "job";
+  /**
    * Random extra delay in `[0, jitterMs)` added to the FIRST tick only.
    * Spreads boot-aligned jobs so multiple same-cadence schedules don't all
    * fire at exactly `boot + every` after every restart (and, with a lock,
