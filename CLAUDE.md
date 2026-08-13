@@ -2,10 +2,25 @@
 
 Loaded every session. Every line must earn its place.
 
-- **Deep guide:** [AGENTS.md](AGENTS.md)
-- **Release history / migrations:** [CHANGELOG.md](CHANGELOG.md)
-- **v3 design:** [v3.md](v3.md)
-- **Concept pages:** [wiki/index.md](wiki/index.md). Load on demand instead of re-reading `src/`. After any change that invalidates a page: edit it, update `wiki/index.md`, append one line to `wiki/log.md`. Keep pages tight; link with `[[page-name]]` instead of duplicating.
+## Where a fact lives — ONE place each
+
+| File | Owns | Budget |
+|---|---|---|
+| **CLAUDE.md** (this) | commands, non-negotiables, type conventions, peers, test map, gotchas | ≤150 lines |
+| [AGENTS.md](AGENTS.md) | architecture, testing standard, security checklist, adding a new X | ≤120 lines |
+| [wiki/](wiki/index.md) | **agent-facing** concept pages — internals, contracts, invariants | ≤150 lines/page |
+| [docs/](docs/) | **host-facing** guides (published site) — usage, never internals | n/a |
+| [changelog/v2.md](changelog/v2.md) | what changed and why, per release | n/a |
+| [CHANGELOG.md](CHANGELOG.md) | index only — one line per minor | ≤4KB |
+| [wiki/log.md](wiki/log.md) | recent decisions — a recency signal | ~10 entries, ≤150 chars each |
+
+**Never restate a fact another file owns — link to it.** These files load into context; duplication is paid on every session forever, and two copies drift.
+
+**No rotting metrics anywhere**: line counts, test counts, file sizes, "N tests green". They are wrong within a release and teach nothing.
+
+After a change that invalidates a wiki page: edit the page, update the index if pages moved, add ONE line to `wiki/log.md` (drop the oldest). Detail goes in `changelog/v2.md`, not the log.
+
+**v3 design:** [v3.md](v3.md)
 
 ## What arc is
 

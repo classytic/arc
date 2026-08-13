@@ -225,7 +225,7 @@ Type host-facing per-resource override bundles as `ResourceSeams` (or a
 `Pick<ResourceSeams, ...>` allow-list) and compose with `mergeResourceConfig`
 — both from `@classytic/arc`. This kills the `as never` tax module authors
 paid when assembling `defineResource` configs from injected parts (a real
-module carried 15+ casts in <200 lines), and makes every module's
+module carried 15+ casts), and makes every module's
 "defaults + host seams" merge identical: top-level arrays concat, plain
 objects merge recursively (nested arrays replace), instances last-win. The
 `adapter` seam slot is widened via `AdapterLike` (the `ControllerLike`

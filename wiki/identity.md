@@ -36,7 +36,7 @@ Violating these breaks users, the build, or the design.
 - No CJS — ESM-only; CJS users use dynamic import.
 - No bundling peer deps — `tsdown.config.ts` `deps.neverBundle`.
 - No Dockerfile/Helm/K8s — app-level concerns.
-- No saga/workflow orchestration — use Streamline/Temporal.
+- No saga/workflow orchestration — use `@classytic/streamline` or a dedicated workflow engine.
 - No `--no-verify` on commit — fix the underlying failure.
 
 ## Related

@@ -471,7 +471,7 @@ defineResource({
 
 ### Handler Patterns
 
-**Arc Context Pattern** (default — `raw` omitted):
+**Arc Context Pattern** (declared via `handler`):
 
 ```typescript
 class ProductController extends BaseController {
@@ -613,7 +613,7 @@ defineResource({
 - Controller methods exist
 - Preset names are valid
 - Permission keys match routes
-- `raw` matches the handler signature (omit for arc-pipeline handlers, set `true` for raw Fastify handlers)
+- The handler FIELD matches the handler signature — `handler` for arc-pipeline handlers (`IRequestContext`), `rawHandler` for Fastify-native ones (`request, reply`). The field carries the intent; the boolean flag it replaced was removed in 2.31 and is now rejected at boot.
 
 ## createCrudRouter (Advanced)
 

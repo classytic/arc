@@ -46,7 +46,7 @@ Arc emits a Mongo-style operator dialect (`$or`, `$in`, `$and`), normalized at t
 |---|---|
 | `core.ts` | auth/role/ownership primitives + combinators: `allOf`, `anyOf`, `not`, `when`, `denyAll` |
 | `scope.ts` | org/service/team/scope-context checks: `requireOrgMembership`, `requireOrgRole`, `requireServiceScope`, `requireScopeContext`, `requireOrgInScope`, `requireTeamMembership` |
-| `dynamic.ts` | runtime permission matrices + cache + cross-node invalidation (~480 lines) |
+| `dynamic.ts` | runtime permission matrices + cache + cross-node invalidation |
 | `fields.ts` | field-level read/write permissions |
 | `presets.ts` | pre-composed permission bundles |
 | `roleHierarchy.ts` | role inheritance tree |
@@ -76,7 +76,7 @@ Full matrix: `docs/getting-started/permissions.mdx`.
 
 ## `requireGrant` — per-record grants / record sharing (2.22)
 
-Subject × record × mode grants (Puter's one good ACL idea, minus its mistakes — verdict + recipe: `designs/record-sharing.md`). Arc ships the GATE only: `requireGrant({ mode, resolve, bypassRoles })` + the `GRANT_MODES` lattice (`see < list < read < write < manage`, held ≥ required via `modeSatisfies`). Grant STORAGE is a host `defineResource` (tenant-scoped, `audit: true` — DB-agnostic over `RepositoryLike`); `resolve` is structural. Resolutions: `boolean` | `{ mode }` (lattice-checked for single-record ops) | `{ filters }` (list-shaped — flows through `PermissionResult.filters` into the ONE list query; never per-item ACL walks). Fail-closed: resolver throw, empty resolution, and corrupted mode strings all deny. Anonymous callers reach the resolver by design (share links = a signed token referencing a grant ROW with `subjectType: 'link'` — revocable by deleting the row). Turnkey layer: **`@classytic/arc-shares`** (arc-ecosystem) — ShareStore port + adapter, createShares service, revocable HMAC share links, prebuilt permission sets (ownership folded into the resolver — see the package for why anyOf(requireOwnership, requireGrant) would short-circuit). Pinned by `tests/permissions/require-grant.test.ts`.
+Subject × record × mode grants (verdict + recipe: `designs/record-sharing.md`). Arc ships the GATE only: `requireGrant({ mode, resolve, bypassRoles })` + the `GRANT_MODES` lattice (`see < list < read < write < manage`, held ≥ required via `modeSatisfies`). Grant STORAGE is a host `defineResource` (tenant-scoped, `audit: true` — DB-agnostic over `RepositoryLike`); `resolve` is structural. Resolutions: `boolean` | `{ mode }` (lattice-checked for single-record ops) | `{ filters }` (list-shaped — flows through `PermissionResult.filters` into the ONE list query; never per-item ACL walks). Fail-closed: resolver throw, empty resolution, and corrupted mode strings all deny. Anonymous callers reach the resolver by design (share links = a signed token referencing a grant ROW with `subjectType: 'link'` — revocable by deleting the row). Turnkey layer: **`@classytic/arc-shares`** (arc-ecosystem) — ShareStore port + adapter, createShares service, revocable HMAC share links, prebuilt permission sets (ownership folded into the resolver — see the package for why anyOf(requireOwnership, requireGrant) would short-circuit). Pinned by `tests/permissions/require-grant.test.ts`.
 
 ## CRUD public-by-omission (2.20)
 

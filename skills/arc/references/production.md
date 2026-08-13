@@ -292,7 +292,7 @@ field masking. Client = plain `EventSource` with `?token=`. No replay — reconn
 refetches the list. Choosing: per-user resource views → realtime; bidirectional/geo
 → `integrations/websocket` (its CRUD bridge is org-coarse — never expose
 row-permissioned resources through it); event firehose → sse. Massive fan-out
-(viral feeds, live scores) → publish once to an edge layer (Ably/Centrifugo/CF)
+(viral feeds, live scores) → publish once to a dedicated edge fan-out layer
 via `app.events.subscribe(...)`; full tiering guide: docs/production-ops/realtime.mdx.
 
 ```typescript
@@ -618,7 +618,7 @@ presets: [bulkPreset({ operations: ['createMany', 'updateMany'], maxCreateItems:
 ## Compensating Transaction
 
 In-process rollback primitive — runs steps in order, compensates in reverse on failure.
-For distributed sagas across services, use Temporal, Inngest, or Streamline.
+For distributed sagas across services, use `@classytic/streamline` or a dedicated workflow orchestrator.
 
 ```typescript
 import { withCompensation } from '@classytic/arc/utils';

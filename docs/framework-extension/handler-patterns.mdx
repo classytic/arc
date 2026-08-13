@@ -48,7 +48,7 @@ defineResource({
       path: '/category/:category',
       handler: 'getByCategory',
       permissions: allowPublic(),
-      // (no `raw` flag → arc wraps the handler in its pipeline — the default)
+      // (`handler` — not `rawHandler` — so arc wraps it in its pipeline)
     },
   ],
 });
@@ -411,3 +411,70 @@ This is the most common cause of "dead repository methods" in arc codebases. Bef
 - **For preset-shaped endpoints (slug / tree / soft-delete / bulk)**, consult the [decision table above](#pattern-3-mixins-vs-routes--which-one-for-preset-shaped-endpoints) and pick ONE path — never mix.
 
 Both patterns work great - just pick the right one for your use case! 🚀
+
+## Pattern 4: Write verbs — a CRUD slot backed by a domain command
+
+Use this when the model behind a resource has a **guarded write command** — a
+verb that refuses under conditions generic CRUD knows nothing about (a posted
+invoice, a closed period, a locked record).
+
+```typescript
+defineResource({
+  name: 'invoice',
+  adapter: createMongooseAdapter({ model, repository: engine.repositories.invoices }),
+  schemaOptions: {
+    fieldRules: {
+      status: { systemManaged: true },
+      number: { systemManaged: true },
+    },
+  },
+  writes: {
+    create: (data, ctx) => engine.repositories.invoices.createDraft(data, resolveCtx(ctx.req)),
+    update: (id, data, ctx) => engine.repositories.invoices.updateDraft(id, data, resolveCtx(ctx.req)),
+    delete: (id, ctx) => engine.repositories.invoices.deleteDraft(id, resolveCtx(ctx.req)),
+  },
+})
+```
+
+Arc runs its **whole pipeline** and swaps only the persistence call:
+
+```
+sanitize (field rules) → tenant inject → actor stamp → before → around → [ YOUR VERB ] → after
+                                                                            ▲
+                                            repository.create() when no verb is declared
+```
+
+### Why not just override the controller method?
+
+Because `BaseCrudController.create/update/delete` are not thin wrappers around
+the repository — each one sanitizes the body against the resource's field rules,
+injects the tenant field, stamps `createdBy`/`updatedBy` and runs the hook
+sandwich. An override replaces all of it.
+
+That produced a real, measured defect. A resource declaring eight
+`systemManaged: true` fields overrode `update` to reach its kernel's guarded
+verb. A `PATCH` on a draft then wrote `status: "posted"` and a forged document
+`number` straight through, answering `200` — a document that read as posted with
+no journal entry behind it. The override had been added to *close* a hole
+(generic CRUD editing posted documents) and opened a wider one, because the two
+safety properties had no way to coexist.
+
+Arc warns at registration when a controller overrides a write method **and** the
+resource declares field rules that the override discards.
+
+### Return contract
+
+A repository returns `null` for "not found"; a domain command **throws**. So
+when a verb is declared:
+
+| slot | contract |
+|---|---|
+| `create` | return the created document |
+| `update` | a `void` return is success — arc re-reads through the repository to answer the request, rather than reporting a false 404 |
+| `delete` | `undefined` is success (`deleteDraft()` returns `void`) |
+
+### Registration-time refusals
+
+A declared verb that can never run is decoration, so these are **errors**, not
+warnings: the slot is in `disabledRoutes`, `disableDefaultRoutes: true` is set,
+or the resource has no adapter repository to mount a controller against.

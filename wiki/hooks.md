@@ -1,6 +1,6 @@
 # Hooks
 
-**Summary**: `HookSystem` runs before/after callbacks on resource operations. ~720 lines; the main lifecycle engine.
+**Summary**: `HookSystem` runs before/after callbacks on resource operations — the lifecycle engine.
 **Sources**: src/hooks/HookSystem.ts.
 **Last updated**: 2026-07-28 (`HookContext.scope` — 2.29).
 
