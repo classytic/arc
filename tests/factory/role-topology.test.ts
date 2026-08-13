@@ -66,6 +66,22 @@ describe("createApp({ role })", () => {
     expect(jobs.map((j) => j.name)).toEqual(["billing.relay"]);
   });
 
+  it("createWorker forwards role — one axis, no second mechanism", async () => {
+    // Historical contract preserved: WITHOUT role, a worker mounts every arm
+    // (it is "the headless process that runs everything non-HTTP")…
+    const { createWorker } = await import("../../src/factory/createWorker.js");
+    const w1 = await createWorker({ logger: false, modules: [armModule()] });
+    expect(
+      ((w1.app.arc?.scheduledJobs ?? []) as Array<{ name: string }>).map((j) => j.name).sort(),
+    ).toEqual(["billing.digest", "billing.relay"]);
+    await w1.close();
+
+    // …and WITH role: 'worker', the arms move to the owning deployment.
+    const w2 = await createWorker({ logger: false, role: "worker", modules: [armModule()] });
+    expect((w2.app.arc?.scheduledJobs ?? []) as unknown[]).toHaveLength(0);
+    await w2.close();
+  });
+
   it("default 'all' mounts every arm — unchanged behaviour", async () => {
     app = await createApp({
       logger: false,

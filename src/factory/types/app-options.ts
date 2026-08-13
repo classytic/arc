@@ -99,6 +99,12 @@ export interface CreateAppOptions {
    *
    * A skipped arm is logged by name at boot so a misdeployed process is
    * legible from its first lines.
+   *
+   * `createWorker` is the paved road for headless processes and forwards
+   * this option untouched — one axis, not two mechanisms. Its default stays
+   * `'all'` (its 2.23 contract: the headless process runs everything
+   * non-HTTP); pass `role: 'worker'` there when a dedicated scheduler/relay
+   * deployment owns the arms.
    */
   role?: "api" | "worker" | "relay" | "scheduler" | "all";
 

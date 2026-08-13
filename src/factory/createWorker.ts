@@ -5,6 +5,13 @@
  *   1. `mountRoutes: false`  — resources register runtime state, mount nothing
  *   2. `preset: 'worker'`    — HTTP-surface flags off (host-overridable)
  *
+ * ROLE composition (2.34): `role` flows through untouched — ONE topology
+ * axis, no second mechanism. createWorker's historical contract is "the
+ * headless process that runs everything non-HTTP", so its default stays
+ * `role: 'all'` (module schedule arms + relays mount here). A fleet with a
+ * dedicated scheduler/relay deployment passes `role: 'worker'` and this
+ * process drops the arms — same option, same semantics as createApp.
+ *
  * One options object, two process shapes:
  *
  * ```ts
