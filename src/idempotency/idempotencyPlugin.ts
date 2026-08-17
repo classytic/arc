@@ -109,6 +109,22 @@ export interface IdempotencyPluginOptions {
    * Omit for the common case where the store is per-deployment.
    */
   namespace?: string;
+  /**
+   * Boot-time store self-check (default: true). Writes one probe entry,
+   * verifies it reads back under ITS OWN key and NOT under a different key,
+   * then deletes it. Registration THROWS if the store fails — because the
+   * failure mode this catches is silent and catastrophic: a repository
+   * whose schema strips the key filter (observed live: a pathless Mongoose
+   * schema under `strictQuery: true`) collapses every idempotency key onto
+   * one shared row, and every request then replays the most recent cached
+   * response across keys AND across users. A store that cannot round-trip
+   * a key must never be allowed to serve traffic.
+   *
+   * Disable only for a store that genuinely cannot accept a probe write at
+   * boot — and if you disable it, the adapter's per-read identity checks
+   * remain as the runtime backstop.
+   */
+  selfCheck?: boolean;
 }
 
 declare module "fastify" {
@@ -179,6 +195,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     store: explicitStore,
     retryAfterSeconds = 1,
     namespace,
+    selfCheck = true,
   } = opts;
 
   // Resolve the store:
@@ -188,6 +205,126 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
   const store: IdempotencyStore = repository
     ? repositoryAsIdempotencyStore(repository, ttlMs)
     : (explicitStore ?? new MemoryIdempotencyStore({ ttlMs }));
+  /**
+   * Who owns the store's lifecycle — arc closes ONLY what arc built.
+   *
+   * A host-supplied `store` may outlive this app: two arc apps in one process
+   * (a documented topology) can share one, and `MemoryIdempotencyStore.close()`
+   * CLEARS its maps. Closing on the first app's shutdown therefore wiped the
+   * second app's live idempotency records — replayable requests silently
+   * became re-executable. A store handed in from outside is the host's to
+   * close. The same rule now applies to the events transport and the
+   * query-cache store, which had the identical defect.
+   *
+   * The `repository` path builds its own adapter here, so arc owns that
+   * wrapper — but the adapter has no `close`, and the underlying repository
+   * (host-owned) is never touched.
+   */
+  const ownsStore = !explicitStore;
+
+  // ── Boot-time store self-check — falsify the store before it serves ──
+  //
+  // Round-trip probe: a store that cannot (a) return a written entry under
+  // its own key, and (b) return NOTHING under a different key, will
+  // silently replay cached responses across keys and users in production.
+  // That exact failure was observed live (filter-stripping repository —
+  // see IdempotencyStoreMisconfiguredError) and produced "success"
+  // responses for operations that never executed.
+  //
+  // TWO OUTCOMES, DELIBERATELY NOT COLLAPSED:
+  //
+  //   - a CORRECTNESS violation (the probe proved the store ignores the key
+  //     filter) is deterministic, a pure function of schema/config, and
+  //     catastrophic in production → REFUSE TO BOOT;
+  //   - an AVAILABILITY failure (the probe could not complete — connection
+  //     not ready, timeout, permissions) says nothing about key filtering →
+  //     WARN and continue.
+  //
+  // Collapsing them was a real fault in the first cut of this check, caught
+  // on the very next boot: a mongoose connection that dropped mid-boot made
+  // the probe read return nothing, and the plugin killed the whole app while
+  // reporting "the store is not persisting or not filtering by key" — a
+  // false diagnosis AND a new hard dependency of BOOT on DB availability
+  // that this plugin never had before (it previously touched the store only
+  // on the first keyed request). A liveness problem is the app's own
+  // health-check to own; it must not be laundered into a correctness verdict.
+  //
+  // Continuing on an availability failure is safe because it is not the last
+  // line of defense: `repositoryAsIdempotencyStore` verifies key identity on
+  // EVERY read at runtime and throws `IdempotencyStoreMisconfiguredError`
+  // rather than serving a cross-key row. The boot check exists to convert
+  // that runtime refusal into an earlier, louder, deployment-time one — not
+  // to be the only thing standing between a bad schema and a replayed
+  // response.
+  if (enabled && selfCheck) {
+    const probeSuffix = createHash("sha256")
+      .update(`${process.pid}:${Date.now()}:${Math.random()}`)
+      .digest("hex")
+      .slice(0, 12);
+    const probeKeyA = `__arc_idempotency_selfcheck__:${probeSuffix}:a`;
+    const probeKeyB = `__arc_idempotency_selfcheck__:${probeSuffix}:b`;
+    /** Correctness verdicts rethrow; everything else degrades to a warning. */
+    class SelfCheckViolation extends Error {}
+    try {
+      await store.set(probeKeyA, createIdempotencyResult(299, { probe: true }, {}, 60_000));
+      const own = await store.get(probeKeyA);
+      // NOTE: a missing/incorrect own-key read is AMBIGUOUS — an unreachable
+      // store looks identical to a non-persisting one from here — so it is
+      // deliberately NOT a violation. The unambiguous signal is the foreign
+      // read below.
+      if (!own || own.statusCode !== 299) {
+        fastify.log?.warn?.(
+          { probe: "own-key" },
+          "idempotencyPlugin self-check: probe entry did not read back under its own key. " +
+            "This is usually the store being unreachable at boot (connection not ready), not a " +
+            "misconfiguration — continuing, with the adapter's per-read key-identity checks as the " +
+            "runtime backstop. If keyed requests later fail with IDEMPOTENCY_STORE_MISCONFIGURED, " +
+            "the store's key filter is being stripped (see IdempotencyStoreMisconfiguredError).",
+        );
+      } else {
+        // Only meaningful once the own-key read PROVED the probe is stored:
+        // otherwise a foreign miss is trivially satisfied by an empty store.
+        const foreign = await store.get(probeKeyB);
+        if (foreign) {
+          throw new SelfCheckViolation(
+            "idempotencyPlugin self-check: a probe read under key B returned key A's entry — the store " +
+              "is ignoring the key filter, which in production replays cached responses across keys and " +
+              "users (observed cause: a pathless Mongoose schema under strictQuery:true strips every " +
+              "filter to {}). Declare the key path on the schema (e.g. _id: String) and set " +
+              "strictQuery: false in the schema options.",
+          );
+        }
+      }
+    } catch (err) {
+      // A cross-key hit detected by the ADAPTER surfaces as
+      // IdempotencyStoreMisconfiguredError from `set`/`get` above — same
+      // verdict, different messenger. Matched structurally (by `code`) so a
+      // custom store can report it without importing arc's class.
+      const isMisconfiguration =
+        err instanceof SelfCheckViolation ||
+        (err as { code?: string } | null)?.code === "IDEMPOTENCY_STORE_MISCONFIGURED";
+      if (isMisconfiguration) throw err;
+      fastify.log?.warn?.(
+        { err },
+        "idempotencyPlugin self-check could not complete (store unreachable at boot?) — continuing. " +
+          "The adapter's per-read key-identity checks remain the runtime backstop.",
+      );
+    } finally {
+      // Best-effort cleanup — must never mask the actual check result.
+      //
+      // Scoped to THIS boot's probe keys, deliberately. Sweeping the whole
+      // reserved prefix looks tidier (it would also collect residue from an
+      // interrupted earlier boot) but it deletes probes belonging to OTHER
+      // replicas booting at the same moment: a rolling deploy has several
+      // starting against one shared store, and a replica whose probe is
+      // swept between its `set` and its `get` observes "did not read back
+      // under its own key" and refuses to boot. The self-check would take
+      // down the deployment it exists to protect. Residue is not a problem
+      // worth that: probes carry a 60s TTL and `get` already filters expired
+      // entries, so an interrupted boot's leftovers age out on their own.
+      await store.deleteByPrefix(`__arc_idempotency_selfcheck__:${probeSuffix}:`).catch(() => {});
+    }
+  }
 
   // Skip if not enabled
   if (!enabled) {
@@ -477,9 +614,9 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     await store.unlock(fullKey, request.id);
   });
 
-  // Cleanup on close
+  // Cleanup on close — only for a store arc constructed. See `ownsStore`.
   fastify.addHook("onClose", async () => {
-    await store.close?.();
+    if (ownsStore) await store.close?.();
   });
 
   fastify.log?.debug?.({ headerName, ttlMs, methods }, "Idempotency plugin enabled");

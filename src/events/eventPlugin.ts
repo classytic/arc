@@ -190,6 +190,16 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
   fastify: FastifyInstance,
   opts: EventPluginOptions = {},
 ) => {
+  /**
+   * Lifecycle ownership: arc closes ONLY the transport it built.
+   *
+   * A host-supplied transport (a Redis client wrapper, typically) may be
+   * shared with other apps in the process or outlive this one — closing it
+   * on this app's shutdown severs a connection arc does not own. Read
+   * BEFORE the destructure, because the default below is indistinguishable
+   * from a host value afterwards.
+   */
+  const ownsTransport = opts.transport === undefined;
   const {
     transport = new MemoryEventTransport(),
     singleProcess = false,
@@ -423,6 +433,7 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
 
   // Cleanup on close
   fastify.addHook("onClose", async () => {
+    if (!ownsTransport) return; // host-supplied — the host closes it
     try {
       await transport.close?.();
     } catch (error) {

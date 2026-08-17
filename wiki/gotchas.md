@@ -34,7 +34,7 @@
 
 14. **`verifySignature(body, ...)` throws `TypeError` on parsed body.** Pass `req.rawBody`, not parsed `req.body`. Register `@fastify/raw-body` before webhook routes. See [[auth]].
 
-15. **Plugins set response headers at `onRequest` or `preSerialization`, never `onSend`.** Async `onSend` races with Fastify's flush path → `ERR_HTTP_HEADERS_SENT`. `isReplyCommitted()` in `src/utils/reply-guards.ts` remains for third-party plugin authors. See [[plugins]].
+15. **Plugins set response headers at `onRequest` or `preSerialization`, never `onSend`.** Async `onSend` races with Fastify's flush path → `ERR_HTTP_HEADERS_SENT`. See [[plugins]].
 
 16. **MCP tools regenerate from resource config.** Changing field rules / permissions / routes changes tool schemas. Run `tests/integrations/mcp/`. See [[mcp]].
 
@@ -57,6 +57,18 @@
 
     Arc ships an opt-in dev-mode duplicate-publish detector — toggled via `arcPlugins: { events: { warnOnDuplicate: true } }` (auto-enabled when `process.env.NODE_ENV !== 'production'`). 5-second LRU on `(eventName, correlationId)`, single warn per collision, no-op in production. See [src/events/eventPlugin.ts](../src/events/eventPlugin.ts) and [[events]].
 
+## Resource ownership: arc closes only what arc BUILT
+
+A store or transport you hand to a plugin (`store:`, `transport:`, `stores.*`)
+stays yours to close. Arc closes only the defaults it constructed itself.
+
+The rule exists because the alternative was silent data loss: `onClose` used to
+close every store, and `MemoryIdempotencyStore.close()` CLEARS its maps — so in
+a two-apps-in-one-process topology (which every integration suite is), shutting
+down the first app wiped the second's live idempotency records and replayable
+requests quietly became re-executable. Applies to `idempotencyPlugin`,
+`eventPlugin`, and `queryCachePlugin`.
+
 ## Related
-- [[rules]]? — see [[identity]] for non-negotiables
+- [[identity]] — the non-negotiables
 - [[security]] — checklist version of the auth-touching gotchas

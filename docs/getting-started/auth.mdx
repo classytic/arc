@@ -221,6 +221,25 @@ overlapping plugin sets won't crash with `OverwriteModelError`.
 
 > **Note:** `arc init --better-auth --mongokit` includes the call automatically.
 
+### Exposing Better Auth tables as resources (read-only)
+
+Kits ship an overlay (`createBetterAuthOverlay` in `@classytic/mongokit/better-auth` and `@classytic/sqlitekit/better-auth`) so BA's `user` / `organization` / `member` / `session` tables can be served with arc's pagination, filters, permissions, and OpenAPI:
+
+```typescript
+const adapter = await createBetterAuthOverlay({ auth, mongoose, collection: 'organization' });
+
+defineResource({
+  name: 'organization',
+  adapter,
+  disabledRoutes: ['create', 'update', 'delete'],   // required — see below
+  permissions: { list: requireRoles('admin'), get: requireRoles('admin') },
+});
+```
+
+**The overlay is READ-ONLY, and mounting write routes over it is boot-fatal.** Better Auth owns writes to these tables and enforces invariants the rows cannot express — password hashing, session revocation, org-membership cascades, and every plugin hook (passkey, SSO, …). A generic `POST /organization` would write a row Better Auth never saw. Route identity mutations through `auth.api`.
+
+For administrative repair paths where you accept that responsibility, the kit takes `unsafeWritable: true`. Reads need nothing special.
+
 ### API Key Auth
 
 When using Better Auth's `apiKey()` plugin, API keys create synthetic sessions that have **no org context**. Arc bridges this gap with the `x-organization-id` header:

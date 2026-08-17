@@ -60,6 +60,9 @@ const queryCachePluginImpl: FastifyPluginAsync<QueryCachePluginOptions> = async 
   fastify: FastifyInstance,
   opts: QueryCachePluginOptions = {},
 ) => {
+  // Arc closes ONLY the store it built — a host-supplied store may be shared
+  // with other apps in the process. Same rule as the events transport.
+  const ownsStore = opts.store === undefined;
   const store = opts.store ?? new MemoryCacheStore();
   const queryCache = new QueryCache(store);
 
@@ -147,6 +150,7 @@ const queryCachePluginImpl: FastifyPluginAsync<QueryCachePluginOptions> = async 
 
   // Cleanup on close
   fastify.addHook("onClose", async () => {
+    if (!ownsStore) return; // host-supplied — the host closes it
     if ("close" in store && typeof store.close === "function") {
       await store.close();
     }

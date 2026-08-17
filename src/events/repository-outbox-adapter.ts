@@ -57,6 +57,7 @@
  * If/when one appears, the FIFO loop becomes a 1-call adoption candidate.
  */
 
+import type { OutboxClaimedEvent } from "@classytic/primitives/outbox";
 import {
   InvalidOutboxEventError,
   type OutboxAcknowledgeOptions,
@@ -89,6 +90,8 @@ interface OutboxDoc extends Record<string, unknown> {
   // (`visibleAtField`), so it rides the index signature above. Nothing reads it
   // off the doc — the filter and both writers go through `visibleAtField`.
   leaseOwner: string | null;
+  /** Fencing token — one per claim epoch. Minted by the `$inc` in the claim CAS. */
+  fenceToken?: number;
   leaseExpiresAt: Date | null;
   deliveredAt: Date | null;
   firstFailedAt: Date | null;
@@ -199,6 +202,75 @@ export function repositoryAsOutboxStore(
       or(eqFilter("leaseOwner", null), lte("leaseExpiresAt", now)),
     );
 
+  /**
+   * FENCED claim — the ONE claim implementation (`claimPending` delegates).
+   * The token rides the SAME CAS that claims the row: `inc: { fenceToken: 1 }`
+   * next to the attempts bump, so a takeover after lease expiry mints a
+   * strictly greater token in the very statement that takes ownership —
+   * no second round trip, no window. Minted by the store; a process cannot
+   * fence itself.
+   */
+  const claimPendingFenced = async (
+    options?: OutboxClaimOptions,
+  ): Promise<OutboxClaimedEvent[]> => {
+    const limit = options?.limit ?? DEFAULT_CLAIM_LIMIT;
+    const leaseMs = options?.leaseMs ?? DEFAULT_LEASE_MS;
+    const consumerId = options?.consumerId ?? "anonymous";
+    const typeFilter = options?.types?.length ? anyOf("type", options.types) : null;
+
+    // Two-phase batch claim — the portable optimum:
+    //
+    //   Phase 1: ONE round trip fetches the FIFO candidate window.
+    //   Phase 2: per-id CAS claims run CONCURRENTLY — each
+    //            findOneAndUpdate re-checks the full claimable filter, so
+    //            a concurrent relayer that wins a doc just nulls it out
+    //            here (skipped; the winner owns it).
+    //
+    // Wall-clock ≈ 2 DB round trips for the whole batch instead of the
+    // previous `limit` SEQUENTIAL claim queries (~1s per 100 events at
+    // 10ms RTT). A single limited atomic batch-claim is NOT portable —
+    // Mongo's updateMany has no limit, so "claim exactly N in one
+    // statement" can't be expressed across kits. Backends with stronger
+    // primitives (SQL `FOR UPDATE SKIP LOCKED`) can supply their own
+    // `OutboxStore` with a native `claimPending` — the store contract IS
+    // the batch seam. `StandardRepo.claim` still doesn't apply: it needs
+    // an id upfront, and here the CAS *selects* the ids.
+    const now = new Date();
+    const candidateFilter = typeFilter
+      ? and(claimableFilter(now), typeFilter)
+      : claimableFilter(now);
+    const candidates = unwrapDocs<OutboxDoc>(
+      await r.getAll({
+        filters: candidateFilter,
+        sort: { createdAt: 1 },
+        page: 1,
+        limit,
+      }),
+    );
+    if (candidates.length === 0) return [];
+
+    const results = await Promise.all(
+      candidates.map((candidate) => {
+        const claimNow = new Date();
+        const leaseExpiresAt = new Date(claimNow.getTime() + leaseMs);
+        return r.findOneAndUpdate(
+          and(eqFilter(idField, candidate.event.meta.id), claimableFilter(claimNow)),
+          update({
+            set: { leaseOwner: consumerId, leaseExpiresAt },
+            inc: { attempts: 1, fenceToken: 1 },
+          }),
+          { returnDocument: "after" },
+        ) as Promise<OutboxDoc | null>;
+      }),
+    );
+
+    // Promise.all preserves candidate order → claims stay FIFO.
+    return results
+      .filter((doc): doc is OutboxDoc => doc !== null)
+      .filter((doc) => isWellFormed(doc.event))
+      .map((doc) => ({ event: doc.event, fencingToken: doc.fenceToken ?? 0 }));
+  };
+
   return {
     /**
      * Transactional: `save` forwards `options.session` to the backing
@@ -259,70 +331,22 @@ export function repositoryAsOutboxStore(
     },
 
     async claimPending(options?: OutboxClaimOptions): Promise<DomainEvent[]> {
-      const limit = options?.limit ?? DEFAULT_CLAIM_LIMIT;
-      const leaseMs = options?.leaseMs ?? DEFAULT_LEASE_MS;
-      const consumerId = options?.consumerId ?? "anonymous";
-      const typeFilter = options?.types?.length ? anyOf("type", options.types) : null;
-
-      // Two-phase batch claim — the portable optimum:
-      //
-      //   Phase 1: ONE round trip fetches the FIFO candidate window.
-      //   Phase 2: per-id CAS claims run CONCURRENTLY — each
-      //            findOneAndUpdate re-checks the full claimable filter, so
-      //            a concurrent relayer that wins a doc just nulls it out
-      //            here (skipped; the winner owns it).
-      //
-      // Wall-clock ≈ 2 DB round trips for the whole batch instead of the
-      // previous `limit` SEQUENTIAL claim queries (~1s per 100 events at
-      // 10ms RTT). A single limited atomic batch-claim is NOT portable —
-      // Mongo's updateMany has no limit, so "claim exactly N in one
-      // statement" can't be expressed across kits. Backends with stronger
-      // primitives (SQL `FOR UPDATE SKIP LOCKED`) can supply their own
-      // `OutboxStore` with a native `claimPending` — the store contract IS
-      // the batch seam. `StandardRepo.claim` still doesn't apply: it needs
-      // an id upfront, and here the CAS *selects* the ids.
-      const now = new Date();
-      const candidateFilter = typeFilter
-        ? and(claimableFilter(now), typeFilter)
-        : claimableFilter(now);
-      const candidates = unwrapDocs<OutboxDoc>(
-        await r.getAll({
-          filters: candidateFilter,
-          sort: { createdAt: 1 },
-          page: 1,
-          limit,
-        }),
-      );
-      if (candidates.length === 0) return [];
-
-      const results = await Promise.all(
-        candidates.map((candidate) => {
-          const claimNow = new Date();
-          const leaseExpiresAt = new Date(claimNow.getTime() + leaseMs);
-          return r.findOneAndUpdate(
-            and(eqFilter(idField, candidate.event.meta.id), claimableFilter(claimNow)),
-            update({
-              set: { leaseOwner: consumerId, leaseExpiresAt },
-              inc: { attempts: 1 },
-            }),
-            { returnDocument: "after" },
-          ) as Promise<OutboxDoc | null>;
-        }),
-      );
-
-      // Promise.all preserves candidate order → claims stay FIFO.
-      return results
-        .filter((doc): doc is OutboxDoc => doc !== null)
-        .map((doc) => doc.event)
-        .filter(isWellFormed);
+      return (await claimPendingFenced(options)).map((c) => c.event);
     },
+    claimPendingFenced,
 
     async acknowledge(eventId: string, options?: OutboxAcknowledgeOptions): Promise<void> {
       const now = new Date();
       const baseFilter = and(eqFilter(idField, eventId), ne("status", "delivered"));
-      const filter = options?.consumerId
+      let filter = options?.consumerId
         ? and(baseFilter, eqFilter("leaseOwner", options.consumerId))
         : baseFilter;
+      // Fencing guard: the token must be the CURRENT claim epoch's. A stale
+      // ex-holder whose consumerId happens to match (ids recur; epochs do
+      // not) still misses the filter and lands in the mismatch throw below.
+      if (options?.fencingToken !== undefined) {
+        filter = and(filter, eqFilter("fenceToken", options.fencingToken));
+      }
 
       const updated = await r.findOneAndUpdate(
         filter,
@@ -344,6 +368,13 @@ export function repositoryAsOutboxStore(
       if (options?.consumerId && current.leaseOwner !== options.consumerId) {
         throw new OutboxOwnershipError(eventId, options.consumerId, current.leaseOwner);
       }
+      if (options?.fencingToken !== undefined && current.fenceToken !== options.fencingToken) {
+        throw new OutboxOwnershipError(
+          eventId,
+          `token ${options.fencingToken}`,
+          `token ${current.fenceToken}`,
+        );
+      }
     },
 
     async fail(
@@ -355,9 +386,12 @@ export function repositoryAsOutboxStore(
       const targetStatus: OutboxDoc["status"] = options?.deadLetter ? "dead_letter" : "pending";
       const visibleAt = options?.retryAt ?? now;
       const baseFilter = eqFilter(idField, eventId);
-      const filter = options?.consumerId
+      let filter = options?.consumerId
         ? and(baseFilter, eqFilter("leaseOwner", options.consumerId))
         : baseFilter;
+      if (options?.fencingToken !== undefined) {
+        filter = and(filter, eqFilter("fenceToken", options.fencingToken));
+      }
 
       // Two-step read-then-write to preserve `firstFailedAt` portably.
       // Mongo's aggregation-pipeline `$ifNull` would do this in a single

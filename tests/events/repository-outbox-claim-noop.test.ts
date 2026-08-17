@@ -240,3 +240,135 @@ describe("repositoryAsOutboxStore — works against repos without claim", () => 
     expect(fouCalls).toBe(3);
   });
 });
+
+describe("repositoryAsOutboxStore — fencing tokens", () => {
+  it("the token rides the claim CAS itself and comes back on the claimed event", async () => {
+    let sawInc: unknown;
+    const repo = makeRepoWithClaimTrap(async (_f, update) => {
+      sawInc = (update as { inc?: unknown }).inc ?? (update as Record<string, unknown>).$inc;
+      return makeRow({ fenceToken: 7 } as never);
+    });
+    (repo as { getAll: unknown }).getAll = async () => ({
+      data: [makeRow()],
+      total: 1,
+      page: 1,
+      limit: 1,
+      pages: 1,
+    });
+
+    const store = repositoryAsOutboxStore(repo);
+    const claimed = await store.claimPendingFenced?.({ consumerId: "w", limit: 1 });
+    expect(claimed?.[0]?.fencingToken).toBe(7);
+    // ONE statement: ownership + attempts + fence epoch, no second round trip.
+    expect(sawInc).toMatchObject({ attempts: 1, fenceToken: 1 });
+  });
+
+  it("a STALE token's acknowledge throws OutboxOwnershipError — epochs, not ids", async () => {
+    const { OutboxOwnershipError } = await import("@classytic/primitives/outbox");
+    // CAS misses (filter includes fenceToken), current row is at a later epoch.
+    const repo = makeRepoWithClaimTrap(
+      async () => null,
+      async () => makeRow({ leaseOwner: "w", fenceToken: 3, status: "pending" } as never),
+    );
+    const store = repositoryAsOutboxStore(repo);
+    await expect(store.acknowledge("evt-1", { consumerId: "w", fencingToken: 2 })).rejects.toThrow(
+      OutboxOwnershipError,
+    );
+  });
+
+  it("the CURRENT token acknowledges through the CAS filter", async () => {
+    let sawFilter: unknown;
+    const repo = makeRepoWithClaimTrap(async (filter) => {
+      sawFilter = filter;
+      return makeRow({ status: "delivered" } as never);
+    });
+    const store = repositoryAsOutboxStore(repo);
+    await store.acknowledge("evt-1", { consumerId: "w", fencingToken: 3 });
+    expect(JSON.stringify(sawFilter)).toContain("fenceToken");
+  });
+
+  it("claimPending stays bare-event compatible — it delegates to the fenced path", async () => {
+    const repo = makeRepoWithClaimTrap(async () => makeRow({ fenceToken: 1 } as never));
+    (repo as { getAll: unknown }).getAll = async () => ({
+      data: [makeRow()],
+      total: 1,
+      page: 1,
+      limit: 1,
+      pages: 1,
+    });
+    const store = repositoryAsOutboxStore(repo);
+    const events = await store.claimPending?.({ consumerId: "w" });
+    expect(events?.[0]?.meta.id).toBe("evt-1");
+  });
+});
+
+describe("EventOutbox relay — fencing live end to end", () => {
+  it("prefers the fenced claim and hands the token back on acknowledge", async () => {
+    const { EventOutbox } = await import("../../src/events/outbox.js");
+    const acked: unknown[] = [];
+    const store = {
+      save: async () => {},
+      getPending: async () => [],
+      claimPendingFenced: async () => [{ event: makeRow().event, fencingToken: 42 }],
+      acknowledge: async (_id: string, opts: unknown) => {
+        acked.push(opts);
+      },
+    } as never;
+    const transport = {
+      name: "t",
+      publish: async () => {},
+      subscribe: async () => {},
+    } as never;
+
+    const relay = new EventOutbox({ store, transport, consumerId: "w" });
+    const result = await relay.relayBatch();
+
+    expect(result.relayed).toBe(1);
+    expect(acked[0]).toMatchObject({ consumerId: "w", fencingToken: 42 });
+  });
+
+  it("a store WITHOUT the fenced claim keeps the plain path — feature-detected", async () => {
+    const { EventOutbox } = await import("../../src/events/outbox.js");
+    const acked: unknown[] = [];
+    const store = {
+      save: async () => {},
+      getPending: async () => [],
+      claimPending: async () => [makeRow().event],
+      acknowledge: async (_id: string, opts: unknown) => {
+        acked.push(opts);
+      },
+    } as never;
+    const transport = { name: "t", publish: async () => {}, subscribe: async () => {} } as never;
+
+    const relay = new EventOutbox({ store, transport, consumerId: "w" });
+    await relay.relayBatch();
+    expect(acked[0]).toMatchObject({ consumerId: "w" });
+    expect((acked[0] as { fencingToken?: number }).fencingToken).toBeUndefined();
+  });
+
+  it("a publish FAILURE hands the token to fail() — the stale guard covers both exits", async () => {
+    const { EventOutbox } = await import("../../src/events/outbox.js");
+    const failed: unknown[] = [];
+    const store = {
+      save: async () => {},
+      getPending: async () => [],
+      claimPendingFenced: async () => [{ event: makeRow().event, fencingToken: 9 }],
+      acknowledge: async () => {},
+      fail: async (_id: string, _e: unknown, opts: unknown) => {
+        failed.push(opts);
+      },
+    } as never;
+    const transport = {
+      name: "t",
+      publish: async () => {
+        throw new Error("boom");
+      },
+      subscribe: async () => {},
+    } as never;
+
+    const relay = new EventOutbox({ store, transport, consumerId: "w" });
+    const result = await relay.relayBatch();
+    expect(result.publishFailed).toBe(1);
+    expect(failed[0]).toMatchObject({ consumerId: "w", fencingToken: 9 });
+  });
+});

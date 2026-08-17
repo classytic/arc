@@ -52,6 +52,7 @@ import {
   type CleanupResult,
   type CleanupRun,
   type CleanupRunStore,
+  type CleanupStepProgress,
   type CleanupStepResult,
   type CleanupWriteFence,
   DEFAULT_CLEANUP_LIMITS,
@@ -201,14 +202,32 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
     input: PreviewInput,
     ctx: CleanupContext,
   ): Promise<CleanupPlan> {
-    const draft = await recipe.plan({ parameters: input.parameters }, ctx);
+    const draft = await recipe.plan(
+      { parameters: input.parameters, excludeSteps: input.excludeSteps },
+      ctx,
+    );
     const items = draft.items;
     if (items.length > limits.maxPlanItems) {
       throw CleanupErrors.planTooLarge(
         `${items.length} items > maxPlanItems ${limits.maxPlanItems}`,
       );
     }
-    const estimatedTotal = items.reduce((sum, i) => sum + i.estimated, 0);
+    /**
+     * Partition by DISPOSITION — a protective guard's count is not damage.
+     *
+     * This was one `reduce` over every item, so a guard reporting the 173 posted
+     * journal entries it defends pushed the "records to remove" headline to 540
+     * on a plan that removes 367. Absent disposition means `'remove'`, so every
+     * pre-existing recipe is unchanged.
+     */
+    const estimatedTotal = items.reduce(
+      (sum, i) => sum + ((i.disposition ?? "remove") === "remove" ? i.estimated : 0),
+      0,
+    );
+    const protectedTotal = items.reduce(
+      (sum, i) => sum + (i.disposition === "protect" ? i.estimated : 0),
+      0,
+    );
     // Item-level blockers are ALSO hard stops — union them into the top level
     // so a recipe that forgot to duplicate them cannot be executed past them.
     const blockers = new Set<string>(draft.blockers ?? []);
@@ -224,6 +243,8 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
       rebuildActions: [...(draft.rebuildActions ?? [])],
       warnings: [...(draft.warnings ?? [])],
       estimatedTotal,
+      protectedTotal,
+      excludeSteps: [...(input.excludeSteps ?? [])].sort(),
       confirmationPhrase: draft.confirmationPhrase ?? recipe.id,
     };
     return { ...unsealed, digest: computePlanDigest(unsealed) };
@@ -401,6 +422,16 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
     let processed = 0;
     let steps = 0;
     let failed = 0;
+    /**
+     * Per-step lifecycle, keyed by `stepId` and ordered by first sight.
+     *
+     * Seeded from the run's existing progress so a RESUMED run (crash recovery,
+     * retry) keeps the states it already recorded instead of presenting an
+     * operator with a blank pipeline for work that demonstrably happened.
+     */
+    const stepStates = new Map<string, CleanupStepProgress>(
+      (run.progress?.stepProgress ?? []).map((s) => [s.stepId, s]),
+    );
     let cancelled = false;
     let lastSummary: CleanupProgressSummary = run.progress ?? EMPTY_PROGRESS;
     let lastPersistMs = 0;
@@ -437,6 +468,7 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
           steps,
           failed,
           currentResource: step.resource,
+          ...(stepStates.size > 0 ? { stepProgress: [...stepStates.values()] } : {}),
           ...(step.cursor !== undefined ? { lastCursor: step.cursor } : {}),
           heartbeatAt: now(),
         };
@@ -450,6 +482,27 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
           await runStore.saveProgress(run.id, summary, renewedLease());
           await refreshCancel();
         }
+      },
+      /**
+       * Upsert one step's lifecycle state, preserving FIRST-SEEN order.
+       *
+       * A `Map` keyed by `stepId` is what keeps this bounded and idempotent: a
+       * step transitioning running → completed updates its entry rather than
+       * appending, so the array length is the step count and never the
+       * transition count. Insertion order is the execution order, which is what
+       * an operator reads down the list.
+       *
+       * Persisted on the NEXT `onStep` (or the terminal write) rather than
+       * immediately — a lifecycle transition is not itself a committed chunk,
+       * and writing on every one would defeat the progress throttle that exists
+       * to keep a long run from hammering the store.
+       */
+      async onStepState(state: CleanupStepProgress) {
+        stepStates.set(state.stepId, state);
+        lastSummary = {
+          ...(lastSummary ?? { processed, steps, failed }),
+          stepProgress: [...stepStates.values()],
+        };
       },
       async throwIfCancelled() {
         if (cancelled || controller.signal.aborted || (await refreshCancel())) {

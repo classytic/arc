@@ -130,12 +130,29 @@ function defaultResolveActor(req: RequestWithExtras): PurgeActor {
 
 const recipeIdSchema = { type: "string", minLength: 1, maxLength: 200 } as const;
 const parametersSchema = { type: "object", additionalProperties: true } as const;
+/**
+ * Step ids to leave out. Bounded and unique — an unbounded list on a
+ * destructive endpoint is a denial-of-service surface, and a duplicate id says
+ * nothing a single one does not. Unknown or PROTECTIVE ids are refused by the
+ * recipe (CLEANUP_INVALID_EXCLUSION), not stripped here: the route must not
+ * decide what an operator may narrow.
+ */
+const excludeStepsSchema = {
+  type: "array",
+  items: { type: "string", minLength: 1, maxLength: 200 },
+  maxItems: 200,
+  uniqueItems: true,
+} as const;
 
 const previewBodySchema = {
   type: "object",
   required: ["recipe"],
   additionalProperties: false,
-  properties: { recipe: recipeIdSchema, parameters: parametersSchema },
+  properties: {
+    recipe: recipeIdSchema,
+    parameters: parametersSchema,
+    excludeSteps: excludeStepsSchema,
+  },
 } as const;
 
 const runsBodySchema = {
@@ -145,6 +162,7 @@ const runsBodySchema = {
   properties: {
     recipe: recipeIdSchema,
     parameters: parametersSchema,
+    excludeSteps: excludeStepsSchema,
     planDigest: { type: "string", minLength: 1, maxLength: 128 },
     reason: { type: "string", minLength: 1, maxLength: 2000 },
     confirmation: { type: "string", maxLength: 500 },
@@ -266,10 +284,15 @@ export function createDataCleanupModule(deps: DataCleanupModuleDeps): ArcModule<
         schema: { body: previewBodySchema },
         rawHandler: async (req: FastifyRequest, reply: FastifyReply) => {
           const r = req as RequestWithExtras;
-          const body = req.body as { recipe: string; parameters?: Record<string, unknown> };
+          const body = req.body as {
+            recipe: string;
+            parameters?: Record<string, unknown>;
+            excludeSteps?: string[];
+          };
           const plan = await (await service()).preview({
             recipeId: body.recipe,
             parameters: body.parameters,
+            excludeSteps: body.excludeSteps,
             actor: resolveActor(r),
             ambient: resolveAmbient?.(r),
           });
@@ -287,6 +310,7 @@ export function createDataCleanupModule(deps: DataCleanupModuleDeps): ArcModule<
           const body = req.body as {
             recipe: string;
             parameters?: Record<string, unknown>;
+            excludeSteps?: string[];
             planDigest: string;
             reason: string;
             confirmation?: string;
@@ -294,6 +318,7 @@ export function createDataCleanupModule(deps: DataCleanupModuleDeps): ArcModule<
           const run = await (await service()).execute({
             recipeId: body.recipe,
             parameters: body.parameters,
+            excludeSteps: body.excludeSteps,
             planDigest: body.planDigest,
             reason: body.reason,
             confirmation: body.confirmation,

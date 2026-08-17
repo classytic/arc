@@ -98,58 +98,15 @@ Default: `onFieldWriteDenied: 'reject'` — `ForbiddenError` listing denied fiel
 
 ## Stamp-from-scope vs validate-from-scope
 
-A recurring request is "permission check that compares request body against the auth user" (xAPI actor IFI, `body.authorId`, `body.customerId`, etc.). Arc deliberately does NOT ship a body-vs-auth `PermissionCheck` helper because the abstraction is wrong: a `PermissionCheck` answers "can this caller do this action?", not "does this body shape match scope?". The arc-native answer is one of two existing primitives — pick by where the field structurally lives.
+"Compare the request body against the auth user" (`body.authorId`, xAPI actor IFI) is a recurring ask, and arc deliberately ships no body-vs-auth `PermissionCheck`: a `PermissionCheck` answers "can this caller do this action?", not "does this body shape match scope?". Pick by where the field structurally lives.
 
-**Flat field on the document — use `fieldRules.systemManaged`.** The cleanest fix when the client should never set the field at all (orders, comments, posts, bookings). Strip the user-supplied value at the body sanitizer and stamp it from scope in a `beforeCreate` hook:
+**Flat field on the document → stamp it.** `fieldRules: { authorId: { systemManaged: true } }` strips the client value at the sanitizer; a `beforeCreate` hook sets it from scope (`ctx.data.authorId = getUserId(ctx.user)`). The client cannot spoof, because the field never reaches the DB from user input — and under the default `onFieldWriteDenied: 'reject'` the attempt fails loudly.
 
-```ts
-defineResource({
-  name: 'comment',
-  schemaOptions: {
-    fieldRules: {
-      authorId: { systemManaged: true },   // stripped from inbound body
-    },
-  },
-  hooks: {
-    beforeCreate: async (ctx) => {
-      ctx.data.authorId = getUserId(ctx.user);
-    },
-  },
-  permissions: { create: requireAuth() },
-});
-```
+**Nested vendor envelope → validate it.** When the field lives inside a shape you cannot strip without breaking it (`statement.actor.account.name`), compare in `beforeCreate` and throw a domain error naming the item index. Typed against `TDoc`, composes with other validations, no stringly-typed dot-paths.
 
-The server stamps. The client can't spoof — the field never reaches the DB from user input. With `onFieldWriteDenied: 'reject'` (default), attempts to write the field even fail loudly.
+**Why no `requireActorMatchesAuth()`:** it would overlap both — `fieldRules` already stamps, `beforeCreate` already validates. A permission helper that *looks* like an auth gate but performs data validation is a category error: consumers reach for it when they should be stamping. Fewer, deeper primitives that compose.
 
-**Nested envelope (xAPI shape) — use `beforeCreate` to validate.** When the field lives inside a vendor-defined envelope (`statement.actor.account.name`) you can't strip without losing the envelope structure. Validate instead:
-
-```ts
-defineResource({
-  name: 'statement',
-  hooks: {
-    beforeCreate: async (ctx) => {
-      const authId = getUserId(ctx.user);
-      const items = Array.isArray(ctx.data) ? ctx.data : [ctx.data];
-      for (const [i, item] of items.entries()) {
-        if (item.actor?.account?.name !== authId) {
-          throw createDomainError(
-            'ACTOR_MISMATCH',
-            `statements[${i}]: actor ${item.actor?.account?.name} ≠ auth ${authId}`,
-            403,
-          );
-        }
-      }
-    },
-  },
-  permissions: { create: requireAuth() },
-});
-```
-
-Typed against the resource's `TDoc`, composes with other validations, fails with rich per-item context, no stringly-typed dot-paths.
-
-**Why no `requireActorMatchesAuth()` helper:** a third path would overlap both of the above. `fieldRules` already gives flat-field stamping; `beforeCreate` already gives structural validation. Adding a permission helper that *looks* like an auth gate but actually does data validation is a category error — consumers reach for it when they should be stamping, or stamp + check when one would suffice. The framework's job is **fewer, deeper primitives that compose** — not a helper for every shape of user mistake.
-
-**`requireOwnership` is read-side.** It checks the LOADED doc's owner field, used for `update` / `delete` / row-filter `list`. It does NOT inspect the inbound body and is not a substitute for stamping. See [[core]] for the body-sanitizer pipeline.
+**`requireOwnership` is read-side** — it checks the LOADED doc's owner field (`update` / `delete` / row-filter `list`). It never inspects the inbound body and is not a substitute for stamping. See [[core]] for the sanitizer pipeline.
 
 ## Dynamic matrix
 

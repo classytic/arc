@@ -61,6 +61,8 @@ function plan(recipeId: string): CleanupPlan {
     rebuildActions: [],
     warnings: [],
     estimatedTotal: 1,
+    protectedTotal: 0,
+    excludeSteps: [],
     confirmationPhrase: recipeId,
     digest: `digest-${recipeId}`,
   };

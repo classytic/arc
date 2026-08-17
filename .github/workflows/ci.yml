@@ -79,7 +79,7 @@ jobs:
   # and pass the fast + contract lanes.
   # ─────────────────────────────────────────────
   peer-minimums:
-    name: Peer minimums (fastify 5.8.5, repo-core 0.14.0, primitives 0.9.0)
+    name: Peer minimums (derived from declared peerDependencies)
     runs-on: ubuntu-latest
 
     steps:
@@ -92,8 +92,27 @@ jobs:
 
       - run: npm ci
 
-      - name: Pin peers to their declared floors
-        run: npm install --no-save fastify@5.8.5 @classytic/repo-core@0.14.0 @classytic/primitives@0.9.0
+      # DERIVED, never hardcoded. These pins were literal versions and rotted
+      # silently: they still said repo-core@0.14.0 / primitives@0.9.0 while the
+      # declared floors had moved to 0.24 / 0.23, so the lane that exists to
+      # prove the floors are real was testing versions arc can no longer build
+      # against. Reading package.json means raising a floor automatically
+      # changes what CI installs, and a floor arc cannot build against fails on
+      # the PR that raised it.
+      - name: Pin REQUIRED peers to their declared floors
+        run: |
+          PINS=$(node -e "
+            const p = require('./package.json');
+            const meta = p.peerDependenciesMeta ?? {};
+            console.log(
+              Object.entries(p.peerDependencies)
+                .filter(([n]) => !meta[n]?.optional)
+                .map(([n, r]) => n + '@' + r.replace(/^[>=^~\s]+/, ''))
+                .join(' ')
+            );
+          ")
+          echo "Installing floors: $PINS"
+          npm install --no-save $PINS
 
       - name: Typecheck against floors
         run: npm run typecheck

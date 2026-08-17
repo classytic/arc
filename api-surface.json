@@ -224,7 +224,7 @@
       "version",
       "when"
     ],
-    "typesHash": "507249b2de4e0f91"
+    "typesHash": "57ec883168cb6452"
   },
   "./permissions": {
     "stability": "stable",
@@ -420,7 +420,7 @@
     "stability": "stable",
     "runtime": [],
     "types": [],
-    "typesHash": "45732ed0b9b69172"
+    "typesHash": "f59d2ae6bcb4525c"
   },
   "./types/storage": {
     "stability": "stable",
@@ -565,7 +565,7 @@
       "sendControllerResponse",
       "validateResourceConfig"
     ],
-    "typesHash": "7e7b0539d3efaec1"
+    "typesHash": "89b8de0b02454d4f"
   },
   "./presets": {
     "stability": "stable",
@@ -622,7 +622,7 @@
       "softDeletePreset",
       "treePreset"
     ],
-    "typesHash": "64fcd73399b79c94"
+    "typesHash": "b6f70b29e6b8e476"
   },
   "./presets/tenant": {
     "stability": "stable",
@@ -634,7 +634,7 @@
       "TenantFieldSpec",
       "multiTenantPreset"
     ],
-    "typesHash": "44f0e46e836dfc53"
+    "typesHash": "ab95eb35530f2689"
   },
   "./presets/files-upload": {
     "stability": "stable",
@@ -654,7 +654,7 @@
       "StorageUploadInput",
       "filesUploadPreset"
     ],
-    "typesHash": "a7c5c394af0e8cbe"
+    "typesHash": "1d95d47e65b5bc9a"
   },
   "./presets/search": {
     "stability": "stable",
@@ -669,7 +669,7 @@
       "SearchableRepository",
       "searchPreset"
     ],
-    "typesHash": "e55579f15bad50f5"
+    "typesHash": "afa5babbed1f8964"
   },
   "./auth": {
     "stability": "stable",
@@ -704,7 +704,7 @@
       "extractBetterAuthOpenApi",
       "mirrorTrustedOriginsFromCors"
     ],
-    "typesHash": "1e33e31d163f13b2"
+    "typesHash": "1500a445d4400508"
   },
   "./hooks": {
     "stability": "stable",
@@ -737,7 +737,7 @@
       "createHookSystem",
       "defineHook"
     ],
-    "typesHash": "cd568ae024f386ea"
+    "typesHash": "b1cb18f3d9c62ade"
   },
   "./middleware": {
     "stability": "stable",
@@ -754,7 +754,7 @@
       "multipartBody",
       "sortMiddlewares"
     ],
-    "typesHash": "7cf72bd4ab153db8"
+    "typesHash": "07160535bc5ed8e9"
   },
   "./pipeline": {
     "stability": "stable",
@@ -780,7 +780,7 @@
       "pipe",
       "transform"
     ],
-    "typesHash": "49728213950df089"
+    "typesHash": "d25c4fea028bef94"
   },
   "./context": {
     "stability": "stable",
@@ -855,7 +855,7 @@
       "introspectionPlugin",
       "introspectionPluginFn"
     ],
-    "typesHash": "79b594df60077edf"
+    "typesHash": "8773e72effdb8640"
   },
   "./utils": {
     "stability": "stable",
@@ -888,6 +888,7 @@
       "createError",
       "createQueryParser",
       "createStateMachine",
+      "declareRuntimeCapability",
       "defineCompensation",
       "defineErrorMapper",
       "defineGuard",
@@ -954,6 +955,7 @@
       "OrgRequiredError",
       "PipeUIMessageStreamOptions",
       "RateLimitError",
+      "RuntimeCapabilityDeclaration",
       "SchemaIo",
       "ServiceUnavailableError",
       "SseStream",
@@ -973,6 +975,7 @@
       "createError",
       "createQueryParser",
       "createStateMachine",
+      "declareRuntimeCapability",
       "defineCompensation",
       "defineErrorMapper",
       "defineGuard",
@@ -1007,7 +1010,7 @@
       "toJsonSchema",
       "withCompensation"
     ],
-    "typesHash": "c91e870b69229561"
+    "typesHash": "a1e46de817c809be"
   },
   "./cli": {
     "stability": "stable",
@@ -1114,7 +1117,7 @@
       "versioningPlugin",
       "versioningPluginFn"
     ],
-    "typesHash": "2e8a728d2109fccd"
+    "typesHash": "e4adc1539596736c"
   },
   "./plugins/tracing": {
     "stability": "stable",
@@ -1158,7 +1161,7 @@
       "createAuditEntry",
       "repositoryAsAuditStore"
     ],
-    "typesHash": "ec7f206343ecbe94"
+    "typesHash": "4829fd6f3c731c42"
   },
   "./docs": {
     "stability": "stable",
@@ -1181,7 +1184,7 @@
       "scalarPlugin",
       "scalarPluginFn"
     ],
-    "typesHash": "5abb1c885b69e345"
+    "typesHash": "9444a403521c5f53"
   },
   "./encryption": {
     "stability": "stable",
@@ -1215,6 +1218,7 @@
   "./idempotency": {
     "stability": "stable",
     "runtime": [
+      "IdempotencyStoreMisconfiguredError",
       "MemoryIdempotencyStore",
       "createIdempotencyResult",
       "idempotencyPlugin",
@@ -1226,6 +1230,7 @@
       "IdempotencyPluginOptions",
       "IdempotencyResult",
       "IdempotencyStore",
+      "IdempotencyStoreMisconfiguredError",
       "MemoryIdempotencyStore",
       "MemoryIdempotencyStoreOptions",
       "RedisClient",
@@ -1235,7 +1240,7 @@
       "idempotencyPluginFn",
       "repositoryAsIdempotencyStore"
     ],
-    "typesHash": "c428afd8285918a6"
+    "typesHash": "919c9c8ef6499ae8"
   },
   "./idempotency/redis": {
     "stability": "stable",
@@ -1328,7 +1333,7 @@
       "wrapWithBoundary",
       "wrapWithSchema"
     ],
-    "typesHash": "c7103f80d609a845"
+    "typesHash": "f6762616d0253f10"
   },
   "./events/redis": {
     "stability": "stable",
@@ -1463,7 +1468,7 @@
       "testActorHeaders",
       "waitFor"
     ],
-    "typesHash": "e05e35c449de58ce"
+    "typesHash": "4d84f06a980e003f"
   },
   "./testing/storage": {
     "stability": "stable",
@@ -1487,7 +1492,7 @@
       "CleanupRunStoreContractSetupResult",
       "runCleanupRunStoreContract"
     ],
-    "typesHash": "5a5af985eabc1d33"
+    "typesHash": "8729f1af8f14c15f"
   },
   "./factory": {
     "stability": "stable",
@@ -1583,7 +1588,7 @@
       "testingPreset",
       "toFetchHandler"
     ],
-    "typesHash": "7a870acb4677b355"
+    "typesHash": "f391644ebfe61f8b"
   },
   "./schemas": {
     "stability": "stable",
@@ -1664,7 +1669,7 @@
     "stability": "stable",
     "runtime": [],
     "types": [],
-    "typesHash": "5353b0c34da51632"
+    "typesHash": "29cc652da910917f"
   },
   "./integrations/streamline": {
     "stability": "stable",
@@ -1784,29 +1789,43 @@
   "./integrations/webhooks": {
     "stability": "stable",
     "runtime": [
+      "WEBHOOK_DELIVERY_EVENT",
+      "WebhookDeliveryError",
+      "createDurableWebhookModule",
+      "createWebhookDeliveryTransport",
       "defaultWebhookUrlPolicy",
       "signWebhook",
       "verifySignature",
       "verifyWebhook",
+      "webhookDeliveryFailurePolicy",
       "webhookPlugin"
     ],
     "types": [
+      "DurableWebhookModuleOptions",
       "VerifySignatureOptions",
       "VerifyWebhookInput",
       "VerifyWebhookResult",
+      "WEBHOOK_DELIVERY_EVENT",
+      "WebhookDeliveryError",
+      "WebhookDeliveryPayload",
+      "WebhookDeliveryPolicyOptions",
       "WebhookDeliveryRecord",
+      "WebhookDeliveryTransportOptions",
       "WebhookManager",
       "WebhookPluginOptions",
       "WebhookStore",
       "WebhookSubscription",
       "WebhookSubscriptionPublic",
+      "createDurableWebhookModule",
+      "createWebhookDeliveryTransport",
       "defaultWebhookUrlPolicy",
       "signWebhook",
       "verifySignature",
       "verifyWebhook",
+      "webhookDeliveryFailurePolicy",
       "webhookPlugin"
     ],
-    "typesHash": "39b7245348588ce4"
+    "typesHash": "1ac01665d589e077"
   },
   "./auth/redis": {
     "stability": "stable",
@@ -2018,7 +2037,7 @@
       "toCallToolResult",
       "toCallToolSuccess"
     ],
-    "typesHash": "f0a7fc6417c46ca1"
+    "typesHash": "08930ba9abf1df7f"
   },
   "./mcp/testing": {
     "stability": "stable",
@@ -2030,7 +2049,7 @@
       "TestMcpClientOptions",
       "createTestMcpClient"
     ],
-    "typesHash": "1db78686664ef33d"
+    "typesHash": "80c3c72c446e059a"
   },
   "./scim": {
     "stability": "stable",
@@ -2191,7 +2210,9 @@
       "CleanupRunTransitionPatch",
       "CleanupService",
       "CleanupServiceDeps",
+      "CleanupStepProgress",
       "CleanupStepResult",
+      "CleanupStepRunStatus",
       "CleanupWriteFence",
       "DEFAULT_CLEANUP_LIMITS",
       "DataCleanupModuleDeps",
@@ -2217,7 +2238,7 @@
       "createDataCleanupModule",
       "recipeFromSteps"
     ],
-    "typesHash": "ed4cd4afaf2c7d70"
+    "typesHash": "0a3a105180db6cdb"
   },
   "./outbox-admin": {
     "stability": "experimental",
@@ -2230,7 +2251,7 @@
       "OutboxAdminStore",
       "createOutboxAdminModule"
     ],
-    "typesHash": "555b720c981a2c39"
+    "typesHash": "aeab1085346bf0c4"
   },
   "./testing/outbox": {
     "stability": "stable",

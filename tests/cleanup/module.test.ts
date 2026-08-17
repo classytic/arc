@@ -150,6 +150,41 @@ describe("createDataCleanupModule — composition", () => {
     expect(plan.estimatedTotal).toBe(3);
   });
 
+  /**
+   * The service's ARITHMETIC, not just the line tagging.
+   *
+   * `estimatedTotal` was one reduce over every item, so a protective guard's
+   * count landed in the removal headline: a reset removing 3 rows announced 20
+   * because a guard reported 17 records it DEFENDS. The two totals are asserted
+   * separately — a version that simply stopped counting protected lines
+   * anywhere would satisfy the first assertion and lose the information the UI
+   * needs for the second.
+   */
+  it("excludes PROTECTED lines from the removal headline and reports them separately", async () => {
+    const { module } = makeModule({
+      recipes: [
+        draftsRecipe({
+          plan: async () => ({
+            items: [
+              { resource: "orders", estimated: 3 },
+              { resource: "statutory accounting records", estimated: 17, disposition: "protect" },
+            ],
+            retains: ["master data"],
+            confirmationPhrase: "REMOVE DRAFTS",
+          }),
+        }),
+      ],
+    });
+    const service = await must(module.bootstrap)({} as never);
+    const plan = await service.preview({
+      recipeId: "cleanup.drafts",
+      actor: { ref: "user:a", kind: "user" },
+    });
+
+    expect(plan.estimatedTotal).toBe(3);
+    expect(plan.protectedTotal).toBe(17);
+  });
+
   it("fails fast at construction on a duplicate recipe id", () => {
     expect(() => makeModule({ recipes: [draftsRecipe(), draftsRecipe()] })).toThrow(CleanupError);
   });

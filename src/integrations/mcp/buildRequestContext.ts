@@ -241,6 +241,18 @@ function expandOperatorKeys(input: Record<string, unknown>): Record<string, unkn
 export function buildScope(auth: McpAuthResult | null): RequestScope {
   if (!auth) return { kind: "public" };
 
+  /**
+   * `context` (and `teamId`, member-only) are carried through, not dropped.
+   *
+   * A resolver could already return them — `McpAuthResult` has an index
+   * signature — and this function silently discarded both, so a resource
+   * gated by `requireScopeContext('branchId')` worked over HTTP and DENIED
+   * every MCP call, because the dimension it authorises against was never
+   * populated. Fail-closed, but it made the tool permanently unusable rather
+   * than wrong, which is why nothing caught it.
+   */
+  const context = normalizeScopeContext(auth.context);
+
   // Service scope — machine-to-machine auth (clientId present, no human userId or userId is the client itself)
   if (auth.clientId && auth.organizationId) {
     return {
@@ -248,6 +260,7 @@ export function buildScope(auth: McpAuthResult | null): RequestScope {
       clientId: auth.clientId,
       organizationId: auth.organizationId,
       scopes: auth.scopes,
+      ...(context ? { context } : {}),
     };
   }
 
@@ -259,9 +272,31 @@ export function buildScope(auth: McpAuthResult | null): RequestScope {
       userRoles: auth.roles ?? [],
       organizationId: auth.organizationId,
       orgRoles: auth.orgRoles ?? [],
+      ...(typeof auth.teamId === "string" ? { teamId: auth.teamId } : {}),
+      ...(context ? { context } : {}),
     };
   }
 
   // Authenticated scope — human user without org context
   return { kind: "authenticated", userId: auth.userId, userRoles: auth.roles ?? [] };
+}
+
+/**
+ * Accept a resolver's `context` only as a string→string map.
+ *
+ * The resolver is host code reached through an index signature, so the value
+ * is `unknown`. Coercing arbitrary values (numbers, objects, null) into
+ * authorisation dimensions would make `requireScopeContext('branchId')`
+ * compare against something that was never a branch id; non-string entries are
+ * dropped rather than stringified. Returns `undefined` for an empty result so
+ * a scope reports "carries no context" rather than "carries an empty one" —
+ * different facts to a caller.
+ */
+function normalizeScopeContext(value: unknown): Readonly<Record<string, string>> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof v === "string") out[k] = v;
+  }
+  return Object.keys(out).length > 0 ? Object.freeze(out) : undefined;
 }

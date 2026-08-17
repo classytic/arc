@@ -29,9 +29,14 @@
  */
 
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { createChildEvent } from "@classytic/primitives/events";
+import type { OutboxFailurePolicy, OutboxStore } from "@classytic/primitives/outbox";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
-import type { DomainEvent } from "../events/EventTransport.js";
+import type { DomainEvent, EventTransport } from "../events/EventTransport.js";
+import { exponentialBackoff } from "../events/outbox/backoff.js";
+import { createOutboxModule, type OutboxModuleOptions } from "../events/outbox-module.js";
+import { declareRuntimeCapability } from "../utils/runtimeCapabilities.js";
 
 // ============================================================================
 // Types
@@ -125,6 +130,23 @@ export interface WebhookPluginOptions {
    * framework.
    */
   validateUrl?: (url: URL, subscription: WebhookSubscription) => void | Promise<void>;
+  /**
+   * DURABLE delivery — the outbox→worker composition. When set, a matching
+   * event no longer POSTs inline: each (event × subscription) pair becomes ONE
+   * durable row in the given outbox store, and `createDurableWebhookModule`'s
+   * relay claims, delivers, retries with backoff, and dead-letters — all
+   * surviving crash and deploy, which the in-process `retry` cannot.
+   *
+   * The row id is deterministic (`<event id>:wh:<subscription id>`) and the
+   * save carries it as `dedupeKey`, so an at-least-once upstream (Redis
+   * Streams, an events outbox) redelivering the same event enqueues each
+   * delivery exactly once. Mutually exclusive with `retry` — the retry axis
+   * moves to the relay's failure policy.
+   */
+  durable?: {
+    /** Outbox store the delivery rows are written to — share it with the module. */
+    store: OutboxStore;
+  };
 }
 
 /** `WebhookSubscription` as returned by `list()` — secret withheld. */
@@ -488,6 +510,14 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
   opts: WebhookPluginOptions = {},
 ) => {
   const store = opts.store ?? new MemoryWebhookStore();
+  // Runtime capability: the default store keeps subscriptions AND the
+  // delivery log in this process — a second replica sees neither. A
+  // host-supplied store is presumed shared (it exists to be).
+  declareRuntimeCapability(fastify, {
+    subsystem: "webhooks.store",
+    durability: opts.store ? "shared" : "memory",
+    detail: "default MemoryWebhookStore: subscriptions + delivery log are replica-local",
+  });
   const fetchFn = opts.fetch ?? globalThis.fetch;
   const timeout = opts.timeout ?? 10000;
   const maxLogEntries = opts.maxLogEntries ?? 1000;
@@ -506,6 +536,15 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
       `webhookPlugin: retry.attempts must be an integer >= 1 (got ${String(opts.retry?.attempts)})`,
     );
   }
+  // Two retry axes on one delivery would double-attempt every failure —
+  // durable mode owns retries via the relay's failure policy.
+  if (opts.durable && opts.retry) {
+    throw new Error(
+      "webhookPlugin: `durable` and `retry` are mutually exclusive — durable delivery " +
+        "retries via the relay's failure policy (webhookDeliveryFailurePolicy), not in-process.",
+    );
+  }
+  const durableStore = opts.durable?.store;
 
   // In-memory cache of subscriptions (loaded from store on init)
   let subscriptions: WebhookSubscription[] = [];
@@ -543,6 +582,30 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
   async function dispatchEvent(event: DomainEvent): Promise<void> {
     const matching = subscriptions.filter((s) => matchesPattern(s.events, event.type));
     if (matching.length === 0) return;
+
+    // Durable mode: enqueue one row per (event × subscription) and stop —
+    // the relay owns the POST. A thrown save PROPAGATES so an upstream
+    // durable chain (events outbox → raw transport) observes the failure
+    // and retries the business row instead of losing the delivery.
+    if (durableStore) {
+      for (const sub of matching) {
+        const deliveryId = `${event.meta.id}:wh:${sub.id}`;
+        const delivery = createChildEvent(
+          event,
+          WEBHOOK_DELIVERY_EVENT,
+          {
+            subscriptionId: sub.id,
+            event: { type: event.type, payload: event.payload, meta: event.meta },
+          } satisfies WebhookDeliveryPayload,
+          { id: deliveryId },
+        );
+        // Deterministic id + dedupeKey: repository stores swallow the
+        // dup-key, the memory store dedups on the key — either way an
+        // at-least-once upstream enqueues each delivery exactly once.
+        await durableStore.save(delivery, { dedupeKey: deliveryId });
+      }
+      return;
+    }
 
     const body = JSON.stringify({
       type: event.type,
@@ -705,3 +768,249 @@ export default fp(webhookPlugin, {
 });
 
 export { webhookPlugin };
+
+// ============================================================================
+// Durable delivery — the outbox→worker composition
+// ============================================================================
+//
+// No second queue: a webhook delivery IS an outbox event. The plugin (durable
+// mode) writes one row per (event × subscription); `createDurableWebhookModule`
+// wraps `createOutboxModule` with a publish-only transport whose `publish()`
+// performs the signed POST — so lease, claim, fencing, failure policy, DLQ,
+// and the relay schedule arm (kind: 'relay') all apply unchanged.
+
+/** Event type carried by durable webhook delivery rows. */
+export const WEBHOOK_DELIVERY_EVENT = "arc.webhook.delivery";
+
+/** Payload of a {@link WEBHOOK_DELIVERY_EVENT} row. */
+export interface WebhookDeliveryPayload {
+  subscriptionId: string;
+  /** The original event, verbatim — what the receiver is signed and sent. */
+  event: { type: string; payload: unknown; meta: DomainEvent["meta"] };
+}
+
+/**
+ * A failed webhook POST, classified for the failure policy: `transient`
+ * failures (network error, timeout, 429, 5xx) are worth retrying; the rest
+ * (4xx rejection, 3xx under `redirect: "manual"`, URL-policy rejection,
+ * malformed row) are final for this payload and dead-letter immediately.
+ */
+export class WebhookDeliveryError extends Error {
+  readonly status?: number;
+  readonly transient: boolean;
+
+  constructor(message: string, options: { status?: number; transient: boolean; cause?: unknown }) {
+    super(message, options.cause !== undefined ? { cause: options.cause } : undefined);
+    this.name = "WebhookDeliveryError";
+    if (options.status !== undefined) this.status = options.status;
+    this.transient = options.transient;
+  }
+}
+
+export interface WebhookDeliveryTransportOptions {
+  /**
+   * Resolve a subscription (WITH secret) at delivery time — fresh URL and
+   * secret apply to every attempt, and an unregistered id is an acknowledged
+   * no-op (the delivery is moot, not an error).
+   */
+  getSubscription: (
+    id: string,
+  ) => WebhookSubscription | undefined | Promise<WebhookSubscription | undefined>;
+  /** Custom fetch (for testing). */
+  fetch?: typeof globalThis.fetch;
+  /** Per-POST timeout in ms (default: 10000). */
+  timeout?: number;
+  /**
+   * URL policy — same seam as {@link WebhookPluginOptions.validateUrl}, but
+   * enforced at DELIVERY time (covers rows enqueued before a policy existed
+   * and out-of-band store writes). When set, `redirect: "manual"` applies so
+   * an allowed URL can't 302 into a blocked target; a rejection is permanent.
+   */
+  validateUrl?: (url: URL, subscription: WebhookSubscription) => void | Promise<void>;
+}
+
+/**
+ * Publish-only `EventTransport` whose `publish()` IS the webhook POST —
+ * plugged into an outbox relay, delivery inherits the relay's guarantees.
+ * Throws {@link WebhookDeliveryError} on failure so the relay observes it
+ * (fail → policy → retryAt/deadLetter); returns normally on 2xx and on
+ * unregistered subscriptions (acknowledge).
+ *
+ * The wire contract is IDENTICAL to inline dispatch: v1 signing, and
+ * `x-arc-webhook-delivery` carries the ORIGINAL event's `meta.id` — stable
+ * across retries, so receiver-side dedup is unchanged.
+ */
+export function createWebhookDeliveryTransport(
+  options: WebhookDeliveryTransportOptions,
+): EventTransport {
+  const fetchFn = options.fetch ?? globalThis.fetch;
+  const timeout = options.timeout ?? 10000;
+
+  return {
+    name: "webhook-delivery",
+
+    async publish(event: DomainEvent): Promise<void> {
+      if (event.type !== WEBHOOK_DELIVERY_EVENT) {
+        throw new WebhookDeliveryError(
+          `webhook-delivery transport received event type '${event.type}' — this store must ` +
+            `contain only ${WEBHOOK_DELIVERY_EVENT} rows (wiring bug: wrong store or transport)`,
+          { transient: false },
+        );
+      }
+      const payload = event.payload as Partial<WebhookDeliveryPayload> | undefined;
+      if (!payload?.subscriptionId || !payload.event?.meta?.id) {
+        throw new WebhookDeliveryError(
+          "webhook-delivery row is malformed: payload.subscriptionId and payload.event required",
+          { transient: false },
+        );
+      }
+
+      const sub = await options.getSubscription(payload.subscriptionId);
+      if (!sub) return; // unregistered → delivery is moot; acknowledge
+
+      let url: URL;
+      try {
+        url = new URL(sub.url);
+        if (options.validateUrl) await options.validateUrl(url, sub);
+      } catch (err) {
+        throw new WebhookDeliveryError(
+          `webhook URL rejected for subscription '${sub.id}': ${err instanceof Error ? err.message : String(err)}`,
+          { transient: false, cause: err },
+        );
+      }
+
+      const body = JSON.stringify(payload.event);
+      const timestamp = Date.now();
+      const v1Signature = signWebhook(body, sub.secret, {
+        timestamp,
+        deliveryId: payload.event.meta.id,
+      });
+
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), timeout);
+      let response: Response;
+      try {
+        response = await fetchFn(sub.url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-arc-webhook-signature": v1Signature,
+            "x-arc-webhook-timestamp": String(timestamp),
+            "x-arc-webhook-delivery": payload.event.meta.id,
+          },
+          body,
+          signal: ac.signal,
+          ...(options.validateUrl ? { redirect: "manual" as const } : {}),
+        });
+      } catch (err) {
+        throw new WebhookDeliveryError(
+          `webhook POST to subscription '${sub.id}' failed: ${err instanceof Error ? err.message : String(err)}`,
+          { transient: true, cause: err },
+        );
+      } finally {
+        clearTimeout(timer);
+      }
+
+      if (!response.ok) {
+        throw new WebhookDeliveryError(
+          `webhook POST to subscription '${sub.id}' returned ${response.status}`,
+          {
+            status: response.status,
+            transient: response.status === 429 || response.status >= 500,
+          },
+        );
+      }
+    },
+  };
+}
+
+export interface WebhookDeliveryPolicyOptions {
+  /** Total attempts before dead-lettering (default: 8). */
+  maxAttempts?: number;
+  /** First retry delay in ms (default: 5000). */
+  baseMs?: number;
+  /** Backoff cap in ms (default: 900000 — 15 minutes). */
+  maxMs?: number;
+}
+
+/**
+ * Default failure policy for durable webhook delivery: permanent failures
+ * ({@link WebhookDeliveryError} with `transient: false`) dead-letter on the
+ * first attempt — repeating a rejected payload can't succeed; transient ones
+ * retry on exponential backoff until `maxAttempts`, then dead-letter.
+ */
+export function webhookDeliveryFailurePolicy(
+  options: WebhookDeliveryPolicyOptions = {},
+): OutboxFailurePolicy {
+  const maxAttempts = options.maxAttempts ?? 8;
+  const baseMs = options.baseMs ?? 5000;
+  const maxMs = options.maxMs ?? 900_000;
+  return ({ error, attempts }) => {
+    if (error instanceof WebhookDeliveryError && !error.transient) return { deadLetter: true };
+    if (attempts >= maxAttempts) return { deadLetter: true };
+    return { retryAt: exponentialBackoff({ attempt: attempts, baseMs, maxMs }) };
+  };
+}
+
+export interface DurableWebhookModuleOptions
+  extends Omit<OutboxModuleOptions, "name" | "transport" | "failurePolicy">,
+    Pick<WebhookDeliveryTransportOptions, "fetch" | "timeout" | "validateUrl"> {
+  /** Module name / `dependsOn` key. Default `'webhook-delivery'`. */
+  name?: string;
+  /** Retry/backoff tuning for the default failure policy. */
+  delivery?: WebhookDeliveryPolicyOptions;
+  /** Full policy override — replaces {@link webhookDeliveryFailurePolicy}. */
+  failurePolicy?: OutboxFailurePolicy;
+}
+
+/**
+ * Durable webhook delivery as a module: the outbox relay machinery pointed at
+ * webhook POSTs. Pair with `webhookPlugin`'s `durable` option sharing the
+ * same store:
+ *
+ * ```ts
+ * const store = repositoryAsOutboxStore(deliveryRepo);
+ * createApp({
+ *   modules: [createDurableWebhookModule({ store })],
+ *   plugins: async (f) => {
+ *     await f.register(webhookPlugin, { durable: { store } });
+ *   },
+ * });
+ * ```
+ *
+ * The relay arm is `kind: 'relay'`, so `role: 'relay'` deployments run
+ * delivery and `role: 'api'` deployments only enqueue. The delivering process
+ * must ALSO register `webhookPlugin` (with the shared subscription store) —
+ * subscriptions resolve through `fastify.webhooks` at delivery time, which is
+ * boot-checked, not discovered on the first row.
+ */
+export function createDurableWebhookModule(
+  options: DurableWebhookModuleOptions,
+): ReturnType<typeof createOutboxModule> {
+  const { name, delivery, failurePolicy, fetch, timeout, validateUrl, ...outboxOptions } = options;
+  return createOutboxModule({
+    ...outboxOptions,
+    name: name ?? "webhook-delivery",
+    transport: (fastify) => {
+      if (!fastify.hasDecorator("webhooks")) {
+        throw new Error(
+          `Durable webhook module "${name ?? "webhook-delivery"}" requires webhookPlugin — ` +
+            "subscriptions resolve through fastify.webhooks at delivery time. Register it " +
+            "in plugins() (with the SHARED subscription store in multi-process topologies).",
+        );
+      }
+      return createWebhookDeliveryTransport({
+        getSubscription: (id) => {
+          const pub = fastify.webhooks.list().find((s) => s.id === id);
+          if (!pub) return undefined;
+          const secret = fastify.webhooks.getSecret(id);
+          return secret === undefined ? undefined : { ...pub, secret };
+        },
+        ...(fetch !== undefined ? { fetch } : {}),
+        ...(timeout !== undefined ? { timeout } : {}),
+        ...(validateUrl !== undefined ? { validateUrl } : {}),
+      });
+    },
+    failurePolicy: failurePolicy ?? webhookDeliveryFailurePolicy(delivery),
+  });
+}

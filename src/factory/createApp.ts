@@ -44,6 +44,7 @@ import qs from "qs";
 import { arcLog, configureArcLogger, createPinoWriter } from "../logger/index.js";
 import { createRequestIdGenerator } from "../plugins/requestId.js";
 import { parseJsonBody } from "../utils/jsonBody.js";
+import { auditRuntimeCapabilities } from "../utils/runtimeCapabilities.js";
 import { registerAssetRoots } from "./assets.js";
 import { collectModuleHealthChecks, orderModules, resolveModule } from "./module/index.js";
 import { getPreset } from "./presets.js";
@@ -597,6 +598,12 @@ async function buildApp(
 
   // ── Log summary ──
   const authMode = config.auth === false ? "none" : config.auth ? config.auth.type : "none";
+  // Capability audit — LAST, after every declarant (arc plugins, host
+  // plugins(), module phases) has spoken. This is the enforcement half the
+  // constructor-time guard cannot provide: it validates what hosts wired,
+  // not just what createApp received.
+  auditRuntimeCapabilities(fastify, config.runtime ?? "memory");
+
   fastify.log.info(
     {
       preset: config.preset ?? "custom",

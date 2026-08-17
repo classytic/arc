@@ -184,7 +184,10 @@ export async function registerResources(
         // A returned disposer is shorthand for a single `defer` — registered
         // last, so it unwinds before anything the phase deferred by hand.
         const returned = await m.plugins(fastify, disposers.contextFor(m.name));
-        if (typeof returned === "function") disposers.contextFor(m.name).defer(returned);
+        if (typeof returned === "function") {
+          assertNotAReturnedPlugin(returned, m.name, fastify);
+          disposers.contextFor(m.name).defer(returned);
+        }
       } catch (err) {
         setModuleState(fastify, m.name, "failed");
         const msg = err instanceof Error ? err.message : String(err);
@@ -764,5 +767,47 @@ export async function registerResources(
       if (appOnClose) await appOnClose(fastify);
       if (closeErrors.length > 0) throw closeErrors[0];
     });
+  }
+}
+
+/**
+ * `plugins()` is CALLED by arc, never handed to `fastify.register()` — so a
+ * module author who returns a Fastify plugin expecting arc to register it
+ * gets silence: nothing is registered, and the "disposer" shorthand then
+ * invokes their plugin at shutdown with no arguments.
+ *
+ * The `fastify-plugin` case is unambiguous (its marker symbols are only ever
+ * set by `fp()`), so it throws. A bare `(fastify, opts)` function is a strong
+ * but not certain signal — arc's disposer contract calls it with ZERO
+ * arguments, so a 2-parameter disposer is meaningless either way — and warns.
+ */
+function assertNotAReturnedPlugin(
+  returned: (...args: never[]) => unknown,
+  moduleName: string,
+  fastify: FastifyInstance,
+): void {
+  const fn = returned as unknown as Record<symbol, unknown>;
+  const isFastifyPlugin =
+    fn[Symbol.for("skip-override")] !== undefined ||
+    fn[Symbol.for("plugin-meta")] !== undefined ||
+    fn[Symbol.for("fastify.display-name")] !== undefined;
+
+  if (isFastifyPlugin) {
+    throw new Error(
+      `[arc] module "${moduleName}" returned a fastify-plugin from plugins(). That slot is a ` +
+        "SETUP function arc calls directly — it is never passed to fastify.register(), so the " +
+        "returned value is read as a disposer and your plugin would be invoked at shutdown " +
+        "instead of registered at boot. Register it yourself: " +
+        "`plugins: async (fastify) => { await fastify.register(myPlugin) }`.",
+    );
+  }
+
+  if (returned.length >= 2) {
+    fastify.log?.warn?.(
+      `[arc] module "${moduleName}" returned a ${returned.length}-argument function from ` +
+        "plugins(). Arc calls disposers with NO arguments, so this looks like a Fastify plugin " +
+        "that was meant to be registered (`await fastify.register(fn)`) rather than a teardown " +
+        "callback. If it really is a disposer, declare it with no parameters.",
+    );
   }
 }

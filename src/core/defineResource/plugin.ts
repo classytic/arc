@@ -388,6 +388,16 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
     const isFirstMount = !resource._sharedStateRegisteredOn.has(sharedRoot);
     if (isFirstMount) resource._sharedStateRegisteredOn.add(sharedRoot);
 
+    // Deferred boot assertions FIRST — before diagnostics, registry writes, or
+    // any route mounting. These read state that only exists once the app has
+    // booted (a live DB connection behind a capability descriptor), so they
+    // could not be settled at define time. Failing here still fails the boot,
+    // which is the point: the alternative was a resource that registered
+    // clean and threw on its first write.
+    if (isFirstMount && resource._deferredChecks?.length) {
+      for (const check of resource._deferredChecks) check();
+    }
+
     // Flush boot-time diagnostics through the host's Fastify logger.
     // Collected by `validateDefineResourceConfig` at define-time (when
     // no logger exists) and held on the resource until first mount.

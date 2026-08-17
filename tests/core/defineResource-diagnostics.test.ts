@@ -232,6 +232,28 @@ describe("defineResource — boot-time diagnostics", () => {
       expect(consoleWarn).not.toHaveBeenCalled();
     });
 
+    it("the WARN names the production switch — an unactionable warning gets filtered", () => {
+      // The gate that makes ungated writes impossible existed but was never
+      // mentioned at the point a host actually sees the problem.
+      const diags = byOmission(defineResource({ name: "wideopen", adapter: noopAdapter() }));
+      expect(diags[0]?.message).toContain("ARC_STRICT_PERMISSIONS=true");
+      expect(diags[0]?.message).toContain("strictPermissions: true");
+      expect(diags[0]?.message).toContain("v3 default");
+    });
+
+    it("the ERROR does NOT repeat the switch — it is already on", () => {
+      const prev = process.env.ARC_STRICT_PERMISSIONS;
+      process.env.ARC_STRICT_PERMISSIONS = "true";
+      try {
+        expect(() => defineResource({ name: "wideopen-strict", adapter: noopAdapter() })).toThrow(
+          /ungated WRITE is fatal/,
+        );
+      } finally {
+        if (prev === undefined) delete process.env.ARC_STRICT_PERMISSIONS;
+        else process.env.ARC_STRICT_PERMISSIONS = prev;
+      }
+    });
+
     it("warns when only reads are gated (ungated writes = real exposure)", () => {
       const resource = defineResource({
         name: "readsonly-gated",

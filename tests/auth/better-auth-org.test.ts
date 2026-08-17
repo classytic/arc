@@ -474,3 +474,38 @@ describe("Better Auth Org Context Bridge", () => {
     expect(typeof permissions.requireOrgMembership()).toBe("function");
   });
 });
+
+/**
+ * `orgContext: true` without Better Auth's `organization()` plugin.
+ *
+ * Arc resolves membership through `auth.api.getActiveMember` /
+ * `getActiveMemberRole`. Absent the plugin those are undefined, every lookup
+ * returns null, and scope silently stays `'authenticated'` — so every
+ * tenant-scoped route answers 403 with nothing pointing at the missing
+ * plugin. Fails closed, but undiagnosably; now it fails at BOOT.
+ */
+describe("orgContext without the organization plugin", () => {
+  it("REFUSES at registration, naming the plugin", async () => {
+    const app = Fastify({ logger: false });
+    const authNoOrg = {
+      handler: async () => new Response("{}", { status: 200 }),
+      api: { getSession: async () => null }, // no organization methods
+    } as never;
+
+    const { plugin } = createBetterAuthAdapter({ auth: authNoOrg, orgContext: true });
+    await expect(app.register(plugin).ready()).rejects.toThrow(/organization\(\)/);
+    await app.close();
+  });
+
+  it("boots fine when orgContext is OFF — the plugin is only needed for org scope", async () => {
+    const app = Fastify({ logger: false });
+    const authNoOrg = {
+      handler: async () => new Response("{}", { status: 200 }),
+      api: { getSession: async () => null },
+    } as never;
+
+    const { plugin } = createBetterAuthAdapter({ auth: authNoOrg });
+    await expect(app.register(plugin).ready()).resolves.toBeTruthy();
+    await app.close();
+  });
+});

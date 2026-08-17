@@ -64,6 +64,44 @@ import { createIsDuplicateKeyError, createSafeGetOne } from "../utils/store-help
 import type { IdempotencyResult, IdempotencyStore } from "./stores/interface.js";
 
 /**
+ * The backing repository returned a document whose key does not match the
+ * key that was asked for — which means the repository is NOT applying the
+ * key filter. Concretely observed (2026-08-14, be-prod): a Mongoose schema
+ * with no declared paths (`new Schema({}, { _id: false })`) under a global
+ * `mongoose.set('strictQuery', true)` strips EVERY filter key as an
+ * "unknown path", so `getOne({ _id: key })` becomes `getOne({})` — one
+ * shared document then absorbs every idempotency key, and every request
+ * replays the most recent cached response ACROSS KEYS AND ACROSS USERS
+ * (a cancel response for order A was served as "success" for order B,
+ * which was never actually canceled).
+ *
+ * That failure mode is silent by construction — every read "succeeds" with
+ * a plausible document — so the adapter verifies the identity of every
+ * document it gets back and THROWS this instead of trusting it. Returning
+ * `undefined` (treat as miss) would be worse, not safer: the very next
+ * `tryLock`/`set` on the same broken repository would corrupt the shared
+ * document again.
+ *
+ * Fix on the host side: declare the key path on the schema (e.g.
+ * `_id: String`) and/or set `strictQuery: false` in the SCHEMA options so
+ * filters on it are never stripped — see `idempotencyPlugin`'s
+ * `repository` option docs.
+ */
+export class IdempotencyStoreMisconfiguredError extends Error {
+  readonly code = "IDEMPOTENCY_STORE_MISCONFIGURED";
+  constructor(operation: string, expectedKey: string, actualKey: unknown) {
+    super(
+      `idempotency repository store: ${operation} for key '${expectedKey}' returned a document ` +
+        `keyed '${String(actualKey)}' — the repository is not applying the key filter ` +
+        `(commonly: a pathless Mongoose schema under strictQuery:true strips the filter to {}). ` +
+        `Declare the key path on the schema (e.g. _id: String) and set strictQuery: false in the ` +
+        `schema options. Refusing to serve cross-key results.`,
+    );
+    this.name = "IdempotencyStoreMisconfiguredError";
+  }
+}
+
+/**
  * Idempotency document shape. The primary-key field is determined by the
  * kit's `repository.idField` (defaults to `_id` on mongokit, `id` on
  * sqlitekit) — using `Record<string, unknown>` keeps the interface
@@ -106,12 +144,27 @@ export function repositoryAsIdempotencyStore(
   const isDuplicateKeyError = createIsDuplicateKeyError(repository);
   const safeGetOne = createSafeGetOne(repository);
 
+  /**
+   * Every document read back MUST carry the key it was fetched by. A
+   * mismatch means the repository dropped the filter (see
+   * {@link IdempotencyStoreMisconfiguredError}) — fail loud, never serve
+   * or mutate a cross-key document.
+   */
+  function assertKeyIdentity(operation: string, doc: IdempotencyDoc, expectedKey: string): void {
+    const actual = doc[idField];
+    if (String(actual) !== expectedKey) {
+      throw new IdempotencyStoreMisconfiguredError(operation, expectedKey, actual);
+    }
+  }
+
   return {
     name: "repository",
 
     async get(key: string): Promise<IdempotencyResult | undefined> {
       const doc = (await safeGetOne(eqFilter(idField, key))) as IdempotencyDoc | null;
-      if (!doc?.result) return undefined;
+      if (!doc) return undefined;
+      assertKeyIdentity("get", doc, key);
+      if (!doc.result) return undefined;
       if (new Date(doc.expiresAt) < new Date()) return undefined;
       return {
         key,
@@ -124,7 +177,7 @@ export function repositoryAsIdempotencyStore(
     },
 
     async set(key: string, result: Omit<IdempotencyResult, "key">): Promise<void> {
-      await r.findOneAndUpdate(
+      const doc = (await r.findOneAndUpdate(
         eqFilter(idField, key),
         update({
           set: {
@@ -136,10 +189,19 @@ export function repositoryAsIdempotencyStore(
             createdAt: result.createdAt,
             expiresAt: result.expiresAt,
           },
+          // Stamp the key on the row itself, not only via the upsert filter:
+          // when the filter equality survives (healthy repo) this is a no-op
+          // write of the same value; it exists so the row is self-describing
+          // for the identity checks and for operators inspecting the store.
+          setOnInsert: { [idField]: key },
           unset: ["lock"],
         }),
         { upsert: true, returnDocument: "after" },
-      );
+      )) as IdempotencyDoc | null;
+      // A filter-dropping repository matches an arbitrary existing row here
+      // and OVERWRITES its cached response — the exact corruption observed
+      // live. Verify what we actually wrote to.
+      if (doc) assertKeyIdentity("set", doc, key);
     },
 
     async tryLock(key: string, requestId: string, ttlMs: number): Promise<boolean> {
@@ -154,14 +216,18 @@ export function repositoryAsIdempotencyStore(
         // Filter IR handles dot-path fields (`lock.expiresAt`) identically
         // across kits — mongokit dot-accesses, SQL kits treat as nested JSON
         // or require flattened columns (backend-specific, documented per kit).
-        const doc = await r.findOneAndUpdate(
+        const doc = (await r.findOneAndUpdate(
           and(eqFilter(idField, key), or(exists("lock", false), lt("lock.expiresAt", now))),
           update({
             set: { lock: { requestId, expiresAt: lockExpiresAt } },
-            setOnInsert: { createdAt: now, expiresAt: docExpiresAt },
+            setOnInsert: { [idField]: key, createdAt: now, expiresAt: docExpiresAt },
           }),
           { upsert: true, returnDocument: "after" },
-        );
+        )) as IdempotencyDoc | null;
+        // A filter-dropping repository "acquires" the lock on an arbitrary
+        // shared row — every caller then wins the same lock and the overlap
+        // protection is silently gone. Verify the row is really ours.
+        if (doc) assertKeyIdentity("tryLock", doc, key);
         return doc !== null && doc !== undefined;
       } catch (err) {
         if (isDuplicateKeyError(err)) return false;
@@ -205,6 +271,11 @@ export function repositoryAsIdempotencyStore(
         ),
       )) as IdempotencyDoc | null;
       if (!doc?.result) return undefined;
+      // Prefix analog of assertKeyIdentity — a doc whose key does not start
+      // with the requested prefix means the filter was dropped.
+      if (!String(doc[idField] ?? "").startsWith(prefix)) {
+        throw new IdempotencyStoreMisconfiguredError("findByPrefix", prefix, doc[idField]);
+      }
       return {
         // Extract the matched doc's key via the configured `idField` —
         // returning `doc._id` would break on SQL kits where the column is `id`.

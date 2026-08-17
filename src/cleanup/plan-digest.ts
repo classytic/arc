@@ -41,6 +41,10 @@ function planMaterial(plan: Omit<CleanupPlan, "digest">): Record<string, unknown
       .map((i) => ({
         resource: i.resource,
         estimated: i.estimated,
+        // Part of consent: the operator agreed to a line that REMOVES n, and a
+        // line that flipped to protecting n (or the reverse) is a different plan.
+        disposition: i.disposition ?? "remove",
+        excluded: i.excluded ?? false,
         retained: i.retained ?? null,
         blockers: [...(i.blockers ?? [])].sort(),
       }))
@@ -51,6 +55,9 @@ function planMaterial(plan: Omit<CleanupPlan, "digest">): Record<string, unknown
     blockers: [...plan.blockers].sort(),
     rebuildActions: [...plan.rebuildActions].sort(),
     // warnings are advisory, NOT part of consent — excluded from the digest.
+    // A plan previewed with a domain excluded must not execute as one that
+    // includes it, so the exclusion set is material.
+    excludeSteps: [...plan.excludeSteps].sort(),
     estimatedTotal: plan.estimatedTotal,
     confirmationPhrase: plan.confirmationPhrase,
   };

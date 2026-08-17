@@ -31,7 +31,7 @@ import type {
   CleanupStepExecuteContext,
   CleanupStepOutcome,
 } from "@classytic/repo-core/cleanup";
-import { CleanupCancelled } from "./errors.js";
+import { CleanupCancelled, CleanupErrors } from "./errors.js";
 import type {
   Availability,
   CleanupContext,
@@ -97,6 +97,73 @@ function stepContextOf(
   };
 }
 
+/**
+ * Resolve the operator's exclusion list against the recipe's real steps.
+ *
+ * REFUSES rather than filters. Two rejections, both of which a permissive
+ * version would turn into a silent lie:
+ *
+ *   - **unknown id** — a typo, or a step that has since been removed. Dropping
+ *     it leaves the operator believing they narrowed a destructive run when the
+ *     excluded domain will in fact be purged. A free-text ignore-list that
+ *     silently tolerates unknown entries carries exactly this hazard.
+ *   - **a protective step** — the property an ignore-list alone cannot give. A
+ *     guard deletes nothing; it stands between the run and records that must
+ *     never be purged. If it can be switched off from the same screen that
+ *     starts the run, it is advice, not a guard. `destructive: false` alone is
+ *     not the test — a projection rebuild is also non-destructive and IS
+ *     legitimately excludable — so the marker is the step's own
+ *     `disposition: 'protect'`.
+ *
+ * Returns the validated set; throws `CleanupErrors.invalidInput` otherwise.
+ */
+export function resolveExclusions(
+  steps: readonly CleanupStep[],
+  requested: readonly string[] | undefined,
+): ReadonlySet<string> {
+  if (!requested || requested.length === 0) return new Set();
+  const byId = new Map(steps.map((s) => [s.id, s]));
+  const unknown: string[] = [];
+  const protectedIds: string[] = [];
+  for (const id of requested) {
+    const step = byId.get(id);
+    if (!step) {
+      unknown.push(id);
+      continue;
+    }
+    if (isProtective(step)) protectedIds.push(id);
+  }
+  if (unknown.length > 0) {
+    throw CleanupErrors.invalidExclusion(
+      `excludeSteps names step(s) this recipe does not have: ${unknown.join(", ")}. ` +
+        "Refusing rather than ignoring — a dropped exclusion means the run touches " +
+        "data the operator believed they had left out.",
+      unknown,
+    );
+  }
+  if (protectedIds.length > 0) {
+    throw CleanupErrors.invalidExclusion(
+      `excludeSteps names protective step(s): ${protectedIds.join(", ")}. ` +
+        "A guard deletes nothing; it refuses the run when records that must never " +
+        "be purged are present. It cannot be switched off from the same request " +
+        "that starts the run.",
+      protectedIds,
+    );
+  }
+  return new Set(requested);
+}
+
+/**
+ * Is this step a GUARD?
+ *
+ * Asked of the step's declared disposition rather than `destructive`, because
+ * `destructive: false` covers guards AND projection rebuilds — and a rebuild is
+ * perfectly reasonable to exclude.
+ */
+function isProtective(step: CleanupStep): boolean {
+  return step.disposition === "protect";
+}
+
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -133,6 +200,7 @@ export function recipeFromSteps(input: RecipeFromStepsInput): CleanupRecipe {
     async plan(cleanupInput: CleanupInput, ctx: CleanupContext): Promise<CleanupPlanDraft> {
       const parameters = cleanupInput.parameters ?? {};
       const stepCtx = stepContextOf(ctx, parameters);
+      const excluded = resolveExclusions(steps, cleanupInput.excludeSteps);
       const items: CleanupPlanItem[] = [];
       const blockers = new Set<string>();
       const retains = new Set<string>(input.retains ?? []);
@@ -140,10 +208,66 @@ export function recipeFromSteps(input: RecipeFromStepsInput): CleanupRecipe {
       const warnings = new Set<string>(input.warnings ?? []);
 
       for (const step of steps) {
+        /**
+         * An excluded step is NOT estimated.
+         *
+         * Estimating it would run its counting queries for a line the operator
+         * has already taken out — cost with no consequence — and, worse, would
+         * surface its blockers, so leaving a domain out of a run could still be
+         * refused because of that domain. A line the run will not touch must not
+         * be able to stop the run.
+         */
+        if (excluded.has(step.id)) {
+          items.push({
+            stepId: step.id,
+            resource: step.resource,
+            estimated: 0,
+            excluded: true,
+            retained: "excluded from this run by the operator",
+          });
+          continue;
+        }
         const est = await step.estimate(stepCtx);
+        /**
+         * Disposition comes from the STEP, not from `step.destructive`.
+         *
+         * (See the exclusion handling above for why `'protect'` also decides
+         * whether a line may be left out of a run.)
+         *
+         * They are close but not the same, and conflating them is how the bug
+         * this fixes arose. `destructive: false` covers BOTH a protective guard
+         * (counts what it defends) and a projection rebuild (counts what it
+         * recomputes) — opposite meanings for the headline. A step that says
+         * nothing means `'remove'`, which is what every purge step is.
+         */
+        /**
+         * A step may only PROTECT if it said so on the step itself.
+         *
+         * `resolveExclusions` runs before any estimate — it has to, since it
+         * decides which steps to estimate at all — so it can read only
+         * `step.disposition`. A guard that declared `'protect'` from its
+         * ESTIMATE instead was therefore excludable: the plan line came back
+         * marked protective, looked defended, and `excludeSteps: [thatId]`
+         * still switched it off. That is precisely the property this feature
+         * exists to make impossible, so the mismatch is an authoring error
+         * rather than a silent downgrade.
+         */
+        if (est.disposition === "protect" && step.disposition !== "protect") {
+          throw CleanupErrors.invalidExclusion(
+            `step '${step.id}' returned disposition 'protect' from its estimate but does not ` +
+              "declare `disposition: 'protect'` on the step. Exclusions are resolved before " +
+              "estimates run, so a guard declared only at estimate time can be excluded — " +
+              "switching off the check it exists to enforce. Declare it on the step.",
+            [step.id],
+          );
+        }
         items.push({
+          stepId: step.id,
           resource: est.resource,
           estimated: est.estimated,
+          ...((est.disposition ?? step.disposition) !== undefined
+            ? { disposition: est.disposition ?? step.disposition }
+            : {}),
           ...(est.retained !== undefined ? { retained: est.retained } : {}),
           ...(est.blockers && est.blockers.length > 0 ? { blockers: est.blockers } : {}),
         });
@@ -166,9 +290,51 @@ export function recipeFromSteps(input: RecipeFromStepsInput): CleanupRecipe {
     async execute(plan: CleanupPlan, ctx: CleanupExecutionContext): Promise<CleanupResult> {
       const parameters = plan.parameters ?? {};
       const results: CleanupStepResult[] = [];
+      /**
+       * Re-resolved from the SEALED plan, never from a fresh caller input.
+       *
+       * The exclusion set is part of the digest the operator confirmed against,
+       * so taking it from the plan is what makes consent binding: an execute
+       * cannot widen the run beyond what was previewed. Re-validating here also
+       * means a step that has since become protective refuses rather than being
+       * quietly dropped.
+       */
+      const excluded = resolveExclusions(steps, plan.excludeSteps);
+
+      /**
+       * Lifecycle reporting is OPTIONAL on the context — a host service that
+       * predates it simply gets no per-step view, rather than a crash. Resolved
+       * once so the loop below reads as bookkeeping, not feature detection.
+       */
+      const reportState = ctx.onStepState?.bind(ctx) ?? (async () => {});
 
       for (const step of steps) {
         await ctx.throwIfCancelled();
+
+        // Reported, not silently absent: an operator reading the run must see
+        // that this phase was left out and why, exactly as they would see one
+        // that had nothing in scope.
+        if (excluded.has(step.id)) {
+          await reportState({
+            stepId: step.id,
+            resource: step.resource,
+            status: "skipped",
+            processed: 0,
+            startedAt: ctx.now,
+            completedAt: ctx.now,
+            detail: "excluded by the operator",
+          });
+          continue;
+        }
+
+        const startedAt = ctx.now;
+        await reportState({
+          stepId: step.id,
+          resource: step.resource,
+          status: "running",
+          processed: 0,
+          startedAt,
+        });
 
         // Per-step delta bookkeeping: steps report CUMULATIVE progress; arc's
         // onStep sums DELTAS into the run's bounded total.
@@ -230,6 +396,30 @@ export function recipeFromSteps(input: RecipeFromStepsInput): CleanupRecipe {
           ok: outcome.ok,
           ...(outcome.error !== undefined ? { error: outcome.error } : {}),
           ...(outcome.cursor !== undefined ? { cursor: outcome.cursor } : {}),
+        });
+
+        /**
+         * `skipped` is a REAL outcome, not "completed with zero".
+         *
+         * A step that had nothing in scope and a step that removed 4,000 rows
+         * both end `ok`, and reading a bare 0 as success is how an operator
+         * concludes a phase ran when its scope was simply empty. Three states
+         * alone only CATEGORISE the outcome; the `detail` is what makes it
+         * answerable.
+         */
+        const isSkip = outcome.ok && outcome.processed === 0;
+        await reportState({
+          stepId: step.id,
+          resource: outcome.resource,
+          status: outcome.ok ? (isSkip ? "skipped" : "completed") : "failed",
+          processed: outcome.processed,
+          startedAt,
+          completedAt: ctx.now,
+          ...(outcome.ok
+            ? isSkip
+              ? { detail: "nothing in scope" }
+              : {}
+            : { detail: outcome.error ?? "step failed" }),
         });
 
         if (!outcome.ok) break; // stop-on-first-failure (retention §8)

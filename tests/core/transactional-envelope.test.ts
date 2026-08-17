@@ -70,6 +70,12 @@ function txCapableRepo() {
           ),
       ),
     withTransaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(txRepo)),
+    // This double runs the callback ONCE per withTransaction call, so
+    // `'caller'` is its honest declaration — the envelope owns the retry
+    // loop. A kit whose driver retries internally (mongokit) declares
+    // `'managed'` and is invoked exactly once; declaring the wrong one here
+    // would test a composition that ships nowhere.
+    capabilities: { transactions: true, transactionRetry: "caller" },
     // biome-ignore lint/suspicious/noExplicitAny: test double
   } as any;
   return { repo, txRepo };
@@ -206,6 +212,67 @@ describe("transactional write envelope", () => {
     expect(repo.withTransaction).not.toHaveBeenCalled();
     expect(repo.create).toHaveBeenCalledTimes(1);
     expect(txRepo.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("retry ownership — arc must not stack a second policy", () => {
+  /**
+   * The mongokit shape: `session.withTransaction()` re-runs the callback
+   * INTERNALLY on TransientTransactionError for up to 120s. Arc wrapping that
+   * in `retryingTransaction` created nested retry authority — the callback's
+   * execution count stopped being bounded by maxAttempts, `onRetry` saw a
+   * fraction of the real attempts, and every outer attempt opened a NEW
+   * session. Retry ownership is declared by the kit, and arc honours it.
+   */
+  function managedRepo(internalAttempts: number) {
+    const txRepo = {
+      __tx: true,
+      getById: vi.fn().mockResolvedValue({ _id: "inv-1", status: "draft" }),
+      create: vi.fn(async () => {
+        throw Object.assign(new Error("write conflict"), {
+          errorLabels: ["TransientTransactionError"],
+        });
+      }),
+      update: vi.fn(),
+      delete: vi.fn(),
+      // biome-ignore lint/suspicious/noExplicitAny: test double
+    } as any;
+    const repo = {
+      getById: vi.fn().mockResolvedValue({ _id: "inv-1", status: "draft" }),
+      getAll: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+      capabilities: { transactions: true, transactionRetry: "managed" },
+      isTransientConflictError: () => true,
+      withTransaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => {
+        let lastErr: unknown;
+        for (let i = 0; i < internalAttempts; i++) {
+          try {
+            return await fn(txRepo);
+          } catch (err) {
+            lastErr = err;
+          }
+        }
+        throw lastErr;
+      }),
+      // biome-ignore lint/suspicious/noExplicitAny: test double
+    } as any;
+    return { repo, txRepo };
+  }
+
+  it("calls withTransaction ONCE for a self-retrying kit — the kit's attempts, not arc's × the kit's", async () => {
+    const hooks = new HookSystem();
+    const { repo, txRepo } = managedRepo(3);
+    const controller = new BaseController(repo, { resourceName: "invoice", transactional: true });
+
+    await expect(
+      controller.create(createReq(hooks, { body: { partnerName: "Acme" } })),
+    ).rejects.toThrow(/write conflict/);
+
+    // The kit ran its own 3 attempts. Arc opened ONE transaction, not 5.
+    expect(repo.withTransaction).toHaveBeenCalledTimes(1);
+    expect(txRepo.create).toHaveBeenCalledTimes(3);
   });
 });
 

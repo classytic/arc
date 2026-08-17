@@ -714,6 +714,35 @@ export function createBetterAuthAdapter(
   // ========================================
 
   const betterAuthPlugin: FastifyPluginAsync = async (fastify: FastifyInstance) => {
+    /**
+     * `orgContext` without the `organization()` plugin is a SILENT
+     * misconfiguration, so it fails at boot instead.
+     *
+     * Arc resolves org membership through `auth.api.getActiveMember` /
+     * `getActiveMemberRole`. Absent the plugin those methods do not exist,
+     * every lookup returns null, and `request.scope` silently stays
+     * `'authenticated'` — so `requireOrgId()` throws 403 on every
+     * tenant-scoped route. It fails CLOSED (no data leak), but the symptom
+     * points nowhere near the cause: the host sees blanket 403s and no
+     * indication that a plugin is missing. One check at registration turns
+     * that into a sentence.
+     */
+    if (orgEnabled) {
+      const hasOrgApi =
+        pickApiMethod(auth, "getActiveMember", "organization") !== undefined ||
+        pickApiMethod(auth, "getActiveMemberRole", "organization") !== undefined;
+      if (!hasOrgApi) {
+        throw new ArcError(
+          "createBetterAuthAdapter({ orgContext: true }) requires Better Auth's `organization()` " +
+            "plugin — `auth.api.getActiveMember` / `getActiveMemberRole` are missing. Without it " +
+            "arc can never resolve membership, so request.scope stays 'authenticated' and every " +
+            "tenant-scoped route answers 403. Add `organization()` to your betterAuth({ plugins }), " +
+            "or drop `orgContext`.",
+          { code: "BETTER_AUTH_ORG_PLUGIN_MISSING", statusCode: 500 },
+        );
+      }
+    }
+
     // Register catch-all route for Better Auth endpoints. `rateLimit`
     // (adapter option) stamps @fastify/rate-limit's per-route config so
     // credential endpoints can run a tighter bucket than the global limit.

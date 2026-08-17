@@ -60,7 +60,10 @@
 import type { DataAdapter } from "@classytic/repo-core/adapter";
 import type { ActionsMap, AnyRecord, ResourceConfig } from "../types/index.js";
 import type { InternalResourceConfig } from "./defineResource/config.js";
-import { resolveOrAutoCreateController } from "./defineResource/controller.js";
+import {
+  assertTransactionCapability,
+  resolveOrAutoCreateController,
+} from "./defineResource/controller.js";
 import type { ResourceDiagnostic } from "./defineResource/diagnostics.js";
 import { wireHooks } from "./defineResource/hooks.js";
 import { resolveIdField } from "./defineResource/idField.js";
@@ -199,6 +202,14 @@ export function defineResource<TDoc = AnyRecord>(
   if (!normalisedConfig.skipRegistry) {
     const registryMeta = resolveOpenApiSchemas(narrowedConfig);
     if (registryMeta) resource._registryMeta = registryMeta;
+  }
+
+  // Defer the transaction-CAPABILITY assertion to registration: this
+  // function commonly runs at module import, before `beforeBoot()` connects,
+  // and an unresolved topology reports `transactions: false` by design.
+  if (resolvedConfig.transactional === true) {
+    const name = resolvedConfig.name;
+    resource._deferredChecks = [() => assertTransactionCapability(repository, name)];
   }
 
   // Attach boot-time diagnostics. `buildResourcePlugin` flushes them

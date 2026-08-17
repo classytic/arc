@@ -32,7 +32,9 @@ export type CleanupErrorCode =
   /** No authenticated actor could be resolved for a destructive action (fail-closed). */
   | "CLEANUP_ACTOR_REQUIRED"
   /** Caller lacks permission for the operation. */
-  | "CLEANUP_FORBIDDEN";
+  | "CLEANUP_FORBIDDEN"
+  /** The exclusion list names an unknown or protective step (fail-closed). */
+  | "CLEANUP_INVALID_EXCLUSION";
 
 /**
  * A framework error carrying BOTH `status` (read directly in code/tests) and
@@ -166,6 +168,18 @@ export const CleanupErrors = {
       `Action '${action}' is not valid for a run in status '${status}'.`,
       { action, status },
     );
+  },
+  /**
+   * The operator's exclusion list cannot be honoured as written.
+   *
+   * A 400 rather than a filter: dropping an unrecognised exclusion leaves
+   * someone believing they narrowed a destructive run when they did not, and
+   * dropping a PROTECTIVE one would let a guard be switched off from the same
+   * request that starts the run. `steps` carries the offending ids so a UI can
+   * point at them.
+   */
+  invalidExclusion(reason: string, steps: readonly string[]): CleanupError {
+    return new CleanupError("CLEANUP_INVALID_EXCLUSION", 400, reason, { steps: [...steps] });
   },
   forbidden(operation: string): CleanupError {
     return new CleanupError("CLEANUP_FORBIDDEN", 403, `Not authorized to ${operation} cleanup.`, {

@@ -38,7 +38,10 @@ export {
  * before passing it to {@link idempotencyPlugin} via `store:`. Passing
  * `{ repository }` to the plugin remains the one-liner path.
  */
-export { repositoryAsIdempotencyStore } from "./repository-idempotency-adapter.js";
+export {
+  IdempotencyStoreMisconfiguredError,
+  repositoryAsIdempotencyStore,
+} from "./repository-idempotency-adapter.js";
 // Types + core (lightweight) stores
 export type {
   IdempotencyLock,

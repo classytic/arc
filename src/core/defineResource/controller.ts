@@ -17,6 +17,7 @@
  * warns honour `ARC_SUPPRESS_WARNINGS=1` via `arcLog()`.
  */
 
+import { isReadOnlyRepo } from "@classytic/repo-core/repository";
 import { arcLog } from "../../logger/index.js";
 import type {
   AnyRecord,
@@ -28,6 +29,9 @@ import { BaseController } from "../BaseController.js";
 import type { BaseControllerOptions } from "../controllerTypes.js";
 import type { InternalResourceConfig } from "./config.js";
 import { enforceWriteVerbReachability, warnOnWriteMethodOverride } from "./writeVerbs.js";
+
+/** CRUD routes refused over a read-only repository. */
+const READ_ONLY_REFUSED_ROUTES = ["create", "update", "delete"] as const;
 
 /**
  * Resolve the controller for the resource. See module docstring for
@@ -41,17 +45,59 @@ export function resolveOrAutoCreateController<TDoc extends AnyRecord>(
 ): IController<TDoc> | undefined {
   const userController = resolvedConfig.controller;
 
-  // Transactional envelope requires withTransaction on the repository —
+  // Transactional envelope requires a repository that can actually run one —
   // BOOT-fatal on both branches (user-supplied and auto-built): a requested
   // envelope that silently degrades to bare writes is the defect, not a mode.
+  //
+  // Split across two lifecycle points, because they can be settled at
+  // different times. Method presence is knowable NOW. Whether the DEPLOYMENT
+  // can run a transaction is not: `defineResource()` typically runs at module
+  // import, before `beforeBoot()` connects, and mongokit reports
+  // `transactions: false` for an unresolved topology by design. So the
+  // capability assertion is deferred to registration (lifecycle slot 5) via
+  // `assertTransactionCapability`, where fail-closed finally means what it
+  // says. Presence alone was never sufficient — kits expose `withTransaction`
+  // unconditionally and fail at BEGIN, which is how standalone Mongo used to
+  // boot fine and 500 on the first write.
   if (resolvedConfig.transactional === true) {
-    const repoLike = repository as { withTransaction?: unknown } | null | undefined;
+    const repoLike = repository as
+      | { withTransaction?: unknown; capabilities?: { transactions?: unknown } }
+      | null
+      | undefined;
     if (typeof repoLike?.withTransaction !== "function") {
       throw new Error(
         `Resource "${resolvedConfig.name}" declares \`transactional: true\` but its ` +
           "repository has no `withTransaction` (capability `transactions: false` — D1, " +
           "standalone Mongo). Wire a transactional kit, or remove the flag; arc will not " +
           "silently drop a requested transaction envelope.",
+      );
+    }
+    // The CAPABILITY half is deferred to registration — see
+    // `assertTransactionCapability`. Asserting it here would read a
+    // descriptor taken before `beforeBoot()` opened the connection.
+  }
+
+  // A repository whose rows another component owns (`capabilities.readOnly` —
+  // Better Auth's identity collections, a SQL view, a read replica) must not
+  // be reachable through generic CRUD writes. The kit seals the repository so
+  // a write THROWS, but a 500 on the first `POST /users` is late feedback for
+  // a wiring mistake that is fully visible at boot.
+  //
+  // Refusing here is what makes the seal a design, not a tripwire: the host
+  // either drops the write routes or opts into `unsafeWritable` deliberately.
+  if (repository && isReadOnlyRepo(repository)) {
+    const disabled = new Set(resolvedConfig.disabledRoutes ?? []);
+    const enabledWrites = READ_ONLY_REFUSED_ROUTES.filter(
+      (op) => !resolvedConfig.disableDefaultRoutes && !disabled.has(op),
+    );
+    if (enabledWrites.length > 0) {
+      throw new Error(
+        `Resource "${resolvedConfig.name}" mounts write routes (${enabledWrites.join(", ")}) ` +
+          "over a READ-ONLY repository — its rows are owned by another component that enforces " +
+          "invariants generic CRUD would bypass (Better Auth hashes passwords, revokes sessions, " +
+          "and cascades org membership on every write it performs). Disable the write routes " +
+          "(`disabledRoutes: ['create', 'update', 'delete']`), or if raw writes are genuinely " +
+          "required, build the repository with the kit's explicit `unsafeWritable: true` opt-in.",
       );
     }
   }
@@ -344,4 +390,27 @@ function buildBaseController<TDoc extends AnyRecord>(
   });
 
   return controller as unknown as IController<TDoc>;
+}
+
+/**
+ * The DEFERRED half of the `transactional: true` gate — run at resource
+ * registration, after `beforeBoot()` has had its chance to connect.
+ *
+ * Fail-closed: anything other than a confirmed `true` refuses the boot. A
+ * repository with NO capability descriptor (hand-written, custom kit) passes
+ * — it never promised one, and the define-time presence check already covered
+ * the only signal it offers.
+ */
+export function assertTransactionCapability(repository: unknown, resourceName: string): void {
+  const capabilities = (repository as { capabilities?: { transactions?: unknown } } | null)
+    ?.capabilities;
+  if (!capabilities || capabilities.transactions === true) return;
+  throw new Error(
+    `Resource "${resourceName}" declares \`transactional: true\` but its repository reports ` +
+      `\`capabilities.transactions: ${String(capabilities.transactions)}\` — this deployment ` +
+      "cannot run transactions (standalone MongoDB, D1, or a topology arc could not confirm). " +
+      "`withTransaction` exists but every call would fail at BEGIN. Point at a replica set / " +
+      "transactional backend, or remove the flag. Checked at REGISTRATION, so a connection " +
+      "opened in `beforeBoot()` is already live by now.",
+  );
 }

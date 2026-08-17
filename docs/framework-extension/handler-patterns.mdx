@@ -478,3 +478,48 @@ when a verb is declared:
 A declared verb that can never run is decoration, so these are **errors**, not
 warnings: the slot is in `disabledRoutes`, `disableDefaultRoutes: true` is set,
 or the resource has no adapter repository to mount a controller against.
+
+### `transactional: true` — running the write inside a transaction (2.34)
+
+Wraps the **persistence step** in `withTransaction`. The verb receives the
+tx-bound repository, plus `ctx.uow` — the join point for work that lives
+*outside* the repository, canonically an outbox row:
+
+```typescript
+defineResource({
+  name: 'order',
+  adapter,
+  transactional: true,
+  writes: {
+    create: async (data, ctx) => {
+      const order = await ctx.repository.create(data);           // tx-bound
+      await outbox.store(orderCreated(order), { session: ctx.uow?.session });
+      return order;                                              // both commit, or neither
+    },
+  },
+});
+```
+
+What is and isn't inside the transaction matters:
+
+- **Hooks stay OUTSIDE the retry.** `before` / `around` already ran and must not
+  re-run; `after` runs post-commit. Only the persistence step re-executes.
+- **Transient conflicts re-run** the persistence step with jittered, bounded
+  backoff. `VersionConflictError` is *not* transient — it surfaces as a 409, so
+  a caller re-reads and re-decides rather than blindly overwriting.
+- **Your verb may run more than once.** Keep it pure apart from writes through
+  `ctx.repository`, which roll back with the transaction. A side effect that must
+  not repeat (an email, a payment call) belongs after the commit, or in an outbox
+  row written inside it.
+- **Retry ownership belongs to the kit.** mongokit's driver already retries a
+  conflicted transaction internally, so arc calls it exactly once; sqlitekit gets
+  arc's retry loop. Arc never stacks two policies on one write.
+- `ctx.uow.session` is empty on connection-bound backends (SQLite) — there the
+  tx-bound repository is the only join point.
+
+**Boot-fatal, twice over.** A repository with no `withTransaction` fails at
+`defineResource()`. A repository that *has* the method but reports
+`capabilities.transactions !== true` — standalone MongoDB, D1, or a topology arc
+could not confirm — fails at **registration**, because `defineResource()` usually
+runs at module import, before `beforeBoot()` has opened the connection. Arc will
+not silently drop a transaction envelope you asked for.

@@ -69,7 +69,7 @@ Why: async `onSend` hooks race with Fastify's `onSendEnd → safeWriteHead` flus
 
 - **`onRequest`** — when header is derivable from request (requestId, versioning).
 - **`preSerialization`** — when payload is needed (caching, response-cache, idempotency).
-- `isReplyCommitted()` in [src/utils/reply-guards.ts](../src/utils/reply-guards.ts) remains for third-party plugin authors; arc's own plugins no longer need it.
+- Arc's own plugins no longer need a reply-committed guard; the former `isReplyCommitted()` helper was removed with the `onSend` paths that needed it. Third-party plugin authors setting headers late should check `reply.sent` themselves.
 
 Fixed across 5 plugins in v2.9.2, fully swept in v2.10.3. See [[gotchas]] #15.
 

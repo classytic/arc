@@ -126,7 +126,26 @@ import {
 import { tracingPlugin } from '@classytic/arc/plugins/tracing';
 import { auditPlugin } from '@classytic/arc/audit';
 import { idempotencyPlugin } from '@classytic/arc/idempotency';
+// Runtime capability registry (2.34) — declare process-local state so a
+// `runtime: 'distributed'` boot fails on undeclared memory state:
+import { declareRuntimeCapability } from '@classytic/arc/utils';
 ```
+
+**Idempotency store — the one schema mistake that matters.** Backing the store
+with a repository requires the key path to survive the filter. A Mongoose
+schema with NO declared paths under a global `strictQuery: true` has EVERY
+filter key stripped, so `getOne({ _id: key })` becomes `getOne({})`: one row
+absorbs every key and responses replay across keys AND users. Declare the path
+and pin the option on the schema:
+
+```typescript
+new Schema({ _id: String }, { strict: false, strictQuery: false, timestamps: false })
+// NOT `new Schema({}, { _id: false, strict: false })`
+```
+
+The plugin's boot self-check (default on, `selfCheck: false` to disable) probes
+for exactly this and refuses to register; the adapter also throws
+`IdempotencyStoreMisconfiguredError` on any cross-key read at runtime.
 
 ## Integrations
 

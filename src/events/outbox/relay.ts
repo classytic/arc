@@ -392,13 +392,31 @@ export class EventOutbox {
     if (!this._transport) return empty;
 
     const claimStartedAt = Date.now();
-    const pending = this._store.claimPending
-      ? await this._store.claimPending({
-          limit: this._batchSize,
-          consumerId: this._consumerId,
-          leaseMs: this._leaseMs,
-        })
-      : await this._store.getPending(this._batchSize);
+    // Fencing (feature-detected end to end): prefer the fenced claim and
+    // carry each event's store-minted token into ack/fail, where a fencing
+    // store rejects a stale epoch — the overlap consumer-id ownership
+    // narrows but cannot close (holder ids recur; epochs do not).
+    const fenceTokens = new Map<string, number>();
+    let pending: DomainEvent[];
+    if (typeof this._store.claimPendingFenced === "function") {
+      const claimed = await this._store.claimPendingFenced({
+        limit: this._batchSize,
+        consumerId: this._consumerId,
+        leaseMs: this._leaseMs,
+      });
+      pending = claimed.map((c) => {
+        if (c.event?.meta?.id) fenceTokens.set(c.event.meta.id, c.fencingToken);
+        return c.event;
+      });
+    } else if (this._store.claimPending) {
+      pending = await this._store.claimPending({
+        limit: this._batchSize,
+        consumerId: this._consumerId,
+        leaseMs: this._leaseMs,
+      });
+    } else {
+      pending = await this._store.getPending(this._batchSize);
+    }
     const claimMs = Date.now() - claimStartedAt;
     const publishStartedAt = Date.now();
 
@@ -498,7 +516,11 @@ export class EventOutbox {
           if (oldest !== undefined) this._attempts.delete(oldest);
         }
 
-        let failOpts: OutboxFailOptions = { consumerId: this._consumerId };
+        const fenceToken = fenceTokens.get(event.meta.id);
+        let failOpts: OutboxFailOptions = {
+          consumerId: this._consumerId,
+          ...(fenceToken !== undefined ? { fencingToken: fenceToken } : {}),
+        };
         if (this._failurePolicy) {
           try {
             const decision = await this._failurePolicy({
@@ -533,8 +555,10 @@ export class EventOutbox {
 
       // Published successfully — acknowledge
       try {
+        const ackFenceToken = fenceTokens.get(event.meta.id);
         await this._store.acknowledge(event.meta.id, {
           consumerId: this._consumerId,
+          ...(ackFenceToken !== undefined ? { fencingToken: ackFenceToken } : {}),
         });
         counts.relayed++;
         this._attempts.delete(event.meta.id);

@@ -34,6 +34,8 @@ const basePlan = (over: Partial<CleanupPlan> = {}): Omit<CleanupPlan, "digest"> 
   rebuildActions: ["sales facts"],
   warnings: ["some warning"],
   estimatedTotal: 16,
+  protectedTotal: 0,
+  excludeSteps: [],
   confirmationPhrase: "cleanup.drafts",
   ...over,
 });

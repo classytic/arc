@@ -69,6 +69,14 @@ await app.listen({ port: 8040, host: '0.0.0.0' });
 
 **Boot order (fixed):** `beforeBoot` → modules resolve → `plugins` → `bootstrap[]` → `resources` → `afterResources` → `onReady`.
 
+**`role` — one image, N deployments (2.34).** `createApp({ role })` declares what a process is FOR, so the same codebase ships as api / worker / relay / scheduler without per-deployment builds:
+
+```typescript
+createApp({ role: process.env.ARC_ROLE as 'api' | 'worker' | 'relay' | 'scheduler' | 'all' })
+```
+
+`api` and `worker` mount NO module schedule arms; `relay` mounts only `kind: 'relay'` arms (the outbox relay, durable webhook delivery); `scheduler` mounts all of them. Declaring `relay`/`scheduler` together with `resources`/`resourceDir` is BOOT-FATAL — a relay process must not serve routes. Default `all` is the pre-2.34 behaviour, unchanged. `createWorker()` forwards `role`; without one it still runs everything non-HTTP.
+
 `beforeBoot()` (2.21) runs before Fastify exists and before module thunks / resource files import — connect the DB there instead of dynamic-import ordering hacks.
 
 For async-booted engines, pass `resources` as a factory so it runs after `bootstrap[]`:
@@ -313,6 +321,9 @@ Decorates `app.authenticate` / `app.optionalAuthenticate` / `app.authorize`.
 - **`verifySignature(body, …)`** throws on parsed body — pass `req.rawBody`.
 - **MCP tools fail-closed.** A resource action without per-action perm + no `actionPermissions` + no `permissions.update` fallback → throws at tool generation. Declare `allowPublic()` to opt into unauthenticated.
 - **Better Auth roles.** BA stores `member.role = "admin,recruiter"` (comma-separated). Arc splits into `scope.orgRoles = ['admin', 'recruiter']`; `?role=admin` won't match — use `role[like]=admin`.
+- **Read-only repositories refuse write ROUTES at boot (2.34).** Kits' Better Auth overlays are sealed by default (`capabilities.readOnly`) — BA owns hashing, session revocation, org cascades. Mounting `create`/`update`/`delete` over one is boot-fatal: disable those routes, or pass the kit's `unsafeWritable: true` for administrative repair only. Normal identity mutations go through `auth.api`.
+- **Arc closes only stores/transports it BUILT (2.34).** One you hand to `idempotencyPlugin` / `eventPlugin` / `queryCachePlugin` stays yours to close — arc used to close every one, which wiped a co-resident app's live idempotency records.
+- **Idempotency self-checks its store at boot (2.34).** A probe write must read back under its own key and NOT under another; registration throws otherwise. Catches a filter-stripping repository (a pathless Mongoose schema under `strictQuery: true` strips filters to `{}`), which otherwise replays cached responses across keys AND users. `selfCheck: false` to disable; the adapter's per-read identity checks remain.
 
 ## routeGuards + defineGuard
 
@@ -478,6 +489,31 @@ defineResource({
 
 POST/PATCH/DELETE bumps resource version. Response header: `x-cache: HIT | STALE | MISS`. `runtime: 'distributed'` requires `stores.queryCache: RedisCacheStore`.
 
+## Transactional writes (2.34)
+
+`transactional: true` runs the PERSISTENCE step inside `withTransaction`. Write verbs receive the tx-bound repository plus `ctx.uow` — the join point for work outside the repository:
+
+```typescript
+defineResource({
+  name: 'order',
+  adapter,
+  transactional: true,
+  writes: {
+    create: async (data, ctx) => {
+      const order = await ctx.repository.create(data);          // tx-bound
+      await outbox.store(event, { session: ctx.uow?.session });  // SAME transaction
+      return order;
+    },
+  },
+});
+```
+
+- Hooks stay OUTSIDE the retry — before/after run once; only persistence re-runs.
+- Transient conflicts re-run with jittered backoff; `VersionConflictError` surfaces (409), never retried.
+- **Retry authority is the KIT's.** mongokit declares `transactionRetry: 'managed'` (its driver already retries internally) and is called exactly once; sqlitekit declares `'caller'` and gets the envelope's loop. Arc never stacks a second policy.
+- **BOOT-FATAL** without `withTransaction`, and at REGISTRATION when the repository reports `capabilities.transactions !== true` (standalone Mongo, D1, unconfirmed topology). The capability is checked at registration, not at `defineResource()`, because that usually runs at module import — before `beforeBoot()` connects.
+- `ctx.uow.session` is empty on connection-bound backends (SQLite); the tx-bound repo is the join point there.
+
 ## Events
 
 CRUD events auto-emit: `{resource}.created` / `{resource}.updated` / `{resource}.deleted`. Manual publish:
@@ -489,12 +525,26 @@ await app.events.subscribe('order.*', async (event) => { … });
 
 Transports: Memory · Redis Pub/Sub (fire-and-forget) · Redis Streams (durable, consumer groups, DLQ). Event types live in `@classytic/primitives/events` (`createEvent`, `createChildEvent`, `matchEventPattern`, …); arc re-exports the runtime `MemoryEventTransport` only.
 
-**Outbox** (at-least-once via transactional outbox):
+**Outbox** (at-least-once via transactional outbox) — prefer the MODULE, so the store is a slot other modules depend on rather than a value threaded by hand:
 
 ```typescript
-const outbox = new EventOutbox({ repository: outboxRepo, transport });
-// Dev: { store: new MemoryOutboxStore(), transport }
+createApp({ modules: [createOutboxModule({ store: repositoryAsOutboxStore(outboxRepo) })] });
+// Dev: createOutboxModule({ store: new MemoryOutboxStore() })
 ```
+
+The relay arm is `kind: 'relay'`, so `role: 'relay'` deployments drain it. It resolves the RAW transport, never the `fastify.events` facade (the facade fails open, which would acknowledge rows whose publish failed) — no transport is boot-fatal. **Fencing (2.34):** stores that support `claimPendingFenced` mint a token in the claim CAS; a relay that lost its lease mid-batch cannot ack or re-schedule a row a successor already owns. Feature-detected end to end.
+
+**Durable webhooks (2.34)** — delivery survives crash and deploy, using the outbox machinery rather than a second queue:
+
+```typescript
+const store = repositoryAsOutboxStore(deliveryRepo);
+createApp({
+  modules: [createDurableWebhookModule({ store })],       // relay does the signed POST
+  plugins: async (f) => f.register(webhookPlugin, { durable: { store } }), // enqueue, don't POST
+});
+```
+
+One row per (event × subscription), deterministic id so an at-least-once upstream enqueues each delivery exactly once. Transient failures (network/timeout/429/5xx) retry with backoff; 4xx dead-letters on the FIRST attempt. `durable` + `retry` together is a registration error.
 
 Full event recipes (retry, DLQ, dual-publish warnings, idempotency keys) → [references/events.md](references/events.md).
 
@@ -676,6 +726,23 @@ await app.audit.custom('order', req.params.id, 'refund', { reason }, { user });
 ## Usage counters + plan limits (2.22)
 
 `@classytic/arc/usage` — `usagePlugin` decorates `fastify.usage` with per-actor, per-UTC-month counters (`record`/`summary`/`period`/`actorOf`; actor chain org → user → client → ip). Auto-tracks `api.requests` (default on) + `api.egress.bytes` (opt-in); recording is fail-safe (a throwing `UsageStore` never fails a request; `MemoryUsageStore` built in, Redis/kit backends are ~5 lines). Pair with `createApp({ rateLimit: { plan: { resolve, limits: { free: { max: 60 }, enterprise: false }, default: 'free' } } })` for per-plan ceilings — `false` = unlimited, unknown/throwing resolvers fall back to `default` then global `max`, and buckets follow the tenant key chain by default. Caveat: the limiter runs before route auth, so `resolve` sees the raw request.
+
+## Runtime capability registry (2.34)
+
+Under `runtime: 'distributed'`, subsystems holding process-local state must declare it — the end-of-boot audit FAILS the app on undeclared memory state, naming every violator:
+
+```typescript
+import { declareRuntimeCapability } from '@classytic/arc/utils';
+
+declareRuntimeCapability(fastify, {
+  subsystem: 'billing.sequence-cache',
+  durability: 'memory',        // 'memory' | 'shared'
+  accepted: true,              // per-process BY DESIGN (logged, never fatal)
+  detail: 'short-TTL cache; correctness from TTL, not shared state',
+});
+```
+
+`createApp`'s constructor-time guard only sees what it is passed; state a host wires inside `plugins()` was invisible to it and lived on a checklist. This makes the checklist enforcement. Arc's webhooks plugin declares its default in-memory store.
 
 ## Adapters
 

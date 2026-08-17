@@ -1,6 +1,6 @@
 /**
  * Shared projection from a full `RequestScope` discriminated union
- * → the lightweight `{ organizationId, userId, orgRoles }` shape that
+ * → the lightweight tenant/actor shape that
  * 95% of arc's tenant-scoped code actually reads.
  *
  * One implementation, two consumers:
@@ -16,7 +16,7 @@
  */
 
 import type { RequestScope } from "./types.js";
-import { getOrgId, getUserId, isMember } from "./types.js";
+import { getOrgId, getScopeContextMap, getTeamId, getUserId, isMember } from "./types.js";
 
 /**
  * Lightweight projection of `RequestScope` — just the fields tenant-aware
@@ -31,6 +31,10 @@ export interface RequestScopeProjection {
   userId?: string;
   /** Org-level roles (e.g. `['admin', 'warehouse-manager']`) — separate from global `user.roles`. */
   orgRoles?: string[];
+  /** Active team for member scopes. */
+  teamId?: string;
+  /** Host-defined project / branch / region / workspace dimensions. */
+  context?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -46,5 +50,32 @@ export function buildRequestScopeProjection(
     organizationId: getOrgId(scope),
     userId: getUserId(scope),
     orgRoles: isMember(scope) ? scope.orgRoles : undefined,
+    teamId: getTeamId(scope),
+    context: freezeContext(getScopeContextMap(scope)),
   };
+}
+
+/**
+ * Hand out a FROZEN COPY of the scope's context, never the live map.
+ *
+ * `Readonly<Record<string, string>>` is erased at runtime, so the annotation
+ * alone protected nothing: `getScopeContextMap` returns the scope's own
+ * object, and a hook doing `ctx.scope.context.branchId = 'other'` mutated the
+ * caller's REAL scope. That matters because `requireScopeContext()` authorises
+ * against exactly these values — a later permission check in the same request
+ * would read the tampered dimension and allow what it should refuse.
+ *
+ * A copy rather than freezing in place: the map belongs to whoever built the
+ * scope (a host auth function), and freezing someone else's object as a side
+ * effect of reading it is a surprise a library should not spring. Copying also
+ * makes the guarantee deterministic instead of "frozen once something happens
+ * to call the accessor".
+ *
+ * ESM is always strict mode, so a write to the frozen copy THROWS rather than
+ * failing silently — the mistake surfaces where it is made.
+ */
+function freezeContext(
+  ctx: Readonly<Record<string, string>> | undefined,
+): Readonly<Record<string, string>> | undefined {
+  return ctx === undefined ? undefined : Object.freeze({ ...ctx });
 }

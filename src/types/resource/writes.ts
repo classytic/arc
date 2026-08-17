@@ -30,6 +30,7 @@
  */
 
 import type { RepositoryLike } from "@classytic/repo-core/adapter";
+import type { TransactionHandle } from "@classytic/repo-core/repository";
 import type { AnyRecord } from "../base.js";
 import type { IRequestContext } from "../handlers.js";
 
@@ -53,8 +54,10 @@ export interface WriteContext<TDoc = AnyRecord> {
    */
   repository: RepositoryLike<TDoc>;
   /**
-   * Present ONLY under `transactional: true`: the repo-core
-   * `TransactionHandle` for the transaction this write runs in.
+   * Present ONLY under `transactional: true`: repo-core's canonical
+   * `TransactionHandle` for the transaction this write runs in — imported,
+   * never restated, so a field added to the contract reaches write verbs
+   * instead of being silently dropped at this boundary.
    * `uow.session` is the raw driver handle — the join point for work OUTSIDE
    * the repository, canonically an outbox row:
    * `outbox.store(event, { session: ctx.uow.session })` commits the event
@@ -62,7 +65,7 @@ export interface WriteContext<TDoc = AnyRecord> {
    * provide an empty handle; their tx-bound `ctx.repository` is the only
    * join point.
    */
-  uow?: { session?: unknown };
+  uow?: TransactionHandle;
 }
 
 /**

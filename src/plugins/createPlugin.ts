@@ -2,7 +2,7 @@
  * createPlugin() — forRoot/forFeature Pattern
  *
  * Standard pattern for plugins that need both global setup and per-resource configuration.
- * Inspired by NestJS forRoot/forFeature but simpler — plain functions, no decorators.
+ * Plain functions, no decorators and no container — the config object IS the wiring.
  *
  * @example
  * ```typescript

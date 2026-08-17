@@ -78,6 +78,10 @@ export {
 } from "./responseSchemas.js";
 // Cross-runtime scheduling helper
 export { scheduleBackground } from "./runtime.js";
+export {
+  declareRuntimeCapability,
+  type RuntimeCapabilityDeclaration,
+} from "./runtimeCapabilities.js";
 export type { JsonSchemaTarget, SchemaIo } from "./schemaConverter.js";
 // Schema Converter
 export {

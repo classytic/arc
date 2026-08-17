@@ -184,7 +184,15 @@ export function collectUngatedCrudDiagnostics<TDoc>(
           : "An omitted permission mounts the route WITHOUT auth. State intent explicitly:\n") +
         `  permissions: permissions.fullPublic()     // intentionally public\n` +
         `  permissions: permissions.authenticated()  // require auth on every op\n` +
-        `  permissions: { ${ungated[0]}: requireAuth(), ... }  // per-operation`,
+        `  permissions: { ${ungated[0]}: requireAuth(), ... }  // per-operation` +
+        // A warning nobody can act on decisively gets filtered. Name the
+        // switch that makes this whole class of mistake impossible —
+        // recommended for production, and the v3 default.
+        (severity === "warn"
+          ? "\nRecommended in production: ARC_STRICT_PERMISSIONS=true (or `strictPermissions: " +
+            "true` on the resource) makes an ungated WRITE fail the boot instead of shipping. " +
+            "This is the arc v3 default."
+          : ""),
     },
   ];
 }

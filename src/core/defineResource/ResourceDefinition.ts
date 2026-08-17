@@ -184,6 +184,23 @@ export class ResourceDefinition<TDoc = AnyRecord> {
   _diagnostics?: ResourceDiagnostic[];
 
   /**
+   * Boot-time assertions that CANNOT be settled at define time because
+   * they read state a connection establishes.
+   *
+   * `defineResource()` frequently runs at module-import time — before
+   * `beforeBoot()` opens the database. A repository's capability
+   * descriptor is therefore not yet authoritative then: mongokit
+   * deliberately reports `transactions: false` for an unresolved topology
+   * (fail-closed), so asserting at define time would reject a correctly
+   * configured app for the crime of importing its resources early.
+   *
+   * `buildResourcePlugin` runs these on first mount — lifecycle slot 5,
+   * after `beforeBoot` (0) and module resolution (0.5) — where the same
+   * fail-closed rule finally means what it says.
+   */
+  _deferredChecks?: Array<() => void>;
+
+  /**
    * Public view of {@link _diagnostics} for programmatic consumption.
    *
    * Returns the collected define-time diagnostics for this resource.

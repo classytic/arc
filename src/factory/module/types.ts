@@ -164,11 +164,39 @@ export interface ArcModule<TExports = unknown> {
   readonly dependsOn?: readonly string[];
 
   /**
-   * Fastify plugins / decorators this module needs — the module-level analog
-   * of the app's `plugins()` slot. Runs in the plugins phase: AFTER the app's
-   * own `plugins()` (so module infra can build on app foundations like a DB
-   * connection) and in `dependsOn` order, but BEFORE any module `bootstrap` —
-   * so engines initialised in `bootstrap` can rely on what's registered here.
+   * Infra SETUP function — the module-level analog of the app's `plugins()`
+   * slot. Runs in the plugins phase: AFTER the app's own `plugins()` (so
+   * module infra can build on app foundations like a DB connection) and in
+   * `dependsOn` order, but BEFORE any module `bootstrap` — so engines
+   * initialised in `bootstrap` can rely on what's registered here.
+   *
+   * ## ⚠ This is NOT itself a Fastify plugin
+   *
+   * Despite the name, arc CALLS this function directly — it is never handed
+   * to `fastify.register()`. Two consequences, both of which bite module
+   * authors coming from ordinary Fastify plugins:
+   *
+   *   - **You must register plugins yourself.** `await fastify.register(x)`,
+   *     not `return x`. A returned function is read as a DISPOSER (below),
+   *     so returning a plugin silently registers nothing and then invokes
+   *     your plugin as a teardown callback. Arc detects the `fastify-plugin`
+   *     case and throws; the bare-function case warns.
+   *   - **There is no encapsulation and no prefix here.** Decorators and
+   *     hooks you add land on the instance arc passes you — the same
+   *     instance every other module sees. Fastify's encapsulation applies
+   *     only inside a `register()` call you make yourself. See
+   *     https://fastify.dev/docs/latest/Reference/Plugins/
+   *
+   * ```ts
+   * plugins: async (fastify) => {
+   *   await fastify.register(somePlugin, { prefix: '/x' });  // ✅ register
+   *   fastify.decorate('thing', thing);                      // ✅ root-visible
+   *   // return somePlugin                                   // ❌ never registered
+   * },
+   * ```
+   *
+   * The name is kept for the 2.x line; v3 renames the slot to `setup` and
+   * REMOVES `plugins` outright — v3 ships no compatibility aliases (v3.md).
    *
    * Separating this from `bootstrap` keeps lifecycle intent explicit for
    * published ecosystem packages: `plugins` = "register infra"; `bootstrap` =

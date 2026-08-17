@@ -25,6 +25,7 @@ import {
   type QueryOptions,
   retryingTransaction,
   type StandardRepo,
+  type TransactionHandle,
 } from "@classytic/repo-core/repository";
 import { buildQueryKey } from "../cache/keys.js";
 import type { QueryCacheConfig } from "../cache/QueryCache.js";
@@ -594,7 +595,7 @@ export class BaseCrudController<
    * after-hooks run post-commit, which they already do by running after this.
    */
   protected runWritePersistence<T>(
-    fn: (repo: TRepository, uow?: { session?: unknown }) => Promise<T>,
+    fn: (repo: TRepository, uow?: TransactionHandle) => Promise<T>,
   ): Promise<T> {
     if (!this._transactional) return fn(this.repository);
     return retryingTransaction(
@@ -607,7 +608,7 @@ export class BaseCrudController<
   protected writeContext(
     req: IRequestContext,
     repo: TRepository = this.repository,
-    uow?: { session?: unknown },
+    uow?: TransactionHandle,
   ): WriteContext {
     return {
       req,
@@ -635,7 +636,7 @@ export class BaseCrudController<
     id: string,
     existing: unknown,
     repo: TRepository = this.repository,
-    uow?: { session?: unknown },
+    uow?: TransactionHandle,
   ): MutationWriteContext {
     return {
       req,

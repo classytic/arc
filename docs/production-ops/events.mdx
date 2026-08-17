@@ -837,4 +837,24 @@ fastify.post('/webhooks/incoming', { config: { rawBody: true } }, async (req, re
 });
 ```
 
+### Durable delivery (survives crash and deploy)
+
+Inline dispatch (above) is best-effort: in-process retries die with the process. For webhooks that must eventually arrive, switch delivery to the outbox machinery — each (event × subscription) becomes a durable row; the relay claims, POSTs, retries with backoff, and dead-letters:
+
+```typescript
+import { webhookPlugin, createDurableWebhookModule } from '@classytic/arc/integrations/webhooks';
+import { repositoryAsOutboxStore } from '@classytic/arc/events';
+
+const store = repositoryAsOutboxStore(webhookDeliveryRepo); // any kit's repository
+
+createApp({
+  modules: [createDurableWebhookModule({ store })], // relay arm, kind: 'relay'
+  plugins: async (f) => {
+    await f.register(webhookPlugin, { durable: { store } }); // enqueue instead of inline POST
+  },
+});
+```
+
+The wire contract is unchanged (v1 signing, `x-arc-webhook-delivery` = the original event's `meta.id`, stable across retries). Enqueue is exactly-once per (event, subscription) even behind an at-least-once transport — the row id is deterministic. Transient failures (network, timeout, 429, 5xx) retry on exponential backoff (default: 8 attempts, capped at 15 min); 4xx rejections dead-letter immediately. Tune via `createDurableWebhookModule({ delivery: { maxAttempts, baseMs, maxMs } })` or replace the policy wholesale with `failurePolicy`. Under `role` topology, `role: 'api'` deployments enqueue and `role: 'relay'` deployments deliver — the delivering process must also register `webhookPlugin` with the shared subscription store.
+
 See [integrations reference](/docs/integrations) for WebhookStore, delivery log, custom algorithms, and full verification options.

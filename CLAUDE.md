@@ -66,28 +66,16 @@ See [RELEASING.md](RELEASING.md) — canonical commit/push/publish steps for eve
 
 ## Test mapping
 
-Run the minimum that covers your change:
+Run the minimum that covers your change. **Default: `src/X/*` → `npx vitest run tests/X/`** (core, auth, hooks, events, cache, plugins, presets, usage, testing, docs, cli, idempotency, integrations/mcp). Only these need more:
 
-| Changed | Run |
-|---------|-----|
-| `src/core/*` | `npx vitest run tests/core/` |
-| `src/auth/*` | `npx vitest run tests/auth/` |
-| `src/permissions/*` | `npx vitest run tests/permissions/ tests/e2e/rbac-permissions.test.ts` |
-| `src/scope/*` | `npx vitest run tests/scope/ tests/e2e/elevation-plugin.test.ts` |
-| `src/hooks/*` | `npx vitest run tests/hooks/` |
-| `src/events/*` | `npx vitest run tests/events/` |
-| `src/cache/*` | `npx vitest run tests/cache/` |
-| `src/plugins/*` | `npx vitest run tests/plugins/` |
-| `src/presets/*` | `npx vitest run tests/presets/` |
-| `src/integrations/mcp/*` | `npx vitest run tests/integrations/mcp/` |
-| `src/factory/*` | `npx vitest run tests/factory/ tests/e2e/full-app.test.ts` |
-| `src/usage/*` | `npx vitest run tests/usage/` |
-| `src/testing/*` | `npx vitest run tests/testing/` |
-| `src/utils/store-helpers*` | `npx vitest run tests/adapters/ tests/core/base-controller.test.ts` |
-| `src/docs/*` | `npx vitest run tests/docs/` |
-| `src/cli/*` | `npx vitest run tests/cli/` |
-| `src/utils/queryParser*` | `npx vitest run tests/utils/ tests/property/` |
-| `src/auth/authPlugin*` | `npx vitest run tests/auth/ tests/property/jwt-bearer*` |
+| Changed | Also run |
+|---------|----------|
+| `src/permissions/*` | `tests/e2e/rbac-permissions.test.ts` |
+| `src/scope/*` | `tests/e2e/elevation-plugin.test.ts` |
+| `src/factory/*` | `tests/e2e/full-app.test.ts` |
+| `src/utils/store-helpers*` | `tests/adapters/ tests/core/base-controller.test.ts` (not `tests/utils/`) |
+| `src/utils/queryParser*` | `tests/utils/ tests/property/` |
+| `src/auth/authPlugin*` | `tests/auth/ tests/property/jwt-bearer*` |
 
 ## Load-bearing gotchas
 
@@ -107,6 +95,9 @@ Non-obvious design choices that won't be caught by tests. Release-tagged changes
 - **Field-write perms default to `reject` (403)** — opt into silent `strip` via `defineResource({ onFieldWriteDenied: 'strip' })`.
 - **`multipartBody()` is a no-op for JSON requests** — safe to always add to create/update middleware.
 - **`verifySignature(body, …)` throws `TypeError` if body isn't string/Buffer** — pass `req.rawBody`, not parsed body.
+- **Arc closes only stores/transports it BUILT** — one you hand to `idempotencyPlugin`/`eventPlugin`/`queryCachePlugin` is yours to close (closing a shared one wiped a co-resident app's idempotency records).
+- **`transactional: true` checks `capabilities.transactions` at REGISTRATION**, not at `defineResource()` — that runs at module import, before `beforeBoot()` connects. Retry ownership is the kit's (`transactionRetry`); arc never stacks a second policy.
+- **Read-only repositories refuse write ROUTES at boot** — kits' Better Auth overlays are sealed by default; use `auth.api`, not generic CRUD.
 
 ## Lifecycle
 
@@ -133,8 +124,8 @@ Arc's boot order is **fixed** (do not reorder; do not skip slots):
 | Peer | Min | Required? |
 |------|-----|-----------|
 | fastify | >=5.8.5 | **Yes** |
-| @classytic/primitives | >=0.21.0 | **Yes** |
-| @classytic/repo-core | >=0.23.0 | **Yes** |
+| @classytic/primitives | >=0.23.0 | **Yes** |
+| @classytic/repo-core | >=0.24.0 | **Yes** |
 | better-auth | >=1.6.2 | No |
 | ioredis | >=5.0.0 | No |
 | bullmq | >=5.0.0 | No |

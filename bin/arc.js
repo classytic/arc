@@ -42,17 +42,11 @@ const VERSION = getPackageVersion();
 
 const args = process.argv.slice(2);
 
-// Version flag
-if (args.includes('--version') || args.includes('-v')) {
-  console.log(`Arc CLI v${VERSION}`);
-  process.exit(0);
-}
-
-// Help flag or no args
-if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
-  printHelp();
-  process.exit(0);
-}
+// Version / help are GLOBAL only in the leading position. Scanning the whole
+// argv made `arc init --help` print the global help and exit, which left the
+// per-command usage in COMMAND_HELP unreachable — a user asking how to use
+// one command got the manual for all of them.
+const leading = args[0];
 
 // ============================================================================
 // Command Routing
@@ -64,7 +58,7 @@ const [command, subcommand, ...rest] = args;
 // through to the command (where `--help` was mistaken for an argument).
 const COMMAND_ALIASES = { new: 'init', g: 'generate', i: 'introspect', desc: 'describe', d: 'docs' };
 const COMMAND_HELP = {
-  init: 'Usage: arc init [name] [--jwt|--better-auth] [--mongokit|--custom] [--api-key]\n            [--multi|--single] [--js] [--edge] [--docker|--no-docker] [--skip-install] [--force]\n  Scaffold a new arc project (prompts when run in a TTY without a name).',
+  init: 'Usage: arc init [name] [--jwt|--better-auth] [--mongokit|--custom] [--api-key|--no-api-key] [--session cookie|bearer|both]\n            [--multi|--single] [--js] [--edge] [--docker|--no-docker] [--skip-install] [--force]\n  Scaffold a new arc project (prompts when run in a TTY without a name).',
   generate: 'Usage: arc generate <resource|controller|model|repository|schemas|mcp> <name> [--mcp]\n  Aliases: g; types r/c/m/repo/s. Name must be kebab-case (letters, digits, hyphens).',
   introspect: 'Usage: arc introspect <entry-file>\n  Print a human-readable summary of the resources an entry file exports.',
   describe: 'Usage: arc describe <entry-file> [--json] [--pretty] [--entry <file>]\n  Describe resources; --json emits machine output for AI agents.',
@@ -72,8 +66,27 @@ const COMMAND_HELP = {
   doctor: 'Usage: arc doctor\n  Diagnose common arc setup issues (exit 1 on hard failures).',
 };
 
+/**
+ * `process.exitCode` + return, never `process.exit()`.
+ *
+ * `process.exit()` tears the process down immediately; on POSIX a `stdout`
+ * that is a PIPE (`arc --help | less`, `arc describe --json > out.json`)
+ * writes asynchronously, so an exit racing the flush TRUNCATES output. Arc's
+ * own `doctor` already sets `exitCode`; this file is the one that did not.
+ * Setting the code and returning lets Node drain stdout and exit on its own.
+ */
 async function main() {
   try {
+    // Global help/version are the LEADING argument only — see `leading`.
+    if (leading === '--version' || leading === '-v') {
+      console.log(`Arc CLI v${VERSION}`);
+      return;
+    }
+    if (args.length === 0 || leading === '--help' || leading === '-h') {
+      printHelp();
+      return;
+    }
+
     // `arc <command> --help` / `-h` → command-specific usage, exit 0.
     const canonicalCommand = COMMAND_ALIASES[command] ?? command;
     if (
@@ -117,7 +130,8 @@ async function main() {
       default:
         console.error(`Unknown command: ${command}`);
         console.error('Run "arc --help" for usage');
-        process.exit(1);
+        process.exitCode = 1;
+        return;
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -125,7 +139,7 @@ async function main() {
     if (process.env.DEBUG) {
       console.error(err instanceof Error ? err.stack : err);
     }
-    process.exit(1);
+    process.exitCode = 1;
   }
 }
 
@@ -148,7 +162,8 @@ async function handleGenerate(type, args) {
     console.log('  arc generate resource product --mcp');
     console.log('  arc generate mcp product');
     console.log('  arc g r invoice');
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   // Normalize type shortcuts
@@ -170,14 +185,16 @@ async function handleGenerate(type, args) {
   if (!normalizedType) {
     console.error(`Unknown type: ${type}`);
     console.log('Available types: resource (r), controller (c), model (m), repository (repo), schemas (s)');
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   const name = args[0];
   if (!name) {
     console.error('Missing name argument');
     console.log(`\nUsage: arc generate ${normalizedType} <name>`);
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   // Import and run
@@ -250,6 +267,11 @@ function parseInitOptions(rawArgs) {
     adapter: undefined,
     auth: undefined,
     tenant: undefined,
+    // Better Auth-specific. `undefined` (not a default) is load-bearing:
+    // options.ts prompts ONLY when the field is undefined, so defaulting
+    // here would silently skip the interactive question.
+    apiKey: undefined,
+    session: undefined,
     typescript: undefined,
     edge: undefined,
     skipInstall: false,
@@ -307,6 +329,21 @@ function parseInitOptions(rawArgs) {
 
       case '--jwt':
         opts.auth = 'jwt';
+        break;
+
+      case '--api-key':
+        opts.apiKey = true;
+        break;
+
+      case '--no-api-key':
+        opts.apiKey = false;
+        break;
+
+      case '--session':
+        // cookie | bearer | both — options.ts falls back to the documented
+        // default for anything else.
+        opts.session = next;
+        i++;
         break;
 
       case '--edge':
@@ -380,6 +417,7 @@ GLOBAL OPTIONS
   --help, -h               Show this help
 
 INIT OPTIONS
+  --name, -n <name>        Project name (alternative to the positional argument)
   --mongokit               Use MongoKit adapter (default, recommended)
   --custom                 Use custom / Drizzle-ready adapter template
   --better-auth            Use Better Auth (default, recommended)
@@ -388,6 +426,9 @@ INIT OPTIONS
   --single-tenant, --single Single-tenant mode (default)
   --ts, --typescript       Generate TypeScript (default)
   --js, --javascript       Generate JavaScript
+  --api-key                Enable Better Auth's apiKey plugin (machine-to-machine)
+  --no-api-key             Skip it without being prompted
+  --session <mode>         Better Auth session strategy: cookie | bearer | both
   --edge, --serverless     Target Edge/Serverless environments
   --docker                 Emit Dockerfile + docker-compose.yml (opt-in, 2.16)
   --no-docker              Skip Docker scaffolding even in interactive mode

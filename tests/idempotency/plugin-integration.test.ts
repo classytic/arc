@@ -290,6 +290,12 @@ describe("idempotencyPlugin — error handling", () => {
     await app.register(idempotencyPlugin, {
       enabled: true,
       store: brokenStore,
+      // This stub deliberately cannot round-trip a key (get always misses) —
+      // the boot self-check would rightly refuse it. Opt out because THIS
+      // test targets the runtime error path (tryLock infrastructure error →
+      // 500), not store health. The self-check's own refusal behavior is
+      // pinned in store-misconfiguration.test.ts.
+      selfCheck: false,
     });
 
     app.post(

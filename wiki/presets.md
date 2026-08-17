@@ -34,7 +34,7 @@ Arc's preset only adds the HTTP routes (`GET /deleted`, `POST /:id/restore`) and
 | `@classytic/mongokit` | One plugin: `softDeletePlugin({ ttlDays })`. Creates a real MongoDB TTL index with `partialFilterExpression: { deletedAt: { $type: 'date' } }` so only tombstoned rows are swept. Mongo's TTL monitor runs every ~60s. |
 | `@classytic/sqlitekit` | Two plugins. `softDeletePlugin()` handles tombstone + read filter. SQLite has no native TTL, so auto-purge ships as a separate `ttlPlugin({ field: 'deletedAt', expireAfterSeconds, mode })` with three modes: `scheduled` (setInterval sweep, default 60s, calls `.unref()` so it doesn't pin the event loop), `trigger` (`AFTER INSERT` SQL trigger prunes on writes, persistent across restarts), `lazy` (never deletes, just hides — pair with periodic `VACUUM`). `repo.sweepExpired()` exposed for Workers / Cron Triggers. |
 
-For consumer-level coverage, see [tests/integration/mongokit-soft-delete.test.ts](../tests/integration/mongokit-soft-delete.test.ts) (HTTP round-trip + TTL index assertions) and [tests/integration/presets-cross-kit.test.ts](../tests/integration/presets-cross-kit.test.ts) (sqlitekit parity).
+For consumer-level coverage, see [tests/adapters/mongokit-soft-delete.test.ts](../tests/adapters/mongokit-soft-delete.test.ts) (HTTP round-trip + TTL index assertions) and [tests/adapters/presets-cross-kit.test.ts](../tests/adapters/presets-cross-kit.test.ts) (sqlitekit parity).
 
 ## multiTenant hardening (v2.9)
 

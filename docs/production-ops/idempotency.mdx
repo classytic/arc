@@ -155,7 +155,11 @@ import mongoose, { Schema } from 'mongoose';
 
 const IdempotencyModel = mongoose.model(
   'ArcIdempotency',
-  new Schema({}, { strict: false, timestamps: false, _id: false }),
+  // `_id: String` and `strictQuery: false` are BOTH load-bearing — see below.
+  new Schema(
+    { _id: String },
+    { strict: false, strictQuery: false, timestamps: false },
+  ),
   'arc_idempotency',
 );
 
@@ -177,6 +181,32 @@ await IdempotencyModel.collection.createIndex(
 **Why `strict: false`?** Arc owns the idempotency doc shape
 (`result`, `lock`, `createdAt`, `expiresAt`). A strict schema would
 drop fields arc adds in future releases.
+
+**Why `_id: String` and `strictQuery: false`?** This is the one
+misconfiguration that breaks idempotency *silently and dangerously*.
+`strictQuery` (which many hosts set globally to `true`) strips filter keys
+that are not schema paths. A schema declaring **no** paths therefore has
+every filter key stripped: `getOne({ _id: key })` becomes `getOne({})`, one
+shared row absorbs every idempotency key, and each request replays the most
+recent cached response **across keys and across users** — a cancel response
+served as "success" for an order that was never canceled. Declaring the key
+path and pinning `strictQuery: false` in the SCHEMA options (which wins over
+the global) keeps the filter intact.
+
+Do not write `_id: false` here: it removes the very path the store is keyed on.
+
+Arc defends this on two levels, but neither is a substitute for the schema
+being right:
+
+- **Boot self-check** (default on) writes a probe, requires it to read back
+  under its own key and *not* under a different one, and refuses registration
+  otherwise — so a misconfigured host fails at boot with an actionable
+  message. Disable with `selfCheck: false` only if your store genuinely
+  cannot accept a probe write at boot.
+- **Per-read identity checks** in the repository adapter throw
+  `IdempotencyStoreMisconfiguredError` if a document ever comes back keyed
+  differently than it was fetched — the runtime backstop when the self-check
+  is off.
 
 **Why `batchOperationsPlugin`?** `deleteByPrefix` (regex key sweep) and
 `delete` both call `repository.deleteMany`, which mongokit exposes

@@ -397,6 +397,20 @@ export interface McpAuthResult {
    * Carried on the `service` RequestScope for fine-grained permission checks.
    */
   scopes?: readonly string[];
+  /**
+   * Active team — carried onto a `member` scope so `getTeamId()` answers the
+   * same on MCP as on HTTP. Member-only, like the HTTP surface.
+   */
+  teamId?: string;
+  /**
+   * Host-defined scope dimensions (`branchId`, `projectId`, `region`, …),
+   * carried onto `member` / `service` scopes.
+   *
+   * Declared explicitly because `requireScopeContext()` AUTHORISES against
+   * these: a resource gated on `branchId` denies every MCP call until the
+   * resolver supplies it. Non-string entries are dropped rather than coerced.
+   */
+  context?: Record<string, string>;
   /** Any extra metadata from the auth resolver */
   [key: string]: unknown;
 }

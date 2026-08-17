@@ -132,9 +132,11 @@ describe("Outbox — write options passthrough", () => {
 });
 
 describe("Outbox — claimPending path", () => {
-  it("uses claimPending when store supports it", async () => {
+  it("uses the claim path when the store supports it — fenced preferred", async () => {
     const store = new MemoryOutboxStore();
-    const claimSpy = vi.spyOn(store, "claimPending");
+    // MemoryOutboxStore fences (primitives >=0.22 unreleased), so the relay
+    // takes claimPendingFenced; a store with only claimPending keeps that path.
+    const claimSpy = vi.spyOn(store, "claimPendingFenced");
     const transport = new MemoryEventTransport();
     const outbox = new EventOutbox({ store, transport, consumerId: "worker-1" });
 

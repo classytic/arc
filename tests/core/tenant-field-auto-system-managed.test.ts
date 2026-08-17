@@ -172,6 +172,8 @@ describe("2.10.6 · first-class req.scope projection on IRequestContext", () => 
         organizationId: orgId,
         organizationRole: "admin",
         orgRoles: ["admin", "warehouse-manager"],
+        teamId: "team_ops",
+        context: { projectId: "project_alpha", regionId: "region_east" },
       };
     });
 
@@ -197,7 +199,7 @@ describe("2.10.6 · first-class req.scope projection on IRequestContext", () => 
     return fastify;
   }
 
-  it("exposes organizationId / userId / orgRoles without reaching into metadata._scope", async () => {
+  it("exposes tenant dimensions without reaching into metadata._scope", async () => {
     const app = await buildAppWithScopeRoute();
     try {
       const res = await app.inject({
@@ -212,6 +214,8 @@ describe("2.10.6 · first-class req.scope projection on IRequestContext", () => 
       expect(scope.organizationId).toBe("org_alpha");
       expect(scope.userId).toBe("user_test");
       expect(scope.orgRoles).toEqual(["admin", "warehouse-manager"]);
+      expect(scope.teamId).toBe("team_ops");
+      expect(scope.context).toEqual({ projectId: "project_alpha", regionId: "region_east" });
     } finally {
       await app.close();
     }

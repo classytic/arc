@@ -90,6 +90,18 @@ export interface CleanupExecutionContext extends CleanupContext {
    */
   onStep(step: CleanupStepResult): Promise<void>;
   /**
+   * Report a STEP LIFECYCLE transition — running / completed / skipped / failed.
+   *
+   * Separate from {@link onStep}, which reports a committed CHUNK and drives the
+   * aggregate counters. Folding both into one call would double-count `steps`
+   * and conflate "a batch landed" with "this phase is now done" — two different
+   * facts an operator reads differently.
+   *
+   * OPTIONAL on the context so a recipe that does not model discrete steps is
+   * unaffected; `recipeFromSteps` drives it for every composed recipe.
+   */
+  onStepState?(state: CleanupStepProgress): Promise<void>;
+  /**
    * Throw `CleanupCancelled` if a cancel has been requested for this run. Cheap
    * to call between chunks; backed by the durable `cancelRequested` flag (the
    * source of truth) plus the in-process `signal`.
@@ -107,14 +119,74 @@ export interface Availability {
 /** Operator-supplied recipe parameters (branch, module set, before-date, …). */
 export interface CleanupInput {
   readonly parameters?: Readonly<Record<string, unknown>> | undefined;
+  /**
+   * Step ids the operator chose to LEAVE OUT of this run.
+   *
+   * The obvious shape for this is a free-text ignore-list, which carries one
+   * dangerous gap: anything can be ignored, including the checks. Here a step
+   * that PROTECTS is not excludable — see
+   * {@link CleanupPlanItem.excluded} — because being able to switch off the
+   * thing standing between you and a statutory record makes the guard advisory.
+   * An unknown or unexcludable id REFUSES the plan rather than being dropped: a
+   * silently-ignored exclusion is an operator believing they narrowed a
+   * destructive run when they did not.
+   *
+   * SEALED INTO THE DIGEST. The exclusion set is part of what was consented to,
+   * so a plan previewed with accounting excluded cannot be executed as one that
+   * includes it.
+   *
+   * Framework-level and deliberately NOT smuggled through `parameters`:
+   * parameters are the recipe's domain scope, this is the composition.
+   */
+  readonly excludeSteps?: readonly string[] | undefined;
 }
+
+/**
+ * What a line's `estimated` COUNTS. Absent ⇒ `'remove'`, so every existing
+ * recipe keeps its meaning.
+ *
+ * A protective guard step reports the records it DEFENDS, not records it would
+ * touch — and summing those into a "records to remove" headline overstates the
+ * damage by exactly the protected count. That is not cosmetic: a pre-live reset
+ * showed **540 records to remove** when 173 of them were posted journal entries
+ * the run would refuse to touch. The number was plausible, internally
+ * consistent, and wrong — this codebase's signature failure, in the one place an
+ * operator reads before authorising a destructive act.
+ *
+ * The count cannot be inferred from `blockers`: a guard that finds nothing still
+ * reports zero protected records, and a REMOVING line can carry a blocker too.
+ * The line has to say which quantity it is.
+ */
+export type CleanupPlanItemDisposition = "remove" | "protect" | "rebuild";
 
 /** One logical line in the preview — a business record class, never a collection. */
 export interface CleanupPlanItem {
+  /**
+   * The contributing step, when the recipe is composed from steps.
+   *
+   * Without it the exclusion list is enforceable but not DISCOVERABLE: a UI
+   * showing `resource` labels has no id to send, so the capability exists and
+   * nothing can reach it. Absent for a recipe that is not step-composed.
+   */
+  readonly stepId?: string | undefined;
   /** Logical module / resource label, e.g. `'orders'`, `'journal entries'`. */
   readonly resource: string;
   /** Estimated records affected. */
   readonly estimated: number;
+  /**
+   * Whether `estimated` counts records this line REMOVES, PROTECTS, or REBUILDS.
+   * Defaults to `'remove'` — only a line that does something else must say so.
+   */
+  readonly disposition?: CleanupPlanItemDisposition | undefined;
+  /**
+   * The operator excluded this line from the run.
+   *
+   * It still appears in the plan — showing what was left out is the point; a
+   * line that vanishes is indistinguishable from one that was never in scope.
+   * Its `estimated` is kept out of both totals, and at execute time the step is
+   * reported `skipped` with the reason rather than silently not run.
+   */
+  readonly excluded?: boolean | undefined;
   /** What is retained for this line (e.g. `'measures kept, PII redacted'`). */
   readonly retained?: string | undefined;
   /** Domain blockers preventing this line (e.g. `'OPEN_TRANSFER'`). */
@@ -155,7 +227,26 @@ export interface CleanupPlan {
   readonly blockers: readonly string[];
   readonly rebuildActions: readonly string[];
   readonly warnings: readonly string[];
+  /**
+   * Records this plan would REMOVE — the headline an operator authorises against.
+   *
+   * Counts only `disposition: 'remove'` lines. It used to sum every line, so a
+   * protective guard's count landed in the removal total (see
+   * {@link CleanupPlanItemDisposition}).
+   */
   readonly estimatedTotal: number;
+  /**
+   * Records a guard step is DEFENDING in this plan, reported separately so it
+   * can be shown as reassurance rather than as damage. Zero when no line
+   * protects anything.
+   */
+  readonly protectedTotal: number;
+  /**
+   * Step ids the operator left out, SEALED.  re-resolves from here,
+   * never from a fresh caller input, so a run cannot be widened past what was
+   * previewed and confirmed.
+   */
+  readonly excludeSteps: readonly string[];
   readonly confirmationPhrase: string;
   /** Deterministic checksum of the plan's material content — see `computePlanDigest`. */
   readonly digest: string;
@@ -178,11 +269,66 @@ export interface CleanupStepResult {
  * fixed-size aggregate, never an unbounded per-chunk array. Detailed steps, if a
  * host wants them, go to a separate capped sink — not this document.
  */
+/**
+ * One step's lifecycle within a run.
+ *
+ * `skipped` and `failed` are DISTINCT from each other and from `completed`,
+ * because collapsing them is what makes a long destructive run unreadable: an
+ * operator watching "1,204 processed" cannot tell whether accounting ran, was
+ * deliberately not applicable, or blew up and left the rest half-done.
+ */
+export type CleanupStepRunStatus = "pending" | "running" | "completed" | "skipped" | "failed";
+
+/**
+ * Per-step progress — the readable half of a run.
+ *
+ * The conventional shape is one FIXED COLUMN per phase, each holding
+ * `Pending | Completed | Skipped`. That works for a fixed pipeline and breaks
+ * the moment the pipeline is composed: adding a phase means a schema migration,
+ * and a recipe assembled from contributed steps has no fixed phase list at all.
+ *
+ * So this is a bounded LIST keyed by step id rather than columns. Two further
+ * properties, both deliberate:
+ *
+ *   - a `Skipped` with no reason is unreadable — "nothing to do" and
+ *     "deliberately excluded" are opposite facts, and a bare status enum cannot
+ *     tell them apart. {@link detail} is REQUIRED for `skipped` and `failed`.
+ *   - per-step `processed` and timings, so a stalled step is visible while it is
+ *     still running instead of after the run ends.
+ *
+ * Bounded by construction: one entry per step in the SEALED plan, and the plan
+ * is already capped at `maxPlanItems`. This is not the unbounded per-chunk array
+ * the progress summary exists to avoid.
+ */
+export interface CleanupStepProgress {
+  /** Stable id of the contributing step — survives relabelling of `resource`. */
+  readonly stepId: string;
+  /** Human-facing record class, e.g. `'journal entries'`. */
+  readonly resource: string;
+  readonly status: CleanupStepRunStatus;
+  /** Records this step has processed so far. */
+  readonly processed: number;
+  readonly startedAt?: Date | undefined;
+  readonly completedAt?: Date | undefined;
+  /**
+   * WHY, for any non-`completed` terminal state. Required for `skipped` and
+   * `failed`: an unexplained non-completion is the thing this field exists to
+   * prevent.
+   */
+  readonly detail?: string | undefined;
+}
+
 export interface CleanupProgressSummary {
   /** Running total of processed records across all steps. */
   readonly processed: number;
   /** Count of steps reported so far. */
   readonly steps: number;
+  /**
+   * Per-step lifecycle. Bounded by the sealed plan's step count — see
+   * {@link CleanupStepProgress}. Absent on runs recorded before this existed,
+   * so a reader must treat it as optional rather than assume an empty run.
+   */
+  readonly stepProgress?: readonly CleanupStepProgress[] | undefined;
   /** Resource the last step touched. */
   readonly currentResource?: string | undefined;
   /** Last resume cursor reported. */
