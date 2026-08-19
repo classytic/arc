@@ -21,7 +21,7 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { toRepositoryFilter } from "../../src/core/repositoryFilter.js";
+import { nativePolicyFilter, toRepositoryFilter } from "../../src/core/repositoryFilter.js";
 
 type Doc = { id: string; organizationId: string; title: string };
 
@@ -100,5 +100,23 @@ describe("policy filters execute portably on sqlitekit", () => {
     }
     // Converted path is correct (0); raw path is either a throw or a wrong count.
     expect(rawMatched).not.toBe(0);
+  });
+});
+
+describe("Mongo array policy normalization", () => {
+  it("preserves an explicitly native $elemMatch record without involving repo-core IR", () => {
+    const native = nativePolicyFilter("mongodb", {
+      assignments: {
+        $elemMatch: { actorRef: "worker-1", unassignedAt: { $exists: false } },
+      },
+    });
+    expect(toRepositoryFilter({ organizationId: "office-1", $and: [native] })).toEqual({
+      organizationId: "office-1",
+      $and: [{
+        assignments: {
+          $elemMatch: { actorRef: "worker-1", unassignedAt: { $exists: false } },
+        },
+      }],
+    });
   });
 });

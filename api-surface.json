@@ -48,6 +48,7 @@
       "fullPublic",
       "getControllerScope",
       "mergeResourceConfig",
+      "nativePolicyFilter",
       "ownerWithAdminBypass",
       "permissions",
       "publicRead",
@@ -144,6 +145,7 @@
       "MiddlewareConfig",
       "MutationOperation",
       "MutationWriteContext",
+      "NativePolicyFilter",
       "NotFoundError",
       "OwnershipCheck",
       "PaginationResult",
@@ -207,6 +209,7 @@
       "fullPublic",
       "getControllerScope",
       "mergeResourceConfig",
+      "nativePolicyFilter",
       "ownerWithAdminBypass",
       "permissions",
       "publicRead",
@@ -224,7 +227,7 @@
       "version",
       "when"
     ],
-    "typesHash": "57ec883168cb6452"
+    "typesHash": "2b4be7c197204de4"
   },
   "./permissions": {
     "stability": "stable",
@@ -482,6 +485,7 @@
       "getEntityQuery",
       "isFieldReadable",
       "mergeResourceConfig",
+      "nativePolicyFilter",
       "sendControllerResponse",
       "validateResourceConfig"
     ],
@@ -528,6 +532,7 @@
       "MAX_SEARCH_LENGTH",
       "MUTATION_OPERATIONS",
       "MutationOperation",
+      "NativePolicyFilter",
       "QueryResolver",
       "QueryResolverConfig",
       "RESERVED_QUERY_PARAMS",
@@ -562,10 +567,11 @@
       "getEntityQuery",
       "isFieldReadable",
       "mergeResourceConfig",
+      "nativePolicyFilter",
       "sendControllerResponse",
       "validateResourceConfig"
     ],
-    "typesHash": "89b8de0b02454d4f"
+    "typesHash": "685ff817dd2232c6"
   },
   "./presets": {
     "stability": "stable",
@@ -1333,7 +1339,7 @@
       "wrapWithBoundary",
       "wrapWithSchema"
     ],
-    "typesHash": "f6762616d0253f10"
+    "typesHash": "88a36e92a8563be5"
   },
   "./events/redis": {
     "stability": "stable",
@@ -1825,7 +1831,7 @@
       "webhookDeliveryFailurePolicy",
       "webhookPlugin"
     ],
-    "typesHash": "1ac01665d589e077"
+    "typesHash": "90514d78ee883b7d"
   },
   "./auth/redis": {
     "stability": "stable",

@@ -479,7 +479,7 @@ A declared verb that can never run is decoration, so these are **errors**, not
 warnings: the slot is in `disabledRoutes`, `disableDefaultRoutes: true` is set,
 or the resource has no adapter repository to mount a controller against.
 
-### `transactional: true` — running the write inside a transaction (2.34)
+### `transactional: true` — running the write inside a transaction (2.33)
 
 Wraps the **persistence step** in `withTransaction`. The verb receives the
 tx-bound repository, plus `ctx.uow` — the join point for work that lives

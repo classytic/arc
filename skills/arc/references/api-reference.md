@@ -126,7 +126,7 @@ import {
 import { tracingPlugin } from '@classytic/arc/plugins/tracing';
 import { auditPlugin } from '@classytic/arc/audit';
 import { idempotencyPlugin } from '@classytic/arc/idempotency';
-// Runtime capability registry (2.34) — declare process-local state so a
+// Runtime capability registry (2.33) — declare process-local state so a
 // `runtime: 'distributed'` boot fails on undeclared memory state:
 import { declareRuntimeCapability } from '@classytic/arc/utils';
 ```

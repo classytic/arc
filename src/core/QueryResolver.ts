@@ -192,11 +192,44 @@ export class QueryResolver {
    * Combines what was previously _buildContext + _parseQueryOptions + _applyFilters.
    */
   resolve(req: IRequestContext, meta?: ArcInternalMetadata): ControllerQueryOptions {
-    const parsed = this.queryParser.parse(req.query);
-    const arcContext = meta ?? (req.metadata as ArcInternalMetadata | undefined);
+    /**
+     * Strip `_policyFilters` BEFORE the parse, not after.
+     *
+     * **Reachable only when a CLIENT puts it in the URL.** Trusted policy is a
+     * request DECORATION (`request._policyFilters`, set by the permission
+     * middleware) that `createRequestContext` lifts into `metadata` — it never
+     * enters `req.query`, which is Fastify's parsed querystring. So the key
+     * arriving here is always user-supplied, always inert (the authoritative
+     * copy is read from `arcContext` below), and must simply not reach the
+     * parser.
+     *
+     * The previous `delete` ran on `parsed.filters` — AFTER
+     * `queryParser.parse()` — so on the one path that needed it, it could
+     * never run: a KIT parser validates every key against the resource's
+     * `allowedFilterFields` and throws during the parse, before the cleanup
+     * line. Arc's own parser skips the key via `RESERVED_QUERY_PARAMS`, so the
+     * two parsers disagreed on the same request: arc ignored a probe, kits
+     * 400'd it.
+     *
+     * Stripping here makes them agree, and agrees with arc. Nothing is
+     * weakened — the client's value was already inert — but note the trade:
+     * under a kit parser `?_policyFilters=…` used to be a loud 400 and is now
+     * silently dropped. The alternative, teaching every kit's reserved-key list
+     * about an arc-internal key, spreads one framework's leak across the
+     * ecosystem for the same outcome.
+     *
+     * Copy only when present: the hot path allocates nothing, and `req.query`
+     * is never mutated (it is shared with the rest of the request).
+     */
+    const rawQuery = req.query as AnyRecord | undefined;
+    let query = rawQuery;
+    if (rawQuery && "_policyFilters" in rawQuery) {
+      const { _policyFilters: _ignored, ...rest } = rawQuery;
+      query = rest;
+    }
 
-    // Remove internal params from filters
-    delete (parsed.filters as AnyRecord)?._policyFilters;
+    const parsed = this.queryParser.parse(query);
+    const arcContext = meta ?? (req.metadata as ArcInternalMetadata | undefined);
 
     // Enforce limits
     const limit = Math.min(Math.max(1, parsed.limit || this.defaultLimit), this.maxLimit);

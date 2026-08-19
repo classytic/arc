@@ -1,6 +1,6 @@
 /**
  * Repository-boundary filter normalization — make arc's policy-filter dialect
- * portable across EVERY kit.
+ * explicit Filter IR across every kit.
  *
  * ## The problem this solves
  *
@@ -25,8 +25,8 @@
  * repo-core already owns the canonical converter for exactly this dialect:
  * {@link policyRecordToFilter} ("the arc-policy-filter dialect — `$`-prefixed,
  * with logical operators"). It turns a `$`-record into the portable {@link Filter}
- * IR, which EVERY kit compiles (MongoKit via `compileFilterToMongo`, SQLiteKit /
- * PGKit via `recordToFilter`'s IR pass-through). That is the same IR the
+ * IR, which each kit compiles when its storage model supports the operation and
+ * otherwise rejects explicitly. That is the same IR the
  * in-memory matcher (`matchesRecordFilter`) already uses, so DB-level and
  * in-memory enforcement agree by construction.
  *
@@ -41,6 +41,50 @@ import type { Filter } from "@classytic/repo-core/filter";
 import { policyRecordToFilter } from "@classytic/repo-core/filter";
 import { arcLog } from "../logger/index.js";
 import type { AnyRecord } from "../types/index.js";
+
+const NATIVE_FILTER_DIALECT: unique symbol = Symbol.for(
+  "@classytic/arc/native-filter-dialect",
+) as never;
+
+export type NativePolicyFilter<Dialect extends string = string> = AnyRecord & {
+  readonly [NATIVE_FILTER_DIALECT]: Dialect;
+};
+
+/**
+ * Mark a server-owned policy as intentionally adapter-native. This is an
+ * explicit escape hatch for semantics absent from repo-core's universal IR
+ * (for example MongoDB `$elemMatch`). Never apply it to client input.
+ */
+export function nativePolicyFilter<const Dialect extends string>(
+  dialect: Dialect,
+  record: AnyRecord,
+): NativePolicyFilter<Dialect> {
+  return Object.freeze({
+    ...record,
+    [NATIVE_FILTER_DIALECT]: dialect,
+  }) as NativePolicyFilter<Dialect>;
+}
+
+function nativeDialects(value: unknown, found = new Set<string>()): Set<string> {
+  if (value === null || typeof value !== "object") return found;
+  const dialect = (value as { [NATIVE_FILTER_DIALECT]?: unknown })[NATIVE_FILTER_DIALECT];
+  if (typeof dialect === "string") found.add(dialect);
+  if (Array.isArray(value)) {
+    for (const entry of value) nativeDialects(entry, found);
+  } else {
+    for (const entry of Object.values(value as AnyRecord)) nativeDialects(entry, found);
+  }
+  return found;
+}
+
+function stripNativeMarkers(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripNativeMarkers);
+  if (value === null || typeof value !== "object" || value instanceof Date) return value;
+  const out: AnyRecord = {};
+  for (const [key, entry] of Object.entries(value as AnyRecord))
+    out[key] = stripNativeMarkers(entry);
+  return out;
+}
 
 const log = arcLog("repository-filter");
 let warnedUnconvertible = false;
@@ -69,10 +113,20 @@ export function filterHasDollarOperator(record: AnyRecord): boolean {
 /**
  * Normalize a compound query/policy filter for the repository layer. Flat
  * equality records pass through unchanged; anything carrying `$`-operators is
- * converted to the portable repo-core {@link Filter} IR so it compiles
- * identically on Mongo, SQLite, Postgres, and custom adapters.
+ * converted to repo-core {@link Filter} IR so semantics stay explicit. Common
+ * operators compile identically across kits; capability-specific operators
+ * such as array-element matching fail loudly on adapters that cannot model them.
  */
 export function toRepositoryFilter(record: AnyRecord): AnyRecord | Filter {
+  const dialects = nativeDialects(record);
+  if (dialects.size > 0) {
+    if (dialects.size > 1) {
+      throw new Error(
+        `Cannot compose native policy-filter dialects: ${[...dialects].sort().join(", ")}`,
+      );
+    }
+    return stripNativeMarkers(record) as AnyRecord;
+  }
   if (!filterHasDollarOperator(record)) return record;
   try {
     return policyRecordToFilter(record);

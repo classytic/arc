@@ -96,6 +96,7 @@ export type { TreeExt } from "./mixins/tree.js";
 export { TreeMixin } from "./mixins/tree.js";
 export type { QueryResolverConfig } from "./QueryResolver.js";
 export { QueryResolver } from "./QueryResolver.js";
+export { type NativePolicyFilter, nativePolicyFilter } from "./repositoryFilter.js";
 export type {
   ConfigError,
   ValidateOptions,

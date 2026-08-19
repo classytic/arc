@@ -69,13 +69,13 @@ await app.listen({ port: 8040, host: '0.0.0.0' });
 
 **Boot order (fixed):** `beforeBoot` → modules resolve → `plugins` → `bootstrap[]` → `resources` → `afterResources` → `onReady`.
 
-**`role` — one image, N deployments (2.34).** `createApp({ role })` declares what a process is FOR, so the same codebase ships as api / worker / relay / scheduler without per-deployment builds:
+**`role` — one image, N deployments (2.33).** `createApp({ role })` declares what a process is FOR, so the same codebase ships as api / worker / relay / scheduler without per-deployment builds:
 
 ```typescript
 createApp({ role: process.env.ARC_ROLE as 'api' | 'worker' | 'relay' | 'scheduler' | 'all' })
 ```
 
-`api` and `worker` mount NO module schedule arms; `relay` mounts only `kind: 'relay'` arms (the outbox relay, durable webhook delivery); `scheduler` mounts all of them. Declaring `relay`/`scheduler` together with `resources`/`resourceDir` is BOOT-FATAL — a relay process must not serve routes. Default `all` is the pre-2.34 behaviour, unchanged. `createWorker()` forwards `role`; without one it still runs everything non-HTTP.
+`api` and `worker` mount NO module schedule arms; `relay` mounts only `kind: 'relay'` arms (the outbox relay, durable webhook delivery); `scheduler` mounts all of them. Declaring `relay`/`scheduler` together with `resources`/`resourceDir` is BOOT-FATAL — a relay process must not serve routes. Default `all` is the pre-2.33 behaviour, unchanged. `createWorker()` forwards `role`; without one it still runs everything non-HTTP.
 
 `beforeBoot()` (2.21) runs before Fastify exists and before module thunks / resource files import — connect the DB there instead of dynamic-import ordering hacks.
 
@@ -321,9 +321,9 @@ Decorates `app.authenticate` / `app.optionalAuthenticate` / `app.authorize`.
 - **`verifySignature(body, …)`** throws on parsed body — pass `req.rawBody`.
 - **MCP tools fail-closed.** A resource action without per-action perm + no `actionPermissions` + no `permissions.update` fallback → throws at tool generation. Declare `allowPublic()` to opt into unauthenticated.
 - **Better Auth roles.** BA stores `member.role = "admin,recruiter"` (comma-separated). Arc splits into `scope.orgRoles = ['admin', 'recruiter']`; `?role=admin` won't match — use `role[like]=admin`.
-- **Read-only repositories refuse write ROUTES at boot (2.34).** Kits' Better Auth overlays are sealed by default (`capabilities.readOnly`) — BA owns hashing, session revocation, org cascades. Mounting `create`/`update`/`delete` over one is boot-fatal: disable those routes, or pass the kit's `unsafeWritable: true` for administrative repair only. Normal identity mutations go through `auth.api`.
-- **Arc closes only stores/transports it BUILT (2.34).** One you hand to `idempotencyPlugin` / `eventPlugin` / `queryCachePlugin` stays yours to close — arc used to close every one, which wiped a co-resident app's live idempotency records.
-- **Idempotency self-checks its store at boot (2.34).** A probe write must read back under its own key and NOT under another; registration throws otherwise. Catches a filter-stripping repository (a pathless Mongoose schema under `strictQuery: true` strips filters to `{}`), which otherwise replays cached responses across keys AND users. `selfCheck: false` to disable; the adapter's per-read identity checks remain.
+- **Read-only repositories refuse write ROUTES at boot (2.33).** Kits' Better Auth overlays are sealed by default (`capabilities.readOnly`) — BA owns hashing, session revocation, org cascades. Mounting `create`/`update`/`delete` over one is boot-fatal: disable those routes, or pass the kit's `unsafeWritable: true` for administrative repair only. Normal identity mutations go through `auth.api`.
+- **Arc closes only stores/transports it BUILT (2.33).** One you hand to `idempotencyPlugin` / `eventPlugin` / `queryCachePlugin` stays yours to close — arc used to close every one, which wiped a co-resident app's live idempotency records.
+- **Idempotency self-checks its store at boot (2.33).** A probe write must read back under its own key and NOT under another; registration throws otherwise. Catches a filter-stripping repository (a pathless Mongoose schema under `strictQuery: true` strips filters to `{}`), which otherwise replays cached responses across keys AND users. `selfCheck: false` to disable; the adapter's per-read identity checks remain.
 
 ## routeGuards + defineGuard
 
@@ -489,7 +489,7 @@ defineResource({
 
 POST/PATCH/DELETE bumps resource version. Response header: `x-cache: HIT | STALE | MISS`. `runtime: 'distributed'` requires `stores.queryCache: RedisCacheStore`.
 
-## Transactional writes (2.34)
+## Transactional writes (2.33)
 
 `transactional: true` runs the PERSISTENCE step inside `withTransaction`. Write verbs receive the tx-bound repository plus `ctx.uow` — the join point for work outside the repository:
 
@@ -532,9 +532,9 @@ createApp({ modules: [createOutboxModule({ store: repositoryAsOutboxStore(outbox
 // Dev: createOutboxModule({ store: new MemoryOutboxStore() })
 ```
 
-The relay arm is `kind: 'relay'`, so `role: 'relay'` deployments drain it. It resolves the RAW transport, never the `fastify.events` facade (the facade fails open, which would acknowledge rows whose publish failed) — no transport is boot-fatal. **Fencing (2.34):** stores that support `claimPendingFenced` mint a token in the claim CAS; a relay that lost its lease mid-batch cannot ack or re-schedule a row a successor already owns. Feature-detected end to end.
+The relay arm is `kind: 'relay'`, so `role: 'relay'` deployments drain it. It resolves the RAW transport, never the `fastify.events` facade (the facade fails open, which would acknowledge rows whose publish failed) — no transport is boot-fatal. **Fencing (2.33):** stores that support `claimPendingFenced` mint a token in the claim CAS; a relay that lost its lease mid-batch cannot ack or re-schedule a row a successor already owns. Feature-detected end to end.
 
-**Durable webhooks (2.34)** — delivery survives crash and deploy, using the outbox machinery rather than a second queue:
+**Durable webhooks (2.33)** — delivery survives crash and deploy, using the outbox machinery rather than a second queue:
 
 ```typescript
 const store = repositoryAsOutboxStore(deliveryRepo);
@@ -727,7 +727,7 @@ await app.audit.custom('order', req.params.id, 'refund', { reason }, { user });
 
 `@classytic/arc/usage` — `usagePlugin` decorates `fastify.usage` with per-actor, per-UTC-month counters (`record`/`summary`/`period`/`actorOf`; actor chain org → user → client → ip). Auto-tracks `api.requests` (default on) + `api.egress.bytes` (opt-in); recording is fail-safe (a throwing `UsageStore` never fails a request; `MemoryUsageStore` built in, Redis/kit backends are ~5 lines). Pair with `createApp({ rateLimit: { plan: { resolve, limits: { free: { max: 60 }, enterprise: false }, default: 'free' } } })` for per-plan ceilings — `false` = unlimited, unknown/throwing resolvers fall back to `default` then global `max`, and buckets follow the tenant key chain by default. Caveat: the limiter runs before route auth, so `resolve` sees the raw request.
 
-## Runtime capability registry (2.34)
+## Runtime capability registry (2.33)
 
 Under `runtime: 'distributed'`, subsystems holding process-local state must declare it — the end-of-boot audit FAILS the app on undeclared memory state, naming every violator:
 

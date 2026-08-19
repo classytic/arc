@@ -36,7 +36,7 @@ const stubTransport = (): EventTransport =>
   ({ name: "stub", publish: vi.fn(), subscribe: vi.fn() }) as unknown as EventTransport;
 
 const app = (over: Record<string, unknown> = {}) =>
-  ({ [ARC_EVENT_TRANSPORT]: stubTransport(), ...over }) as never;
+  ({ log: { error: vi.fn() }, [ARC_EVENT_TRANSPORT]: stubTransport(), ...over }) as never;
 
 const schedules = (mod: ReturnType<typeof createOutboxModule>): ScheduleLike[] => {
   const arm = mod.scheduledJobs;
@@ -135,6 +135,29 @@ describe("createOutboxModule", () => {
       relay: { transportName?: string };
     };
     expect(relay).toBeDefined();
+  });
+
+  it("defaults relay failures to the app logger instead of requiring host console wiring", async () => {
+    const store = new MemoryOutboxStore();
+    await store.save({
+      type: "course.published",
+      payload: {},
+      meta: { id: "evt-log-1", occurredAt: new Date().toISOString() },
+    });
+    const log = { error: vi.fn() };
+    const transport = stubTransport();
+    vi.mocked(transport.publish).mockRejectedValueOnce(new Error("transport down"));
+    const mod = createOutboxModule({ store });
+    const { relay } = mod.bootstrap!(app({ log, [ARC_EVENT_TRANSPORT]: transport })) as {
+      relay: { relay: () => Promise<unknown> };
+    };
+
+    await relay.relay();
+
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "publish_failed", eventId: "evt-log-1" }),
+      'outbox relay "outbox" failed',
+    );
   });
 
   it("REFUSES to boot with only the facade present — no silent no-op relay", () => {

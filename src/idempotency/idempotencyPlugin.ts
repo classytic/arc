@@ -272,7 +272,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
       // store looks identical to a non-persisting one from here — so it is
       // deliberately NOT a violation. The unambiguous signal is the foreign
       // read below.
-      if (!own || own.statusCode !== 299) {
+      if (own?.statusCode !== 299) {
         fastify.log?.warn?.(
           { probe: "own-key" },
           "idempotencyPlugin self-check: probe entry did not read back under its own key. " +

@@ -380,7 +380,7 @@ const app = await createApp({
 Fail-fast validation: using `distributed` mode without required shared stores throws immediately for enforced subsystems.
 If `stores.idempotency` is omitted, Arc starts but logs a warning because idempotent write dedupe would be instance-local.
 
-### Declaring process-local state (2.34)
+### Declaring process-local state (2.33)
 
 `createApp` can only validate what it is *passed*. State you wire inside `plugins()` — a cache, a sequence counter, a subscription registry — is invisible to that check, so it used to live on a documentation checklist. Declare it instead, and a `distributed` boot fails on anything undeclared:
 
@@ -405,7 +405,7 @@ Set `accepted: true` for state that is per-process **by design** — a short-TTL
 
 Arc's own webhooks plugin declares its default in-memory subscription store, so `runtime: 'distributed'` catches it unless you supply a shared one.
 
-## Deployment roles (2.34)
+## Deployment roles (2.33)
 
 One image, N deployments. `role` declares what a process is FOR, and arc refuses work that contradicts it:
 
@@ -421,7 +421,7 @@ createApp({ role: process.env.ARC_ROLE as 'api' | 'worker' | 'relay' | 'schedule
 | `scheduler` | **no — boot-fatal with `resources`** | all |
 | `all` (default) | yes | all |
 
-Default `all` is the pre-2.34 behaviour, so an app that never sets `role` is unchanged. Skipped arms are logged by name at boot, so a deployment that mounts nothing tells you which arms it declined rather than going quietly silent. `createWorker()` forwards `role`; without one it still runs everything non-HTTP.
+Default `all` is the pre-2.33 behaviour, so an app that never sets `role` is unchanged. Skipped arms are logged by name at boot, so a deployment that mounts nothing tells you which arms it declined rather than going quietly silent. `createWorker()` forwards `role`; without one it still runs everything non-HTTP.
 
 The contradiction check is deliberate: a relay process that also served routes would take traffic no load balancer knew to send it, and the mistake is invisible until something depends on it.
 

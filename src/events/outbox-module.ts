@@ -125,8 +125,22 @@ export interface OutboxModuleOptions {
    * Called for every non-fatal relay problem — publish failures, ownership mismatches,
    * acknowledge failures.
    *
-   * **Wire this.** Silence here is the failure mode that matters: the relay keeps ticking, rows
-   * keep failing, and the only symptom is revenue that never posted.
+   * Omit to report through the Arc app's structured logger. Override for metrics, tracing, or
+   * external alerting. Silence here is the failure mode that matters: the relay keeps ticking,
+   * rows keep failing, and the only symptom is revenue that never posted.
+   *
+   * **Fires per EVENT, not per batch.** With the defaults (`batchSize: 100`,
+   * `relayEveryMs: 5000`) a transport outage emits up to 100 lines per tick —
+   * ~1,200/minute — and that is UNBOUNDED without a {@link
+   * OutboxModuleOptions.failurePolicy}: with no policy the row is failed with
+   * neither `retryAt` nor `deadLetter`, so it stays pending and is retried on
+   * every poll forever.
+   *
+   * Set a `failurePolicy` first — it bounds the retry loop and the logs
+   * together. Reach for a custom `onError` when you want a different SHAPE
+   * (aggregate per batch, sample, emit a metric); `() => {}` restores the
+   * pre-2.34 silence, which is a choice worth making explicitly rather than
+   * inheriting.
    */
   onError?: OutboxRelayErrorHandler;
   /**
@@ -242,7 +256,19 @@ export function createOutboxModule(options: OutboxModuleOptions): ArcModule<Outb
         ...(options.batchSize !== undefined ? { batchSize: options.batchSize } : {}),
         ...(options.leaseMs !== undefined ? { leaseMs: options.leaseMs } : {}),
         consumerId: options.consumerId ?? mintConsumerId(name),
-        ...(options.onError !== undefined ? { onError: options.onError } : {}),
+        onError:
+          options.onError ??
+          ((info) => {
+            fastify.log.error(
+              {
+                err: info.error,
+                kind: info.kind,
+                ...(info.event?.meta.id !== undefined ? { eventId: info.event.meta.id } : {}),
+                ...(info.event?.type !== undefined ? { eventType: info.event.type } : {}),
+              },
+              `outbox relay "${name}" failed`,
+            );
+          }),
         ...(options.failurePolicy !== undefined ? { failurePolicy: options.failurePolicy } : {}),
       });
 

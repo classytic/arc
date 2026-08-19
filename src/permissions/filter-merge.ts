@@ -111,5 +111,13 @@ export function conjoinPolicyFilters(
   }
 
   if (andParts.length > 0) result.$and = andParts;
+  // Preserve symbol-keyed policy metadata (for example an explicitly branded
+  // adapter-native filter). Object.entries deliberately omits symbols.
+  for (const source of [base, incoming]) {
+    for (const symbol of Object.getOwnPropertySymbols(source)) {
+      const descriptor = Object.getOwnPropertyDescriptor(source, symbol);
+      if (descriptor) Object.defineProperty(result, symbol, descriptor);
+    }
+  }
   return result;
 }

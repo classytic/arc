@@ -152,6 +152,8 @@ export {
   defineResourceVariants,
   getControllerScope,
   mergeResourceConfig,
+  type NativePolicyFilter,
+  nativePolicyFilter,
   ResourceDefinition,
   type ResourceSeams,
   type SeamedResourceConfig,
