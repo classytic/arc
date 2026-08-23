@@ -809,7 +809,9 @@
     "runtime": [
       "arcLog",
       "configureArcLogger",
-      "createPinoWriter"
+      "createPinoWriter",
+      "enterArcLoggerScope",
+      "runWithArcLogger"
     ],
     "types": [
       "ArcLogWriter",
@@ -818,9 +820,11 @@
       "PinoLike",
       "arcLog",
       "configureArcLogger",
-      "createPinoWriter"
+      "createPinoWriter",
+      "enterArcLoggerScope",
+      "runWithArcLogger"
     ],
-    "typesHash": "8bbbca71f1a7e2d5"
+    "typesHash": "56694862e7c3720a"
   },
   "./registry": {
     "stability": "stable",
@@ -1056,6 +1060,8 @@
       "healthPluginFn",
       "metricsPlugin",
       "metricsPluginFn",
+      "pressurePlugin",
+      "pressurePluginFn",
       "realtimePlugin",
       "realtimePluginFn",
       "replyHelpersPlugin",
@@ -1087,6 +1093,12 @@
       "MetricsOptions",
       "PluginMeta",
       "PluginResourceResult",
+      "PressureApi",
+      "PressureOptions",
+      "PressureSignal",
+      "PressureSnapshot",
+      "PressureState",
+      "PressureThresholds",
       "RealtimeOptions",
       "RequestIdOptions",
       "SSEOptions",
@@ -1110,6 +1122,8 @@
       "healthPluginFn",
       "metricsPlugin",
       "metricsPluginFn",
+      "pressurePlugin",
+      "pressurePluginFn",
       "realtimePlugin",
       "realtimePluginFn",
       "replyHelpersPlugin",
@@ -1123,7 +1137,7 @@
       "versioningPlugin",
       "versioningPluginFn"
     ],
-    "typesHash": "e4adc1539596736c"
+    "typesHash": "fb1d0bf0023bda3e"
   },
   "./plugins/tracing": {
     "stability": "stable",
@@ -1339,7 +1353,7 @@
       "wrapWithBoundary",
       "wrapWithSchema"
     ],
-    "typesHash": "88a36e92a8563be5"
+    "typesHash": "33fc75b5b60a1f28"
   },
   "./events/redis": {
     "stability": "stable",
@@ -1831,7 +1845,7 @@
       "webhookDeliveryFailurePolicy",
       "webhookPlugin"
     ],
-    "typesHash": "90514d78ee883b7d"
+    "typesHash": "93413460b84da4d0"
   },
   "./auth/redis": {
     "stability": "stable",
