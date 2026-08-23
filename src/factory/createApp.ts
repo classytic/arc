@@ -41,7 +41,14 @@ import Fastify, {
   type FastifyServerOptions,
 } from "fastify";
 import qs from "qs";
-import { arcLog, configureArcLogger, createPinoWriter } from "../logger/index.js";
+import {
+  type ArcLoggerOptions,
+  arcLog,
+  configureArcLogger,
+  createPinoWriter,
+  enterArcLoggerScope,
+  runWithArcLogger,
+} from "../logger/index.js";
 import { createRequestIdGenerator } from "../plugins/requestId.js";
 import { parseJsonBody } from "../utils/jsonBody.js";
 import { auditRuntimeCapabilities } from "../utils/runtimeCapabilities.js";
@@ -263,13 +270,29 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     );
   }
 
+  /**
+   * This app's own `arcLog` config, entered for the WHOLE boot.
+   *
+   * Held by reference and mutated in `buildApp` once `fastify.log` exists:
+   * boot starts before Fastify does, so a copied snapshot would send every
+   * post-construction boot warning to the console instead of this app's
+   * logger. Scoping it per app is what stops two apps in one process from
+   * overwriting each other's writer — see `src/logger/index.ts`.
+   */
+  const loggerScope: ArcLoggerOptions = {};
+  if (options.debug !== undefined && options.debug !== false) {
+    loggerScope.debug = options.debug;
+  }
+
   // The instance escapes `buildApp` the moment Fastify constructs it, so a
   // throw from ANY later phase still has something to close.
   let partial: FastifyInstance | undefined;
   try {
-    return await buildApp(options, (instance) => {
-      partial = instance;
-    });
+    return await runWithArcLogger(loggerScope, () =>
+      buildApp(options, loggerScope, (instance) => {
+        partial = instance;
+      }),
+    );
   } catch (err) {
     // ── Failed-boot cleanup ──
     //
@@ -304,13 +327,13 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
 async function buildApp(
   options: CreateAppOptions,
+  /** This app's live arcLog config — mutated below once `fastify.log` exists. */
+  loggerScope: ArcLoggerOptions,
   onInstance: (instance: FastifyInstance) => void,
 ): Promise<FastifyInstance> {
   // ── 0. Logger + validation ──
-
-  if (options.debug !== undefined && options.debug !== false) {
-    configureArcLogger({ debug: options.debug });
-  }
+  // `debug` is already on `loggerScope` (set by createApp before the scope was
+  // entered), so nothing to configure globally here.
 
   validateAuthOptions(options);
   const deferredWarnings = validateDistributedRuntime(options);
@@ -437,14 +460,30 @@ async function buildApp(
   // so framework warnings inherit the app's transports, level, AND redaction
   // — the console fallback bypassed all three. `logger: false` keeps the
   // console fallback: silent apps still surface arc warnings somewhere.
-  // Last-created app wins the (global) writer; hosts that need a custom
-  // writer call `configureArcLogger({ writer })` AFTER createApp.
+  //
+  // Written onto THIS APP's scope, not the process global: two apps in one
+  // process (a multi-app test file, a warm serverless container) each keep
+  // their own writer instead of the last boot winning for everyone.
   if (resolvedLogger !== false) {
+    const writer = createPinoWriter(fastify.log);
+    loggerScope.writer = writer;
+    // ALSO seed the process fallback, for arc code that runs OUTSIDE any app
+    // scope — a host calling into arc after `createApp` returns, a shutdown
+    // path, a job tick. That fallback is still last-app-wins by nature, which
+    // is why it is only a fallback: anything inside a boot or a request
+    // resolves through `loggerScope` and is correct with N apps in a process.
     configureArcLogger({
       ...(options.debug !== undefined && options.debug !== false ? { debug: options.debug } : {}),
-      writer: createPinoWriter(fastify.log),
+      writer,
     });
   }
+
+  // Carry the scope across the request lifecycle. Same shape arcCorePlugin
+  // uses for requestContext: `run(store, done)` wraps everything downstream,
+  // so a warning raised deep in a handler still resolves to this app.
+  fastify.addHook("onRequest", (_request, _reply, done) => {
+    enterArcLoggerScope(loggerScope, done);
+  });
 
   for (const warning of deferredWarnings) {
     fastify.log.warn(warning);

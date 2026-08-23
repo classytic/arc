@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 /**
  * Arc Logger — Centralized debug & warning system
  *
@@ -61,20 +63,66 @@ export interface ArcLogger {
 }
 
 // ============================================================================
-// Global State
+// Scoped + global state
 // ============================================================================
 
+/**
+ * Per-app logger options, resolved from the async context.
+ *
+ * The process-global below is a FALLBACK, not the source of truth. It used to
+ * be both, and `configureArcLogger` overwrote it on every boot — so the
+ * last-created app owned the writer for every app in the process. One app's
+ * framework warnings then surfaced through another app's transports, level,
+ * and redaction config. Fine for one-app-per-process; wrong for multi-app test
+ * files and for serverless containers that reuse a warm process across apps.
+ *
+ * Follows the same shape as `requestContext`: the scope is entered once and
+ * wraps everything downstream, so the 23 `arcLog()` call sites keep their
+ * zero-argument signature and resolve correctly without threading a logger.
+ */
+const scope = new AsyncLocalStorage<ArcLoggerOptions>();
+
 let globalOptions: ArcLoggerOptions = {};
+
+/** Active options: the app's if we're inside one, else the process fallback. */
+function resolveOptions(): ArcLoggerOptions {
+  return scope.getStore() ?? globalOptions;
+}
+
+/**
+ * Run `fn` with `options` as the active logger config.
+ *
+ * `options` is held BY REFERENCE deliberately: `createApp` enters the scope
+ * before Fastify exists, then fills in the pino writer once `fastify.log` is
+ * constructed. Copying here would freeze the pre-Fastify view and send every
+ * post-construction boot warning to the console instead of the app's logger.
+ */
+export function runWithArcLogger<T>(options: ArcLoggerOptions, fn: () => T): T {
+  return scope.run(options, fn);
+}
+
+/**
+ * Enter `options` for the remainder of the current async context.
+ *
+ * For Fastify's `onRequest` hook, where `run(store, done)` wraps the rest of
+ * the request lifecycle. Outside a hook, prefer {@link runWithArcLogger}.
+ */
+export function enterArcLoggerScope(options: ArcLoggerOptions, done: () => void): void {
+  scope.run(options, done);
+}
 
 // ============================================================================
 // Public API
 // ============================================================================
 
 /**
- * Configure the Arc logger globally.
+ * Configure the PROCESS-GLOBAL Arc logger — the fallback used outside any app.
  *
- * Called automatically by `createApp({ debug })`, but can also be
- * called manually for standalone usage outside of `createApp`.
+ * `createApp` no longer routes its writer through here; each app carries its
+ * own scoped options (see {@link runWithArcLogger}) so two apps in one process
+ * cannot overwrite each other's. This remains the way to configure arcLog for
+ * standalone use — `defineResource()` at module import, CLI commands, and any
+ * code running before or outside a `createApp` boot.
  */
 export function configureArcLogger(options: ArcLoggerOptions): void {
   globalOptions = { ...options };
@@ -180,12 +228,12 @@ export function createPinoWriter(logger: PinoLike): ArcLogWriter {
 // ============================================================================
 
 function getWriter(): ArcLogWriter {
-  return globalOptions.writer ?? console;
+  return resolveOptions().writer ?? console;
 }
 
 function isDebugEnabled(module: string): boolean {
-  // Priority 1: Programmatic config
-  const configDebug = globalOptions.debug;
+  // Priority 1: Programmatic config — the app's if scoped, else the global.
+  const configDebug = resolveOptions().debug;
   if (configDebug !== undefined && configDebug !== false) {
     return matchesModule(configDebug, module);
   }
