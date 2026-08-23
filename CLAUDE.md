@@ -87,7 +87,7 @@ Non-obvious design choices that won't be caught by tests. Release-tagged changes
 - **`select` is never normalized** — preserved as-is (string / array / projection object) for DB agnosticism.
 - **Type-only subpath exports produce `export {}` at runtime** — correct; interfaces are erased.
 - **Event publishing is fire-and-forget** (`failOpen: true`). Use outbox for guaranteed delivery.
-- **Dual-publish dev-warn** — calling both `app.events.publish()` and an `eventStrategy: 'auto'` resource hook for the same event in development triggers a one-shot warning. Pick one path (manual publish OR `eventStrategy`).
+- **Duplicate-publish dev-warn** — `eventPlugin` keeps a 5s LRU on `(eventType, correlationId)` and warns via `arcLog("events")` when ONE request publishes the same event twice (the trap: a service holding both a publisher and a notification helper that publishes internally). On outside production; `warnOnDuplicate: true|false` overrides. It still publishes — detection, not enforcement.
 - **Plugins set response headers at `onRequest` or `preSerialization`, never `onSend`** — async `onSend` races with Fastify's `onSendEnd → safeWriteHead` flush path and produces `ERR_HTTP_HEADERS_SENT` under slow responses.
 - **Always read `resolvedConfig.X` in `defineResource.ts`, never raw `config.X`** — `resolvedConfig` is the post-preset, post-auto-inject canonical copy. Touching raw `config` after presets apply ships half-wired features.
 - **Presets compose but order matters** — test combinations (`tests/presets/preset-conflicts.test.ts`).

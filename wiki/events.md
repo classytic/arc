@@ -2,7 +2,7 @@
 
 **Summary**: `EventPlugin` publishes domain events via pluggable transports. Publishing is fire-and-forget by default. Use the outbox for guaranteed delivery.
 **Sources**: src/events/.
-**Last updated**: 2026-04-21.
+**Last updated**: 2026-08-23 (duplicate-publish warn corrected — `eventStrategy` never existed).
 
 ---
 
@@ -43,7 +43,9 @@ If publishing fails, the HTTP request still succeeds. For guaranteed delivery, u
 
 ## Dual-publish dev-warn
 
-Calling `app.events.publish()` manually for the same event type that an `eventStrategy: 'auto'` resource hook also emits triggers a one-shot `console.warn` in development. Pick one path: manual publish OR `eventStrategy`, not both.
+`eventPlugin` keeps a 5-second LRU keyed on `(eventType, correlationId)` and emits an `arcLog("events").warn` the second time one request publishes the same event inside that window. The trap it catches: a domain service holding BOTH a publisher AND a notification helper that publishes to the same bus internally, so every subscriber fires twice for one logical event.
+
+`warnOnDuplicate` — `undefined` (default) enables it outside production, `true` enables it everywhere (one Map lookup per publish), `false` disables it. **Arc still publishes** on detection: this is a diagnostic, not a guard. Pick one publish path rather than relying on it.
 
 ## Outbox (v2.9+)
 

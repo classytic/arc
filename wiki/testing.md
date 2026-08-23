@@ -2,7 +2,7 @@
 
 **Summary**: Vitest + `mongodb-memory-server`. Mirror src structure. Always run targeted tests; never the full suite during dev. Perf runs in its own lane. `test:main` = plain `vitest run` — vitest **projects** split the suite into `parallel` + `timing-serial` (files whose assertions depend on real elapsed time — websocket, and any other file in the `TIMING_SENSITIVE` holding pen — run with `fileParallelism: false` automatically; no manual `--no-file-parallelism` needed, ~40s wall clock). A file leaves the pen by replacing positive sleeps with condition-based waits; see the timing-lane section below.
 **Sources**: tests/, vitest.config.ts, vitest.perf.config.ts, src/testing/.
-**Last updated**: 2026-07-31 (condition-based waits — the flake standard).
+**Last updated**: 2026-08-23 (tests/_harness + tests/parity — the cross-surface standard).
 
 ---
 
@@ -57,35 +57,37 @@ arc's own test suite uses `tests/setup.ts` — a thin convenience layer over the
 - `createMockRepository(model)` — real mongokit `Repository` against the given model.
 - `mockUser`, `mockOrg`, `mockContext` — standard test fixtures.
 
-44 internal tests import from this file. New tests should prefer the public API when the scenario fits.
+Most adapter-free internal tests flow through this file. New tests should prefer the public API when the scenario fits.
 
-## Removed in v2.11
+## `tests/_harness/` — arc's OWN dev harness
 
-- `TestHarness` (778 LOC) — Mongoose-bound "DB-agnostic" harness. 0 consumers. Full delete.
-- `authHelpers` (`createBetterAuthTestHelpers`, `setupBetterAuthOrg`) — 372 LOC, 0 consumers. Full delete.
-- `dbHelpers` (`TestDatabase`, `TestSeeder`, `TestTransaction`, `DatabaseSnapshot`, `InMemoryDatabase` exposed publicly) — 385 LOC. `InMemoryDatabase` absorbed as a private helper inside `testApp.ts`; everything else deleted.
-- `testFactory`'s `TestRequestBuilder`, `request`, `createTestAuth`, `createSnapshotMatcher`, `TestDataLoader` — fragmented with `HttpTestHarness`'s auth providers. Collapsed into `TestAuthSession` + `expectArc`.
+Three homes, three audiences: `src/testing/` is SHIPPED (hosts), `@classytic/arc-testkit` is SHIPPED (ecosystem modules), `tests/_harness/` is arc's own and may reach into `src/` internals. Import from `tests/_harness/index.js`, never a leaf file.
+
+- `arcApp(options)` — boots with `logger: false, auth: false` (the suite's measured defaults) and auto-closes in `afterEach`. Replaces the `let app` + manual-teardown preamble; teardown tolerates an already-closed app, so a test that closes early needs no bookkeeping.
+- `arcAppRefuses(options, /regex/)` — one line for arc's most common shape, a boot-fatal misconfiguration.
+- `anAdapter(seed)` / `aResource(name)` / `PERMS` / `aScope` — the fixtures the suite kept retyping. `aScope` covers all five `RequestScope` kinds; build scopes from it rather than inline, since the union is discriminated and hand-written members drift.
+
+**No database helper here, deliberately.** A run-wide pooled `mongod` (vitest `globalSetup`) was built and measured against the status quo: SLOWER at both lane scale (10s vs 6s on `tests/adapters/`) and suite scale (75s vs 71s median), with much wider variance. Independent in-memory servers parallelize better than one contended server, and boot is cheap once the binary is cached. Files starting their own is the faster design, not debt — don't rebuild the pool.
+
+## `tests/parity/` — one assertion, every surface
+
+Arc serves the same resource over HTTP and MCP through two entry paths that re-implement the same decisions (identity → `RequestScope`, permission check, field projection, error envelope). The suite exercises those overwhelmingly on HTTP and rarely on both, and the cross-surface defects all lived in that gap. `forEachSurface(title, makeResource, body)` writes the expectation once with the transport as a parameter, so a divergence cannot be green anywhere.
+
+```ts
+forEachSurface("an anonymous WRITE is refused", guarded, async (surface) => {
+  const r = await surface.call({ op: "create", body: { name: "x" } }, ANONYMOUS);
+  expect(r.status).toBe(401);
+});
+```
+
+- `surface.call` (CRUD) · `callAction` (declarative actions) · `callRoute` (custom routes) — all three MCP tool families.
+- **Both surfaces are seeded from one `buildScope()`.** Setting `request.user` on HTTP and passing a session to MCP is NOT equivalent: HTTP mints the `member` scope in the auth plugin, MCP mints it from the session directly, so with `auth: false` the same identity yields different scopes and every tenancy assertion "diverges" for no transport reason.
+- **The MCP surface must carry `wiring`.** Without it `buildContextExtras` returns `undefined`, `metadata.arc` is never stamped, and hooks, CRUD event publishing, and `BodySanitizer`'s field-WRITE enforcement all silently switch off — a degraded path that manufactures its own parity failures. The field-write parity test is the tripwire for this.
+- Resources are built by a FACTORY per call, so one surface's mutation cannot leak into the other's run.
 
 ## Test mapping (by changed file)
 
-Run the tightest subset. If you change file X, run the matching row. See CLAUDE.md for the full table.
-
-| Changed | Run |
-|---|---|
-| `src/core/BaseController.ts` | `tests/core/base-controller.test.ts tests/core/access-control.test.ts tests/core/body-sanitizer.test.ts` |
-| `src/core/QueryResolver.ts` | `tests/core/query-resolver.test.ts tests/e2e/query-*.test.ts` |
-| `src/core/routerShared.ts` | `tests/core/router-shared-primitives.test.ts tests/core/action-router-parity.test.ts tests/security/action-router-auth.test.ts` |
-| `src/testing/*` | `tests/testing/` |
-| `src/auth/*` | `tests/auth/` |
-| `src/permissions/*` | `tests/permissions/ tests/e2e/rbac-permissions.test.ts tests/scenarios/permission-presets.test.ts` |
-| `src/scope/*` | `tests/scope/ tests/e2e/elevation-plugin.test.ts` |
-| `src/events/*` | `tests/events/` |
-| `src/plugins/*` | `tests/plugins/` |
-| `src/presets/*` | `tests/presets/` |
-| `src/integrations/mcp/*` | `tests/integrations/mcp/` |
-| `src/factory/*` | `tests/factory/ tests/e2e/full-app.test.ts` |
-| `src/utils/queryParser*` | `tests/utils/ tests/property/` |
-| `src/auth/authPlugin*` | `tests/auth/ tests/property/jwt-bearer*` |
+Owned by [CLAUDE.md](../CLAUDE.md) — the `src/X/*` -> `tests/X/` default plus the handful of rows that need more. Not duplicated here; two copies drift.
 
 ## Why perf is isolated
 
