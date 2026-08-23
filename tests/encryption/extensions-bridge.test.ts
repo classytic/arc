@@ -104,10 +104,21 @@ describe("extensions → route config → request-time read (bridge)", () => {
     const res = await app.inject({ url: "/vaults/peek" });
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-type"]).toContain("application/jose");
-    expect(res.body).not.toContain("top"); // ciphertext on the wire
+    // The wire body must be a JWE COMPACT SERIALIZATION — five base64url
+    // segments — not the JSON it encrypts. Substring-matching the plaintext
+    // against base64 is unsound and was FLAKY: base64url of random ciphertext
+    // contains any given 3-character run every few hundred runs, and one such
+    // run failed the release gate on `...IXVErtopdK0F4...`. Asserting the
+    // SHAPE is both stronger and deterministic — it cannot pass on a body
+    // that merely avoided the needle.
+    expect(res.body.split(".")).toHaveLength(5);
+    expect(res.body).not.toContain('"secret"'); // no JSON structure on the wire
 
     const { plaintext } = await compactDecrypt(res.body, privateKey);
-    expect(new TextDecoder().decode(plaintext)).toContain("top");
+    // The ENVELOPE is unwrapped before encryption — the handler's `data` is
+    // the payload, so the ciphertext holds `{ secret }`, not `{ data: {...} }`.
+    // The old `toContain("top")` passed either way and never pinned this.
+    expect(JSON.parse(new TextDecoder().decode(plaintext))).toEqual({ secret: "top" });
   });
 
   it("end-to-end: action routes (POST /:id/action) are encrypted too", async () => {
