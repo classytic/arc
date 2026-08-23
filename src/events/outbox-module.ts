@@ -36,6 +36,7 @@ import { randomBytes } from "node:crypto";
 import { hostname } from "node:os";
 import type { OutboxFailurePolicy, OutboxStore } from "@classytic/primitives/outbox";
 import type { FastifyInstance } from "fastify";
+import { transactionContext } from "../context/transactionContext.js";
 /**
  * TYPE-only import of `ArcModule`, deliberately — `defineModule()` is pure identity
  * (inference only), and the declared return type below gives the same inference. Calling
@@ -154,6 +155,29 @@ export interface OutboxModuleOptions {
    */
   failurePolicy?: OutboxFailurePolicy;
   /**
+   * Unit-of-Work session provider. Defaults to `() => transactionContext.get()`.
+   *
+   * This is what makes the durable path the DEFAULT path rather than a
+   * discipline. `EventOutbox.store()` already auto-injects a session from this
+   * provider (explicit `options.session` still wins), and a `transactional:
+   * true` write now publishes its session on `transactionContext` — so with
+   * the default in place, `outbox.store(event)` inside a transactional write
+   * commits the event row atomically with the domain write. No threading the
+   * handle from the controller through every service layer to the call site.
+   *
+   * The default matters more than the capability: `auditPlugin` has defaulted
+   * its `sessionProvider` the same way since it shipped, while this module
+   * required every host to remember. A host that forgets does not get an
+   * error — it gets an event row written outside the transaction, which
+   * survives a rollback and reports something that never happened. That is
+   * precisely the guarantee an outbox exists to provide.
+   *
+   * Pass `false` (or `() => undefined`) to opt out — for a store whose
+   * writes must NOT join the caller's transaction (a separate connection,
+   * an external queue).
+   */
+  sessionProvider?: (() => unknown) | false;
+  /**
    * Run one relay pass at boot. Default `true` — a process that restarts with a backlog should
    * drain it immediately rather than waiting a full interval, because that backlog is precisely
    * the events the previous process failed to publish.
@@ -270,6 +294,10 @@ export function createOutboxModule(options: OutboxModuleOptions): ArcModule<Outb
             );
           }),
         ...(options.failurePolicy !== undefined ? { failurePolicy: options.failurePolicy } : {}),
+        // `false` opts out; anything else defaults to the ambient session.
+        ...(options.sessionProvider === false
+          ? {}
+          : { sessionProvider: options.sessionProvider ?? (() => transactionContext.get()) }),
       });
 
       exports = { store, relay };

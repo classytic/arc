@@ -30,6 +30,7 @@ import {
 import { buildQueryKey } from "../cache/keys.js";
 import type { QueryCacheConfig } from "../cache/QueryCache.js";
 import { DEFAULT_ID_FIELD, DEFAULT_LIMIT, DEFAULT_TENANT_FIELD } from "../constants.js";
+import { transactionContext } from "../context/transactionContext.js";
 import type { HookSystem } from "../hooks/HookSystem.js";
 import { getOrgId as getOrgIdFromScope } from "../scope/types.js";
 import type {
@@ -600,7 +601,21 @@ export class BaseCrudController<
     if (!this._transactional) return fn(this.repository);
     return retryingTransaction(
       this.repository as unknown as StandardRepo<AnyRecord>,
-      (txRepo, uow) => fn(txRepo as unknown as TRepository, uow),
+      (txRepo, uow) => {
+        const run = () => fn(txRepo as unknown as TRepository, uow);
+        // Publish the session on the AMBIENT context so writers that are not
+        // the repository join this transaction: the audit store and the outbox
+        // both default their `sessionProvider` to `transactionContext.get()`.
+        // Without this the default resolved to `undefined` on every request —
+        // arc never entered the scope anywhere — so an audit row documented as
+        // committing "atomically with the domain write" was in fact written
+        // outside the transaction and survived a rollback.
+        //
+        // Only when a session EXISTS: connection-bound kits (SQLite) pass an
+        // empty handle, and entering with `undefined` there would mask an
+        // enclosing scope rather than represent this one.
+        return uow?.session === undefined ? run() : transactionContext.run(uow.session, run);
+      },
     );
   }
 
