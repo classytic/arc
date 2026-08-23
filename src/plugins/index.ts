@@ -68,6 +68,19 @@ export {
   default as metricsPlugin,
   metricsPlugin as metricsPluginFn,
 } from "./metrics.js";
+export type {
+  PressureApi,
+  PressureOptions,
+  PressureSignal,
+  PressureSnapshot,
+  PressureState,
+  PressureThresholds,
+} from "./pressure.js";
+// Admission control — one policy over registered saturation signals (v3 Phase 2)
+export {
+  default as pressurePlugin,
+  pressurePlugin as pressurePluginFn,
+} from "./pressure.js";
 export type { ChangeOperation, RealtimeOptions } from "./realtime.js";
 // Realtime resource change feed — permission-gated SSE per resource (2.22)
 export {
