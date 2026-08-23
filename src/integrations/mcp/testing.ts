@@ -95,7 +95,12 @@ export async function createTestMcpClient(
     resources: [],
     ...options.pluginOptions,
   };
-  const auth = options.auth ?? { userId: "test-user" };
+  // `auth: null` is the documented ANONYMOUS session and must survive: `??`
+  // coalesces null as well as undefined, so it silently upgraded every
+  // "anonymous is rejected" test into an authenticated `test-user` call —
+  // the test passed while proving the opposite of its name. Only an ABSENT
+  // `auth` takes the default.
+  const auth = options.auth === undefined ? { userId: "test-user" } : options.auth;
   const serverName = options.serverName ?? "test-mcp";
 
   // Build tools from resources — share `filterResourcesForMcp` with the
