@@ -333,7 +333,18 @@ export class MigrationRunner {
     const lock = this.lock;
     if (!lock) return fn(() => false);
 
-    const acquired = await lock.tryAcquire(MIGRATION_LOCK_NAME, this.holderId, this.lockLeaseMs);
+    // Fenced acquire when available — see the schedules plugin for why the
+    // token matters beyond `lost`. A migration that lost and re-took the lock
+    // must NOT keep applying steps: another runner may have advanced state.
+    const fenced = await lock.tryAcquireFenced?.(
+      MIGRATION_LOCK_NAME,
+      this.holderId,
+      this.lockLeaseMs,
+    );
+    const acquired =
+      fenced !== undefined
+        ? fenced !== null
+        : await lock.tryAcquire(MIGRATION_LOCK_NAME, this.holderId, this.lockLeaseMs);
     if (!acquired) {
       throw new Error(
         "MigrationRunner: another runner holds the migration lock — refusing to run concurrently. " +
@@ -347,6 +358,7 @@ export class MigrationRunner {
       name: MIGRATION_LOCK_NAME,
       holderId: this.holderId,
       leaseMs: this.lockLeaseMs,
+      ...(fenced ? { token: fenced.token } : {}),
       onLost: () =>
         this.log.error(
           "MigrationRunner: lease renewal lost — another holder took the migration lock; " +
@@ -447,7 +459,7 @@ export class MigrationRunner {
    * Rollback last migration
    */
   async down(migrations: Migration[]): Promise<void> {
-    await this.withLock(async () => {
+    await this.withLock(async (leaseLost) => {
       const applied = await this.store.getApplied();
       const last = applied[applied.length - 1];
       if (!last) {
@@ -461,6 +473,19 @@ export class MigrationRunner {
 
       if (!migration) {
         throw new Error(`Migration ${last.resource}:${last.version} not found in migration files`);
+      }
+
+      // `up` and `downTo` have always checked this in their loops; `down`
+      // never did, because it runs a single step and looked like it had no
+      // window. It has one: `getApplied()` is a round trip, and the lease can
+      // lapse — or change epoch — across it. This is the DESTRUCTIVE path, so
+      // it is the last one that should proceed on stale ownership: the
+      // `applied` list it just read may already belong to another runner.
+      if (leaseLost()) {
+        throw new Error(
+          "MigrationRunner: refusing to roll back — lock ownership lost between " +
+            "acquiring the lease and starting the rollback.",
+        );
       }
 
       this.log.info(`Rolling back ${migration.resource} v${migration.version}...`);

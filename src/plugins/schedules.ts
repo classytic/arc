@@ -180,7 +180,16 @@ const schedulesPlugin: FastifyPluginAsync<SchedulesPluginOptions> = async (fasti
       if (lock) {
         const lockName = `arc:schedule:${s.name}`;
         const leaseMs = s.leaseMs ?? Math.min(Math.floor(s.every * 0.9), MAX_DEFAULT_LEASE_MS);
-        const won = await lock.tryAcquire(lockName, holderId, leaseMs);
+        // Prefer the FENCED acquire when the adapter has one: the token lets
+        // renewal notice a holder change that plain `tryAcquire` cannot see
+        // (an interloper whose lease expired before our next renewal looks
+        // exactly like uninterrupted ownership). Feature-detected — adapters
+        // without it keep the previous behaviour verbatim.
+        const fenced = await lock.tryAcquireFenced?.(lockName, holderId, leaseMs);
+        const won =
+          fenced !== undefined
+            ? fenced !== null
+            : await lock.tryAcquire(lockName, holderId, leaseMs);
         if (!won) {
           stat.skippedByLock++;
           return;
@@ -190,6 +199,7 @@ const schedulesPlugin: FastifyPluginAsync<SchedulesPluginOptions> = async (fasti
           name: lockName,
           holderId,
           leaseMs,
+          ...(fenced ? { token: fenced.token } : {}),
           onLost: () =>
             fastify.log.warn(
               { schedule: s.name },
