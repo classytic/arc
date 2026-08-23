@@ -11,16 +11,11 @@
  * probable (a multi-argument function, when disposers take none) warns.
  */
 
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify from "fastify";
 import fp from "fastify-plugin";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createApp, defineModule } from "../../src/factory/index.js";
-
-let app: FastifyInstance | undefined;
-afterEach(async () => {
-  await app?.close();
-  app = undefined;
-});
+import { describe, expect, it, vi } from "vitest";
+import { defineModule } from "../../src/factory/index.js";
+import { arcApp, arcAppRefuses } from "../_harness/index.js";
 
 describe("ArcModule.plugins — returned-value contract", () => {
   it("THROWS when a fastify-plugin is returned instead of registered", async () => {
@@ -28,20 +23,15 @@ describe("ArcModule.plugins — returned-value contract", () => {
       instance.decorate("neverRegistered", true);
     });
 
-    await expect(
-      createApp({
-        logger: false,
-        auth: false,
-        modules: [defineModule({ name: "infra", plugins: async () => wouldNeverRun as never })],
-      }),
-    ).rejects.toThrow(/returned a fastify-plugin from plugins\(\)/);
+    await arcAppRefuses(
+      { modules: [defineModule({ name: "infra", plugins: async () => wouldNeverRun as never })] },
+      /returned a fastify-plugin from plugins\(\)/,
+    );
   });
 
   it("WARNS on a multi-argument function — disposers are called with none", async () => {
     const warn = vi.fn();
-    app = await createApp({
-      logger: false,
-      auth: false,
+    const app = await arcApp({
       plugins: async (f) => {
         Object.assign(f.log, { warn });
       },
@@ -60,9 +50,7 @@ describe("ArcModule.plugins — returned-value contract", () => {
   it("a zero-argument disposer is the supported shorthand — no warning, runs at close", async () => {
     const warn = vi.fn();
     const closed = vi.fn();
-    app = await createApp({
-      logger: false,
-      auth: false,
+    const app = await arcApp({
       plugins: async (f) => {
         Object.assign(f.log, { warn });
       },
@@ -71,17 +59,17 @@ describe("ArcModule.plugins — returned-value contract", () => {
 
     expect(warn).not.toHaveBeenCalledWith(expect.stringMatching(/looks like a Fastify plugin/));
     expect(closed).not.toHaveBeenCalled();
+    // Closing EARLY is the point of this test. No `app = undefined` needed:
+    // the harness's teardown tolerates an already-closed app, which is what
+    // the old mutable-`let` pattern was working around.
     await app.close();
-    app = undefined;
     expect(closed).toHaveBeenCalledTimes(1);
   });
 
   it("registering INSIDE plugins() is the correct shape and hits the shared instance", async () => {
     // Documents the encapsulation consequence: no register() wrapper around
     // plugins() means a decorate() lands where every other module sees it.
-    app = await createApp({
-      logger: false,
-      auth: false,
+    const app = await arcApp({
       modules: [
         defineModule({
           name: "infra",

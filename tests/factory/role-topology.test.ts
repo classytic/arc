@@ -8,14 +8,9 @@
  *   default 'all'                     → byte-identical to before
  */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createApp, defineModule } from "../../src/factory/index.js";
-
-let app: Awaited<ReturnType<typeof createApp>> | undefined;
-afterEach(async () => {
-  await app?.close();
-  app = undefined;
-});
+import { describe, expect, it, vi } from "vitest";
+import { defineModule } from "../../src/factory/index.js";
+import { arcApp, arcAppRefuses } from "../_harness/index.js";
 
 const armModule = () =>
   defineModule({
@@ -28,22 +23,16 @@ const armModule = () =>
 
 describe("createApp({ role })", () => {
   it("relay + HTTP resources is BOOT-fatal", async () => {
-    await expect(
-      createApp({ logger: false, auth: false, role: "relay", resources: [] }),
-    ).rejects.toThrow(/must not serve routes/);
+    await arcAppRefuses({ role: "relay", resources: [] }, /must not serve routes/);
   });
 
   it("scheduler + resourceDir is BOOT-fatal", async () => {
-    await expect(
-      createApp({ logger: false, auth: false, role: "scheduler", resourceDir: "./x" }),
-    ).rejects.toThrow(/must not serve routes/);
+    await arcAppRefuses({ role: "scheduler", resourceDir: "./x" }, /must not serve routes/);
   });
 
   it("role 'api' mounts NO module schedule arms — and says which were skipped", async () => {
     const info = vi.fn();
-    app = await createApp({
-      logger: false,
-      auth: false,
+    const app = await arcApp({
       role: "api",
       modules: [armModule()],
       plugins: async (f) => {
@@ -56,9 +45,7 @@ describe("createApp({ role })", () => {
   });
 
   it("role 'relay' mounts ONLY kind:'relay' arms", async () => {
-    app = await createApp({
-      logger: false,
-      auth: false,
+    const app = await arcApp({
       role: "relay",
       modules: [armModule()],
     });
@@ -83,9 +70,7 @@ describe("createApp({ role })", () => {
   });
 
   it("default 'all' mounts every arm — unchanged behaviour", async () => {
-    app = await createApp({
-      logger: false,
-      auth: false,
+    const app = await arcApp({
       modules: [armModule()],
     });
     const jobs = (app.arc?.scheduledJobs ?? []) as Array<{ name: string }>;

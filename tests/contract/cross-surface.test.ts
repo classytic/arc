@@ -25,6 +25,13 @@
  * The fixture intentionally exercises every concern at once so a future
  * surface that "forgets" about one input is caught without writing 4×
  * separate scenarios.
+ *
+ * SCOPE — this file is about SHAPE: does a declared route/action/aggregation
+ * APPEAR on every surface. It says nothing about whether invoking it BEHAVES
+ * the same. Execution parity (permissions, scope, field rules, hooks, error
+ * envelope, HTTP vs MCP) lives in `tests/parity/` via `forEachSurface`. The
+ * two are complements, not duplicates: a tool can be perfectly described and
+ * still skip its permission check.
  */
 
 import { describe, expect, it, vi } from "vitest";

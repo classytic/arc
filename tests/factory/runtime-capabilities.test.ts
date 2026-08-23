@@ -11,15 +11,9 @@
  *   4. Arc's own webhooks plugin declares its default in-memory store.
  */
 
-import { afterEach, describe, expect, it } from "vitest";
-import { createApp } from "../../src/factory/index.js";
+import { describe, expect, it } from "vitest";
 import { declareRuntimeCapability } from "../../src/utils/index.js";
-
-let app: Awaited<ReturnType<typeof createApp>> | undefined;
-afterEach(async () => {
-  await app?.close();
-  app = undefined;
-});
+import { arcApp, arcAppRefuses } from "../_harness/index.js";
 
 // A minimal shared events transport so runtime: 'distributed' passes the
 // constructor-time guard — this suite is about what that guard CANNOT see.
@@ -32,10 +26,8 @@ const sharedTransport = {
 
 describe("runtime capability registry", () => {
   it("a host-wired memory capability FAILS a distributed boot — named, not silent", async () => {
-    await expect(
-      createApp({
-        logger: false,
-        auth: false,
+    await arcAppRefuses(
+      {
         runtime: "distributed",
         rateLimit: false,
         stores: { events: sharedTransport },
@@ -47,14 +39,13 @@ describe("runtime capability registry", () => {
             detail: "invoice numbering cached per process",
           });
         },
-      }),
-    ).rejects.toThrow(/billing\.sequence-cache/);
+      },
+      /billing\.sequence-cache/,
+    );
   });
 
   it("accepted per-process state passes distributed — the topology decision is explicit", async () => {
-    app = await createApp({
-      logger: false,
-      auth: false,
+    const app = await arcApp({
       runtime: "distributed",
       rateLimit: false,
       stores: { events: sharedTransport },
@@ -71,9 +62,7 @@ describe("runtime capability registry", () => {
   });
 
   it("non-distributed runtimes enforce nothing — declarations are informational", async () => {
-    app = await createApp({
-      logger: false,
-      auth: false,
+    const app = await arcApp({
       plugins: async (f) => {
         declareRuntimeCapability(f, {
           subsystem: "anything.memory",
@@ -86,17 +75,16 @@ describe("runtime capability registry", () => {
 
   it("webhooks' DEFAULT in-memory store is a declared violation under distributed", async () => {
     const { default: webhookPlugin } = await import("../../src/integrations/webhooks.js");
-    await expect(
-      createApp({
-        logger: false,
-        auth: false,
+    await arcAppRefuses(
+      {
         runtime: "distributed",
         rateLimit: false,
         stores: { events: sharedTransport },
         plugins: async (f) => {
           await f.register(webhookPlugin, {});
         },
-      }),
-    ).rejects.toThrow(/webhooks\.store/);
+      },
+      /webhooks\.store/,
+    );
   });
 });
