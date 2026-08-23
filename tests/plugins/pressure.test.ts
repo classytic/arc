@@ -184,3 +184,92 @@ describe("pressure — configuration", () => {
     expect(app.pressure.snapshot().worst).toEqual({ name: "late", value: 1 });
   });
 });
+
+// ── The policy has to reach something ───────────────────────────────────
+
+describe("pressure — 503 shedding", () => {
+  async function shedApp(shed: unknown, saturation: number) {
+    const app = Fastify({ logger: false });
+    live.push(app);
+    await app.register(pressurePlugin, {
+      eventLoopUtilization: false,
+      intervalMs: 60_000,
+      signals: [knob("db", saturation)],
+      shed,
+    } as never);
+    app.get("/things", async () => ({ ok: true }));
+    app.get("/heavy", async () => ({ ok: true }));
+    app.get("/_health/ready", async () => ({ ready: true }));
+    await app.ready();
+    return app;
+  }
+
+  it("is OFF by default — a saturated app still serves", async () => {
+    // Opt-in on purpose: arc cannot know which routes are sheddable, and
+    // refusing a checkout because a dashboard query saturated the pool is
+    // worse than serving it slowly.
+    const app = await shedApp(undefined, 1);
+    expect(app.pressure.state()).toBe("saturated");
+    expect((await app.inject({ method: "GET", url: "/things" })).statusCode).toBe(200);
+  });
+
+  it("refuses with 503 + Retry-After when enabled and saturated", async () => {
+    const app = await shedApp(true, 1);
+    const res = await app.inject({ method: "GET", url: "/things" });
+
+    expect(res.statusCode).toBe(503);
+    // Without Retry-After a well-behaved client retries immediately, adding a
+    // round trip to the load the shed was meant to relieve.
+    expect(res.headers["retry-after"]).toBe("1");
+    expect(res.json()).toMatchObject({ code: "arc.unavailable", status: 503 });
+  });
+
+  it("serves normally while merely DEGRADED", async () => {
+    const app = await shedApp(true, 0.85);
+    expect(app.pressure.state()).toBe("degraded");
+    expect((await app.inject({ method: "GET", url: "/things" })).statusCode).toBe(200);
+  });
+
+  it("NEVER sheds a health probe", async () => {
+    // Shedding the probe that reports saturation removes the orchestrator's
+    // only way to see it — and a 503 on /_health/ready reads as "process
+    // dead" rather than "process full".
+    const app = await shedApp(true, 1);
+    expect((await app.inject({ method: "GET", url: "/_health/ready" })).statusCode).toBe(200);
+  });
+
+  it("honours custom status, Retry-After and excludes", async () => {
+    // `/heavy` is declared inside shedApp's builder: Fastify freezes the route
+    // table at ready(), so a route added afterwards never exists.
+    const app = await shedApp({ statusCode: 429, retryAfterSeconds: 30, exclude: ["/things"] }, 1);
+
+    // Excluded path is served despite saturation.
+    expect((await app.inject({ method: "GET", url: "/things" })).statusCode).toBe(200);
+
+    const res = await app.inject({ method: "GET", url: "/heavy" });
+    expect(res.statusCode).toBe(429);
+    expect(res.headers["retry-after"]).toBe("30");
+  });
+});
+
+describe("pressure — readiness", () => {
+  it("reports NOT ready at saturated, ready otherwise", async () => {
+    const saturated = await appWith({ signals: [knob("db", 1)] });
+    const degraded = await appWith({ signals: [knob("db", 0.85)] });
+
+    expect(await saturated.pressure.readinessCheck().check()).toBe(false);
+    // `degraded` still serves, so it must still read READY — a readiness flip
+    // there would pull a working instance out of the load balancer.
+    expect(await degraded.pressure.readinessCheck().check()).toBe(true);
+  });
+
+  it("is not registered automatically", async () => {
+    // Flipping readiness pulls the instance from its load balancer — correct
+    // in a fleet, a self-inflicted outage for a single instance. The host
+    // composes it deliberately.
+    const app = await appWith({ signals: [knob("db", 1)] });
+    const check = app.pressure.readinessCheck({ name: "load", critical: false });
+    expect(check.name).toBe("load");
+    expect(check.critical).toBe(false);
+  });
+});

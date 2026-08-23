@@ -50,6 +50,7 @@ import { performance } from "node:perf_hooks";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
 import { arcLog } from "../logger/index.js";
+import type { HealthCheck } from "./health.js";
 
 const log = arcLog("pressure");
 
@@ -96,6 +97,20 @@ export interface PressureOptions {
   eventLoopUtilization?: boolean;
   /** Fired when the state CHANGES — not on every sample. */
   onStateChange?: (next: PressureState, snapshot: PressureSnapshot) => void;
+  /**
+   * Refuse requests with 503 while `saturated`. Default OFF.
+   *
+   * Opt-in because arc cannot know which of a host's routes are sheddable. A
+   * checkout POST and a dashboard chart both look like requests here, and
+   * shedding the wrong one under load is worse than serving it slowly. Turn it
+   * on once you know which paths to exclude.
+   *
+   * `exclude` is matched against `request.url` by prefix. Health and readiness
+   * routes are ALWAYS exempt: shedding the probe that reports saturation
+   * removes the orchestrator's only way to see it, and a 503 on
+   * `/_health/ready` reads as "process dead" rather than "process full".
+   */
+  shed?: boolean | { statusCode?: number; retryAfterSeconds?: number; exclude?: string[] };
 }
 
 export interface PressureApi {
@@ -105,6 +120,22 @@ export interface PressureApi {
   register(signal: PressureSignal): void;
   /** True at `saturated`. The check a handler makes before admitting work. */
   shouldShed(): boolean;
+  /**
+   * A readiness check for `healthPlugin({ checks })`.
+   *
+   * NOT registered automatically: flipping readiness pulls the instance out of
+   * its load balancer, which is the correct response to saturation in one
+   * topology and a self-inflicted outage in another (a single instance would
+   * remove the only server). The host composes it deliberately:
+   *
+   * ```ts
+   * await app.register(healthPlugin, { checks: [app.pressure.readinessCheck()] });
+   * ```
+   *
+   * Reports unhealthy only at `saturated` — `degraded` still serves, so it must
+   * still read ready.
+   */
+  readinessCheck(options?: { name?: string; critical?: boolean }): HealthCheck;
 }
 
 declare module "fastify" {
@@ -212,8 +243,38 @@ export const pressurePlugin: FastifyPluginAsync<PressureOptions> = async (
       signals.push(signal);
     },
     shouldShed: () => snapshot.state === "saturated",
+    readinessCheck: (checkOptions) => ({
+      name: checkOptions?.name ?? "pressure",
+      critical: checkOptions?.critical ?? true,
+      check: () => snapshot.state !== "saturated",
+    }),
   };
   fastify.decorate("pressure", api);
+
+  // ── 503 shedding (opt-in) ──
+  if (options.shed) {
+    const shedConfig = options.shed === true ? {} : options.shed;
+    const statusCode = shedConfig.statusCode ?? 503;
+    const retryAfter = shedConfig.retryAfterSeconds ?? 1;
+    // Probes are never shed — see the `exclude` note on the option.
+    const exempt = ["/_health", "/health", ...(shedConfig.exclude ?? [])];
+
+    fastify.addHook("onRequest", async (request, reply) => {
+      if (snapshot.state !== "saturated") return;
+      const url = request.url;
+      if (exempt.some((prefix) => url.startsWith(prefix))) return;
+
+      // `Retry-After` turns a refusal into a scheduling instruction. Without
+      // it a well-behaved client retries immediately and the shed does nothing
+      // but add a round trip to the load it was meant to relieve.
+      reply.header("Retry-After", String(retryAfter));
+      return reply.code(statusCode).send({
+        code: "arc.unavailable",
+        message: "Server is at capacity — retry shortly.",
+        status: statusCode,
+      });
+    });
+  }
 
   // Take one reading now so a probe arriving before the first interval sees a
   // real answer rather than an optimistic default.
