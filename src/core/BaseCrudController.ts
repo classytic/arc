@@ -670,7 +670,7 @@ export class BaseCrudController<
    */
   protected async runAfterHook(
     req: IRequestContext,
-    op: "create" | "update" | "delete",
+    op: "create" | "update" | "delete" | "list" | "read",
     data: AnyRecord,
     meta?: Record<string, unknown>,
   ): Promise<void> {
@@ -834,6 +834,13 @@ export class BaseCrudController<
     if (cached) return cached;
 
     const result = await this.executeListQuery(options, req);
+    // READ after-hooks fire here, not inside the cached query path, so a
+    // cache HIT and a live read look identical to a handler. `hooks.after(res,
+    // 'list', fn)` has always been registrable — `HookOperation` includes
+    // 'list' and 'read' — but nothing ever executed it, so the registration
+    // was a silent no-op. Around hooks already fired; after did not.
+    await this.runAfterHook(req, "list", result as unknown as AnyRecord);
+
     return { data: result, status: 200 };
   }
 
@@ -967,6 +974,10 @@ export class BaseCrudController<
 
     const { doc, reason } = await this.executeGetQuery(id, options, req);
     if (!doc) this.throwNotFound(reason);
+    // Only for a doc that EXISTS: a 404 path has nothing to hand a handler,
+    // and firing with null would make every after-read hook null-guard first.
+    await this.runAfterHook(req, "read", doc as unknown as AnyRecord);
+
     return { data: doc, status: 200 };
   }
 

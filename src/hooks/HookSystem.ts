@@ -275,13 +275,20 @@ export class HookSystem {
 
   async execute<T = AnyRecord>(ctx: HookContext<T>): Promise<T | undefined> {
     const key = this.getKey(ctx.resource, ctx.operation, ctx.phase);
-    const hooks = this.hooks.get(key) ?? [];
+    const hooks = this.hooks.get(key);
 
     // Also check for wildcard hooks
     const wildcardKey = this.getKey("*", ctx.operation, ctx.phase);
-    const wildcardHooks = this.hooks.get(wildcardKey) ?? [];
+    const wildcardHooks = this.hooks.get(wildcardKey);
 
-    let allHooks = [...wildcardHooks, ...hooks];
+    // Nothing registered — return before allocating and sorting. This runs on
+    // the READ path now (list/get fire after-hooks too), where the common case
+    // is no handlers at all and two Map misses should cost exactly that.
+    if (!hooks?.length && !wildcardHooks?.length) {
+      return ctx.data as T | undefined;
+    }
+
+    let allHooks = [...(wildcardHooks ?? []), ...(hooks ?? [])];
     allHooks.sort((a, b) => a.priority - b.priority);
 
     // Apply topological sort if any hook has dependsOn

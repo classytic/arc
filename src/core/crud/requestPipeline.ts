@@ -436,7 +436,7 @@ export async function executeHookedOp<TInput, TResult>(
  */
 export async function executeAfterHook(
   ctx: HookedOpContext,
-  op: "create" | "update" | "delete",
+  op: "create" | "update" | "delete" | "list" | "read",
   data: AnyRecord,
   meta?: Record<string, unknown>,
 ): Promise<void> {
