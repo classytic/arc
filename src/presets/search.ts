@@ -19,55 +19,17 @@
  * GET-based autocomplete, pass `path`/`method` overrides or use `routes` for
  * fully bespoke endpoints.
  *
- * @example MongoKit wiring (elasticSearchPlugin + vectorPlugin)
- * ```typescript
- * import { Repository, methodRegistryPlugin, elasticSearchPlugin } from '@classytic/mongokit';
- * import { vectorPlugin } from '@classytic/mongokit/ai';
- * import { searchPreset } from '@classytic/arc/presets/search';
- *
- * const productRepo = new Repository(Product, [
- *   methodRegistryPlugin(),
- *   elasticSearchPlugin({ client: esClient, indexName: 'products' }),
- *   vectorPlugin({ fields: [{ path: 'embedding', dimensions: 1536 }], embedFn }),
- * ]);
- *
- * defineResource({
- *   name: 'product',
- *   adapter: createMongooseAdapter({ model: Product, repository: productRepo }),
- *   presets: [
- *     searchPreset({
- *       search:  { handler: (req) => productRepo.search(req.body.query, req.body) },
- *       similar: { handler: (req) => productRepo.searchSimilar(req.body.query, req.body) },
- *     }),
- *   ],
- * });
- * ```
- *
- * @example Custom vector backend (Pinecone)
+ * @example
  * ```typescript
  * searchPreset({
+ *   search:  { handler: (req) => repo.search(req.body.query, req.body) },
  *   similar: {
- *     path: '/vector-search',                 // custom path
- *     handler: async (req) => {
- *       const hits = await pinecone.query({
- *         vector: req.body.vector,
- *         topK: req.body.topK ?? 10,
- *       });
- *       return hits.matches;
- *     },
- *     schema: { body: { type: 'object', properties: { vector: { type: 'array' }, topK: { type: 'integer' } } } },
- *     mcp: false,                             // no MCP tool for this one
+ *     path: '/vector-search',   // override the default path
+ *     mcp: false,               // and skip the MCP tool for this one
+ *     handler: (req) => pinecone.query({ vector: req.body.vector }),
  *   },
- *   // Extra app-specific route
- *   routes: [
- *     {
- *       method: 'GET',
- *       path: '/autocomplete',
- *       handler: async (req) => algolia.suggest(req.query.q as string),
- *       permissions: allowPublic(),
- *     },
- *   ],
- * });
+ *   routes: [{ method: 'GET', path: '/autocomplete', handler, permissions }],
+ * })
  * ```
  */
 

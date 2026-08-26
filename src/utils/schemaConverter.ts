@@ -11,44 +11,31 @@
  * boot with an actionable error; DOC paths warn and degrade — see
  * {@link UnconvertibleMode}. Hosts that never pass Zod pay nothing.
  *
- * ## Targets
+ * TARGET — `draft-7` for Fastify route schemas, `openapi-3.0` for docs. Fastify
+ * v5's AJV 8 is draft-07 and wants NUMERIC `exclusiveMinimum`; the
+ * `openapi-3.0` target emits the draft-04 boolean form, which AJV rejects at
+ * registration (`exclusiveMinimum must be number`). Using `draft-7` makes
+ * `.positive()` / `.gt()` work unmodified.
  *
- * Zod v4's `toJSONSchema` supports multiple output targets; arc picks per consumer:
- *
- * - **`draft-7`** (default) — for Fastify route schemas. Fastify v5 bundles AJV 8
- *   configured for draft-07, which uses **numeric** `exclusiveMinimum`/`exclusiveMaximum`.
- *   The `openapi-3.0` target emits the **boolean** form inherited from draft-04
- *   (`exclusiveMinimum: true` alongside `minimum`), which AJV rejects at route
- *   registration with `schema is invalid: data/properties/X/exclusiveMinimum must be number`.
- *   Using `draft-7` fixes `.positive() / .negative() / .gt() / .lt()` out of the box.
- * - **`openapi-3.0`** — for OpenAPI doc generation (arc emits OpenAPI 3.0.3). Keeps
- *   the boolean exclusive form that 3.0 tooling expects.
- *
- * ## Input vs output (`io`)
- *
- * A Zod schema has TWO shapes and `z.toJSONSchema()` emits one of them. Getting
- * this wrong is not cosmetic — it rejects legal traffic:
+ * IO DIRECTION — a Zod schema has two shapes and getting this wrong REJECTS
+ * LEGAL TRAFFIC:
  *
  * ```ts
  * z.object({ title: z.string(), status: z.string().default("draft") })
- * // io: "output" → required: ["title", "status"]   ← a client omitting `status` is REJECTED
- * // io: "input"  → required: ["title"]             ← correct: the default fills it in
+ * // io: "output" → required: ["title", "status"]  ← omitting `status` is rejected
+ * // io: "input"  → required: ["title"]            ← correct; the default fills it
  * ```
  *
- * The same applies to `.transform()`: in output mode the node is unrepresentable
- * and degrades to `{}` (no validation at all), while input mode emits the real
- * input type. So arc converts by DIRECTION:
+ * `.transform()` is worse in output mode: unrepresentable, so it degrades to
+ * `{}` — no validation at all. Arc therefore converts by direction: REQUESTS
+ * (`body`/`querystring`/`params`/`headers`) use `io: "input"`, validating what
+ * the client sends before defaults and transforms; RESPONSES (and the `entity`
+ * shape) use `io: "output"`, describing what the server returns.
  *
- * - **request** (`body`, `querystring`, `params`, `headers`) → `io: "input"` —
- *   validates what the client SENDS, before defaults/transforms/coercion apply.
- * - **response** (and the `entity` doc shape) → `io: "output"` — describes what
- *   the server RETURNS, after they apply.
- *
- * One deliberate consequence: a plain `z.object()` emits
- * `additionalProperties: false` in output mode but NOT in input mode, because
- * `z.object()` STRIPS unknown keys rather than rejecting them — so extra keys
- * are legal input. Use `z.strictObject()` when the wire contract must reject
- * them; it keeps `additionalProperties: false` in both modes.
+ * Consequence: plain `z.object()` emits `additionalProperties: false` only in
+ * output mode, because it STRIPS unknown keys rather than rejecting them — so
+ * extra keys are legal input. Use `z.strictObject()` when the wire contract
+ * must reject them; it holds in both modes.
  */
 
 import { arcLog } from "../logger/index.js";

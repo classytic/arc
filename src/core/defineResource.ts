@@ -18,41 +18,16 @@
  * phases and delegates every responsibility. The `ResourceDefinition`
  * class itself lives in `./defineResource/ResourceDefinition.ts`.
  *
- * @example Mongoose
- * ```typescript
- * import { defineResource } from '@classytic/arc';
- * import { createMongooseAdapter } from '@classytic/mongokit/adapter';
- * import { allowPublic, requireRoles } from '@classytic/arc/permissions';
+ * The adapter is the only kit-specific part — every kit's factory plugs in
+ * identically.
  *
+ * @example
+ * ```typescript
  * export default defineResource({
  *   name: 'product',
- *   adapter: createMongooseAdapter({
- *     model: ProductModel,
- *     repository: productRepository,
- *   }),
+ *   adapter: createMongooseAdapter({ model: ProductModel, repository: repo }),
  *   presets: ['softDelete', 'slugLookup'],
- *   permissions: {
- *     list: allowPublic(),
- *     get: allowPublic(),
- *     create: requireRoles(['admin']),
- *     update: requireRoles(['admin']),
- *     delete: requireRoles(['admin']),
- *   },
- * });
- * ```
- *
- * @example Prisma
- * ```typescript
- * import { defineResource } from '@classytic/arc';
- * import { createPrismaAdapter } from '@classytic/prismakit/adapter';
- *
- * export default defineResource({
- *   name: 'user',
- *   adapter: createPrismaAdapter({
- *     client: prisma,
- *     modelName: 'user',
- *     repository: userRepository,
- *   }),
+ *   permissions: { list: allowPublic(), create: requireRoles(['admin']) },
  * });
  * ```
  */

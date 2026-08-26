@@ -7,88 +7,28 @@
  * custom kit shipping the `DataAdapter<TDoc>` contract from
  * `@classytic/repo-core/adapter` plugs in identically.
  *
- * ## Import Strategy (Tree-Shaking)
+ * IMPORT STRATEGY — this entry exports ONLY resource definition, permissions,
+ * and errors. Everything else lives in a dedicated subpath because Node does
+ * NOT tree-shake: a barrel re-export loads eagerly at runtime, so a fat main
+ * entry would pull Redis, OpenTelemetry and BullMQ into every process that
+ * imported `defineResource`.
  *
- * This main entry exports ONLY the essentials for defining resources.
- * All other features live in dedicated subpaths — Node.js does NOT
- * tree-shake, so barrel re-exports load eagerly at runtime.
+ * The authoritative subpath list is `package.json#exports` — not restated here,
+ * where it would rot.
  *
+ * @example
  * ```typescript
- * // Main entry — resource definition + permissions + errors
  * import { defineResource, allowPublic } from '@classytic/arc';
- * // Kit-specific adapters live in their kits (arc 2.12+):
- * import { createMongooseAdapter } from '@classytic/mongokit/adapter';
- *
- * // Everything else from dedicated subpaths:
  * import { createApp } from '@classytic/arc/factory';
- * import { createTestApp } from '@classytic/arc/testing';
- * import { eventPlugin } from '@classytic/arc/events';
- * import { beforeCreate } from '@classytic/arc/hooks';
- * import { healthPlugin } from '@classytic/arc/plugins';
- * import { RedisEventTransport } from '@classytic/arc/events/redis';
- * import { tracingPlugin } from '@classytic/arc/plugins/tracing';
- * import { auditPlugin } from '@classytic/arc/audit';
- * // audit accepts a RepositoryLike directly — no adapter import needed
- * ```
- *
- * ## Subpath Exports
- *
- * | Subpath | Purpose |
- * |---------|---------|
- * | `@classytic/arc` | Core: defineResource, permissions, errors |
- * | `@classytic/arc/factory` | App creation (createApp, ArcFactory) |
- * | `@classytic/arc/permissions` | Permission functions (also in main) |
- * | `@classytic/arc/presets` | Preset functions (softDelete, tree, etc.) |
- * | `@classytic/arc/hooks` | Hook helpers (beforeCreate, afterUpdate) |
- * | `@classytic/arc/middleware` | Middleware helpers (multipartBody, named/priority middleware) |
- * | `@classytic/arc/pipeline` | Functional guard / intercept / pipe / transform |
- * | `@classytic/arc/context` | AsyncLocalStorage request context |
- * | `@classytic/arc/logger` | Internal debug/warning logger (arcLog) |
- * | `@classytic/arc/events` | Event bus (MemoryTransport only) |
- * | `@classytic/arc/events/redis` | Redis Pub/Sub transport (requires ioredis) |
- * | `@classytic/arc/events/redis-stream` | Redis Streams transport (requires ioredis) |
- * | `@classytic/arc/plugins` | Fastify plugins (health, requestId, etc.) |
- * | `@classytic/arc/plugins/tracing` | OpenTelemetry tracing (requires @opentelemetry/*) |
- * | `@classytic/arc/audit` | Audit trail — accepts any `RepositoryLike` directly |
- * | `@classytic/arc/idempotency` | Idempotency — accepts any `RepositoryLike` directly |
- * | `@classytic/arc/idempotency/redis` | Redis idempotency store (non-repository backend) |
- * | `@classytic/arc/utils` | Utilities (errors, state machine, circuit breaker) |
- * | `@classytic/arc/auth` | Authentication (JWT, Better Auth) |
- * | `@classytic/arc/testing` | Test utilities, mocks, TestHarness |
- * | `@classytic/arc/schemas` | TypeBox schema helpers |
- * | `@classytic/arc/types` | TypeScript types only |
- * | `@classytic/arc/discovery` | Auto-discovery plugin |
- * | `@classytic/arc/integrations/streamline` | @classytic/streamline adapter |
- * | `@classytic/arc/integrations/websocket` | @fastify/websocket adapter |
- * | `@classytic/arc/integrations/jobs` | BullMQ job queue adapter |
- *
- * @example Basic Resource
- * ```typescript
- * import { defineResource, allowPublic, requireRoles } from '@classytic/arc';
  * import { createMongooseAdapter } from '@classytic/mongokit/adapter';
  *
- * const productResource = defineResource({
+ * const product = defineResource({
  *   name: 'product',
- *   adapter: createMongooseAdapter({ model: ProductModel, repository: productRepo }),
- *   permissions: {
- *     list: allowPublic(),
- *     create: requireRoles(['admin']),
- *   },
+ *   adapter: createMongooseAdapter({ model: ProductModel, repository: repo }),
+ *   permissions: { list: allowPublic() },
  * });
- * ```
  *
- * @example Full Application
- * ```typescript
- * import { createApp } from '@classytic/arc/factory';
- * import { productResource } from './modules/product.resource.js';
- *
- * const app = await createApp({
- *   preset: 'production',
- *   auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
- *   plugins: async (fastify) => {
- *     await fastify.register(productResource.toPlugin());
- *   },
- * });
+ * const app = await createApp({ preset: 'production', resources: [product] });
  * ```
  */
 

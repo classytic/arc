@@ -1,42 +1,19 @@
 /**
- * `defineAction()` — typed action declaration.
+ * Typed action declaration — captures the Zod schema's literal type so the
+ * handler's `data` is inferred as `z.infer<typeof schema>` instead of
+ * `Record<string, unknown>` that each host hand-casts.
  *
- * Pre-2.16 every action handler received `data: Record<string, unknown>`
- * and hosts hand-cast it to a domain interface or threw their own
- * `ValidationError` for missing fields. The pattern was reinvented in
- * every resource file (lead, opportunity, invoice, …) — the OpenAI-team
- * report's #2 ask.
+ * The shape arc validates at the HTTP layer (`buildActionBodySchema` → AJV) is
+ * BY CONSTRUCTION the shape the handler sees. Opt-in: plain-object action
+ * entries still work.
  *
- * The fix: a tiny helper that captures the declared Zod schema's literal
- * type so the handler's `data` parameter is inferred as
- * `z.infer<typeof schema>`. The shape arc validates at the HTTP layer
- * (via `buildActionBodySchema` → AJV) is the EXACT same shape the
- * handler sees, by construction.
- *
- * Plain-object action entries still work — typing is opt-in, not
- * mandatory. Use `defineAction()` for new actions where you want the
- * compiler to catch typos in `data.<field>` accesses.
- *
- * @example Drop-in replacement for an object-form action.
+ * @example
  * ```ts
- * import { defineAction } from '@classytic/arc/core';
- * import { z } from 'zod';
- *
- * defineResource({
- *   actions: {
- *     moveToStage: defineAction({
- *       schema: z.object({
- *         stageId: z.string(),
- *         probability: z.number().min(0).max(1).optional(),
- *       }),
- *       handler: async (id, data, req) => {
- *         // data: { stageId: string; probability?: number }  ← typed
- *         await leadService.move(id, data.stageId, data.probability);
- *       },
- *       permissions: requireRoles(['admin']),
- *     }),
- *   },
- * });
+ * moveToStage: defineAction({
+ *   schema: z.object({ stageId: z.string(), probability: z.number().optional() }),
+ *   handler: async (id, data) => leadService.move(id, data.stageId, data.probability),
+ *   permissions: requireRoles(['admin']),
+ * })
  * ```
  */
 

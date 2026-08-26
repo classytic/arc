@@ -1,54 +1,26 @@
 /**
- * defineResourceVariants — Define multiple resources sharing one model/repo/adapter.
+ * N resources over ONE model/repo/adapter — the same data behind different
+ * HTTP interfaces (a public read-only slug-keyed view and an admin CRUD one)
+ * without duplicating the shared adapter / queryParser / schemaOptions.
  *
- * Common pattern: the same underlying data exposed through two different
- * HTTP interfaces. For example:
- *
- *   - Public: `GET /articles/:slug` (read-only, slug-keyed, allowPublic)
- *   - Admin:  `CRUD /admin/articles/:_id` (full CRUD, _id-keyed, requireRoles)
- *
- * Doing this with two separate `defineResource()` calls duplicates the shared
- * config (adapter, queryParser, schemaOptions). This helper takes a base
- * config + a map of variant overrides and returns a record of named
- * `ResourceDefinition`s, one per variant.
- *
- * The base + override pattern intentionally mirrors `defineResource()` itself —
- * the helper is just sugar that returns N real resources. Each variant goes
- * through `defineResource()` independently, so presets, hooks, registry
- * registration, and OpenAPI generation all work normally.
+ * Pure sugar: each variant runs through `defineResource()` independently, so
+ * presets, hooks, registry, and OpenAPI behave exactly as normal. Every variant
+ * must declare its own `name` (registry uniqueness) and `prefix` (route
+ * uniqueness); everything else falls back to the base.
  *
  * @example
  * ```typescript
- * import { Repository } from '@classytic/mongokit';
- * import { createMongooseAdapter } from '@classytic/mongokit/adapter';
- * import { defineResourceVariants } from '@classytic/arc';
- * import { allowPublic, adminOnly, readOnly } from '@classytic/arc/permissions';
- * import { ArticleModel, type IArticle } from './article.model.js';
- *
- * const repo = new Repository<IArticle>(ArticleModel);
- * const adapter = createMongooseAdapter({ model: ArticleModel, repository: repo });
- *
  * export const { articlePublic, articleAdmin } = defineResourceVariants<IArticle>(
  *   { adapter },
  *   {
- *     articlePublic: {
- *       name: 'article',
- *       prefix: '/articles',
- *       idField: 'slug',
- *       disabledRoutes: ['create', 'update', 'delete'],
- *       permissions: readOnly(),
- *     },
- *     articleAdmin: {
- *       name: 'article-admin',
- *       prefix: '/admin/articles',
- *       permissions: adminOnly(),
- *     },
+ *     articlePublic: { name: 'article', prefix: '/articles', idField: 'slug',
+ *                      disabledRoutes: ['create', 'update', 'delete'],
+ *                      permissions: readOnly() },
+ *     articleAdmin:  { name: 'article-admin', prefix: '/admin/articles',
+ *                      permissions: adminOnly() },
  *   },
  * );
  * ```
- *
- * Each variant must declare its own `name` (registry uniqueness) and `prefix`
- * (route uniqueness). Everything else falls back to the base.
  */
 
 import type { AnyRecord, ResourceConfig } from "../types/index.js";

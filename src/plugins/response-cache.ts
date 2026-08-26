@@ -1,64 +1,25 @@
 /**
- * Response Cache Plugin for Arc
+ * In-memory LRU/TTL cache for GET responses, with per-route TTL rules and
+ * automatic invalidation on mutations. Zero deps, serverless-safe.
  *
- * In-memory LRU/TTL response cache that sits in front of your database.
- * Caches serialized responses for GET requests, dramatically reducing DB load
- * for frequently accessed resources.
+ * PER-INSTANCE: each replica keeps its own cache. Cross-instance invalidation
+ * means wiring `responseCache.invalidate()` to the event bus yourself.
  *
- * Features:
- * - LRU eviction with configurable max entries
- * - Per-route TTL configuration
- * - Automatic invalidation on mutations (POST/PUT/PATCH/DELETE)
- * - Manual invalidation via `fastify.responseCache.invalidate()`
- * - Cache stats endpoint for monitoring
- * - Zero external deps — pure in-memory, serverless-safe
+ * AUTH ORDER MATTERS: `responseCache.middleware` must run AFTER authentication
+ * in the preHandler chain, or a cached response is served before the caller is
+ * identified. `createCrudRouter` wires it; custom routes do it themselves. The
+ * default key includes `userId` and `orgId` to prevent cross-caller leaks.
  *
- * NOTE: This cache is per-instance (in-memory). In multi-instance deployments,
- * each instance maintains its own cache. For cross-instance invalidation,
- * wire `fastify.responseCache.invalidate()` to your event bus manually.
- *
- * ## Auth Safety
- *
- * The cache check runs as a **route-level middleware** (`responseCache.middleware`)
- * that must be wired AFTER authentication in the preHandler chain. Arc's
- * `createCrudRouter` does this automatically. For custom routes, wire it
- * manually:
- *
- * ```typescript
- * fastify.get('/data', {
- *   preHandler: [fastify.authenticate, fastify.responseCache.middleware],
- * }, handler);
- * ```
- *
- * This ensures cached responses are never served before auth validates the
- * caller's identity. The default cache key includes `userId` and `orgId`
- * to prevent cross-caller data leaks.
- *
- * This is a SEPARATE subpath import — only loaded when explicitly used:
- *   import { responseCachePlugin } from '@classytic/arc/plugins/response-cache';
+ * A separate subpath: `@classytic/arc/plugins/response-cache`.
  *
  * @example
  * ```typescript
- * import { responseCachePlugin } from '@classytic/arc/plugins/response-cache';
- *
  * await fastify.register(responseCachePlugin, {
  *   maxEntries: 1000,
- *   defaultTTL: 30,       // 30 seconds
- *   rules: [
- *     { match: '/api/products', ttl: 120 },         // 2 min for products
- *     { match: '/api/categories', ttl: 300 },        // 5 min for categories
- *     { match: '/api/users', ttl: 0 },               // never cache users
- *   ],
- *   invalidateOn: ['POST', 'PUT', 'PATCH', 'DELETE'],
+ *   defaultTTL: 30,
+ *   rules: [{ match: '/api/products', ttl: 120 }, { match: '/api/users', ttl: 0 }],
  * });
- *
- * // Manual invalidation
  * fastify.responseCache.invalidate('/api/products');
- * fastify.responseCache.invalidateAll();
- *
- * // Stats
- * const stats = fastify.responseCache.stats();
- * // { entries: 42, hits: 1250, misses: 180, hitRate: 0.87, evictions: 5 }
  * ```
  */
 

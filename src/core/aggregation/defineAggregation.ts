@@ -37,39 +37,16 @@ import type { AggregationConfig } from "./types.js";
  * `defineResource({ aggregations: { ... } })` either as named keys or
  * via auto-discovery patterns (loadAggregations — future).
  *
- * @example Inline
- * ```ts
- * defineResource({
- *   name: 'order',
- *   aggregations: {
- *     revenueByStatus: defineAggregation({
- *       groupBy: 'status',
- *       measures: { count: 'count', revenue: 'sum:totalPrice' },
- *       permissions: requireRoles(['admin']),
- *     }),
- *   },
- * });
- * ```
+ * A namespace import lets many live in their own files and flow in at once
+ * (`import * as aggregations` → `defineResource({ aggregations })`).
  *
- * @example Multi-file
+ * @example
  * ```ts
- * // orders/aggregations/revenue-by-status.ts
- * import { defineAggregation } from '@classytic/arc';
- *
  * export const revenueByStatus = defineAggregation({
  *   groupBy: 'status',
  *   measures: { count: 'count', revenue: 'sum:totalPrice' },
  *   permissions: requireRoles(['admin']),
- *   timeout: 5000,
  *   cache: { staleTime: 60 },
- * });
- *
- * // orders/order.resource.ts
- * import * as aggregations from './aggregations/index.js';
- *
- * defineResource({
- *   name: 'order',
- *   aggregations,                                  // 30+ entries flow in
  * });
  * ```
  */

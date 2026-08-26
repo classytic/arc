@@ -16,45 +16,18 @@
  * therefore runs on any kit that implements `StandardRepo.findOneAndUpdate`
  * + `getOne` + `getAll` + `deleteMany` + `create`.
  *
- * `fail()` uses a lease-gated read-then-write pair to preserve
- * `firstFailedAt` across retries without relying on Mongo's aggregation-
- * pipeline `$ifNull`. Leases guarantee single-writer during the failure
- * window (`claimPending` filters out non-owned rows), so the two calls are
- * safe under concurrent relayers.
+ * `fail()` is a lease-gated read-then-write pair, preserving `firstFailedAt`
+ * across retries without Mongo-specific `$ifNull`. The lease guarantees a
+ * single writer during the failure window, so the two calls are safe under
+ * concurrent relayers.
  *
- * Why we DON'T use `StandardRepo.claim()` (repo-core 0.4+) anywhere in this
- * adapter — design note for the next reader who wants to "modernize" us:
- *
- *   • `claimPending` (FIFO claim-next loop): `claim(id, ...)` requires the
- *     candidate id upfront, but the relayer doesn't have it — that's the
- *     whole point of `findOneAndUpdate({ filter, sort: { createdAt: 1 } })`,
- *     which finds + claims in a SINGLE round-trip per claimed event.
- *     Replacing with `getOne(filter, sort) → claim(id, ...)` doubles the
- *     round-trips, opens a TOCTOU window where the candidate state can
- *     change between read and CAS (we'd need a retry loop on null-on-race),
- *     and gains nothing — the existing call is already atomic and
- *     race-free. Throughput regression with no upside; do not adopt.
- *
- *   • `acknowledge` (pending → delivered): id is in scope, but the current
- *     filter uses `ne('status', 'delivered')` to allow ack from any
- *     non-delivered state (defensive; lease invariant means it's pending
- *     in practice). `claim` requires an exact `from` value, so adopting
- *     would tighten the source-state predicate from "not delivered" to
- *     "exactly pending". That's a behavior change — even if the new
- *     behavior is arguably tighter/safer, the constraint here is "no
- *     semantic regression". Keep `findOneAndUpdate`.
- *
- *   • `fail` (any → pending|dead_letter): the current `baseFilter` is
- *     id-only (with optional `leaseOwner` guard) — there's NO source-state
- *     predicate at all. Adopting `claim` would ADD `from: 'pending'`,
- *     blocking `fail()` calls against rows in any other state. Same "no
- *     semantic regression" concern; keep `findOneAndUpdate`. The
- *     read-then-write pair also exists here to preserve `firstFailedAt`
- *     portably (see paragraph above) — `claim` doesn't simplify that.
- *
- * No kit currently ships a filter-based `claimNext`/`claimPending` (Path C
- * in the v2.11.x evaluation) — checked mongokit 3.13.0 + sqlitekit 0.3.0.
- * If/when one appears, the FIFO loop becomes a 1-call adoption candidate.
+ * DO NOT swap `findOneAndUpdate` for `StandardRepo.claim()` — it regresses all
+ * three call sites. `claimPending` has no candidate id (finding + claiming in
+ * one round trip is the point), so `claim` would double the round trips and
+ * open a TOCTOU window. `acknowledge` and `fail` deliberately have loose or
+ * absent source-state predicates; `claim` demands an exact `from`, which
+ * tightens semantics. A filter-based `claimNext` in a kit would make the FIFO
+ * loop adoptable — none ships one today.
  */
 
 import type { OutboxClaimedEvent } from "@classytic/primitives/outbox";

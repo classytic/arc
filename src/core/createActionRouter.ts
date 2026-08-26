@@ -572,65 +572,29 @@ export function createActionRouter(
 // ============================================================================
 
 /**
- * Build a discriminated body schema for the unified action endpoint.
+ * Discriminated body schema for the unified action endpoint: a top-level
+ * `action` enum plus a `oneOf` branch per action, each branch pinning
+ * `action: { const }` and carrying its own `required`.
  *
- * Produces a schema of the form:
- * ```json
- * {
- *   "type": "object",
- *   "required": ["action"],
- *   "properties": {
- *     "action": { "type": "string", "enum": ["dispatch", "approve"] },
- *     "carrier": { "type": "string" }
- *   },
- *   "oneOf": [
- *     {
- *       "properties": {
- *         "action": { "const": "dispatch" },
- *         "carrier": { "type": "string" }       // ← every branch lists the union
- *       },
- *       "required": ["action", "carrier"]
- *     },
- *     {
- *       "properties": {
- *         "action": { "const": "approve" },
- *         "carrier": { "type": "string" }       // ← even though approve doesn't use it
- *       },
- *       "required": ["action"]
- *     }
- *   ]
- * }
- * ```
+ * EVERY BRANCH LISTS THE FULL PROPERTY UNION — the non-obvious part. AJV's
+ * `removeAdditional: 'all'` (Fastify's default) strips a field during a
+ * branch's evaluation when that branch's `properties` omits it, EVEN IF
+ * another branch would have allowed it. The strip mutates the body before
+ * `oneOf` finishes discriminating, so the winning branch receives a body that
+ * has already lost fields: `POST { action: 'hold', amount, reason }` arrived at
+ * the handler as `{ action: 'hold' }`. Listing every action's properties on
+ * every branch makes each walk see every field as its own, so nothing is
+ * stripped; `required` stays per-action, so dispatch still gates correctly.
  *
- * **Why every branch carries the full property union.** AJV's
- * `removeAdditional: 'all'` (Fastify's framework default) interacts badly
- * with `oneOf`: when a branch's `properties` lacks a field, AJV strips it
- * from the body during that branch's evaluation — *even if a different
- * branch would have allowed it*. The strip mutates the body before
- * `oneOf` finishes discriminating, so by the time the matching branch
- * wins, the body has already lost fields. Concretely: `actions: { verify:
- * {}, hold: { schema: z.object({ amount, reason }.optional()) } }` +
- * `POST { action: 'hold', amount: 1, reason }` lands at the handler as
- * `{ action: 'hold' }`. Empirically reproduced and locked at
- * [tests/core/action-discriminator-strip.test.ts](../../tests/core/action-discriminator-strip.test.ts).
+ * Per-branch `additionalProperties: false` survives but cannot reject
+ * sibling-action fields under host `removeAdditional: 'all'` — those strip at
+ * top level instead. That is the host's opt-in; arc's job is only to stop
+ * losing an action's OWN declared fields. Under arc's `createApp`
+ * (`removeAdditional: false`) strict rejection works normally.
  *
- * Listing every action's properties on every branch makes per-branch
- * removeAdditional walks see every caller field as "in this branch's
- * properties," so nothing gets stripped during oneOf evaluation. The
- * `required` array stays per-action, so the handler still gets called
- * only when the matching branch's required-field contract is satisfied.
- * Per-branch `additionalProperties: false` (Zod v4 default) carries
- * through but, under host removeAdditional: 'all', it can no longer
- * reject sibling-action fields — those become silently stripped at top
- * level instead. That's the host's opt-in to stripping; arc's job is to
- * stop accidentally losing the action's *own* declared fields.
- *
- * Under arc's own `createApp` (`removeAdditional: false`), strict-mode
- * rejection still functions normally — see
- * [tests/core/action-strict-schema-parity.test.ts](../../tests/core/action-strict-schema-parity.test.ts).
- *
- * Exported so OpenAPI generation and MCP tool generation can reuse the same
- * schema shape (single source of truth).
+ * Pinned by `tests/core/action-discriminator-strip.test.ts` and
+ * `action-strict-schema-parity.test.ts`. Exported so OpenAPI and MCP tool
+ * generation reuse one shape.
  */
 export function buildActionBodySchema(
   actionEnum: readonly string[],

@@ -7,55 +7,24 @@
  *   - `@classytic/arc/testing` — compatibility export under the testing namespace
  *     (use this from inside vitest setup files / unit-test fixtures).
  *
- * `loadResources()` works in production and most vitest setups, but it can fail
- * in two edge cases:
+ * `loadResources()` covers production and most vitest setups. Reach for this
+ * when its DYNAMIC import fails: a resource doing engine init at module
+ * top-level (the engine must exist first), or vitest's loader chain not
+ * resolving .js→.ts through transitive `node_modules`. Vite rewrites
+ * `import.meta.glob` at transform time, so every match goes through the normal
+ * transform pipeline instead.
  *
- *   1. Resources that depend on top-level engine init (e.g., `getAccountModel()`
- *      called at module top-level, where the engine must be initialized FIRST)
- *
- *   2. Vitest's loader chain not composing perfectly with dynamic imports for
- *      deeply nested .js→.ts resolution in transitive `node_modules` packages
- *
- * For these cases, use Vite's compile-time `import.meta.glob` to preload
- * resources statically. This bypasses dynamic import entirely — every match
- * goes through vitest's transform pipeline like any other static import.
+ * `eager: true` evaluates at import time of the calling file. Use
+ * `preloadResourcesAsync` (and drop `eager`) when resources need a bootstrap to
+ * run first.
  *
  * @example
  * ```typescript
- * // tests/setup/preload-resources.ts
- * import { preloadResources } from '@classytic/arc/testing';
- *
- * // Vite rewrites import.meta.glob at transform time into a static map.
- * // eager: true evaluates all resources at import time of THIS file.
- * // Use eager: false if any resource depends on prior bootstrap (engine init).
  * export const preloadedResources = preloadResources(
- *   import.meta.glob('../../src/resources/**\/*.resource.ts', {
- *     eager: true,
- *     import: 'default',
- *   }),
+ *   import.meta.glob('../../src/resources/**\/*.resource.ts',
+ *                    { eager: true, import: 'default' }),
  * );
- * ```
- *
- * @example
- * ```typescript
- * // tests/integration/foo.test.ts
- * import { createApp } from '@classytic/arc/factory';
- * import { preloadedResources } from '../setup/preload-resources.js';
- *
  * const app = await createApp({ resources: preloadedResources });
- * ```
- *
- * @example
- * ```typescript
- * // For deferred loading (when modules need bootstrap to run first):
- * import { preloadResourcesAsync } from '@classytic/arc/testing';
- *
- * // bootstrap engines before loading resources
- * await initAccountingEngine();
- *
- * const resources = await preloadResourcesAsync(
- *   import.meta.glob('../../src/resources/**\/*.resource.ts', { import: 'default' }),
- * );
  * ```
  */
 

@@ -17,44 +17,15 @@
  * therefore runs identically on every backend that implements the
  * `StandardRepo.findOneAndUpdate` + `getOne` + `deleteMany` surface.
  *
- * Why we DON'T use `StandardRepo.getOrCreate()` — design note for the next
- * reader who wants to "modernize" `tryLock` after the v0.3.x repo-core fix
- * that gave `getOrCreate` a `{ doc, created }` discriminator:
- *
- *   • `tryLock` has TWO race-detection paths in a single primitive:
- *       (a) first-time acquire — no doc for this key yet → insert + win
- *       (b) stale-lease takeover — doc exists, lock expired → REPLACE
- *           the old lock with this caller's lock + win
- *     The current filter `and(eq(idField, key), or(exists("lock", false),
- *     lt("lock.expiresAt", now)))` covers BOTH paths in one atomic
- *     `findOneAndUpdate` round-trip; the dup-key catch disambiguates the
- *     concurrent first-time race (two callers, empty key, both try to
- *     insert — Mongo's unique `_id` index lets exactly one win).
- *
- *   • `getOrCreate(filter, data)` is "if filter matches return existing
- *     doc unchanged; else insert `data`" — it CANNOT mutate an existing
- *     doc. For stale-lease takeover (path b above), the existing stale
- *     row matches `filter`, so `getOrCreate` would return
- *     `{ doc: staleRow, created: false }` and never let the new caller
- *     replace the expired lease. Adopting it for `tryLock` would silently
- *     break stale-lock takeover — a real semantic regression that breaks
- *     the plugin's "crashed handler eventually unblocks" guarantee.
- *
- *   • A two-call hybrid (`getOrCreate` first; on `created: false`,
- *     fall back to `findOneAndUpdate` for the takeover) doubles the
- *     happy-path round-trip count and adds zero correctness — the
- *     single `findOneAndUpdate` already handles both cases atomically.
- *
- *   • `set` always overwrites the response envelope and unsets the lock,
- *     regardless of whether a doc exists. That is "upsert + replace",
- *     not "find or create" — `getOrCreate` doesn't match `set`'s
- *     semantics at all.
- *
- * Constraint: `getOrCreate` is the right primitive for "first-write seeds
- * the row" flows where existing docs are returned untouched. `tryLock`
- * is not such a flow — its definitional purpose is to OVERWRITE expired
- * leases. Keep `findOneAndUpdate`. Locked in by
- * `tests/idempotency/get-or-create-evaluation.test.ts`.
+ * DO NOT swap `tryLock` for `StandardRepo.getOrCreate()`. `tryLock` resolves
+ * TWO paths in one atomic `findOneAndUpdate` — first acquire (no doc yet) and
+ * stale-lease TAKEOVER (doc exists, lock expired) — with the dup-key catch
+ * disambiguating the concurrent first-time race. `getOrCreate` returns an
+ * existing match untouched and cannot mutate it, so the stale row would win
+ * forever and the plugin's "a crashed handler eventually unblocks" guarantee
+ * would break silently. A hybrid doubles the happy-path round trips for no
+ * correctness. `set` is upsert-and-replace, which is not that primitive
+ * either. Pinned by `tests/idempotency/get-or-create-evaluation.test.ts`.
  */
 
 import type { RepositoryLike } from "@classytic/repo-core/adapter";

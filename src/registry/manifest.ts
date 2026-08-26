@@ -1,62 +1,21 @@
 /**
- * Resource manifest for frontend code generators.
+ * Resource metadata for frontend code generators — `{ name, prefix, idField,
+ * crudOps, actions[] }`, where each action carries its `mount` and
+ * `requiresId`.
  *
- * Every host that hand-rolls a `createCrudApi('foo')` helper on the frontend
- * ends up rewriting the same shim for declarative actions: `postAction(id,
- * name, body)` — and forgets to add a method for every NEW action declared
- * on the resource. The OpenAI-team report flagged this in fajr's
- * `invoices.js`, and now matches needs the same.
+ * A hand-rolled FE client needs a method per declarative action and drifts the
+ * moment a new one is declared. Arc owns the resource definition, so it can
+ * emit the list instead of the host maintaining a parallel one.
  *
- * Arc owns the resource definition, so arc can ship the metadata FE codegen
- * needs in one canonical shape:
+ * BE-side only — arc ships no FE runtime. The host decides whether this powers
+ * a fetch helper, a TanStack Query factory, an RPC client, or `.d.ts` codegen.
  *
- *   {
- *     name: 'invoice',
- *     prefix: '/invoices',
- *     idField: '_id',
- *     crudOps: ['list', 'get', 'create', 'update', 'delete'],
- *     actions: [
- *       { name: 'recordPayment', mount: '/:id/action', requiresId: true,  description: '...' },
- *       { name: 'propose',       mount: '/action',     requiresId: false, description: '...' },
- *     ],
- *   }
- *
- * Hosts feed this into their FE generator (or a runtime `createActionsApi`
- * shim) and every action is wired automatically. New actions land on the FE
- * the same moment they're declared on the resource — no parallel list to
- * keep in sync.
- *
- * The helper is BE-side only (lives under `@classytic/arc/registry`) — arc
- * stays a backend framework and doesn't ship FE runtime code. The host
- * decides whether the manifest powers a fetch-based helper, a TanStack
- * Query factory, an RPC client, or static `.d.ts` generation.
- *
- * @example BE → emit JSON at build time / on a route
+ * @example
  * ```ts
- * // Build-time codegen
- * import { buildResourceManifest } from '@classytic/arc/registry';
- * import { invoiceResource } from './invoice.resource.js';
- * writeFileSync('./fe-gen/invoice.manifest.json',
- *   JSON.stringify(buildResourceManifest(invoiceResource)));
- *
- * // Runtime introspection endpoint
- * fastify.get('/manifest/:name', async (req) => {
- *   const r = arc.registry.get(req.params.name);
- *   return r ? buildResourceManifestFromRegistry(r) : reply.code(404);
- * });
- * ```
- *
- * @example FE → generate fetch methods from the manifest
- * ```ts
- * import manifest from './fe-gen/invoice.manifest.json';
- * import { createActionsApi } from './my-fe-shim.js';  // host-owned
- *
- * export const invoicesApi = {
- *   ...createCrudApi(manifest.prefix),
- *   ...createActionsApi(manifest.prefix, manifest.actions),
- *   // → invoicesApi.recordPayment(id, body)
- *   // → invoicesApi.propose(body)        // id-less
- * };
+ * // build time
+ * writeFileSync('invoice.manifest.json', JSON.stringify(buildResourceManifest(r)));
+ * // or at runtime, from the live registry
+ * buildResourceManifestFromRegistry(arc.registry.get(name));
  * ```
  */
 

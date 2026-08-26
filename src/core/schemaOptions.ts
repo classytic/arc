@@ -110,50 +110,27 @@ function stripFromRequired(
 }
 
 /**
- * Strip framework-injected fields from the `required[]` list of every
- * body-shaped slot in an adapter's generated schemas.
+ * Drop `systemManaged` fields from `required[]` in generated body schemas.
  *
- * A "framework-injected field" is any field marked `systemManaged: true`
- * in `schemaOptions.fieldRules`. Arc populates those fields from the
- * request scope / preset middleware / controller — the client is never
- * expected to supply them, so they must not be in the wire contract's
- * `required[]` even if the underlying engine's Mongoose/Zod schema
- * declares them as required at the DB layer.
+ * Arc populates those from scope / preset middleware / controller, so a client
+ * never supplies them — but the DB schema may still mark them required, and the
+ * adapter reflects that into the wire contract.
  *
- * **The primary gotcha this closes:** engines built on
- * `@classytic/primitives` (mongokit, pricelist, and every downstream
- * `@classytic/*` engine) default to `tenant: { required: true }` in
- * `resolveTenantConfig()`. That stamps `organizationId: { required: true }`
- * on the Mongoose schema, which the adapter faithfully reflects into the
- * generated `createBody` / `updateBody` schema's `required[]`. Fastify's
- * preValidation runs BEFORE arc's preHandler chain, so
- * `multiTenantPreset`'s tenant-injection hook never gets a chance to run —
- * the request is rejected with `must have required property 'organizationId'`
- * even though the client correctly supplied `x-organization-id` and the
- * framework had already promised to inject the value.
+ * THE GOTCHA THIS CLOSES: engines on `@classytic/primitives` default to
+ * `tenant: { required: true }`, stamping `organizationId` as required. Fastify
+ * preValidation runs BEFORE arc's preHandler chain, so the tenant-injection
+ * hook never gets to run and the request dies on
+ * `must have required property 'organizationId'` — even though the client sent
+ * `x-organization-id` and arc had promised to inject it. The alternative was
+ * `tenant: { required: false }` at every consumer site.
  *
- * The only workaround before 2.11 was
- * `createEngine({ tenant: { required: false } })` at every consumer site —
- * a leaky abstraction every new engine-backed resource had to remember.
+ * Also covers `auditedPreset`'s `createdBy`/`updatedBy` and any host rule
+ * marked `systemManaged`. Applies to create AND update, since update middleware
+ * injects the same fields.
  *
- * **Secondary coverage (defense-in-depth):** the same transform also fires
- * for `auditedPreset`'s `createdBy` / `updatedBy`, any future preset that
- * marks fields `systemManaged`, and any host-declared `fieldRules` with
- * `systemManaged: true`. Every framework-injected field gets the wire
- * contract / runtime pairing for free.
- *
- * **Leaves `properties` intact** — elevated admins or advanced callers can
- * still send systemManaged fields in the body. `BodySanitizer` enforces
- * the runtime policy (`preserveForElevated`, `strip` vs `reject`, etc.).
- *
- * **No-op when:**
- * - `schemaOptions.fieldRules` is undefined / empty
- * - No rule has `systemManaged: true`
- * - The generated schemas object is undefined (adapter didn't generate any)
- *
- * Applies to both `createBody` and `updateBody` — update middleware also
- * injects tenant/audit fields, so the update wire contract has the same
- * problem as create.
+ * `properties` is left INTACT — an elevated caller may still send these, and
+ * `BodySanitizer` owns that runtime policy (`preserveForElevated`,
+ * strip-vs-reject). No-op without `systemManaged` rules or generated schemas.
  */
 export function stripSystemManagedFromBodyRequired<
   T extends { createBody?: unknown; updateBody?: unknown } | undefined,

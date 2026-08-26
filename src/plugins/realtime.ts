@@ -8,64 +8,38 @@
  * bridge) over SSE, gated and filtered by the SAME machinery that guards
  * the REST routes:
  *
- *   1. CONNECT gate — the resource's `list` permission runs once (same
- *      check, same 401/403 shapes). Its row filters (`_policyFilters`)
- *      are snapshotted for the connection.
- *   2. PER-EVENT row filtering — each event's document is matched against
- *      the snapshot IN PROCESS (adapter `matchesFilter` when the kit
- *      supplies one, `simpleEqualityMatcher` for flat-equality filters).
- *      No per-event DB round-trip, no client-side N+1 `stat` calls.
- *   3. TENANT guard — events carrying an `organizationId` only reach
- *      subscribers whose scope matches (fail-closed for org-less callers),
- *      unless the resource declared `tenantField: false`.
- *   4. FIELD masking — `applyFieldReadPermissions` runs on every payload
- *      with the subscriber's roles, so hidden/role-gated fields never
- *      reach the wire. The registry's live `fields` map powers this.
+ *   1. CONNECT gate — the resource's `list` permission runs once; its row
+ *      filters (`_policyFilters`) are snapshotted for the connection.
+ *   2. PER-EVENT filtering — matched against that snapshot IN PROCESS
+ *      (adapter `matchesFilter`, else `simpleEqualityMatcher`). No per-event
+ *      DB round-trip.
+ *   3. TENANT guard — an event carrying `organizationId` reaches only
+ *      matching scopes, fail-closed for org-less callers, unless the resource
+ *      set `tenantField: false`.
+ *   4. FIELD masking — per subscriber roles, so gated fields never hit the wire.
  *
- * FAIL-CLOSED contract: operator-shaped filters (`$or`/`$in`, e.g. from
- * `requireGrant` list resolutions) without an adapter `matchesFilter`
- * REJECT the subscription at connect (501 + fix hint) — never silently
- * deliver unfiltered rows. Events whose payload can't be matched are
- * dropped.
+ * FAIL-CLOSED: operator-shaped filters (`$or`/`$in`, e.g. from `requireGrant`)
+ * with no adapter `matchesFilter` REJECT the subscription at connect (501 +
+ * hint) rather than delivering unfiltered rows. Unmatchable events are dropped.
  *
- * MULTIPLEXING (Mercure-style): `GET /realtime?resources=a,b,c` carries N
- * feeds over ONE connection (cap {@link MAX_MULTIPLEX_RESOURCES}) — the
- * Phoenix-channels/Pusher concern answered at the URL level, no custom
- * protocol. Each resource is authorized independently with an ISOLATED
- * filter snapshot; any denial rejects the whole subscription. Frames are
- * SSE-standard: per-frame `id:` (client `lastEventId` dedup) + a `retry:`
- * hint at connect.
+ * MULTIPLEXING: `?resources=a,b,c` carries N feeds on one connection (cap
+ * {@link MAX_MULTIPLEX_RESOURCES}). Each is authorized independently with an
+ * ISOLATED snapshot; any denial rejects the whole subscription.
  *
- * MEMBERSHIP TRANSITIONS: when an UPDATE moves a record OUT of a
- * subscriber's row filter (owner reassigned, soft-deleted, moved org), the
- * feed emits a synthetic `<resource>.left` frame (`{ id }`) so the client
- * drops the now-invisible row — the "row left the result set" signal every
- * mature realtime system sends (Firestore `removed`, ElectricSQL move-out,
- * Meteor `removed`, RethinkDB `remove`). The ENTER transition needs no
- * special frame — the matching `updated` frame carries the full record.
+ * `<resource>.left` is emitted when an update moves a record OUT of a
+ * subscriber's filter, so the client can drop a now-invisible row. Entering
+ * needs no frame — the `updated` frame carries the record.
  *
- * STALENESS BOUND: row filters are snapshotted at connect, so a caller
- * whose permissions are revoked mid-connection keeps their old view until
- * reconnect. The feed force-closes at the auth token's `exp` (→ reconnect →
- * fresh authorization); `maxConnectionMs` caps this for session/cookie auth
- * with no `exp`. Same posture as Supabase's JWT-TTL-bounded Broadcast.
+ * STALENESS: filters snapshot at connect, so revoked permissions persist until
+ * reconnect. The feed force-closes at the token's `exp`; `maxConnectionMs`
+ * bounds session/cookie auth that has none.
  *
- * Deliberate NON-goals (keep the surface honest):
- *   - No replay/resume — reconnecting clients refetch the list; the feed
- *     is a change NOTIFIER, not an event store (use the outbox for
- *     guaranteed delivery).
- *   - Filters must be CONCRETE at connect (arc's permission helpers resolve
- *     grant/tenant ids into literal values). A filter referencing a related
- *     row NOT present in the event payload can't be evaluated in-process —
- *     encode such rules as data on the record, or accept the DB-list view.
- *   - No presence/broadcast — `app.events` + the sse plugin already cover
- *     custom channels.
- *   - No payload E2EE — TLS + per-subscriber field masking is the wire
- *     posture (industry-consistent: Supabase/Pusher ship no realtime
- *     payload encryption; Signal-style E2EE is for user-to-user messaging,
- *     not server-authoritative feeds).
- *   - Delivery is per-instance at-most-once over the event transport's
- *     semantics (memory: this instance; Redis Streams: at-least-once).
+ * NON-GOALS: no replay/resume (a change NOTIFIER, not an event store — use the
+ * outbox for guaranteed delivery); filters must be CONCRETE at connect, since a
+ * rule referencing a row absent from the payload cannot be evaluated in
+ * process; no presence/broadcast (`app.events` + sse cover that); no payload
+ * E2EE (TLS + field masking is the posture). Delivery is per-instance and
+ * follows the transport's semantics.
  *
  * @example
  * ```ts

@@ -1,45 +1,23 @@
 /**
- * @classytic/arc — WebSocket Integration (public entry)
+ * WebSocket integration — public surface, re-exporting `./websocket/*`.
  *
- * Pluggable adapter that wires @fastify/websocket into Arc's resource system.
- * Provides room-based subscriptions, auto-broadcasts resource CRUD events,
- * and respects Arc's auth/org scoping.
+ * Wires `@fastify/websocket` into arc's resource system: room-based
+ * subscriptions, auto-broadcast of resource CRUD events, arc auth/org scoping.
+ * A separate subpath, loaded only when used. Peer: `@fastify/websocket`.
  *
- * This is a SEPARATE subpath import — only loaded when explicitly used:
- *   import { websocketPlugin } from '@classytic/arc/integrations/websocket';
+ * ⚠ Needs PERSISTENT connections — not serverless (Lambda, Vercel). Use on
+ * Docker / VPS / K8s / Cloud Run with min-instances > 0.
  *
- * Requires: @fastify/websocket (peer dependency)
- *
- * NOTE: WebSocket requires persistent connections. This does NOT work on
- * serverless platforms (Lambda, Vercel). Only use on persistent runtimes
- * (Docker, VPS, K8s, Cloud Run with min-instances > 0).
+ * Implementation splits into `types` · `adapter` · `room-manager` · `auth`
+ * (the single handshake/re-auth boundary) · `connection` · `event-bridge` ·
+ * `plugin`.
  *
  * @example
  * ```typescript
- * import { websocketPlugin } from '@classytic/arc/integrations/websocket';
- *
  * await fastify.register(websocketPlugin, {
- *   path: '/ws',
- *   auth: true,
- *   resources: ['product', 'order'],
- *   heartbeatInterval: 30000,
+ *   path: '/ws', auth: true, resources: ['product', 'order'],
  * });
  * ```
- *
- * ## Module layout
- *
- * Implementation was split from a single 680-LOC file (with two duplicated
- * `fakeReply` auth shims) into focused submodules:
- *
- *   - `./websocket/types.ts`        — public interfaces
- *   - `./websocket/adapter.ts`      — `WebSocketAdapter` + `LocalWebSocketAdapter`
- *   - `./websocket/room-manager.ts` — `RoomManager` subscription bookkeeping
- *   - `./websocket/auth.ts`         — single boundary for handshake + re-auth
- *   - `./websocket/connection.ts`   — per-socket lifecycle (handshake → close)
- *   - `./websocket/event-bridge.ts` — event bus wiring + stats endpoint
- *   - `./websocket/plugin.ts`       — thin orchestrator
- *
- * This file is the public surface — re-exports what apps import.
  */
 
 // Public surface — keep tight. Internal helpers (SendQueue, DeadQueue,

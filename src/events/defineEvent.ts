@@ -1,58 +1,24 @@
 /**
- * defineEvent — Typed Event Definitions with Optional Schema Validation
+ * Typed event declarations, a registry for introspection, and `.create()` to
+ * build a `DomainEvent` with generated metadata.
  *
- * Provides:
- * 1. defineEvent() — declare an event with name, schema, version, description
- * 2. EventRegistry — catalog of all known events + payload validation
- * 3. .create() helper — build DomainEvent with auto-generated metadata
- *
- * The built-in validator checks: object type, required fields, and top-level
- * property types. It does NOT recurse into nested objects, validate arrays,
- * enums, patterns, formats, or $ref. This is intentional — it's a lightweight
- * guard, not a full JSON Schema engine.
- *
- * For full validation, pass a custom `validate` function to `createEventRegistry()`:
+ * The BUILT-IN validator is deliberately shallow: object type, required
+ * fields, and top-level property types only. It does not recurse, nor handle
+ * arrays, enums, patterns, formats, or `$ref` — it is a guard, not a JSON
+ * Schema engine. Pass `validate` to `createEventRegistry()` to delegate to AJV
+ * or similar when you need the real thing.
  *
  * @example
  * ```typescript
- * import Ajv from 'ajv';
- * const ajv = new Ajv();
- *
- * const registry = createEventRegistry({
- *   validate: (schema, payload) => {
- *     const valid = ajv.validate(schema, payload);
- *     return valid
- *       ? { valid: true }
- *       : { valid: false, errors: ajv.errorsText().split(', ') };
- *   },
- * });
- * ```
- *
- * @example
- * ```typescript
- * import { defineEvent, createEventRegistry } from '@classytic/arc/events';
- *
  * const OrderCreated = defineEvent({
  *   name: 'order.created',
  *   version: 1,
- *   schema: {
- *     type: 'object',
- *     properties: {
- *       orderId: { type: 'string' },
- *       total: { type: 'number' },
- *     },
- *     required: ['orderId', 'total'],
- *   },
+ *   schema: { type: 'object', properties: { orderId: { type: 'string' } },
+ *             required: ['orderId'] },
  * });
  *
- * // Type-safe event creation
- * const event = OrderCreated.create({ orderId: 'o-1', total: 100 });
+ * const event = OrderCreated.create({ orderId: 'o-1' });
  * await fastify.events.publish(event.type, event.payload, event.meta);
- *
- * // Registry for introspection + validation
- * const registry = createEventRegistry();
- * registry.register(OrderCreated);
- * const result = registry.validate('order.created', payload);
  * ```
  */
 

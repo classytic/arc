@@ -2,50 +2,24 @@
  * `simpleEqualityMatcher` — a minimal, dialect-agnostic flat-key equality
  * matcher for `DataAdapter.matchesFilter` / `BaseController({ matchesFilter })`.
  *
- * **What it does:** for each `[key, expected]` in the filter, compares
- * `item[key]` to `expected` via string coercion (so Mongo `ObjectId` values
- * match their string representation) and returns `true` only if every
- * filter entry matches. Array item values are matched implicitly (contains).
+ * Compares `item[key]` to each filter value by string coercion, so a Mongo
+ * `ObjectId` matches its string form; array values match by contains. ALL
+ * entries must match.
  *
- * **What it does NOT do:**
- * - No `$eq` / `$ne` / `$in` / `$nin` / `$gt` / `$lt` / `$regex` / `$exists`
- * - No `$and` / `$or`
- * - No dot-path traversal (`"owner.id"`)
- * - No schema-specific coercion
+ * NOT an operator engine: no `$in`/`$ne`/`$gt`/`$regex`/`$exists`, no
+ * `$and`/`$or`, no dot paths, no schema coercion. Most `_policyFilters` from
+ * arc's built-in permission helpers are flat equality (`{ ownerId }`,
+ * `{ organizationId }`), and this covers exactly that — defense-in-depth for
+ * hosts on minimal repos with no `getOne(compoundFilter)` path.
  *
- * **Why it exists:** 95%+ of arc's `_policyFilters` are produced by built-in
- * permission helpers and are shaped like `{ ownerId: "u1" }` or
- * `{ organizationId: "org_x" }` — flat equality. For that common shape,
- * this helper is a safe, tested, 15-line defense-in-depth matcher that
- * hosts using minimal repos (no `getOne(compoundFilter)` DB path) can opt
- * into without arc shipping a full Mongo-syntax engine.
- *
- * **When to use:**
- * - Your adapter/repo doesn't natively filter on `getOne(compoundFilter)`
- * - Your `_policyFilters` are flat equality (from arc's built-in permission helpers)
- * - You want defense-in-depth on `validateItemAccess` / `fetchDetailed`'s `getById` fallback
- *
- * **When NOT to use:**
- * - Your `_policyFilters` use operators (`$in`, `$ne`, etc.) — supply a
- *   native matcher (mongokit's repo does the filter at the DB layer; for
- *   custom repos, wrap the kit's own predicate engine).
- * - You're a mongokit / sqlitekit / Prisma user — the DB-level filter
- *   applied by `getOne(compoundFilter)` already covers this.
+ * Do NOT use it with operator-shaped filters — supply a native matcher instead
+ * (a kit's predicate engine). Kit users need neither: the DB-level filter in
+ * `getOne(compoundFilter)` already applies.
  *
  * @example
  * ```ts
- * import { simpleEqualityMatcher } from '@classytic/arc/utils';
- *
- * // On a custom adapter
- * const adapter: DataAdapter = {
- *   repository,
- *   type: 'custom',
- *   name: 'in-memory',
- *   matchesFilter: simpleEqualityMatcher,
- * };
- *
- * // Or directly on BaseController for ad-hoc controllers
- * new BaseController(repo, { matchesFilter: simpleEqualityMatcher });
+ * const adapter: DataAdapter = { repository, type: 'custom', name: 'in-memory',
+ *                                matchesFilter: simpleEqualityMatcher };
  * ```
  */
 export function simpleEqualityMatcher(item: unknown, filters: Record<string, unknown>): boolean {
