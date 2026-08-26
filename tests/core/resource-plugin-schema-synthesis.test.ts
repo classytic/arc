@@ -72,6 +72,73 @@ describe("buildGeneratedCrudSchemas", () => {
     expect((result?.update?.body as { required?: unknown }).required).toBeUndefined();
   });
 
+  /**
+   * Regression — real defect: `delete patchBody.required` only removed the
+   * TOP-LEVEL key. A schema generator (e.g. mongokit's Mongoose introspection)
+   * can hand back an `updateBody` whose subdocument-array `items` schema
+   * carries its OWN `required` array — a product `variants: [{ sku,
+   * attributes }]` field, for instance — and that nested `required` survived
+   * untouched. Fastify/AJV then rejected a PATCH adding one variant with a
+   * genuinely-empty-but-present `attributes: {}`, because the generated
+   * PATCH schema still demanded the key at `variants.items.required`.
+   */
+  it("strips `required` from a nested subdocument-array item's schema too, not just the top level", () => {
+    const openApi = {
+      params: { type: "object", properties: { id: { type: "string" } } },
+      updateBody: {
+        type: "object",
+        properties: {
+          variants: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                sku: { type: "string" },
+                attributes: { additionalProperties: true },
+              },
+              required: ["sku", "attributes"],
+            },
+          },
+        },
+      },
+    };
+
+    const result = buildGeneratedCrudSchemas(openApi, undefined);
+    const body = result?.update?.body as {
+      properties?: { variants?: { items?: { required?: unknown } } };
+    };
+    expect(body.properties?.variants?.items?.required).toBeUndefined();
+  });
+
+  it("deep-stripping `required` for the PATCH copy does not mutate the source updateBody", () => {
+    // `stripRequiredDeep` mutates in place — the function MUST clone before
+    // stripping, or a shared `openApiSchemas.updateBody` reference (read by
+    // OpenAPI docgen, or reused across resource registration) would lose its
+    // nested `required` arrays too, not just the PATCH copy this function
+    // hands to the update route.
+    const updateBody = {
+      type: "object",
+      properties: {
+        variants: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { sku: { type: "string" } },
+            required: ["sku"],
+          },
+        },
+      },
+    };
+    const openApi = {
+      params: { type: "object", properties: { id: { type: "string" } } },
+      updateBody,
+    };
+
+    buildGeneratedCrudSchemas(openApi, undefined);
+
+    expect(updateBody.properties.variants.items.required).toEqual(["sku"]);
+  });
+
   it("defaults body schemas to `additionalProperties: true` to avoid extractor rejection", () => {
     const openApi = {
       createBody: { type: "object", properties: { name: { type: "string" } } },

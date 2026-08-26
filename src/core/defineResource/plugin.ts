@@ -87,10 +87,19 @@ export function buildGeneratedCrudSchemas(
       generated.create = { body: safeBody(createBody as AnyRecord) };
     }
     if (updateBody) {
-      // PATCH semantics: strip `required` so all fields are optional.
-      // PUT gets the original with required fields intact.
-      const patchBody = { ...(updateBody as AnyRecord) };
-      delete patchBody.required;
+      // PATCH semantics: strip `required` so all fields are optional, at
+      // EVERY nesting depth — not just the top level. PUT gets the
+      // original with required fields intact.
+      //
+      // A structuredClone, not a shallow spread: `stripRequiredDeep`
+      // mutates in place, and `updateBody` here is `openApiSchemas.updateBody`
+      // — a shared reference other readers (OpenAPI docgen, a second CRUD
+      // slot) may still expect untouched. A shallow `{ ...updateBody }`
+      // only copies the top level; every nested `properties`/`items` object
+      // stays the SAME reference, so a shallow clone would let the deep
+      // strip corrupt the shared schema instead of just this PATCH copy.
+      const patchBody = structuredClone(updateBody as AnyRecord);
+      stripRequiredDeep(patchBody);
       generated.update = { body: safeBody(patchBody) };
       if (params) generated.update.params = cloneShallow(params as AnyRecord);
     }
@@ -219,6 +228,35 @@ export function deepMergeSchemas(base: AnyRecord, override: AnyRecord): AnyRecor
 
 function cloneShallow(value: AnyRecord): AnyRecord {
   return { ...value };
+}
+
+/**
+ * Recursively delete every `required` keyword from a JSON-schema subtree
+ * (properties, array items, nested subdocuments).
+ *
+ * PATCH semantics mean every field is optional at every nesting depth, not
+ * just the root. `buildGeneratedCrudSchemas` used to only `delete
+ * patchBody.required` at the top level — a schema generator (mongokit's
+ * Mongoose introspection, or any other `SchemaGenerator` implementation) can
+ * legitimately hand back an `updateBody` whose nested subdocument-array
+ * `items` schema carries its OWN `required` array, and that survived
+ * untouched. A PATCH adding one item to a subdocument array — a product
+ * variant, a line item, anything shaped `{ type: [{...}] }` with a required
+ * field inside — was then rejected by AJV for a field the caller had no way
+ * to know it needed to resend, before the request ever reached the resource
+ * handler. Deep-stripping here means arc enforces PATCH semantics on
+ * WHATEVER schema a generator produces, rather than trusting each generator
+ * to have gotten the recursion right on its own.
+ */
+function stripRequiredDeep(node: unknown): void {
+  if (Array.isArray(node)) {
+    for (const item of node) stripRequiredDeep(item);
+    return;
+  }
+  if (!node || typeof node !== "object") return;
+  const obj = node as AnyRecord;
+  delete obj.required;
+  for (const value of Object.values(obj)) stripRequiredDeep(value);
 }
 
 function safeBody(schema: AnyRecord): AnyRecord {
