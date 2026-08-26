@@ -1,45 +1,23 @@
 /**
  * A cache whose lifetime is ONE REQUEST.
  *
- * ## Why this exists
+ * Several collaborators in one request read the same document and none can
+ * amortise it, because no layer sees the whole request. A process-lifetime
+ * cache is the wrong fix — it serves one request's data to the next. Scoping
+ * to the request makes staleness impossible by construction instead of by
+ * tuning a TTL.
  *
- * A repository read is a network round trip. When several independent
- * collaborators in one request each need the same document — the order handler,
- * the posting handler, the invoice loader — each pays for it again, because no
- * layer sees the whole request and so no layer can amortise it. A measured
- * order placement issued **15 reads of one order document and 9 of one
- * customer**, every one of them a full round trip.
+ * Outside a request `requestScopedCache()` returns `undefined` (cron, CLI,
+ * boot, tests) and repo-core reads through. Falling back to a process-wide
+ * store there would be the cross-request leak this prevents — and invisible,
+ * since every call still returns a plausible value.
  *
- * A process-lifetime cache is the WRONG fix for that: it would serve one
- * request's order to the next request, which is a correctness bug traded for a
- * latency win. The right lifetime is the request itself — and then staleness
- * is impossible by construction rather than by tuning a TTL.
- *
- * ## The division of labour
- *
- * - **repo-core** owns "how do I cache a repository read" — the key, the
- *   envelope, the invalidation. It accepts a `CacheAdapterResolver` and never
- *   learns what a request is.
- * - **arc** owns "what is a request" — this file. It already runs the
- *   `AsyncLocalStorage` that makes the question answerable.
- *
- * Neither package gains a dependency on the other's vocabulary, which is the
- * whole reason the seam is a resolver and not a flag.
- *
- * ## Outside a request, there is NO cache
- *
- * `requestScopedCache()` returns `undefined` when called outside the ALS —
- * cron jobs, CLI scripts, boot, tests. repo-core treats that as `disabled` and
- * reads straight through. The alternative (lazily creating a process-wide
- * store as a fallback) is exactly the cross-request leak this design exists to
- * prevent, and it would be invisible: every call would still return a
- * plausible value, occasionally someone else's.
+ * The seam is a resolver so neither package learns the other's vocabulary:
+ * repo-core owns "how to cache a repository read", arc owns "what is a
+ * request".
  *
  * @example
  * ```ts
- * import { requestScopedCache } from '@classytic/arc/context';
- * import { cachePlugin } from '@classytic/mongokit';
- *
  * new Repository(OrderModel, [
  *   cachePlugin({ adapter: () => requestScopedCache() }),
  * ]);
@@ -56,18 +34,13 @@ import { requestContext } from "./requestContext.js";
 const SLOT = "_requestCache";
 
 /**
- * A `Map`-backed `CacheAdapter` with NO eviction and NO TTL enforcement.
+ * A `Map`-backed `CacheAdapter` with NO eviction and NO TTL — both deliberate.
  *
- * Both omissions are deliberate rather than unfinished. The store is
- * unreachable once the request's async context ends, so it is garbage in
- * milliseconds and bounded by what a single request can touch — an LRU here
- * would add bookkeeping to protect against a lifetime that cannot occur.
- *
- * TTL is accepted and ignored for the same reason: repo-core stamps freshness
- * INTO the envelope it stores and re-checks it on read, so expiry is already
- * enforced one layer up. Honouring `ttl` here as well would mean two clocks
- * deciding the same question, and the interesting case — a request outliving
- * its own `staleTime` — is already handled correctly by the envelope.
+ * The store is unreachable once the request's async context ends, so it is
+ * garbage in milliseconds and bounded by what one request touches; an LRU
+ * would guard a lifetime that cannot occur. TTL is accepted and ignored
+ * because repo-core stamps freshness INTO the envelope and re-checks on read —
+ * honouring it here too would put two clocks on one question.
  */
 function createRequestCacheAdapter(): CacheAdapter {
   const map = new Map<string, unknown>();
@@ -85,11 +58,9 @@ function createRequestCacheAdapter(): CacheAdapter {
       map.delete(key);
     },
     /**
-     * `clear` ignores its pattern and wipes the request's whole store.
-     *
-     * Over-invalidating within one request costs at most a re-read; the
-     * pattern-matching a shared store needs is what would have to be
-     * CORRECT here, and a store that dies in milliseconds does not earn it.
+     * Ignores the pattern and wipes the whole store. Over-invalidating within
+     * one request costs at most a re-read; pattern matching is complexity a
+     * store that dies in milliseconds does not earn.
      */
     async clear(_pattern?: string): Promise<void> {
       map.clear();

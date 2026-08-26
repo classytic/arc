@@ -1,22 +1,11 @@
 /**
- * Schema-synthesis pure-function unit tests
+ * `buildGeneratedCrudSchemas` — adapter `OpenApiSchemas` + the resource's
+ * `customSchemas` → the per-op schema map `createCrudRouter` consumes.
  *
- * `buildGeneratedCrudSchemas` is the pure function pulled out of
- * `toPlugin()`'s plugin closure: given an adapter's OpenApiSchemas + the
- * resource's customSchemas, it produces the per-CRUD-op schema map
- * (`{ create: { body }, update: { body, params }, get: { params }, delete: { params } }`)
- * that `createCrudRouter` consumes.
- *
- * The reason this is its own file: the previous inline implementation
- * shared `params` references across 3+ CRUD slots (`generated.get =
- * { params }; generated.delete = { params }; generated.update.params =
- * params`), so any downstream mutation of one operation's params schema
- * would leak into the others. Vendor extensions, AJV `$ref` decoration,
- * description overrides — all classes of edits that could quietly
- * cross-contaminate the schema for other operations.
- *
- * The function now clones `params` per slot. These tests pin that
- * contract.
+ * The contract these pin: `params` is CLONED per slot. Sharing one reference
+ * across get/delete/update let any downstream mutation — a vendor extension,
+ * AJV `$ref` decoration, a description override — cross-contaminate the other
+ * operations' schemas.
  */
 
 import { describe, expect, it } from "vitest";
