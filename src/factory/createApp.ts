@@ -39,6 +39,7 @@ import Fastify, {
   type FastifyInstance,
   type FastifyRequest,
   type FastifyServerOptions,
+  type RawServerDefault,
 } from "fastify";
 import qs from "qs";
 import {
@@ -361,6 +362,26 @@ async function buildApp(
   const inheritedTrustProxyDefault =
     options.preset === "production" && options.trustProxy === undefined;
 
+  /**
+   * A NUMERIC `trustProxy` is a no-op on Fastify >= 5.12.1.
+   *
+   * Fastify made hop-count trust fail-closed on purpose — the comment in
+   * `lib/request.js` is explicit: "Hop-count-only trust cannot validate the
+   * immediate peer. Fail closed so direct clients cannot spoof X-Forwarded-*
+   * values by supplying enough hops." So `trustProxy: 1` now trusts NOTHING.
+   *
+   * That is the right call upstream and the wrong thing to inherit silently:
+   * `request.ip` becomes the proxy's address, which is the exact failure the
+   * production-preset warning below describes — rate-limit keys collapse onto
+   * one bucket and audit rows record the wrong client. The host asked for
+   * proxy trust and got none, with no error.
+   *
+   * Warn rather than refuse: the app still serves, and a hard boot failure on
+   * a transitive `fastify` bump would be a harsher surprise than the one being
+   * reported. The replacement is named so the fix is a copy-paste.
+   */
+  const numericTrustProxy = typeof config.trustProxy === "number";
+
   // ── 1.5 Resolve + order the module graph — pure work (dynamic imports +
   // stable topological sort), hoisted BEFORE any side-effecting phase: a
   // broken composition root (dup name, missing/self dep, cycle) now aborts
@@ -380,7 +401,7 @@ async function buildApp(
 
   const resolvedLogger = resolveLoggerConfig(config.logger);
 
-  const fastify: FastifyInstance = Fastify({
+  const fastify: FastifyInstance = Fastify<RawServerDefault>({
     logger: resolvedLogger,
     // Request-id resolution belongs at the SERVER level, not in a hook:
     // Fastify binds `request.log = logger.child({ reqId: request.id })` at
@@ -487,6 +508,18 @@ async function buildApp(
 
   for (const warning of deferredWarnings) {
     fastify.log.warn(warning);
+  }
+
+  if (numericTrustProxy) {
+    fastify.log.warn(
+      `[arc] trustProxy: ${String(config.trustProxy)} (a hop COUNT) trusts nothing on ` +
+        "Fastify >= 5.12.1 — hop-count trust cannot validate the immediate peer, so it " +
+        "fails closed upstream to stop clients spoofing X-Forwarded-* with padded hops. " +
+        "`request.ip` is therefore the PROXY's address: rate-limit keys collapse onto one " +
+        "bucket and audit rows record the wrong client. Name the proxies instead — " +
+        "trustProxy: 'loopback', '10.0.0.0/8', a comma-separated list, or `true` if every " +
+        "upstream hop is genuinely trusted.",
+    );
   }
 
   if (inheritedTrustProxyDefault) {

@@ -63,6 +63,11 @@ const account = sqliteTable("account", {
   refreshTokenExpiresAt: integer("refreshTokenExpiresAt", { mode: "timestamp" }),
   scope: text("scope"),
   idToken: text("idToken"),
+  // better-auth 1.7.x added `issuer` to `account`. The adapter validates the
+  // Drizzle schema against its own model and refuses the whole request when a
+  // field is missing — a 500, not a degraded write — so the fixture has to
+  // track better-auth's schema as it moves.
+  issuer: text("issuer"),
   createdAt: integer("createdAt", { mode: "timestamp" }).notNull(),
   updatedAt: integer("updatedAt", { mode: "timestamp" }).notNull(),
 });
@@ -108,6 +113,7 @@ const DDL = [
     refreshTokenExpiresAt INTEGER,
     scope TEXT,
     idToken TEXT,
+    issuer TEXT,
     createdAt INTEGER NOT NULL,
     updatedAt INTEGER NOT NULL
   )`,

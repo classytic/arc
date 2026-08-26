@@ -1488,7 +1488,7 @@
       "testActorHeaders",
       "waitFor"
     ],
-    "typesHash": "4d84f06a980e003f"
+    "typesHash": "268acc031953dfc3"
   },
   "./testing/storage": {
     "stability": "stable",
@@ -1608,7 +1608,7 @@
       "testingPreset",
       "toFetchHandler"
     ],
-    "typesHash": "f391644ebfe61f8b"
+    "typesHash": "7f48ac848db8717f"
   },
   "./schemas": {
     "stability": "stable",

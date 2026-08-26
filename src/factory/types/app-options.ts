@@ -165,13 +165,20 @@ export interface CreateAppOptions {
    * proxy's address; a boot warning fires when the production preset's
    * default is inherited without an explicit choice.
    *
+   * ⚠ **A hop COUNT is no longer accepted.** Fastify 5.12.1 removed `number`
+   * from this option and made hop-count trust fail closed, because it cannot
+   * validate the immediate peer — a direct client could spoof `X-Forwarded-*`
+   * simply by supplying enough hops. Name the proxies instead; arc warns at
+   * boot if a number reaches it from untyped (JavaScript) config.
+   *
    * @example
    * ```ts
-   * createApp({ preset: 'production', trustProxy: 1 });          // one LB hop
-   * createApp({ preset: 'production', trustProxy: '10.0.0.0/8' }); // VPC proxies
+   * createApp({ preset: 'production', trustProxy: 'loopback' });    // local proxy
+   * createApp({ preset: 'production', trustProxy: '10.0.0.0/8' });  // VPC proxies
+   * createApp({ preset: 'production', trustProxy: true });          // every hop trusted
    * ```
    */
-  trustProxy?: boolean | string | string[] | number;
+  trustProxy?: boolean | string | string[];
 
   /** Fastify plugin/onReady timeout in ms (default: 10_000). Raise for slow boot work (index materialisation, WAL replay, external warm-up). */
   pluginTimeout?: number;
