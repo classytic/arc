@@ -11,6 +11,19 @@
 import { describe, expect, it } from "vitest";
 import { buildGeneratedCrudSchemas } from "../../src/core/defineResource/plugin.js";
 
+/**
+ * Read a slot that must exist, failing by NAME when it does not.
+ *
+ * `schemas!` and `result?.update?.body as X` both hide the interesting case: a
+ * missing slot surfaces as a TypeError on the next property access, naming
+ * nothing. This says which slot was absent.
+ */
+function slot<T>(value: T | null | undefined, what: string): T {
+  if (value === null || value === undefined)
+    throw new Error(`expected \`${what}\` to be generated`);
+  return value;
+}
+
 describe("buildGeneratedCrudSchemas", () => {
   it("returns null when neither openApi nor customSchemas provide anything to generate", () => {
     expect(buildGeneratedCrudSchemas(undefined, undefined)).toBeNull();
@@ -34,17 +47,20 @@ describe("buildGeneratedCrudSchemas", () => {
 
     const schemas = buildGeneratedCrudSchemas(openApi, undefined);
     expect(schemas).not.toBeNull();
-    const result = schemas!;
+    const result = slot(schemas, "schemas");
+    const getParams = slot(result.get?.params, "get.params") as { mutated?: boolean };
+    const deleteParams = slot(result.delete?.params, "delete.params") as { mutated?: boolean };
+    const updateParams = slot(result.update?.params, "update.params") as { mutated?: boolean };
 
     // Every slot that holds `params` must hold its OWN reference.
-    expect(result.get?.params).not.toBe(result.delete?.params);
-    expect(result.get?.params).not.toBe(result.update?.params);
-    expect(result.delete?.params).not.toBe(result.update?.params);
+    expect(getParams).not.toBe(deleteParams);
+    expect(getParams).not.toBe(updateParams);
+    expect(deleteParams).not.toBe(updateParams);
 
     // Mutating one slot's params must NOT leak into others.
-    (result.get?.params as { mutated?: boolean }).mutated = true;
-    expect((result.delete?.params as { mutated?: boolean }).mutated).toBeUndefined();
-    expect((result.update?.params as { mutated?: boolean }).mutated).toBeUndefined();
+    getParams.mutated = true;
+    expect(deleteParams.mutated).toBeUndefined();
+    expect(updateParams.mutated).toBeUndefined();
   });
 
   it("strips `required` from update body so PATCH semantics apply", () => {
@@ -58,7 +74,8 @@ describe("buildGeneratedCrudSchemas", () => {
     };
 
     const result = buildGeneratedCrudSchemas(openApi, undefined);
-    expect((result?.update?.body as { required?: unknown }).required).toBeUndefined();
+    const body = slot(result?.update?.body, "update.body") as { required?: unknown };
+    expect(body.required).toBeUndefined();
   });
 
   /**
@@ -133,9 +150,8 @@ describe("buildGeneratedCrudSchemas", () => {
       createBody: { type: "object", properties: { name: { type: "string" } } },
     };
     const result = buildGeneratedCrudSchemas(openApi, undefined);
-    expect((result?.create?.body as { additionalProperties?: unknown }).additionalProperties).toBe(
-      true,
-    );
+    const body = slot(result?.create?.body, "create.body") as { additionalProperties?: unknown };
+    expect(body.additionalProperties).toBe(true);
   });
 
   it("preserves an explicit `additionalProperties: false` from the adapter", () => {
@@ -147,9 +163,8 @@ describe("buildGeneratedCrudSchemas", () => {
       },
     };
     const result = buildGeneratedCrudSchemas(openApi, undefined);
-    expect((result?.create?.body as { additionalProperties?: unknown }).additionalProperties).toBe(
-      false,
-    );
+    const body = slot(result?.create?.body, "create.body") as { additionalProperties?: unknown };
+    expect(body.additionalProperties).toBe(false);
   });
 
   it("customSchemas layers per-slot on top of auto-gen (touched PARTS replace, untouched stay)", () => {

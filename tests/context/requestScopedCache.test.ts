@@ -10,10 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 import { requestContext } from "../../src/context/requestContext.js";
-import {
-  hasRequestScopedCache,
-  requestScopedCache,
-} from "../../src/context/requestScopedCache.js";
+import { hasRequestScopedCache, requestScopedCache } from "../../src/context/requestScopedCache.js";
 
 /** Run `fn` inside a request context, as arc's onRequest hook would. */
 function inRequest<T>(fn: () => T): T {
