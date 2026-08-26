@@ -291,47 +291,17 @@ export interface ResourceConfig<TDoc = AnyRecord> {
    */
   tenantField?: string | false;
   /**
-   * Tenant-cleanup declaration — what `cascadeDeleteForOrganization`
-   * does with this resource's rows when an organization is deleted.
-   * Required for the resource to participate in the cascade; unflagged
-   * resources are never touched.
+   * How `cascadeDeleteForOrganization` treats this resource's rows. Absent
+   * means the resource is NEVER touched by the cascade — participation is
+   * opt-in. Strategies: `hard` (GDPR erase) · `soft` (`deleted`+`deletedAt`,
+   * pair with a TTL) · `anonymize` (keep the row for legal retention, clear
+   * PII; values static or `(doc) => value`) · `skip` (explicit opt-out,
+   * `reason` MANDATORY and surfaced in audit reports).
    *
-   *   - `{ strategy: { type: 'hard' } }` — permanent delete (GDPR).
-   *   - `{ strategy: { type: 'soft' } }` — set `deleted: true` + `deletedAt`
-   *     (recoverable; pair with TTL for eventual hard-purge).
-   *   - `{ strategy: { type: 'anonymize', fields: { name: '[REDACTED]', email: null } } }`
-   *     — keep the row (legal retention) but clear PII linkage. HIPAA /
-   *     PCI / SOX-compatible. Field values can be static or `(doc) =>
-   *     value` for derived patches (hashes, etc.).
-   *   - `{ strategy: { type: 'skip', reason: 'audit-retained-per-SOX' } }`
-   *     — explicit opt-out with **mandatory** reason. Surfaces in audit reports.
-   *
-   * **Priority** — lower runs first. Default `100`. Use to land leaf data
-   * before aggregate references:
-   *   - `10`  : bulk leaf data (events, logs)
-   *   - `50`  : business entities (orders, invoices)
-   *   - `100` : default
-   *
-   * Priority groups are barriers even under concurrency — all
-   * priority-10 resources finish before any priority-50 starts.
-   *
-   * **Batch size** — rows per chunk for the underlying `purgeByField`
-   * call. Default kit-specific (~1000). Tune for very large tenants.
-   *
-   * @example Compliance-retained financial ledger
-   * ```ts
-   * defineResource({
-   *   name: 'invoice',
-   *   tenantField: 'organizationId',
-   *   onTenantDelete: {
-   *     strategy: {
-   *       type: 'anonymize',
-   *       fields: { customerName: '[REDACTED]', customerEmail: null },
-   *     },
-   *     priority: 50,
-   *   },
-   * });
-   * ```
+   * `priority` (default 100) orders leaf data before aggregates — 10 bulk
+   * logs, 50 business entities. Groups are BARRIERS: every priority-10
+   * resource finishes before any priority-50 starts. `batchSize` chunks the
+   * underlying `purgeByField` (kit default ~1000).
    */
   onTenantDelete?: OnTenantDeleteConfig;
   /**

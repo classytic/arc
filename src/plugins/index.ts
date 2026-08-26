@@ -82,7 +82,7 @@ export {
   pressurePlugin as pressurePluginFn,
 } from "./pressure.js";
 export type { ChangeOperation, RealtimeOptions } from "./realtime.js";
-// Realtime resource change feed — permission-gated SSE per resource (2.22)
+// Realtime resource change feed — permission-gated SSE per resource
 export {
   default as realtimePlugin,
   realtimePlugin as realtimePluginFn,

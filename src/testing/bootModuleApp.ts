@@ -1,5 +1,5 @@
 /**
- * bootModuleApp — the module-composability proof harness (2.22).
+ * bootModuleApp — the module-composability proof harness.
  *
  * Boots a REAL arc app around one or more modules on an in-memory
  * MongoDB, and returns the app + connection + a one-call teardown. This

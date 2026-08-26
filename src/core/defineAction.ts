@@ -1,5 +1,5 @@
 /**
- * `defineAction()` — typed action declaration (v2.16).
+ * `defineAction()` — typed action declaration.
  *
  * Pre-2.16 every action handler received `data: Record<string, unknown>`
  * and hosts hand-cast it to a domain interface or threw their own

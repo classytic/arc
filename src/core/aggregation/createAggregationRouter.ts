@@ -214,7 +214,7 @@ function registerOne(
     // for the aggregation slot). Run AFTER auth + permission so the
     // filter sees an authenticated scope, BEFORE the aggregation handler
     // so `_tenantFields` / `_policyFilters` are populated when
-    // `tenantRepoOptions` reads them. (2.15.3)
+    // `tenantRepoOptions` reads them.
     customMws: middlewares,
   });
 

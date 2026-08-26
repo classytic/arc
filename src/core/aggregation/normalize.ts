@@ -217,7 +217,7 @@ export function compileAggRequest(
   // and produced a string clause. Mongokit's plugin produced the
   // matching ObjectId clause. The two AND-ed to zero matches because
   // Mongo doesn't auto-coerce string ↔ ObjectId in `$match`. Lesson:
-  // type-coercion belongs in the kit, not the framework. (2.15.2)
+  // type-coercion belongs in the kit, not the framework.
   void tenantOptions;
   const filter: AnyRecord = {
     ...baseFilter,

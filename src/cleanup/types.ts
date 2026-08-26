@@ -1,35 +1,28 @@
 /**
- * Data Cleanup Center — core types (data-cleanup design §5).
+ * Data Cleanup Center — core types.
  *
- * A **recipe** is a business cleanup operation ("remove draft sales data",
- * "reset pre-go-live transactions"). Operators pick recipes, never collection
- * names or Mongo filters. Each recipe is a pure PROVIDER — arc owns the thin
- * framework (registry, plan digest, run/evidence ports, resource factory);
- * the recipe (and the kernels it delegates to) owns the domain knowledge.
+ * A RECIPE is a business cleanup operation ("remove draft sales data");
+ * operators pick recipes, never collection names or filters. Arc owns the
+ * framework (registry, plan digest, run/evidence ports, resource factory); the
+ * recipe owns domain knowledge. Lifecycle is always:
+ * preview → confirm with reason → execute → verify → record evidence.
  *
- * The lifecycle is always:
+ * Framework-free by design (no Fastify, no driver) so one recipe runs in
+ * tests, a worker, or a resource unchanged.
  *
- *   Preview → Confirm with reason → Execute safely → Verify → Record evidence
- *
- * These types are deliberately framework-free (no Fastify, no Mongo) so the
- * same recipe/registry runs in tests, a worker, or an Arc resource unchanged.
- *
- * **Durability model (this is a DESTRUCTIVE-operation engine).** The ports are
- * shaped so the promised guarantees actually hold across process boundaries and
- * crashes:
- *   - `execute()` VALIDATES + persists a run + ENQUEUES a serializable
- *     `{ runId }` job. The recipe runs in `processRun(runId)` — on a worker,
- *     off the request path. Nothing captures a closure into the queue.
- *   - Every status change is a compare-and-set (`compareAndTransition`) so a
- *     `completed` write can never clobber a `cancelled` one.
- *   - The single-destructive-run guard is an ATOMIC conditional insert
- *     (`createIfPermitted`), not a check-then-create race.
- *   - The sealed plan + inputs are persisted ON the run, so a worker (or a
- *     retry) replays the SAME authorized operation, never a reconstruction.
- *   - Cancellation is a durable `cancelRequested` flag the executor polls; an
- *     in-process `AbortSignal` is only an optimization.
- *   - Finalization (terminal status + evidence + manifest) is idempotent by
- *     `operationId` and recoverable from a `finalizing` state after a restart.
+ * DURABILITY — this is a destructive-operation engine, so the ports are shaped
+ * to survive process boundaries and crashes:
+ * - `execute()` validates, persists a run, and enqueues a serializable
+ *   `{ runId }`. The work happens in `processRun(runId)` off the request path;
+ *   no closure ever enters the queue.
+ * - Status changes are compare-and-set, so `completed` cannot clobber
+ *   `cancelled`. The single-destructive-run guard is an atomic conditional
+ *   insert, not check-then-create.
+ * - The sealed plan + inputs persist ON the run, so a retry replays the
+ *   AUTHORIZED operation rather than a reconstruction.
+ * - Cancellation is a durable flag the executor polls; `AbortSignal` is only
+ *   an optimization. Finalization is idempotent by `operationId` and
+ *   recoverable from `finalizing`.
  */
 
 import type {

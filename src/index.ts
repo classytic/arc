@@ -139,7 +139,7 @@ export type {
   TreeExt,
 } from "./core/index.js";
 // ============================================================================
-// Core — defineResource, controller split (v2.11.0)
+// Core — defineResource, controller split
 // ============================================================================
 export {
   type AdapterLike,

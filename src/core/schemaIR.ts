@@ -82,7 +82,7 @@ export function normalizeSchemaIR(raw: Record<string, unknown> | undefined): Sch
   // draft-7 JSON Schema (Fastify/AJV's preferred target). `throw` mode:
   // action schemas feed route VALIDATION — an unconvertible Zod schema
   // silently collapsing to an empty IR means the action accepts anything,
-  // which must be a boot error, not a quiet contract hole. (2.22)
+  // which must be a boot error, not a quiet contract hole.
   const converted = toJsonSchema(raw, "draft-7", "throw");
   if (
     !converted ||

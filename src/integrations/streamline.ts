@@ -1,45 +1,24 @@
 /**
- * @classytic/arc — Streamline Integration
+ * Streamline integration — wires `@classytic/streamline` workflows into arc.
  *
- * Pluggable adapter that wires @classytic/streamline workflows into Arc's
- * Fastify application. Provides REST endpoints for workflow management,
- * auto-connects to Arc's event bus, respects Arc's auth/permissions, and
- * surfaces streamline's repo-core-aligned `HttpError`s with the correct
- * HTTP status codes (no generic-500-on-everything).
+ * REST endpoints for workflow management, auto-connected to arc's event bus,
+ * honouring arc auth/permissions and surfacing streamline's repo-core-aligned
+ * `HttpError`s with their real status codes rather than a blanket 500.
  *
- * This is a SEPARATE subpath import — only loaded when explicitly used:
- *   import { streamlinePlugin } from '@classytic/arc/integrations/streamline';
+ * A separate subpath, loaded only when used:
+ * `@classytic/arc/integrations/streamline`. Peer: `@classytic/streamline`.
  *
- * Requires: @classytic/streamline (peer dependency, >= 2.7.0) — uses the
- * v2.3 surface: `StartOptions.tenantId/bypassTenant`,
- * `WorkflowError implements HttpError`, `resumeHook` fail-closed
- * validation, strict-concurrency `ConcurrencyLimitReachedError` (status 429).
- * v2.7 additions surfaced here: `cancel(runId, { reason })` and
- * `pause(runId, { reason })` forward an operator reason (persisted on the
- * run + echoed in the `workflow:cancelled` / `workflow:paused` events), and
- * `workflow:paused` is bridged/streamed like every other lifecycle event.
+ * Routes mounted under `prefix`: `POST /:workflow/start`,
+ * `GET /:workflow/runs[/:runId]`, `POST /:workflow/runs/:runId/{resume,cancel}`,
+ * and `POST /hooks/:token` when `enableHookEndpoint` is set.
  *
  * @example
  * ```typescript
- * import { streamlinePlugin } from '@classytic/arc/integrations/streamline';
- * import { orderWorkflow } from './workflows/order.js';
- *
  * await fastify.register(streamlinePlugin, {
  *   workflows: [orderWorkflow],
  *   prefix: '/api/workflows',
- *   auth: true,
- *   // Multi-tenant: extract tenantId from auth context per request.
  *   tenantResolver: (req) => req.user?.organizationId,
- *   // Opt-in: webhook resume endpoint with token-validated resumeHook.
- *   enableHookEndpoint: true,
  * });
- *
- * // POST /api/workflows/order/start { input }
- * // GET  /api/workflows/order/runs (list)
- * // GET  /api/workflows/order/runs/:runId
- * // POST /api/workflows/order/runs/:runId/resume { payload }
- * // POST /api/workflows/order/runs/:runId/cancel
- * // POST /api/workflows/hooks/:token { ... } (when enableHookEndpoint)
  * ```
  */
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";

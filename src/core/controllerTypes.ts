@@ -14,7 +14,7 @@
  *   full response envelope shape.
  * - **Controller options** (`ControllerConstructionOptions` /
  *   `ControllerConfigurableOptions` / `BaseControllerOptions`) — the
- *   construction-only vs `configure()`-able split (2.15.0).
+ *   construction-only vs `configure()`-able split.
  *
  * Re-exported verbatim from `BaseCrudController.ts` so existing
  * `import { ListResult, CacheStatus } from './BaseCrudController.js'`

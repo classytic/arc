@@ -1,59 +1,25 @@
 /**
- * Idempotency Plugin
+ * Idempotency — duplicate-request protection for mutations.
  *
- * Duplicate request protection for mutating operations.
- * Uses idempotency keys to ensure safe retries.
+ * AUTH ORDER MATTERS: `idempotency.middleware` must run AFTER authentication
+ * in the preHandler chain, so the fingerprint includes the real caller and a
+ * key cannot replay another user's response. `createCrudRouter` wires this for
+ * mutation routes; custom routes do it themselves:
+ * `preHandler: [fastify.authenticate, fastify.idempotency.middleware]`.
  *
- * ## Auth Safety
+ * GUARANTEE — best-effort effectively-once, NOT exactly-once. A distributed
+ * lock makes concurrent same-key requests 409, the key includes a body+caller
+ * fingerprint (a different body under one key is its own operation), and a
+ * completed result replays. The business effect is not exactly-once, because
+ * the domain write and the idempotency record are different systems:
+ * - a crash after the DB write but before the record (preSerialization) lets a
+ *   retry re-execute;
+ * - a handler outrunning `lockTimeoutMs` can overlap its own retry — size that
+ *   above the slowest protected handler.
  *
- * The idempotency check runs as a **route-level middleware**
- * (`idempotency.middleware`) that must be wired AFTER authentication in the
- * preHandler chain. This ensures the fingerprint includes the real caller
- * identity, preventing cross-user replay attacks.
- *
- * Arc's `createCrudRouter` does this automatically for mutation routes.
- * For custom routes, wire it manually:
- *
- * ```typescript
- * fastify.post('/orders', {
- *   preHandler: [fastify.authenticate, fastify.idempotency.middleware],
- * }, handler);
- * ```
- *
- * @example
- * import { idempotencyPlugin } from '@classytic/arc/idempotency';
- *
- * await fastify.register(idempotencyPlugin, {
- *   enabled: true,
- *   headerName: 'idempotency-key',
- *   ttlMs: 86400000, // 24 hours
- * });
- *
- * // Client sends:
- * // POST /api/orders
- * // Idempotency-Key: order-123-abc
- *
- * // If same key sent again within TTL, returns cached response
- *
- * ## Guarantee: best-effort effectively-once, NOT exactly-once
- *
- * The plugin gives strong request replay + overlap protection: a
- * distributed lock guards execution (concurrent same-key requests get
- * 409), the store key includes a body/caller fingerprint (a different
- * body under the same key executes as its own operation instead of
- * replaying someone else's response), and a completed result replays on
- * hit. It does NOT make the business effect exactly-once, because the
- * domain write and the idempotency record live in different systems:
- *
- *  - a crash after the DB mutation but before the result is recorded
- *    (preSerialization) lets a retry re-execute the mutation;
- *  - a handler that outruns `lockTimeoutMs` can overlap its own retry —
- *    size the lock timeout above the slowest protected handler.
- *
- * For mutations where re-execution is unacceptable, write the idempotency
- * record in the SAME transaction as the business write inside the handler
- * (the store contract is public — `@classytic/arc/idempotency` exports it),
- * or make the handler naturally idempotent (upserts, compare-and-set).
+ * Where re-execution is unacceptable: write the record in the SAME transaction
+ * as the business write (the store contract is exported), or make the handler
+ * naturally idempotent (upsert, compare-and-set).
  */
 
 import { createHash } from "node:crypto";

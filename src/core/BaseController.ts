@@ -162,7 +162,7 @@ export interface BaseController<
   bodySanitizer: BodySanitizer;
   queryResolver: QueryResolver;
 
-  // Post-construction parser swap (v2.10.9)
+  // Post-construction parser swap
   setQueryParser(queryParser: QueryParserInterface): void;
 
   // Post-construction option configure (v2.15.0) — arc auto-calls this

@@ -1,42 +1,19 @@
 /**
- * Action Router Factory (Stripe Pattern)
+ * Action router — many state transitions behind one `POST /:id/action`,
+ * discriminated by `body.action`, instead of a route per verb.
  *
- * Consolidates multiple state-transition endpoints into a single unified
- * action endpoint: `POST /:id/action`. Instead of one route per action
- * (approve, dispatch, receive, cancel), one route discriminates on
- * `body.action`.
- *
- * Actions share every cross-cutting concern with the CRUD router
- * (`createCrudRouter`) via the primitives in `routerShared` — field masking,
- * auth/permission middleware, pipeline execution, `arcDecorator`, idempotency
- * middleware, and rate-limit config. This is the single source of truth for
- * action route assembly; divergence between CRUD and actions is now a build-
- * time type mismatch, not a silent runtime hole.
- *
- * Response shape is standardised through `sendControllerResponse`, so
- * field-level `fields.hidden() / visibleTo() / writableBy()` permissions
- * apply to action responses exactly like CRUD responses.
+ * Actions share every cross-cutting concern with `createCrudRouter` through
+ * `routerShared` — field masking, auth/permission middleware, pipeline,
+ * `arcDecorator`, idempotency, rate limits — so divergence between CRUD and
+ * actions is a build-time type mismatch, not a silent runtime hole. Responses
+ * go through `sendControllerResponse`, so field rules apply identically.
  *
  * @example
  * ```typescript
- * import { createActionRouter } from '@classytic/arc/core';
- * import { requireRoles } from '@classytic/arc/permissions';
- *
  * createActionRouter(fastify, {
- *   tag: 'Inventory - Transfers',
  *   resourceName: 'transfer',
- *   actions: {
- *     approve: async (id, _data, req) => transferService.approve(id, req.user),
- *     dispatch: async (id, data, req) => transferService.dispatch(id, data.transport, req.user),
- *     receive:  async (id, data, req) => transferService.receive(id, data, req.user),
- *     cancel:   async (id, data, req) => transferService.cancel(id, data.reason, req.user),
- *   },
- *   actionPermissions: {
- *     approve:  requireRoles(['admin', 'warehouse-manager']),
- *     dispatch: requireRoles(['admin', 'warehouse-staff']),
- *     receive:  requireRoles(['admin', 'store-manager']),
- *     cancel:   requireRoles(['admin']),
- *   },
+ *   actions: { approve: (id, _d, req) => svc.approve(id, req.user) },
+ *   actionPermissions: { approve: requireRoles(['admin']) },
  * });
  * ```
  */

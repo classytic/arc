@@ -14,43 +14,14 @@ import type { MultipartOptions, RawBodyOptions, UnderPressureOptions } from "./p
 import type { CorsOptions, HelmetOptions, RateLimitOpts } from "./security.js";
 
 /**
- * CreateApp Options
- *
- * Configuration for creating an Arc application.
+ * Configuration for `createApp()`.
  *
  * @example
  * ```typescript
- * // Minimal setup
- * const app = await createApp({
- *   preset: 'development',
- *   auth: {
- *     type: 'jwt',
- *     jwt: { secret: process.env.JWT_SECRET },
- *   },
- * });
- *
- * // With custom authenticator
  * const app = await createApp({
  *   preset: 'production',
- *   auth: {
- *     type: 'jwt',
- *     jwt: { secret: process.env.JWT_SECRET },
- *     authenticate: async (request, { jwt }) => {
- *       // Check API key first
- *       const apiKey = request.headers['x-api-key'];
- *       if (apiKey) {
- *         const result = await apiKeyService.verify(apiKey);
- *         if (result) return { _id: result.userId, isApiKey: true };
- *       }
- *       // Then check JWT
- *       const token = request.headers.authorization?.split(' ')[1];
- *       if (token) {
- *         const decoded = jwt.verify(token);
- *         return userRepo.findById(decoded.id);
- *       }
- *       return null;
- *     },
- *   },
+ *   auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
+ *   resources: [productResource],
  * });
  * ```
  */
@@ -194,52 +165,29 @@ export interface CreateAppOptions {
   requestTimeout?: number;
 
   /**
-   * Max time in ms to establish a connection before the socket is
-   * destroyed. Pass-through to Fastify's `connectionTimeout` (Node's
-   * `server.timeout`). Default `0` = no limit (Node's `headersTimeout`
-   * ~60s still bounds idle pre-request sockets).
+   * Connection-establishment timeout in ms (Fastify `connectionTimeout`).
+   * Default `0` = unbounded; Node's ~60s `headersTimeout` still caps idle
+   * pre-request sockets.
    */
   connectionTimeout?: number;
 
   /**
-   * Keep-alive idle timeout in ms (Node's `server.keepAliveTimeout`,
-   * default 72_000). MUST be longer than the idle timeout of any load
-   * balancer in front of the app (ALB default 60s) or the LB reuses
-   * sockets the server just closed → intermittent 502s.
+   * Keep-alive idle timeout in ms (default 72_000). MUST exceed the idle
+   * timeout of any LB in front (ALB default 60s), or the LB reuses sockets
+   * the server just closed — intermittent 502s.
    */
   keepAliveTimeout?: number;
 
   /**
-   * Maximum JSON body size in bytes. Pass-through to Fastify's
-   * server-level `bodyLimit` option; default is Fastify's 1 MiB
-   * (1_048_576 bytes). Raise for hosts shipping bulk-import / CSV ingest
-   * / JSON-RPC batch endpoints — without this, Fastify rejects oversized
-   * payloads with `FST_ERR_CTP_BODY_TOO_LARGE` (413) before any route
-   * handler runs. File uploads on `multipart` routes are governed
-   * separately by `multipart.limits.fileSize`. (2.15.1)
+   * Max JSON body in bytes. Fastify default 1 MiB; over it is a 413
+   * (`FST_ERR_CTP_BODY_TOO_LARGE`) raised BEFORE any handler runs.
+   * Multipart uploads are bounded separately by `multipart.limits.fileSize`.
    */
   bodyLimit?: number;
   /**
-   * Maximum length of a single URL path parameter (in characters).
-   *
-   * 2.16 — Fastify's default is `100`, which silently 404s modern signed-
-   * token URLs: HMAC tracking tokens (~250 chars), JWT-in-URL, OAuth state
-   * parameters, password-reset / magic-link tokens, etc. Arc's default
-   * is **400** to match the everything-is-a-signed-token reality of
-   * production apps; hosts that need longer params can raise it further
-   * (`1024` for very long JWTs).
-   *
-   * Pass-through to Fastify's `maxParamLength` constructor option — see
-   * https://fastify.dev/docs/latest/Reference/Server/#maxparamlength.
-   *
-   * @example
-   * ```ts
-   * // App expects long HMAC tokens in the URL path
-   * createApp({ preset: 'production', maxParamLength: 1024 });
-   *
-   * // Constrain tighter than arc's default for audit reasons
-   * createApp({ preset: 'production', maxParamLength: 256 });
-   * ```
+   * Max characters in one URL path param. Arc defaults to 400; Fastify's own
+   * 100 silently 404s signed-token URLs (HMAC ~250 chars, JWT, OAuth state).
+   * Raise to ~1024 for long JWTs.
    */
   maxParamLength?: number;
 
@@ -248,55 +196,9 @@ export interface CreateAppOptions {
   // ============================================
 
   /**
-   * Auth configuration
-   *
-   * Set to false to disable authentication entirely.
-   * Each auth strategy requires a `type` discriminant field.
-   *
-   * @example
-   * ```typescript
-   * // Disable auth
-   * auth: false,
-   *
-   * // Arc JWT
-   * auth: {
-   *   type: 'jwt',
-   *   jwt: { secret: process.env.JWT_SECRET },
-   * },
-   *
-   * // Arc JWT + custom authenticator
-   * auth: {
-   *   type: 'jwt',
-   *   jwt: { secret: process.env.JWT_SECRET },
-   *   authenticate: async (request, { jwt }) => {
-   *     const token = request.headers.authorization?.split(' ')[1];
-   *     if (!token) return null;
-   *     const decoded = jwt.verify(token);
-   *     return userRepo.findById(decoded.id);
-   *   },
-   * },
-   *
-   * // Better Auth adapter
-   * auth: { type: 'betterAuth', betterAuth: createBetterAuthAdapter({ auth: myBetterAuth }) },
-   *
-   * // Custom auth plugin
-   * auth: {
-   *   type: 'custom',
-   *   plugin: async (fastify) => {
-   *     fastify.decorate('authenticate', async (req, reply) => { ... });
-   *   },
-   * },
-   *
-   * // Custom authenticator function
-   * auth: {
-   *   type: 'authenticator',
-   *   authenticate: async (request, reply) => {
-   *     const session = await validateSession(request);
-   *     if (!session) reply.code(401).send({ error: 'Unauthorized' });
-   *     request.user = session.user;
-   *   },
-   * },
-   * ```
+   * Auth configuration, or `false` to disable entirely. Each strategy is a
+   * discriminated union on `type` (`'jwt'` | `'better-auth'` | custom); see
+   * [[auth]] for the strategy matrix and `authenticate` override.
    */
   auth?: AuthOption;
 
@@ -567,45 +469,13 @@ export interface CreateAppOptions {
   replyHelpers?: boolean;
 
   /**
-   * Serialize `bigint` values in JSON responses.
+   * Serialize `bigint` in JSON responses — `JSON.stringify` throws on it.
    *
-   * `JSON.stringify` throws on `bigint` by default. This option installs a
-   * `preSerialization` hook that converts them on the way out:
-   *
-   * - `false` (default) — no conversion. JSON serialization throws if a
-   *   `bigint` reaches the wire. Safest when no codepath produces bigints.
-   * - `'string'` — **recommended for IDs / money / counters / ledgers.**
-   *   Converts every `bigint` to a decimal string. Lossless: every digit
-   *   survives the wire. Clients parse with `BigInt(value)` to reconstitute.
-   * - `'number'` — converts every `bigint` to `Number(value)`.
-   *   **Lossy above 2^53 - 1 (`Number.MAX_SAFE_INTEGER` = 9007199254740991).**
-   *   Use ONLY when you've audited the value range — e.g. small enums,
-   *   bounded counters that physically can't exceed the safe range. For
-   *   anything that could be an ID, monetary amount, or unbounded counter,
-   *   `Number()` corruption silently rounds digits and there is no
-   *   recovery. arc emits a one-shot startup warning when you opt into
-   *   this mode.
-   * - `true` — back-compat alias for `'number'`. Will be removed in a
-   *   future major. Migrate to `'string'` (lossless) or explicit
-   *   `'number'` (acknowledges the precision risk).
-   *
-   * Default: `false` (opt-in — most apps don't use bigint).
-   *
-   * @example
-   * ```typescript
-   * // Lossless — recommended path
-   * const app = await createApp({
-   *   serializeBigInt: 'string',
-   * });
-   * // { totalSatoshis: "9007199254740999" }
-   *
-   * // Lossy — only when value range is bounded
-   * const app = await createApp({
-   *   serializeBigInt: 'number',
-   * });
-   * // { totalSatoshis: 9007199254740999 }  // precision lost above MAX_SAFE_INTEGER
-   * });
-   * ```
+   * - `false` (default) — no conversion; a bigint reaching the wire throws.
+   * - `'string'` — lossless decimal string. The choice for IDs, money,
+   *   counters, ledgers. Clients reconstitute with `BigInt(value)`.
+   * - `'number'` — LOSSY above `Number.MAX_SAFE_INTEGER` (2^53-1). Only for
+   *   an audited, bounded range.
    */
   serializeBigInt?: boolean | "number" | "string";
 
@@ -614,121 +484,28 @@ export interface CreateAppOptions {
   // ============================================
 
   /**
-   * Domain modules — compose whole domains into the app, one entry each.
+   * Domain modules — one entry per self-contained domain package.
    *
-   * Where a `resources` entry is a single route group, a module is a self-
-   * contained domain package's full contribution (engine init + resources +
-   * post-wiring) bundled as one `ArcModule`. A package exports
-   * `createXModule(deps): ArcModule`; the host lists it here instead of hand-
-   * threading the package's pieces across `bootstrap` / `resources` /
-   * `afterResources`.
-   *
-   * Modules are pure sugar over the existing lifecycle — each expands into the
-   * SAME phases, in `dependsOn` order, running BEFORE the app-level entry in
-   * every phase:
-   * ```
-   * app plugins()  → modules[].plugins         (infra registration)
-   * modules[].bootstrap      → options.bootstrap
-   * modules[].resources      → options.resources / resourceDir  (see note ↓)
-   * modules[].afterResources → options.afterResources
-   * modules[].onClose (REVERSE order) → options.onClose   (one hook; see below)
-   * ```
-   * RESOURCES — two orderings, both intentional: app `resources`/`resourceDir`
-   * RESOLVE first (semantics untouched), but module resources REGISTER first
-   * (prepended, so their routes mount ahead of app resources). Teardown runs
-   * module `onClose` (reverse composition order) then app `onClose` in a single
-   * close hook, so module teardown (flush outboxes, drain queues, close a
-   * module-owned connection) sees live shared infra — the app/plugin
-   * connections close last. Module resources flow through arc's normal
-   * registration (prefix, dedup, docs, audit) — they are not special-cased.
-   *
-   * Entries may be eager modules, promises, or **thunks of dynamic imports**
-   * (the `next/dynamic` idea, backend-shaped) — thunks resolve once at boot,
-   * so region/tier-gated packs are only imported when selected:
-   *
-   * @example
-   * ```ts
-   * const taxPack = region === 'BD'
-   *   ? () => import('@classytic/bd-tax/module').then((m) => m.createBdTaxModule(deps))
-   *   : () => import('@classytic/us-tax/module').then((m) => m.createUsTaxModule(deps));
-   *
-   * const app = await createApp({
-   *   resourcePrefix: '/api/v1',
-   *   modules: [accountingModule({ permissions }), taxPack],
-   *   resources: [healthResource], // app-local resources still compose alongside
-   * });
-   * ```
-   *
-   * See `wiki/modules.md` for the full design (authoring convention, events/
-   * outbox integration, microservices path).
+   * A `resources` entry is a route group; an `ArcModule` is a package's whole
+   * contribution (engine init + resources + post-wiring), so the host stops
+   * hand-threading pieces across `bootstrap` / `resources` / `afterResources`.
+   * Modules expand into the SAME lifecycle phases in `dependsOn` order,
+   * always before the app-level entry for that phase. See [[modules]].
    */
   modules?: ReadonlyArray<import("../module/index.js").ArcModuleInput>;
 
   /**
-   * Resources to register automatically. Accepts two shapes:
+   * Resources to register. An ARRAY is resolved at module import, so every
+   * adapter must be constructible synchronously. A FACTORY (sync or async,
+   * receiving the Fastify instance) is resolved after `bootstrap[]` and before
+   * routes are wired — the answer when an adapter depends on an engine that
+   * boots asynchronously, since `defineResource()` then runs with that engine
+   * already live. Boot order lives in CLAUDE.md; do not restate it here.
    *
-   *   1. **Array** — each resource's `.toPlugin()` is called and registered.
-   *      Defined at module-import time, so the resource's adapter must be
-   *      constructible without any async state.
-   *
-   *   2. **Factory function** (sync or async) — called AFTER `bootstrap[]`
-   *      but BEFORE routes are wired. Use this when a resource's adapter
-   *      depends on an engine / singleton that boots asynchronously
-   *      (e.g. `await ensureCatalogEngine()` / `await createFlowEngine()`).
-   *      The factory receives the Fastify instance for symmetry with
-   *      `plugins` and `bootstrap`.
-   *
-   * Arc's lifecycle contract:
-   * ```
-   * 1. Arc core (security, auth, events)
-   * 2. plugins()            ← infra (DB, SSE, data)
-   * 3. bootstrap[]          ← domain init (engines, singletons)
-   * 4. resources resolution ← (factory form: call it here)
-   * 5. resources registered ← plugins mounted on Fastify
-   * 6. afterResources()     ← post-registration wiring
-   * ```
-   *
-   * The factory form is the canonical answer to "my repository lives in an
-   * engine that boots asynchronously." Before this shape existed, hosts had
-   * to write per-resource lazy-bridge adapters that awaited the engine on
-   * every CRUD call — pure boilerplate. With a factory, `defineResource(...)`
-   * runs with the engine already live, so `createMongooseAdapter(engine.models.X, engine.repositories.X)`
-   * works directly.
-   *
-   * @example Static array (most resources)
+   * @example
    * ```ts
-   * const app = await createApp({
-   *   resources: [productResource, orderResource, userResource],
-   *   auth: { type: 'jwt', jwt: { secret: 'xxx' } },
-   * });
-   * ```
-   *
-   * @example Factory with async-booted engine
-   * ```ts
-   * import { createApp, defineResource } from '@classytic/arc';
-   * import { createMongooseAdapter } from '@classytic/mongokit/adapter';
-   *
-   * const app = await createApp({
-   *   bootstrap: [async () => { await ensureCatalogEngine(); }],
-   *   resources: async () => {
-   *     const cat = await ensureCatalogEngine();
-   *     return [
-   *       defineResource({
-   *         name: 'product',
-   *         adapter: createMongooseAdapter(cat.models.Product, cat.repositories.product),
-   *         // ...
-   *       }),
-   *     ];
-   *   },
-   * });
-   * ```
-   *
-   * @example Factory delegating to auto-discovery
-   * ```ts
-   * const app = await createApp({
-   *   bootstrap: [async () => { await ensureCatalogEngine(); }],
-   *   resources: async () => loadResources(import.meta.url),
-   * });
+   * resources: [productResource]                       // static
+   * resources: async () => [defineResource({ ... })]   // engine-dependent
    * ```
    */
   resources?:

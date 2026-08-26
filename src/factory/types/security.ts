@@ -1,6 +1,6 @@
 /**
  * Security-plugin option shapes — CORS / Helmet / rate-limit config for
- * `createApp()`, including plan-aware rate limiting (2.22).
+ * `createApp()`, including plan-aware rate limiting.
  */
 
 // These types are inlined to avoid forcing consumers to install optional peer deps.

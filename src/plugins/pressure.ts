@@ -1,48 +1,27 @@
 /**
  * Admission control — ONE place that decides "are we saturated?".
  *
- * ## Why this is a module and not another flag
+ * Arc already sheds on event-loop lag (`@fastify/under-pressure`), but lag is
+ * LATE: by the time the loop is behind, the work causing it is already
+ * admitted. What actually saturates a backend — a drained pool, an undrained
+ * queue, an outbox falling behind — is invisible to it. Rate limiting is a
+ * different axis: it bounds request FREQUENCY, this bounds concurrent
+ * EXPENSIVE WORK.
  *
- * Arc already sheds load, but only on event-loop lag, via `@fastify/under-
- * pressure`. Event-loop lag is a LATE signal: by the time the loop is behind,
- * the work causing it is already admitted and in flight. The costs that
- * actually saturate a backend — a drained connection pool, a queue nobody is
- * draining, an outbox falling behind — are invisible to it, and each one grew
- * its own knob in a different plugin.
+ * Signals are REGISTERED, not enumerated, because only ELU has a source arc
+ * can read today — no kit exposes pool stats, no queue exposes depth. Arc owns
+ * the DECISION; signals come from whoever can produce them.
  *
- * Rate limiting is a different axis and does not substitute: it bounds request
- * FREQUENCY. Admission control bounds concurrent EXPENSIVE WORK. Ten requests
- * per second is fine until each one holds a connection for four seconds.
- *
- * ## The interface is the policy, not the plumbing
- *
- * Signals are REGISTERED, not enumerated. That is deliberate, and it is what
- * keeps this honest: of the four signals the roadmap names — ELU, DB pool
- * saturation, queue depth, oldest-outbox age — only ELU has a source arc can
- * read today. No kit exposes pool statistics, no queue exposes depth, and no
- * outbox store reports its oldest pending row. Hard-coding four readers would
- * ship three seams with zero adapters behind them.
- *
- * So arc owns the DECISION (normalise, combine, threshold, act) and takes
- * signals from whoever can actually produce them. ELU ships built in because
- * arc can read it without help; the rest arrive as their sources appear,
- * without this module changing shape.
- *
- * ## What a signal must mean
- *
- * `read()` returns SATURATION in `[0, 1]`: 0 idle, 1 "cannot take more". Every
- * signal normalises itself because only the signal's author knows what full
- * means — 90% of a connection pool is nearly fatal, 90% ELU is busy but fine.
- * Returning a raw count here would push that judgement into this module, which
- * cannot make it.
+ * `read()` returns SATURATION in [0,1]. Each signal normalises itself: 90% of
+ * a pool is nearly fatal, 90% ELU is merely busy, and only the signal's author
+ * knows which.
  *
  * @example
  * ```typescript
  * await app.register(pressurePlugin, {
  *   signals: [{ name: 'db-pool', read: () => pool.borrowed / pool.size }],
+ *   shed: true,
  * });
- *
- * if (app.pressure.state() === 'saturated') reply.code(503).send();
  * ```
  */
 
@@ -59,9 +38,8 @@ const log = arcLog("pressure");
 /**
  * One measurable source of load, normalised by whoever owns it.
  *
- * A throwing or hanging `read()` must never take the app down with it — the
- * reader is diagnostic, and a broken thermometer is not a fire. Failures are
- * logged once per signal and the signal reports 0 until it recovers.
+ * A throwing `read()` reports 0, never 1 — a broken thermometer is not a fire.
+ * Logged once per signal, not per sample.
  */
 export interface PressureSignal {
   /** Stable identity — appears in snapshots and logs. */
@@ -98,17 +76,12 @@ export interface PressureOptions {
   /** Fired when the state CHANGES — not on every sample. */
   onStateChange?: (next: PressureState, snapshot: PressureSnapshot) => void;
   /**
-   * Refuse requests with 503 while `saturated`. Default OFF.
+   * Refuse with 503 while `saturated`. Default OFF — arc cannot know which
+   * routes are sheddable, and refusing a checkout because a dashboard drained
+   * the pool is worse than serving it slowly.
    *
-   * Opt-in because arc cannot know which of a host's routes are sheddable. A
-   * checkout POST and a dashboard chart both look like requests here, and
-   * shedding the wrong one under load is worse than serving it slowly. Turn it
-   * on once you know which paths to exclude.
-   *
-   * `exclude` is matched against `request.url` by prefix. Health and readiness
-   * routes are ALWAYS exempt: shedding the probe that reports saturation
-   * removes the orchestrator's only way to see it, and a 503 on
-   * `/_health/ready` reads as "process dead" rather than "process full".
+   * `exclude` matches `request.url` by prefix. Health routes are ALWAYS exempt:
+   * a 503 on `/_health/ready` reads as "process dead", not "process full".
    */
   shed?: boolean | { statusCode?: number; retryAfterSeconds?: number; exclude?: string[] };
 }
@@ -121,19 +94,10 @@ export interface PressureApi {
   /** True at `saturated`. The check a handler makes before admitting work. */
   shouldShed(): boolean;
   /**
-   * A readiness check for `healthPlugin({ checks })`.
-   *
-   * NOT registered automatically: flipping readiness pulls the instance out of
-   * its load balancer, which is the correct response to saturation in one
-   * topology and a self-inflicted outage in another (a single instance would
-   * remove the only server). The host composes it deliberately:
-   *
-   * ```ts
-   * await app.register(healthPlugin, { checks: [app.pressure.readinessCheck()] });
-   * ```
-   *
-   * Reports unhealthy only at `saturated` — `degraded` still serves, so it must
-   * still read ready.
+   * A readiness check for `healthPlugin({ checks })`. NOT auto-registered:
+   * flipping readiness pulls the instance from its load balancer — right in a
+   * fleet, a self-inflicted outage for a single instance. Unhealthy only at
+   * `saturated`; `degraded` still serves.
    */
   readinessCheck(options?: { name?: string; critical?: boolean }): HealthCheck;
 }
@@ -147,13 +111,9 @@ declare module "fastify" {
 // ── Built-in signal ─────────────────────────────────────────────────────
 
 /**
- * Event-loop utilisation as saturation.
- *
- * `performance.eventLoopUtilization()` with a previous sample returns the
- * fraction of the interval the loop was busy — already `[0, 1]`, already a
- * ratio, and measured over the window rather than instantaneously. That last
- * part matters: a single lag reading is a spike, while utilisation across a
- * second is load.
+ * Event-loop utilisation as saturation — already a [0,1] ratio, and measured
+ * ACROSS the interval rather than instantaneously: one lag reading is a spike,
+ * utilisation over a second is load.
  */
 function eluSignal(): PressureSignal {
   let previous = performance.eventLoopUtilization();

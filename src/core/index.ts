@@ -49,7 +49,7 @@ export {
 } from "./createCrudRouter.js";
 // `defineAction()` — typed action declaration. Captures the schema's
 // literal type so handler's `data` is `z.infer<typeof schema>` instead
-// of `Record<string, unknown>`. Drop-in object replacement (2.16).
+// of `Record<string, unknown>`. Drop-in object replacement.
 export { type DefineActionConfig, defineAction } from "./defineAction.js";
 // Programmatic resource assembly — typed seam bundles + the canonical
 // slot-aware merge for module authors (arc-* packs). Kills the `as never`

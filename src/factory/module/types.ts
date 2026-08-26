@@ -1,56 +1,29 @@
 /**
- * Arc modules — compose a whole domain into an app with one entry.
+ * Arc modules — a whole domain composed into an app as one entry.
  *
- * A resource is a single route group. A **module** is a self-contained domain
- * package's contribution to an app: its engine init, its resources, and its
- * post-registration wiring, bundled as one value. Instead of the host hand-
- * threading a package's pieces across `bootstrap`, `resources`, and
- * `afterResources`, the package exports one `ArcModule` and the host lists it:
+ * A resource is one route group; an `ArcModule` is a domain package's entire
+ * contribution (engine init + resources + post-wiring) as a single value, so
+ * the host stops hand-threading pieces across `bootstrap` / `resources` /
+ * `afterResources`:
  *
  * ```ts
- * const app = await createApp({
- *   modules: [accountingModule({ permissions }), orderModule({ permissions })],
- *   resources: [healthResource],   // app-local resources still compose alongside
- * });
+ * createApp({ modules: [accountingModule({ permissions })], resources: [health] })
  * ```
  *
- * `modules` is pure sugar over the existing lifecycle — arc expands each module
- * into the SAME phases a hand-wired app uses. Modules compose in `dependsOn`
- * order (their original list order when no edges are declared), and run BEFORE
- * the app-level entry in every phase:
+ * Pure sugar over the existing lifecycle: each module expands into the SAME
+ * phases, in `dependsOn` order (list order absent edges), running BEFORE the
+ * app-level entry for that phase — so a module's engine is live before
+ * app-level `bootstrap`, and app-level `afterResources` can wire across
+ * modules. `onClose` runs in REVERSE.
  *
- * ```
- * plugins        = app plugins()  →  modules' plugins  (infra registration)
- * bootstrap[]    = modules' bootstrap  →  options.bootstrap  (engine init + export)
- * resources[]    = modules' resources  →  options.resources / resourceDir
- * afterResources = modules' afterResources  →  options.afterResources
- * onClose        = modules' onClose (REVERSE order)  →  options.onClose
- * ```
+ * RESOURCES are the one phase with two orderings, both intentional: app
+ * resources RESOLVE first, module resources REGISTER first (prepended, so
+ * their routes mount ahead). Module resources otherwise flow arc's normal
+ * registration — prefix, dedup, OpenAPI, audit — with no special-casing.
  *
- * So a module's engine is live before app-level bootstrap runs, app-level
- * `afterResources` can wire across modules, and — within the module set — a
- * dependency's `plugins`/`bootstrap` runs before any module that `dependsOn`
- * it.
- *
- * Resources are the ONE phase with two distinct orderings, both intentional:
- * app `resources`/`resourceDir` RESOLVE first (their semantics untouched), but
- * module resources REGISTER first (they're prepended, so routes mount ahead of
- * app resources — matching "modules before app-level"). Either way a module
- * resource flows arc's normal registration (prefix, dedup, OpenAPI, audit) — it
- * is not special-cased.
- *
- * This is the seam a domain package composes through: `createXModule(deps)`
- * returns an `ArcModule`, the host owns the composition. No proxy, no per-call
- * lazy bridges — engines are initialized in `bootstrap` and passed live into
- * `defineResource(...)` inside the `resources` factory.
- *
- * Directory map (mechanical split of the former single file):
- *   types.ts         — the module contract (this file)
- *   resolve.ts       — input-form resolution (thunks / promises / contributions)
- *   order.ts         — `dependsOn` stable topological ordering
- *   contributions.ts — health / workflow / schedule collection
- *   lifecycle.ts     — event-handler subscription + teardown
- *   index.ts         — `defineModule`, `getModuleExports`, public barrel
+ * Siblings: `resolve.ts` (input forms), `order.ts` (topological sort),
+ * `contributions.ts` (health/workflow/schedule), `lifecycle.ts` (subscribe +
+ * teardown), `index.ts` (`defineModule`, `getModuleExports`).
  */
 
 import type { FastifyInstance } from "fastify";
@@ -164,52 +137,23 @@ export interface ArcModule<TExports = unknown> {
   readonly dependsOn?: readonly string[];
 
   /**
-   * Infra SETUP function — the module-level analog of the app's `plugins()`
-   * slot. Runs in the plugins phase: AFTER the app's own `plugins()` (so
-   * module infra can build on app foundations like a DB connection) and in
-   * `dependsOn` order, but BEFORE any module `bootstrap` — so engines
-   * initialised in `bootstrap` can rely on what's registered here.
+   * Infra SETUP — the module analog of the app's `plugins()`. Runs after the
+   * app's own `plugins()`, in `dependsOn` order, before any module `bootstrap`.
    *
-   * ## ⚠ This is NOT itself a Fastify plugin
+   * ⚠ NOT a Fastify plugin: arc CALLS it, never `register()`s it. So you
+   * register your own (`await fastify.register(x)`, not `return x` — a
+   * returned function is read as a DISPOSER), and there is no encapsulation
+   * or prefix: decorators land on the shared instance. Returning an `fp()`
+   * plugin throws; a bare multi-arg function warns.
    *
-   * Despite the name, arc CALLS this function directly — it is never handed
-   * to `fastify.register()`. Two consequences, both of which bite module
-   * authors coming from ordinary Fastify plugins:
-   *
-   *   - **You must register plugins yourself.** `await fastify.register(x)`,
-   *     not `return x`. A returned function is read as a DISPOSER (below),
-   *     so returning a plugin silently registers nothing and then invokes
-   *     your plugin as a teardown callback. Arc detects the `fastify-plugin`
-   *     case and throws; the bare-function case warns.
-   *   - **There is no encapsulation and no prefix here.** Decorators and
-   *     hooks you add land on the instance arc passes you — the same
-   *     instance every other module sees. Fastify's encapsulation applies
-   *     only inside a `register()` call you make yourself. See
-   *     https://fastify.dev/docs/latest/Reference/Plugins/
+   * Receives `{ defer }` for teardown, or return one disposer as shorthand.
+   * v3 renames this slot to `setup` with no alias (v3.md).
    *
    * ```ts
    * plugins: async (fastify) => {
-   *   await fastify.register(somePlugin, { prefix: '/x' });  // ✅ register
-   *   fastify.decorate('thing', thing);                      // ✅ root-visible
-   *   // return somePlugin                                   // ❌ never registered
-   * },
-   * ```
-   *
-   * The name is kept for the 2.x line; v3 renames the slot to `setup` and
-   * REMOVES `plugins` outright — v3 ships no compatibility aliases (v3.md).
-   *
-   * Separating this from `bootstrap` keeps lifecycle intent explicit for
-   * published ecosystem packages: `plugins` = "register infra"; `bootstrap` =
-   * "initialise engines (and return the public export)". Registering a plugin
-   * inside `bootstrap` still works — this slot just makes the two distinct.
-   *
-   * Receives `{ defer }` to register teardown for anything it acquires, and
-   * may RETURN a single disposer as shorthand for the one-resource case:
-   *
-   * ```ts
-   * plugins: async (fastify) => {
+   *   await fastify.register(somePlugin, { prefix: '/x' });
    *   const conn = await connect();
-   *   return () => conn.close();          // equivalent to defer(...)
+   *   return () => conn.close();
    * },
    * ```
    */
@@ -277,53 +221,25 @@ export interface ArcModule<TExports = unknown> {
   ) => TExports | Promise<TExports>;
 
   /**
-   * App-level resource NAMES this module authoritatively SUPERSEDES. When the
-   * host also lists (or `resourceDir`-discovers) a resource of the same name,
-   * arc DROPS the app copy and registers THIS module's version instead — so the
-   * host keeps NO hand-maintained "which resources did modules take over" filter
-   * set. Ownership lives on the atom that provides it (colocated, drift-proof):
+   * App-level resource NAMES this module SUPERSEDES. When the host lists (or
+   * discovers) a resource of the same name, arc drops the app copy and
+   * registers this module's — so the host maintains no "which resources did
+   * modules take over" filter set.
    *
-   * ```ts
-   * defineModule({ name: "order", owns: ["order", "quotation", "rfq"], resources: () => [...] })
-   * ```
+   * PREFER `owns: "provided"`: arc derives the list from the resources the
+   * module actually returned, so the claim cannot disagree with reality.
+   * Resources resolve once, names are validated, `owns` is derived, and
+   * supersession runs after — one phase arc owns.
    *
-   * Semantics:
-   *   - Purely a supersede-the-app-fork switch — it filters the *app* resource
-   *     list, never the module's own `resources` (those always register).
-   *   - Idempotent + tolerant on the APP side: an `owns` entry with no matching
-   *     app resource is a silent no-op — a module may pre-declare a name before
-   *     any fork exists.
-   *   - Collected across ALL modules; the app-side supersession is their union.
+   * The explicit array is ENFORCED at boot: a claimed name must appear in THIS
+   * module's own `resources`, or boot fails naming the unmet names. Without
+   * that, a typo or a deleted resource booted "successfully" with the app's
+   * route removed and nothing serving it. A sibling module providing the name
+   * does NOT satisfy the claim — ownership is local to its declarer.
    *
-   * **Prefer `owns: "provided"`** (2.32) — arc derives the list from the
-   * resources this module actually returned, so the claim and the reality
-   * cannot disagree:
-   *
-   * ```ts
-   * defineModule({ name: "order", owns: "provided", resources: () => [...] })
-   * ```
-   *
-   * That is the whole arm for most modules. Resources are resolved exactly
-   * once, names are validated (duplicates within a module are rejected), the
-   * effective `owns` is derived, and supersession runs afterward — one atomic
-   * phase arc owns, rather than a rule each module re-states.
-   *
-   * **The explicit-array form is ENFORCED at boot: if you `owns` a name,
-   * PROVIDE it** — in THIS module's own `resources`. Arc fails boot when a
-   * claimed name is not among them, naming the module, the unmet names, and
-   * what it did supply. Without that check, a typo or a resource deleted
-   * without updating the list booted "successfully" with the app's route
-   * silently removed and nothing serving it. Two real cases, both silent 404s:
-   * a POS module claiming a checkout resource it mounted only when the host
-   * supplied a pipeline, and a device gateway claiming a name it never
-   * provided at all.
-   *
-   * Keep the explicit array only when the list is genuinely NOT the module's
-   * own resource set — e.g. pre-declaring a name before the fork exists.
-   *
-   * A sibling module supplying the name does NOT satisfy the claim — ownership
-   * is local to the module that declares it, which is the colocation this arm
-   * exists for.
+   * It only filters the APP list, never the module's own resources; an entry
+   * matching no app resource is a silent no-op (a module may pre-declare a
+   * name before any fork exists). Collected across modules as a union.
    */
   readonly owns?: readonly string[] | "provided";
 

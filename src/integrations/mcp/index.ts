@@ -41,12 +41,12 @@ export {
   buildMcpToolsFromBridges,
   type McpBridge,
 } from "./aiSdkBridge.js";
-// Better Auth API-key → MCP resolver (2.17.1)
+// Better Auth API-key → MCP resolver
 export {
   type CreateMcpAuthFromBetterAuthApiKeyOptions,
   createMcpAuthFromBetterAuthApiKey,
 } from "./betterAuthApiKey.js";
-// Factory (Level 2) + collision resolution (2.17.1)
+// Factory (Level 2) + collision resolution
 export {
   type AuthRef,
   createMcpServer,

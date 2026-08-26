@@ -147,7 +147,7 @@ export interface EventPluginOptions {
    */
   validateMode?: "warn" | "reject" | "off";
   /**
-   * Dev-mode duplicate-publish detector (v2.12).
+   * Dev-mode duplicate-publish detector.
    *
    * When enabled, arc keeps a 5-second LRU on `(eventType, correlationId)`
    * and emits an `arcLog("events").warn(...)` the second time a request

@@ -1,33 +1,23 @@
 /**
  * ONE assertion, run through EVERY surface arc exposes.
  *
- * Arc serves the same resource over HTTP and over MCP, through two different
- * entry paths that re-implement the same decisions: resolve identity into a
- * `RequestScope`, run the permission check, project fields, shape the error.
- * The suite tests those decisions 203 times on HTTP and 33 times on MCP — and
- * only twice on both. Every cross-surface defect this session lived in exactly
- * that gap: MCP dropped `teamId` from member scopes, and MCP's field masking
- * diverged from HTTP's, and in each case the HTTP test was green.
- *
- * A parity test is not "an MCP test too". It is the SAME expectation with the
+ * HTTP and MCP re-implement the same decisions — identity → `RequestScope`,
+ * permission check, field projection, error envelope. The suite exercises them
+ * overwhelmingly on HTTP and rarely on both, and every cross-surface defect
+ * lived in that gap. `forEachSurface` writes the expectation once with the
  * transport as a parameter, so a divergence cannot be green anywhere.
  *
- * SCOPE — this is about BEHAVIOUR. Whether a route/action/aggregation is
- * DESCRIBED consistently across registry / OpenAPI / CLI describe / MCP is
- * `tests/contract/cross-surface.test.ts`. Complements, not duplicates: a tool
- * can be perfectly described and still skip its permission check.
- *
- *   forEachSurface("denies an anonymous list", async (surface) => {
- *     const r = await surface.call({ op: "list" }, ANONYMOUS);
- *     expect(r.status).toBe(401);
+ *   forEachSurface("denies an anonymous list", makeResource, async (surface) => {
+ *     expect((await surface.call({ op: "list" }, ANONYMOUS)).status).toBe(401);
  *   });
  *
- * WHY normalize to an HTTP-shaped `{ status, ok, body }` rather than invent a
- * neutral third vocabulary: arc's error envelope (`{ code, message, status }`)
- * is already the shared contract — MCP embeds that exact object in its
- * `isError` text. The normalization therefore reads a value both surfaces
- * genuinely produce instead of inventing one, so a parity failure means the
- * surfaces disagree, not that the harness mistranslated.
+ * Results normalise to an HTTP-shaped `{ status, ok, body }` because arc's
+ * error envelope already IS the shared contract — MCP embeds that exact object
+ * in its `isError` text — so a parity failure means the surfaces disagree, not
+ * that the harness mistranslated.
+ *
+ * SCOPE: behaviour. Whether a route is DESCRIBED consistently across registry /
+ * OpenAPI / CLI describe / MCP is `tests/contract/cross-surface.test.ts`.
  */
 
 import type { FastifyRequest } from "fastify";
@@ -119,19 +109,12 @@ export interface Surface {
 // ── HTTP ────────────────────────────────────────────────────────────────
 
 /**
- * Both surfaces are seeded from ONE `buildScope()` call.
- *
- * This is the load-bearing decision in the file. The obvious alternative —
- * set `request.user` on HTTP and pass a session to MCP — looks equivalent and
- * is not: on HTTP the `member` scope is minted by the AUTH PLUGIN
- * (`authPlugin.ts`), while MCP mints it straight from the session with no
- * plugin involved. With `auth: false` the same identity therefore yields a
- * member scope on MCP and a public one on HTTP, and every tenancy assertion
- * "diverges" for a reason that has nothing to do with the surfaces.
- *
- * Holding the RequestScope identical is what makes the remaining differences
- * attributable to the transport. Testing scope DERIVATION is a separate job,
- * and belongs with the auth plugin that owns it.
+ * Both surfaces are seeded from ONE `buildScope()` — the load-bearing decision
+ * here. Setting `request.user` on HTTP and passing a session to MCP is NOT
+ * equivalent: HTTP mints the `member` scope in the auth plugin, MCP mints it
+ * from the session, so with `auth: false` the same identity yields different
+ * scopes and every tenancy assertion "diverges" for no transport reason.
+ * Scope DERIVATION is the auth plugin's to test.
  */
 function identityPreHandler(as: MaybeIdentity) {
   return async (request: FastifyRequest) => {
@@ -245,15 +228,11 @@ function findToolBySource(tools: ReturnType<typeof resourceToTools>, want: strin
 /**
  * The app-level services a real MCP call gets, mirrored from `mcpPlugin`.
  *
- * WITHOUT this, `buildContextExtras` bails on `if (!wiring) return undefined`
- * and never stamps `metadata.arc` — which silently disables hooks, CRUD event
- * publishing, AND `BodySanitizer`'s field-WRITE enforcement, since that half
- * is gated on `arcContext?.arc?.fields`. A wiring-less MCP surface therefore
- * looks like it diverges from HTTP on writes when the real one does not: the
- * harness would be manufacturing its own parity failures.
- *
- * Lazy getters for the same reason the plugin uses them — registration order
- * must not decide whether execution finds its services.
+ * Without it `buildContextExtras` returns undefined and never stamps
+ * `metadata.arc`, silently disabling hooks, CRUD event publishing, and
+ * field-WRITE enforcement — so the harness would manufacture its own parity
+ * failures. Lazy getters so registration order cannot decide what execution
+ * finds.
  */
 function wiringFrom(app: ArcApp) {
   const decorated = app as unknown as {

@@ -79,7 +79,33 @@ When touching auth, permissions, MCP, idempotency, or data handling:
 - `requireXxxId(scope, hint?)` at handler boundaries instead of hand-rolled guards. Status splits by dimension: `requireUserId`/`requireClientId` → 401 (wrong principal); `requireOrgId`/`requireTeamId` → 403 (authenticated, no tenancy).
 - Subclass authors: `ArcCreateResult<this>` / `ArcListResult<this>` etc. thread the concrete `TDoc` — no restating `Promise<IControllerResponse<T>>`.
 - File names: `*Plugin.ts` = Fastify plugin, `types.ts` = shared types, `interface.ts` = type-only contract. Everything else follows its directory.
-- Docblocks carry the WHY that code cannot: a measured defect, a rejected alternative, an ordering constraint. They do not narrate what the next line already says.
+## Docblocks — budgeted, because they are edited too
+
+A docblock is code you maintain. When it grows past its subject, every change to
+the code forces a rewrite of the prose, and editing the file becomes the hazard
+the prose was meant to prevent. `src/` sat at 38% comment (one options file at
+85%) before this rule existed.
+
+**Budget**: a member ≤ 8 lines, a file header ≤ 25. Over budget means the
+knowledge belongs in [wiki/](wiki/index.md), not here — link to it.
+
+**Keep** — only what breaks something if unknown:
+- a constraint with a consequence (`keepAliveTimeout` MUST exceed the LB's, or 502s)
+- a default that differs from upstream, and its unit
+- a rejected alternative that looks obviously right
+- an ordering or lifecycle requirement local to this code
+
+**Cut** — every one of these is bloat:
+- version archaeology: `(2.15.1)`, `2.16 —`, `before 2.24 this…`. Git and
+  [changelog/v2.md](changelog/v2.md) own history; a docblock is present tense.
+- incident narrative: who hit it, which host, what date. Keep the INVARIANT,
+  drop the story.
+- restating the signature, the type, or the next line
+- `@example` for a scalar option — save them for shapes a reader would get wrong
+- lifecycle diagrams, boot order, test maps, peer tables: owned by CLAUDE.md
+- external URLs (they rot) and ASCII art
+
+Write for someone changing this code next week, not for the person who wrote it.
 
 ## Glossary
 

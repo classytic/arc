@@ -30,48 +30,17 @@ import { getUserId as getRawUserId } from "../utils/userHelpers.js";
 // ============================================================================
 
 /**
- * A capability mandate — declarative, time-boxed, optionally cap-bounded
- * authorization for a single high-value action by an AI agent or service.
+ * A capability mandate — time-boxed, optionally cap-bounded authorization for
+ * ONE high-value action by an agent or service.
  *
- * Models the **2025 agent-payments / agent-authorization conventions**:
- * - Google + Anthropic + Stripe **AP2** (Agent Payments Protocol)
- * - Stripe **x402 / Agentic Commerce**
- * - **MCP authorization** (RFC 9728 + RFC 9700 + RFC 9449)
+ * Where OAuth scopes answer "what may this client EVER do?", a mandate answers
+ * "what is THIS request authorized to do right now?" — narrower in capability,
+ * time, and value. Shape follows the 2025 agent-authorization conventions
+ * (AP2, x402, MCP authorization: RFC 9728/9700/9449).
  *
- * Where OAuth `scopes` answer "what can this client EVER do?", a mandate
- * answers "what is THIS REQUEST authorized to do RIGHT NOW?" — narrower in
- * capability, time, and value.
- *
- * Arc does **not** parse mandate JWTs / Verifiable Credentials — your
- * authenticate callback does (one `jose.jwtVerify()` or `did-jwt-vc.verify()`
- * call) and populates this object. Arc's `requireMandate(capability, opts)`
- * permission helper reads it and validates the action against the mandate's
- * declared bounds.
- *
- * @example
- * ```typescript
- * // Inbound: Authorization: Mandate eyJhbGc...
- * authenticate: async (request) => {
- *   const proof = request.headers['authorization']?.replace(/^Mandate /, '');
- *   const claims = await verifyMandate(proof);            // host's verifier
- *   request.scope = {
- *     kind: 'service',
- *     clientId: claims.iss,
- *     organizationId: claims.org,
- *     scopes: claims.scope?.split(' '),
- *     mandate: {
- *       id: claims.jti,
- *       capability: claims.cap,           // 'payment.charge' / 'inbox.send' / ...
- *       cap: claims.amount,               // numeric ceiling
- *       expiresAt: claims.exp * 1000,
- *       parent: claims.parent,            // delegated mandate chain
- *       audience: claims.aud,             // resource id mandate is bound to
- *     },
- *     dpopJkt: claims.cnf?.jkt,           // RFC 7638 — sender-constrained
- *   };
- *   return { id: claims.iss };
- * };
- * ```
+ * Arc does NOT verify mandate JWTs or VCs. The host's `authenticate` callback
+ * verifies and populates this object; `requireMandate(capability, opts)` then
+ * validates the action against its bounds.
  */
 export interface Mandate {
   /** Mandate identifier — typically the JWT `jti` claim. */
@@ -278,36 +247,10 @@ export function getOrgId(scope: RequestScope): string | undefined {
 }
 
 /**
- * Resolve the tenant (organization) id from an incoming Fastify request,
- * walking the canonical sources in order: `request.scope` → `x-organization-id`
- * header. Returns `{ organizationId, source }` so callers can log or branch
- * on which path won.
+ * Tenant id for a request, from its scope.
  *
- * Use in custom handlers that bypass arc's auto-CRUD path (worker routes,
- * batch importers, cross-engine subscribers) and therefore don't get the
- * tenant injected by `BaseCrudController`. Bridges arc's HTTP shape to
- * the mongokit/kit-side tenant context (e.g. `createTenantContext().run`).
- *
- * Header fallback is intentional: matches `resolveOrgFromHeader` semantics
- * for hosts that select an org via header instead of session/scope. Don't
- * reach for this when `getOrgId(scope)` alone is enough — for standard
- * authenticated routes the scope is already authoritative.
- *
- * @example
- * ```typescript
- * import { getTenantFromRequest } from '@classytic/arc/scope';
- * import { tenantContext } from './lib/mongokit.js';
- *
- * fastify.post('/statements/batch', async (req, reply) => {
- *   const { organizationId } = getTenantFromRequest(req);
- *   if (!organizationId) {
- *     return reply.code(400).send({ error: 'organizationId required' });
- *   }
- *   await tenantContext.run({ tenantId: organizationId }, async () => {
- *     await statementRepository.create(req.body);
- *   });
- * });
- * ```
+ * Reads the SCOPE, never `request.user` — the two drift once elevation or a
+ * service token is involved, and the scope is the resolved answer.
  */
 export function getTenantFromRequest(
   req: {
@@ -687,27 +630,10 @@ export function getOrgContext(request: {
 }
 
 /**
- * Read `request.scope` safely from any object that *might* have one.
- * Falls back to `PUBLIC_SCOPE` when the field is absent or undefined.
+ * Read `request.scope`, falling back to `PUBLIC_SCOPE`.
  *
- * This is the canonical way for permission checks, presets, and middleware
- * to read scope — never access `request.scope` directly because it can be
- * `undefined` on requests that haven't been touched by an auth adapter yet.
- *
- * Accepts a structural shape (`{ scope?: RequestScope }`) instead of the
- * full Fastify request type so it can be called from any layer without
- * dragging in the Fastify type. The actual runtime is identical.
- *
- * @example
- * ```typescript
- * import { getRequestScope } from '@classytic/arc/scope';
- *
- * function myCheck(ctx: PermissionContext) {
- *   const scope = getRequestScope(ctx.request);
- *   if (isElevated(scope)) return true;
- *   // ...
- * }
- * ```
+ * Never returns undefined: an absent scope means an unauthenticated request,
+ * not a missing one, and callers must not have to distinguish those.
  */
 export function getRequestScope(request: { scope?: RequestScope }): RequestScope {
   return request.scope ?? PUBLIC_SCOPE;
@@ -764,38 +690,9 @@ export interface ScopeFirstCtxRequest {
 }
 
 /**
- * The ONE shared actor/org derivation for resource handlers and module
- * packages (`arc-*` fleet) — scope-FIRST, per the canonical precedence:
- *
- * 1. `request.scope` (arc's validated `RequestScope`, set by auth adapters):
- *    `userId` (human) or `clientId` (service) → `actorId`; `getOrgId(scope)`
- *    → `organizationId`.
- * 2. The `x-organization-id` header — ONLY when the scope carries no org.
- *    This is the bridge for custom-auth/public routes where arc leaves scope
- *    unpopulated; it never overrides a validated scope.
- *
- * Replaces per-package hand-rolled clones of
- * `req.user?._id ?? req.user?.id ?? headers['x-organization-id']` — that
- * pattern re-implements (and drifts from) arc's canonical resolution. A
- * package's `ctxOf(req)` should call this for the shared
- * `{ actorId, organizationId }` and only ADD its kernel-specific fields
- * (`actorKind` / `correlationId` / `roles` / `idempotencyKey`).
- *
- * Structural request shape — works on a raw `FastifyRequest` AND on arc's
- * `IRequestContext` (see {@link ScopeFirstCtxRequest}: the discriminated
- * `RequestScope` and the flat controller projection are both understood).
- *
- * @example
- * ```typescript
- * import { scopeFirstCtx } from '@classytic/arc/scope';
- *
- * // Guaranteed actor (kernel context requires one):
- * const { actorId, organizationId } = scopeFirstCtx(req, { fallbackActorId: 'system' });
- *
- * // Optional actor (package applies its own policy):
- * const ctx = scopeFirstCtx(req);
- * if (ctx.actorId) audit.record({ actor: ctx.actorId });
- * ```
+ * Build a scope-first context for permission checks outside a Fastify request
+ * (jobs, MCP tools, workers). `scope` is the identity channel; `user` is
+ * derived for legacy checks that still read it.
  */
 export function scopeFirstCtx(
   req: ScopeFirstCtxRequest,

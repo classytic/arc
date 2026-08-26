@@ -83,7 +83,7 @@ const MEMORY_STORE_NAMES = new Set(["memory", "memory-cache"]);
  * Hosts that need NO redaction (test fixtures, security audits) opt out
  * with `logger: { redact: [] }`. Hosts that need MORE redaction supply
  * their own `redact` and arc steps aside — this default never overrides
- * an explicit setting. (2.15.1)
+ * an explicit setting.
  */
 export const DEFAULT_LOGGER_REDACT_PATHS = [
   "req.headers.authorization",

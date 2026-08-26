@@ -1,30 +1,17 @@
 /**
- * @classytic/arc — Webhook Outbound Integration
+ * Outbound webhooks — auto-dispatch arc events to registered endpoints with
+ * HMAC-SHA256 signing, delivery logging, and a pluggable `WebhookStore`.
  *
- * Fastify plugin that auto-dispatches Arc events to registered webhook
- * endpoints with HMAC-SHA256 signing, delivery logging, and pluggable
- * persistence via WebhookStore.
- *
- * This is a SEPARATE subpath import — only loaded when explicitly used:
- *   import { webhookPlugin } from '@classytic/arc/integrations/webhooks';
+ * A separate subpath, loaded only when used:
+ * `@classytic/arc/integrations/webhooks`. For at-least-once delivery use
+ * `durable: { store }` / `createDurableWebhookModule` — the in-process retry
+ * is explicitly best-effort.
  *
  * @example
  * ```typescript
- * import { webhookPlugin } from '@classytic/arc/integrations/webhooks';
- *
  * await fastify.register(webhookPlugin);
- *
- * // Register a customer webhook
- * app.webhooks.register({
- *   id: 'wh-1',
- *   url: 'https://customer.com/webhook',
- *   events: ['order.created', 'order.shipped'],
- *   secret: 'whsec_abc123',
- * });
- *
- * // Events auto-dispatch — no manual wiring needed
- * await app.events.publish('order.created', { orderId: '123' });
- * // → POST https://customer.com/webhook with HMAC signature
+ * app.webhooks.register({ id: 'wh-1', url, events: ['order.created'], secret });
+ * await app.events.publish('order.created', { orderId: '123' }); // → signed POST
  * ```
  */
 
