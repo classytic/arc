@@ -145,6 +145,79 @@ describe("delivery transport — wire contract", () => {
     expect(JSON.parse(init.body as string).type).toBe("order.created");
   });
 
+  it("resolves private authentication headers only at delivery time", async () => {
+    const calls: RequestInit[] = [];
+    const transport = createWebhookDeliveryTransport({
+      getSubscription: () => ({ ...SUB }),
+      resolveHeaders: async () => ({ authorization: "Bearer private-key" }),
+      fetch: (async (_url: string, init: RequestInit) => {
+        calls.push(init);
+        return { ok: true, status: 204 };
+      }) as never,
+    });
+
+    await transport.publish(makeRow() as never);
+    expect(calls[0]?.headers).toMatchObject({ authorization: "Bearer private-key" });
+  });
+
+  it("rejects attempts to replace Arc signature headers — BEFORE dispatching", async () => {
+    const send = vi.fn();
+    const transport = createWebhookDeliveryTransport({
+      getSubscription: () => ({ ...SUB }),
+      resolveHeaders: () => ({ "x-arc-webhook-signature": "forged" }),
+      fetch: send as never,
+    });
+
+    await expect(transport.publish(makeRow() as never)).rejects.toMatchObject({ transient: false });
+    // The guard must run before the request goes out. Rejecting AFTER dispatch
+    // would still throw here while the receiver had already seen the forged
+    // header — so assert the request never left.
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("reserves the arc headers case-INSENSITIVELY", async () => {
+    // HTTP header names are case-insensitive and `fetch` normalises them, so a
+    // guard that only matched lowercase would be bypassed by `X-Arc-...`.
+    const transport = createWebhookDeliveryTransport({
+      getSubscription: () => ({ ...SUB }),
+      resolveHeaders: () => ({ "X-Arc-Webhook-Signature": "forged" }),
+      fetch: vi.fn() as never,
+    });
+
+    await expect(transport.publish(makeRow() as never)).rejects.toMatchObject({ transient: false });
+  });
+
+  it("reserves `content-type` too — a changed encoding breaks signature verification", async () => {
+    const transport = createWebhookDeliveryTransport({
+      getSubscription: () => ({ ...SUB }),
+      resolveHeaders: () => ({ "content-type": "text/plain" }),
+      fetch: vi.fn() as never,
+    });
+
+    await expect(transport.publish(makeRow() as never)).rejects.toMatchObject({ transient: false });
+  });
+
+  it("a NON-reserved header passes through untouched", async () => {
+    // The inverse control — a guard that rejected everything would satisfy the
+    // three tests above while making the feature useless.
+    const calls: RequestInit[] = [];
+    const transport = createWebhookDeliveryTransport({
+      getSubscription: () => ({ ...SUB }),
+      resolveHeaders: () => ({ "x-tenant-key": "abc" }),
+      fetch: (async (_url: string, init: RequestInit) => {
+        calls.push(init);
+        return { ok: true, status: 204 };
+      }) as never,
+    });
+
+    await transport.publish(makeRow() as never);
+    expect(calls[0]?.headers).toMatchObject({
+      "x-tenant-key": "abc",
+      // and arc's own survived alongside it
+      "x-arc-webhook-signature": expect.any(String),
+    });
+  });
+
   it("unregistered subscription resolves — the delivery is moot, the row acknowledges", async () => {
     const transport = createWebhookDeliveryTransport({
       getSubscription: () => undefined,

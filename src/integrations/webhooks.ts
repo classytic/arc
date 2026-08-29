@@ -814,6 +814,11 @@ export interface WebhookDeliveryTransportOptions {
    * an allowed URL can't 302 into a blocked target; a rejection is permanent.
    */
   validateUrl?: (url: URL, subscription: WebhookSubscription) => void | Promise<void>;
+  /** Resolve private auth headers at delivery time; reserved Arc headers cannot be replaced. */
+  resolveHeaders?: (
+    subscription: WebhookSubscription,
+    event: WebhookDeliveryPayload["event"],
+  ) => Record<string, string> | Promise<Record<string, string>>;
 }
 
 /**
@@ -872,6 +877,10 @@ export function createWebhookDeliveryTransport(
         timestamp,
         deliveryId: payload.event.meta.id,
       });
+      const extraHeaders = options.resolveHeaders
+        ? await options.resolveHeaders(sub, payload.event)
+        : {};
+      assertWebhookHeaderOverrides(extraHeaders);
 
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), timeout);
@@ -884,6 +893,7 @@ export function createWebhookDeliveryTransport(
             "x-arc-webhook-signature": v1Signature,
             "x-arc-webhook-timestamp": String(timestamp),
             "x-arc-webhook-delivery": payload.event.meta.id,
+            ...extraHeaders,
           },
           body,
           signal: ac.signal,
@@ -941,7 +951,7 @@ export function webhookDeliveryFailurePolicy(
 
 export interface DurableWebhookModuleOptions
   extends Omit<OutboxModuleOptions, "name" | "transport" | "failurePolicy">,
-    Pick<WebhookDeliveryTransportOptions, "fetch" | "timeout" | "validateUrl"> {
+    Pick<WebhookDeliveryTransportOptions, "fetch" | "timeout" | "validateUrl" | "resolveHeaders"> {
   /** Module name / `dependsOn` key. Default `'webhook-delivery'`. */
   name?: string;
   /** Retry/backoff tuning for the default failure policy. */
@@ -974,7 +984,16 @@ export interface DurableWebhookModuleOptions
 export function createDurableWebhookModule(
   options: DurableWebhookModuleOptions,
 ): ReturnType<typeof createOutboxModule> {
-  const { name, delivery, failurePolicy, fetch, timeout, validateUrl, ...outboxOptions } = options;
+  const {
+    name,
+    delivery,
+    failurePolicy,
+    fetch,
+    timeout,
+    validateUrl,
+    resolveHeaders,
+    ...outboxOptions
+  } = options;
   return createOutboxModule({
     ...outboxOptions,
     name: name ?? "webhook-delivery",
@@ -996,8 +1015,27 @@ export function createDurableWebhookModule(
         ...(fetch !== undefined ? { fetch } : {}),
         ...(timeout !== undefined ? { timeout } : {}),
         ...(validateUrl !== undefined ? { validateUrl } : {}),
+        ...(resolveHeaders !== undefined ? { resolveHeaders } : {}),
       });
     },
     failurePolicy: failurePolicy ?? webhookDeliveryFailurePolicy(delivery),
   });
+}
+
+const RESERVED_WEBHOOK_HEADERS = new Set([
+  "content-type",
+  "x-arc-webhook-signature",
+  "x-arc-webhook-timestamp",
+  "x-arc-webhook-delivery",
+]);
+
+function assertWebhookHeaderOverrides(headers: Record<string, string>): void {
+  const reserved = Object.keys(headers).find((name) =>
+    RESERVED_WEBHOOK_HEADERS.has(name.toLowerCase()),
+  );
+  if (reserved) {
+    throw new WebhookDeliveryError(`webhook authentication header '${reserved}' is reserved`, {
+      transient: false,
+    });
+  }
 }

@@ -165,6 +165,21 @@ export interface PermissionCheckMeta {
   /** Set by allowPublic() — marks the endpoint as publicly accessible */
   _isPublic?: boolean;
   /**
+   * Set by `denyAll()` — nobody passes this gate, ever.
+   *
+   * Marked because `denyAll` used to return a BARE closure with no metadata, and
+   * introspection reads metadata: `describePermission` found no `_isPublic`, no
+   * `_roles` and no scope, and fell through to its last branch —
+   * `{ kind: "authenticated" }`. So the most restrictive gate in the library was
+   * published to permission UIs and audits as "any signed-in user may do this",
+   * which is the exact opposite of what it does.
+   *
+   * The enforcement path was always correct; only the DESCRIPTION lied. That is
+   * the dangerous direction: a dashboard renders the button, every click 403s,
+   * and an access audit reports a surface that does not exist.
+   */
+  _isDenied?: boolean;
+  /**
    * Set by requireAuth() — a pure identity gate (must be signed in) that adds NO
    * row-level or environmental condition. Marked so `allOf` does not mistake it
    * for an opaque runtime branch and needlessly taint the composite `conditional`.

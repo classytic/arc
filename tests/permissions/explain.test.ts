@@ -10,6 +10,7 @@ import {
   allowPublic,
   anyOf,
   collectPublicSurface,
+  denyAll,
   describePermission,
   describePermissionMap,
   explainAccess,
@@ -19,6 +20,7 @@ import {
   requireRoles,
   requireScopeContext,
 } from "../../src/permissions/index.js";
+import { introspectCheck } from "../../src/permissions/matrix.js";
 
 describe("describePermission", () => {
   it("reports public / roles / authenticated from meta", () => {
@@ -198,5 +200,90 @@ describe("describePermissionMap + collectPublicSurface", () => {
 
   it("collectPublicSurface lists the no-auth actions (incl. public-by-omission)", () => {
     expect(collectPublicSurface(perms).sort()).toEqual(["delete", "get", "list"]);
+  });
+});
+
+/**
+ * `denyAll()` — the gate that used to describe itself as its own opposite.
+ *
+ * `denyAll` returned a BARE closure. Introspection reads metadata, so
+ * `describePermission` found no `_isPublic`, no `_roles` and no scope, and fell
+ * through to its last branch: `{ kind: "authenticated" }`. The most restrictive
+ * gate in the library was therefore published to permission UIs and access
+ * audits as "any signed-in user may do this".
+ *
+ * Enforcement was never wrong — only the description was, in the direction that
+ * makes a dashboard render a button whose every click 403s, and makes an audit
+ * report a surface that does not exist. Found via a live matrix, where
+ * `reservation.delete` (kernel default `denyAll`) read as `authenticated`.
+ */
+describe("denyAll is described as denied, not authenticated", () => {
+  it("describes as `denied`", () => {
+    expect(describePermission(denyAll())).toEqual({ kind: "denied" });
+  });
+
+  it("stays `denied` with a custom reason", () => {
+    // The reason is prose for the refusal; it must not change the KIND.
+    expect(describePermission(denyAll("Reservations are never deleted"))).toEqual({
+      kind: "denied",
+    });
+  });
+
+  it("is NOT confused with public-by-omission", () => {
+    /**
+     * The distinction that matters most: an ABSENT rule is an open door
+     * (`describePermissionMap` reports `public`), an explicit `denyAll` is a
+     * closed one. Both used to arrive as the same non-committal answer.
+     */
+    const map = describePermissionMap({ list: undefined, delete: denyAll() });
+    expect(map.list).toEqual({ kind: "public" });
+    expect(map.delete).toEqual({ kind: "denied" });
+  });
+
+  it("explains as a DEFINITIVE deny, for any principal", () => {
+    // `conditional` would tell a UI "render it and find out per request" —
+    // and the answer is already known.
+    const withRoles = explainAccess(denyAll(), { roles: ["owner", "admin"] });
+    expect(withRoles.decision).toBe("deny");
+    expect(explainAccess(denyAll()).decision).toBe("deny");
+  });
+
+  it("does not appear in the public attack surface", () => {
+    // The counterpart to the `public` test above: a denied action must never be
+    // counted as exposed, or an audit overstates risk and gets ignored.
+    expect(collectPublicSurface({ delete: denyAll() })).toEqual([]);
+  });
+});
+
+// ── denyAll under composition ───────────────────────────────────────────
+
+describe("denyAll propagates through allOf / anyOf", () => {
+  it("allOf with ANY denied branch describes as denied", () => {
+    // Intersection: nothing can satisfy every branch when one admits nobody.
+    expect(describePermission(allOf(denyAll(), requireAuth())).kind).toBe("denied");
+    expect(describePermission(allOf(requireRoles(["admin"]), denyAll())).kind).toBe("denied");
+  });
+
+  it("a public sibling does not reopen a closed allOf", () => {
+    // The ordering that matters: `every(_isPublic)` is false here anyway, but a
+    // future branch reordering must not let `public` win over `denied`.
+    expect(describePermission(allOf(denyAll(), allowPublic())).kind).toBe("denied");
+  });
+
+  it("anyOf is denied only when EVERY branch is", () => {
+    expect(describePermission(anyOf(denyAll(), denyAll())).kind).toBe("denied");
+  });
+
+  it("one denied branch does NOT close a disjunction", () => {
+    // The inverse control — a denyAll among granting branches contributes
+    // nothing, so the union stays reachable.
+    expect(describePermission(anyOf(denyAll(), allowPublic())).kind).toBe("public");
+    expect(describePermission(anyOf(denyAll(), requireRoles(["admin"]))).kind).not.toBe("denied");
+  });
+
+  it("composed denial reaches explainAccess and the matrix", () => {
+    const gate = allOf(denyAll(), requireAuth());
+    expect(explainAccess(gate, { roles: ["admin"] }).decision).toBe("deny");
+    expect(introspectCheck(gate).type).toBe("denied");
   });
 });

@@ -358,7 +358,13 @@ export function allOf(...checks: PermissionCheck[]): PermissionCheck {
   const roleBranches = checks.filter(
     (c) => (c._roles?.length ?? 0) > 0 || (c._orgRoles?.length ?? 0) > 0,
   );
-  if (checks.length > 0 && checks.every((c) => c._isPublic)) {
+  // ANY denied branch closes the whole conjunction — nothing can satisfy every
+  // branch when one admits nobody. Checked FIRST so a public or role-gated
+  // sibling cannot describe the composite as reachable; `allOf(denyAll(),
+  // allowPublic())` is a closed door, not a public one.
+  if (checks.some((c) => c._isDenied)) {
+    check._isDenied = true;
+  } else if (checks.length > 0 && checks.every((c) => c._isPublic)) {
     check._isPublic = true;
   } else if (roleBranches.length === 1) {
     const [rb] = roleBranches;
@@ -449,7 +455,12 @@ export function anyOf(...checks: PermissionCheck[]): PermissionCheck {
   // branch is public. Roles are emitted only when EVERY branch is role-gated: an
   // authenticated/custom branch broadens beyond any role list, so we leave meta
   // unset (introspects as "authenticated") rather than under-report access.
-  if (checks.some((c) => c._isPublic)) {
+  // A disjunction is closed only when EVERY branch is — the mirror of `allOf`.
+  // One `denyAll()` among granting branches contributes nothing and must not
+  // describe the union as denied.
+  if (checks.length > 0 && checks.every((c) => c._isDenied)) {
+    check._isDenied = true;
+  } else if (checks.some((c) => c._isPublic)) {
     check._isPublic = true;
   } else if (checks.every((c) => (c._roles?.length ?? 0) > 0 || (c._orgRoles?.length ?? 0) > 0)) {
     const roles = new Set<string>();
@@ -505,7 +516,16 @@ export function not(check: PermissionCheck, reason = "Access denied"): Permissio
  * ```
  */
 export function denyAll(reason = "Access denied"): PermissionCheck {
-  return () => deny(reason);
+  const check: PermissionCheck = () => deny(reason);
+  /**
+   * MARKED, not bare. Introspection (`describePermission`) reads metadata, and a
+   * closure with none fell through to `{ kind: "authenticated" }` — publishing
+   * the library's most restrictive gate as "any signed-in user may do this".
+   * Enforcement was never wrong; the description was, in the direction that
+   * makes a UI offer an action nobody can perform.
+   */
+  check._isDenied = true;
+  return check;
 }
 
 /**

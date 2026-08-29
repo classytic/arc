@@ -16,13 +16,13 @@
 
 import type { FastifyInstance } from "fastify";
 import { resolveCorsOptions } from "./security/cors.js";
-import { loadPlugin } from "./security/pluginLoader.js";
+import { loadPlugin, preflightPlugins } from "./security/pluginLoader.js";
 import { buildRateLimitOpts } from "./security/rateLimit.js";
 import type { CreateAppOptions } from "./types/index.js";
 
 // Re-exported from this module's historical home — createApp, registerArcPlugins,
 // and host code import the loader from here.
-export { loadPlugin };
+export { loadPlugin, preflightPlugins };
 
 /**
  * Register security plugins (Helmet, CORS, Rate Limiting).
@@ -32,6 +32,12 @@ export async function registerSecurityPlugins(
   fastify: FastifyInstance,
   config: CreateAppOptions,
 ): Promise<void> {
+  /**
+   * Resolve every enabled plugin's package FIRST, so a pruned peer set is one
+   * error listing all of them rather than one restart per package.
+   */
+  await preflightPlugins(config as unknown as Record<string, unknown>);
+
   // Helmet — security headers
   if (config.helmet !== false) {
     const helmet = await loadPlugin("helmet");

@@ -60,7 +60,13 @@ export type PermissionRequirement =
       /** See `roles.conditional` — the composite also has an opaque/contradictory branch. */
       readonly conditional?: boolean;
     }
-  | { readonly kind: "authenticated" };
+  | { readonly kind: "authenticated" }
+  /**
+   * Nobody passes — an explicit `denyAll()`. Distinct from "no rule found",
+   * which is `public` (public-by-omission): one is a closed door, the other is
+   * an open one, and before this existed both were reported as `authenticated`.
+   */
+  | { readonly kind: "denied" };
 
 /**
  * Extract a check's static requirement from its `PermissionCheckMeta`. Public
@@ -70,6 +76,8 @@ export type PermissionRequirement =
  * fully captured statically carries `conditional: true` (see `_conditional`).
  */
 export function describePermission(check: PermissionCheck): PermissionRequirement {
+  // FIRST — a closed door cannot be softened by anything below it.
+  if (check._isDenied) return { kind: "denied" };
   if (check._isPublic) return { kind: "public" };
   const roles = [...(check._roles ?? []), ...(check._orgRoles ?? [])];
   const scope = check._scopeContext;
@@ -118,6 +126,15 @@ export function explainAccess(
 ): AccessExplanation {
   const requirement = describePermission(check);
 
+  /**
+   * DEFINITIVE, and checked before everything else. `denyAll()` is the one gate
+   * whose answer needs no principal and no request — reporting it as
+   * `conditional` (which "authenticated" does) tells a UI to render the action
+   * and find out later, and later is a 403 the user cannot act on.
+   */
+  if (requirement.kind === "denied") {
+    return { decision: "deny", reason: "denied to everyone", requirement };
+  }
   if (requirement.kind === "public") {
     return { decision: "allow", reason: "public — no authentication required", requirement };
   }

@@ -33,7 +33,17 @@
 import { describePermission } from "./explain.js";
 import type { PermissionCheck } from "./types.js";
 
-export type PermissionEntryType = "public" | "authenticated" | "roles" | "scoped";
+/**
+ * `denied` is a CLOSED door — an explicit `denyAll()`. It is not the same as
+ * "no rule found", which surfaces as `public` (public-by-omission). Before it
+ * existed a denyAll gate was reported as `authenticated`, so a permission UI
+ * rendered the action for every signed-in user and the server refused every
+ * attempt.
+ *
+ * A CLIENT MUST treat an unrecognised type as DENIED, never as permitted — the
+ * next type added here will otherwise read as "allowed" on every older client.
+ */
+export type PermissionEntryType = "public" | "authenticated" | "roles" | "scoped" | "denied";
 
 export interface PermissionEntry {
   type: PermissionEntryType;
@@ -111,6 +121,7 @@ export function introspectCheck(check: PermissionCheck): PermissionEntry {
       scope: { ...req.scope },
     };
   }
+  if (req.kind === "denied") return { type: "denied", roles: [] };
   return { type: "authenticated", roles: [] };
 }
 

@@ -303,12 +303,25 @@ function validatePayload(payload: unknown, schema: EventSchema): ValidationResul
             // `typeof 42` is 'number', never 'integer'. Raw string
             // comparison rejected EVERY integer-typed field (e.g.
             // minor-units money schemas) — accept via Number.isInteger.
-            if (expectedType === "integer") {
-              if (actualType !== "number" || !Number.isInteger(value)) {
-                errors.push(`Field '${key}': expected integer, got ${actualType}`);
-              }
-            } else if (expectedType !== actualType) {
-              errors.push(`Field '${key}': expected ${expectedType}, got ${actualType}`);
+            /**
+             * `type` may be a UNION (`['string','null']`) — that is how every
+             * nullable field compiles. Comparing the array to a `typeof` string
+             * is never equal, so a union-typed field failed for EVERY value it
+             * allows, and the array stringified into the message as the
+             * self-contradictory "expected string,null, got string".
+             */
+            const allowed = Array.isArray(expectedType) ? expectedType : [expectedType];
+            const matches = allowed.some((t) =>
+              // JSON Schema `integer` is a NUMERIC constraint, not a typeof:
+              // `typeof 42` is 'number', never 'integer'. Raw string comparison
+              // rejected EVERY integer-typed field (e.g. minor-units money
+              // schemas) — accept via Number.isInteger.
+              t === "integer"
+                ? actualType === "number" && Number.isInteger(value)
+                : t === actualType,
+            );
+            if (!matches) {
+              errors.push(`Field '${key}': expected ${allowed.join(" | ")}, got ${actualType}`);
             }
           }
         }
