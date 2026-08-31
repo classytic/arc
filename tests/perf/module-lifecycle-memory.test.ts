@@ -95,37 +95,43 @@ describe("module system — memory + efficiency", () => {
   }, 60_000);
 
   it("compose + close of many module-heavy apps reaches steady state (no per-app leak)", async () => {
-    // Absolute thresholds can't tell a real leak from JIT/warmup. Instead
-    // measure TWO equal windows after warmup: a per-app leak grows every window
-    // by the same amount, while a non-leaking system plateaus — the second
-    // window is near-flat once one-time allocations have settled.
+    // The discriminator is TOTAL SLOPE over several windows, not deceleration
+    // between two adjacent ones.
+    //
+    // The two-window form compared `window2 < window1 * 0.75`, which assumes V8
+    // collects on a schedule that makes each window monotonically smaller. Node
+    // 24 does not: measured across four windows the sequence was
+    // `15.4, 32.9, -18.0, 9.8` MB — window2 absorbing window1's deferred
+    // garbage, window3 handing it back. A NEGATIVE window is proof the memory
+    // was never retained, yet the two-window check read that same run as a leak.
+    //
+    // Total growth per app is immune to when the collector runs. A real per-app
+    // leak retains a whole app's worth of structures — MBs per app, tens of MB
+    // per window, sustained. Fastify's own per-app churn is ~125KB/app and the
+    // measured total here is ~167KB/app, so the bound below sits ~3x above
+    // baseline and roughly an order of magnitude below any real retention.
     await composeAndCloseApps(25); // warm up: JIT, mongoose model cache, steady caches
     await gc();
     const m0 = await measureHeapMedian(5);
 
     const WINDOW = 60;
-    await composeAndCloseApps(WINDOW);
-    await gc();
-    const m1 = await measureHeapMedian(5);
+    const WINDOWS = 4;
+    const marks: number[] = [];
+    for (let i = 0; i < WINDOWS; i++) {
+      await composeAndCloseApps(WINDOW);
+      await gc();
+      marks.push(await measureHeapMedian(5));
+    }
 
-    await composeAndCloseApps(WINDOW);
-    await gc();
-    const m2 = await measureHeapMedian(5);
-
-    const window1 = m1 - m0;
-    const window2 = m2 - m1;
+    const perWindow = marks.map((m, i) => m - (i === 0 ? m0 : (marks[i - 1] as number)));
+    const totalMB = (marks[WINDOWS - 1] as number) - m0;
+    const perAppKB = (totalMB * 1024) / (WINDOW * WINDOWS);
     console.log(
-      `[module-mem] window1=${window1.toFixed(2)}MB window2=${window2.toFixed(2)}MB (${WINDOW} apps each) → decel=${(100 - (window2 / Math.max(window1, 0.01)) * 100).toFixed(0)}%`,
+      `[module-mem] windows=[${perWindow.map((w) => w.toFixed(1)).join(", ")}]MB ` +
+        `total=${totalMB.toFixed(2)}MB over ${WINDOW * WINDOWS} apps → ${perAppKB.toFixed(0)}KB/app`,
     );
 
-    // The leak discriminator is DECELERATION, not an absolute cap (Fastify's own
-    // per-app churn — ~125KB/app — is baseline, not a module leak). A real
-    // per-app module leak has a CONSTANT slope, so window2 ≈ window1. A
-    // non-leaking system decelerates toward steady state, so the fully-settled
-    // second window is markedly smaller than the still-warming first. Require
-    // window2 to be at least 25% smaller — no additive slack (the flaw that let
-    // a `*0.7 + 6` form pass a real leak).
-    expect(window2).toBeLessThan(window1 * 0.75);
+    expect(perAppKB).toBeLessThan(500);
   }, 120_000);
 
   it("orderModules is fast and allocation-clean under repeated calls", async () => {
@@ -141,27 +147,54 @@ describe("module system — memory + efficiency", () => {
     // Correctness: the sort yields the strict chain order every time.
     expect(orderModules(shuffled).map((m) => m.name)).toEqual(chain.map((m) => m.name));
 
-    await gc();
-    const baselineMB = await measureHeapMedian(3);
-
+    // TWO identical batches, and the assertion is on the SECOND.
+    //
+    // Measuring one batch against a baseline taken right after the previous
+    // test made this a measure of that test's leftovers, not of `orderModules`.
+    // The threshold had already been raised once for exactly that reason ("test
+    // 2 leaves residual V8 heap … passes in isolation") — an absolute cap that
+    // has to move whenever a NEIGHBOUR changes is measuring the neighbour.
+    //
+    // The first batch runs the same work and settles that residue; the second
+    // is then bracketed by two marks taken in the same state, so its delta is
+    // what 5000 sorts actually retain. A pure function retains nothing, so the
+    // bound is tight — and unlike the old form it cannot be perturbed by
+    // whatever ran before.
     const RUNS = 5000;
-    const start = performance.now();
-    for (let i = 0; i < RUNS; i++) orderModules(shuffled);
-    const elapsedMs = performance.now() - start;
+    const batch = () => {
+      const start = performance.now();
+      for (let i = 0; i < RUNS; i++) orderModules(shuffled);
+      return performance.now() - start;
+    };
 
+    batch(); // absorb prior residue + JIT warmup
     await gc();
+    const beforeMB = await measureHeapMedian(3);
+
+    // NET across several batches — a single bracketed delta cannot work here.
+    // `--expose-gc` does not force a full collection on Node 24: consecutive
+    // identical batches measured +13.78, -47.71, +13.77 MB. The +13.78 is
+    // stable to 0.1MB and looks exactly like retention, but the net is NEGATIVE
+    // — the heap handed back more than any batch "kept". Only the net over
+    // several batches separates allocation volume from retention.
+    const BATCHES = 4;
+    let elapsedMs = 0;
+    for (let i = 0; i < BATCHES; i++) {
+      elapsedMs = batch();
+      await gc();
+    }
     const afterMB = await measureHeapMedian(3);
-    const deltaMB = afterMB - baselineMB;
+
+    const netMB = afterMB - beforeMB;
+    const perSortBytes = (netMB * 1024 * 1024) / (RUNS * BATCHES);
     console.log(
-      `[order-mem] ${RUNS} sorts of 30 modules in ${elapsedMs.toFixed(1)}ms (${(elapsedMs / RUNS).toFixed(3)}ms/sort), heap delta=${deltaMB.toFixed(2)}MB`,
+      `[order-mem] ${RUNS} sorts of 30 modules in ${elapsedMs.toFixed(1)}ms (${(elapsedMs / RUNS).toFixed(3)}ms/sort), net over ${BATCHES} batches=${netMB.toFixed(2)}MB (${perSortBytes.toFixed(0)}B/sort)`,
     );
 
-    // Pure function — repeated calls must not retain (delta ≈ noise), and it
-    // must be comfortably sub-millisecond per sort at this size.
-    // Threshold raised to 12 MB: test 2 (145 app create/close cycles) leaves
-    // residual V8 heap that hasn't been collected by the time this baseline is
-    // taken, but orderModules itself retains nothing — passes in isolation.
-    expect(deltaMB).toBeLessThan(12);
+    // A pure function nets ~zero or negative. Real retention at the ~2.8KB/sort
+    // the single-delta form appeared to show would be ~56MB over 20k sorts, so
+    // this still fails loudly on genuine retention.
+    expect(netMB).toBeLessThan(10);
     expect(elapsedMs / RUNS).toBeLessThan(1);
   }, 60_000);
 });

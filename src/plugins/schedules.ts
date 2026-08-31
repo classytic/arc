@@ -98,6 +98,15 @@ export interface SchedulesPluginOptions {
    * environments), same pattern as `idempotencyPlugin`.
    */
   enabled?: boolean;
+  /**
+   * How long `onClose` waits for in-flight runs before abandoning them.
+   * Default: 5000.
+   *
+   * A tick cannot be cancelled, so this is the only lever. Keep it below the
+   * orchestrator's termination grace period — past that the process is killed
+   * and the wait bought nothing.
+   */
+  drainTimeoutMs?: number;
 }
 
 /** Per-schedule runtime counters, readable via `fastify.getScheduleStats()`. */
@@ -120,7 +129,7 @@ const MIN_SAFE_INTERVAL_MS = 1000;
 const MAX_DEFAULT_LEASE_MS = 300_000;
 
 const schedulesPlugin: FastifyPluginAsync<SchedulesPluginOptions> = async (fastify, opts) => {
-  const { schedules, lock, enabled = true } = opts;
+  const { schedules, lock, enabled = true, drainTimeoutMs = 5000 } = opts;
   const holderId = opts.holderId ?? `arc-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
 
   const stats = new Map<string, ScheduleStats>();
@@ -265,8 +274,41 @@ const schedulesPlugin: FastifyPluginAsync<SchedulesPluginOptions> = async (fasti
     closing = true;
     for (const timer of timers.values()) clearTimeout(timer);
     timers.clear();
-    // Let in-flight runs settle so shutdown never truncates a sweep mid-write.
-    await Promise.allSettled([...inFlight.values()]);
+
+    /**
+     * Let in-flight runs settle so shutdown never truncates a sweep mid-write —
+     * but BOUNDED, because a tick has no cancellation contract and its duration
+     * is not this plugin's to predict. An outbox relay whose subscriber retries
+     * on a backoff ladder holds one tick for minutes, and an unbounded await
+     * here contradicts the `unref` two functions up: pending scheduled work is
+     * already declared as something that must not hold the process.
+     *
+     * Waiting longer than the orchestrator's grace period buys nothing anyway —
+     * SIGKILL truncates the same write, without the log line naming what was
+     * still running.
+     */
+    const pending = [...inFlight.entries()];
+    if (pending.length === 0) return;
+
+    let timeout: NodeJS.Timeout | undefined;
+    const expired = Symbol("drain-timeout");
+    const budget = new Promise<typeof expired>((resolve) => {
+      timeout = setTimeout(() => resolve(expired), drainTimeoutMs);
+      timeout.unref?.();
+    });
+
+    const settled = Promise.allSettled(pending.map(([, run]) => run)).then(() => undefined);
+    const outcome = await Promise.race([settled, budget]);
+    if (timeout) clearTimeout(timeout);
+
+    if (outcome === expired) {
+      fastify.log.warn(
+        { schedules: pending.map(([name]) => name), drainTimeoutMs },
+        "[arc-schedules] shutdown drain budget exceeded — abandoning in-flight run(s). " +
+          "Durable work (outbox rows, leased sweeps) is retried on the next boot; raise " +
+          "`drainTimeoutMs` only if a listed job is genuinely non-resumable.",
+      );
+    }
   });
 };
 

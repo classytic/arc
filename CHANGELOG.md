@@ -6,6 +6,7 @@ Release **index** for `@classytic/arc` — one line per minor, newest first. Ful
 
 | Version | Headline |
 |---|---|
+| [2.37](changelog/v2.md#2370) | `schedulesPlugin` `drainTimeoutMs` — bounded shutdown drain (default 5 s); logs and names abandoned in-flight schedules. Perf tests ported to Node 24's GC schedule. |
 | [2.36](changelog/v2.md#2360) | ⚠ `defineEvent` payload validation rejected UNION types (`['string','null']` — every nullable field) and `integer`, comparing a JSON Schema `type` against a raw `typeof`. Boot preflight names every missing plugin package at once instead of one restart at a time. `resolveHeaders` supplies per-subscription webhook auth at delivery time, with arc's own headers reserved. ⚠ `denyAll()` introspected as "any authenticated user". |
 | [2.35](changelog/v2.md#2350) | `hooks.after(resource, 'list' \| 'read', fn)` was a silent no-op. ⚠ `trustProxy` no longer accepts a hop COUNT. Dependency alignment for fastify 5.12.1 + better-auth 1.7.1. |
 | [2.34](changelog/v2.md#2340) | `nativePolicyFilter()` — branded, frozen escape hatch for adapter-native policy the universal filter IR cannot express (`mergeFilters` now preserves the symbol brand, which it silently dropped). Client-sent `_policyFilters` stripped BEFORE the parser, so kit parsers stop 400ing a probe arc ignores. ⚠ Outbox relay `onError` now DEFAULTS to a structured error log instead of silence. |

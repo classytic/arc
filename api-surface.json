@@ -227,7 +227,7 @@
       "version",
       "when"
     ],
-    "typesHash": "4652db918a3c7bca"
+    "typesHash": "8fce2bbc7f87f8d9"
   },
   "./permissions": {
     "stability": "stable",
@@ -571,7 +571,7 @@
       "sendControllerResponse",
       "validateResourceConfig"
     ],
-    "typesHash": "06faccf260f7416a"
+    "typesHash": "6b20902b7ba4b768"
   },
   "./presets": {
     "stability": "stable",
@@ -869,7 +869,7 @@
       "introspectionPlugin",
       "introspectionPluginFn"
     ],
-    "typesHash": "fd75a35757b4470b"
+    "typesHash": "b81c399ffe65e835"
   },
   "./utils": {
     "stability": "stable",
@@ -1141,7 +1141,7 @@
       "versioningPlugin",
       "versioningPluginFn"
     ],
-    "typesHash": "4df0d4e087eb17b2"
+    "typesHash": "5870f58f2826b6ad"
   },
   "./plugins/tracing": {
     "stability": "stable",
@@ -1357,7 +1357,7 @@
       "wrapWithBoundary",
       "wrapWithSchema"
     ],
-    "typesHash": "6704333cb40a5363"
+    "typesHash": "b672a78a06ba8c1f"
   },
   "./events/redis": {
     "stability": "stable",
@@ -1492,7 +1492,7 @@
       "testActorHeaders",
       "waitFor"
     ],
-    "typesHash": "445214484650932b"
+    "typesHash": "dbfdd1067f791861"
   },
   "./testing/storage": {
     "stability": "stable",
@@ -1612,7 +1612,7 @@
       "testingPreset",
       "toFetchHandler"
     ],
-    "typesHash": "3e03ebff2e5e8537"
+    "typesHash": "fa33f131f62732ac"
   },
   "./schemas": {
     "stability": "stable",
@@ -1849,7 +1849,7 @@
       "webhookDeliveryFailurePolicy",
       "webhookPlugin"
     ],
-    "typesHash": "3e01d5d3332cabda"
+    "typesHash": "519b04473c1d0a6b"
   },
   "./auth/redis": {
     "stability": "stable",
@@ -2262,7 +2262,7 @@
       "createDataCleanupModule",
       "recipeFromSteps"
     ],
-    "typesHash": "a982f10ba59a91e0"
+    "typesHash": "c5ad82cbd7d4eaef"
   },
   "./outbox-admin": {
     "stability": "experimental",
@@ -2275,7 +2275,7 @@
       "OutboxAdminStore",
       "createOutboxAdminModule"
     ],
-    "typesHash": "4833681b41012ae1"
+    "typesHash": "f171e39c67f2069a"
   },
   "./testing/outbox": {
     "stability": "stable",

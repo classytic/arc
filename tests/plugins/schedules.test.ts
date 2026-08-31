@@ -322,3 +322,118 @@ describe("schedules — lease renewal", () => {
     await app.close();
   });
 });
+
+/**
+ * A tick has no cancellation contract, so `onClose` can only BOUND its wait.
+ *
+ * The unbounded form held shutdown for as long as the slowest in-flight run —
+ * measured at 133s in a host whose outbox relay was publishing to a subscriber
+ * on a retry ladder. Past the orchestrator's grace period the wait buys nothing:
+ * SIGKILL truncates the same write, minus the log line naming the job.
+ */
+describe("schedulesPlugin — shutdown drain budget", () => {
+  it("abandons an in-flight run once the budget expires instead of waiting it out", async () => {
+    let released = false;
+    const app = await makeApp({
+      drainTimeoutMs: 100,
+      schedules: [
+        {
+          name: "slow-sweep",
+          every: 10_000,
+          runOnStart: true,
+          handler: async () => {
+            await sleep(3000);
+            released = true;
+          },
+        },
+      ],
+    });
+
+    // The run must actually be in flight, or this asserts nothing.
+    await waitFor(() => (app.getScheduleStats?.() ?? [])[0]?.runs === 1, { label: "tick started" });
+
+    await app.close();
+
+    // `released` is the whole claim and needs no clock: had close awaited the
+    // 3s handler, this would be true by the time it returned. An elapsed-time
+    // assertion would add no proof and measure the runner instead — the flake
+    // shape that put this file in TIMING_SENSITIVE.
+    expect(released).toBe(false);
+  });
+
+  it("still waits for a run that finishes INSIDE the budget", async () => {
+    let finished = false;
+    const app = await makeApp({
+      drainTimeoutMs: 3000,
+      schedules: [
+        {
+          name: "quick-sweep",
+          every: 10_000,
+          runOnStart: true,
+          handler: async () => {
+            await sleep(150);
+            finished = true;
+          },
+        },
+      ],
+    });
+
+    await waitFor(() => (app.getScheduleStats?.() ?? [])[0]?.runs === 1, { label: "tick started" });
+    await app.close();
+
+    // The whole point of the await: a sweep that CAN settle is not truncated.
+    expect(finished).toBe(true);
+  });
+
+  it("NAMES the abandoned schedules in the warning", async () => {
+    // Abandoning quietly would be the bug. This log line is the operator's only
+    // signal that work was dropped, so it must fire AND identify which jobs —
+    // "drain exceeded" with no names sends them reading every handler.
+    const warnings: Array<{ meta: unknown; msg: string }> = [];
+    const app = Fastify({ logger: false });
+    app.log.warn = ((meta: unknown, msg?: string) => {
+      warnings.push({ meta, msg: String(msg ?? meta) });
+    }) as never;
+
+    await app.register(schedulesPlugin, {
+      drainTimeoutMs: 100,
+      schedules: [
+        {
+          name: "slow-sweep",
+          every: 10_000,
+          runOnStart: true,
+          handler: async () => sleep(3000),
+        },
+      ],
+    });
+    await app.ready();
+    await waitFor(() => (app.getScheduleStats?.() ?? [])[0]?.runs === 1, { label: "tick started" });
+    await app.close();
+
+    const drain = warnings.find((w) => w.msg.includes("drain budget exceeded"));
+    expect(drain).toBeDefined();
+    expect(drain?.meta).toMatchObject({ schedules: ["slow-sweep"], drainTimeoutMs: 100 });
+  });
+
+  it("does NOT warn when every run settles in time", async () => {
+    // The inverse control — a warn that always fired would satisfy the test
+    // above while crying wolf on every clean shutdown.
+    const warnings: string[] = [];
+    const app = Fastify({ logger: false });
+    app.log.warn = ((meta: unknown, msg?: string) => {
+      warnings.push(String(msg ?? meta));
+    }) as never;
+
+    await app.register(schedulesPlugin, {
+      drainTimeoutMs: 3000,
+      schedules: [
+        { name: "quick-sweep", every: 10_000, runOnStart: true, handler: async () => sleep(50) },
+      ],
+    });
+    await app.ready();
+    await waitFor(() => (app.getScheduleStats?.() ?? [])[0]?.runs === 1, { label: "tick started" });
+    await app.close();
+
+    expect(warnings.some((w) => w.includes("drain budget exceeded"))).toBe(false);
+  });
+});

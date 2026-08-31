@@ -1,6 +1,6 @@
 {
   "name": "@classytic/arc",
-  "version": "2.36.0",
+  "version": "2.37.0",
   "description": "Resource-oriented backend framework for Fastify - clean, minimal, powerful, tree-shakable",
   "type": "module",
   "exports": {
@@ -505,7 +505,7 @@
     "@vitest/coverage-v8": "^4.1.9",
     "ajv": "^8.20.0",
     "better-auth": "^1.6.25",
-    "better-sqlite3": "^12.4.1",
+    "better-sqlite3": "^13.0.3",
     "bullmq": "^6.1.2",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
@@ -556,5 +556,8 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/classytic/arc.git"
+  },
+  "overrides": {
+    "better-sqlite3": "$better-sqlite3"
   }
 }
