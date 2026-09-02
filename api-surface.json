@@ -227,7 +227,7 @@
       "version",
       "when"
     ],
-    "typesHash": "8fce2bbc7f87f8d9"
+    "typesHash": "74fbb40f44841c0c"
   },
   "./permissions": {
     "stability": "stable",
@@ -423,7 +423,7 @@
     "stability": "stable",
     "runtime": [],
     "types": [],
-    "typesHash": "44a97b8cb6dedbe7"
+    "typesHash": "78a3c69149f8a26e"
   },
   "./types/storage": {
     "stability": "stable",
@@ -571,7 +571,7 @@
       "sendControllerResponse",
       "validateResourceConfig"
     ],
-    "typesHash": "6b20902b7ba4b768"
+    "typesHash": "ca680ebdc36ececd"
   },
   "./presets": {
     "stability": "stable",
@@ -628,7 +628,7 @@
       "softDeletePreset",
       "treePreset"
     ],
-    "typesHash": "9523c9019a0de3ba"
+    "typesHash": "7f4825bf92ff78e1"
   },
   "./presets/tenant": {
     "stability": "stable",
@@ -640,7 +640,7 @@
       "TenantFieldSpec",
       "multiTenantPreset"
     ],
-    "typesHash": "d52b990a2b8bd722"
+    "typesHash": "e03b5cb9a4415996"
   },
   "./presets/files-upload": {
     "stability": "stable",
@@ -660,7 +660,7 @@
       "StorageUploadInput",
       "filesUploadPreset"
     ],
-    "typesHash": "cf2bb61a7ee62b9b"
+    "typesHash": "95203e5d8185ba83"
   },
   "./presets/search": {
     "stability": "stable",
@@ -675,7 +675,7 @@
       "SearchableRepository",
       "searchPreset"
     ],
-    "typesHash": "f3fc6c61f2d433aa"
+    "typesHash": "7a7f96314f0ade61"
   },
   "./auth": {
     "stability": "stable",
@@ -710,7 +710,7 @@
       "extractBetterAuthOpenApi",
       "mirrorTrustedOriginsFromCors"
     ],
-    "typesHash": "c48e7cab1bef9e5f"
+    "typesHash": "8737be044ef6b4e6"
   },
   "./hooks": {
     "stability": "stable",
@@ -743,7 +743,7 @@
       "createHookSystem",
       "defineHook"
     ],
-    "typesHash": "02f1f920531bd2cc"
+    "typesHash": "6846bedf6decfb87"
   },
   "./middleware": {
     "stability": "stable",
@@ -760,7 +760,7 @@
       "multipartBody",
       "sortMiddlewares"
     ],
-    "typesHash": "d052bec572a90eea"
+    "typesHash": "1fb1b34662a16aa5"
   },
   "./pipeline": {
     "stability": "stable",
@@ -786,7 +786,7 @@
       "pipe",
       "transform"
     ],
-    "typesHash": "ebd092c993702cd9"
+    "typesHash": "de41bc90e4cd410f"
   },
   "./context": {
     "stability": "stable",
@@ -869,7 +869,7 @@
       "introspectionPlugin",
       "introspectionPluginFn"
     ],
-    "typesHash": "b81c399ffe65e835"
+    "typesHash": "ad19e54c22b6850a"
   },
   "./utils": {
     "stability": "stable",
@@ -1024,7 +1024,7 @@
       "toJsonSchema",
       "withCompensation"
     ],
-    "typesHash": "d9472406586d6bb8"
+    "typesHash": "b127ea487cbbcdb3"
   },
   "./cli": {
     "stability": "stable",
@@ -1141,7 +1141,7 @@
       "versioningPlugin",
       "versioningPluginFn"
     ],
-    "typesHash": "5870f58f2826b6ad"
+    "typesHash": "739409b17b738787"
   },
   "./plugins/tracing": {
     "stability": "stable",
@@ -1185,7 +1185,7 @@
       "createAuditEntry",
       "repositoryAsAuditStore"
     ],
-    "typesHash": "2704957a290217bb"
+    "typesHash": "c5813ffd296df7af"
   },
   "./docs": {
     "stability": "stable",
@@ -1208,7 +1208,7 @@
       "scalarPlugin",
       "scalarPluginFn"
     ],
-    "typesHash": "34bc416934102d44"
+    "typesHash": "2e6837581c6362c0"
   },
   "./encryption": {
     "stability": "stable",
@@ -1492,7 +1492,7 @@
       "testActorHeaders",
       "waitFor"
     ],
-    "typesHash": "dbfdd1067f791861"
+    "typesHash": "09557e02f7098d78"
   },
   "./testing/storage": {
     "stability": "stable",
@@ -1612,7 +1612,7 @@
       "testingPreset",
       "toFetchHandler"
     ],
-    "typesHash": "fa33f131f62732ac"
+    "typesHash": "f9f3f82eb228903b"
   },
   "./schemas": {
     "stability": "stable",
@@ -1693,7 +1693,7 @@
     "stability": "stable",
     "runtime": [],
     "types": [],
-    "typesHash": "b244e283fcbf1c58"
+    "typesHash": "9d90c6e9010683cb"
   },
   "./integrations/streamline": {
     "stability": "stable",
@@ -2061,7 +2061,7 @@
       "toCallToolResult",
       "toCallToolSuccess"
     ],
-    "typesHash": "afcc2dddfa074991"
+    "typesHash": "f8f1d705886b7159"
   },
   "./mcp/testing": {
     "stability": "stable",
@@ -2073,7 +2073,7 @@
       "TestMcpClientOptions",
       "createTestMcpClient"
     ],
-    "typesHash": "0054716adf7f654d"
+    "typesHash": "e9c1800751edbdad"
   },
   "./scim": {
     "stability": "stable",
@@ -2262,7 +2262,7 @@
       "createDataCleanupModule",
       "recipeFromSteps"
     ],
-    "typesHash": "c5ad82cbd7d4eaef"
+    "typesHash": "a47a7ede4e49944a"
   },
   "./outbox-admin": {
     "stability": "experimental",

@@ -67,15 +67,15 @@ export type {
   BaseControllerOptions,
   ListResult,
 } from "./BaseCrudController.js";
-export { BaseCrudController } from "./BaseCrudController.js";
-export type { BulkExt } from "./mixins/bulk.js";
-export { BulkMixin } from "./mixins/bulk.js";
-export type { SlugExt } from "./mixins/slug.js";
-export { SlugMixin } from "./mixins/slug.js";
-export type { SoftDeleteExt } from "./mixins/softDelete.js";
-export { SoftDeleteMixin } from "./mixins/softDelete.js";
-export type { TreeExt } from "./mixins/tree.js";
-export { TreeMixin } from "./mixins/tree.js";
+/**
+ * The `Arc*Result` types above stay: `src/index.ts` re-exports them from THIS
+ * path. `BaseCrudController` and the four mixins (+ their `*Ext` types) were
+ * also re-exported here and are not, as of 2.37.1 — `core/index.ts` takes them
+ * straight from `./BaseCrudController.js` and `./mixins/*.js`, so this file's
+ * copies had no importer. Two public paths to one symbol is a drift seam, not
+ * convenience: composition belongs to `core/index.ts`, and this module is the
+ * composed `BaseController` itself.
+ */
 
 /**
  * Fully-composed controller shape: all CRUD methods + every preset method

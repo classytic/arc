@@ -37,6 +37,7 @@ npm run test:ci                                   # Release gate — main + isol
 npm run build                                     # tsdown → dist/
 npm run smoke                                     # CLI + subpath imports
 npx knip                                          # Dead-code detection
+npm run fix:line-endings                          # CRLF crept into the working tree (see gotcha)
 npm run push -- main                              # Push as classytic-bot[bot] (see below)
 ```
 
@@ -81,6 +82,7 @@ Run the minimum that covers your change. **Default: `src/X/*` → `npx vitest ru
 
 Non-obvious design choices that won't be caught by tests. Release-tagged changes live in [CHANGELOG.md](CHANGELOG.md); only keep entries here if they'd bite a contributor walking in cold.
 
+- **CRLF in the working tree is invisible to git** — `.gitattributes` keeps the BLOB at LF, so a tool that rewrites a checked-out file leaves `git status` and `git diff` empty while `biome` fails with a whole-file character diff that never says "line endings". `check:line-endings` (first step of the gate) names the files; `npm run fix:line-endings` fixes them.
 - **`request.user` is `undefined` on public routes** — always guard.
 - **`isRevoked` is fail-closed** — errors = access denied. Security design choice.
 - **Redis Streams are at-least-once** — handlers must be idempotent.
@@ -126,7 +128,7 @@ Arc's boot order is **fixed** (do not reorder; do not skip slots):
 | fastify | >=5.12.0 | **Yes** |
 | @classytic/primitives | >=0.25.0 | **Yes** |
 | @classytic/repo-core | >=0.25.0 | **Yes** |
-| better-auth | >=1.6.2 | No |
+| better-auth | >=1.7.0 | No |
 | ioredis | >=5.0.0 | No |
 | bullmq | >=5.0.0 | No |
 

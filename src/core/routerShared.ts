@@ -39,7 +39,7 @@
  *   - `customMws`     per-route user middlewares
  */
 
-export { type ArcRouteMeta, buildArcDecorator } from "./middlewares/arcDecorator.js";
+export { buildArcDecorator } from "./middlewares/arcDecorator.js";
 export {
   buildAuthMiddleware,
   buildAuthMiddlewareForPermissions,
@@ -48,7 +48,6 @@ export {
 export {
   buildRouteHooks,
   type PreHandlerHook,
-  type RouteHookChains,
   resolveRoutePreHandlers,
   routeHookOptions,
 } from "./middlewares/chain.js";

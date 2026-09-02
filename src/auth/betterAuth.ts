@@ -414,33 +414,34 @@ async function getMemberRolesByOrg(
 }
 
 /**
- * List teams the current user is a member of. Used to validate
- * `activeTeamId` against the membership set before binding it to scope.
+ * Teams the current user is a MEMBER of, scoped to one organization. Used to
+ * validate `activeTeamId` before binding it to scope.
  *
- * Better Auth 1.6+ exposes this as `auth.api.listUserTeams` (path:
- * `/organization/list-user-teams`). Older 1.5.x exposed
- * `auth.api.listTeams` — kept as a fallback so stubs/older versions still
- * work.
+ * `auth.api.listUserTeams` (`/organization/list-user-teams`) is the only name
+ * probed. A `listTeams` fallback lived here for "older 1.5.x" and was removed:
+ * Better Auth exposes `listUserTeams` and `listOrganizationTeams` on `auth.api`
+ * and has never exposed a bare `listTeams` — that is the CLIENT name
+ * (`authClient.organization.listTeams`). It could only ever resolve against a
+ * test double, which is exactly what it was doing.
+ *
+ * Do not "restore" it as `listOrganizationTeams`: that endpoint lists every team
+ * in the organization, while this one lists the teams the USER belongs to.
+ * Validating `activeTeamId` against the org-wide list would admit a team the
+ * user is not a member of — the organization check below constrains the org, not
+ * membership.
  */
 async function listTeamsDirect(
   auth: BetterAuthHandler,
   headers: Headers,
+  organizationId: string,
 ): Promise<Array<Record<string, unknown>> | null> {
-  const fn =
-    pickApiMethod<(opts: { headers: Headers }) => Promise<unknown>>(
-      auth,
-      "listUserTeams",
-      "organization",
-    ) ??
-    pickApiMethod<(opts: { headers: Headers }) => Promise<unknown>>(
-      auth,
-      "listTeams",
-      "organization",
-    );
+  const fn = pickApiMethod<
+    (opts: { headers: Headers; query: { organizationId: string } }) => Promise<unknown>
+  >(auth, "listUserTeams", "organization");
   if (!fn) return null;
 
   try {
-    const result = await fn({ headers });
+    const result = await fn({ headers, query: { organizationId } });
     const teams = Array.isArray(result) ? result : (result as Record<string, unknown>)?.teams;
     return Array.isArray(teams) ? teams : null;
   } catch {
@@ -493,6 +494,24 @@ function extractRolesFromMembership(membership: Record<string, unknown>): string
   }
 
   return [];
+}
+
+async function resolveActiveTeamId(input: {
+  auth: BetterAuthHandler;
+  headers: Headers;
+  session: Record<string, unknown> | undefined;
+  activeOrgId: string;
+}): Promise<string | undefined> {
+  const activeTeamId = normalizeId(input.session?.activeTeamId);
+  if (!activeTeamId) return undefined;
+
+  const teams = await listTeamsDirect(input.auth, input.headers, input.activeOrgId);
+  const activeTeam = teams?.find(
+    (team) =>
+      normalizeId(team.id ?? team._id) === activeTeamId &&
+      normalizeId(team.organizationId) === input.activeOrgId,
+  );
+  return activeTeam ? activeTeamId : undefined;
 }
 
 // ============================================================================
@@ -589,7 +608,20 @@ export function createBetterAuthAdapter(
         const activeOrgId = (session?.activeOrganizationId as string | undefined) || requestedOrgId;
 
         if (activeOrgId) {
-          let orgRoles = await getActiveMemberRoles(auth, headers);
+          /**
+           * `getActiveMember` resolves the member for the SESSION's active
+           * organization, so with no `activeOrganizationId` it cannot succeed —
+           * it throws `No active organization`, which the helper swallows into
+           * `null` after paying the full endpoint round trip.
+           *
+           * A bearer-only deployment never calls `setActive`, so that was every
+           * request: ~440ms spent to learn what the session already said, before
+           * the ~870ms header-based lookup that actually answers. Ask the
+           * session first; it is already in hand.
+           */
+          let orgRoles = session?.activeOrganizationId
+            ? await getActiveMemberRoles(auth, headers)
+            : null;
           if (!orgRoles) {
             orgRoles = await getMemberRolesByOrg(auth, headers, activeOrgId);
           }
@@ -603,13 +635,13 @@ export function createBetterAuthAdapter(
               orgRoles,
             };
 
-            const activeTeamId = session?.activeTeamId as string | undefined;
-            if (activeTeamId) {
-              const teams = await listTeamsDirect(auth, headers);
-              if (teams?.some((t) => normalizeId(t.id) === activeTeamId)) {
-                scope.teamId = activeTeamId;
-              }
-            }
+            const activeTeamId = await resolveActiveTeamId({
+              auth,
+              headers,
+              session,
+              activeOrgId,
+            });
+            if (activeTeamId) scope.teamId = activeTeamId;
 
             req.scope = scope;
           }
@@ -671,19 +703,40 @@ export function createBetterAuthAdapter(
         const activeOrgId = (session?.activeOrganizationId as string | undefined) || requestedOrgId;
 
         if (activeOrgId) {
-          let orgRoles = await getActiveMemberRoles(auth, headers);
+          /**
+           * `getActiveMember` resolves the member for the SESSION's active
+           * organization, so with no `activeOrganizationId` it cannot succeed —
+           * it throws `No active organization`, which the helper swallows into
+           * `null` after paying the full endpoint round trip.
+           *
+           * A bearer-only deployment never calls `setActive`, so that was every
+           * request: ~440ms spent to learn what the session already said, before
+           * the ~870ms header-based lookup that actually answers. Ask the
+           * session first; it is already in hand.
+           */
+          let orgRoles = session?.activeOrganizationId
+            ? await getActiveMemberRoles(auth, headers)
+            : null;
           if (!orgRoles) {
             orgRoles = await getMemberRolesByOrg(auth, headers, activeOrgId);
           }
 
           if (orgRoles) {
-            req.scope = {
+            const scope: RequestScope = {
               kind: "member",
               userId: optUserId,
               userRoles: optUserRoles,
               organizationId: activeOrgId,
               orgRoles,
-            } satisfies RequestScope;
+            };
+            const activeTeamId = await resolveActiveTeamId({
+              auth,
+              headers,
+              session,
+              activeOrgId,
+            });
+            if (activeTeamId) scope.teamId = activeTeamId;
+            req.scope = scope;
           }
         }
       }

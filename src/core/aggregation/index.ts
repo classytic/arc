@@ -1,28 +1,22 @@
 /**
- * Public barrel for the resource-aggregation module.
+ * Public barrel for the resource-aggregation module — exactly what
+ * `core/index.ts` forwards to hosts: `defineAggregation` + the config types.
  *
- * Hosts import the helper + types from `@classytic/arc`; the router
- * + boot-time validation are internal to defineResource and not
- * re-exported.
+ * The router, `validate.js` and the repo-core IR types were re-exported here
+ * and are not, as of 2.37.1. Nothing imported them through the barrel:
+ * `defineResource/plugin.ts` reaches `createAggregationRouter` by LAZY dynamic
+ * `import("../aggregation/createAggregationRouter.js")` so a resource with no
+ * aggregations never pays the module load, and the internal callers of
+ * `validateAggregations` / `adapterSupportsAggregate` import `./validate.js`
+ * directly. Re-listing the router here was therefore not a convenience — it
+ * would defeat the laziness the boot path is written for.
+ *
+ * The `AggDateBucket*` / `AggTopN*` re-exports claimed to spare hosts a
+ * parallel `@classytic/repo-core` import, but `core/index.ts` never forwarded
+ * them, so no host could reach them; declaring `topN` / `dateBuckets` inline
+ * types structurally through `AggregationConfig` and needs no named import.
  */
 
-// Aggregation IR types — re-exported from repo-core so hosts importing
-// from `@classytic/arc` don't need a parallel `@classytic/repo-core`
-// import for the types they touch declaring topN / dateBuckets.
-export type {
-  AggDateBucket,
-  AggDateBucketInterval,
-  AggDateBucketUnit,
-  AggTopN,
-  AggTopNTies,
-} from "@classytic/repo-core/repository";
-// Internal exports — used by defineResource boot wiring; not part of
-// the public surface but kept on the barrel so the boot orchestrator
-// has one import path.
-export {
-  type AggregationRouterConfig,
-  createAggregationRouter,
-} from "./createAggregationRouter.js";
 export { defineAggregation } from "./defineAggregation.js";
 export type {
   AggMeasureInput,
@@ -36,9 +30,3 @@ export type {
   AggregationRateLimit,
   AggregationsMap,
 } from "./types.js";
-export {
-  ArcAggregationConfigError,
-  adapterSupportsAggregate,
-  type NormalizedAggregation,
-  validateAggregations,
-} from "./validate.js";

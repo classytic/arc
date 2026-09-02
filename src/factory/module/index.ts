@@ -37,7 +37,7 @@ export {
   type ModuleState,
   setModuleState,
 } from "./state.js";
-export { createModuleTeardown, type ModuleTeardown } from "./teardown.js";
+export { createModuleTeardown } from "./teardown.js";
 export type {
   ArcModule,
   ArcModuleInput,

@@ -375,7 +375,7 @@ describe("QueryResolver", () => {
       expect(result.select).toEqual({ name: 1, email: 1 });
     });
 
-    it("returns undefined select when all fields are blocked", () => {
+    it("uses an exclusion projection when all selected fields are blocked", () => {
       const resolver = createResolver({
         schemaOptions: {
           fieldRules: {
@@ -387,7 +387,22 @@ describe("QueryResolver", () => {
 
       const result = resolver.resolve(req);
 
-      expect(result.select).toBeUndefined();
+      expect(result.select).toEqual({ password: 0 });
+    });
+
+    it("excludes hidden fields when the client supplies no select", () => {
+      const resolver = createResolver({
+        schemaOptions: {
+          fieldRules: {
+            password: { hidden: true },
+            internalToken: { hidden: true },
+          },
+        },
+      });
+
+      const result = resolver.resolve(createReq({ query: {} }));
+
+      expect(result.select).toEqual({ password: 0, internalToken: 0 });
     });
 
     it("allows select when no blocked fields", () => {

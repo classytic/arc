@@ -54,12 +54,14 @@ import {
 // Internal re-exports for arc's own modules. NOT surfaced through the public
 // `events/index.ts` barrel — callers outside arc must import from
 // `@classytic/primitives/events` directly. See the file-header rationale.
+// `EventMeta` is NOT in this list: no arc module referenced it, and the block
+// exists only to serve arc's own imports. Hosts take it from
+// `@classytic/primitives/events`, as the header says.
 export type {
   DeadLetteredEvent,
   DomainEvent,
   EventHandler,
   EventLogger,
-  EventMeta,
   EventTransport,
   PublishManyResult,
 } from "@classytic/primitives/events";

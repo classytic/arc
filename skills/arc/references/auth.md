@@ -86,7 +86,10 @@ const app2 = await createApp({
 2. Reads `session.activeOrganizationId`, or falls back to `x-organization-id` header (needed for API key auth where synthetic sessions have no org context)
 3. Looks up org membership via `auth.api.getActiveMember` (or `getActiveMemberRole` with explicit `organizationId` for header-based resolution)
 4. Splits roles: `"admin,recruiter"` → `['admin', 'recruiter']`
-5. Sets `request.scope`: `{ kind: 'member', organizationId, orgRoles: string[], teamId? }`
+5. Resolves `session.activeTeamId` (if set) against `auth.api.listUserTeams` scoped to the ACTIVE org, and binds it only if the team is one the user belongs to AND carries that `organizationId`. Stale or cross-org team state is dropped, not trusted. Requires **better-auth >=1.7.0** — the `organizationId` query param landed in 1.7.0, and without it a self-query returns teams across every org the user belongs to.
+6. Sets `request.scope`: `{ kind: 'member', organizationId, orgRoles: string[], teamId? }`
+
+Both `authenticate` and `optionalAuthenticate` run this same flow — an optional-auth route sees the identical scope when a session exists (arc 2.37.1; before that `teamId` was never set on the optional path).
 
 **Sessions at scale (BA-native knobs — know these before reaching for arc's):**
 - **Redis sessions**: use BA's `secondaryStorage` (sessions land there INSTEAD of the DB unless `session.storeSessionInDatabase: true`). Arc's `@classytic/arc/auth/redis` (`SessionStore`) is the JWT-strategy store — different layer, don't mix them.
@@ -240,7 +243,7 @@ The `auth.api.*` direct in-process API map and `auth.$context.tables` schema int
 |---|---|---|---|
 | (core) — `emailAndPassword`, OAuth providers | `user`, `session`, `account`, `verification` | both kits + playground | Nothing extra. Optionally overlay `user` as a resource. |
 | `organization()` (built-in) | `organization`, `member`, `invitation` | both kits + playground | `createBetterAuthAdapter({ orgContext: true })`; overlay `organization` / `member` as resources. |
-| `organization({ teams: true })` | + `team`, `teamMember` | mongokit | `requireTeamMembership()` works on `scope.teamId`. |
+| `organization({ teams: true })` | + `team`, `teamMember` | mongokit | `requireTeamMembership()` works on `scope.teamId`. Needs **better-auth >=1.7.0** (see step 5 of the org-context flow). |
 | `twoFactor()` (built-in) | `twoFactor` | both kits | Picked up automatically by overlay; expose `twoFactor` as a resource if needed. |
 | `admin()` (built-in) | (field-only, augments `user`) | both kits | `requireRoles(['admin'])` reads the platform role; no extra plumbing. |
 | `bearer()` (built-in) | (none — header strategy) | CLI scaffold | Token comes via `Authorization: Bearer <session>` instead of cookie — same `auth.api.getSession()` path. Use for SPA / mobile clients. |

@@ -78,7 +78,6 @@ import { isFieldReadable } from "./fieldRulePredicates.js";
 // `import { ListResult, BaseControllerOptions } from './BaseCrudController.js'`
 // sites keep working unchanged.
 export type {
-  ArcControllerLike,
   ArcCreateResult,
   ArcDeleteResult,
   ArcGetResult,

@@ -1,6 +1,6 @@
 {
   "name": "@classytic/arc",
-  "version": "2.37.0",
+  "version": "2.37.1",
   "description": "Resource-oriented backend framework for Fastify - clean, minimal, powerful, tree-shakable",
   "type": "module",
   "exports": {
@@ -343,9 +343,11 @@
     "check:peer-skew": "node scripts/check-peer-skew.mjs",
     "check:docs-drift": "node scripts/check-docs-drift.mjs",
     "check:boundaries": "node scripts/check-boundaries.mjs",
-    "prepublishOnly": "npm run check:peer-skew && npm run check:docs-drift && npm run check:route-api && npm run check:boundaries && npm run typecheck && npm run lint && npm run build && npm run check:api-surface && npm run check:forgotten-exports && npm run check:package && npm run test:ci && npm run smoke:consumer && npm run smoke:mcp",
+    "prepublishOnly": "npm run check:line-endings && npm run check:peer-skew && npm run check:docs-drift && npm run check:route-api && npm run check:boundaries && npm run typecheck && npm run lint && npm run build && npm run check:api-surface && npm run check:forgotten-exports && npm run check:package && npm run test:ci && npm run smoke:consumer && npm run smoke:mcp",
     "check:route-api": "node scripts/check-removed-route-api.mjs",
-    "check:forgotten-exports": "node scripts/check-forgotten-exports.mjs"
+    "check:forgotten-exports": "node scripts/check-forgotten-exports.mjs",
+    "check:line-endings": "node scripts/check-line-endings.mjs",
+    "fix:line-endings": "node scripts/check-line-endings.mjs --fix"
   },
   "engines": {
     "node": ">=22"
@@ -371,7 +373,7 @@
     "@opentelemetry/instrumentation-http": ">=0.50.0",
     "@opentelemetry/instrumentation-mongodb": ">=0.40.0",
     "@opentelemetry/sdk-node": ">=0.50.0",
-    "better-auth": ">=1.6.2",
+    "better-auth": ">=1.7.0",
     "bullmq": ">=5.0.0",
     "fastify": ">=5.12.0",
     "fastify-raw-body": ">=5.0.0",
@@ -504,7 +506,7 @@
     "@types/qs": "^6.15.1",
     "@vitest/coverage-v8": "^4.1.9",
     "ajv": "^8.20.0",
-    "better-auth": "^1.6.25",
+    "better-auth": "^1.7.2",
     "better-sqlite3": "^13.0.3",
     "bullmq": "^6.1.2",
     "dotenv": "^17.4.2",

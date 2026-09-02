@@ -305,10 +305,11 @@ export class QueryResolver {
     select: string | string[] | Record<string, 0 | 1> | undefined,
     schemaOptions: RouteSchemaOptions,
   ): string | string[] | Record<string, 0 | 1> | undefined {
-    if (!select) return undefined;
-
     const blockedFields = this.getBlockedFields(schemaOptions);
     if (blockedFields.length === 0) return select;
+    const exclusion = (): Record<string, 0> =>
+      Object.fromEntries(blockedFields.map((field) => [field, 0] as const));
+    if (!select) return exclusion();
 
     // Object projection: { name: 1, email: 1, password: 0 }
     if (typeof select === "object" && !Array.isArray(select)) {
@@ -316,7 +317,7 @@ export class QueryResolver {
       for (const [field, val] of Object.entries(select)) {
         if (!blockedFields.includes(field)) sanitized[field] = val;
       }
-      return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+      return Object.keys(sanitized).length > 0 ? sanitized : exclusion();
     }
 
     // Array: ['name', 'email', '-password']
@@ -325,7 +326,7 @@ export class QueryResolver {
         const fieldName = f.replace(/^-/, "");
         return !blockedFields.includes(fieldName);
       });
-      return sanitized.length > 0 ? sanitized : undefined;
+      return sanitized.length > 0 ? sanitized : exclusion();
     }
 
     // String: "name email -password" or "name,email,-password"
@@ -334,7 +335,7 @@ export class QueryResolver {
       const fieldName = f.replace(/^-/, "");
       return !blockedFields.includes(fieldName);
     });
-    return sanitized.length > 0 ? sanitized.join(" ") : undefined;
+    return sanitized.length > 0 ? sanitized.join(" ") : exclusion();
   }
 
   /** Sanitize populate fields */

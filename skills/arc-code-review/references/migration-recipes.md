@@ -21,13 +21,22 @@ In arc 2.12:
 
 ### Coordinated versions
 
-| Package | Min (adapter split) | Current best-practice floor |
-|---|---|---|
-| `@classytic/arc` | 2.12.0 | 2.21.0 — seams/`mergeResourceConfig`, `beforeBoot`, `permissionMatrix`, `schedulesPlugin` |
-| `@classytic/repo-core` | 0.4.0 | 0.9.0 — `StandardRepo.getByIds` contract member |
-| `@classytic/mongokit` | 3.13.0 | 3.21.0 — adapter `schemaGenerator` defaults ON |
-| `@classytic/sqlitekit` | 0.3.0 | 0.7.0 |
-| `@classytic/prismakit` | 0.1.0 | 0.1.0 |
+These are the floors the adapter SPLIT requires — fixed history, safe to rely on:
+
+| Package | Min (adapter split) |
+|---|---|
+| `@classytic/arc` | 2.12.0 |
+| `@classytic/repo-core` | 0.4.0 |
+| `@classytic/mongokit` | 3.13.0 |
+| `@classytic/sqlitekit` | 0.3.0 |
+| `@classytic/prismakit` | 0.1.0 (not published to npm — build from source) |
+
+A second "current best-practice floor" column used to sit here and is gone: it named
+arc 2.21.0 while arc shipped 2.37, and sqlitekit 0.7.0 against a published 0.9.0. A
+version restated in a skill is wrong within a release and teaches nothing (CLAUDE.md,
+"no rotting metrics") — worse, it reads as researched. **For current floors read
+`peerDependencies` in arc's `package.json` and each kit's own README**; for what a
+given arc version added, [CHANGELOG.md](../../../CHANGELOG.md) is the index.
 
 ### Import migration table
 

@@ -21,10 +21,11 @@ function createOrgAuthHandler(
     memberNotFound?: boolean;
     userRoles?: string[];
     activeTeamId?: string;
-    /** Teams returned by api.organization.listTeams */
+    /** Teams returned by `api.organization.listUserTeams` */
     teams?: Array<Record<string, unknown>>;
-    /** When true, listTeams returns `{ teams: [...] }` envelope instead of bare array */
+    /** When true, listUserTeams returns `{ teams: [...] }` envelope instead of bare array */
     teamsEnvelope?: boolean;
+    onListUserTeams?: (input: unknown) => void;
   } = {},
 ): BetterAuthHandler {
   const session = {
@@ -57,7 +58,18 @@ function createOrgAuthHandler(
             role: opts.memberRole ?? "member",
           };
         },
-        listTeams: async () => {
+        /**
+         * `listUserTeams` — the name Better Auth actually exposes on `auth.api`.
+         *
+         * This double was `listTeams` until 2026-09-02, which no Better Auth
+         * version registers server-side (it is the CLIENT name). The fake
+         * therefore had no `listUserTeams`, so every team test fell through to
+         * the adapter's `listTeams` fallback and green-lit a path that could not
+         * run in production — while the path that DOES run had no coverage at
+         * all. The fallback is now gone and this name is the real one.
+         */
+        listUserTeams: async (input: unknown) => {
+          opts.onListUserTeams?.(input);
           const teams = opts.teams ?? [];
           return opts.teamsEnvelope ? { teams } : teams;
         },
@@ -410,6 +422,66 @@ describe("Better Auth Org Context Bridge", () => {
     expect((capturedScope as any).teamId).toBeUndefined();
   });
 
+  it("does not attach a team from a different active organization", async () => {
+    app = Fastify({ logger: false });
+    const { plugin } = createBetterAuthAdapter({
+      auth: createOrgAuthHandler({
+        activeOrgId: "org-1",
+        memberRole: "admin",
+        activeTeamId: "team-other-org",
+        teams: [{ id: "team-other-org", name: "Foreign", organizationId: "org-2" }],
+      }),
+      orgContext: true,
+    });
+    await app.register(plugin);
+
+    let capturedScope: unknown;
+    app.get("/test", { preHandler: [app.authenticate] }, async (request) => {
+      capturedScope = request.scope;
+      return { ok: true };
+    });
+    await app.ready();
+
+    const res = await app.inject({ method: "GET", url: "/test" });
+    expect(res.statusCode).toBe(200);
+    expect(capturedScope).toMatchObject({ kind: "member", organizationId: "org-1" });
+    expect((capturedScope as { teamId?: string }).teamId).toBeUndefined();
+  });
+
+  it("projects the same active team through optional authentication", async () => {
+    app = Fastify({ logger: false });
+    let listInput: unknown;
+    const { plugin } = createBetterAuthAdapter({
+      auth: createOrgAuthHandler({
+        activeOrgId: "org-1",
+        memberRole: "member",
+        activeTeamId: "team-a",
+        teams: [{ id: "team-a", name: "Engineering", organizationId: "org-1" }],
+        onListUserTeams: (input) => {
+          listInput = input;
+        },
+      }),
+      orgContext: true,
+    });
+    await app.register(plugin);
+
+    let capturedScope: unknown;
+    app.get("/optional", { preHandler: [app.optionalAuthenticate] }, async (request) => {
+      capturedScope = request.scope;
+      return { ok: true };
+    });
+    await app.ready();
+
+    const res = await app.inject({ method: "GET", url: "/optional" });
+    expect(res.statusCode).toBe(200);
+    expect(capturedScope).toMatchObject({
+      kind: "member",
+      organizationId: "org-1",
+      teamId: "team-a",
+    });
+    expect(listInput).toMatchObject({ query: { organizationId: "org-1" } });
+  });
+
   it("handles list-teams envelope shape ({ teams: [...] })", async () => {
     app = Fastify({ logger: false });
     const { plugin } = createBetterAuthAdapter({
@@ -507,5 +579,92 @@ describe("orgContext without the organization plugin", () => {
     const { plugin } = createBetterAuthAdapter({ auth: authNoOrg });
     await expect(app.register(plugin).ready()).resolves.toBeTruthy();
     await app.close();
+  });
+});
+
+// ============================================================================
+// `getActiveMember` must not be called when the session names no active org
+// ============================================================================
+
+/**
+ * `getActiveMember` resolves the member for the SESSION's active organization.
+ * With no `activeOrganizationId` it can only throw, and the adapter swallows
+ * that into `null` — after paying a full Better Auth endpoint round trip.
+ *
+ * A bearer-only deployment never calls `setActive`, so this was every request:
+ * ~440ms of measured, guaranteed-useless work before the header-based lookup
+ * that actually answers.
+ */
+describe("org resolution skips the call that cannot succeed", () => {
+  let app: FastifyInstance;
+  afterEach(async () => {
+    if (app) await app.close();
+  });
+
+  function handlerWithSpies(activeOrgId: string | null) {
+    const calls = { getActiveMember: 0, getActiveMemberRole: 0 };
+    const session = { id: "session-1", activeOrganizationId: activeOrgId, activeTeamId: null };
+    const user = { id: "user-1", name: "T", email: "t@example.com", roles: [] };
+    const auth = {
+      handler: async () => new Response("{}", { status: 200 }),
+      api: {
+        getSession: async () => ({ user, session }),
+        organization: {
+          getActiveMember: async () => {
+            calls.getActiveMember += 1;
+            if (!activeOrgId) throw new Error("No active organization");
+            return { id: "m-1", userId: "user-1", organizationId: activeOrgId, role: "admin" };
+          },
+          getActiveMemberRole: async () => {
+            calls.getActiveMemberRole += 1;
+            return { role: "branch_manager" };
+          },
+          listUserTeams: async () => [],
+        },
+      },
+    } as unknown as BetterAuthHandler;
+    return { auth, calls };
+  }
+
+  async function run(activeOrgId: string | null, header: string) {
+    const { auth, calls } = handlerWithSpies(activeOrgId);
+    app = Fastify({ logger: false });
+    const { plugin } = createBetterAuthAdapter({ auth, orgContext: true });
+    await app.register(plugin);
+    let scope: any;
+    app.get("/t", { preHandler: [app.authenticate] }, async (req) => {
+      scope = (req as any).scope;
+      return { ok: true };
+    });
+    await app.ready();
+    const res = await app.inject({
+      method: "GET",
+      url: "/t",
+      headers: { authorization: "Bearer tok", "x-organization-id": header },
+    });
+    return { calls, scope, status: res.statusCode };
+  }
+
+  it("session has NO activeOrganizationId → getActiveMember is never called", async () => {
+    const { calls, scope, status } = await run(null, "org-from-header");
+
+    expect(status).toBe(200);
+    expect(calls.getActiveMember).toBe(0);
+    // Still resolves membership — via the header path that can actually answer.
+    expect(calls.getActiveMemberRole).toBe(1);
+    expect(scope.kind).toBe("member");
+    expect(scope.organizationId).toBe("org-from-header");
+    expect(scope.orgRoles).toContain("branch_manager");
+  });
+
+  it("session HAS activeOrganizationId → getActiveMember is still used first", async () => {
+    const { calls, scope, status } = await run("org-123", "org-123");
+
+    expect(status).toBe(200);
+    expect(calls.getActiveMember).toBe(1);
+    // It succeeded, so the fallback must not run.
+    expect(calls.getActiveMemberRole).toBe(0);
+    expect(scope.kind).toBe("member");
+    expect(scope.orgRoles).toContain("admin");
   });
 });
