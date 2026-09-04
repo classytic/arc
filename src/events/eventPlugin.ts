@@ -28,12 +28,22 @@ import {
   type EventHandler,
   type EventTransport,
   MemoryEventTransport,
+  type MemoryEventTransportOptions,
 } from "./EventTransport.js";
 import { createDeadLetterPublisher, type RetryOptions, withRetry } from "./retry.js";
 
 export interface EventPluginOptions {
   /** Event transport (default: MemoryEventTransport) */
   transport?: EventTransport;
+  /**
+   * Options for the DEFAULT `MemoryEventTransport`, when no `transport` is
+   * supplied. Ignored if you pass your own.
+   *
+   * Exists so the default path can reach `handlerDispatch` / `onHandlerError`
+   * at all: without it only an app that hand-constructs its transport could
+   * opt in, which is most of the fleet unable to change either setting.
+   */
+  memoryTransport?: MemoryEventTransportOptions;
   /**
    * Declare that this deployment is ONE process on purpose — the in-memory
    * transport is its intended configuration, not a forgotten default.
@@ -201,7 +211,7 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
    */
   const ownsTransport = opts.transport === undefined;
   const {
-    transport = new MemoryEventTransport(),
+    transport = new MemoryEventTransport(opts.memoryTransport),
     singleProcess = false,
     logEvents = false,
     failOpen = true,

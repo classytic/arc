@@ -110,6 +110,41 @@ export interface MemoryEventTransportOptions {
    * handlers must be idempotent. Every handler runs before the rejection.
    */
   onHandlerError?: "log" | "throw";
+  /**
+   * Whether independent subscribers run one at a time or together.
+   *
+   * - `'sequential'` (default) — handler N+1 starts after handler N settles.
+   * - `'parallel'` — all matching handlers start together; `publish()` resolves
+   *   when the last settles.
+   *
+   * Same delivery and the same failure semantics either way: every handler
+   * still receives the event, every failure is still collected, and `'throw'`
+   * still rejects with one `AggregateError` after all of them have run.
+   *
+   * **Opting in requires an AUDIT, not an assumption.** Every other transport
+   * in this package runs matching handlers sequentially in registration order
+   * (`redis-stream.ts` states it outright; `redis.ts` implements it), so an app
+   * relying on that order is relying on documented behaviour — switching this
+   * on is what breaks it, and swapping to a broker would not have surfaced it.
+   * Confirm no subscriber reads another subscriber's write before enabling.
+   *
+   * Measured on one order placement: 6 subscribers, each spending most of its
+   * time on its own round trips, cost 2.8s sequentially — the length of the
+   * QUEUE, not of the work.
+   */
+  handlerDispatch?: "sequential" | "parallel";
+  /**
+   * Cap on handlers running at once under `'parallel'`. Default: unlimited.
+   *
+   * Sequential dispatch was an accidental per-publish rate limiter on whatever
+   * pool the handlers share; removing it converts a latency problem into a
+   * saturation one when several publishes overlap. `RedisStreamTransport`
+   * exposes `processingConcurrency` for the same reason — this is its peer, so
+   * an operator has a dial rather than only "queued" or "all at once".
+   *
+   * Ignored under `'sequential'`, which is already a concurrency of 1.
+   */
+  handlerConcurrency?: number;
 }
 
 /**
@@ -124,10 +159,22 @@ export class MemoryEventTransport implements EventTransport {
   private handlers = new Map<string, Set<EventHandler>>();
   private logger: EventLogger;
   private onHandlerError: "log" | "throw";
+  private handlerDispatch: "sequential" | "parallel";
+  private handlerConcurrency: number;
 
   constructor(options?: MemoryEventTransportOptions) {
     this.logger = options?.logger ?? console;
     this.onHandlerError = options?.onHandlerError ?? "log";
+    this.handlerDispatch = options?.handlerDispatch ?? "sequential";
+    const cap = options?.handlerConcurrency;
+    // A non-integer or <1 cap would stall the pool loop below rather than
+    // widen it — refuse at construction instead of hanging at publish.
+    if (cap !== undefined && (!Number.isInteger(cap) || cap < 1)) {
+      throw new TypeError(
+        `MemoryEventTransport: handlerConcurrency must be a positive integer, received ${String(cap)}`,
+      );
+    }
+    this.handlerConcurrency = cap ?? Number.POSITIVE_INFINITY;
   }
 
   async publish(event: DomainEvent): Promise<void> {
@@ -147,13 +194,48 @@ export class MemoryEventTransport implements EventTransport {
     // `onHandlerError: 'throw'` they surface AFTER every subscriber has had
     // the event, because a failure must not deprive the others of it.
     const failures: unknown[] = [];
-    for (const handler of allHandlers) {
+    const run = async (handler: EventHandler): Promise<void> => {
       try {
         await handler(event);
       } catch (err) {
-        this.logger.error(`[EventTransport] Handler error for ${event.type}:`, err);
+        // Record BEFORE logging. A logger is caller-supplied and the default is
+        // raw `console` — an EPIPE on a closed stdout or a throwing test spy
+        // would otherwise lose the failure it was called to report.
         failures.push(err);
+        try {
+          this.logger.error(`[EventTransport] Handler error for ${event.type}:`, err);
+        } catch {
+          // A logger that cannot log must not decide whether subscribers ran.
+        }
       }
+    };
+
+    if (this.handlerDispatch === "parallel") {
+      /**
+       * `allSettled`, not `all`. Correctness must not rest on `run` never
+       * rejecting: `all` short-circuits on the first rejection and resolves
+       * `publish()` while the other handlers are still in flight — detached
+       * work racing the outbox relay's redelivery of the same event. `run` is
+       * written not to reject, and `allSettled` means the next person to add a
+       * timeout or a metric to it cannot silently break that.
+       */
+      const pending = [...allHandlers];
+      if (this.handlerConcurrency >= pending.length) {
+        await Promise.allSettled(pending.map(run));
+      } else {
+        // Fixed-size worker pool — each worker pulls the next handler as it
+        // frees up, so at most `handlerConcurrency` are ever in flight.
+        let next = 0;
+        const worker = async (): Promise<void> => {
+          while (next < pending.length) {
+            const handler = pending[next++];
+            if (handler) await run(handler);
+          }
+        };
+        await Promise.allSettled(Array.from({ length: this.handlerConcurrency }, worker));
+      }
+    } else {
+      for (const handler of allHandlers) await run(handler);
     }
 
     /**

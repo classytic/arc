@@ -7,6 +7,7 @@
 import type { RouteHandlerMethod } from "fastify";
 
 import { requestContext } from "../../context/requestContext.js";
+import { deriveHiddenFieldPermissions, type FieldPermissionMap } from "../../permissions/fields.js";
 
 /**
  * Frozen metadata stamped onto `req.arc` by `arcDecorator`. Downstream
@@ -42,7 +43,16 @@ export interface ArcRouteMeta {
  * formatters).
  */
 export function buildArcDecorator(meta: ArcRouteMeta): RouteHandlerMethod {
-  const frozen = Object.freeze({ ...meta });
+  // `schemaOptions.fieldRules[x].hidden` implies "not readable", which includes the
+  // RESPONSE — folded in here, once per resource, so the single response stripper
+  // sees it and `computeFieldCapabilities` reports the same answer.
+  const frozen = Object.freeze({
+    ...meta,
+    fields: deriveHiddenFieldPermissions(
+      meta.schemaOptions,
+      meta.fields as FieldPermissionMap | undefined,
+    ),
+  });
   return async (req, _reply) => {
     (req as unknown as { arc?: ArcRouteMeta }).arc = frozen;
     const store = requestContext.get();

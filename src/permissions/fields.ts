@@ -114,6 +114,45 @@ export const fields = {
 // ---------------------------------------------------------------------------
 
 /**
+ * Field permissions implied by `schemaOptions.fieldRules[x].hidden === true`.
+ *
+ * `hidden` is documented — in `fieldRulePredicates.ts` and in arc's own adapter
+ * tests ("must never appear in API", "never surfaced") — as meaning the field is
+ * not readable AT ALL. Every read surface honoured that except the one that
+ * matters most: the response body. `select=`, `_distinct` and aggregations were
+ * gated while a plain `GET /:id` returned the value, so a resource declaring
+ * `fieldRules: { secret: { hidden: true } }` shipped the secret in every payload
+ * and nothing said so.
+ *
+ * Deriving a `hidden()` PERMISSION here routes it through the single existing
+ * response stripper rather than adding a second one — two strippers is how the
+ * two halves drift apart again.
+ *
+ * An explicit `fields` entry WINS: it is the more specific statement about
+ * visibility, and silently overriding an operator's `visibleTo([...])` with a
+ * broad query-surface flag would be the general defeating the specific.
+ */
+export function deriveHiddenFieldPermissions(
+  schemaOptions: unknown,
+  explicit: FieldPermissionMap | undefined,
+): FieldPermissionMap | undefined {
+  const rules = (
+    schemaOptions as { fieldRules?: Record<string, { hidden?: boolean } | undefined> } | undefined
+  )?.fieldRules;
+  if (!rules) return explicit;
+
+  const derived: FieldPermissionMap = {};
+  let any = false;
+  for (const [name, rule] of Object.entries(rules)) {
+    if (rule?.hidden !== true) continue;
+    derived[name] = { _type: "hidden" };
+    any = true;
+  }
+  if (!any) return explicit;
+  return { ...derived, ...(explicit ?? {}) };
+}
+
+/**
  * Apply field-level READ permissions to a response object.
  * Strips hidden fields, enforces visibility, and applies redaction.
  *

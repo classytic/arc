@@ -17,6 +17,15 @@
  *     `aggregable: true` overrides on agg).
  *   - everything else → readable.
  *
+ * The RESPONSE half is not enforced by the predicates in this file — they
+ * gate `select` / `_distinct` / aggregations only. Response omission runs
+ * through the field-PERMISSION stripper (`applyFieldReadPermissions`), which
+ * `arcDecorator` feeds via `deriveHiddenFieldPermissions`. One stripper, two
+ * ways to declare it. Until that derivation existed the promise above was
+ * true of three surfaces and false of the fourth, so a resource declaring
+ * `fieldRules: { secret: { hidden: true } }` returned the secret in every
+ * payload — see `tests/core/hidden-field-response.test.ts`.
+ *
  * Write decisions (handled in BodySanitizer / mergeFieldRuleConstraints
  * — NOT here):
  *   - `systemManaged` / `readonly` / `immutable` → strip on writes.

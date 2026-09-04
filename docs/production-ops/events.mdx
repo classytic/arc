@@ -335,7 +335,7 @@ Arc ships three built-in transports:
 
 | Transport | Import | Ordering | Durability |
 |-----------|--------|----------|------------|
-| `MemoryEventTransport` | `@classytic/arc/events` | Sequential (awaited) | None (lost on restart) |
+| `MemoryEventTransport` | `@classytic/arc/events` | Sequential (awaited); `handlerDispatch: 'parallel'` opts out | None (lost on restart) |
 | `RedisEventTransport` | `@classytic/arc/events/redis` | Unordered (fire-and-forget) | None (pub/sub) |
 | `RedisStreamTransport` | `@classytic/arc/events/redis-stream` | Ordered (consumer groups) | Durable (at-least-once) |
 
@@ -349,7 +349,12 @@ await fastify.register(eventPlugin, {
 });
 ```
 
-- Handlers execute **sequentially** with `await`
+- Handlers execute **sequentially** with `await`, in registration order
+- Pass `handlerDispatch: 'parallel'` to run one event's matching handlers
+  concurrently — `publish()` then costs the SLOWEST handler rather than their
+  sum. Delivery and failure collection are identical; only the timing changes.
+  Audit first: sequential order is the documented behaviour of every transport
+  here, so a subscriber may legitimately be relying on it.
 - One failing handler does NOT block others
 - **Use for:** Development, testing, single-instance
 
