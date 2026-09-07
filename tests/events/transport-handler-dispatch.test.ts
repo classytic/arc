@@ -16,7 +16,7 @@ function evt(type = "order:created"): DomainEvent {
   return {
     type,
     payload: { orderNumber: "ORD-1" },
-    meta: { id: "e1", occurredAt: new Date().toISOString() },
+    meta: { id: "e1", timestamp: new Date() },
   } as unknown as DomainEvent;
 }
 

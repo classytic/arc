@@ -132,11 +132,14 @@ export function defineResource<TDoc = AnyRecord>(
   // `ARC_STRICT_PERMISSIONS` env) upgrades an ungated WRITE from a warning to a
   // FATAL error, so unauthenticated writes cannot ship silently. Off by default
   // — existing hosts keep the warn behavior until they opt in.
-  if (!normalisedConfig.skipValidation) {
-    const strict =
-      resolvedConfig.strictPermissions ?? process.env.ARC_STRICT_PERMISSIONS === "true";
-    diagnostics = diagnostics.concat(collectUngatedCrudDiagnostics(resolvedConfig, strict));
-  }
+  // NOT behind `skipValidation`. That flag means "skip SCHEMA validation" and is
+  // set implicitly by `customRoutesOnly`, so hiding a security invariant behind
+  // it let a documented-as-structural switch silently disable the ungated-write
+  // check — including under `ARC_STRICT_PERMISSIONS`. Nothing is lost by running
+  // it always: `collectUngatedCrudDiagnostics` returns [] when
+  // `disableDefaultRoutes` is set, which is every `customRoutesOnly` resource.
+  const strict = resolvedConfig.strictPermissions ?? process.env.ARC_STRICT_PERMISSIONS === "true";
+  diagnostics = diagnostics.concat(collectUngatedCrudDiagnostics(resolvedConfig, strict));
 
   // Fatal diagnostics (severity: "error") fail boot at define-time — the same
   // synchronous UX as `validateCustomRoutePermissions`. Aggregate all of them so
@@ -150,7 +153,7 @@ export function defineResource<TDoc = AnyRecord>(
   // Internal cast widens TDoc to satisfy BaseController's bound; safe
   // at runtime (every doc is a string-keyed object) and bounded to
   // this one site so hosts never see it.
-  const narrowedConfig = resolvedConfig as unknown as InternalResourceConfig<TDoc & AnyRecord>;
+  const narrowedConfig = resolvedConfig as InternalResourceConfig<TDoc & AnyRecord>;
   const narrowedAdapter = configWithId.adapter as DataAdapter<TDoc & AnyRecord> | undefined;
   const controller = resolveOrAutoCreateController(
     narrowedConfig,
@@ -164,7 +167,7 @@ export function defineResource<TDoc = AnyRecord>(
     ...resolvedConfig,
     adapter: configWithId.adapter,
     controller,
-  } as unknown as ResolvedResourceConfig<TDoc>);
+  } as ResolvedResourceConfig<TDoc>);
 
   if (!normalisedConfig.skipValidation && controller) resource._validateControllerMethods();
 

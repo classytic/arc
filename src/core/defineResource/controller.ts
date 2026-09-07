@@ -111,7 +111,7 @@ export function resolveOrAutoCreateController<TDoc extends AnyRecord>(
     warnOnDroppedAuthorOptions(resolvedConfig);
     warnOnDroppedPresetOptions(resolvedConfig);
     warnOnWriteMethodOverride(userController, resolvedConfig);
-    return userController as unknown as IController<TDoc>;
+    return userController as IController<TDoc>;
   }
 
   if (!hasCrudRoutes || !repository) return undefined;
@@ -389,7 +389,7 @@ function buildBaseController<TDoc extends AnyRecord>(
       : undefined,
   });
 
-  return controller as unknown as IController<TDoc>;
+  return controller as IController<TDoc>;
 }
 
 /**

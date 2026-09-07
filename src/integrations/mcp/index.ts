@@ -9,8 +9,13 @@
  * - Level 2: `createMcpServer`  → Declarative tool/resource/prompt config
  *
  * Peer dependencies (optional, loaded only when this module is imported):
- *   @modelcontextprotocol/sdk >= 1.28.0
+ *   @modelcontextprotocol/server >= 2.0.0   (McpServer)
+ *   @modelcontextprotocol/node   >= 2.0.0   (Streamable HTTP server transport)
+ *   @modelcontextprotocol/client >= 2.0.0   (only for `@classytic/arc/mcp/testing`)
  *   zod (any version already in your project)
+ *
+ * SDK v2 replaced the single `@modelcontextprotocol/sdk` package with this
+ * split; there is no 2.x of the old name, and arc does not support v1.
  *
  * @example
  * ```typescript

@@ -90,13 +90,13 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
     opts: Record<string, unknown>,
   ) => SessionEntry["transport"] & { sessionId: string | undefined };
   try {
-    const mod = await import("@modelcontextprotocol/sdk/server/streamableHttp.js");
+    const mod = await import("@modelcontextprotocol/node");
     StreamableHTTPServerTransport =
-      mod.StreamableHTTPServerTransport as typeof StreamableHTTPServerTransport;
+      mod.NodeStreamableHTTPServerTransport as typeof StreamableHTTPServerTransport;
   } catch {
     throw new Error(
-      "@modelcontextprotocol/sdk is required for MCP support. " +
-        "Install it: npm install @modelcontextprotocol/sdk",
+      "@modelcontextprotocol/server and @modelcontextprotocol/node are required for MCP support. " +
+        "Install them: npm install @modelcontextprotocol/server @modelcontextprotocol/node",
     );
   }
   try {
@@ -122,7 +122,7 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
   // `_idempotencyKey` schema advertising: input schemas bake at generation,
   // so register `idempotencyPlugin` BEFORE `mcpPlugin` to surface the field
   // (execution-side idempotency still works either way via the getter).
-  const fastifyAny = fastify as unknown as {
+  const fastifyAny = fastify as {
     arc?: { hooks?: unknown };
     events?: unknown;
     audit?: unknown;
@@ -219,6 +219,70 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
         "Pass `auth: betterAuthInstance` or `auth: async (headers) => ...` to gate access. " +
         "Safe only for stdio transports, local development, or explicitly-public read-only APIs.",
     );
+  }
+
+  // ── 8b. DNS-rebinding protection (Host / Origin) ──
+  //
+  // Closes the attack the MCP SDK ships this for: a page the developer visits
+  // POSTs to `127.0.0.1:<port>`, and if an attacker-controlled DNS name resolves
+  // to loopback the browser treats the reply as same-origin and can READ it —
+  // every tool, from any website. A `Host` the server does not expect is the
+  // signal, so checking it is what breaks the chain.
+  //
+  // The URL check below is LOAD-BEARING, not defensive. This plugin is wrapped
+  // in `fp()`, which skips encapsulation — so `addHook` here registers on the
+  // PARENT scope and fires for every route in the app, including ones arc does
+  // not own. Verified, not assumed: a probe app with an unrelated `/unrelated`
+  // route saw this hook fire on it. Delete the prefix test and every route in
+  // the host application inherits MCP's Host policy.
+  //
+  // `request.url` is the right thing to test because `fp()` also discards the
+  // register prefix — `app.register(mcpPlugin, { prefix: '/api' })` still mounts
+  // at `/mcp`, so the plugin-local `prefix` IS the live path.
+  //
+  // `${prefix}/health` is deliberately EXEMPT. It is the liveness surface, and
+  // probes (k8s, load balancers) send a `Host` nobody can enumerate in advance —
+  // guarding it turns DNS-rebinding protection into a restart loop. The prize in
+  // this attack is the tool surface on POST, not liveness.
+  //
+  // Runs at `onRequest`, before auth, so a rebound request is refused without
+  // touching the session store.
+  //
+  // The matching rules come from `@modelcontextprotocol/server` — port-agnostic,
+  // IPv6-bracket aware, "absent Origin passes" for non-browser clients. Arc
+  // supplies the policy (when to enforce, which hosts); the SDK supplies the
+  // comparison. Reimplementing it here is how the two would drift.
+  const rebindOption = options.dnsRebindingProtection;
+  const rebindEnabled =
+    rebindOption === undefined ? options.auth === false : rebindOption !== false;
+  if (rebindEnabled) {
+    const { validateHostHeader, validateOriginHeader, localhostAllowedHostnames } = await import(
+      "@modelcontextprotocol/server"
+    );
+    const cfg = rebindOption === undefined || rebindOption === false ? {} : rebindOption;
+    const allowedHosts = cfg.allowedHosts ?? localhostAllowedHostnames();
+    const allowedOrigins = cfg.allowedOrigins ?? allowedHosts;
+
+    const healthPath = `${prefix}/health`;
+    fastify.addHook("onRequest", async (request, reply) => {
+      if (!request.url.startsWith(prefix)) return;
+      if (request.url.split("?")[0] === healthPath) return;
+      const host = validateHostHeader(request.headers.host, allowedHosts);
+      if (!host.ok) {
+        // 403 with the JSON-RPC error envelope MCP clients parse, matching the
+        // SDK's own rejection shape rather than arc's REST ErrorContract — the
+        // caller here speaks JSON-RPC, not arc's HTTP contract.
+        return reply
+          .code(403)
+          .send({ jsonrpc: "2.0", error: { code: -32000, message: host.message }, id: null });
+      }
+      const origin = validateOriginHeader(request.headers.origin, allowedOrigins);
+      if (!origin.ok) {
+        return reply
+          .code(403)
+          .send({ jsonrpc: "2.0", error: { code: -32000, message: origin.message }, id: null });
+      }
+    });
   }
 
   // ── Health endpoint (both modes) — no MCP protocol needed ──

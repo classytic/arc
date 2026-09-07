@@ -2,7 +2,7 @@
  * MCP Auth & Multi-Tenancy E2E Tests
  *
  * Tests all auth modes and multi-tenancy through the full MCP pipeline:
- *   createMcpServer → InMemoryTransport → tool call → BaseController → mock DB
+ *   createMcpServer → loopback Streamable HTTP → tool call → BaseController → mock DB
  *
  * Scenarios:
  *   1. No auth — anonymous access, all data visible
@@ -17,6 +17,7 @@ import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { connectMcpTestClient } from "../../../src/integrations/mcp/testing.js";
 import { z } from "zod";
 import { BaseController } from "../../../src/core/BaseController.js";
 import { defineResource } from "../../../src/core/defineResource.js";
@@ -97,19 +98,24 @@ function createProjectResource(tenantField: string | false = "organizationId") {
   });
 }
 
-// Helper: connect server + client via InMemoryTransport
-async function connectInMemory(server: unknown) {
-  const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
-  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+// Helper: connect server + client over the shared loopback harness
+/**
+ * Connect a client to `server` over arc's shared loopback harness.
+ *
+ * Five suites each carried a private `InMemoryTransport.createLinkedPair()` copy
+ * of this. SDK v2 does not publish that transport, so all five now route through
+ * `connectMcpTestClient`. Unlike a linked pair each connection owns a listening
+ * socket — hence the teardown registry: without it vitest hangs at end-of-file
+ * with no failing assertion.
+ */
+const openMcpConnections: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  for (const close of openMcpConnections.splice(0)) await close();
+});
 
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "test-client", version: "1.0.0" });
-
-  await Promise.all([
-    client.connect(clientTransport),
-    (server as { connect: (t: unknown) => Promise<void> }).connect(serverTransport),
-  ]);
-
+async function connectMcpClient(server: unknown) {
+  const { client, close } = await connectMcpTestClient(server);
+  openMcpConnections.push(close);
   return client;
 }
 
@@ -124,7 +130,7 @@ describe("No auth mode", () => {
 
     // Create server with no authRef (simulates auth: false)
     const server = await createMcpServer({ name: "test-noauth", tools });
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     // Create a project (no org scoping)
     const result = await client.callTool({
@@ -157,7 +163,7 @@ describe("No auth mode", () => {
       ],
     });
 
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
     await client.callTool({ name: "check_auth", arguments: {} });
 
     expect(capturedSession).toBeNull();
@@ -190,7 +196,7 @@ describe("Custom auth via AuthRef", () => {
       authRef,
     );
 
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
     const result = await client.callTool({ name: "whoami", arguments: {} });
 
     const session = JSON.parse((result.content[0] as { text: string }).text);
@@ -217,7 +223,7 @@ describe("Custom auth via AuthRef", () => {
       authRef,
     );
 
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     // First call — user-1
     const r1 = await client.callTool({ name: "whoami", arguments: {} });
@@ -251,7 +257,7 @@ describe("Multi-tenancy via org-scoped BaseController", () => {
     // ── Org A's session ──
     const authRefA: AuthRef = { current: { userId: "alice", organizationId: "org-a" } };
     const serverA = await createMcpServer({ name: "test-a", tools }, authRefA);
-    const clientA = await connectInMemory(serverA);
+    const clientA = await connectMcpClient(serverA);
 
     const resultA = await clientA.callTool({ name: "list_projects", arguments: {} });
     const dataA = JSON.parse((resultA.content[0] as { text: string }).text);
@@ -264,7 +270,7 @@ describe("Multi-tenancy via org-scoped BaseController", () => {
     // ── Org B's session ──
     const authRefB: AuthRef = { current: { userId: "bob", organizationId: "org-b" } };
     const serverB = await createMcpServer({ name: "test-b", tools }, authRefB);
-    const clientB = await connectInMemory(serverB);
+    const clientB = await connectMcpClient(serverB);
 
     const resultB = await clientB.callTool({ name: "list_projects", arguments: {} });
     const dataB = JSON.parse((resultB.content[0] as { text: string }).text);
@@ -286,7 +292,7 @@ describe("Multi-tenancy via org-scoped BaseController", () => {
 
     const authRef: AuthRef = { current: { userId: "alice", organizationId: "org-x" } };
     const server = await createMcpServer({ name: "test", tools }, authRef);
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     await client.callTool({
       name: "create_project",
@@ -312,7 +318,7 @@ describe("Multi-tenancy via org-scoped BaseController", () => {
 
     const authRef: AuthRef = { current: { userId: "user", organizationId: "org-f" } };
     const server = await createMcpServer({ name: "test", tools }, authRef);
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     // Filter by status within org
     const result = await client.callTool({
@@ -471,7 +477,7 @@ describe("Permission filters flow into _policyFilters", () => {
     const tools = resourceToTools(resource);
     const authRef: AuthRef = { current: { userId: "alice" } };
     const server = await createMcpServer({ name: "test-perm", tools }, authRef);
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     const result = await client.callTool({ name: "list_tasks", arguments: {} });
     const data = JSON.parse((result.content[0] as { text: string }).text);
@@ -491,7 +497,7 @@ describe("Permission filters flow into _policyFilters", () => {
     const tools = resourceToTools(resource);
     const authRef: AuthRef = { current: { userId: "viewer" } };
     const server = await createMcpServer({ name: "test-deny", tools }, authRef);
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     const result = await client.callTool({
       name: "create_task",
@@ -512,7 +518,7 @@ describe("Permission filters flow into _policyFilters", () => {
     const tools = resourceToTools(resource);
     // No authRef → session is null → user is null
     const server = await createMcpServer({ name: "test-nouser", tools });
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     const result = await client.callTool({ name: "list_tasks", arguments: {} });
     expect((result as any).isError).toBe(true);
@@ -547,7 +553,7 @@ describe("Permission filters flow into _policyFilters", () => {
     // Alice sees main branch
     const authA: AuthRef = { current: { userId: "alice" } };
     const serverA = await createMcpServer({ name: "test-alice", tools }, authA);
-    const clientA = await connectInMemory(serverA);
+    const clientA = await connectMcpClient(serverA);
 
     const resultA = await clientA.callTool({ name: "list_tasks", arguments: {} });
     const dataA = JSON.parse((resultA.content[0] as { text: string }).text);
@@ -558,7 +564,7 @@ describe("Permission filters flow into _policyFilters", () => {
     // Bob sees dev branch
     const authB: AuthRef = { current: { userId: "bob" } };
     const serverB = await createMcpServer({ name: "test-bob", tools }, authB);
-    const clientB = await connectInMemory(serverB);
+    const clientB = await connectMcpClient(serverB);
 
     const resultB = await clientB.callTool({ name: "list_tasks", arguments: {} });
     const dataB = JSON.parse((resultB.content[0] as { text: string }).text);
@@ -588,7 +594,7 @@ describe("Permission filters flow into _policyFilters", () => {
     const tools = resourceToTools(resource);
     const authRef: AuthRef = { current: { userId: "deployer" } };
     const server = await createMcpServer({ name: "test-async", tools }, authRef);
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     const result = await client.callTool({ name: "list_tasks", arguments: {} });
     const data = JSON.parse((result.content[0] as { text: string }).text);
@@ -627,7 +633,7 @@ describe("Mixed auto-generated + custom tools", () => {
       { name: "test-mixed", tools: [...autoTools, customTool] },
       authRef,
     );
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     // List all tools — should include both auto + custom
     const { tools } = await client.listTools();

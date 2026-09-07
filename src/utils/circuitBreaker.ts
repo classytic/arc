@@ -429,7 +429,7 @@ export class CircuitBreakerRegistry {
     options?: Omit<CircuitBreakerOptions, "name">,
   ): CircuitBreaker<T> {
     const breaker = new CircuitBreaker(fn, { ...options, name });
-    this.breakers.set(name, breaker as unknown as CircuitBreaker<AnyAsyncFn>);
+    this.breakers.set(name, breaker as CircuitBreaker<AnyAsyncFn>);
     return breaker;
   }
 

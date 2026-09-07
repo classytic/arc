@@ -57,6 +57,10 @@
       },
       "complexity": {
         "noForEach": "off"
+      },
+      "nursery": {
+        "noFloatingPromises": "error",
+        "noMisusedPromises": "error"
       }
     }
   },

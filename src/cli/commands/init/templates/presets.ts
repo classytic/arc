@@ -142,7 +142,7 @@ interface FlexibleMultiTenantOptions {
 }
 `
     : `
-const { multiTenantPreset } = require('@classytic/arc/presets/tenant');
+import { multiTenantPreset } from '@classytic/arc/presets/tenant';
 `;
 
   return `/**

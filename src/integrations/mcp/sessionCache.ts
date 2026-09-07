@@ -135,7 +135,10 @@ export class McpSessionCache {
     try {
       const transport = entry.transport as { close?: () => void | Promise<void> };
       if (transport && typeof transport.close === "function") {
-        transport.close();
+        // `close()` may return a promise. A rejection would escape the
+        // synchronous try/catch around this block as an unhandled rejection
+        // mid-shutdown — settle it here. Best-effort either way.
+        void Promise.resolve(transport.close()).catch(() => {});
       }
     } catch {
       // Best-effort cleanup — don't throw during shutdown

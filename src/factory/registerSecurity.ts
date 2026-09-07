@@ -36,7 +36,7 @@ export async function registerSecurityPlugins(
    * Resolve every enabled plugin's package FIRST, so a pruned peer set is one
    * error listing all of them rather than one restart per package.
    */
-  await preflightPlugins(config as unknown as Record<string, unknown>);
+  await preflightPlugins(config as Record<string, unknown>);
 
   // Helmet — security headers
   if (config.helmet !== false) {

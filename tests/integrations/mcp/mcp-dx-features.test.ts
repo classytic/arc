@@ -16,6 +16,7 @@ import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { connectMcpTestClient } from "../../../src/integrations/mcp/testing.js";
 import { BaseController } from "../../../src/core/BaseController.js";
 import { defineResource } from "../../../src/core/defineResource.js";
 import {
@@ -108,16 +109,24 @@ function makeResource(
   });
 }
 
-// Helper: connect InMemoryTransport
-async function connectInMemory(server: unknown) {
-  const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
-  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
-  const [ct, st] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "test", version: "1.0" });
-  await Promise.all([
-    client.connect(ct),
-    (server as { connect: (t: unknown) => Promise<void> }).connect(st),
-  ]);
+// Helper: connect over the shared loopback harness
+/**
+ * Connect a client to `server` over arc's shared loopback harness.
+ *
+ * Five suites each carried a private `InMemoryTransport.createLinkedPair()` copy
+ * of this. SDK v2 does not publish that transport, so all five now route through
+ * `connectMcpTestClient`. Unlike a linked pair each connection owns a listening
+ * socket — hence the teardown registry: without it vitest hangs at end-of-file
+ * with no failing assertion.
+ */
+const openMcpConnections: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  for (const close of openMcpConnections.splice(0)) await close();
+});
+
+async function connectMcpClient(server: unknown) {
+  const { client, close } = await connectMcpTestClient(server);
+  openMcpConnections.push(close);
   return client;
 }
 
@@ -195,7 +204,7 @@ describe("disableDefaultRoutes + MCP", () => {
     const tools = resourceToTools(resource);
 
     const server = await createMcpServer({ name: "test", tools });
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     // Create via MCP
     const result = await client.callTool({
@@ -280,7 +289,7 @@ describe("mcpHandler on routes", () => {
 
     const tools = resourceToTools(resource);
     const server = await createMcpServer({ name: "test", tools });
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     const result = await client.callTool({
       name: "analyze_product",
@@ -384,7 +393,7 @@ describe("Guard helpers on custom tools", () => {
 
     // Unauthenticated — no authRef
     const server1 = await createMcpServer({ name: "test", tools: [protectedTool] });
-    const client1 = await connectInMemory(server1);
+    const client1 = await connectMcpClient(server1);
     const r1 = await client1.callTool({ name: "admin_action", arguments: {} });
     expect((r1 as any).isError).toBe(true);
     expect((r1.content[0] as { text: string }).text).toContain("Authentication required");
@@ -392,7 +401,7 @@ describe("Guard helpers on custom tools", () => {
     // Authenticated
     const authRef: AuthRef = { current: { userId: "admin-1" } };
     const server2 = await createMcpServer({ name: "test2", tools: [protectedTool] }, authRef);
-    const client2 = await connectInMemory(server2);
+    const client2 = await connectMcpClient(server2);
     const r2 = await client2.callTool({ name: "admin_action", arguments: {} });
     expect((r2 as any).isError).toBeFalsy();
     expect((r2.content[0] as { text: string }).text).toBe("Welcome admin-1");
@@ -411,14 +420,14 @@ describe("Guard helpers on custom tools", () => {
     // No org
     const auth1: AuthRef = { current: { userId: "user-1" } };
     const server1 = await createMcpServer({ name: "test", tools: [orgTool] }, auth1);
-    const client1 = await connectInMemory(server1);
+    const client1 = await connectMcpClient(server1);
     const r1 = await client1.callTool({ name: "org_data", arguments: {} });
     expect((r1 as any).isError).toBe(true);
 
     // With org
     const auth2: AuthRef = { current: { userId: "user-1", organizationId: "org-abc" } };
     const server2 = await createMcpServer({ name: "test2", tools: [orgTool] }, auth2);
-    const client2 = await connectInMemory(server2);
+    const client2 = await connectMcpClient(server2);
     const r2 = await client2.callTool({ name: "org_data", arguments: {} });
     expect((r2.content[0] as { text: string }).text).toBe("Org: org-abc");
   });
@@ -436,14 +445,14 @@ describe("Guard helpers on custom tools", () => {
     // Non-admin
     const auth1: AuthRef = { current: { userId: "user-1", roles: ["viewer"] } };
     const server1 = await createMcpServer({ name: "test", tools: [adminTool] }, auth1);
-    const client1 = await connectInMemory(server1);
+    const client1 = await connectMcpClient(server1);
     const r1 = await client1.callTool({ name: "admin_panel", arguments: {} });
     expect((r1 as any).isError).toBe(true);
 
     // Admin
     const auth2: AuthRef = { current: { userId: "user-1", roles: ["admin"] } };
     const server2 = await createMcpServer({ name: "test2", tools: [adminTool] }, auth2);
-    const client2 = await connectInMemory(server2);
+    const client2 = await connectMcpClient(server2);
     const r2 = await client2.callTool({ name: "admin_panel", arguments: {} });
     expect((r2.content[0] as { text: string }).text).toBe("Admin access granted");
   });
@@ -458,7 +467,7 @@ describe("Full CRUD lifecycle through MCP", () => {
     const resource = makeResource("product", ProductModel);
     const tools = resourceToTools(resource);
     const server = await createMcpServer({ name: "test-crud", tools });
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     // Create
     const createResult = await client.callTool({

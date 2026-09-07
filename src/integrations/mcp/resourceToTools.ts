@@ -454,7 +454,7 @@ export function resourceToTools(
   // permission gate, and cross-cutting middleware the REST route
   // applies — `executeAggregation` is the single source of truth.
   if (resource.aggregations && Object.keys(resource.aggregations).length > 0) {
-    const repoForAgg = (resource.controller as unknown as { repository?: unknown })?.repository;
+    const repoForAgg = (resource.controller as { repository?: unknown })?.repository;
     // MCP doesn't have a Fastify request, so build the tenant options bag
     // from the session directly, projected into the same shape
     // `BaseCrudController.tenantRepoOptions(req)` produces.

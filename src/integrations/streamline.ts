@@ -1025,7 +1025,7 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
         // path when `enableHookEndpoint: false`. First request pays the
         // import cost; subsequent requests are cached.
         if (!resumeHookFn) {
-          const streamline = (await import("@classytic/streamline")) as unknown as {
+          const streamline = (await import("@classytic/streamline")) as {
             resumeHook: ResumeHookFn;
           };
           resumeHookFn = streamline.resumeHook;

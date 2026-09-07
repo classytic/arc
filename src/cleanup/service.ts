@@ -172,7 +172,28 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
   const logger = deps.logger;
   const generateId = deps.generateId ?? (() => globalThis.crypto.randomUUID());
   const now = deps.now ?? (() => new Date());
-  const limits: CleanupLimits = { ...DEFAULT_CLEANUP_LIMITS, ...deps.limits };
+  /**
+   * Undefined-valued keys are DROPPED, not spread.
+   *
+   * `limits` is `Partial<CleanupLimits>`, which permits an EXPLICIT `undefined`
+   * — and a plain spread lets that overwrite the default rather than fall back
+   * to it. Every limit is then read in a comparison, and `n > undefined` is
+   * always `false`, so `{ limits: { maxPlanItems: undefined } }` did not raise
+   * the cap: it silently REMOVED it, on a framework whose whole job is deleting
+   * data. Same for `maxReasonLength` / `maxParamDepth`, and `maxResults` turned
+   * `slice(0, undefined)` into "keep everything".
+   *
+   * A host reaches this by forwarding an optional config through
+   * (`limits: { maxPlanItems: cfg.planCap }`) — no cast, no obvious mistake.
+   * `permissions/presets.ts` already filters for exactly this reason; this is
+   * the same rule applied to the destructive path.
+   */
+  const limits: CleanupLimits = {
+    ...DEFAULT_CLEANUP_LIMITS,
+    ...(Object.fromEntries(
+      Object.entries(deps.limits ?? {}).filter(([, v]) => v !== undefined),
+    ) as Partial<CleanupLimits>),
+  };
   const leaseMs = deps.leaseMs ?? 5 * 60 * 1000;
   const progressThrottleMs = deps.progressThrottleMs ?? 0;
 

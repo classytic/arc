@@ -852,9 +852,7 @@ export function createBetterAuthAdapter(
 
     // Push extracted OpenAPI paths to arc core (if available)
     if (extractedOpenApi) {
-      const arc = (
-        fastify as unknown as { arc?: { externalOpenApiPaths?: ExternalOpenApiPaths[] } }
-      ).arc;
+      const arc = (fastify as { arc?: { externalOpenApiPaths?: ExternalOpenApiPaths[] } }).arc;
       if (arc?.externalOpenApiPaths) {
         arc.externalOpenApiPaths.push(extractedOpenApi);
       }

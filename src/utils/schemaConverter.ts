@@ -100,8 +100,8 @@ const zodReady: Promise<void> = import("zod")
       // `any` outward — call site receives `Record<string, unknown>`.
       _toJSONSchema = (schema, opts) =>
         z.toJSONSchema(
-          schema as unknown as Parameters<typeof z.toJSONSchema>[0],
-          opts as unknown as Parameters<typeof z.toJSONSchema>[1],
+          schema as Parameters<typeof z.toJSONSchema>[0],
+          opts as Parameters<typeof z.toJSONSchema>[1],
         ) as Record<string, unknown>;
     }
   })

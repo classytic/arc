@@ -437,3 +437,116 @@ describe("MCP hardening — GET/DELETE refresh session auth snapshot", () => {
     expect(cache.get(sessionId)).toBeTruthy();
   });
 });
+
+// ============================================================================
+// DNS-rebinding protection — Host / Origin validation on the MCP routes
+// ============================================================================
+
+describe("MCP hardening — DNS-rebinding protection", () => {
+  let app: FastifyInstance;
+
+  afterEach(async () => {
+    await app?.close().catch(() => {});
+    vi.restoreAllMocks();
+  });
+
+  const INIT = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "c", version: "0" },
+    },
+  };
+
+  async function build(opts: Record<string, unknown>) {
+    const mcpPlugin = await loadMcpPlugin();
+    const f = Fastify({ logger: false });
+    await f.register(mcpPlugin, { resources: [], ...opts });
+    await f.ready();
+    return f;
+  }
+
+  const post = (f: FastifyInstance, headers: Record<string, string>) =>
+    f.inject({
+      method: "POST",
+      url: "/mcp",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...headers },
+      payload: INIT,
+    });
+
+  it("auth:false — a rebound Host is REFUSED (the attack this exists for)", async () => {
+    // The attack: a page the developer visits POSTs to 127.0.0.1:<port>. If an
+    // attacker-controlled name resolves to loopback the browser treats the
+    // response as same-origin and can READ every tool's output. The forged
+    // request carries the attacker's `Host` — which is the signal we reject on.
+    app = await build({ auth: false });
+    const res = await post(app, { host: "evil.example.com" });
+    expect(res.statusCode).toBe(403);
+    // JSON-RPC envelope, not arc's REST ErrorContract — the caller speaks JSON-RPC.
+    expect(res.json()).toMatchObject({ jsonrpc: "2.0", error: { code: -32000 }, id: null });
+  });
+
+  it("auth:false — localhost Host is allowed (protection must not break dev)", async () => {
+    app = await build({ auth: false });
+    expect((await post(app, { host: "127.0.0.1:9000" })).statusCode).toBeLessThan(400);
+  });
+
+  it("a present but unlisted Origin is refused; an absent Origin passes", async () => {
+    // Non-browser MCP clients send no Origin — rejecting those would break
+    // every CLI client. Only a PRESENT, unlisted Origin is an attack signal.
+    app = await build({ auth: false });
+    expect(
+      (await post(app, { host: "localhost", origin: "https://evil.example.com" })).statusCode,
+    ).toBe(403);
+    expect((await post(app, { host: "localhost" })).statusCode).toBeLessThan(400);
+  });
+
+  it("DEFAULTS OFF when auth is configured — else every production deploy 403s", async () => {
+    // A real deployment answers on its own domain, whose Host is not localhost.
+    // Defaulting protection on would reject it. With auth configured the
+    // credential is the gate, so the default must be off.
+    app = await build({ auth: async () => ({ userId: "u1" }) });
+    expect((await post(app, { host: "mcp.example.com" })).statusCode).not.toBe(403);
+  });
+
+  it("opt-in works for a localhost server that DOES use auth", async () => {
+    app = await build({ auth: async () => ({ userId: "u1" }), dnsRebindingProtection: {} });
+    expect((await post(app, { host: "evil.example.com" })).statusCode).toBe(403);
+  });
+
+  it("`false` disables it for a deliberately-public auth:false endpoint", async () => {
+    app = await build({ auth: false, dnsRebindingProtection: false });
+    expect((await post(app, { host: "anything.example.com" })).statusCode).not.toBe(403);
+  });
+
+  it("allowedHosts names a real public deployment", async () => {
+    app = await build({ auth: false, dnsRebindingProtection: { allowedHosts: ["mcp.example.com"] } });
+    expect((await post(app, { host: "mcp.example.com" })).statusCode).not.toBe(403);
+    expect((await post(app, { host: "evil.example.com" })).statusCode).toBe(403);
+  });
+
+  it("the health probe is EXEMPT — guarding it would restart-loop k8s", async () => {
+    // Probes send a Host nobody can enumerate ahead of time (pod IP, LB name).
+    // The attack's prize is the tool surface on POST, not liveness.
+    app = await build({ auth: false });
+    const res = await app.inject({ method: "GET", url: "/mcp/health", headers: { host: "10.1.2.3:8080" } });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("does NOT apply to routes the plugin does not own", async () => {
+    // `fp()` skips encapsulation, so this hook registers on the PARENT scope and
+    // fires for every route in the host app. The URL guard is what keeps arc's
+    // MCP policy off the host's own routes — assert it, or a future edit that
+    // drops the guard silently imposes Host validation app-wide.
+    const mcpPlugin = await loadMcpPlugin();
+    app = Fastify({ logger: false });
+    await app.register(mcpPlugin, { resources: [], auth: false });
+    app.get("/unrelated", async () => ({ ok: true }));
+    await app.ready();
+    const res = await app.inject({ method: "GET", url: "/unrelated", headers: { host: "evil.example.com" } });
+    expect(res.statusCode).toBe(200);
+  });
+});

@@ -266,7 +266,7 @@ function buildPermissionContextLite(
   req: FastifyRequest,
   aggregationName: string,
 ): PermissionContext {
-  const reqWithExtras = req as unknown as {
+  const reqWithExtras = req as {
     user?: UserBase | null;
     arc?: { resource?: string };
   };

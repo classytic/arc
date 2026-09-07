@@ -274,7 +274,7 @@ export function sendControllerResponse<T>(
     typeof response !== "object" ||
     !Object.hasOwn(response as object, "data")
   ) {
-    response = { data: response as unknown as T, status: 200 } as IControllerResponse<T>;
+    response = { data: response as T, status: 200 } as IControllerResponse<T>;
   }
 
   // Extract field mask from request if available
@@ -282,7 +282,7 @@ export function sendControllerResponse<T>(
   const fieldMaskConfig = reqWithExtras?.fieldMask;
 
   // Extract field-level permissions from arc metadata (set by arcDecorator)
-  const arcMeta = (reqWithExtras as unknown as AnyRecord | undefined)?.arc as AnyRecord | undefined;
+  const arcMeta = (reqWithExtras as AnyRecord | undefined)?.arc as AnyRecord | undefined;
   const scope = (reqWithExtras?.scope as RequestScope) ?? PUBLIC_SCOPE;
 
   // Elevated scope (platform admin) skips field restrictions —
@@ -405,7 +405,7 @@ export function sendControllerResponse<T>(
   const filteredData =
     rawData !== null &&
     typeof rawData === "object" &&
-    typeof (rawData as unknown as { toJSON?: () => unknown }).toJSON === "function"
+    typeof (rawData as { toJSON?: () => unknown }).toJSON === "function"
       ? ((rawData as unknown as { toJSON: () => unknown }).toJSON() as typeof rawData)
       : rawData;
   const status = response.status ?? 200;

@@ -301,13 +301,9 @@ const websocketPluginImpl: FastifyPluginAsync<WebSocketPluginOptions> = async (
     opts: { websocket: true },
     handler: (socket: WsSocketLike, request: unknown) => unknown,
   ) => void;
-  (fastify.get as unknown as WsRouteRegistrar)(
-    path,
-    { websocket: true },
-    async (socket, request) => {
-      await handleConnection(ctx, socket, request);
-    },
-  );
+  (fastify.get as WsRouteRegistrar)(path, { websocket: true }, async (socket, request) => {
+    await handleConnection(ctx, socket, request);
+  });
 
   // Register the optional stats endpoint.
   registerStatsRoute(fastify, rooms, path, exposeStats);

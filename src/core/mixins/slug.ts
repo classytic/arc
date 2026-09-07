@@ -15,18 +15,16 @@ import type { AnyRecord, IControllerResponse, IRequestContext } from "../../type
 import { createError, NotFoundError } from "../../utils/errors.js";
 import { withRepoFeatures } from "../../utils/repoFeature.js";
 import type { BaseCrudController } from "../BaseCrudController.js";
-
-// biome-ignore lint/suspicious/noExplicitAny: standard TS mixin Constructor pattern
-type Constructor<T> = new (...args: any[]) => T;
+import type { MixinConstructor } from "../controllerTypes.js";
 
 /** Public surface contributed by SlugMixin. */
 export interface SlugExt {
   getBySlug(req: IRequestContext): Promise<IControllerResponse<AnyRecord>>;
 }
 
-export function SlugMixin<TBase extends Constructor<BaseCrudController>>(
+export function SlugMixin<TBase extends MixinConstructor<BaseCrudController>>(
   Base: TBase,
-): TBase & Constructor<SlugExt> {
+): TBase & MixinConstructor<SlugExt> {
   return class SlugController extends Base {
     async getBySlug(req: IRequestContext): Promise<IControllerResponse<AnyRecord>> {
       // `_presetFields` is populated by the slugLookup preset.
@@ -68,7 +66,7 @@ export function SlugMixin<TBase extends Constructor<BaseCrudController>>(
         const code = item ? "POLICY_FILTERED" : "NOT_FOUND";
         const resource = (this as unknown as { resourceName?: string }).resourceName ?? "Resource";
         const err = new NotFoundError(resource);
-        (err as unknown as { details: Record<string, unknown> }).details = {
+        (err as { details: Record<string, unknown> }).details = {
           ...(err.details ?? {}),
           code,
         };

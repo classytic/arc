@@ -77,17 +77,28 @@ export type OutboxStoreContractSetup = () => Promise<OutboxStoreContractSetupRes
 // ============================================================================
 
 let seq = 0;
-/** A minimal well-formed event. Ids are unique per call. */
+/**
+ * A minimal well-formed event. Ids are unique per call.
+ *
+ * It was NOT well-formed until 2.40: `meta` carried `occurredAt: string`, which
+ * is not a field of `EventMeta`, and omitted the REQUIRED `timestamp: Date`.
+ * An `as unknown as DomainEvent` made it compile — a total override that hid the
+ * mismatch, so every third party running this shipped suite conformance-tested
+ * their store against an event shape the transports never produce. `createEvent`
+ * in `@classytic/primitives` is the reference: `{ id, timestamp: new Date() }`.
+ *
+ * No cast now — if `EventMeta` changes, this stops compiling, which is the point.
+ */
 function event(type = "test.event"): DomainEvent {
   seq += 1;
   return {
     type,
     payload: { n: seq },
-    meta: { id: `evt-${Date.now()}-${seq}`, occurredAt: new Date().toISOString() },
-  } as unknown as DomainEvent;
+    meta: { id: `evt-${Date.now()}-${seq}`, timestamp: new Date() },
+  };
 }
 
-const idOf = (e: DomainEvent): string => (e as unknown as { meta: { id: string } }).meta.id;
+const idOf = (e: DomainEvent): string => e.meta.id;
 
 // ============================================================================
 // Suite
@@ -139,7 +150,7 @@ export function runOutboxStoreContract(name: string, setup: OutboxStoreContractS
       });
 
       it("THROWS rather than persisting an event with no `type`", async () => {
-        const bad = { payload: {}, meta: { id: "no-type" } } as unknown as DomainEvent;
+        const bad = { payload: {}, meta: { id: "no-type" } } as DomainEvent;
         await expect(store.save(bad)).rejects.toThrow();
         // And it must not have landed — a persisted malformed row would be
         // returned by a later getPending and break the relay (invariant 6).
@@ -147,7 +158,7 @@ export function runOutboxStoreContract(name: string, setup: OutboxStoreContractS
       });
 
       it("THROWS rather than persisting an event with no `meta.id`", async () => {
-        const bad = { type: "x", payload: {}, meta: {} } as unknown as DomainEvent;
+        const bad = { type: "x", payload: {}, meta: {} } as DomainEvent;
         await expect(store.save(bad)).rejects.toThrow();
         expect((await store.getPending(10)).length).toBe(0);
       });

@@ -130,7 +130,7 @@ export function createCustomRouteHandler(
   hasId: boolean,
   options: CustomRouteToolOptions,
 ): ToolDefinition["handler"] {
-  const ctrl = controller as unknown as Record<string, ControllerMethod> | undefined;
+  const ctrl = controller as Record<string, ControllerMethod> | undefined;
   const handlerName =
     typeof route.handler === "string"
       ? route.handler

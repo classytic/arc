@@ -8,7 +8,8 @@
  * - Integration with defineTool + createMcpServer
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { connectMcpTestClient } from "../../../src/integrations/mcp/testing.js";
 import { z } from "zod";
 import {
   type AuthRef,
@@ -41,12 +42,23 @@ function ctx(session: ToolContext["session"]): ToolContext {
   };
 }
 
-async function connectInMemory(server: unknown) {
-  const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
-  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
-  const [ct, st] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "test", version: "1.0" });
-  await Promise.all([client.connect(ct), (server as any).connect(st)]);
+/**
+ * Connect a client to `server` over arc's shared loopback harness.
+ *
+ * Five suites each carried a private `InMemoryTransport.createLinkedPair()` copy
+ * of this. SDK v2 does not publish that transport, so all five now route through
+ * `connectMcpTestClient`. Unlike a linked pair each connection owns a listening
+ * socket — hence the teardown registry: without it vitest hangs at end-of-file
+ * with no failing assertion.
+ */
+const openMcpConnections: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  for (const close of openMcpConnections.splice(0)) await close();
+});
+
+async function connectMcpClient(server: unknown) {
+  const { client, close } = await connectMcpTestClient(server);
+  openMcpConnections.push(close);
   return client;
 }
 
@@ -255,7 +267,7 @@ describe("Guard integration with createMcpServer", () => {
       ],
     });
 
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     // No authRef → session is null → guard rejects
     const result = await client.callTool({ name: "admin_action", arguments: {} });
@@ -288,7 +300,7 @@ describe("Guard integration with createMcpServer", () => {
       authRef,
     );
 
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
     const result = await client.callTool({ name: "admin_action", arguments: {} });
 
     expect(result.isError).toBeFalsy();
@@ -316,7 +328,7 @@ describe("Guard integration with createMcpServer", () => {
       authRef,
     );
 
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     // Editor can publish
     const ok = await client.callTool({ name: "publish", arguments: { title: "My Post" } });

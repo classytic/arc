@@ -30,7 +30,7 @@ export function decorateRequestScope(fastify: FastifyInstance): void {
   // `null`. Reach the second-overload via the `as unknown as` cast — one
   // narrow, documented boundary instead of a non-null assertion at the
   // call site.
-  (fastify.decorateRequest as unknown as (name: string, value: unknown) => void)("scope", null);
+  (fastify.decorateRequest as (name: string, value: unknown) => void)("scope", null);
   fastify.addHook("onRequest", async (request) => {
     if (!request.scope) {
       request.scope = PUBLIC_SCOPE;

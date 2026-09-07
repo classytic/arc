@@ -410,7 +410,7 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
     // context) so multi-prefix mounts collapse to a single shared-state
     // registration. Routes register inside their own encapsulation pass
     // below — Fastify owns that isolation.
-    const sharedRoot = fastify.server as unknown as object;
+    const sharedRoot = fastify.server as object;
     const isFirstMount = !resource._sharedStateRegisteredOn.has(sharedRoot);
     if (isFirstMount) resource._sharedStateRegisteredOn.add(sharedRoot);
 
@@ -446,10 +446,7 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
     const arc = (fastify as FastifyWithDecorators).arc;
     if (isFirstMount && arc?.registry && resource._registryMeta) {
       try {
-        arc.registry.register(
-          resource as unknown as ResourceDefinition<AnyRecord>,
-          resource._registryMeta,
-        );
+        arc.registry.register(resource as ResourceDefinition<AnyRecord>, resource._registryMeta);
       } catch (err) {
         fastify.log?.warn?.(
           `Failed to register resource '${resource.name}' in registry: ${
@@ -579,7 +576,7 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
         // Pass routes as-is to createCrudRouter. String handler resolution
         // and `wrapHandler` derivation (from the presence of `rawHandler`) happen inside
         // createCrudRouter.
-        createCrudRouter(typedInstance, resource.controller as unknown as CrudController<TDoc>, {
+        createCrudRouter(typedInstance, resource.controller as CrudController<TDoc>, {
           tag: resource.tag,
           schemas: schemas ?? undefined,
           permissions: resource.permissions,
@@ -673,8 +670,7 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
           // `materialized` hook owns its own dispatch and doesn't need
           // either — handled inside `executeAggregation`.
           const repoForAgg =
-            (resource.controller as unknown as { repository?: unknown })?.repository ??
-            resource.repository;
+            (resource.controller as { repository?: unknown })?.repository ?? resource.repository;
           // Boot-time guard: any aggregation without `materialized` MUST
           // reach a repo that ships `aggregate()`. Loud failure at register
           // beats a 501 at first dashboard request in production.
@@ -708,7 +704,7 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
             type CtrlWithOptions = {
               tenantRepoOptions?: (req: unknown) => AnyRecord;
             };
-            const ctrl = resource.controller as unknown as CtrlWithOptions | undefined;
+            const ctrl = resource.controller as CtrlWithOptions | undefined;
             if (!ctrl?.tenantRepoOptions) return {};
             const ctx = createRequestContext(req as Parameters<typeof createRequestContext>[0]);
             return ctrl.tenantRepoOptions(ctx);

@@ -32,7 +32,7 @@ const introspectionPlugin: FastifyPluginAsync<IntrospectionPluginOptions> = asyn
       : [];
 
   // Instance-scoped registry access
-  const getRegistry = () => (fastify as unknown as FastifyWithDecorators).arc?.registry;
+  const getRegistry = () => (fastify as FastifyWithDecorators).arc?.registry;
 
   await fastify.register(
     async (instance) => {

@@ -46,7 +46,9 @@ optional-peer typing pattern. Values below are the real shapes shipped by
   },
 
   // Optional peers: declared here AND marked optional below. Host installs only if used.
-  // "peerDependencies": { ..., "zod": ">=3.23.0", "ioredis": ">=5.0.0" },
+  // The floor is the major YOUR suite runs — never one below it. A floor you never test
+  // is a compatibility claim, not a fact (arc shipped seven of those until 2.40).
+  // "peerDependencies": { ..., "zod": ">=4.4.0", "ioredis": ">=6.0.0" },
   // "peerDependenciesMeta": {
   //   "zod": { "optional": true },
   //   "ioredis": { "optional": true }

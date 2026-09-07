@@ -1,11 +1,13 @@
 /**
- * MCP Integration Tests — createMcpServer + InMemoryTransport
+ * MCP Integration Tests — createMcpServer over loopback HTTP
  *
  * Tests the full round-trip: create server → connect transport → call tools.
- * Uses MCP SDK's InMemoryTransport (no HTTP, no network).
+ * Connects through the shared loopback harness (`connectMcpTestClient`) — the real
+ * Streamable HTTP transport, since SDK v2 publishes no in-memory transport.
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { connectMcpTestClient } from "../../../src/integrations/mcp/testing.js";
 import { z } from "zod";
 import {
   createMcpServer,
@@ -14,23 +16,28 @@ import {
   resourceToTools,
 } from "../../../src/integrations/mcp/index.js";
 
-// Helper: connect server + client via InMemoryTransport
-async function connectInMemory(server: unknown) {
-  const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
-  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+// Helper: connect server + client over the shared loopback harness
+/**
+ * Connect a client to `server` over arc's shared loopback harness.
+ *
+ * Five suites each carried a private `InMemoryTransport.createLinkedPair()` copy
+ * of this. SDK v2 does not publish that transport, so all five now route through
+ * `connectMcpTestClient`. Unlike a linked pair each connection owns a listening
+ * socket — hence the teardown registry: without it vitest hangs at end-of-file
+ * with no failing assertion.
+ */
+const openMcpConnections: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  for (const close of openMcpConnections.splice(0)) await close();
+});
 
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "test-client", version: "1.0.0" });
-
-  await Promise.all([
-    client.connect(clientTransport),
-    (server as { connect: (t: unknown) => Promise<void> }).connect(serverTransport),
-  ]);
-
+async function connectMcpClient(server: unknown) {
+  const { client, close } = await connectMcpTestClient(server);
+  openMcpConnections.push(close);
   return client;
 }
 
-describe("createMcpServer — InMemoryTransport integration", () => {
+describe("createMcpServer — loopback transport integration", () => {
   it("initializes and lists tools", async () => {
     const server = await createMcpServer({
       name: "test",
@@ -43,7 +50,7 @@ describe("createMcpServer — InMemoryTransport integration", () => {
       ],
     });
 
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
     const { tools } = await client.listTools();
 
     expect(tools).toHaveLength(1);
@@ -65,7 +72,7 @@ describe("createMcpServer — InMemoryTransport integration", () => {
       ],
     });
 
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
     const result = await client.callTool({ name: "greet", arguments: { name: "Arc" } });
 
     expect(result.content).toHaveLength(1);
@@ -86,7 +93,7 @@ describe("createMcpServer — InMemoryTransport integration", () => {
       ],
     });
 
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
     const result = await client.callTool({ name: "set_status", arguments: { status: "active" } });
 
     expect((result.content[0] as { text: string }).text).toBe("Status: active");
@@ -106,7 +113,7 @@ describe("createMcpServer — InMemoryTransport integration", () => {
       ],
     });
 
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
     const result = await client.callTool({ name: "fail", arguments: {} });
 
     expect(result.isError).toBe(true);
@@ -133,7 +140,7 @@ describe("createMcpServer — InMemoryTransport integration", () => {
       ],
     });
 
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
     const { tools } = await client.listTools();
     expect(tools).toHaveLength(2);
 
@@ -158,7 +165,7 @@ describe("createMcpServer — InMemoryTransport integration", () => {
       ],
     });
 
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
     const { prompts } = await client.listPrompts();
 
     expect(prompts).toHaveLength(1);
@@ -179,7 +186,7 @@ describe("createMcpServer — InMemoryTransport integration", () => {
       ],
     });
 
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
     const result = await client.getPrompt({ name: "plan", arguments: { scope: "sprint" } });
 
     expect(result.messages).toHaveLength(1);
@@ -198,7 +205,7 @@ describe("createMcpServer — InMemoryTransport integration", () => {
       ],
     });
 
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
     const info = client.getServerVersion();
 
     expect(info?.name).toBe("test");
@@ -243,7 +250,7 @@ describe("resourceToTools → createMcpServer integration", () => {
   it("generates tools from resource and registers on server", async () => {
     const tools = resourceToTools(mockResource);
     const server = await createMcpServer({ name: "test", tools });
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     const { tools: listed } = await client.listTools();
     expect(listed.map((t: { name: string }) => t.name)).toEqual([
@@ -258,7 +265,7 @@ describe("resourceToTools → createMcpServer integration", () => {
   it("list tool returns data from controller", async () => {
     const tools = resourceToTools(mockResource);
     const server = await createMcpServer({ name: "test", tools });
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     const result = await client.callTool({ name: "list_items", arguments: {} });
     const text = (result.content[0] as { text: string }).text;
@@ -272,7 +279,7 @@ describe("resourceToTools → createMcpServer integration", () => {
   it("create tool passes input to controller", async () => {
     const tools = resourceToTools(mockResource);
     const server = await createMcpServer({ name: "test", tools });
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     const result = await client.callTool({
       name: "create_item",
@@ -289,7 +296,7 @@ describe("resourceToTools → createMcpServer integration", () => {
   it("tool input schemas have correct required fields", async () => {
     const tools = resourceToTools(mockResource);
     const server = await createMcpServer({ name: "test", tools });
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     const { tools: listed } = await client.listTools();
     const createTool = listed.find((t: { name: string }) => t.name === "create_item");
@@ -301,7 +308,7 @@ describe("resourceToTools → createMcpServer integration", () => {
   it("list tool input schema has filterable fields", async () => {
     const tools = resourceToTools(mockResource);
     const server = await createMcpServer({ name: "test", tools });
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     const { tools: listed } = await client.listTools();
     const listTool = listed.find((t: { name: string }) => t.name === "list_items");

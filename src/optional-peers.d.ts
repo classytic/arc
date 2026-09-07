@@ -6,24 +6,12 @@
  * Actual types come from the packages themselves when installed.
  */
 
-declare module "@modelcontextprotocol/sdk/server/mcp.js" {
-  export class McpServer {
-    constructor(info: { name: string; version: string }, options?: Record<string, unknown>);
-    tool(...args: unknown[]): void;
-    prompt(...args: unknown[]): void;
-    resource(...args: unknown[]): void;
-    connect(transport: unknown): Promise<void>;
-  }
-}
-
-declare module "@modelcontextprotocol/sdk/server/streamableHttp.js" {
-  export class StreamableHTTPServerTransport {
-    sessionId: string;
-    constructor(options?: Record<string, unknown>);
-    handleRequest(req: unknown, res: unknown, body?: unknown): Promise<void>;
-    close(): void;
-  }
-}
+/**
+ * No `@modelcontextprotocol/*` stubs here. v1 was declared ambiently because its
+ * subpaths (`.../server/mcp.js`) resolved to hand-written `unknown`-typed shims;
+ * the v2 packages are real devDependencies that ship their own types, so a stub
+ * would only shadow a checked signature with an unchecked one.
+ */
 
 declare module "bullmq" {
   export class Queue {

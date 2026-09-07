@@ -213,7 +213,7 @@ ${typeImport}import User from './user.model.js';
 ${ts ? "type ID = string | Types.ObjectId;\n" : ""}
 class UserRepository extends Repository${ts ? "<UserDocument>" : ""} {
   constructor() {
-    super(User${ts ? " as unknown as never" : ""}, [
+    super(User${ts ? " as never" : ""}, [
       methodRegistryPlugin(),
       mongoOperationsPlugin(),
     ]);
@@ -306,7 +306,7 @@ import userRepository from './user.repository.js';
 
 class UserController extends BaseController {
   constructor() {
-    super(userRepository${ts ? " as unknown as never" : ""});
+    super(userRepository${ts ? " as never" : ""});
   }
 
   // Custom user operations can be added here

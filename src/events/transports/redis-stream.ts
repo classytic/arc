@@ -339,7 +339,7 @@ export class RedisStreamTransport implements EventTransport {
     // overloaded to dozens of positional shapes; route through a single
     // narrowed call signature instead of leaking `any` to the caller.
     type XaddCallable = (...args: (string | number)[]) => Promise<string | null>;
-    await (this.redis as unknown as { xadd: XaddCallable }).xadd(...args);
+    await (this.redis as { xadd: XaddCallable }).xadd(...args);
   }
 
   // -----------------------------------------------------------------------
@@ -442,7 +442,7 @@ export class RedisStreamTransport implements EventTransport {
     //
     // `externalLifecycle: true` skips `quit()` — host owns the client and
     // expects to keep it alive across transport teardown.
-    if (this.pollPromise) {
+    if (this.pollPromise !== null) {
       const drained = await Promise.race([
         this.pollPromise.then(() => "drained" as const),
         this.sleep(this.closeTimeoutMs).then(() => "timeout" as const),
@@ -771,7 +771,7 @@ export class RedisStreamTransport implements EventTransport {
           continue;
         }
 
-        await (this.redis as unknown as RedisStreamLike).xadd(
+        await (this.redis as RedisStreamLike).xadd(
           this.deadLetterStream,
           "*",
           "type",

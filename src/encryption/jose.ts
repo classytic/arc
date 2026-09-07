@@ -36,7 +36,7 @@ let josePromise: Promise<JoseModule> | undefined;
 async function loadJose(): Promise<JoseModule> {
   if (!josePromise) {
     josePromise = import("jose").then(
-      (m) => m as unknown as JoseModule,
+      (m) => m as JoseModule,
       (cause) => {
         josePromise = undefined; // allow retry after the host installs it
         throw new Error(

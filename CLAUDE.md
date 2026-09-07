@@ -129,8 +129,9 @@ Arc's boot order is **fixed** (do not reorder; do not skip slots):
 | @classytic/primitives | >=0.26.4 | **Yes** |
 | @classytic/repo-core | >=0.26.0 | **Yes** |
 | better-auth | >=1.7.0 | No |
-| ioredis | >=5.0.0 | No |
-| bullmq | >=5.0.0 | No |
+| ioredis | >=6.0.0 | No |
+| bullmq | >=6.0.0 | No |
+| @modelcontextprotocol/server · /node · /client | >=2.0.0 | No |
 
 **Removed in arc 2.12:** `@classytic/mongokit`, `@classytic/sqlitekit`, `mongoose`, `@prisma/client`. Every kit-specific adapter — Mongoose, Drizzle, AND Prisma — ships from its kit (`@classytic/mongokit/adapter@>=3.13.0`, `@classytic/sqlitekit/adapter@>=0.3.0`, `@classytic/prismakit/adapter@>=0.1.0`); hosts depend on the kit directly. The kit owns the driver peer. Custom kits implementing `DataAdapter<TDoc>` from `@classytic/repo-core/adapter` plug in identically.
 

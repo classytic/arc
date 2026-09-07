@@ -16,9 +16,7 @@ import type { AnyRecord, IControllerResponse, IRequestContext } from "../../type
 import { createError } from "../../utils/errors.js";
 import { withRepoFeatures } from "../../utils/repoFeature.js";
 import type { BaseCrudController } from "../BaseCrudController.js";
-
-// biome-ignore lint/suspicious/noExplicitAny: standard TS mixin Constructor pattern
-type Constructor<T> = new (...args: any[]) => T;
+import type { MixinConstructor } from "../controllerTypes.js";
 
 /** Public surface contributed by TreeMixin. */
 export interface TreeExt {
@@ -26,9 +24,9 @@ export interface TreeExt {
   getChildren(req: IRequestContext): Promise<IControllerResponse<AnyRecord[]>>;
 }
 
-export function TreeMixin<TBase extends Constructor<BaseCrudController>>(
+export function TreeMixin<TBase extends MixinConstructor<BaseCrudController>>(
   Base: TBase,
-): TBase & Constructor<TreeExt> {
+): TBase & MixinConstructor<TreeExt> {
   return class TreeController extends Base {
     async getTree(req: IRequestContext): Promise<IControllerResponse<AnyRecord[]>> {
       const repo = withRepoFeatures<{

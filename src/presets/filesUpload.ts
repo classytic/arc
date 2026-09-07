@@ -149,7 +149,7 @@ function buildStorageContext(
   request: FastifyRequest,
   contextFrom: (scope: RequestScope | undefined) => Record<string, unknown>,
 ): StorageContext {
-  const scope = (request as unknown as { scope?: RequestScope }).scope;
+  const scope = (request as { scope?: RequestScope }).scope;
   return {
     scope: contextFrom(scope),
     requestId: request.id,

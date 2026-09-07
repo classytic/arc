@@ -178,8 +178,7 @@ export async function bootModuleApp<TConn = unknown>(
   // Default: Mongo (arc's historical testing default). The cast is the one
   // documented boundary — the default factory's connection is mongoose's
   // default connection; DB-typed wrappers pin TConn themselves.
-  const provision =
-    options.database ?? (mongoMemoryDatabase as unknown as TestDatabaseFactory<TConn>);
+  const provision = options.database ?? (mongoMemoryDatabase as TestDatabaseFactory<TConn>);
   const db = await provision({ replset: options.replset ?? false });
 
   const ctx: TestkitContext<TConn> = {

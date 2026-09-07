@@ -15,10 +15,12 @@
 | @classytic/repo-core | >=0.26.0 | **Yes** | `RepositoryLike`, adapter contract (`/adapter`), canonical pagination / tenant / errors / schema-generator contracts; **0.17 floor**: `/cleanup` step contract (`CleanupStep`); **0.23 floor**: `asReadOnlyRepo` / `RepoCapabilities.readOnly` (the write-route gate) and `TransactionHandle` re-exported from `/repository` (arc imports it rather than restating it); **0.24 floor**: `disposition` on `CleanupStep` / `CleanupStepEstimate` — the cleanup module reads it to keep protected records out of the removal headline and to refuse excluding a guard. Absent from published 0.23.0, so a clean install fails `typecheck` (the class `check:peer-skew` cannot catch: it proves the devDep covers the floor, not that source stays within it). |
 | @classytic/streamline | >=2.8.0 | No | Streamline integration |
 | better-auth | >=1.7.0 | No | Better Auth integration — `listUserTeams` gained the `organizationId` query param in 1.7.0 |
-| ioredis | >=5.0.0 | No | Redis events, cache, sessions |
-| bullmq | >=5.0.0 | No | Job queue |
+| ioredis | >=6.0.0 | No | Redis events, cache, sessions |
+| bullmq | >=6.0.0 | No | Job queue |
+| `@modelcontextprotocol/server` + `/node` | >=2.0.0 | No | `@classytic/arc/mcp`. **SDK v2 split the single `@modelcontextprotocol/sdk` package into per-role packages and never published a 2.x of the old name** — `sdk` stops at 1.30.0, so a floor on it could never express "v2". arc dropped v1 in 2.40 with no compat shim. |
+| `@modelcontextprotocol/client` | >=2.0.0 | No | `@classytic/arc/mcp/testing` only. The harness drives a real Streamable HTTP client over loopback because v2 ships `InMemoryTransport` solely in the unpublished, `private: true` `core-internal` and exports no `Transport` interface to implement one against. |
 | @opentelemetry/* | various | No | Tracing plugin |
-| @fastify/static | >=8.0.0 | No | `assets` roots — arc supplies header policy (per-prefix CORP, cache preset, disposition) and delegates ranges / ETag / immutable / pre-compressed variants to the plugin |
+| @fastify/static | >=10.0.0 | No | `assets` roots — arc supplies header policy (per-prefix CORP, cache preset, disposition) and delegates ranges / ETag / immutable / pre-compressed variants to the plugin |
 | zod | >=4.4.0 | No | Zod→JSON Schema conversion (`z.toJSONSchema()`) for route validation, OpenAPI + MCP. **4.4 floor**: arc's own code runs on 4.0, but 4.4 carries three fixes arc's output depends on — a stack overflow on recursive `.lazy()` + `.describe()` (#5797), min/max intersections on the `openapi-3.0` target arc emits (#5700), and object/tuple optionality alignment (#5661) that the input/output split relies on |
 
 **Kit-specific adapters live on the kit side.** Hosts depend on whichever kit they use (`@classytic/mongokit@>=3.21.0` for Mongoose — 3.21 defaults the adapter's `schemaGenerator`, `@classytic/sqlitekit@>=0.7.0` for Drizzle, `@classytic/prismakit` for Prisma) and import from the kit's `/adapter` subpath. The kit owns the driver peer dep, not arc. Arc has zero kit- or driver-bound peers.

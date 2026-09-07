@@ -831,7 +831,7 @@ output_mode: content
 
 Also: adapter contract types imported from arc — `import type { DataAdapter, AdapterRepositoryInput, AdapterFactory, OpenApiSchemas, SchemaMetadata, FieldMetadata, RelationMetadata, AdapterValidationResult, AdapterSchemaContext } from '@classytic/arc'` (any subpath). And: `mergeFieldRuleConstraints` from `@classytic/arc/adapters`. Any `from '@classytic/arc/adapters'` import — the entire subpath was removed in arc 2.12.
 
-**Why critical:** This only worked in arc ≤ 2.x. Arc 2.12 moved every kit-specific adapter (Mongoose, Drizzle, Prisma) into its kit and the cross-framework adapter contract into `@classytic/repo-core/adapter`. The `@classytic/arc/adapters` subpath was removed entirely. Importing these names from arc fails to resolve on 3.x — the build breaks at install time. The new shape is **strict**: kit-specific things MUST come from the kit; the contract MUST come from repo-core.
+**Why critical:** `@classytic/arc/adapters` does not exist. Kit-specific adapters (Mongoose, Drizzle, Prisma) live in their kit; the cross-framework contract lives in `@classytic/repo-core/adapter`. Importing these names from arc fails to resolve — the build breaks at install time. The rule is **strict**: kit-specific things come from the kit, the contract comes from repo-core.
 
 **Fix:**
 ```typescript

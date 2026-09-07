@@ -54,7 +54,7 @@ export function buildArcDecorator(meta: ArcRouteMeta): RouteHandlerMethod {
     ),
   });
   return async (req, _reply) => {
-    (req as unknown as { arc?: ArcRouteMeta }).arc = frozen;
+    (req as { arc?: ArcRouteMeta }).arc = frozen;
     const store = requestContext.get();
     if (store) {
       store.resourceName = frozen.resourceName;

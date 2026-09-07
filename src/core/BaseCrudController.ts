@@ -598,24 +598,21 @@ export class BaseCrudController<
     fn: (repo: TRepository, uow?: TransactionHandle) => Promise<T>,
   ): Promise<T> {
     if (!this._transactional) return fn(this.repository);
-    return retryingTransaction(
-      this.repository as unknown as StandardRepo<AnyRecord>,
-      (txRepo, uow) => {
-        const run = () => fn(txRepo as unknown as TRepository, uow);
-        // Publish the session on the AMBIENT context so writers that are not
-        // the repository join this transaction: the audit store and the outbox
-        // both default their `sessionProvider` to `transactionContext.get()`.
-        // Without this the default resolved to `undefined` on every request —
-        // arc never entered the scope anywhere — so an audit row documented as
-        // committing "atomically with the domain write" was in fact written
-        // outside the transaction and survived a rollback.
-        //
-        // Only when a session EXISTS: connection-bound kits (SQLite) pass an
-        // empty handle, and entering with `undefined` there would mask an
-        // enclosing scope rather than represent this one.
-        return uow?.session === undefined ? run() : transactionContext.run(uow.session, run);
-      },
-    );
+    return retryingTransaction(this.repository as StandardRepo<AnyRecord>, (txRepo, uow) => {
+      const run = () => fn(txRepo as TRepository, uow);
+      // Publish the session on the AMBIENT context so writers that are not
+      // the repository join this transaction: the audit store and the outbox
+      // both default their `sessionProvider` to `transactionContext.get()`.
+      // Without this the default resolved to `undefined` on every request —
+      // arc never entered the scope anywhere — so an audit row documented as
+      // committing "atomically with the domain write" was in fact written
+      // outside the transaction and survived a rollback.
+      //
+      // Only when a session EXISTS: connection-bound kits (SQLite) pass an
+      // empty handle, and entering with `undefined` there would mask an
+      // enclosing scope rather than represent this one.
+      return uow?.session === undefined ? run() : transactionContext.run(uow.session, run);
+    });
   }
 
   /** Assemble the `WriteContext` a `create` verb receives. */
@@ -824,7 +821,7 @@ export class BaseCrudController<
     // `STANDARD_RESERVED_PARAMS` (kits skip them at filter parse time
     // so `?_count=true&status=active` filters by status).
     const dispatch = this.dispatchResourceVerb(req);
-    if (dispatch) {
+    if (dispatch !== null) {
       return dispatch as Promise<IControllerResponse<ListResult<TDoc>>>;
     }
 
@@ -975,7 +972,7 @@ export class BaseCrudController<
     if (!doc) this.throwNotFound(reason);
     // Only for a doc that EXISTS: a 404 path has nothing to hand a handler,
     // and firing with null would make every after-read hook null-guard first.
-    await this.runAfterHook(req, "read", doc as unknown as AnyRecord);
+    await this.runAfterHook(req, "read", doc as AnyRecord);
 
     return { data: doc, status: 200 };
   }
@@ -995,7 +992,7 @@ export class BaseCrudController<
         // fetchDetailed reads only the QueryOptions subset (select/populate/lean);
         // the resolved options are a superset. `user` differs (unknown vs Record)
         // but is unused on this path.
-        options as unknown as QueryOptions,
+        options as QueryOptions,
       );
       return result;
     };

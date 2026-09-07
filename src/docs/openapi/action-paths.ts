@@ -112,7 +112,7 @@ function emitMount(
       // RegistryEntry action items aren't full `ActionEntry` values
       // (they lack `handler`), but the resolver only reads `.permissions`
       // on the non-function branch — which matches the shape we have here.
-      action: { permissions: a.permissions } as unknown as ActionEntry,
+      action: { permissions: a.permissions } as ActionEntry,
       resourcePermissions: resource.permissions,
       resourceActionPermissions: resource.actionPermissions,
     });

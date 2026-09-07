@@ -27,7 +27,7 @@ export function registerSchemaResources(
   const srv = server as McpServerInstance;
 
   // ── arc://schemas — all resources overview ──
-  srv.resource(
+  srv.registerResource(
     "schemas",
     "arc://schemas",
     {
@@ -63,7 +63,7 @@ export function registerSchemaResources(
     const uri = `arc://schemas/${r.name}`;
     const schemaOpts = r.schemaOptions as Record<string, unknown> | undefined;
 
-    srv.resource(
+    srv.registerResource(
       `schema-${r.name}`,
       uri,
       {

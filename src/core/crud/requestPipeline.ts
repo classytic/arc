@@ -270,7 +270,7 @@ export function buildNotFoundError(
   const code = reason ?? "NOT_FOUND";
   const resource = resourceName ?? "Resource";
   const err = new NotFoundError(resource);
-  (err as unknown as { details: Record<string, unknown> }).details = {
+  (err as { details: Record<string, unknown> }).details = {
     ...(err.details ?? {}),
     code,
   };

@@ -138,7 +138,7 @@ export class RedisCacheStore<TValue = unknown> implements CacheStore<TValue> {
     }
     const current = await this.get(key);
     const next = (typeof current === "number" ? current : 0) + by;
-    await this.set(key, next as unknown as TValue, ttlSeconds ?? this.defaultTtlSeconds);
+    await this.set(key, next as TValue, ttlSeconds ?? this.defaultTtlSeconds);
     return next;
   }
 

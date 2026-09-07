@@ -155,9 +155,8 @@ const elevationPlugin: FastifyPluginAsync<ElevationOptions> = async (
       timestamp: new Date(),
     };
 
-    const publish = (
-      fastify as unknown as { events?: { publish?: (t: string, p: unknown) => Promise<void> } }
-    ).events?.publish;
+    const publish = (fastify as { events?: { publish?: (t: string, p: unknown) => Promise<void> } })
+      .events?.publish;
     if (publish) {
       try {
         await publish("arc.scope.elevated", {

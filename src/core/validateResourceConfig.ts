@@ -208,7 +208,7 @@ export function validateResourceConfig(
   // ========================================
 
   if (config.controller && !options.skipControllerCheck && !config.disableDefaultRoutes) {
-    const ctrl = config.controller as unknown as Record<string, unknown>;
+    const ctrl = config.controller as Record<string, unknown>;
 
     // Check for IController methods (MongoKit-compatible standard)
     const requiredMethods = CRUD_OPERATIONS;

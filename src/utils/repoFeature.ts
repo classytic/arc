@@ -11,7 +11,7 @@
  * Every mixin used to spell out its own narrowing cast inline:
  *
  * ```ts
- * const repo = this.repository as unknown as {
+ * const repo = this.repository as {
  *   getTree?: (options?: unknown) => Promise<AnyRecord[]>;
  * };
  * ```

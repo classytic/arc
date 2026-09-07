@@ -2,7 +2,22 @@
  * @classytic/arc/mcp/testing — MCP Test Utilities
  *
  * Helpers for testing MCP tool integration without raw JSON-RPC parsing.
- * Uses the MCP SDK's InMemoryTransport for fast, in-process testing.
+ *
+ * Runs the real Streamable HTTP transport over an ephemeral loopback port
+ * (`127.0.0.1:0`) rather than an in-process shortcut. Two reasons, one forced
+ * and one preferred:
+ *
+ *  - **Forced**: SDK v2 ships `InMemoryTransport` only in
+ *    `@modelcontextprotocol/core-internal`, which is `private: true` and not
+ *    published, and it exports no `Transport` interface — so there is no
+ *    supported way to link a client and server in-process, and no contract to
+ *    implement one against. The SDK's own guidance is to point a
+ *    `StreamableHTTPClientTransport` at a local server.
+ *  - **Preferred**: this exercises the transport arc actually ships in
+ *    `mcpPlugin`, instead of a path no production request takes.
+ *
+ * The cost is a listening socket per harness instead of a linked pair. Always
+ * `await close()` — it shuts the client and the HTTP server down together.
  *
  * @example
  * ```typescript
@@ -19,10 +34,89 @@
  * ```
  */
 
+import type { Client } from "@modelcontextprotocol/client";
 import { createMcpServer, type McpServerInstance } from "./createMcpServer.js";
 import { filterResourcesForMcp } from "./mcpPlugin.js";
 import { resourceToTools } from "./resourceToTools.js";
 import type { McpAuthResult, McpPluginOptions, ToolDefinition } from "./types.js";
+
+// ============================================================================
+// Loopback connection — the ONE place a test client is wired to a server
+// ============================================================================
+
+/** An MCP client bound to a live loopback server, plus its teardown. */
+export interface ConnectedMcpTestClient {
+  /** The connected SDK client — full `listTools` / `callTool` / `listPrompts` surface. */
+  client: Client;
+  /** Closes the client and the HTTP server. Always await it. */
+  close: () => Promise<void>;
+}
+
+/**
+ * Serve an already-built `McpServer` on an ephemeral loopback port and connect
+ * a client to it.
+ *
+ * Split out from {@link createTestMcpClient} because arc's own MCP suites build
+ * a server directly and only need the connection — five of them had each grown a
+ * private copy of the same connect helper against the v1 in-memory transport.
+ * One implementation, two entry points: this for a server you built, that for
+ * one built from resources.
+ */
+export async function connectMcpTestClient(
+  server: McpServerInstance | unknown,
+): Promise<ConnectedMcpTestClient> {
+  const { randomUUID } = await import("node:crypto");
+  const { createServer } = await import("node:http");
+  const { NodeStreamableHTTPServerTransport } = await import("@modelcontextprotocol/node");
+  const { Client, StreamableHTTPClientTransport } = await import("@modelcontextprotocol/client");
+
+  // Stateful (`sessionIdGenerator` set), matching `mcpPlugin`: the client picks
+  // the assigned id up from `mcp-session-id` itself, so no session plumbing here.
+  // `handleRequest`'s third argument is the PRE-PARSED body — omitted on purpose
+  // so the transport reads the raw stream, which is what bare `node:http` gives.
+  const serverTransport = new NodeStreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+  });
+  await (server as McpServerInstance).connect(serverTransport);
+
+  const httpServer = createServer((req, res) => {
+    void serverTransport.handleRequest(req, res);
+  });
+  // Port 0 = kernel-assigned, so parallel test files never collide. Bound to
+  // 127.0.0.1, never 0.0.0.0 — a test harness must not be reachable off-box.
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once("error", reject);
+    httpServer.listen(0, "127.0.0.1", resolve);
+  });
+  const address = httpServer.address();
+  if (address === null || typeof address === "string") {
+    httpServer.close();
+    throw new Error("[arc] MCP test harness: HTTP server did not bind a TCP port");
+  }
+
+  const client = new Client({ name: "test-client", version: "1.0" });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${address.port}/`)),
+  );
+
+  return {
+    client,
+    /**
+     * Client first, THEN the socket. Reversed, the client's in-flight request
+     * hangs on a dead server until its own timeout — which reads as a slow test
+     * rather than a teardown bug. `httpServer.close()` only stops NEW
+     * connections, so keep-alive sockets are destroyed explicitly; without that
+     * vitest hangs at end-of-file with no failing assertion.
+     */
+    async close() {
+      await client.close();
+      httpServer.closeAllConnections?.();
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((err) => (err ? reject(err) : resolve()));
+      });
+    },
+  };
+}
 
 // ============================================================================
 // Types
@@ -88,9 +182,6 @@ export interface TestMcpClient {
 export async function createTestMcpClient(
   options: TestMcpClientOptions = {},
 ): Promise<TestMcpClient> {
-  const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
-  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
-
   const pluginOpts: NonNullable<TestMcpClientOptions["pluginOptions"]> = {
     resources: [],
     ...options.pluginOptions,
@@ -134,13 +225,7 @@ export async function createTestMcpClient(
     authRef,
   );
 
-  // Connect via InMemoryTransport
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "test-client", version: "1.0" });
-  await Promise.all([
-    client.connect(clientTransport),
-    (server as McpServerInstance).connect(serverTransport),
-  ]);
+  const { client, close } = await connectMcpTestClient(server);
 
   return {
     async listTools() {
@@ -156,8 +241,6 @@ export async function createTestMcpClient(
       return result as { content: Array<{ type: string; text: string }>; isError?: boolean };
     },
 
-    async close() {
-      await client.close();
-    },
+    close,
   };
 }

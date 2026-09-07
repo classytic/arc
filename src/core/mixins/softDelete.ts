@@ -22,9 +22,7 @@ import type {
 import { createError, ForbiddenError, isArcError, NotFoundError } from "../../utils/errors.js";
 import { withRepoFeatures } from "../../utils/repoFeature.js";
 import type { BaseCrudController } from "../BaseCrudController.js";
-
-// biome-ignore lint/suspicious/noExplicitAny: standard TS mixin Constructor pattern
-type Constructor<T> = new (...args: any[]) => T;
+import type { MixinConstructor } from "../controllerTypes.js";
 
 /** Public surface contributed by SoftDeleteMixin. */
 export interface SoftDeleteExt {
@@ -32,9 +30,9 @@ export interface SoftDeleteExt {
   restore(req: IRequestContext): Promise<IControllerResponse<AnyRecord>>;
 }
 
-export function SoftDeleteMixin<TBase extends Constructor<BaseCrudController>>(
+export function SoftDeleteMixin<TBase extends MixinConstructor<BaseCrudController>>(
   Base: TBase,
-): TBase & Constructor<SoftDeleteExt> {
+): TBase & MixinConstructor<SoftDeleteExt> {
   return class SoftDeleteController extends Base {
     async getDeleted(
       req: IRequestContext,

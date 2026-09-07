@@ -347,33 +347,6 @@ If consumers see `as unknown as RepositoryLike<T>` casts when wiring a repo into
 
 In the client project, prefer `createMongooseAdapter({ model, repository })` from `@classytic/mongokit/adapter` over manual `RepositoryLike` shaping — it accepts mongokit-native repos with no casts, and since mongokit 3.21 `schemaGenerator` defaults to `buildCrudSchemasFromModel` (`schemaGenerator: false` opts out — see anti-patterns §32f before recommending that).
 
-## arc 2.12 / mongokit 3.13.0 — adapter split
-
-Through mongokit 3.12 / arc 2.11, `createMongooseAdapter` shipped from `@classytic/arc`. In mongokit 3.13.0 + arc 2.12, the adapter lives in mongokit at `@classytic/mongokit/adapter`. Coordinated minimums:
-
-| Package | Min |
-|---|---|
-| `@classytic/arc` | 2.12.0 |
-| `@classytic/mongokit` | 3.13.0 |
-| `@classytic/repo-core` | 0.4.0 |
-
-Migration shape:
-
-```typescript
-// arc 2.x
-import { createMongooseAdapter } from '@classytic/arc';
-import type { DataAdapter, RepositoryLike, AdapterRepositoryInput } from '@classytic/arc';
-import type { InferMongooseDoc, MongooseAdapterOptions } from '@classytic/arc/adapters';
-
-// arc 2.12+
-import { createMongooseAdapter } from '@classytic/mongokit/adapter';
-import type { DataAdapter, RepositoryLike, AdapterRepositoryInput } from '@classytic/repo-core/adapter';
-import type { InferMongooseDoc, MongooseAdapterOptions } from '@classytic/mongokit/adapter';
-```
-
-The kit owns mongoose as its peer dep; arc dropped both `@classytic/mongokit` and `mongoose` from its `peerDependencies`. Hosts depend on `@classytic/mongokit` directly, which transitively pulls mongoose. Detection regex for stragglers: see `references/anti-patterns.md` §32g.
-
----
 
 ## What mongokit does NOT do
 

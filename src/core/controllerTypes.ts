@@ -104,6 +104,19 @@ export type ArcControllerLike = {
 };
 
 /**
+ * Constructor constraint for the four preset mixins (`BulkMixin`, `SlugMixin`,
+ * `SoftDeleteMixin`, `TreeMixin`).
+ *
+ * This is the ONE place `any[]` is unavoidable: TypeScript requires a mixin's
+ * base-class constraint to be `new (...args: any[]) => T` — `unknown[]` and
+ * `never[]` are both rejected with "A mixin class must have a constructor with
+ * a single rest parameter of type 'any[]'". Each mixin used to carry its own
+ * copy of this line and its own lint waiver; one definition, one waiver.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: mandated by TS for mixin base constraints (see above)
+export type MixinConstructor<T> = new (...args: any[]) => T;
+
+/**
  * Return type of the controller's `list` method.
  *
  * @example

@@ -543,4 +543,4 @@ export const responseCachePlugin: FastifyPluginAsync<ResponseCacheOptions> = fp(
     name: "arc-response-cache",
     fastify: "5.x",
   },
-) as unknown as FastifyPluginAsync<ResponseCacheOptions>;
+) as FastifyPluginAsync<ResponseCacheOptions>;

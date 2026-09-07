@@ -133,6 +133,26 @@ await app.register(mcpPlugin, { resources: catalogResources, prefix: '/mcp/catal
 await app.register(mcpPlugin, { resources: orderResources, prefix: '/mcp/orders' });
 ```
 
+## DNS-rebinding protection (`Host` / `Origin`)
+
+An MCP endpoint on loopback is reachable from any page the developer visits: if
+an attacker-controlled DNS name resolves to `127.0.0.1`, the browser treats the
+reply as same-origin and can read every tool's output. Validating `Host` breaks
+the chain.
+
+`dnsRebindingProtection` **defaults on when `auth: false`** (the local shape the
+attack targets) and **off when auth is configured** (a real deployment's `Host`
+is its own domain — defaulting on would 403 it; credentials are the gate there).
+
+```typescript
+mcpPlugin({ resources, auth, dnsRebindingProtection: {} });                        // localhost + auth
+mcpPlugin({ resources, dnsRebindingProtection: { allowedHosts: ['mcp.example.com'] } });
+mcpPlugin({ resources, auth: false, dnsRebindingProtection: false });              // deliberately public
+```
+
+An absent `Origin` passes — non-browser MCP clients send none. A present but
+unlisted one is refused. `${prefix}/health` is exempt so probes keep working.
+
 ## Auth — Three Modes
 
 Arc doesn't enforce an auth strategy. You choose what fits.

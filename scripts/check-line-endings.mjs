@@ -55,6 +55,18 @@ function check(file) {
     return;
   }
   scanned++;
+  // Control bytes other than tab / LF / CR — a NUL or a backspace in source. Found
+  // for real in src/usage/requireQuota.ts (2026-09-07): a literal 0x00 inside a
+  // template string, meant as a separator. It ran, but grep classified the file
+  // as BINARY and skipped it, and an editor would strip the byte on save.
+  // Never auto-fixed: the right escape depends on intent (\u0000 there).
+  const ctl = /[\x00-\x08\x0B\x0C\x0E-\x1F]/.exec(text);
+  if (ctl) {
+    const line = text.slice(0, ctl.index).split("\n").length;
+    const code = ctl[0].charCodeAt(0).toString(16).padStart(2, "0");
+    offenders.push(`${rel}:${line} — control byte 0x${code} (write it as an escape)`);
+    return;
+  }
   if (!text.includes("\r\n")) return;
   if (FIX) {
     writeFileSync(file, text.replace(/\r\n/g, "\n"), "utf8");

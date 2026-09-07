@@ -108,7 +108,7 @@ function buildHookContext(ctx: AnyRecord): {
   return {
     data: (ctx.data ?? ctx.result ?? {}) as AnyRecord,
     user: ctx.user as UserBase | undefined,
-    context: context as unknown as AnyRecord | undefined,
+    context: context as AnyRecord | undefined,
     scope: ctx.scope as ReturnType<typeof buildRequestScopeProjection>,
     meta: ctx.meta as AnyRecord | undefined,
   };

@@ -67,6 +67,18 @@ import { registerResources } from "./registerResources.js";
 import { registerSecurityPlugins, registerUtilityPlugins } from "./registerSecurity.js";
 import type { CreateAppOptions } from "./types/index.js";
 
+/**
+ * The fail-loud switches, and what each one costs while OFF.
+ *
+ * Every one is a SPECIFIC instruction defeated by a GENERAL default, which is
+ * why they are reported together rather than one at a time.
+ */
+const STRICT_ENV_FLAGS: ReadonlyArray<readonly [string, string]> = [
+  ["ARC_STRICT_PERMISSIONS", "An ungated write route warns instead of failing boot."],
+  ["ARC_STRICT_QUERY_PARAMS", "An unknown filter key is DROPPED, which WIDENS the read."],
+  ["ARC_STRICT_IMMUTABLE_WRITES", "A PATCH of an immutable field returns 200, unchanged."],
+];
+
 // ── Constants ──
 
 const MEMORY_STORE_NAMES = new Set(["memory", "memory-cache"]);
@@ -531,6 +543,31 @@ async function buildApp(
         "explicitly: a hop count (trustProxy: 1), a CIDR allow-list ('10.0.0.0/8'), " +
         "a resolver function, or false if clients truly connect directly.",
     );
+  }
+
+  /**
+   * `preset: 'production'` REPORTS the fail-loud switches it cannot set.
+   *
+   * All three are read where the object is CONSTRUCTED — `defineResource` at
+   * define time, `QueryParser` and `BodySanitizer` in their constructors — and a
+   * host imports its resources before it calls `createApp`. So setting
+   * `process.env` here would be too late for everything already built: wired to
+   * read, doing nothing. Reporting cannot fail that way.
+   *
+   * Set them in the process entrypoint, BEFORE the first resource import, with
+   * `??=` so an operator's explicit `false` still wins.
+   */
+  if (config.preset === "production") {
+    const off = STRICT_ENV_FLAGS.filter(([name]) => process.env[name] !== "true");
+    if (off.length > 0) {
+      fastify.log.warn(
+        `[arc] preset: 'production' with fail-loud OFF: ${off.map(([n]) => n).join(", ")}. ` +
+          `${off.map(([, what]) => what).join(" ")} ` +
+          "Set them in the entrypoint BEFORE any resource import — they are read when " +
+          "resources, parsers and sanitizers are CONSTRUCTED, so setting them later is " +
+          "silently too late. Per-resource options still override.",
+      );
+    }
   }
 
   // NOTE: arc deliberately does NOT swap Fastify's validator compiler for

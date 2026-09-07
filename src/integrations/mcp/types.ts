@@ -288,6 +288,53 @@ export interface McpPluginOptions {
    * - `McpAuthResolver` — custom function that resolves identity from headers
    */
   auth?: BetterAuthHandler | McpAuthResolver | false;
+  /**
+   * DNS-rebinding protection for the MCP routes — `Host` / `Origin` validation.
+   *
+   * The attack this closes: a page the developer visits can POST to
+   * `127.0.0.1:<port>`. If a DNS name the attacker controls resolves to
+   * loopback, the browser treats the response as same-origin and the page can
+   * READ it — every registered tool, from any website. Validating that `Host`
+   * names a host you expect is what breaks it, which is why the MCP SDK ships
+   * this as a default for localhost servers.
+   *
+   * **Default: on when `auth: false`, off otherwise.** Not a guess — it follows
+   * the threat:
+   * - `auth: false` is the local/dev shape the attack targets, and nothing else
+   *   is standing in the way. Defaults to the SDK's localhost set
+   *   (`localhost`, `127.0.0.1`, `[::1]`).
+   * - With auth configured, the endpoint is normally a real domain whose `Host`
+   *   is not localhost — defaulting protection ON would 403 every production
+   *   deployment. There, credentials are the gate.
+   *
+   * Set explicitly whenever the default's assumption is wrong for you: a
+   * localhost server that DOES use auth, or a deliberately-public `auth: false`
+   * endpoint that must keep answering (`false` to disable).
+   *
+   * Validation itself is `@modelcontextprotocol/server`'s `validateHostHeader` /
+   * `validateOriginHeader` — arc does not reimplement the matching rules.
+   * Hostnames only, no scheme or port; IPv6 in brackets (`[::1]`). A request
+   * with no `Origin` header passes (non-browser MCP clients send none); a
+   * present-but-unlisted `Origin` is rejected.
+   *
+   * @example
+   * ```ts
+   * // localhost server that uses auth — opt in explicitly
+   * mcpPlugin({ resources, auth, dnsRebindingProtection: {} });
+   * // reachable under a known public name
+   * mcpPlugin({ resources, dnsRebindingProtection: { allowedHosts: ['mcp.example.com'] } });
+   * // deliberately public, no Host constraint
+   * mcpPlugin({ resources, auth: false, dnsRebindingProtection: false });
+   * ```
+   */
+  dnsRebindingProtection?:
+    | false
+    | {
+        /** Allowed `Host` hostnames. Default: `localhost`, `127.0.0.1`, `[::1]`. */
+        allowedHosts?: string[];
+        /** Allowed `Origin` hostnames. Default: same localhost set. */
+        allowedOrigins?: string[];
+      };
   /** MCP endpoint path (default: '/mcp') */
   prefix?: string;
   /** Server identity */

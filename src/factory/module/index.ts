@@ -137,7 +137,7 @@ function readModuleExports(fastify: FastifyInstance, name: string): unknown {
  * spelling that question as
  *
  * ```ts
- * (fastify as unknown as { arc?: { modules?: Record<string, unknown> } })
+ * (fastify as { arc?: { modules?: Record<string, unknown> } })
  *   .arc?.modules?.inventory;
  * ```
  *

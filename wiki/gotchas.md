@@ -39,6 +39,7 @@
 16. **MCP tools regenerate from resource config.** Changing field rules / permissions / routes changes tool schemas. Run `tests/integrations/mcp/`. See [[mcp]].
 
 17. **MCP `auth: false` → `ctx.user` is `null`, not `"anonymous"`.** Guards still work correctly. See [[mcp]].
+18. **MCP DNS-rebinding protection defaults ON under `auth: false`, OFF with auth.** `auth: false` is the loopback shape a browser can attack; an authenticated deploy answers on its own domain, where defaulting `Host` validation on would 403 it. Override with `dnsRebindingProtection`. Its `onRequest` hook is app-wide (`fp()` skips encapsulation) — the URL-prefix test inside it is what keeps arc's policy off the host's own routes. See [[mcp]].
 
 18. **`multipartBody()` is a no-op for JSON.** Safe to always add to create/update middlewares.
 

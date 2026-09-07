@@ -305,105 +305,116 @@ export async function handleConnection(
   }
 
   // ── 4. Message handler ──────────────────────────────────────────────────
-  socket.on("message", async (raw: Buffer | string) => {
-    // Message size cap — drop oversized messages
-    const rawSize = typeof raw === "string" ? Buffer.byteLength(raw) : raw.length;
-    if (rawSize > options.maxMessageBytes) {
-      socket.send(JSON.stringify({ type: "error", error: "Message too large" }));
-      return;
-    }
-
-    let msg: WebSocketMessage;
-    try {
-      // `sjson.parse` blocks `__proto__` / `constructor.prototype` in untrusted
-      // client frames; any downstream `Object.assign(target, msg)` is safe.
-      msg = sjson.parse(typeof raw === "string" ? raw : raw.toString()) as WebSocketMessage;
-    } catch {
-      socket.send(JSON.stringify({ type: "error", error: "Invalid message format" }));
-      return;
-    }
-
-    switch (msg.type) {
-      case "subscribe": {
-        const room = msg.resource ?? msg.channel;
-        if (!room) break;
-
-        // Subscription limit per client
-        if (client.subscriptions.size >= options.maxSubscriptionsPerClient) {
-          socket.send(
-            JSON.stringify({
-              type: "error",
-              channel: room,
-              error: "Subscription limit reached",
-            }),
-          );
-          break;
+  // An async listener on an EventEmitter: `emit` DROPS the returned promise, so
+  // a throw from `roomPolicy` / `onMessage` (host code) became an unhandled
+  // rejection — a process crash on Node ≥ 15. `safeAsync` settles it into a
+  // logged warning, the same treatment `registry.release` already gets below.
+  socket.on("message", (raw: Buffer | string) =>
+    safeAsync(
+      (async () => {
+        // Message size cap — drop oversized messages
+        const rawSize = typeof raw === "string" ? Buffer.byteLength(raw) : raw.length;
+        if (rawSize > options.maxMessageBytes) {
+          socket.send(JSON.stringify({ type: "error", error: "Message too large" }));
+          return;
         }
 
-        // Room authorization policy
-        if (options.roomPolicy) {
-          const allowed = await options.roomPolicy(client, room);
-          if (!allowed) {
+        let msg: WebSocketMessage;
+        try {
+          // `sjson.parse` blocks `__proto__` / `constructor.prototype` in untrusted
+          // client frames; any downstream `Object.assign(target, msg)` is safe.
+          msg = sjson.parse(typeof raw === "string" ? raw : raw.toString()) as WebSocketMessage;
+        } catch {
+          socket.send(JSON.stringify({ type: "error", error: "Invalid message format" }));
+          return;
+        }
+
+        switch (msg.type) {
+          case "subscribe": {
+            const room = msg.resource ?? msg.channel;
+            if (!room) break;
+
+            // Subscription limit per client
+            if (client.subscriptions.size >= options.maxSubscriptionsPerClient) {
+              socket.send(
+                JSON.stringify({
+                  type: "error",
+                  channel: room,
+                  error: "Subscription limit reached",
+                }),
+              );
+              break;
+            }
+
+            // Room authorization policy
+            if (options.roomPolicy) {
+              const allowed = await options.roomPolicy(client, room);
+              if (!allowed) {
+                socket.send(
+                  JSON.stringify({
+                    type: "error",
+                    channel: room,
+                    error: "Subscription denied",
+                  }),
+                );
+                break;
+              }
+            }
+
+            const ok = rooms.subscribe(clientId, room);
             socket.send(
               JSON.stringify({
-                type: "error",
+                type: ok ? "subscribed" : "error",
                 channel: room,
-                error: "Subscription denied",
+                ...(ok ? {} : { error: "Room at capacity" }),
               }),
             );
             break;
           }
-        }
 
-        const ok = rooms.subscribe(clientId, room);
-        socket.send(
-          JSON.stringify({
-            type: ok ? "subscribed" : "error",
-            channel: room,
-            ...(ok ? {} : { error: "Room at capacity" }),
-          }),
-        );
-        break;
-      }
+          case "unsubscribe": {
+            const room = msg.resource ?? msg.channel;
+            if (room) {
+              rooms.unsubscribe(clientId, room);
+              socket.send(JSON.stringify({ type: "unsubscribed", channel: room }));
+            }
+            break;
+          }
 
-      case "unsubscribe": {
-        const room = msg.resource ?? msg.channel;
-        if (room) {
-          rooms.unsubscribe(clientId, room);
-          socket.send(JSON.stringify({ type: "unsubscribed", channel: room }));
-        }
-        break;
-      }
+          case "resume": {
+            const raw = msg as { lastSeq?: unknown };
+            const lastSeq = typeof raw.lastSeq === "number" ? raw.lastSeq : -1;
+            if (!envelope) {
+              socket.send(JSON.stringify({ type: "resumed", lastSeq, replayed: 0 }));
+              break;
+            }
+            const replay = envelope.drainAfter(lastSeq);
+            if (replay === null) {
+              socket.send(
+                JSON.stringify({
+                  type: "resume_gap",
+                  lastSeq,
+                  highestSeq: envelope.highestSeq(),
+                }),
+              );
+              break;
+            }
+            for (const payload of replay) socket.send(payload);
+            socket.send(JSON.stringify({ type: "resumed", lastSeq, replayed: replay.length }));
+            break;
+          }
 
-      case "resume": {
-        const raw = msg as unknown as { lastSeq?: unknown };
-        const lastSeq = typeof raw.lastSeq === "number" ? raw.lastSeq : -1;
-        if (!envelope) {
-          socket.send(JSON.stringify({ type: "resumed", lastSeq, replayed: 0 }));
-          break;
+          default:
+            // Forward to custom handler
+            await options.onMessage?.(client, msg);
+            break;
         }
-        const replay = envelope.drainAfter(lastSeq);
-        if (replay === null) {
-          socket.send(
-            JSON.stringify({
-              type: "resume_gap",
-              lastSeq,
-              highestSeq: envelope.highestSeq(),
-            }),
-          );
-          break;
-        }
-        for (const payload of replay) socket.send(payload);
-        socket.send(JSON.stringify({ type: "resumed", lastSeq, replayed: replay.length }));
-        break;
-      }
-
-      default:
-        // Forward to custom handler
-        await options.onMessage?.(client, msg);
-        break;
-    }
-  });
+      })(),
+      fastify.log,
+      "ws.message",
+      { clientId },
+    ),
+  );
 
   // ── 5. Cleanup on disconnect ────────────────────────────────────────────
   // Stale-connection close guard: only purge the room manager if THIS
@@ -411,29 +422,48 @@ export async function handleConnection(
   // race can otherwise evict the *new* connection when the old close
   // fires late. The clientId is per-socket so this is theoretical here,
   // but the same guard at the room/pushRef level lands in PR2.
-  socket.on("close", async () => {
-    if (heartbeatTimer) clearInterval(heartbeatTimer);
-    if (reauthTimer) clearInterval(reauthTimer);
-    if (rooms.getClient(clientId)?.socket === socket) {
-      await options.onDisconnect?.(client);
-      rooms.removeClient(clientId);
-    }
-    queue.dispose();
-    // Release the registry binding ONLY if no live socket currently owns
-    // this pushRef. A faster reconnect under the same pushRef has already
-    // re-activated the entry via `claim()` — calling release() here
-    // would start a TTL countdown while the new connection is live,
-    // causing premature eviction.
-    if (!rooms.getClientByPushRef(pushRef)) {
-      // Close handlers are sync — wrap async release with safeAsync so
-      // a store outage (Redis down) surfaces as a logged warning, not
-      // an unhandled promise rejection.
-      safeAsync(ctx.pushRefRegistry.release(pushRef, generation), fastify.log, "registry.release", {
-        pushRef,
-        generation,
-      });
-    }
-  });
+  socket.on("close", () =>
+    safeAsync(
+      (async () => {
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
+        if (reauthTimer) clearInterval(reauthTimer);
+        if (rooms.getClient(clientId)?.socket === socket) {
+          // A throwing host `onDisconnect` must not leak the room entry: log it and
+          // keep tearing down. (The outer `safeAsync` is the crash guard; this is
+          // the "cleanup still completes" guard — they answer different failures.)
+          try {
+            await options.onDisconnect?.(client);
+          } catch (err) {
+            fastify.log.warn({ err, clientId }, "[arc] websocket onDisconnect threw");
+          }
+          rooms.removeClient(clientId);
+        }
+        queue.dispose();
+        // Release the registry binding ONLY if no live socket currently owns
+        // this pushRef. A faster reconnect under the same pushRef has already
+        // re-activated the entry via `claim()` — calling release() here
+        // would start a TTL countdown while the new connection is live,
+        // causing premature eviction.
+        if (!rooms.getClientByPushRef(pushRef)) {
+          // Close handlers are sync — wrap async release with safeAsync so
+          // a store outage (Redis down) surfaces as a logged warning, not
+          // an unhandled promise rejection.
+          safeAsync(
+            ctx.pushRefRegistry.release(pushRef, generation),
+            fastify.log,
+            "registry.release",
+            {
+              pushRef,
+              generation,
+            },
+          );
+        }
+      })(),
+      fastify.log,
+      "ws.close",
+      { clientId },
+    ),
+  );
 
   socket.on("error", () => {
     if (heartbeatTimer) clearInterval(heartbeatTimer);

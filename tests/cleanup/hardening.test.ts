@@ -12,6 +12,7 @@ import {
   type CleanupWriteFence,
   createCleanupRegistry,
   createCleanupService,
+  DEFAULT_CLEANUP_LIMITS,
 } from "../../src/cleanup/index.js";
 import {
   actor,
@@ -348,6 +349,35 @@ describe("cleanup hardening — audit fidelity", () => {
     expect(manifest.checksTruncated).toBe(2);
     expect(manifest.verification.checks.map((c) => c.name)).toContain("c-failed"); // failure survives the cap
     expect(must(h.evidenceStore.evidence[0]).verification?.note).toContain("truncated");
+  });
+
+  it("an explicit `undefined` limit falls back to the default instead of REMOVING the cap", async () => {
+    /**
+     * `limits` is `Partial<CleanupLimits>`, so `{ maxReasonLength: undefined }`
+     * type-checks — a host forwarding an optional config
+     * (`maxReasonLength: cfg.reasonCap`) writes it without noticing. A plain
+     * spread over the defaults let that `undefined` win, and every limit is read
+     * in a comparison: `n > undefined` is always FALSE. So the cap was not
+     * raised, it was GONE — on a framework whose job is deleting data.
+     *
+     * The assertion must SEPARATE the two behaviours. A first version asserted
+     * "no truncation at 4 checks", which the bug also satisfies (the default 200
+     * would not truncate either) — it passed against the broken code. This
+     * exceeds the DEFAULT, so it can only pass if the default is still in force:
+     *   fixed  → default 2000 applies → 2001 chars → throws
+     *   broken → undefined → `2001 > undefined` is false → resolves
+     */
+    const h = makeService(draftsRecipe(), { limits: { maxReasonLength: undefined } });
+    const plan = await h.service.preview({ recipeId: "cleanup.drafts", actor });
+    await expect(
+      h.service.execute({
+        recipeId: "cleanup.drafts",
+        actor,
+        planDigest: plan.digest,
+        reason: "x".repeat(DEFAULT_CLEANUP_LIMITS.maxReasonLength + 1),
+        confirmation: "REMOVE DRAFTS",
+      }),
+    ).rejects.toMatchObject({ code: "CLEANUP_PLAN_TOO_LARGE" });
   });
 
   it("evidence records the recipe's declared strategy, not a hard-coded 'hard'", async () => {

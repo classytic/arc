@@ -142,7 +142,7 @@ describe("createOutboxModule", () => {
     await store.save({
       type: "course.published",
       payload: {},
-      meta: { id: "evt-log-1", occurredAt: new Date().toISOString() },
+      meta: { id: "evt-log-1", timestamp: new Date() },
     });
     const log = { error: vi.fn() };
     const transport = stubTransport();

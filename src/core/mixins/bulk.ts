@@ -28,9 +28,7 @@ import type {
 import { createError } from "../../utils/errors.js";
 import { withRepoFeatures } from "../../utils/repoFeature.js";
 import type { BaseCrudController } from "../BaseCrudController.js";
-
-// biome-ignore lint/suspicious/noExplicitAny: standard TS mixin Constructor pattern
-type Constructor<T> = new (...args: any[]) => T;
+import type { MixinConstructor } from "../controllerTypes.js";
 
 /** Public surface contributed by BulkMixin. */
 export interface BulkExt {
@@ -41,9 +39,9 @@ export interface BulkExt {
   bulkDelete(req: IRequestContext): Promise<IControllerResponse<{ deletedCount: number }>>;
 }
 
-export function BulkMixin<TBase extends Constructor<BaseCrudController>>(
+export function BulkMixin<TBase extends MixinConstructor<BaseCrudController>>(
   Base: TBase,
-): TBase & Constructor<BulkExt> {
+): TBase & MixinConstructor<BulkExt> {
   return class BulkController extends Base {
     async bulkCreate(req: IRequestContext): Promise<IControllerResponse<AnyRecord[]>> {
       const repo = withRepoFeatures<{

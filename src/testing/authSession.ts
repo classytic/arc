@@ -194,9 +194,7 @@ export function createJwtAuthProvider(
       if (!config.user) {
         throw new Error(`[jwt] role '${role}' has neither 'user' nor 'token'`);
       }
-      const jwt = (
-        app as unknown as { jwt?: { sign: (payload: Record<string, unknown>) => string } }
-      ).jwt;
+      const jwt = (app as { jwt?: { sign: (payload: Record<string, unknown>) => string } }).jwt;
       if (!jwt?.sign) {
         throw new Error(
           `[jwt] app.jwt.sign() is unavailable — register @fastify/jwt before calling createJwtAuthProvider.`,

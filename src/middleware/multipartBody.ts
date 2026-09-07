@@ -207,7 +207,7 @@ export function multipartBody(options: MultipartBodyOptions = {}): RouteHandlerM
     let totalBytes = 0;
 
     try {
-      const parts = (request as unknown as { parts: () => AsyncIterable<MultipartPart> }).parts();
+      const parts = (request as { parts: () => AsyncIterable<MultipartPart> }).parts();
 
       for await (const part of parts) {
         if (part.type === "file") {

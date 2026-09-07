@@ -381,7 +381,8 @@ export default ${camel}Resource;
  */
 
 import { defineTool } from '@classytic/arc/mcp';
-${ts ? "import { z } from 'zod';\n" : "const { z } = require('zod');\n"}
+import { z } from 'zod';
+
 // Example: domain-specific action tool
 // export const activate${name}Tool = defineTool('activate_${fileName}', {
 //   description: 'Activate a ${name.toLowerCase()} by ID',

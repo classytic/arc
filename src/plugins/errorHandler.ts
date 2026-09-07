@@ -36,9 +36,14 @@ import { isArcError, statusToArcCode } from "../utils/errors.js";
  * to a partial `ErrorContract`. Highest-priority dispatch in the handler.
  */
 export interface ErrorMapper<T extends Error = Error> {
+  /**
+   * Only ever used as `error instanceof mapper.type` — the constructor is never
+   * CALLED through this interface, so `never[]` is the sound parameter type:
+   * every real class assigns to it (constructor parameters are contravariant),
+   * and nothing can invoke it. `any[]` here was a permission nothing used.
+   */
   type: abstract new (
-    // biome-ignore lint/suspicious/noExplicitAny: permissive ctor signature is deliberate
-    ...args: any[]
+    ...args: never[]
   ) => T;
   toResponse: (error: T) => {
     status: number;

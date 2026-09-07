@@ -41,7 +41,7 @@ export async function subscribeModuleEventHandlers(
       const handlers = await resolveModuleArm(m, "eventHandlers", m.eventHandlers, fastify);
       countsByModule?.set(m.name, handlers.length);
       if (handlers.length === 0) continue;
-      const bus = (fastify as unknown as { events?: EventBusLike }).events;
+      const bus = (fastify as { events?: EventBusLike }).events;
       if (!bus) {
         throw new Error(
           `[arc] module "${m.name}" declares eventHandlers but the event subsystem is unavailable (fastify.events). Enable arcPlugins.events.`,

@@ -55,7 +55,7 @@ export async function createMcpServer(
   config: CreateMcpServerConfig,
   authRef?: AuthRef,
 ): Promise<McpServerInstance> {
-  const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
+  const { McpServer } = await import("@modelcontextprotocol/server");
 
   const server = new McpServer(
     { name: config.name, version: config.version ?? "1.0.0" },
@@ -78,7 +78,7 @@ export async function createMcpServer(
     for (const prompt of config.prompts) registerPrompt(server, prompt);
   }
 
-  return server as unknown as McpServerInstance;
+  return server as McpServerInstance;
 }
 
 // ============================================================================
@@ -169,7 +169,8 @@ export interface McpServerInstance {
     config: Record<string, unknown>,
     handler: (args: Record<string, unknown>) => unknown,
   ) => void;
-  resource: (...args: unknown[]) => void;
+  /** v2 name. v1 called this `resource()` — same four arguments. */
+  registerResource: (...args: unknown[]) => void;
 }
 
 // ============================================================================
@@ -189,6 +190,17 @@ function registerTool(server: unknown, tool: ToolDefinition, authRef?: AuthRef):
   const config: Record<string, unknown> = {};
   if (tool.title) config.title = tool.title;
   if (tool.description) config.description = tool.description;
+  /**
+   * Flat SHAPES are passed straight through. v2's `registerTool` carries a
+   * `ZodRawShape` overload and auto-wraps it in `z.object()` itself, so arc's
+   * host-facing ergonomic (`{ name: z.string() }`) needs no adaptation layer.
+   *
+   * arc's own MIGRATION-V2 notes claimed v2 "requires z.object(), raw shapes no
+   * longer accepted" and a wrap was written here on that basis. That was true of
+   * the PRE-ALPHA and is not true of 2.0.0 — checked against the shipped
+   * overloads. Wrapping anyway would have been arc maintaining an adapter for a
+   * conversion the SDK already owns.
+   */
   if (tool.inputSchema) config.inputSchema = tool.inputSchema;
   if (tool.outputSchema) config.outputSchema = tool.outputSchema;
   if (tool.annotations) config.annotations = tool.annotations;
@@ -196,21 +208,30 @@ function registerTool(server: unknown, tool: ToolDefinition, authRef?: AuthRef):
   srv.registerTool(
     tool.name,
     config,
-    (input: Record<string, unknown>, extra: Record<string, unknown>) => {
+    (input: Record<string, unknown>, mcpCtx: Record<string, unknown>) => {
       const ctx: ToolContext = {
         session: authRef?.current ?? null,
+        /**
+         * v2 exposes logging as `ctx.mcpReq.log(level, message)` — the SDK builds
+         * the `notifications/message` envelope and correlates it to the in-flight
+         * request. v1 handed over a raw `sendNotification` that arc had to frame
+         * itself; that hand-framed envelope carried no request id, so a log line
+         * from a tool arrived uncorrelated.
+         *
+         * Still best-effort: a transport that has already closed must not turn a
+         * successful tool call into a failed one.
+         */
         log: async (level, message) => {
           try {
-            const notify = extra?.sendNotification as
-              | ((...a: unknown[]) => Promise<void>)
+            const mcpReq = mcpCtx?.mcpReq as
+              | { log?: (level: string, message: string) => Promise<void> }
               | undefined;
-            if (notify)
-              await notify({ method: "notifications/message", params: { level, data: message } });
+            await mcpReq?.log?.(level, message);
           } catch {
             /* best-effort */
           }
         },
-        extra,
+        extra: mcpCtx,
       };
       return tool.handler(input, ctx);
     },
@@ -224,6 +245,8 @@ function registerPrompt(server: unknown, prompt: PromptDefinition): void {
   const config: Record<string, unknown> = {};
   if (prompt.title) config.title = prompt.title;
   if (prompt.description) config.description = prompt.description;
+  // Passed through for the same reason as tool schemas above — `registerPrompt`
+  // has the matching `ZodRawShape` overload.
   if (prompt.argsSchema) config.argsSchema = prompt.argsSchema;
 
   srv.registerPrompt(prompt.name, config, (args: Record<string, unknown>) => prompt.handler(args));

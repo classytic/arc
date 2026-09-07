@@ -47,7 +47,7 @@ export const authResource = defineResource({
   tag: 'Authentication',
   prefix: '/auth',
 
-  adapter: createAdapter(User${ts ? " as unknown as never" : ""}, userRepository${ts ? " as unknown as never" : ""}),
+  adapter: createAdapter(User${ts ? " as never" : ""}, userRepository${ts ? " as never" : ""}),
   disableDefaultRoutes: true,
 
   routes: [
@@ -103,7 +103,7 @@ export const userProfileResource = defineResource({
   tag: 'User Profile',
   prefix: '/users',
 
-  adapter: createAdapter(User${ts ? " as unknown as never" : ""}, userRepository${ts ? " as unknown as never" : ""}),
+  adapter: createAdapter(User${ts ? " as never" : ""}, userRepository${ts ? " as never" : ""}),
   disableDefaultRoutes: true,
 
   routes: [
@@ -158,7 +158,7 @@ import { mongodbAdapter } from '@better-auth/mongo-adapter';`
 
   const dbAdapter = useMongo
     ? config.typescript
-      ? `database: mongodbAdapter(mongoose.connection.getClient().db() as unknown as never),`
+      ? `database: mongodbAdapter(mongoose.connection.getClient().db() as never),`
       : `database: mongodbAdapter(mongoose.connection.getClient().db()),`
     : `// Configure your database adapter here
     // See: https://www.better-auth.com/docs/concepts/database`;
@@ -444,7 +444,7 @@ export async function resetPassword(request${ts ? ": FastifyRequest" : ""}, repl
  */
 export async function getUserProfile(request${ts ? ": FastifyRequest" : ""}, reply${ts ? ": FastifyReply" : ""}) {
   try {
-    const requestUser = (request${ts ? " as unknown as { user?: { _id?: string; id?: string } }" : ""}).user;
+    const requestUser = (request${ts ? " as { user?: { _id?: string; id?: string } }" : ""}).user;
     const userId = requestUser?._id || requestUser?.id;
     if (!userId) {
       return reply.code(401).send({ error: 'Authentication required', code: 'arc.unauthorized' });
@@ -467,7 +467,7 @@ export async function getUserProfile(request${ts ? ": FastifyRequest" : ""}, rep
  */
 export async function updateUserProfile(request${ts ? ": FastifyRequest" : ""}, reply${ts ? ": FastifyReply" : ""}) {
   try {
-    const requestUser = (request${ts ? " as unknown as { user?: { _id?: string; id?: string } }" : ""}).user;
+    const requestUser = (request${ts ? " as { user?: { _id?: string; id?: string } }" : ""}).user;
     const userId = requestUser?._id || requestUser?.id;
     if (!userId) {
       return reply.code(401).send({ error: 'Authentication required', code: 'arc.unauthorized' });

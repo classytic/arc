@@ -15,6 +15,7 @@ import { createMongooseAdapter } from "@classytic/mongokit/adapter";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { connectMcpTestClient } from "../../../src/integrations/mcp/testing.js";
 import { BaseController } from "../../../src/core/BaseController.js";
 import { defineResource } from "../../../src/core/defineResource.js";
 import {
@@ -52,15 +53,23 @@ afterEach(async () => {
   }
 });
 
-async function connectInMemory(server: unknown) {
-  const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
-  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
-  const [ct, st] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "test", version: "1.0" });
-  await Promise.all([
-    client.connect(ct),
-    (server as { connect: (t: unknown) => Promise<void> }).connect(st),
-  ]);
+/**
+ * Connect a client to `server` over arc's shared loopback harness.
+ *
+ * Five suites each carried a private `InMemoryTransport.createLinkedPair()` copy
+ * of this. SDK v2 does not publish that transport, so all five now route through
+ * `connectMcpTestClient`. Unlike a linked pair each connection owns a listening
+ * socket — hence the teardown registry: without it vitest hangs at end-of-file
+ * with no failing assertion.
+ */
+const openMcpConnections: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  for (const close of openMcpConnections.splice(0)) await close();
+});
+
+async function connectMcpClient(server: unknown) {
+  const { client, close } = await connectMcpTestClient(server);
+  openMcpConnections.push(close);
   return client;
 }
 
@@ -138,7 +147,7 @@ describe("Mixed per-operation permissions", () => {
     const resource = createPostResource();
     const tools = resourceToTools(resource);
     const server = await createMcpServer({ name: "test", tools }); // no auth
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     // List — allowed (public)
     const listResult = await client.callTool({ name: "list_posts", arguments: {} });
@@ -163,7 +172,7 @@ describe("Mixed per-operation permissions", () => {
     const tools = resourceToTools(resource);
     const authRef: AuthRef = { current: { userId: "alice" } };
     const server = await createMcpServer({ name: "test", tools }, authRef);
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     // Create — allowed
     const createResult = await client.callTool({
@@ -191,7 +200,7 @@ describe("Mixed per-operation permissions", () => {
     const tools = resourceToTools(resource);
     const authRef: AuthRef = { current: { userId: "admin", roles: ["admin"] } };
     const server = await createMcpServer({ name: "test", tools }, authRef);
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     const result = await client.callTool({ name: "delete_post", arguments: { id: "any-id" } });
     expect((result as any).isError).toBe(true);
@@ -250,7 +259,7 @@ describe("Custom tools with different auth levels alongside auto-gen", () => {
     // Test with regular user (no admin, no org)
     const auth1: AuthRef = { current: { userId: "viewer", roles: ["viewer"] } };
     const server1 = await createMcpServer({ name: "test1", tools: allTools }, auth1);
-    const client1 = await connectInMemory(server1);
+    const client1 = await connectMcpClient(server1);
 
     // Auto-gen works (public)
     const listResult = await client1.callTool({ name: "list_posts", arguments: {} });
@@ -270,7 +279,7 @@ describe("Custom tools with different auth levels alongside auto-gen", () => {
       current: { userId: "boss", roles: ["admin"], organizationId: "org-1" },
     };
     const server2 = await createMcpServer({ name: "test2", tools: allTools }, auth2);
-    const client2 = await connectInMemory(server2);
+    const client2 = await connectMcpClient(server2);
 
     const purgeResult2 = await client2.callTool({ name: "purge_posts", arguments: {} });
     expect((purgeResult2 as any).isError).toBeFalsy();
@@ -412,7 +421,7 @@ describe("Composite permission patterns", () => {
       current: { userId: "alice", organizationId: "org-x", roles: ["admin"] },
     };
     const adminServer = await createMcpServer({ name: "admin", tools }, adminAuth);
-    const adminClient = await connectInMemory(adminServer);
+    const adminClient = await connectMcpClient(adminServer);
     const adminResult = await adminClient.callTool({ name: "list_posts", arguments: {} });
     const adminData = JSON.parse((adminResult.content[0] as { text: string }).text);
     expect(adminData.data.length).toBe(2); // both org-x posts
@@ -422,7 +431,7 @@ describe("Composite permission patterns", () => {
       current: { userId: "bob", organizationId: "org-x", roles: ["member"] },
     };
     const memberServer = await createMcpServer({ name: "member", tools }, memberAuth);
-    const memberClient = await connectInMemory(memberServer);
+    const memberClient = await connectMcpClient(memberServer);
     const memberResult = await memberClient.callTool({ name: "list_posts", arguments: {} });
     const memberData = JSON.parse((memberResult.content[0] as { text: string }).text);
     expect(memberData.data.length).toBe(1);
@@ -430,7 +439,7 @@ describe("Composite permission patterns", () => {
 
     // No auth — denied
     const anonServer = await createMcpServer({ name: "anon", tools });
-    const anonClient = await connectInMemory(anonServer);
+    const anonClient = await connectMcpClient(anonServer);
     const anonResult = await anonClient.callTool({ name: "list_posts", arguments: {} });
     expect((anonResult as any).isError).toBe(true);
   });
@@ -466,7 +475,7 @@ describe("Real-world guard composition patterns", () => {
       current: { userId: "exporter-1", organizationId: "org-1", roles: ["exporter"] },
     };
     const server = await createMcpServer({ name: "test", tools: [tool] }, auth);
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     const result = await client.callTool({ name: "sensitive_export", arguments: {} });
     expect((result as any).isError).toBeFalsy();
@@ -485,7 +494,7 @@ describe("Real-world guard composition patterns", () => {
 
     const auth: AuthRef = { current: { userId: "u-1" } };
     const server = await createMcpServer({ name: "test", tools: [tool] }, auth);
-    const client = await connectInMemory(server);
+    const client = await connectMcpClient(server);
 
     const result = await client.callTool({ name: "restricted_op", arguments: {} });
     expect((result as any).isError).toBe(true);

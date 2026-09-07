@@ -55,7 +55,7 @@ const openApiPlugin: FastifyPluginAsync<OpenApiOptions> = async (
 
   // Build spec from instance-scoped registry
   const buildSpec = (): OpenApiSpec => {
-    const arc = (fastify as unknown as FastifyWithDecorators).arc;
+    const arc = (fastify as FastifyWithDecorators).arc;
     const resources = arc?.registry?.getAll() ?? [];
     const externalPaths = arc?.externalOpenApiPaths ?? [];
     return buildOpenApiSpec(

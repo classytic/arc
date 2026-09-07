@@ -159,7 +159,7 @@ export function wrapWithSchema<T>(
       result = registry.validate(definition.name, event.payload, eventVersion);
     } else if (definition.schema) {
       const adhoc = createEventRegistry();
-      adhoc.register(definition as unknown as EventDefinitionOutput);
+      adhoc.register(definition as EventDefinitionOutput);
       result = adhoc.validate(definition.name, event.payload);
     } else {
       // No schema declared anywhere — pass through (consistent with the

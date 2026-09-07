@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * MCP E2E Test — validates MCP plugin works end-to-end with a real MongoDB
- * and the MCP SDK's InMemoryTransport (no network, no Claude CLI dependency).
+ * and the shipped loopback MCP test harness (no Claude CLI dependency).
  *
  * Usage:
  *   node scripts/mcp-e2e.mjs               # uses localhost:27017
@@ -125,21 +125,23 @@ try {
   });
   assert("initialize 200", initResp.statusCode === 200, `got ${initResp.statusCode}`);
 
-  // ── 3. InMemoryTransport tool calls ──
-  console.log("\n[3/6] InMemoryTransport tool calls...");
+  // ── 3. Tool calls over the shipped loopback harness ──
+  //
+  // Uses `connectMcpTestClient` from dist, so this smoke run also exercises the
+  // harness arc publishes at `@classytic/arc/mcp/testing` rather than a private
+  // copy of the connect dance. (Was `InMemoryTransport.createLinkedPair()`; SDK
+  // v2 does not publish that transport.)
+  console.log("\n[3/6] Tool calls over loopback transport...");
   const { createMcpServer } = await import("../dist/integrations/mcp/index.mjs");
   const { resourceToTools } = await import("../dist/integrations/mcp/index.mjs");
-  const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
-  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { connectMcpTestClient } = await import("../dist/integrations/mcp/testing.mjs");
 
   const tools = resourceToTools(resource);
   tools.push(statusTool);
   const authRef = { current: { userId: "test" } };
   server = await createMcpServer({ name: "e2e", version: "1.0.0", tools }, authRef);
 
-  const [ct, st] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "test", version: "1.0" });
-  await Promise.all([client.connect(ct), server.connect(st)]);
+  const { client, close: closeMcp } = await connectMcpTestClient(server);
 
   const toolList = await client.listTools();
   assert("tool count", toolList.tools.length === 6, `got ${toolList.tools.length}`);
@@ -180,7 +182,9 @@ try {
   const status = JSON.parse(statusResult.content[0].text);
   assert("custom tool works", status.ok === true);
 
-  await client.close();
+  // Closes the client AND the harness's loopback socket — without the latter the
+  // script would not exit on its own.
+  await closeMcp();
   await app.close();
 } catch (err) {
   console.error("\nFatal:", err);

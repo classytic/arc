@@ -198,15 +198,3 @@ runStorageContract(async () => {
 3. **Use `ctx.fixtures.clear()` in `afterEach`** — destroyers handle dependency order.
 4. **Test permission denials explicitly** — `expectArc(res).forbidden()` beats status-code assertions.
 5. **Reach for `createHttpTestHarness` first** — 16 tests for one function call.
-
-## Migration from pre-2.11 testing APIs
-
-| Pre-2.11 | 2.11 |
-|---|---|
-| `TestHarness` / `createTestHarness` | `createHttpTestHarness(resource, ctxFn)` |
-| `TestAppResult` | `TestAppContext` |
-| `testApp.mongoUri` | `ctx.dbUri` |
-| `createJwtAuthProvider` / `createBetterAuthProvider` (as `HttpTestHarness` imports) | `ctx.auth` from `createTestApp` (or direct factory import) |
-| `withTestDb()` | `createTestApp({ db: 'in-memory' })` + `ctx.dbUri` |
-| `TestDatabase` / `TestSeeder` / `TestTransaction` | `createTestFixtures` + kit-level cleanup |
-| `setupBetterAuthOrg` | `setupBetterAuthTestApp` + `helpers.signUpWithOrg` |

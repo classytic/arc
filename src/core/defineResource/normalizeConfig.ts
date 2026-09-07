@@ -128,7 +128,7 @@ function expandHistory<TDoc>(config: ResourceConfig<TDoc>): ResourceConfig<TDoc>
     path: "/:id/history",
     summary: `Change history for a ${resourceName} record (audit-backed timeline)`,
     rawHandler: async (request: FastifyRequest, reply: FastifyReply) => {
-      const audit = (request.server as unknown as { audit?: AuditQuerySurface }).audit;
+      const audit = (request.server as { audit?: AuditQuerySurface }).audit;
       if (!audit?.query || audit._noop === true) {
         return reply.code(503).send({
           code: "history.audit_unavailable",

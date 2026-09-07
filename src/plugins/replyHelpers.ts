@@ -56,7 +56,7 @@ async function replyHelpersPluginFn(fastify: FastifyInstance): Promise<void> {
     // `BareListResult` arm of `PaginatedResult` collapses to the array
     // overload. Cast through unknown so TS picks the correct overload at
     // the call site without re-narrowing the input shape.
-    return this.code(200).send(toCanonicalList(input as unknown as readonly T[]));
+    return this.code(200).send(toCanonicalList(input as readonly T[]));
   });
 
   fastify.decorateReply(

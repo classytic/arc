@@ -138,7 +138,7 @@ export function layerQueryParserListQuery(
   if (!querySchema) return openApiSchemas;
   return {
     ...openApiSchemas,
-    listQuery: querySchema as unknown as AnyRecord,
+    listQuery: querySchema as AnyRecord,
   } as OpenApiSchemas;
 }
 

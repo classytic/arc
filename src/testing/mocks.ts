@@ -48,7 +48,7 @@ export function createMockRepository<T extends AnyRecord = AnyRecord>(
       pages: 0,
       hasNext: false,
       hasPrev: false,
-    } as unknown as OffsetPaginationResult<T>),
+    } as OffsetPaginationResult<T>),
 
     getById: vi.fn().mockResolvedValue(null),
 

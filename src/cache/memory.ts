@@ -147,7 +147,7 @@ export class MemoryCacheStore<TValue = unknown> implements CacheStore<TValue> {
     this.cache.set(key, {
       // `increment` is only meaningful on numeric keys; the store-wide
       // generic can't express "this one entry is a number".
-      value: next as unknown as TValue,
+      value: next as TValue,
       size,
       // TTL-on-create: keep the live entry's expiry; stamp fresh only when
       // the key is new or expired.

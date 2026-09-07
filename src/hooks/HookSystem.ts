@@ -265,7 +265,7 @@ export class HookSystem {
           scope: scopeOf(options?.context),
           meta: options?.meta,
         };
-        return (hook.handler as unknown as AroundHookHandler<T>)(ctx, next);
+        return (hook.handler as AroundHookHandler<T>)(ctx, next);
       }
       return execute();
     };

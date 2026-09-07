@@ -226,7 +226,7 @@ describe("bridge registration end-to-end", () => {
     },
   ];
 
-  it("registers bridges via extraTools and invokes them through InMemoryTransport", async () => {
+  it("registers bridges via extraTools and invokes them through the loopback harness", async () => {
     const client = await createTestMcpClient({
       pluginOptions: { extraTools: buildMcpToolsFromBridges(bridges) },
       auth: { userId: "u1", organizationId: "org-1" },

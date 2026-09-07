@@ -489,7 +489,7 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
       if (queue) {
         const name = queueName;
         const job = await (
-          queue as unknown as { getJob(id: string): Promise<Record<string, unknown> | undefined> }
+          queue as { getJob(id: string): Promise<Record<string, unknown> | undefined> }
         ).getJob(jobId);
         if (!job) return null;
 
