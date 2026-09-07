@@ -169,6 +169,13 @@ export default defineConfig({
       /^@opentelemetry\//,
       /^@modelcontextprotocol\//,
       /^zod\//,
+      // `vitest` is imported by `@classytic/arc/testing` but is deliberately
+      // NOT a dependency or a peer — see the note on that subpath. It is a
+      // plain devDependency, which the bundler would otherwise INLINE into
+      // shipped output; it stayed external before 2.40 only as a side effect of
+      // the peer declaration that has now been removed. This gate is what keeps
+      // it external on its own merit.
+      /^vitest$/,
     ],
   },
 });

@@ -384,7 +384,6 @@
     "jose": ">=6.0.0",
     "pino-pretty": ">=13.0.0",
     "typebox": ">=1.0.0",
-    "vitest": ">=4.0.0",
     "zod": ">=4.4.0"
   },
   "peerDependenciesMeta": {
@@ -470,9 +469,6 @@
       "optional": true
     },
     "typebox": {
-      "optional": true
-    },
-    "vitest": {
       "optional": true
     },
     "zod": {

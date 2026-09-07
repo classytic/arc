@@ -1,6 +1,26 @@
 /**
  * @classytic/arc/testing — test utilities for arc apps
  *
+ * **`vitest` is NOT a dependency or a peer of arc**, even though this subpath
+ * imports it. It is the CONSUMER's test runner: anyone importing
+ * `@classytic/arc/testing` is by definition already inside a vitest suite that
+ * provides it, and the import resolves from their own install.
+ *
+ * Declaring it an optional peer was strictly worse, and arc shipped that until
+ * 2.40. `peerDependenciesMeta.optional: true` silences only the MISSING case —
+ * npm still hard-fails `ERESOLVE` on a version MISMATCH. So a host on a newer
+ * vitest could not install arc at all, despite never importing this subpath.
+ * Widening the range instead of removing it only moves the wall to the next
+ * major. (Measured on `@classytic/repo-core`, which had the same declaration
+ * and blocked arc's own move to vitest 5.)
+ *
+ * `tsdown.config.ts` lists `vitest` in `neverBundle` so the bundler keeps the
+ * import external — without the peer declaration it would otherwise inline a
+ * dev-only dependency into shipped output.
+ *
+ * Any vitest exposing the standard `describe` / `it` / `expect` / `beforeEach` /
+ * `afterEach` API works.
+ *
  * Three primary entry points, picked by what you're testing:
  *
  *   1. HTTP behavior      → `createHttpTestHarness(resource, { app, auth, ... })`
