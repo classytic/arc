@@ -21,6 +21,9 @@ export type { ElevationEvent, ElevationOptions } from "./elevation.js";
 export { default as elevationPlugin, elevationPlugin as elevationPluginFn } from "./elevation.js";
 export type { RateLimitKeyContext, TenantKeyGeneratorOptions } from "./rateLimitKey.js";
 // Per-tenant rate limit key generator
+// `SCOPE_AWARE_KEY_GENERATOR` / `isScopeAwareKeyGenerator` stay INTERNAL — they are how
+// `buildRateLimitOpts` places the hook, not something a host calls. Public surface is a
+// contract to keep; this one has no consumer outside arc.
 export { createTenantKeyGenerator } from "./rateLimitKey.js";
 export type { ResolveOrgFromHeaderOptions } from "./resolveOrgFromHeader.js";
 // Org-from-header utility

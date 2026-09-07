@@ -61,35 +61,61 @@ export interface TenantKeyGeneratorOptions {
 // Implementation
 // ============================================================================
 
+/**
+ * Marks a key generator as SCOPE-AWARE, so `buildRateLimitOpts` can place the rate-limit
+ * hook after authentication instead of before it.
+ *
+ * Without this, the degradation is invisible: `@fastify/rate-limit` runs at `onRequest`,
+ * arc authenticates in a `preHandler`, so a scope-keyed generator sees `PUBLIC_SCOPE`,
+ * returns the IP for every caller, and — behind a proxy — buckets an entire deployment
+ * together. Nothing throws; the limiter simply answers a question nobody asked.
+ *
+ * `Symbol.for` so the marker survives two copies of arc in one tree.
+ */
+export const SCOPE_AWARE_KEY_GENERATOR = Symbol.for("arc.rateLimit.scopeAwareKeyGenerator");
+
+/** True when this generator needs a resolved scope (see the symbol's docblock). */
+export function isScopeAwareKeyGenerator(fn: unknown): boolean {
+  return (
+    typeof fn === "function" &&
+    (fn as unknown as Record<symbol, unknown>)[SCOPE_AWARE_KEY_GENERATOR] === true
+  );
+}
+
 export function createTenantKeyGenerator(
   opts?: TenantKeyGeneratorOptions,
 ): (ctx: RateLimitKeyContext) => string {
-  if (opts?.strategy) {
-    return opts.strategy;
+  const generator = opts?.strategy ?? defaultTenantStrategy;
+  /**
+   * Wrapped rather than tagged in place: a host's `strategy` is its own function, and
+   * stamping a symbol onto it would mutate a value it may reuse elsewhere.
+   */
+  const tagged = (ctx: RateLimitKeyContext): string => generator(ctx);
+  Object.defineProperty(tagged, SCOPE_AWARE_KEY_GENERATOR, { value: true, enumerable: false });
+  return tagged;
+}
+
+function defaultTenantStrategy(ctx: RateLimitKeyContext): string {
+  const scope = ctx.scope;
+  if (!scope || scope.kind === "public") {
+    return ctx.ip;
   }
 
-  return (ctx: RateLimitKeyContext): string => {
-    const scope = ctx.scope;
-    if (!scope || scope.kind === "public") {
-      return ctx.ip;
-    }
+  if (scope.kind === "member") {
+    return scope.organizationId;
+  }
 
-    if (scope.kind === "member") {
-      return scope.organizationId;
-    }
+  if (scope.kind === "service") {
+    // Service scopes are always org-bound (see RequestScope type — organizationId
+    // is required on kind: "service"). Use the org as the rate-limit key so
+    // machine-to-machine traffic shares the tenant's budget with user traffic.
+    return scope.organizationId;
+  }
 
-    if (scope.kind === "service") {
-      // Service scopes are always org-bound (see RequestScope type — organizationId
-      // is required on kind: "service"). Use the org as the rate-limit key so
-      // machine-to-machine traffic shares the tenant's budget with user traffic.
-      return scope.organizationId;
-    }
+  if (scope.kind === "elevated") {
+    return scope.organizationId ?? scope.userId ?? ctx.ip;
+  }
 
-    if (scope.kind === "elevated") {
-      return scope.organizationId ?? scope.userId ?? ctx.ip;
-    }
-
-    // authenticated
-    return scope.userId ?? ctx.ip;
-  };
+  // authenticated
+  return scope.userId ?? ctx.ip;
 }

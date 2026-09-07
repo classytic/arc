@@ -6,6 +6,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { runWithArcLogger } from "../../src/logger/index.js";
 import { QueryResolver } from "../../src/core/QueryResolver.js";
 import type { ArcInternalMetadata, IRequestContext } from "../../src/types/index.js";
 
@@ -375,6 +376,34 @@ describe("QueryResolver", () => {
       expect(result.select).toEqual({ name: 1, email: 1 });
     });
 
+    it("blocks a SUBFIELD of a hidden object, not just its exact name", () => {
+      /**
+       * `hidden` on an object means the object. Matching the exact name only left the
+       * children reachable, so `?select=password.hash` projected the very value the rule
+       * exists to withhold — the filter oracle's twin, on the projection side.
+       */
+      const resolver = createResolver({
+        schemaOptions: { fieldRules: { password: { hidden: true } } },
+      });
+      const req = createReq({ query: { select: "name,password.hash,email" } });
+
+      const result = resolver.resolve(req);
+
+      expect(result.select).toEqual({ name: 1, email: 1 });
+    });
+
+    it("does not block a field that merely SHARES A PREFIX with a hidden one", () => {
+      // `passwordPolicy` is a different field, not a child of `password`.
+      const resolver = createResolver({
+        schemaOptions: { fieldRules: { password: { hidden: true } } },
+      });
+      const req = createReq({ query: { select: "passwordPolicy,name" } });
+
+      const result = resolver.resolve(req);
+
+      expect(result.select).toEqual({ passwordPolicy: 1, name: 1 });
+    });
+
     it("uses an exclusion projection when all selected fields are blocked", () => {
       const resolver = createResolver({
         schemaOptions: {
@@ -515,6 +544,92 @@ describe("QueryResolver", () => {
   // Populate field sanitization
   // --------------------------------------------------------------------------
 
+  /**
+   * `hidden` was enforced on every surface that RETURNS a value, and on none that
+   * INTERROGATES one. A filter key never returns the field — it narrows the result set, so
+   * the row count answers a question about a value the caller cannot read. That made any
+   * resource without an `allowedFilterFields` list a blind existence oracle.
+   *
+   * These reject rather than drop: dropping a filter widens the rows, which is the silent
+   * permissiveness this framework fails loudly on everywhere else.
+   */
+  describe("hidden fields cannot be filtered or sorted on", () => {
+    const hidden = { schemaOptions: { fieldRules: { password: { hidden: true } } } };
+
+    it("rejects a hidden field used as a filter key", () => {
+      const resolver = createResolver(hidden);
+      const req = createReq({ query: { password: "secret" } });
+
+      expect(() => resolver.resolve(req)).toThrow(/hidden field/i);
+    });
+
+    it("rejects the probe shape — an operator against a hidden field", () => {
+      const resolver = createResolver(hidden);
+      const req = createReq({ query: { "password[like]": "^ab" } });
+
+      expect(() => resolver.resolve(req)).toThrow(/hidden field/i);
+    });
+
+    /**
+     * Through a KIT parser, not arc's — arc's own drops `$or` before it becomes a filter,
+     * while mongokit's `parseOr` emits it, and mongokit is what the hosts run. The stub is
+     * the smallest thing that reproduces that output.
+     */
+    it("rejects a hidden field nested inside a compound branch", () => {
+      const compoundParser = {
+        parse: () => ({ filters: { $or: [{ password: "x" }, { name: "y" }] } }),
+      } as unknown as ConstructorParameters<typeof QueryResolver>[0]["queryParser"];
+      const resolver = createResolver({ ...hidden, queryParser: compoundParser });
+
+      expect(() => resolver.resolve(createReq())).toThrow(/hidden field/i);
+    });
+
+    it("rejects a subfield of a hidden field", () => {
+      const resolver = createResolver(hidden);
+      const req = createReq({ query: { "password.hash": "x" } });
+
+      expect(() => resolver.resolve(req)).toThrow(/hidden field/i);
+    });
+
+    it("rejects sorting on a hidden field", () => {
+      const resolver = createResolver(hidden);
+      const req = createReq({ query: { sort: "-password" } });
+
+      expect(() => resolver.resolve(req)).toThrow(/hidden field/i);
+    });
+
+    it("names the offending field, so the 400 is actionable", () => {
+      const resolver = createResolver(hidden);
+      const req = createReq({ query: { password: "secret" } });
+
+      expect(() => resolver.resolve(req)).toThrow(/password/);
+    });
+
+    it("leaves a readable field alone", () => {
+      const resolver = createResolver(hidden);
+      const req = createReq({ query: { name: "alice" } });
+
+      expect(() => resolver.resolve(req)).not.toThrow();
+    });
+
+    it("does not reject a TRUSTED policy filter on the hidden field", () => {
+      // `requireOwnership` emits exactly this shape, and the check runs before the
+      // conjunction precisely so the framework's own restrictions are never refused.
+      const resolver = createResolver(hidden);
+      const req = createReq({ query: { name: "alice" } });
+      const meta = { _policyFilters: { password: "internal" } } as unknown as ArcInternalMetadata;
+
+      expect(() => resolver.resolve(req, meta)).not.toThrow();
+    });
+
+    it("is inert when the resource declares no hidden fields", () => {
+      const resolver = createResolver();
+      const req = createReq({ query: { password: "secret" } });
+
+      expect(() => resolver.resolve(req)).not.toThrow();
+    });
+  });
+
   describe("populate field sanitization", () => {
     it("filters populate against allowedPopulate list", () => {
       const resolver = createResolver({
@@ -564,6 +679,88 @@ describe("QueryResolver", () => {
   // --------------------------------------------------------------------------
   // Keyset pagination (after/cursor)
   // --------------------------------------------------------------------------
+
+  /**
+   * The join reaches another collection; arc's tenant filter scopes the base one. Nothing
+   * said so at the moment a deployment opens `allowedLookups`, which is when the decision
+   * is actually made — so it warns there, once per collection set.
+   */
+  describe("client-driven joins warn that the foreign side is unscoped", () => {
+    const lookup = { from: "orders", localField: "_id", foreignField: "customerId" };
+
+    /**
+     * Through a KIT parser: arc's own never emits `lookups` at all, so a resolver built on
+     * it could not reach this path — mongokit is what produces them.
+     */
+    const lookupParser = {
+      parse: () => ({ filters: {}, lookups: [lookup] }),
+    } as unknown as ConstructorParameters<typeof QueryResolver>[0]["queryParser"];
+
+    /** Capture through arc's own writer seam; `console` is not where it necessarily goes. */
+    function warningsWhile(fn: () => void): string[] {
+      const warnings: string[] = [];
+      const suppressed = process.env.ARC_SUPPRESS_WARNINGS;
+      delete process.env.ARC_SUPPRESS_WARNINGS;
+      try {
+        runWithArcLogger(
+          {
+            writer: {
+              debug: () => undefined,
+              info: () => undefined,
+              warn: (...args: unknown[]) => warnings.push(args.join(" ")),
+              error: () => undefined,
+            },
+          },
+          fn,
+        );
+      } finally {
+        if (suppressed !== undefined) process.env.ARC_SUPPRESS_WARNINGS = suppressed;
+      }
+      return warnings;
+    }
+
+    it("warns, naming the joined collection", () => {
+      const resolver = createResolver({
+        queryParser: lookupParser,
+        schemaOptions: { query: { allowedLookups: ["orders"] } },
+      });
+
+      const warnings = warningsWhile(() => {
+        resolver.resolve(createReq());
+      });
+
+      expect(warnings.join(" ")).toMatch(/orders/);
+    });
+
+    it("still RETURNS the lookup — this informs, it does not block a declared allowlist", () => {
+      const resolver = createResolver({
+        queryParser: lookupParser,
+        schemaOptions: { query: { allowedLookups: ["orders"] } },
+      });
+
+      let result: ReturnType<typeof resolver.resolve> | undefined;
+      warningsWhile(() => {
+        result = resolver.resolve(createReq());
+      });
+
+      expect(result?.lookups).toHaveLength(1);
+    });
+
+    it("says nothing when the collection is not allow-listed — it never joins", () => {
+      const resolver = createResolver({
+        queryParser: lookupParser,
+        schemaOptions: { query: { allowedLookups: ["invoices"] } },
+      });
+
+      let result: ReturnType<typeof resolver.resolve> | undefined;
+      const warnings = warningsWhile(() => {
+        result = resolver.resolve(createReq());
+      });
+
+      expect(result?.lookups).toBeUndefined();
+      expect(warnings.join(" ")).not.toMatch(/foreign side|JOINED side/);
+    });
+  });
 
   describe("keyset pagination", () => {
     it("sets page to undefined when using after/cursor pagination", () => {

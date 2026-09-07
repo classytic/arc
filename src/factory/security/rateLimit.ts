@@ -8,7 +8,7 @@
  */
 
 import type { FastifyRequest } from "fastify";
-import { createTenantKeyGenerator } from "../../scope/rateLimitKey.js";
+import { createTenantKeyGenerator, isScopeAwareKeyGenerator } from "../../scope/rateLimitKey.js";
 import type { RateLimitPlanConfig } from "../types/index.js";
 
 export type RateLimitAllowList =
@@ -71,6 +71,8 @@ export function buildRateLimitOpts(input: Record<string, unknown>): Record<strin
     plan?: RateLimitPlanConfig;
   };
 
+  applyScopeAwareHook(bare);
+
   const rest = plan ? buildPlanOpts(bare, plan) : bare;
 
   if (!skipPaths || skipPaths.length === 0) {
@@ -88,6 +90,38 @@ export function buildRateLimitOpts(input: Record<string, unknown>): Record<strin
   };
 
   return { ...rest, allowList: combined };
+}
+
+/**
+ * A scope-keyed generator must run AFTER authentication, so arc places the hook itself.
+ *
+ * `@fastify/rate-limit` defaults to `onRequest`; arc authenticates in a `preHandler`. A
+ * generator from `createTenantKeyGenerator` therefore saw `PUBLIC_SCOPE` and returned the
+ * caller's IP for EVERY request — and behind a proxy with `trustProxy` unset that is one
+ * address, so a whole deployment shared a single bucket. Nothing threw: the limiter ran,
+ * the host's key function ran, and the answer was silently wrong.
+ *
+ * Defaulted rather than merely warned, because the correct value is knowable here and the
+ * failure is unobservable in production. An explicit `onRequest` is REFUSED rather than
+ * honoured — it cannot do what the caller is asking for.
+ */
+function applyScopeAwareHook(bare: Record<string, unknown>): void {
+  if (!isScopeAwareKeyGenerator(bare.keyGenerator)) return;
+
+  if (bare.hook === undefined) {
+    bare.hook = "preHandler";
+    return;
+  }
+
+  if (bare.hook === "onRequest") {
+    throw new Error(
+      "[arc] rateLimit.hook: 'onRequest' cannot be combined with a scope-aware keyGenerator " +
+        "(createTenantKeyGenerator). Authentication runs in a preHandler, so the generator would " +
+        "see PUBLIC_SCOPE and key every caller by IP — behind a proxy that is one bucket for the " +
+        "whole deployment. Use hook: 'preHandler' (arc's default for this generator), or supply a " +
+        "keyGenerator that derives identity without the scope.",
+    );
+  }
 }
 
 function compilePathMatcher(patterns: string[]): (path: string) => boolean {
