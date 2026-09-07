@@ -303,8 +303,26 @@ describe("Dynamic Permission Matrix E2E", () => {
   // --------------------------------------------------------------------------
 
   describe("Cache behavior", () => {
-    it("resolver is called for permission resolution", () => {
-      // After all the requests above, resolver should have been called
+    it("resolver is called for permission resolution", async () => {
+      // Makes its OWN request rather than asserting on calls accumulated by the
+      // preceding `it`s. That earlier form only passed because mock state leaked
+      // across tests: it asserted a side effect of tests it does not control, so
+      // it would also have broken on reorder, on `.only`, or on running this
+      // file's cases in isolation. vitest 5 clears mocks between tests by
+      // default, which is what surfaced it.
+      // `clearCache()` first: this describe block is about the CACHE, so a
+      // principal an earlier test already resolved is served from it and never
+      // reaches the resolver. Clearing is what makes the assertion about
+      // resolution rather than about which tests happened to run before.
+      await matrix.clearCache();
+      resolverSpy.mockClear();
+      const token = issueToken({
+        id: USER_1,
+        role: [],
+        organizationId: ORG_1,
+        orgRoles: ["viewer"],
+      });
+      await app.inject({ method: "GET", url: "/projects", headers: headers(token) });
       expect(resolverSpy).toHaveBeenCalled();
     });
 

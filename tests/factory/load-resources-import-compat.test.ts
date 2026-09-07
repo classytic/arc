@@ -24,8 +24,25 @@ const WINDOWS_SAFE_REMOVE = {
   retryDelay: 50,
 } as const;
 
+/**
+ * Best-effort teardown. These tests dynamically `import()` files out of `TMP`,
+ * and on Windows the loader can still hold those handles when `afterAll` runs —
+ * `rmSync` then throws `EPERM` and fails a suite whose 25 assertions all passed.
+ * The existing 5×50ms retry was enough on vitest 4 and is not on 5, which
+ * releases module handles later; raising the retry count only moves the
+ * threshold rather than removing the race.
+ *
+ * A leftover temp directory costs nothing (it is gitignored and recreated per
+ * run), so it must not be able to fail the suite — but it is WARNED, not
+ * swallowed, so a genuine leak is still visible in the output.
+ */
 afterAll(() => {
-  if (existsSync(TMP)) rmSync(TMP, WINDOWS_SAFE_REMOVE);
+  if (!existsSync(TMP)) return;
+  try {
+    rmSync(TMP, WINDOWS_SAFE_REMOVE);
+  } catch (err) {
+    console.warn(`[test] could not remove ${TMP} (harmless, retried):`, (err as Error).message);
+  }
 });
 
 // ── Helper: create a minimal resource file ──

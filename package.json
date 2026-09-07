@@ -490,7 +490,7 @@
     "@classytic/mongokit": "^3.33.0",
     "@classytic/pgkit": "^0.1.0",
     "@classytic/primitives": "^0.26.4",
-    "@classytic/repo-core": "^0.26.0",
+    "@classytic/repo-core": "^0.26.1",
     "@classytic/sqlitekit": "^0.9.0",
     "@classytic/streamline": "^2.8.2",
     "@electric-sql/pglite": "^0.5.4",
@@ -510,7 +510,7 @@
     "@opentelemetry/api": "^1.9.1",
     "@types/node": "^22.19.21",
     "@types/qs": "^6.15.1",
-    "@vitest/coverage-v8": "^4.1.9",
+    "@vitest/coverage-v8": "^5.0.0",
     "ajv": "^8.20.0",
     "better-auth": "^1.7.3",
     "better-sqlite3": "^13.0.3",
@@ -532,7 +532,7 @@
     "tsdown": "^0.22.14",
     "typebox": "^1.3.6",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10",
+    "vitest": "^5.0.0",
     "ws": "^8.21.0",
     "zod": "^4.4.3"
   },
@@ -566,6 +566,9 @@
     "url": "git+https://github.com/classytic/arc.git"
   },
   "overrides": {
-    "better-sqlite3": "$better-sqlite3"
+    "better-sqlite3": "$better-sqlite3",
+    "better-auth": {
+      "vitest": "$vitest"
+    }
   }
 }

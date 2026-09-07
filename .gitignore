@@ -35,3 +35,7 @@ tests/integrations/mcp/test-mcp-server.mts
 
 # Local playground (scratch dev / runtime probes)
 playground/
+# Per-run scratch dir for load-resources-import-compat.test.ts. Windows can
+# hold module handles past afterAll, so removal is best-effort and a leftover
+# must not show up as untracked noise.
+tests/factory/__tmp_import_compat__/
