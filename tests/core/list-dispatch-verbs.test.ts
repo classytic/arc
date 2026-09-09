@@ -85,7 +85,7 @@ describe("BaseController — list() resource-dispatch verbs", () => {
       const res = await controller.list(createReq(hooks, { query: { _distinct: "status" } }));
 
       expect(res.status).toBe(200);
-      expect(res.data).toEqual(["draft", "active", "archived"]);
+      expect(res.data).toEqual({ values: ["draft", "active", "archived"] });
       // biome-ignore lint/suspicious/noExplicitAny: test mock extension
       expect((repo as any).distinct).toHaveBeenCalledWith(
         "status",
@@ -128,7 +128,7 @@ describe("BaseController — list() resource-dispatch verbs", () => {
       });
 
       const res = await controller.list(createReq(hooks, { query: { _distinct: "internalFlag" } }));
-      expect(res).toMatchObject({ data: ["a", "b"] });
+      expect(res).toMatchObject({ data: { values: ["a", "b"] } });
       // biome-ignore lint/suspicious/noExplicitAny: test mock extension
       expect((repo as any).distinct).toHaveBeenCalledOnce();
     });

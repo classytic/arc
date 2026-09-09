@@ -89,7 +89,7 @@ export async function runDistinctVerb(
   repository: RepositoryLike,
   field: string,
   resolveScope: () => DispatchScope,
-): Promise<unknown[]> {
+): Promise<{ values: unknown[] }> {
   const repo = withRepoFeatures<{
     distinct?: (f: string, q: AnyRecord, o: AnyRecord) => Promise<unknown[]>;
   }>(repository);
@@ -101,7 +101,7 @@ export async function runDistinctVerb(
   }
   const { filter, options } = resolveScope();
   const values = (await repo.distinct(field, filter, options)) as unknown[];
-  return values;
+  return { values };
 }
 
 /**

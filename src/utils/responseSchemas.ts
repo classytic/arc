@@ -96,8 +96,8 @@ export const paginationSchema: JsonSchema = {
  * validation PER RESPONSE to pick the branch, on the hottest route of
  * every arc app. The merge keeps the exact bytes (pinned by
  * `tests/utils/list-response-serialization.test.ts`) and drops the
- * per-response branch validation. Only `data` is required — the one field
- * all four variants share.
+ * per-response branch validation. The list route also serves count, exists
+ * and distinct dispatch verbs, so no field is common to every valid shape.
  */
 export function listResponse(itemSchema: JsonSchema): JsonSchema {
   return {
@@ -110,6 +110,9 @@ export function listResponse(itemSchema: JsonSchema): JsonSchema {
         example: "offset",
       },
       data: { type: "array", items: itemSchema },
+      count: { type: "integer", minimum: 0 },
+      exists: { type: "boolean" },
+      values: { type: "array", items: {} },
       // offset / aggregate counters
       page: { type: "integer", example: 1 },
       limit: { type: "integer", example: 20 },
@@ -121,7 +124,6 @@ export function listResponse(itemSchema: JsonSchema): JsonSchema {
       hasMore: { type: "boolean" },
       next: { type: ["string", "null"], description: "Cursor token for the next page, or null." },
     },
-    required: ["data"],
     additionalProperties: true,
   };
 }

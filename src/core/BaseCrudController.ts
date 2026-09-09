@@ -891,7 +891,7 @@ export class BaseCrudController<
   protected async dispatchDistinct(
     req: IRequestContext,
     field: string,
-  ): Promise<IControllerResponse<unknown[]>> {
+  ): Promise<IControllerResponse<{ values: unknown[] }>> {
     if (!this.isFieldExposedForRead(field)) {
       throw createError(
         400,

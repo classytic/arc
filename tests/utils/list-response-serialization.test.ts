@@ -62,6 +62,15 @@ const VARIANTS: Record<string, Record<string, unknown>> = {
   bare: {
     data: [{ name: "d" }],
   },
+  count: {
+    count: 42,
+  },
+  exists: {
+    exists: true,
+  },
+  distinct: {
+    values: ["active", "archived"],
+  },
 };
 
 describe("listResponse — single-shape serializer, wire-compatible for all variants", () => {

@@ -62,12 +62,12 @@ describe("Response Format Consistency", () => {
       // oneOf via per-response AJV branch validation — on the hottest
       // route. Wire bytes are identical (pinned by
       // list-response-serialization.test.ts); this test pins the schema
-      // SHAPE contract: every variant's fields declared, only `data`
-      // required, no envelope, no oneOf.
+      // SHAPE contract: list and dispatch-verb fields declared, no envelope
+      // and no oneOf. No field is common to every valid response.
       const schema = listResponse({ type: "object", properties: { name: { type: "string" } } });
       expect(schema.oneOf).toBeUndefined();
       expect(schema.type).toBe("object");
-      expect(schema.required).toEqual(["data"]);
+      expect(schema.required).toBeUndefined();
       expect(schema.additionalProperties).toBe(true);
 
       const props = (schema.properties ?? {}) as Record<string, unknown>;
@@ -85,6 +85,9 @@ describe("Response Format Consistency", () => {
         "hasPrev",
         "hasMore",
         "next",
+        "count",
+        "exists",
+        "values",
       ]) {
         expect(props).toHaveProperty(field);
       }
