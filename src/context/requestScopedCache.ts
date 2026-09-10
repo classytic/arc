@@ -26,12 +26,10 @@
 
 import type { CacheAdapter } from "@classytic/repo-core/cache";
 import { requestContext } from "./requestContext.js";
+import { scopedValue } from "./workScope.js";
 
-/**
- * The slot the per-request store hangs off. Underscore-prefixed to sit apart
- * from the fields arc's own hooks populate on `RequestStore`.
- */
-const SLOT = "_requestCache";
+/** The memo slot the per-scope store hangs off. */
+const SLOT = Symbol.for("arc.requestScopedCache");
 
 /**
  * A `Map`-backed `CacheAdapter` with NO eviction and NO TTL — both deliberate.
@@ -69,25 +67,21 @@ function createRequestCacheAdapter(): CacheAdapter {
 }
 
 /**
- * The cache for the CURRENT request, or `undefined` outside one.
+ * The cache for the CURRENT unit of work — a request, an event dispatch or a
+ * job run (see `runWorkScope`) — or `undefined` outside one.
  *
- * Lazily created on first use, so a request that never touches a cached
+ * Lazily created on first use, so a scope that never touches a cached
  * repository allocates nothing.
  */
 export function requestScopedCache(): CacheAdapter | undefined {
-  const store = requestContext.get();
-  if (!store) return undefined;
-  const existing = store[SLOT] as CacheAdapter | undefined;
-  if (existing) return existing;
-  const created = createRequestCacheAdapter();
-  store[SLOT] = created;
-  return created;
+  return scopedValue(SLOT, createRequestCacheAdapter);
 }
 
 /**
- * Whether the current request has allocated a cache yet. Diagnostics and
+ * Whether the current scope has allocated a cache yet. Diagnostics and
  * tests only — never branch application behaviour on this.
  */
 export function hasRequestScopedCache(): boolean {
-  return requestContext.get()?.[SLOT] !== undefined;
+  const store = requestContext.get() as unknown as Record<symbol, unknown> | undefined;
+  return store?.[SLOT] !== undefined;
 }

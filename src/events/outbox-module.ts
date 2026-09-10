@@ -191,6 +191,15 @@ export interface OutboxModuleExports {
   store: OutboxStore;
   /** The relay, for a host that wants to drain on demand (tests, admin actions). */
   relay: EventOutbox;
+  /**
+   * Ask for a relay pass SOON, without waiting for the interval. Coalesced:
+   * any number of calls before the pass runs produce ONE pass. Never throws
+   * and returns nothing — a unit of work calls this after commit so a row it
+   * just wrote is delivered in milliseconds rather than up to `relayEveryMs`
+   * later. Safe under concurrency: the store's lease and fence token make an
+   * extra pass a no-op, not a double publish.
+   */
+  requestDrain: () => void;
 }
 
 /**
@@ -300,7 +309,25 @@ export function createOutboxModule(options: OutboxModuleOptions): ArcModule<Outb
           : { sessionProvider: options.sessionProvider ?? (() => transactionContext.get()) }),
       });
 
-      exports = { store, relay };
+      /**
+       * One pass per burst of requests. `drainQueued` stays true from the
+       * first request until the pass STARTS, so a request landing mid-pass
+       * schedules the next one — a row written during a pass is never left
+       * waiting for the interval.
+       */
+      let drainQueued = false;
+      const requestDrain = (): void => {
+        if (drainQueued) return;
+        drainQueued = true;
+        setImmediate(() => {
+          drainQueued = false;
+          relay.relayBatch().catch((err: unknown) => {
+            fastify.log.error({ err }, `outbox relay "${name}" requested drain failed`);
+          });
+        });
+      };
+
+      exports = { store, relay, requestDrain };
       return exports;
     },
 

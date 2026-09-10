@@ -15,6 +15,7 @@
  */
 
 import sjson from "secure-json-parse";
+import { runWorkScope, workSeedFromEvent } from "../../context/workScope.js";
 import type { DomainEvent, EventHandler, EventLogger, EventTransport } from "../EventTransport.js";
 
 // ---------------------------------------------------------------------------
@@ -229,20 +230,23 @@ export class RedisEventTransport implements EventTransport {
       return;
     }
 
-    for (const handler of handlers) {
-      try {
-        const result = handler(event);
-        // If handler returns a promise, attach a catch so one failing
-        // handler doesn't prevent the rest from executing or crash the process.
-        if (result && typeof result === "object" && "catch" in result) {
-          (result as Promise<void>).catch((err: unknown) => {
-            this.logger.error(`[RedisEventTransport] Handler error for ${event.type}:`, err);
-          });
+    // One work scope per delivered message — see `runWorkScope`.
+    runWorkScope(workSeedFromEvent(event), () => {
+      for (const handler of handlers) {
+        try {
+          const result = handler(event);
+          // If handler returns a promise, attach a catch so one failing
+          // handler doesn't prevent the rest from executing or crash the process.
+          if (result && typeof result === "object" && "catch" in result) {
+            (result as Promise<void>).catch((err: unknown) => {
+              this.logger.error(`[RedisEventTransport] Handler error for ${event.type}:`, err);
+            });
+          }
+        } catch (err) {
+          this.logger.error(`[RedisEventTransport] Handler error for ${event.type}:`, err);
         }
-      } catch (err) {
-        this.logger.error(`[RedisEventTransport] Handler error for ${event.type}:`, err);
       }
-    }
+    });
   }
 
   /**

@@ -170,6 +170,7 @@ const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
   // so any code in the call stack can access user/org/requestId.
   fastify.addHook("onRequest", (request, _reply, done) => {
     const store: RequestStore = {
+      kind: "request",
       requestId: request.id,
       startTime: performance.now(),
     };

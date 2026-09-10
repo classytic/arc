@@ -31,7 +31,9 @@
  * ```
  */
 
+import { matchEventPattern } from "@classytic/primitives/events";
 import sjson from "secure-json-parse";
+import { runWorkScope, workSeedFromEvent } from "../../context/workScope.js";
 import type {
   DeadLetteredEvent,
   DomainEvent,
@@ -661,22 +663,25 @@ export class RedisStreamTransport implements EventTransport {
       return;
     }
 
-    // Dispatch to matching handlers
+    // Dispatch to matching handlers — inside ONE work scope for the entry, so
+    // the handlers share a per-event cache and correlation id.
     const matchingHandlers = this.getMatchingHandlers(event.type);
     let allSucceeded = true;
     let lastError: Error | undefined;
     let lastHandlerName: string | undefined;
 
-    for (const handler of matchingHandlers) {
-      try {
-        await handler(event);
-      } catch (err) {
-        allSucceeded = false;
-        lastError = err instanceof Error ? err : new Error(String(err));
-        lastHandlerName = (handler as { name?: string }).name || lastHandlerName;
-        this.logger.error(`[RedisStreamTransport] Handler error for ${event.type}:`, err);
+    await runWorkScope(workSeedFromEvent(event), async () => {
+      for (const handler of matchingHandlers) {
+        try {
+          await handler(event);
+        } catch (err) {
+          allSucceeded = false;
+          lastError = err instanceof Error ? err : new Error(String(err));
+          lastHandlerName = (handler as { name?: string }).name || lastHandlerName;
+          this.logger.error(`[RedisStreamTransport] Handler error for ${event.type}:`, err);
+        }
       }
-    }
+    });
 
     if (allSucceeded) {
       await this.redis.xack(this.stream, this.group, messageId);
@@ -711,11 +716,17 @@ export class RedisStreamTransport implements EventTransport {
     // Leave unacked — pending claim picks it up after claimTimeoutMs.
   }
 
+  /**
+   * The canonical matcher from primitives — the SAME glob rules the memory
+   * transport speaks. A private matcher here once accepted `prefix.*` but not
+   * `prefix:*`, so an `order:*` subscription that worked in-process received
+   * nothing after a move to the stream, with no error.
+   */
   private getMatchingHandlers(eventType: string): EventHandler[] {
     const matched: EventHandler[] = [];
 
     for (const [pattern, handlers] of this.handlers) {
-      if (this.matchesPattern(pattern, eventType)) {
+      if (matchEventPattern(pattern, eventType)) {
         for (const h of handlers) {
           matched.push(h);
         }
@@ -723,16 +734,6 @@ export class RedisStreamTransport implements EventTransport {
     }
 
     return matched;
-  }
-
-  private matchesPattern(pattern: string, eventType: string): boolean {
-    if (pattern === "*") return true;
-    if (pattern === eventType) return true;
-    if (pattern.endsWith(".*")) {
-      const prefix = pattern.slice(0, -2);
-      return eventType.startsWith(`${prefix}.`);
-    }
-    return false;
   }
 
   // -----------------------------------------------------------------------

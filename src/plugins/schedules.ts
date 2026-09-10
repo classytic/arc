@@ -45,6 +45,7 @@
 import type { LockAdapter } from "@classytic/repo-core/lock";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
+import { runWorkScope } from "../context/workScope.js";
 import { type RenewingLease, startRenewingLease } from "../lock/renewingLease.js";
 
 export interface ScheduleDefinition {
@@ -224,7 +225,9 @@ const schedulesPlugin: FastifyPluginAsync<SchedulesPluginOptions> = async (fasti
       }
       stat.runs++;
       stat.lastRunAt = new Date().toISOString();
-      await s.handler(fastify);
+      // A run is a unit of work: its own scope, so per-request mechanisms
+      // (`requestScopedCache`, correlation) work inside a job too.
+      await runWorkScope({ kind: "job", id: s.name }, () => s.handler(fastify));
       stat.lastError = null;
     } catch (err) {
       stat.failures++;

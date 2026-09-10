@@ -50,6 +50,7 @@ import {
   matchEventPattern,
   type PublishManyResult,
 } from "@classytic/primitives/events";
+import { runWorkScope, workSeedFromEvent } from "../context/workScope.js";
 
 // Internal re-exports for arc's own modules. NOT surfaced through the public
 // `events/index.ts` barrel — callers outside arc must import from
@@ -177,7 +178,18 @@ export class MemoryEventTransport implements EventTransport {
     this.handlerConcurrency = cap ?? Number.POSITIVE_INFINITY;
   }
 
-  async publish(event: DomainEvent): Promise<void> {
+  /**
+   * One work scope per publish, around the WHOLE handler set — so every
+   * handler of this event, parallel or not, shares one `requestScopedCache()`
+   * and one correlation id. Inherits an active request scope (a live
+   * in-request dispatch keeps the request's reads); a relay- or job-driven
+   * publish gets its own.
+   */
+  publish(event: DomainEvent): Promise<void> {
+    return runWorkScope(workSeedFromEvent(event), () => this.dispatch(event));
+  }
+
+  private async dispatch(event: DomainEvent): Promise<void> {
     // Resolve all matching handlers via the canonical `matchEventPattern`
     // from primitives — same glob rules every other transport speaks.
     // Walking `this.handlers` once per publish is O(handlers); fine for the

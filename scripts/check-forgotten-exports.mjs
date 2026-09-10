@@ -71,7 +71,7 @@ const DIST = path.join(ROOT, "dist");
  * LOWER as they are fixed. At 0 the rule is absolute and this constant can go.
  * Do not raise it: a rise means a NEW public signature is unnameable.
  */
-const BASELINE = 28;
+const BASELINE = 25;
 
 /** TypeScript/ES built-ins never declared by us — cheap pre-filter. */
 const BUILTIN =

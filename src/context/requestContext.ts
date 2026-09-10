@@ -30,12 +30,18 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
+/** What started this unit of work. See `workScope.ts`. */
+export type WorkKind = "request" | "event" | "job";
+
 /**
  * Shape of the request-scoped context store.
- * Populated by Arc's onRequest hook in arcCorePlugin.
+ * Populated by Arc's onRequest hook in arcCorePlugin, or by `runWorkScope`
+ * for an event dispatch or a job run.
  */
 export interface RequestStore {
-  /** Unique request identifier */
+  /** Absent on stores created before scopes had kinds; treat as `'request'`. */
+  kind?: WorkKind;
+  /** Unique request identifier — the correlation key of an event or job scope. */
   requestId?: string;
   /** Authenticated user (if any) */
   user?: { id?: string; _id?: string; roles?: string[]; [key: string]: unknown } | null;
