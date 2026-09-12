@@ -198,6 +198,47 @@ describe("registerSecurityPlugins", () => {
     );
   });
 
+  it("distributed runtime + rate limit passes with a custom `store` class", async () => {
+    app = createTestFastify();
+    // @fastify/rate-limit's store contract: constructed with the plugin
+    // options, `incr(key, cb, timeWindow, max)`, `child(routeOptions)`.
+    class SharedStore {
+      incr(_key: string, cb: (err: Error | null, res: { current: number; ttl: number }) => void) {
+        cb(null, { current: 1, ttl: 60_000 });
+      }
+      child() {
+        return this;
+      }
+    }
+    await registerSecurityPlugins(app, {
+      runtime: "distributed",
+      rateLimit: { store: SharedStore },
+    });
+    app.get("/test", async () => ({ ok: true }));
+    await app.ready();
+
+    expect((await app.inject({ method: "GET", url: "/test" })).statusCode).toBe(200);
+  });
+
+  it("distributed runtime + rate limit passes with the documented `redis` client form", async () => {
+    app = createTestFastify();
+    // The plugin wraps `redis` in its own RedisStore — no `store` key ever
+    // exists on the options, which is exactly what the guard used to check.
+    const redis = {
+      defineCommand: () => {},
+      rateLimit: (...args: unknown[]) => {
+        const cb = args[args.length - 1] as (err: Error | null, res: [number, number]) => void;
+        cb(null, [1, 60_000]);
+      },
+      rateLimitRead: () => {},
+    };
+    await registerSecurityPlugins(app, { runtime: "distributed", rateLimit: { redis } });
+    app.get("/test", async () => ({ ok: true }));
+    await app.ready();
+
+    expect((await app.inject({ method: "GET", url: "/test" })).statusCode).toBe(200);
+  });
+
   it("all disabled = no security plugins", async () => {
     app = createTestFastify();
     await registerSecurityPlugins(app, {

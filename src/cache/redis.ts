@@ -205,13 +205,15 @@ export class RedisCacheStore<TValue = unknown> implements CacheStore<TValue> {
 
 /**
  * Minimal ioredis shape we depend on. We don't import ioredis itself so the
- * cache subpath stays peer-dep-free.
+ * cache subpath stays peer-dep-free. The `scan` tail is `unknown[]` so a real
+ * ioredis `Redis` (overloads with literal tokens + optional callback) is
+ * assignable — see the same note on the idempotency `IoredisLike`.
  */
 export interface IoredisLike {
   get(key: string): Promise<string | null>;
   set(...args: unknown[]): Promise<string | null>;
   del(...keys: string[]): Promise<number>;
-  scan(cursor: string | number, ...args: (string | number)[]): Promise<[string, string[]]>;
+  scan(cursor: string | number, ...args: unknown[]): Promise<[string, string[]]>;
   pipeline?(): { del(key: string): unknown; exec(): Promise<unknown> };
   incrby?(key: string, by: number): Promise<number>;
   eval?(script: string, numKeys: number, ...args: (string | number)[]): Promise<unknown>;

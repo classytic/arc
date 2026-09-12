@@ -24,6 +24,7 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastif
 import fp from "fastify-plugin";
 import { transactionContext } from "../context/transactionContext.js";
 import type { RequestContext, UserBase } from "../types/index.js";
+import { declareRuntimeCapability } from "../utils/runtimeCapabilities.js";
 import { repositoryAsAuditStore } from "./repository-audit-adapter.js";
 import type { AuditContext, AuditEntry, AuditStore } from "./stores/interface.js";
 import { createAuditEntry } from "./stores/interface.js";
@@ -224,7 +225,18 @@ const auditPlugin: FastifyPluginAsync<AuditPluginOptions> = async (
     );
   }
   stores.push(...customStores);
-  if (stores.length === 0) stores.push(new MemoryAuditStore());
+  const memoryFallback = stores.length === 0;
+  if (memoryFallback) stores.push(new MemoryAuditStore());
+
+  // Runtime capability: the fallback ring buffer lives in this process — the
+  // trail a second replica writes is invisible here, and both vanish on
+  // restart. Anything the host wired (repository or custom stores) is
+  // presumed durable.
+  declareRuntimeCapability(fastify, {
+    subsystem: "audit.store",
+    durability: memoryFallback ? "memory" : "shared",
+    detail: "default MemoryAuditStore: the trail is replica-local and lost on restart",
+  });
 
   // Log to all stores
   async function logToStores(entry: AuditEntry): Promise<void> {

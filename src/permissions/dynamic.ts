@@ -11,10 +11,12 @@
  */
 
 import { randomUUID } from "node:crypto";
+import type { FastifyInstance } from "fastify";
 import type { CacheLogger, CacheStore } from "../cache/interface.js";
 import { MemoryCacheStore } from "../cache/memory.js";
 import { arcLog } from "../logger/index.js";
 import { isElevated, isMember } from "../scope/types.js";
+import { declareRuntimeCapability } from "../utils/runtimeCapabilities.js";
 import { scopeOf } from "./context.js";
 import { deny } from "./core.js";
 import { requireOrgMembership, requireOrgRole, requireTeamMembership } from "./scope.js";
@@ -49,6 +51,14 @@ export interface DynamicPermissionMatrixConfig {
     /** Hard entry cap for internal memory store (default: 1000) */
     maxEntries?: number;
   };
+  /**
+   * App to declare the cache to (`declareRuntimeCapability`). This is a pure
+   * factory with no Fastify handle of its own, so without it the internal
+   * memory cache is invisible to the `runtime: 'distributed'` audit — a
+   * revocation on one replica then leaves the others honouring the old
+   * roles until TTL. Pass the instance whenever one exists at construction.
+   */
+  fastify?: FastifyInstance;
 }
 
 /** Minimal publish/subscribe interface for cross-node cache invalidation. */
@@ -216,6 +226,15 @@ export function createDynamicPermissionMatrix(
       : undefined;
 
   const cacheStore = config.cacheStore ?? internalStore;
+  // Runtime capability: only when there IS a cache — an uncached matrix
+  // resolves on every check and holds nothing a second replica could miss.
+  if (config.fastify && cacheStore) {
+    declareRuntimeCapability(config.fastify, {
+      subsystem: "permissions.dynamic-cache",
+      durability: internalStore ? "memory" : "shared",
+      detail: "internal MemoryCacheStore: a role change invalidates on this replica only",
+    });
+  }
   const trackedKeys = new Set<string>();
   // org → its cache keys. `invalidateByOrg` matches the DEFAULT key by `orgId::`
   // prefix, but a host-supplied `cache.key(ctx)` need not carry the org, so a

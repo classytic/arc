@@ -19,7 +19,7 @@
 | `metrics` | Prometheus/OTel metric emission |
 | `sse` | Server-Sent Events transport |
 | `realtime` | Permission-gated per-resource change feed (2.22) — see below |
-| `gracefulShutdown` | Drains connections on SIGTERM |
+| `gracefulShutdown` | Lame duck on SIGTERM: `fastify.shutdownState.draining` flips → `/ready` 503 `draining` → waits `drainDelayMs` (default 0; set > LB deregistration window) → close |
 | `schedules` | Recurring in-process jobs (2.21) — see below |
 | `usage` | Per-actor per-period usage counters (2.22) — see below |
 

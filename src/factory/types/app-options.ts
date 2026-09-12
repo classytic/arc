@@ -320,8 +320,15 @@ export interface CreateAppOptions {
      * ```
      */
     health?: boolean | import("../../plugins/health.js").HealthOptions;
-    /** Graceful shutdown handling (default: true) */
-    gracefulShutdown?: boolean;
+    /**
+     * Graceful shutdown handling (default: true). Pass `GracefulShutdownOptions`
+     * to configure it inline — in particular `drainDelayMs`, the lame-duck
+     * window behind a load balancer (readiness fails first, the server keeps
+     * serving until the LB has deregistered the instance, then closes).
+     */
+    gracefulShutdown?:
+      | boolean
+      | import("../../plugins/gracefulShutdown.js").GracefulShutdownOptions;
     /** Emit events for CRUD operations (default: true) */
     emitEvents?: boolean;
     /**

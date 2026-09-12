@@ -212,13 +212,21 @@ export class RedisIdempotencyStore implements IdempotencyStore {
 // Adapters — bridge common Redis clients to the idempotency RedisClient shape
 // ============================================================================
 
-/** Minimal ioredis shape we depend on — keeps this file peer-dep-free. */
+/**
+ * Minimal ioredis shape we depend on — keeps this file peer-dep-free.
+ *
+ * Variadic tails are `unknown[]`, not `(string | number)[]`: ioredis types
+ * every command as overloads whose tails mix literal tokens (`'MATCH'`),
+ * `Buffer` and an optional callback, and a narrower tail matches NONE of
+ * them — a real `Redis` instance then fails to assign (TS2345). Pinned by
+ * `tests/types/ioredis-assignability.test.ts`.
+ */
 export interface IoredisLike {
   get(key: string): Promise<string | null>;
   set(...args: unknown[]): Promise<string | null>;
   del(...keys: string[]): Promise<number>;
   exists(...keys: string[]): Promise<number>;
-  scan(cursor: string | number, ...args: (string | number)[]): Promise<[string, string[]]>;
+  scan(cursor: string | number, ...args: unknown[]): Promise<[string, string[]]>;
   eval?(script: string, numKeys: number, ...args: (string | number)[]): Promise<unknown>;
   quit?(): Promise<string>;
   disconnect?(): void;

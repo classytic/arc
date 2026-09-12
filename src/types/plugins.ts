@@ -21,6 +21,8 @@ export interface GracefulShutdownOptions {
   onShutdown?: () => Promise<void> | void;
   signals?: NodeJS.Signals[];
   logEvents?: boolean;
+  /** Lame-duck window (ms) between failing readiness and closing. Default 0. */
+  drainDelayMs?: number;
 }
 
 export interface RequestIdOptions {

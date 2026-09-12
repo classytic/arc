@@ -19,6 +19,7 @@
 
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
+import { declareRuntimeCapability } from "../utils/runtimeCapabilities.js";
 import { hasEvents } from "../utils/typeGuards.js";
 import type { CacheStore } from "./interface.js";
 import { MemoryCacheStore } from "./memory.js";
@@ -65,6 +66,15 @@ const queryCachePluginImpl: FastifyPluginAsync<QueryCachePluginOptions> = async 
   const ownsStore = opts.store === undefined;
   const store = opts.store ?? new MemoryCacheStore();
   const queryCache = new QueryCache(store);
+
+  // Runtime capability: a memory store (defaulted here, or the one createApp
+  // builds when `stores.queryCache` is absent) caches AND versions per
+  // replica — an invalidation on one node leaves the others serving stale.
+  declareRuntimeCapability(fastify, {
+    subsystem: "cache.query",
+    durability: store instanceof MemoryCacheStore ? "memory" : "shared",
+    detail: "MemoryCacheStore: entries and version bumps are replica-local",
+  });
 
   const defaults: QueryCacheDefaults = {
     staleTime: opts.defaults?.staleTime ?? 0,

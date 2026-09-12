@@ -3,7 +3,8 @@
  *
  * Kubernetes-ready health endpoints:
  * - /health/live  - Liveness probe (is the process alive?)
- * - /health/ready - Readiness probe (can we serve traffic?)
+ * - /health/ready - Readiness probe (can we serve traffic? 503 `draining`
+ *                   once gracefulShutdown has started — see its `drainDelayMs`)
  * - /health/metrics - Prometheus metrics (optional)
  *
  * @example
@@ -255,7 +256,7 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
           503: {
             type: "object",
             properties: {
-              status: { type: "string", enum: ["not_ready"] },
+              status: { type: "string", enum: ["not_ready", "draining"] },
               timestamp: { type: "string" },
               checks: { type: "array" },
             },
@@ -264,6 +265,16 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
       },
     },
     async (_, reply) => {
+      // Lame duck — gracefulShutdown flipped `shutdownState.draining` before
+      // closing the server. Fail readiness FIRST so the load balancer stops
+      // routing here while we still answer; dependency probes are moot for an
+      // instance that is leaving. Read at request time: the shutdown plugin
+      // registers after this one, and hosts may not register it at all.
+      if (fastify.hasDecorator("shutdownState") && fastify.shutdownState.draining) {
+        reply.code(503);
+        return { status: "draining", timestamp: new Date().toISOString(), checks: [] };
+      }
+
       const results = await runChecks(readinessChecks);
       const criticalFailed = results.some(
         (result, index) => !result.healthy && (readinessChecks[index]?.critical ?? true),

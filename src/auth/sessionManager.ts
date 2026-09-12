@@ -38,6 +38,7 @@ import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { isProductionEnv } from "@classytic/primitives/environment";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
+import { declareRuntimeCapability } from "../utils/runtimeCapabilities.js";
 
 // ============================================================================
 // Types
@@ -578,6 +579,15 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
   // ========================================
 
   const sessionPlugin: FastifyPluginAsync = async (fastify: FastifyInstance) => {
+    // Runtime capability: the store is host-supplied, so the memory case is
+    // detected rather than defaulted — a MemorySessionStore logs a user in
+    // on ONE replica; the next request lands elsewhere as anonymous.
+    declareRuntimeCapability(fastify, {
+      subsystem: "auth.sessions",
+      durability: store instanceof MemorySessionStore ? "memory" : "shared",
+      detail: "MemorySessionStore: sessions exist on the replica that created them",
+    });
+
     // ---- authenticate decorator ----
 
     const authenticate = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {

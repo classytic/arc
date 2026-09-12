@@ -48,26 +48,31 @@ import type {
 
 export interface RedisStreamLike {
   xadd(key: string, id: string, ...fieldValues: string[]): Promise<string | null>;
+  // Tail is `unknown[]`: ioredis types this as overloads over literal tokens
+  // (`'COUNT'`, `'BLOCK'`, `'STREAMS'`) plus an optional callback, which a
+  // `(string | number)[]` tail cannot match — a real `Redis` would not assign.
   xreadgroup(
     command: "GROUP",
     group: string,
     consumer: string,
-    ...args: (string | number)[]
-  ): Promise<Array<[string, Array<[string, string[]]>]> | null>;
-  xack(key: string, group: string, ...ids: string[]): Promise<number>;
-  xgroup(command: string, key: string, group: string, ...args: string[]): Promise<unknown>;
-  xpending(
-    key: string,
-    group: string,
-    ...args: (string | number)[]
-  ): Promise<Array<[string, string, number, number]>>;
+    ...args: unknown[]
+    // `fields` is null for an entry trimmed from the stream while it sat in
+    // this group's pending list — ioredis types it so, and the transport acks
+    // those rather than retrying a message that no longer exists.
+  ): Promise<Array<[string, Array<[string, string[] | null]>]> | null>;
+  // Same `unknown[]` tails as `xreadgroup`, for the same reason.
+  xack(key: string, group: string, ...ids: unknown[]): Promise<number>;
+  xgroup(command: string, key: string, group: string, ...args: unknown[]): Promise<unknown>;
+  // ioredis types the extended-form reply as `unknown[]`; the transport
+  // narrows each row where it reads it.
+  xpending(key: string, group: string, ...args: unknown[]): Promise<unknown[]>;
   xclaim(
     key: string,
     group: string,
     consumer: string,
     minIdleTime: number,
-    ...ids: string[]
-  ): Promise<Array<[string, string[]]>>;
+    ...ids: unknown[]
+  ): Promise<unknown[]>;
   xlen(key: string): Promise<number>;
   /**
    * Read a range of entries by id. When present, the DLQ writer uses this
@@ -574,19 +579,28 @@ export class RedisStreamTransport implements EventTransport {
    * shared index — at most N entries in flight, each entry's own handlers
    * still sequential inside `processEntry`.
    */
-  private async processEntries(entries: Array<[string, string[]]>): Promise<void> {
+  private async processEntries(entries: Array<[string, string[] | null]>): Promise<void> {
+    // An entry with no fields was trimmed (XDEL / MAXLEN) after delivery. It
+    // can never be processed; acking is the only way to clear it from the
+    // pending list, otherwise every claim cycle re-delivers a ghost.
+    const live: Array<[string, string[]]> = [];
+    for (const [messageId, fields] of entries) {
+      if (fields) live.push([messageId, fields]);
+      else await this.redis.xack(this.stream, this.group, messageId);
+    }
+
     if (this.processingConcurrency <= 1) {
-      for (const [messageId, fields] of entries) {
+      for (const [messageId, fields] of live) {
         await this.processEntry(messageId, fields);
       }
       return;
     }
     let next = 0;
     const workers = Array.from(
-      { length: Math.min(this.processingConcurrency, entries.length) },
+      { length: Math.min(this.processingConcurrency, live.length) },
       async () => {
-        while (next < entries.length) {
-          const entry = entries[next++];
+        while (next < live.length) {
+          const entry = live[next++];
           if (entry) await this.processEntry(entry[0], entry[1]);
         }
       },
@@ -613,7 +627,8 @@ export class RedisStreamTransport implements EventTransport {
       const staleIds: string[] = [];
       const overRetryIds: string[] = [];
 
-      for (const entry of pending) {
+      // XPENDING extended form: [id, consumer, idleMs, deliveryCount] per row.
+      for (const entry of pending as Array<[string, string, number, number]>) {
         const [id, , idleTime, deliveryCount] = entry;
         if (idleTime > this.claimTimeoutMs) {
           if (deliveryCount >= this.maxRetries) {
@@ -639,7 +654,8 @@ export class RedisStreamTransport implements EventTransport {
           ...staleIds,
         );
 
-        await this.processEntries(claimed);
+        // XCLAIM reply: [id, fields | null] per entry (null once trimmed).
+        await this.processEntries(claimed as Array<[string, string[] | null]>);
       }
     } catch (err) {
       // Pending check failures are non-fatal — will retry next poll iteration.

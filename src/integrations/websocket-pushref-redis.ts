@@ -50,7 +50,10 @@ import type {
  */
 export interface RedisLike {
   get(key: string): Promise<string | null>;
-  set(key: string, value: string, mode?: string, duration?: number): Promise<unknown>;
+  // Flags as an `unknown[]` tail: ioredis types `set` as overloads over
+  // literal tokens (`'PX'`, `'NX'`) plus an optional callback, which a fixed
+  // `(mode?, duration?)` pair cannot match — a real `Redis` would not assign.
+  set(key: string, value: string, ...args: unknown[]): Promise<unknown>;
   del(key: string): Promise<number>;
   pexpire(key: string, ttlMs: number): Promise<number>;
   scan(

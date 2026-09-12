@@ -9,6 +9,7 @@
  */
 
 import type { FastifyInstance } from "fastify";
+import type { GracefulShutdownOptions } from "../plugins/gracefulShutdown.js";
 import { type HealthCheck, type HealthOptions, mergeHealthChecks } from "../plugins/health.js";
 import type { CreateAppOptions } from "./types/index.js";
 
@@ -18,7 +19,7 @@ type PluginTracker = (name: string, opts?: Record<string, unknown>) => void;
 export interface ArcPluginModules {
   requestIdPlugin: import("fastify").FastifyPluginAsync;
   healthPlugin: import("fastify").FastifyPluginAsync;
-  gracefulShutdownPlugin: import("fastify").FastifyPluginAsync;
+  gracefulShutdownPlugin: import("fastify").FastifyPluginAsync<GracefulShutdownOptions>;
 }
 
 /**
@@ -107,8 +108,14 @@ export async function registerArcPlugins(
   }
 
   if (config.arcPlugins?.gracefulShutdown !== false) {
-    await fastify.register(gracefulShutdownPlugin);
-    trackPlugin("arc-graceful-shutdown");
+    // Same shape as `health`: `true` = defaults, an object = inline options
+    // (`drainDelayMs` is the one LB deployments need).
+    const shutdownOpts: GracefulShutdownOptions =
+      typeof config.arcPlugins?.gracefulShutdown === "object"
+        ? config.arcPlugins.gracefulShutdown
+        : {};
+    await fastify.register(gracefulShutdownPlugin, shutdownOpts);
+    trackPlugin("arc-graceful-shutdown", shutdownOpts as Record<string, unknown>);
   }
 
   // Caching (opt-in)

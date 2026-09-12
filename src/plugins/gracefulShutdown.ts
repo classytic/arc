@@ -2,6 +2,8 @@
  * Graceful Shutdown Plugin
  *
  * Handles SIGTERM and SIGINT signals for clean shutdown:
+ * - Flips `fastify.shutdownState.draining` so `/ready` fails FIRST (lame duck)
+ * - Keeps serving for `drainDelayMs` while the load balancer deregisters
  * - Stops accepting new connections
  * - Waits for in-flight requests to complete
  * - Closes database connections
@@ -12,9 +14,10 @@
  * @example
  * import { gracefulShutdownPlugin } from '@classytic/arc';
  *
- * // Production
+ * // Production, behind a load balancer
  * await fastify.register(gracefulShutdownPlugin, {
  *   timeout: 30000, // 30 seconds max
+ *   drainDelayMs: 10000, // > the LB's deregistration window
  *   onShutdown: async () => {
  *     await mongoose.disconnect();
  *     await redis.quit();
@@ -40,6 +43,18 @@ export interface GracefulShutdownOptions {
   /** Whether to log shutdown events (default: true) */
   logEvents?: boolean;
   /**
+   * Lame-duck window in ms between flipping readiness and closing the
+   * server (default: 0 — close immediately, the pre-2.41 behaviour).
+   *
+   * A load balancer keeps routing to an instance until its readiness
+   * probe has failed for a few intervals; closing the moment SIGTERM
+   * arrives is the classic rolling-deploy 502. Set this to exceed the LB's
+   * deregistration window (typically 5000–15000) so `/ready` reports
+   * `draining` while the instance still answers everything routed to it.
+   * Counts against `timeout`.
+   */
+  drainDelayMs?: number;
+  /**
    * Called when shutdown times out or encounters an error.
    * Defaults to `process.exit(1)` — appropriate for production but dangerous in:
    * - **Tests**: kills the test runner. Pass `() => {}` or `() => { throw … }`.
@@ -51,6 +66,19 @@ export interface GracefulShutdownOptions {
   onForceExit?: (reason: "timeout" | "error") => void;
 }
 
+/**
+ * Readable shutdown state — `fastify.shutdownState`. Set the moment a signal
+ * (or `fastify.shutdown()`) arrives, BEFORE the server closes, so readiness
+ * can start failing while the instance is still serving. `/live` ignores it:
+ * a draining process is alive, that is the whole point of the window.
+ */
+export interface ShutdownState {
+  /** True from the shutdown signal onward — never resets. */
+  readonly draining: boolean;
+  /** When draining began. */
+  readonly since?: Date;
+}
+
 const gracefulShutdownPlugin: FastifyPluginAsync<GracefulShutdownOptions> = async (
   fastify: FastifyInstance,
   opts: GracefulShutdownOptions = {},
@@ -60,27 +88,31 @@ const gracefulShutdownPlugin: FastifyPluginAsync<GracefulShutdownOptions> = asyn
     onShutdown,
     signals = ["SIGTERM", "SIGINT"],
     logEvents = true,
+    drainDelayMs = 0,
     onForceExit = () => process.exit(1),
   } = opts;
 
-  let isShuttingDown = false;
+  // Mutable here, read-only through the decorator — the one source of truth
+  // for "are we shutting down" (also the double-shutdown guard).
+  const state: { draining: boolean; since?: Date } = { draining: false };
 
   // Keep references to signal handlers so we can remove them on close
   const signalHandlers = new Map<string, () => void>();
 
   const shutdown = async (signal: string): Promise<void> => {
     // Prevent multiple shutdown attempts
-    if (isShuttingDown) {
+    if (state.draining) {
       if (logEvents) {
         fastify.log?.warn?.({ signal }, "Shutdown already in progress, ignoring signal");
       }
       return;
     }
-    isShuttingDown = true;
+    state.draining = true;
+    state.since = new Date();
 
     if (logEvents) {
       fastify.log?.info?.(
-        { signal, timeout },
+        { signal, timeout, drainDelayMs },
         "Shutdown signal received, starting graceful shutdown",
       );
     }
@@ -97,6 +129,15 @@ const gracefulShutdownPlugin: FastifyPluginAsync<GracefulShutdownOptions> = asyn
     forceExitTimer.unref();
 
     try {
+      // 0. Lame duck: readiness already reports `draining` (state above).
+      // Keep serving until the load balancer has stopped sending traffic.
+      if (drainDelayMs > 0) {
+        if (logEvents) {
+          fastify.log?.info?.({ drainDelayMs }, "Draining — readiness failing, still serving");
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, drainDelayMs));
+      }
+
       // 1. Stop accepting new connections and wait for in-flight requests
       if (logEvents) {
         fastify.log?.info?.("Closing server to new connections");
@@ -148,9 +189,11 @@ const gracefulShutdownPlugin: FastifyPluginAsync<GracefulShutdownOptions> = asyn
   fastify.decorate("shutdown", async () => {
     await shutdown("MANUAL");
   });
+  // Same object the shutdown path mutates — readers see the flip immediately.
+  fastify.decorate("shutdownState", state as ShutdownState);
 
   if (logEvents) {
-    fastify.log?.debug?.({ signals }, "Graceful shutdown plugin registered");
+    fastify.log?.debug?.({ signals, drainDelayMs }, "Graceful shutdown plugin registered");
   }
 };
 
@@ -159,6 +202,8 @@ declare module "fastify" {
   interface FastifyInstance {
     /** Trigger graceful shutdown manually */
     shutdown: () => Promise<void>;
+    /** Draining flag + start time; read by the health plugin's `/ready`. */
+    shutdownState: ShutdownState;
   }
 }
 

@@ -17,6 +17,7 @@
 
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
+import { declareRuntimeCapability } from "../../utils/runtimeCapabilities.js";
 import { LocalWebSocketAdapter } from "./adapter.js";
 import type { ConnectionContext } from "./connection.js";
 import { handleConnection } from "./connection.js";
@@ -118,6 +119,22 @@ const websocketPluginImpl: FastifyPluginAsync<WebSocketPluginOptions> = async (
     pushRefRegistry,
     fastify.log,
   );
+
+  // Runtime capabilities — two independent axes. Rooms themselves are NOT
+  // declared: a socket lives on exactly one process, so per-process room
+  // bookkeeping is the only correct shape; what crosses replicas is the
+  // broadcast (adapter) and the reconnect state (pushRef store).
+  declareRuntimeCapability(fastify, {
+    subsystem: "websocket.adapter",
+    durability: adapter ? "shared" : "memory",
+    detail: "LocalWebSocketAdapter: a broadcast reaches only this replica's sockets",
+  });
+  declareRuntimeCapability(fastify, {
+    subsystem: "websocket.pushref-store",
+    durability: options.pushRefStore ? "shared" : "memory",
+    detail:
+      "MemoryPushRefStore: a client reconnecting through another replica loses its dead queue (RESUME replays nothing)",
+  });
 
   // Wire adapter subscription — relay messages from other instances to local
   // clients. Channel prefixes are the wire contract; receiver dispatches on

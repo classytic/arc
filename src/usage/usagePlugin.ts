@@ -33,6 +33,7 @@ import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
 import { getClientId, getOrgId, getUserId } from "../scope/index.js";
 import type { RequestScope } from "../scope/types.js";
+import { declareRuntimeCapability } from "../utils/runtimeCapabilities.js";
 import type { UsageStore } from "./stores/interface.js";
 import { usagePeriod } from "./stores/interface.js";
 import { MemoryUsageStore } from "./stores/memory.js";
@@ -121,6 +122,14 @@ const usagePluginFn: FastifyPluginAsync<UsagePluginOptions> = async (fastify, op
   }
 
   const store: UsageStore = opts.store ?? new MemoryUsageStore();
+  // Runtime capability: the default store counts per process — a quota read
+  // on one replica misses every request the others served. A host-supplied
+  // store is presumed shared (it exists to be).
+  declareRuntimeCapability(fastify, {
+    subsystem: "usage.store",
+    durability: opts.store ? "shared" : "memory",
+    detail: "default MemoryUsageStore: counters are replica-local",
+  });
   const track = { requests: true, egress: false, ...opts.track };
   const ignores = compileIgnore(opts.ignorePaths ?? ["/_health*", "/_metrics*"]);
 

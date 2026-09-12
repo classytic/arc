@@ -50,7 +50,7 @@ export {
   errorHandlerPlugin,
   errorHandlerPlugin as errorHandlerPluginFn,
 } from "./errorHandler.js";
-export type { GracefulShutdownOptions } from "./gracefulShutdown.js";
+export type { GracefulShutdownOptions, ShutdownState } from "./gracefulShutdown.js";
 // Graceful shutdown handling
 export {
   default as gracefulShutdownPlugin,

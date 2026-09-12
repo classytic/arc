@@ -70,12 +70,16 @@ export async function registerSecurityPlugins(
     );
     await fastify.register(rateLimit, rateLimitOpts);
 
-    const hasStore = typeof rateLimitOpts === "object" && "store" in rateLimitOpts;
+    // Both of @fastify/rate-limit's shared forms count: a custom `store`
+    // class, or its documented `redis: ioredisClient` shorthand (which the
+    // plugin wraps in its own RedisStore — no `store` key ever appears).
+    const hasStore =
+      typeof rateLimitOpts === "object" && ("store" in rateLimitOpts || "redis" in rateLimitOpts);
     if (!hasStore) {
       if (config.runtime === "distributed") {
         throw new Error(
           "[Arc] runtime: 'distributed' with rate limiting requires a shared store.\n" +
-            "Provide rateLimit: { store: new RedisStore({ ... }) } or disable rate limiting: rateLimit: false",
+            "Provide rateLimit: { redis: ioredisClient } (or { store: CustomStore }) or disable rate limiting: rateLimit: false",
         );
       } else if (config.preset === "production") {
         fastify.log.warn(

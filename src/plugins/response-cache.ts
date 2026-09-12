@@ -25,6 +25,7 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
+import { declareRuntimeCapability } from "../utils/runtimeCapabilities.js";
 import { hasEvents } from "../utils/typeGuards.js";
 
 // ============================================================================
@@ -298,6 +299,15 @@ const responseCachePluginImpl: FastifyPluginAsync<ResponseCacheOptions> = async 
   }
   const cache = new LRUCache(maxEntries);
   const invalidateMethods = new Set(invalidateOn.map((m) => m.toUpperCase()));
+
+  // Runtime capability: per-replica BY DESIGN (see the header) — accepted, so
+  // the distributed audit logs the decision instead of failing on it.
+  declareRuntimeCapability(fastify, {
+    subsystem: "http.response-cache",
+    durability: "memory",
+    accepted: true,
+    detail: "per-replica micro-cache; correctness comes from short TTLs, not shared state",
+  });
 
   // Declared so per-request assignment in the global onRequest hook below
   // doesn't mutate the request object's hidden class on every GET/HEAD.
