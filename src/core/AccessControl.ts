@@ -245,6 +245,11 @@ export class AccessControl {
   ): boolean {
     // Platform-universal resources (tenantField: false) skip org scope check entirely
     if (!this.tenantField) return true;
+    // A cross-tenant read (`multiTenantPreset({ crossTenant: ['get'] })`) is allowed to return
+    // another tenant's row, so re-checking the org here would 404 the very document the route was
+    // configured to serve. What a stranger may see is the resource's row policy to state, and
+    // `checkPolicyFilters` below still enforces it.
+    if ((arcContext as ArcInternalMetadata | undefined)?._crossTenantRead === true) return true;
     const scope = (arcContext as ArcInternalMetadata | undefined)?._scope;
     const orgId = scope ? getOrgIdFromScope(scope) : undefined;
     // No item, or no active org scope (including elevated admins viewing

@@ -155,6 +155,7 @@ const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
   const POLICY_REQUEST_FIELDS = [
     "_policyFilters",
     "_ownershipCheck",
+    "_crossTenantRead",
     "fieldMask",
     "policyMetadata",
     "document",

@@ -176,6 +176,9 @@ export function createRequestContext(req: FastifyRequest): IRequestContext {
       _scope: rawScope,
       // Include ownership check for access control
       _ownershipCheck: reqWithExtras._ownershipCheck,
+      // A cross-tenant read decided by the preset; the layers below re-derive
+      // tenancy from the scope and would otherwise each undo that decision.
+      _crossTenantRead: reqWithExtras._crossTenantRead,
       // Policy filters — ONLY from trusted middleware (req._policyFilters)
       // SECURITY: Never merge user-supplied query._policyFilters — they are untrusted
       _policyFilters: reqWithExtras._policyFilters ?? {},

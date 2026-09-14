@@ -82,6 +82,22 @@ export function buildTenantRepoOptions(
   const out: AnyRecord = {};
   const scope = arcContext?._scope;
 
+  /**
+   * A cross-tenant read forwards NO tenant to the repository, and says so explicitly.
+   *
+   * Leaving the tenant out would be enough for a kit that treats missing context as "unscoped",
+   * but a kit wired `multiTenantPlugin({ required: true })` rejects the call instead, so silence
+   * reads as a bug rather than as permission. `bypassTenant` is the existing word for this — the
+   * same one elevated cross-tenant reads already use — so no kit needs to learn anything new.
+   */
+  const crossTenantRead =
+    (arcContext as { _crossTenantRead?: boolean } | undefined)?._crossTenantRead === true;
+  if (crossTenantRead) {
+    out.bypassTenant = true;
+    (req as IRequestContext & { _tenantRepoOptions?: AnyRecord })._tenantRepoOptions = out;
+    return out;
+  }
+
   // 1. Tenant scope — primary tenantField + multi-field preset overrides.
   if (tenantField) {
     const orgId = scope ? getOrgIdFromScope(scope) : undefined;

@@ -303,7 +303,11 @@ export class QueryResolver {
     // Skip for platform-universal resources (tenantField: false).
     const scope = arcContext?._scope;
     const orgId = scope ? getOrgIdFromScope(scope) : undefined;
-    if (this.tenantField && orgId && !policyFilters?.[this.tenantField]) {
+    // `_crossTenantRead` is `multiTenantPreset({ crossTenant: [...] })` saying this listing is a
+    // marketplace, not one tenant's shelf. Without this branch the preset's decision was undone
+    // here, one layer down and out of sight: the route stopped filtering and the resolver put the
+    // filter straight back, so a signed-in seller still saw only their own rows.
+    if (this.tenantField && orgId && !arcContext?._crossTenantRead && !policyFilters?.[this.tenantField]) {
       // Only set if not already set by multiTenant preset — conjoined, so it
       // can't clobber (or be clobbered by) an existing constraint on the key.
       filters = conjoinPolicyFilters(filters, { [this.tenantField]: orgId });

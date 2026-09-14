@@ -115,6 +115,44 @@ export interface MultiTenantOptions {
    * multiTenantPreset({ allowPublic: ['list', 'get'] })
    */
   allowPublic?: CrudRouteKey[];
+
+  /**
+   * Reads that are NOT scoped to a tenant at all — a marketplace listing.
+   *
+   * `allowPublic` answers "may an anonymous caller reach this route?". That is a different
+   * question from "is this listing scoped to a tenant?", and until this option there was no way
+   * to answer the second one with "no". An `allowPublic` route still filters by the caller's
+   * organization whenever they have one, and a signed-in user of a multi-org product ALWAYS has
+   * one, because choosing an organization writes it onto the session. So a cross-tenant catalog
+   * silently became single-tenant the moment one of its own sellers browsed it: the same URL,
+   * with no header and no query parameter to explain the difference, returned a different world
+   * depending on who was asking.
+   *
+   * The only escape was to drop this preset from the resource entirely, which also drops tenant
+   * INJECTION on create/update — the thing that stops a member moving a document into another
+   * organization. Trading a write guarantee for a read behaviour is not a real choice.
+   *
+   * Listed routes get no tenant middleware: no filter, and nothing stashed for the repo layer.
+   * Everything else keeps its filter, so writes are unaffected.
+   *
+   * READS ONLY, by type. A cross-tenant `create` or `update` is not a listing, it is an escape
+   * from tenancy, and it should never be one option away by accident.
+   *
+   * THIS DOES NOT AUTHORIZE ANYTHING. Removing the tenant filter widens what the query can
+   * return, so the resource owes a row-level `policy` from its permission check saying what a
+   * stranger may see (`{ status: 'active' }`, `{ visibility: 'public' }`). Declaring this without
+   * one publishes every row in every tenant.
+   *
+   * @default []
+   * @example
+   * // A public catalog: anyone may browse every seller's LIVE products,
+   * // while create/update/delete stay pinned to the caller's own shop.
+   * multiTenantPreset({
+   *   allowPublic: ['list', 'get'],
+   *   crossTenant: ['list', 'get'],
+   * })
+   */
+  crossTenant?: readonly Extract<CrudRouteKey, "list" | "get">[];
 }
 
 /**
@@ -309,7 +347,7 @@ function createTenantInjection(specs: readonly TenantFieldSpec[]): RouteHandler 
 }
 
 export function multiTenantPreset(options: MultiTenantOptions = {}): PresetResult {
-  const { tenantField, tenantFields, allowPublic = [] } = options;
+  const { tenantField, tenantFields, allowPublic = [], crossTenant = [] } = options;
 
   // Mutual exclusion — passing both is almost certainly a config bug
   if (tenantField !== undefined && tenantFields !== undefined) {
@@ -336,6 +374,26 @@ export function multiTenantPreset(options: MultiTenantOptions = {}): PresetResul
   // Helper to select appropriate filter based on allowPublic
   const getFilter = (route: CrudRouteKey): RouteHandler =>
     allowPublic.includes(route) ? flexibleTenantFilter : strictTenantFilter;
+
+  /**
+   * A cross-tenant read MARKS the request rather than simply skipping the filter.
+   *
+   * Skipping is not enough, because this middleware is only the first of four places that scope a
+   * read, and the other three each re-derive the organization from the request scope on their own:
+   * `QueryResolver` adds the tenant filter for `list`, `buildTenantRepoOptions` forwards it to the
+   * repository as tenant context, and `checkOrgScope` re-checks it post-fetch on `get`. Removing
+   * one of four changes nothing observable, which is exactly what made this look unfixable from the
+   * preset: the listing stayed single-tenant no matter what the preset decided.
+   *
+   * So the decision travels on the request instead, and each of those layers honours it. The
+   * repository layer needs no change of its own — kits already accept `bypassTenant`, which is the
+   * same door elevated cross-tenant reads have always used.
+   */
+  const markCrossTenantRead: RouteHandler = async (request: RequestWithExtras): Promise<void> => {
+    (request as RequestWithExtras & { _crossTenantRead?: boolean })._crossTenantRead = true;
+  };
+  const readMiddleware = (route: Extract<CrudRouteKey, "list" | "get">): RouteHandler[] =>
+    crossTenant.includes(route) ? [markCrossTenantRead] : [getFilter(route)];
 
   // v2.11.0 — declare `systemManaged: true` on every tenant dimension so
   // the adapter-generated body schema strips them from `required[]` and
@@ -367,8 +425,8 @@ export function multiTenantPreset(options: MultiTenantOptions = {}): PresetResul
     name: "multiTenant",
     schemaOptions: { fieldRules },
     middlewares: {
-      list: [getFilter("list")],
-      get: [getFilter("get")],
+      list: readMiddleware("list"),
+      get: readMiddleware("get"),
       create: [tenantInjection],
       // UPDATE runs BOTH: filter pins the lookup to the caller's tenant,
       // and injection overwrites any attacker-supplied `organizationId` in

@@ -40,6 +40,16 @@ declare module "fastify" {
     document?: unknown;
     /** Ownership check context (field name + user field) */
     _ownershipCheck?: Record<string, unknown>;
+    /**
+     * This read is deliberately NOT scoped to a tenant — a marketplace listing.
+     *
+     * Set by `multiTenantPreset({ crossTenant: [...] })`. Tenancy is applied in four separate
+     * places for a read (the preset middleware, `QueryResolver`, `buildTenantRepoOptions` and the
+     * post-fetch `checkOrgScope`), each deriving the org from the scope on its own, so a decision
+     * made in one of them is silently re-made by the other three. This flag is how that decision
+     * travels. Never set from user input.
+     */
+    _crossTenantRead?: boolean;
   }
 }
 

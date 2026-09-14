@@ -28,6 +28,8 @@ export interface ArcInternalMetadata extends RequestContext {
   _policyFilters?: Record<string, unknown>;
   /** Request scope from scope resolution */
   _scope?: import("../scope/types.js").RequestScope;
+  /** This read is deliberately unscoped by tenant — see `_crossTenantRead` on FastifyRequest. */
+  _crossTenantRead?: boolean;
   /** Ownership check config from ownedByUser preset */
   _ownershipCheck?: { field: string; userId: string; missingOwner?: "deny" | "allow" };
   /** Arc instance references (hooks, field permissions, etc.) */
