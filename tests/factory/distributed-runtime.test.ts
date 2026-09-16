@@ -154,23 +154,79 @@ describe("distributed runtime validation", () => {
     await app.close();
   });
 
-  it("warns when schedules are configured without a lock (every replica fires)", async () => {
-    const lines: string[] = [];
-    const app = await createApp({
+  /**
+   * REFUSES, it does not warn. This was a warning until 2.41, which did not
+   * survive comparison with the rest of the guard: a replica-local usage
+   * counter fails the boot while "the billing cron runs on all six pods" only
+   * logged. Duplicate side effects are the more expensive failure — two
+   * invoices, two dunning emails, two charges.
+   */
+  it("REFUSES to boot when schedules are configured without a lock", async () => {
+    await expect(
+      createApp({
+        runtime: "distributed",
+        stores: { events: mockRedisTransport as any },
+        auth: false,
+        logger: false,
+        helmet: false,
+        cors: false,
+        rateLimit: false,
+        underPressure: false,
+        arcPlugins: { schedules: {} },
+      }),
+    ).rejects.toThrow(/arcPlugins\.schedules\.lock/);
+  });
+
+  it("names the singleReplica escape in the failure, not just the lock", async () => {
+    // The recommended topology is a `role: 'scheduler'` deployment pinned to
+    // one replica, which needs no lock. A guard that only said "pass a lock"
+    // would push those hosts toward machinery they do not need.
+    const err = await createApp({
       runtime: "distributed",
       stores: { events: mockRedisTransport as any },
       auth: false,
-      logger: {
-        level: "warn",
-        stream: { write: (msg: string) => void lines.push(msg) },
-      } as any,
+      logger: false,
       helmet: false,
       cors: false,
       rateLimit: false,
       underPressure: false,
       arcPlugins: { schedules: {} },
+    }).then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+    expect(err?.message).toMatch(/singleReplica/);
+  });
+
+  it("boots when the host DECLARES a single arming replica", async () => {
+    const app = await createApp({
+      runtime: "distributed",
+      stores: { events: mockRedisTransport as any },
+      auth: false,
+      logger: false,
+      helmet: false,
+      cors: false,
+      rateLimit: false,
+      underPressure: false,
+      arcPlugins: { schedules: { singleReplica: true } },
     });
-    expect(lines.some((l) => l.includes("schedules configured without a `lock`"))).toBe(true);
+    expect(app).toBeTruthy();
+    await app.close();
+  });
+
+  it("schedules disabled entirely is not a violation", async () => {
+    const app = await createApp({
+      runtime: "distributed",
+      stores: { events: mockRedisTransport as any },
+      auth: false,
+      logger: false,
+      helmet: false,
+      cors: false,
+      rateLimit: false,
+      underPressure: false,
+      arcPlugins: { schedules: { enabled: false } },
+    });
+    expect(app).toBeTruthy();
     await app.close();
   });
 

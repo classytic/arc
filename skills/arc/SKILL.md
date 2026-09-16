@@ -725,7 +725,7 @@ await app.audit.custom('order', req.params.id, 'refund', { reason }, { user });
 
 ## Usage counters + plan limits (2.22)
 
-`@classytic/arc/usage` — `usagePlugin` decorates `fastify.usage` with per-actor, per-UTC-month counters (`record`/`summary`/`period`/`actorOf`; actor chain org → user → client → ip). Auto-tracks `api.requests` (default on) + `api.egress.bytes` (opt-in); recording is fail-safe (a throwing `UsageStore` never fails a request; `MemoryUsageStore` built in, Redis/kit backends are ~5 lines). Pair with `createApp({ rateLimit: { plan: { resolve, limits: { free: { max: 60 }, enterprise: false }, default: 'free' } } })` for per-plan ceilings — `false` = unlimited, unknown/throwing resolvers fall back to `default` then global `max`, and buckets follow the tenant key chain by default. Caveat: the limiter runs before route auth, so `resolve` sees the raw request.
+`@classytic/arc/usage` — `usagePlugin` decorates `fastify.usage` with per-actor, per-UTC-month counters (`record`/`summary`/`period`/`actorOf`; actor chain org → user → client → ip). Auto-tracks `api.requests` (default on) + `api.egress.bytes` (opt-in); recording is fail-safe (a throwing `UsageStore` never fails a request). Stores: `MemoryUsageStore` (default, single-process) and `RedisUsageStore` (2.41 — `HINCRBY`, the right shape for a hot per-request counter) both from `@classytic/arc/usage`; or a kit's (`@classytic/mongokit/usage`) when counters belong beside domain data. `RedisUsageStore` keeps counters forever by default — `retentionSeconds` is opt-in, because expiring billing history on an unchosen schedule is silent (`summary()` returns `{}` for an expired bucket and a never-written one alike). Pair with `createApp({ rateLimit: { plan: { resolve, limits: { free: { max: 60 }, enterprise: false }, default: 'free' } } })` for per-plan ceilings — `false` = unlimited, unknown/throwing resolvers fall back to `default` then global `max`, and buckets follow the tenant key chain by default. Caveat: the limiter runs before route auth, so `resolve` sees the raw request.
 
 ## Runtime capability registry (2.33)
 
@@ -737,12 +737,16 @@ import { declareRuntimeCapability } from '@classytic/arc/utils';
 declareRuntimeCapability(fastify, {
   subsystem: 'billing.sequence-cache',
   durability: 'memory',        // 'memory' | 'shared'
-  accepted: true,              // per-process BY DESIGN (logged, never fatal)
-  detail: 'short-TTL cache; correctness from TTL, not shared state',
+  detail: 'invoice numbering cached per process',
+  // accepted: true,           // ONLY when per-process is intended by design
+  //                           // (logged, never fatal). Must be stated by the
+  //                           // declarant — the audit never infers it.
 });
 ```
 
-`createApp`'s constructor-time guard only sees what it is passed; state a host wires inside `plugins()` was invisible to it and lived on a checklist. This makes the checklist enforcement. Arc's webhooks plugin declares its default in-memory store.
+`createApp`'s constructor-time guard only sees what it is passed; state a host wires inside `plugins()` was invisible to it and lived on a checklist. This makes the checklist enforcement. Declare from anywhere a registration reaches — `plugins()`, a module phase, or your own encapsulated `fastify.register()`; all land in the one audit (2.41).
+
+**Since 2.41 every memory-backed default arc ships declares itself**: `auth.sessions`, `usage.store`, `audit.store`, `cache.query`, `permissions.dynamic-cache` (pass `fastify:` to the matrix — it has no handle of its own), `websocket.adapter`, `websocket.pushref-store`, `webhooks.store`. `http.response-cache` declares `accepted` (per-replica by design). So a distributed app that booted before 2.41 can now fail on a default it was silently running replica-local — the error names each one, and `references/production.md` has the store-by-store fix table.
 
 ## Adapters
 

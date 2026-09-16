@@ -73,8 +73,18 @@ export async function registerSecurityPlugins(
     // Both of @fastify/rate-limit's shared forms count: a custom `store`
     // class, or its documented `redis: ioredisClient` shorthand (which the
     // plugin wraps in its own RedisStore — no `store` key ever appears).
+    //
+    // The VALUE has to be there, not just the key: `{ redis: maybeClient }`
+    // where the client failed to build is the shape a host writes, and `in`
+    // would call that a shared store and let a distributed boot through with
+    // per-replica counters — the exact deployment this guard exists to refuse.
+    const rateLimitRecord =
+      typeof rateLimitOpts === "object" && rateLimitOpts !== null
+        ? (rateLimitOpts as Record<string, unknown>)
+        : undefined;
     const hasStore =
-      typeof rateLimitOpts === "object" && ("store" in rateLimitOpts || "redis" in rateLimitOpts);
+      rateLimitRecord !== undefined &&
+      (rateLimitRecord.store != null || rateLimitRecord.redis != null);
     if (!hasStore) {
       if (config.runtime === "distributed") {
         throw new Error(

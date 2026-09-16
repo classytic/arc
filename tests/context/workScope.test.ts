@@ -131,11 +131,54 @@ describe("scopedValue — the memo slot", () => {
       expect(scopedValue(SLOT, () => ({}))).toBe(before);
     });
   });
+
+  // "Created once per scope" is the ONLY guarantee this has, so it cannot hold
+  // for some return values and not others. A truthiness check on the stored
+  // value breaks exactly the falsy ones — and silently: every call still
+  // returns a correct-looking result, it just pays for a fresh `create()` each
+  // time. A memoized `null` from a lookup that found nothing, or a `0`
+  // counter, is the caller least likely to notice and most likely to care.
+  it.each([
+    ["undefined", undefined],
+    ["null", null],
+    ["0", 0],
+    ["empty string", ""],
+    ["false", false],
+  ])("memoizes a falsy value (%s) — created once, not once per call", (_label, value) => {
+    runWorkScope({ kind: "job", id: "j" }, () => {
+      const slot = Symbol(`test.falsy.${String(value)}`);
+      let created = 0;
+      const create = () => {
+        created++;
+        return value;
+      };
+      expect(scopedValue(slot, create)).toBe(value);
+      expect(scopedValue(slot, create)).toBe(value);
+      expect(scopedValue(slot, create)).toBe(value);
+      expect(created).toBe(1);
+    });
+  });
+
+  it("a memoized falsy value is still not shared ACROSS scopes", () => {
+    const slot = Symbol("test.falsy.cross-scope");
+    let created = 0;
+    const create = () => {
+      created++;
+      return null;
+    };
+    runWorkScope({ kind: "job", id: "a" }, () => void scopedValue(slot, create));
+    runWorkScope({ kind: "job", id: "b" }, () => void scopedValue(slot, create));
+    expect(created).toBe(2);
+  });
 });
 
 describe("workSeedFromEvent", () => {
   const evt = (meta: Partial<DomainEvent["meta"]>): DomainEvent =>
-    ({ type: "order:created", payload: {}, meta: { id: "e1", timestamp: new Date(), ...meta } }) as DomainEvent;
+    ({
+      type: "order:created",
+      payload: {},
+      meta: { id: "e1", timestamp: new Date(), ...meta },
+    }) as DomainEvent;
 
   it("uses the correlation id as the scope id so child events chain", () => {
     expect(workSeedFromEvent(evt({ correlationId: "corr-1" }))).toMatchObject({

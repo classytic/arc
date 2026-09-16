@@ -46,22 +46,49 @@ await fastify.register(requestIdPlugin, {
 
 ## Graceful Shutdown Plugin
 
+Registered by default (`arcPlugins.gracefulShutdown`). Pass an options object to configure it inline from `createApp`.
+
 ```typescript
 import { gracefulShutdownPlugin } from '@classytic/arc/plugins';
 
 await fastify.register(gracefulShutdownPlugin, {
-  timeout: 30000,
+  timeout: 30000,          // hard cap; drainDelayMs counts against it
+  drainDelayMs: 10000,     // lame-duck window — see below
   signals: ['SIGTERM', 'SIGINT'],
   logEvents: true,
   onShutdown: async () => {
     await mongoose.disconnect();
     await redis.quit();
   },
+  onForceExit: () => {},   // tests: stop a timeout from killing the runner
 });
 
-// Sequence: receive signal → stop accepting connections → wait for in-flight
-// → run onShutdown → close Fastify → exit process
+// Sequence: signal → shutdownState.draining = true (/ready starts 503ing)
+//   → wait drainDelayMs (still serving) → fastify.close() (stops accepting,
+//   drains in-flight) → onShutdown() → exit naturally
 ```
+
+**`fastify.close()` runs BEFORE `onShutdown`** — so `onShutdown` is where you release what arc doesn't own (DB connections, your own Redis client), and it runs after in-flight requests are done. Don't close anything a request might still need.
+
+### `drainDelayMs` — the rolling-deploy 502
+
+Default `0`, which is the pre-2.41 behaviour: close the moment SIGTERM arrives. That is the classic rolling-deploy 502 — a load balancer keeps routing to an instance until its readiness probe has failed **for several intervals**, and by then the instance already stopped accepting.
+
+`drainDelayMs` is the window between "start failing readiness" and "stop accepting":
+
+- `/health/ready` → `503 { status: 'draining' }` immediately on signal
+- `/health/live` → stays `200` (a draining process is alive — that's the point; a 503 here gets the pod **killed**, not drained)
+- everything already routed here is still served for the whole window
+
+Set it **above** your LB's deregistration window — typically 5000–15000ms. On Kubernetes, also keep `terminationGracePeriodSeconds` > `drainDelayMs + timeout`, or the kubelet SIGKILLs you mid-drain.
+
+```typescript
+createApp({
+  arcPlugins: { gracefulShutdown: { drainDelayMs: 10_000, timeout: 30_000 } },
+});
+```
+
+**Do not also write `process.on('SIGTERM', () => app.close())`.** The plugin already owns those signals; a second handler closes the server immediately and skips the drain entirely — you get the 502s back while the config says you fixed them.
 
 ## Audit Plugin
 
@@ -464,21 +491,79 @@ const app = await createApp({
   auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
   cors: { origin: process.env.ALLOWED_ORIGINS?.split(',') ?? [], credentials: true },
   rateLimit: { max: 100, timeWindow: '1 minute' },
-  arcPlugins: { queryCache: true },
+  arcPlugins: {
+    queryCache: true,
+    // Behind a load balancer: fail readiness first, keep serving while it
+    // deregisters, then close. No manual process.on('SIGTERM') — the plugin
+    // owns the signals, and a second handler skips the drain.
+    gracefulShutdown: { drainDelayMs: 10_000 },
+  },
 });
-
-process.on('SIGTERM', () => app.close());
-process.on('SIGINT', () => app.close());
 ```
 
 ## Distributed Runtime
 
-`runtime: 'distributed'` only validates stores you actually enable:
+`runtime: 'distributed'` is the "more than one replica" switch. It refuses to boot when something in the app holds state that only exists in **this** process. Two checks, one policy:
+
+**1. Constructor-time guard** — what `createApp` can see in its own options, checked before any boot cost:
 
 - `stores.events` — always required
 - `stores.cache` — only when `arcPlugins.caching` enabled
 - `stores.queryCache` — only when `arcPlugins.queryCache` enabled
-- `stores.idempotency` — never validated (per-resource opt-in)
+- `stores.idempotency` — warn only (per-resource opt-in)
+- `rateLimit` — needs a shared store: `{ redis: client }` or `{ store: CustomStore }`. Both forms count; `rateLimit: false` opts out.
+- `arcPlugins.schedules` — needs `lock` (a `LockAdapter`, for a fleet where any replica may arm schedules) **or** `singleReplica: true` (exactly one replica arms them — the `role: 'scheduler'` deployment pinned at 1). Without one, boot fails: otherwise every replica fires every tick, and duplicate side effects are two invoices, not a stale cache. `singleReplica` is a claim about your deployment — scale that deployment past one replica and it becomes false.
+
+**2. Capability audit** (end of boot) — everything wired inside `plugins()`, `bootstrap[]`, or a module phase, which the guard above cannot inspect. Subsystems declare via `declareRuntimeCapability`; an undeclared-shared memory default **fails the boot in one error naming every violator**, so you fix them in one pass rather than one restart each.
+
+What declares itself, and what fixes it:
+
+| Subsystem | Default | Shared option |
+|---|---|---|
+| `auth.sessions` | `MemorySessionStore` | `RedisSessionStore` (`@classytic/arc/auth/redis`) |
+| `usage.store` | `MemoryUsageStore` | `RedisUsageStore` (`@classytic/arc/usage`) or `@classytic/mongokit/usage` |
+| `audit.store` | `MemoryAuditStore` | `repository: yourRepo` (any kit) |
+| `cache.query` | `MemoryCacheStore` | `RedisCacheStore` (`@classytic/arc/cache`) |
+| `permissions.dynamic-cache` | internal memory | `cacheStore:` — **and pass `fastify:`**, the matrix has no handle of its own so it is invisible to the audit without it |
+| `websocket.adapter` | `LocalWebSocketAdapter` | Redis adapter (`@classytic/arc/integrations/websocket-redis`) |
+| `websocket.pushref-store` | memory | Redis pushRef store |
+| `webhooks.store` | memory | shared store, or durable mode |
+| `http.response-cache` | memory | **nothing — declared `accepted`.** Per-replica by design; correctness comes from short TTLs. Logged, never a failure. |
+
+### Circuit breakers count per replica unless you say otherwise
+
+`CircuitBreaker` state is in-process. With 50 pods and `failureThreshold: 5`, a dead downstream absorbs **250 real requests** before anything opens — each pod rediscovers the same outage independently. Share the failure window:
+
+```typescript
+import { CircuitBreaker, RedisCircuitBreakerState } from '@classytic/arc/utils';
+
+const shared = new RedisCircuitBreakerState({ redis });   // fixed window, default 60s
+
+const payments = new CircuitBreaker(charge, {
+  name: 'stripe.charges',   // REQUIRED with sharedState — the key every replica counts under
+  failureThreshold: 5,
+  sharedState: shared,
+});
+```
+
+First replica trips at the threshold; every other trips on its **next** failure. It shares the failure *signal*, not the state machine — each replica still owns its own OPEN/HALF_OPEN probing, which avoids needing consensus over who probes. Nothing touches the network on the success path, the failure path never *waits* on the store, and a store that throws degrades to local counting rather than disabling the breaker.
+
+Hosts declare their own too — a replica-local cache you built in `plugins()` belongs in the audit:
+
+```typescript
+import { declareRuntimeCapability } from '@classytic/arc/utils';
+
+declareRuntimeCapability(fastify, {
+  subsystem: 'billing.sequence-cache',
+  durability: 'memory',                  // 'memory' | 'shared'
+  detail: 'invoice numbering cached per process',
+  // accepted: true,                     // only when per-process is INTENDED
+});
+```
+
+Declare from anywhere a registration reaches — `plugins()`, a module phase, or inside your own encapsulated `fastify.register()`; all land in the one audit. `accepted: true` is for state that is per-process **by design**; it must be stated by the declarant, never inferred.
+
+**Migration note:** a distributed app that booted fine before 2.41 can now fail on a default it was silently running replica-local (usage counters and audit trails were the common ones). The boot error names each. That is the bug surfacing, not a new one.
 
 ## Under-Pressure
 

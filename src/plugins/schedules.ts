@@ -100,6 +100,24 @@ export interface SchedulesPluginOptions {
    */
   enabled?: boolean;
   /**
+   * States that exactly ONE replica of this deployment arms schedules, so no
+   * lock is needed. Same idiom as `eventPlugin, { singleProcess: true }`.
+   *
+   * Under `runtime: 'distributed'`, schedules with neither `lock` nor this
+   * flag FAIL the boot. Without one of them arc cannot tell a deliberately
+   * single-armed deployment — the `role: 'scheduler'` process pinned to one
+   * replica, which is the recommended topology — from the accidental default,
+   * where every replica in a fleet fires every tick. The accidental case is
+   * duplicate side effects: two invoices, two dunning emails, two charges.
+   * That is a worse failure than the replica-local stores arc already refuses
+   * to boot on, so it is held to the same standard rather than warned about.
+   *
+   * Set it only when the replica count for the process that arms schedules is
+   * genuinely one. It is a claim about your deployment, not a silencer — if
+   * you scale that deployment past one replica, remove it and pass a `lock`.
+   */
+  singleReplica?: boolean;
+  /**
    * How long `onClose` waits for in-flight runs before abandoning them.
    * Default: 5000.
    *

@@ -3,13 +3,22 @@
  *
  * The accounting primitive quotas, plan limits, and usage-based billing
  * are built on. One decoration (`fastify.usage`), one store contract
- * (`UsageStore` — memory built in, Redis/kit-backed pluggable), and
- * opt-out zero-config tracking of API requests + response bytes.
+ * (`UsageStore`), and opt-out zero-config tracking of API requests +
+ * response bytes.
+ *
+ * Three stores answer `runtime: 'distributed'`'s `usage.store` violation:
+ * `RedisUsageStore` (shipped here — `HINCRBY`, the right shape for a hot
+ * per-request counter), a kit's (`@classytic/mongokit/usage`, when the
+ * counters belong beside your domain data in one backup), or your own —
+ * the contract is two methods.
  *
  * ```typescript
- * import { usagePlugin, MemoryUsageStore } from '@classytic/arc/usage';
+ * import { usagePlugin, RedisUsageStore } from '@classytic/arc/usage';
+ * import Redis from 'ioredis';
  *
- * await app.register(usagePlugin, { store: new RedisUsageStore({ client }) });
+ * await app.register(usagePlugin, {
+ *   store: new RedisUsageStore({ redis: new Redis(process.env.REDIS_URL) }),
+ * });
  *
  * // Automatic: 'api.requests' (+ 'api.egress.bytes') per actor per month.
  * // Manual — anything your product sells:

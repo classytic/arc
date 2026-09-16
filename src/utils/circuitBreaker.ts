@@ -48,6 +48,54 @@ export type CircuitState = (typeof CircuitState)[keyof typeof CircuitState];
  */
 type AnyAsyncFn = (...args: never[]) => Promise<unknown>;
 
+/**
+ * Cluster-wide failure counting for a circuit.
+ *
+ * ## What this shares, and what it deliberately does not
+ *
+ * It shares the failure SIGNAL, not the state machine. Each replica still owns
+ * its own CLOSED/OPEN/HALF_OPEN transitions and its own probe scheduling; what
+ * becomes cluster-wide is the count that decides when to trip.
+ *
+ * That is the whole of the problem worth solving. Per-replica counting means a
+ * downstream outage costs `failureThreshold × replicas` real requests before
+ * anything opens — at 5 and 50 that is 250 errors a failing payment gateway
+ * absorbs while every pod independently rediscovers the same outage. Sharing
+ * the count collapses it: the first replica trips at the threshold, and every
+ * other replica trips on its NEXT failure, because the shared window is
+ * already over the line.
+ *
+ * Sharing the full state machine instead would mean electing which replica
+ * probes in HALF_OPEN — consensus, plus a lock, plus a read on the hot path.
+ * The remaining gap without it is bounded and small: one extra failure per
+ * replica, once, versus `failureThreshold` per replica every time.
+ *
+ * ## Cost
+ *
+ * ONLY the failure path calls this. A successful call never touches the
+ * network, which matters because success is the common case and this wraps
+ * things like a payment charge. `reset` is called when a circuit closes.
+ *
+ * ## Failure of the store itself
+ *
+ * Never propagates. If the shared counter is unreachable the breaker falls
+ * back to its local count — degraded to the old behaviour, which is the
+ * correct direction: a Redis blip must not disable the protection that exists
+ * for a downstream outage, and the two often arrive together.
+ */
+export interface CircuitBreakerSharedState {
+  /** Store name for diagnostics. */
+  readonly name: string;
+  /**
+   * Record one failure for `circuit` and return the CLUSTER-wide count within
+   * the current window. Implementations expire the window so a long-ago
+   * outage does not trip a healthy circuit.
+   */
+  recordFailure(circuit: string): Promise<number>;
+  /** Clear the window — called when this replica closes the circuit. */
+  reset(circuit: string): Promise<void>;
+}
+
 export interface CircuitBreakerOptions {
   /**
    * Number of failures before opening circuit
@@ -120,6 +168,20 @@ export interface CircuitBreakerOptions {
    * Name for logging/monitoring
    */
   name?: string;
+
+  /**
+   * Cluster-wide failure counting — see {@link CircuitBreakerSharedState}.
+   *
+   * Omit for a single process, where the local count already IS the cluster
+   * count. Under a multi-replica deployment this is what stops every replica
+   * absorbing the full threshold before anything trips.
+   *
+   * Requires a stable {@link CircuitBreakerOptions.name}: it is the key every
+   * replica must agree on. A breaker with `sharedState` and no `name` throws
+   * at construction rather than silently counting under a generated id that no
+   * other replica shares.
+   */
+  sharedState?: CircuitBreakerSharedState;
 }
 
 export interface CircuitBreakerStats {
@@ -163,11 +225,22 @@ export class CircuitBreaker<T extends AnyAsyncFn> {
   private readonly onStateChange?: (from: CircuitState, to: CircuitState) => void;
   private readonly onError?: (error: Error) => void;
   private readonly name: string;
+  private readonly sharedState?: CircuitBreakerSharedState;
 
   private readonly fn: T;
 
   constructor(fn: T, options: CircuitBreakerOptions = {}) {
     this.fn = fn;
+    // A shared counter is keyed by the circuit name, so every replica has to
+    // agree on it. The default name is per-instance, which would give each
+    // replica its own key — the exact per-replica counting this exists to end,
+    // with the added cost of a Redis round trip. Refuse instead.
+    if (options.sharedState && !options.name) {
+      throw new Error(
+        "[arc] CircuitBreaker: `sharedState` requires an explicit `name` — it is the key every replica counts under. Without it each replica would count under its own key.",
+      );
+    }
+    this.sharedState = options.sharedState;
     this.failureThreshold = options.failureThreshold ?? 5;
     this.resetTimeout = options.resetTimeout ?? 60000;
     this.timeout = options.timeout ?? 10000;
@@ -294,6 +367,11 @@ export class CircuitBreaker<T extends AnyAsyncFn> {
       if (this.successes >= this.successThreshold) {
         this.setState(CircuitState.CLOSED);
         this.successes = 0;
+        // Clear the cluster window only on a real recovery — `successThreshold`
+        // probes passed, not one lucky call. Clearing on every success would
+        // let a downstream that alternates pass/fail keep resetting the window
+        // and never trip anywhere.
+        this.clearSharedWindow();
       }
     }
   }
@@ -309,11 +387,53 @@ export class CircuitBreaker<T extends AnyAsyncFn> {
       this.onError(error);
     }
 
-    if (this.state === CircuitState.HALF_OPEN || this.failures >= this.failureThreshold) {
-      this.setState(CircuitState.OPEN);
-      this.nextAttempt = Date.now() + this.resetTimeout;
-      this.openedAt = Date.now();
+    const trippedLocally =
+      this.state === CircuitState.HALF_OPEN || this.failures >= this.failureThreshold;
+    if (trippedLocally) {
+      this.trip();
     }
+
+    if (!this.sharedState) return;
+
+    // Published on EVERY failure — a replica that already tripped still has to
+    // let the others see it, and one that has not still has to contribute.
+    //
+    // Deliberately NOT awaited. The caller's error is already on its way back;
+    // making it wait for a round trip would add latency to the failure path,
+    // and would hang it outright when the unreachable thing is the counter
+    // store. Tripping a tick later costs nothing.
+    void this.sharedState
+      .recordFailure(this.name)
+      .then((clusterFailures) => {
+        if (
+          !trippedLocally &&
+          this.state === CircuitState.CLOSED &&
+          clusterFailures >= this.failureThreshold
+        ) {
+          this.trip();
+        }
+      })
+      .catch(() => {
+        // Degrade to local counting, silently. A breaker that stops protecting
+        // because its bookkeeping store blinked is worse than one that counts
+        // per replica — and those two outages tend to arrive together.
+      });
+  }
+
+  /** Open the circuit and schedule the next probe. */
+  private trip(): void {
+    this.setState(CircuitState.OPEN);
+    this.nextAttempt = Date.now() + this.resetTimeout;
+    this.openedAt = Date.now();
+  }
+
+  /** Best-effort clear of the cluster failure window. Never throws. */
+  private clearSharedWindow(): void {
+    if (!this.sharedState) return;
+    void this.sharedState.reset(this.name).catch(() => {
+      // Same reasoning as `recordFailure` — the window's own TTL is the
+      // backstop, so a failed reset expires rather than sticking.
+    });
   }
 
   /**

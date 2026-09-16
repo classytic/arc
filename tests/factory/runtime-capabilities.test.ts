@@ -207,3 +207,146 @@ describe("runtime capability registry", () => {
     );
   });
 });
+
+/**
+ * Where the declaration is made must not change whether it is heard.
+ *
+ * A Fastify child (`register` with an un-`fp`-wrapped plugin) is
+ * `Object.create(parent)`: a symbol READ finds the parent's array through the
+ * prototype chain, but a symbol WRITE always lands on the child. With the
+ * registry created lazily, the FIRST declarant therefore decided where it
+ * lived — and a host declaring from inside its own encapsulated `register()`
+ * before anything else declared got an own array on the child that the root
+ * audit never read. The boot passed. Silence from the mechanism whose entire
+ * job is to refuse to boot is the worst failure it has, so it is pinned here.
+ *
+ * Every case below declares from a child and NOTHING declares at the root, so
+ * the root array only exists if `createApp` seeded it up front.
+ */
+describe("runtime capability registry — encapsulation", () => {
+  const distributed = {
+    runtime: "distributed",
+    rateLimit: false,
+    stores: { events: sharedTransport },
+  } as const;
+
+  it("a declaration from an ENCAPSULATED child reaches the audit", async () => {
+    await arcAppRefuses(
+      {
+        ...distributed,
+        plugins: async (f) => {
+          // Un-`fp`-wrapped: a real encapsulation boundary, the shape a host
+          // writes to keep its own decorators out of the root.
+          await f.register(async (child) => {
+            declareRuntimeCapability(child, {
+              subsystem: "billing.child-scoped-cache",
+              durability: "memory",
+              detail: "declared inside an encapsulated plugin",
+            });
+          });
+        },
+      },
+      /billing\.child-scoped-cache/,
+    );
+  });
+
+  it("nesting depth does not lose it", async () => {
+    await arcAppRefuses(
+      {
+        ...distributed,
+        plugins: async (f) => {
+          await f.register(async (child) => {
+            await child.register(async (grandchild) => {
+              declareRuntimeCapability(grandchild, {
+                subsystem: "billing.grandchild-cache",
+                durability: "memory",
+              });
+            });
+          });
+        },
+      },
+      /billing\.grandchild-cache/,
+    );
+  });
+
+  it("a child declaring FIRST does not orphan a later root declaration", async () => {
+    // Order is the actual trigger: pre-fix, the child's own array won the slot
+    // and a root declaration made afterwards landed somewhere else entirely.
+    // BOTH must appear in the one error.
+    const err = await arcApp({
+      ...distributed,
+      plugins: async (f) => {
+        await f.register(async (child) => {
+          declareRuntimeCapability(child, {
+            subsystem: "first.from-child",
+            durability: "memory",
+          });
+        });
+        declareRuntimeCapability(f, {
+          subsystem: "second.from-root",
+          durability: "memory",
+        });
+      },
+    }).then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err?.message).toContain("first.from-child");
+    expect(err?.message).toContain("second.from-root");
+    // One error naming every violator — not one boot per fix.
+    expect(err?.message).toContain("2 subsystem(s)");
+  });
+
+  it("`accepted` from a child is honoured too — the boot passes", async () => {
+    const app = await arcApp({
+      ...distributed,
+      plugins: async (f) => {
+        await f.register(async (child) => {
+          declareRuntimeCapability(child, {
+            subsystem: "http.child-micro-cache",
+            durability: "memory",
+            accepted: true,
+            detail: "per-replica by design",
+          });
+        });
+      },
+    });
+    expect(app).toBeTruthy();
+  });
+
+  it("`accepted` from a child is CLASSIFIED, not merely lost", async () => {
+    // The test above passes vacuously if a child's declaration is dropped —
+    // no declaration is also no violation. This one can't: a second child
+    // declares a real violation, so the boot fails either way and the message
+    // shows whether the accepted sibling was heard and correctly exonerated,
+    // rather than never having arrived.
+    const err = await arcApp({
+      ...distributed,
+      plugins: async (f) => {
+        await f.register(async (child) => {
+          declareRuntimeCapability(child, {
+            subsystem: "http.accepted-child",
+            durability: "memory",
+            accepted: true,
+          });
+        });
+        await f.register(async (child) => {
+          declareRuntimeCapability(child, {
+            subsystem: "billing.violating-child",
+            durability: "memory",
+          });
+        });
+      },
+    }).then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err?.message).toContain("billing.violating-child");
+    expect(err?.message).not.toContain("http.accepted-child");
+    expect(err?.message).toContain("1 subsystem(s)");
+  });
+});

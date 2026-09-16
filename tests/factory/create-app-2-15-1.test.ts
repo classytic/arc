@@ -183,6 +183,7 @@ describe("resolveLoggerConfig — logger redact safe defaults (2.15.1)", () => {
       redact: expect.arrayContaining([
         "req.headers.authorization",
         "req.headers.cookie",
+        'req.headers["x-device-token"]',
         "*.password",
         "*.token",
       ]),
@@ -235,6 +236,39 @@ describe("resolveLoggerConfig — logger redact safe defaults (2.15.1)", () => {
       expect(res.statusCode).toBe(200);
     } finally {
       if (app) await app.close();
+    }
+  });
+
+  it("redacts device credentials from request-shaped logs", async () => {
+    const lines: string[] = [];
+    const secret = "device-secret-must-not-leak";
+    const app = await createApp({
+      preset: "testing",
+      auth: false,
+      logger: {
+        level: "info",
+        stream: { write: (line: string) => void lines.push(line) },
+      } as never,
+      plugins: async (f) => {
+        f.post("/device", async (req) => {
+          req.log.info({ req: { headers: req.headers } }, "device upload");
+          return { ok: true };
+        });
+      },
+    });
+
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/device",
+        headers: { "x-device-token": secret },
+      });
+      expect(res.statusCode).toBe(200);
+      const captured = lines.join("\n");
+      expect(captured).toContain("device upload");
+      expect(captured).not.toContain(secret);
+    } finally {
+      await app.close();
     }
   });
 });

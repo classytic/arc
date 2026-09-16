@@ -25,6 +25,8 @@ import type { RedisStreamLike } from "../../src/events/transports/redis-stream.j
 import type { IoredisLike as IdempotencyIoredisLike } from "../../src/idempotency/stores/redis.js";
 import type { RedisLike as PushRefRedisLike } from "../../src/integrations/websocket-pushref-redis.js";
 import type { RedisLike as WsRedisLike } from "../../src/integrations/websocket-redis.js";
+import type { UsageRedisLike } from "../../src/usage/stores/redis.js";
+import type { CircuitBreakerRedisLike } from "../../src/utils/circuitBreakerRedis.js";
 
 function assignable(redis: Redis): void {
   // The documented `ioredisAs*Client(new Redis())` paths.
@@ -37,7 +39,11 @@ function assignable(redis: Redis): void {
   const sessions: SessionRedisLike = redis;
   const ws: WsRedisLike = redis;
   const pushRef: PushRefRedisLike = redis;
-  void [idempotency, cache, stream, pubsub, sessions, ws, pushRef];
+  // Usage counters (HINCRBY/HGETALL/EXPIRE + the optional pipeline).
+  const usage: UsageRedisLike = redis;
+  // Cluster failure counting for CircuitBreaker (INCR/PEXPIRE/DEL).
+  const circuit: CircuitBreakerRedisLike = redis;
+  void [idempotency, cache, stream, pubsub, sessions, ws, pushRef, usage, circuit];
 }
 
 describe("ioredis `Redis` is assignable to every arc Redis-like shape", () => {

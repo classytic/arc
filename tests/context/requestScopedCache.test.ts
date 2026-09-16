@@ -114,3 +114,74 @@ describe("requestScopedCache — isolation is the whole point", () => {
     });
   });
 });
+
+/**
+ * The bound. Unbounded was correct while a scope meant one HTTP request: the
+ * store died in milliseconds and was bounded by what one request touched.
+ * 2.40 extended scopes to job runs, and `schedulesPlugin` wraps the WHOLE
+ * handler in one — so a nightly sweep over a million rows holds a single cache
+ * for the duration. The lifetime the old design ruled out now happens.
+ *
+ * Evicting is always safe here because this is a cache: a miss costs the
+ * re-read it was avoiding, nothing more. Growing without limit does not have
+ * that property.
+ */
+describe("requestScopedCache — bounded for long-lived scopes", () => {
+  const MAX_ENTRIES = 10_000;
+
+  it("keeps every entry below the cap", async () => {
+    await inRequest(async () => {
+      const cache = requestScopedCache();
+      for (let i = 0; i < MAX_ENTRIES; i++) await cache?.set(`k${i}`, i);
+      expect(await cache?.get("k0")).toBe(0);
+      expect(await cache?.get(`k${MAX_ENTRIES - 1}`)).toBe(MAX_ENTRIES - 1);
+    });
+  });
+
+  it("evicts rather than growing forever once the cap is passed", async () => {
+    await inRequest(async () => {
+      const cache = requestScopedCache();
+      // One past the cap: the least recently used key must be gone, and the
+      // newest must be present. A store that kept both is unbounded.
+      for (let i = 0; i < MAX_ENTRIES + 1; i++) await cache?.set(`k${i}`, i);
+      expect(await cache?.get("k0")).toBeUndefined();
+      expect(await cache?.get(`k${MAX_ENTRIES}`)).toBe(MAX_ENTRIES);
+    });
+  });
+
+  it("evicts LEAST-RECENTLY-USED, not oldest-written", async () => {
+    await inRequest(async () => {
+      const cache = requestScopedCache();
+      for (let i = 0; i < MAX_ENTRIES; i++) await cache?.set(`k${i}`, i);
+
+      // Touch the oldest key — a job looping over a hot row must not lose it
+      // just because it was written first.
+      expect(await cache?.get("k0")).toBe(0);
+      await cache?.set("overflow", "x");
+
+      expect(await cache?.get("k0")).toBe(0); // rescued by the read
+      expect(await cache?.get("k1")).toBeUndefined(); // now the LRU victim
+    });
+  });
+
+  it("an overwrite refreshes recency instead of leaving a stale slot", async () => {
+    await inRequest(async () => {
+      const cache = requestScopedCache();
+      for (let i = 0; i < MAX_ENTRIES; i++) await cache?.set(`k${i}`, i);
+
+      await cache?.set("k0", "rewritten");
+      await cache?.set("overflow", "x");
+
+      expect(await cache?.get("k0")).toBe("rewritten");
+      expect(await cache?.get("k1")).toBeUndefined();
+    });
+  });
+
+  it("a scope well under the cap is untouched — no eviction on the normal path", async () => {
+    await inRequest(async () => {
+      const cache = requestScopedCache();
+      for (let i = 0; i < 50; i++) await cache?.set(`k${i}`, i);
+      for (let i = 0; i < 50; i++) expect(await cache?.get(`k${i}`)).toBe(i);
+    });
+  });
+});

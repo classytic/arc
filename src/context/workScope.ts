@@ -13,6 +13,15 @@
  *     request's store; shadowing it would discard the reads the request made.
  *   - `scopedValue` returns `undefined` outside a scope. Never a process-wide
  *     fallback — that is the cross-scope leak the scoping exists to prevent.
+ *
+ * The inherit rule is right for work the caller OWNS — a publish it made, on
+ * its own data, awaited in its own stack. It is wrong for work merely TRIGGERED
+ * from a request: a background pass that also processes other callers' items
+ * would inherit one request's tenant, user and cache for all of them.
+ * AsyncLocalStorage propagates through `setImmediate`/`setTimeout`/promises, so
+ * deferring is not enough to escape — whoever hands work to a shared processor
+ * must leave the scope explicitly (`requestContext.storage.exit(fn)`, as
+ * `OutboxModuleExports.requestDrain` does) so each item opens its own.
  */
 
 import type { DomainEvent } from "@classytic/primitives/events";
@@ -46,9 +55,13 @@ export function runWorkScope<T>(seed: WorkSeed, fn: () => T): T {
 export function scopedValue<T>(slot: symbol, create: () => T): T | undefined {
   const store = requestContext.get();
   if (!store) return undefined;
-  const slots = store as unknown as Record<symbol, T | undefined>;
-  const existing = slots[slot];
-  if (existing !== undefined) return existing;
+  const slots = store as unknown as Record<symbol, T>;
+  // PRESENCE, not truthiness: a `create()` that legitimately returns
+  // `undefined` (or `null`, or `0`) must still be a memo HIT. Testing the value
+  // would re-run the factory on every call for exactly those slots — which
+  // silently turns "created once per scope", the one guarantee this has, into
+  // "created per call" for the caller least likely to check.
+  if (Object.hasOwn(slots, slot)) return slots[slot];
   const created = create();
   slots[slot] = created;
   return created;

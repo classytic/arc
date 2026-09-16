@@ -227,7 +227,7 @@
       "version",
       "when"
     ],
-    "typesHash": "364ffd4afe8d917e"
+    "typesHash": "506bb5751b413aad"
   },
   "./permissions": {
     "stability": "stable",
@@ -373,7 +373,7 @@
       "scopeOf",
       "when"
     ],
-    "typesHash": "8d1aedefc9426fee"
+    "typesHash": "25a0631358e1c60f"
   },
   "./cache": {
     "stability": "stable",
@@ -417,13 +417,13 @@
       "upstashAsCacheClient",
       "versionKey"
     ],
-    "typesHash": "e93185508bc960ed"
+    "typesHash": "b580c377046babad"
   },
   "./types": {
     "stability": "stable",
     "runtime": [],
     "types": [],
-    "typesHash": "2c8295c0f6878041"
+    "typesHash": "955aa98541ef7dd3"
   },
   "./types/storage": {
     "stability": "stable",
@@ -571,7 +571,7 @@
       "sendControllerResponse",
       "validateResourceConfig"
     ],
-    "typesHash": "dc40bc5776acc856"
+    "typesHash": "d115a6470fbe6740"
   },
   "./presets": {
     "stability": "stable",
@@ -628,7 +628,7 @@
       "softDeletePreset",
       "treePreset"
     ],
-    "typesHash": "db24df5a5da22101"
+    "typesHash": "37411171a9fcfad4"
   },
   "./presets/tenant": {
     "stability": "stable",
@@ -640,7 +640,7 @@
       "TenantFieldSpec",
       "multiTenantPreset"
     ],
-    "typesHash": "3a60f410237773a8"
+    "typesHash": "4d382a3e45a52270"
   },
   "./presets/files-upload": {
     "stability": "stable",
@@ -660,7 +660,7 @@
       "StorageUploadInput",
       "filesUploadPreset"
     ],
-    "typesHash": "627dad994fd7ccbf"
+    "typesHash": "1fcd3b2dcca36e9a"
   },
   "./presets/search": {
     "stability": "stable",
@@ -675,7 +675,7 @@
       "SearchableRepository",
       "searchPreset"
     ],
-    "typesHash": "8dbb4d6217e2af24"
+    "typesHash": "48e917841e6cc7ce"
   },
   "./auth": {
     "stability": "stable",
@@ -710,7 +710,7 @@
       "extractBetterAuthOpenApi",
       "mirrorTrustedOriginsFromCors"
     ],
-    "typesHash": "c94b67ee43214382"
+    "typesHash": "47a0a258be3daa15"
   },
   "./hooks": {
     "stability": "stable",
@@ -743,7 +743,7 @@
       "createHookSystem",
       "defineHook"
     ],
-    "typesHash": "788609768d917f01"
+    "typesHash": "0ce0bf34a38e38fd"
   },
   "./middleware": {
     "stability": "stable",
@@ -760,7 +760,7 @@
       "multipartBody",
       "sortMiddlewares"
     ],
-    "typesHash": "6fd30c2730cacdc9"
+    "typesHash": "8d29517a095b9035"
   },
   "./pipeline": {
     "stability": "stable",
@@ -786,7 +786,7 @@
       "pipe",
       "transform"
     ],
-    "typesHash": "a9278450d267e20c"
+    "typesHash": "40cb1d39a250b083"
   },
   "./context": {
     "stability": "stable",
@@ -877,7 +877,7 @@
       "introspectionPlugin",
       "introspectionPluginFn"
     ],
-    "typesHash": "a0e814bc6f44a0b4"
+    "typesHash": "6a63fb05d775c10c"
   },
   "./utils": {
     "stability": "stable",
@@ -896,6 +896,7 @@
       "OrgAccessDeniedError",
       "OrgRequiredError",
       "RateLimitError",
+      "RedisCircuitBreakerState",
       "ServiceUnavailableError",
       "UI_MESSAGE_STREAM_HEADERS",
       "UnauthorizedError",
@@ -953,7 +954,9 @@
       "CircuitBreaker",
       "CircuitBreakerError",
       "CircuitBreakerOptions",
+      "CircuitBreakerRedisLike",
       "CircuitBreakerRegistry",
+      "CircuitBreakerSharedState",
       "CircuitBreakerStats",
       "CircuitState",
       "CompensationDefinition",
@@ -977,6 +980,8 @@
       "OrgRequiredError",
       "PipeUIMessageStreamOptions",
       "RateLimitError",
+      "RedisCircuitBreakerState",
+      "RedisCircuitBreakerStateOptions",
       "RuntimeCapabilityDeclaration",
       "SchemaIo",
       "ServiceUnavailableError",
@@ -1032,7 +1037,7 @@
       "toJsonSchema",
       "withCompensation"
     ],
-    "typesHash": "a1ee4c5c511dab04"
+    "typesHash": "6cf091ffb0525bac"
   },
   "./cli": {
     "stability": "stable",
@@ -1117,6 +1122,7 @@
       "ScheduleDefinition",
       "ScheduleStats",
       "SchedulesPluginOptions",
+      "ShutdownState",
       "TracingOptions",
       "VersioningOptions",
       "arcCorePlugin",
@@ -1149,7 +1155,7 @@
       "versioningPlugin",
       "versioningPluginFn"
     ],
-    "typesHash": "1efedcd24f43b3c8"
+    "typesHash": "5c8fa571c12386ed"
   },
   "./plugins/tracing": {
     "stability": "stable",
@@ -1193,7 +1199,7 @@
       "createAuditEntry",
       "repositoryAsAuditStore"
     ],
-    "typesHash": "6f4c243e22052a4e"
+    "typesHash": "4b0776f95c2195a0"
   },
   "./docs": {
     "stability": "stable",
@@ -1216,7 +1222,7 @@
       "scalarPlugin",
       "scalarPluginFn"
     ],
-    "typesHash": "10b26c20d822fecb"
+    "typesHash": "a815d2e388433c55"
   },
   "./encryption": {
     "stability": "stable",
@@ -1272,7 +1278,7 @@
       "idempotencyPluginFn",
       "repositoryAsIdempotencyStore"
     ],
-    "typesHash": "919c9c8ef6499ae8"
+    "typesHash": "470156de926d9c66"
   },
   "./idempotency/redis": {
     "stability": "stable",
@@ -1290,7 +1296,7 @@
       "ioredisAsIdempotencyClient",
       "upstashAsIdempotencyClient"
     ],
-    "typesHash": "16133971299e0397"
+    "typesHash": "4f0a3ef943a55afb"
   },
   "./events": {
     "stability": "stable",
@@ -1365,7 +1371,7 @@
       "wrapWithBoundary",
       "wrapWithSchema"
     ],
-    "typesHash": "1b179994c25ce919"
+    "typesHash": "9262d0fefbc1f282"
   },
   "./events/redis": {
     "stability": "stable",
@@ -1377,7 +1383,7 @@
       "RedisEventTransportOptions",
       "RedisLike"
     ],
-    "typesHash": "e389e8d4df7f2f3d"
+    "typesHash": "280bb3f2e541489f"
   },
   "./events/redis-stream": {
     "stability": "stable",
@@ -1389,7 +1395,7 @@
       "RedisStreamTransport",
       "RedisStreamTransportOptions"
     ],
-    "typesHash": "2f5dd372be057e3f"
+    "typesHash": "6ad08c94e2453a4f"
   },
   "./testing": {
     "stability": "stable",
@@ -1500,7 +1506,7 @@
       "testActorHeaders",
       "waitFor"
     ],
-    "typesHash": "04d41b26e6371522"
+    "typesHash": "9115fe589fbbb828"
   },
   "./testing/storage": {
     "stability": "stable",
@@ -1620,7 +1626,7 @@
       "testingPreset",
       "toFetchHandler"
     ],
-    "typesHash": "eec9a3d76202682d"
+    "typesHash": "2ef83f4abad9a790"
   },
   "./schemas": {
     "stability": "stable",
@@ -1701,7 +1707,7 @@
     "stability": "stable",
     "runtime": [],
     "types": [],
-    "typesHash": "b93cee0f252b1ab0"
+    "typesHash": "497143889a053e05"
   },
   "./integrations/streamline": {
     "stability": "stable",
@@ -1781,7 +1787,7 @@
       "RedisPushRefStore",
       "RedisPushRefStoreOptions"
     ],
-    "typesHash": "0485f675bb43383f"
+    "typesHash": "9c39265b639095b9"
   },
   "./integrations/jobs": {
     "stability": "stable",
@@ -1816,7 +1822,7 @@
       "EventGatewayOptions",
       "eventGatewayPlugin"
     ],
-    "typesHash": "f7b317142ef1c488"
+    "typesHash": "e8f7f8be42033afd"
   },
   "./integrations/webhooks": {
     "stability": "stable",
@@ -1857,7 +1863,7 @@
       "webhookDeliveryFailurePolicy",
       "webhookPlugin"
     ],
-    "typesHash": "9dd37dd58414afb4"
+    "typesHash": "f6d7e95168ab1cfe"
   },
   "./auth/redis": {
     "stability": "stable",
@@ -2069,7 +2075,7 @@
       "toCallToolResult",
       "toCallToolSuccess"
     ],
-    "typesHash": "f9f74135d9890a60"
+    "typesHash": "24ba1c172373797f"
   },
   "./mcp/testing": {
     "stability": "stable",
@@ -2084,7 +2090,7 @@
       "connectMcpTestClient",
       "createTestMcpClient"
     ],
-    "typesHash": "8abd16c22ca566f4"
+    "typesHash": "8c91d9c8463d8a27"
   },
   "./scim": {
     "stability": "stable",
@@ -2169,6 +2175,7 @@
     "stability": "experimental",
     "runtime": [
       "MemoryUsageStore",
+      "RedisUsageStore",
       "requireQuota",
       "usagePeriod",
       "usagePlugin"
@@ -2176,16 +2183,19 @@
     "types": [
       "MemoryUsageStore",
       "QuotaOptions",
+      "RedisUsageStore",
+      "RedisUsageStoreOptions",
       "UsageBucket",
       "UsageMeter",
       "UsagePluginOptions",
+      "UsageRedisLike",
       "UsageStore",
       "UsageTrackOptions",
       "requireQuota",
       "usagePeriod",
       "usagePlugin"
     ],
-    "typesHash": "1740af741873e03c"
+    "typesHash": "98e06d66bbbc406c"
   },
   "./cleanup": {
     "stability": "stable",
@@ -2273,7 +2283,7 @@
       "createDataCleanupModule",
       "recipeFromSteps"
     ],
-    "typesHash": "35be8588db524def"
+    "typesHash": "6b85005f31299f9d"
   },
   "./outbox-admin": {
     "stability": "experimental",
@@ -2286,7 +2296,7 @@
       "OutboxAdminStore",
       "createOutboxAdminModule"
     ],
-    "typesHash": "58545b8ce4a519f6"
+    "typesHash": "8ebef6c6b7c3763b"
   },
   "./testing/outbox": {
     "stability": "stable",

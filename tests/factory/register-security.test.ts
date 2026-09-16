@@ -239,6 +239,27 @@ describe("registerSecurityPlugins", () => {
     expect((await app.inject({ method: "GET", url: "/test" })).statusCode).toBe(200);
   });
 
+  // The guard reads the VALUE, not the key. `{ redis: buildClient() }` where
+  // the builder returned undefined — a failed env lookup, a lazily-constructed
+  // client that never got built — is the shape a host actually writes. A
+  // key-presence check (`'redis' in opts`) calls that a shared store and lets
+  // the distributed boot through with per-replica counters: the exact
+  // deployment this guard exists to refuse, now waved past by the fix for the
+  // opposite bug.
+  it.each([
+    ["redis", { redis: undefined }],
+    ["store", { store: undefined }],
+    ["redis (null)", { redis: null }],
+  ])("distributed runtime still REFUSES an empty `%s` value", async (_label, shape) => {
+    app = createTestFastify();
+    await expect(
+      registerSecurityPlugins(app, {
+        runtime: "distributed",
+        rateLimit: { max: 10, timeWindow: "1 minute", ...shape } as never,
+      }),
+    ).rejects.toThrow("distributed");
+  });
+
   it("all disabled = no security plugins", async () => {
     app = createTestFastify();
     await registerSecurityPlugins(app, {

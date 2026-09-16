@@ -584,9 +584,25 @@ export class RedisStreamTransport implements EventTransport {
     // can never be processed; acking is the only way to clear it from the
     // pending list, otherwise every claim cycle re-delivers a ghost.
     const live: Array<[string, string[]]> = [];
+    const ghostIds: string[] = [];
     for (const [messageId, fields] of entries) {
       if (fields) live.push([messageId, fields]);
-      else await this.redis.xack(this.stream, this.group, messageId);
+      else ghostIds.push(messageId);
+    }
+    if (ghostIds.length > 0) {
+      // ONE variadic XACK, not one per ghost: a stream trimmed while a whole
+      // batch sat pending yields `batchSize` ghosts, and per-id round-trips
+      // would stall every live entry behind them. Failure is non-fatal — the
+      // ghosts stay pending and the next claim cycle retries the ack — but it
+      // must not take the live entries down with it, which a throw here would.
+      try {
+        await this.redis.xack(this.stream, this.group, ...ghostIds);
+      } catch (err) {
+        this.logger.error(
+          `[RedisStreamTransport] Failed to ack ${ghostIds.length} trimmed entr(ies):`,
+          err,
+        );
+      }
     }
 
     if (this.processingConcurrency <= 1) {

@@ -49,16 +49,47 @@ export interface RuntimeCapabilityDeclaration {
  */
 const ARC_RUNTIME_CAPABILITIES = Symbol.for("arc.runtimeCapabilities");
 
+/**
+ * Seed the registry on the ROOT instance. `createApp` calls this the moment the
+ * instance exists, before any registration — and that ordering is load-bearing,
+ * not tidiness.
+ *
+ * A Fastify child (`register` with an un-`fp`-wrapped plugin) is
+ * `Object.create(parent)`, so a symbol READ reaches the parent's array through
+ * the prototype chain but a symbol WRITE always lands on the child. Created
+ * lazily, the first declarant therefore decides where the registry lives: seeded
+ * first, every child pushes into the root's one array; declared first from
+ * inside an encapsulated child, that child gets an own array the root audit
+ * never sees — a silent pass from the mechanism whose entire job is to refuse to
+ * boot. Arc's own declarants are all `fp`-wrapped and both host `plugins()` and
+ * module `plugins()` receive the root, so nothing internal hit this; a host
+ * declaring from inside its own `fastify.register(async (child) => …)` would.
+ *
+ * Idempotent, and never clobbers an existing array — re-seeding an instance that
+ * already collected declarations would discard them.
+ */
+export function initRuntimeCapabilityRegistry(fastify: FastifyInstance): void {
+  const holder = fastify as unknown as Record<symbol, RuntimeCapabilityDeclaration[] | undefined>;
+  if (!Object.hasOwn(holder, ARC_RUNTIME_CAPABILITIES)) {
+    holder[ARC_RUNTIME_CAPABILITIES] = holder[ARC_RUNTIME_CAPABILITIES] ?? [];
+  }
+}
+
 function registryOf(fastify: FastifyInstance): RuntimeCapabilityDeclaration[] {
   const holder = fastify as unknown as Record<symbol, RuntimeCapabilityDeclaration[] | undefined>;
+  // Reads traverse the prototype chain, so a child finds the root's array once
+  // `initRuntimeCapabilityRegistry` has seeded it. The fallback below only fires
+  // for an instance arc did not build (a plugin registered on a bare Fastify),
+  // where there is no audit to miss it.
   if (!holder[ARC_RUNTIME_CAPABILITIES]) holder[ARC_RUNTIME_CAPABILITIES] = [];
   return holder[ARC_RUNTIME_CAPABILITIES] as RuntimeCapabilityDeclaration[];
 }
 
 /**
  * Declare a runtime capability. Callable from ANY registration context —
- * arc's own plugins, host `plugins()` callbacks, module `plugins` phases —
- * which is the point: the audit sees what the constructor-time guard cannot.
+ * arc's own plugins, host `plugins()` callbacks, module `plugins` phases,
+ * and encapsulated children of any of them — which is the point: the audit
+ * sees what the constructor-time guard cannot.
  */
 export function declareRuntimeCapability(
   fastify: FastifyInstance,
@@ -68,7 +99,9 @@ export function declareRuntimeCapability(
 }
 
 /**
- * The boot audit. Runs once at the end of `buildApp`, after every declarant.
+ * The boot audit. Runs once at the end of `buildApp`, after every declarant —
+ * on the SAME instance `initRuntimeCapabilityRegistry` seeded, which is what
+ * makes declarations from encapsulated children visible here.
  *
  * - `runtime: 'distributed'` + `durability: 'memory'` + not `accepted` →
  *   collected and THROWN as one error naming every violator (fixing them one

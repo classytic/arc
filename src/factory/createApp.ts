@@ -52,7 +52,10 @@ import {
 } from "../logger/index.js";
 import { createRequestIdGenerator } from "../plugins/requestId.js";
 import { parseJsonBody } from "../utils/jsonBody.js";
-import { auditRuntimeCapabilities } from "../utils/runtimeCapabilities.js";
+import {
+  auditRuntimeCapabilities,
+  initRuntimeCapabilityRegistry,
+} from "../utils/runtimeCapabilities.js";
 import { registerAssetRoots } from "./assets.js";
 import { collectModuleHealthChecks, orderModules, resolveModule } from "./module/index.js";
 import { getPreset } from "./presets.js";
@@ -101,6 +104,7 @@ export const DEFAULT_LOGGER_REDACT_PATHS = [
   "req.headers.authorization",
   'req.headers["x-api-key"]',
   'req.headers["x-internal-api-key"]',
+  'req.headers["x-device-token"]',
   "req.headers.cookie",
   'req.headers["set-cookie"]',
   'res.headers["set-cookie"]',
@@ -204,23 +208,35 @@ function validateDistributedRuntime(options: CreateAppOptions): string[] {
     }
   }
 
-  // Schedules without a lock — every replica fires every tick. Warn, don't
-  // throw: duplicate schedule execution is a correctness hazard the host
-  // may have accepted (idempotent jobs), unlike the hard-required stores
-  // above.
+  // Schedules without a lock — EVERY replica fires EVERY tick.
+  //
+  // This was a warning, on the reasoning that duplicate execution is a hazard
+  // the host may have accepted for idempotent jobs. It does not survive
+  // comparison with the rest of this guard: a replica-local usage counter
+  // fails the boot, while "your billing cron runs on all six pods" only
+  // logged. Duplicate side effects — two invoices, two dunning emails, two
+  // charges — are the more expensive failure, and the jobs that are genuinely
+  // idempotent are the minority. An external audit of this file read the warn
+  // as an enforcement and wrote down that arc guarantees single-firer
+  // schedules; if a careful reader gets that wrong, a host will too.
+  //
+  // So it is held to the same standard as the stores, with the same escape
+  // arc already uses for a deliberate single-node topology
+  // (`eventPlugin, { singleProcess: true }`): declare `singleReplica: true`.
   const schedules = options.arcPlugins?.schedules;
   if (
     schedules &&
     typeof schedules === "object" &&
     schedules.enabled !== false &&
-    !schedules.lock
+    !schedules.lock &&
+    !schedules.singleReplica
   ) {
-    deferredWarnings.push(
-      "runtime: 'distributed' — schedules configured without a `lock` adapter. " +
-        "EVERY replica will fire every schedule tick. Pass an ecosystem lock " +
-        "(e.g. createMongoLockAdapter) under arcPlugins.schedules.lock for " +
-        "single-firer leases.",
-    );
+    missing.push({
+      key: "arcPlugins.schedules.lock",
+      hint:
+        "a LockAdapter for single-firer leases (e.g. createMongoLockAdapter) — " +
+        "or `arcPlugins.schedules.singleReplica: true` if exactly one replica arms schedules",
+    });
   }
 
   // The guard validates what `createApp` can SEE (stores + arcPlugins).
@@ -488,6 +504,13 @@ async function buildApp(
   // throw, and each one may leave process listeners / sockets behind that only
   // `close()` releases. See the failed-boot cleanup in `createApp`.
   onInstance(fastify);
+
+  // Seed the capability registry on the ROOT, before anything can declare into
+  // it. A Fastify child writes symbols to itself but READS through the
+  // prototype chain, so seeding first is what makes a declaration from inside
+  // an encapsulated `register()` reach this instance's audit instead of dying
+  // on the child. See `initRuntimeCapabilityRegistry`.
+  initRuntimeCapabilityRegistry(fastify);
 
   // Route arc's internal logger (`arcLog`) through the host's pino instance
   // so framework warnings inherit the app's transports, level, AND redaction

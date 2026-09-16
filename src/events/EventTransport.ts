@@ -135,6 +135,30 @@ export interface MemoryEventTransportOptions {
    */
   handlerDispatch?: "sequential" | "parallel";
   /**
+   * Called when a published event matched ZERO subscribers.
+   *
+   * Silence is the default because a fire-and-forget bus legitimately carries
+   * events nobody wants. It stops being legitimate the moment an OUTBOX is
+   * wired: the relay acknowledges a row it delivered to nobody, so the numbers
+   * report success and the instruction the event carried was never carried
+   * out. A host that expects its events to be consumed passes this and finds
+   * out.
+   *
+   * Runs inside the publish's work scope, after handler resolution and before
+   * the (empty) dispatch. It must not throw — a reporter that fails must not
+   * decide whether an event was published.
+   *
+   * MEMORY TRANSPORT ONLY, and deliberately so — this is not an oversight to be
+   * fixed by adding it to the Redis transports. In-process, "no handler
+   * matched" IS "nobody consumed it": this process is the whole bus. On a
+   * broker, no LOCAL handler matched says nothing about consumption — another
+   * replica, another consumer group, or a consumer not yet started may own the
+   * event, and firing there would report a healthy fan-out as a fault every
+   * time work is routed away from this node. The broker's own pending/lag
+   * metrics answer that question; this one cannot.
+   */
+  onUnroutedEvent?: (event: DomainEvent) => void;
+  /**
    * Cap on handlers running at once under `'parallel'`. Default: unlimited.
    *
    * Sequential dispatch was an accidental per-publish rate limiter on whatever
@@ -162,11 +186,13 @@ export class MemoryEventTransport implements EventTransport {
   private onHandlerError: "log" | "throw";
   private handlerDispatch: "sequential" | "parallel";
   private handlerConcurrency: number;
+  private onUnroutedEvent: ((event: DomainEvent) => void) | undefined;
 
   constructor(options?: MemoryEventTransportOptions) {
     this.logger = options?.logger ?? console;
     this.onHandlerError = options?.onHandlerError ?? "log";
     this.handlerDispatch = options?.handlerDispatch ?? "sequential";
+    this.onUnroutedEvent = options?.onUnroutedEvent;
     const cap = options?.handlerConcurrency;
     // A non-integer or <1 cap would stall the pool loop below rather than
     // widen it — refuse at construction instead of hanging at publish.
@@ -198,6 +224,19 @@ export class MemoryEventTransport implements EventTransport {
     for (const [pattern, handlers] of this.handlers) {
       if (matchEventPattern(pattern, event.type)) {
         for (const h of handlers) allHandlers.add(h);
+      }
+    }
+
+    if (allHandlers.size === 0 && this.onUnroutedEvent) {
+      try {
+        this.onUnroutedEvent(event);
+      } catch (err) {
+        // A reporter that cannot report must not change delivery.
+        try {
+          this.logger.error(`[EventTransport] onUnroutedEvent threw for ${event.type}:`, err);
+        } catch {
+          /* nothing left to do */
+        }
       }
     }
 

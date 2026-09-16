@@ -11,6 +11,8 @@ export { requireQuota } from "./requireQuota.js";
 export type { UsageBucket, UsageStore } from "./stores/interface.js";
 export { usagePeriod } from "./stores/interface.js";
 export { MemoryUsageStore } from "./stores/memory.js";
+export type { RedisUsageStoreOptions, UsageRedisLike } from "./stores/redis.js";
+export { RedisUsageStore } from "./stores/redis.js";
 export type {
   UsageMeter,
   UsagePluginOptions,

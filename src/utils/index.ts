@@ -4,7 +4,11 @@
  * Common utilities for the Arc framework.
  */
 
-export type { CircuitBreakerOptions, CircuitBreakerStats } from "./circuitBreaker.js";
+export type {
+  CircuitBreakerOptions,
+  CircuitBreakerSharedState,
+  CircuitBreakerStats,
+} from "./circuitBreaker.js";
 // Circuit Breaker
 export {
   CircuitBreaker,
@@ -14,6 +18,11 @@ export {
   createCircuitBreaker,
   createCircuitBreakerRegistry,
 } from "./circuitBreaker.js";
+export type {
+  CircuitBreakerRedisLike,
+  RedisCircuitBreakerStateOptions,
+} from "./circuitBreakerRedis.js";
+export { RedisCircuitBreakerState } from "./circuitBreakerRedis.js";
 // Compensating Transaction
 export type {
   CompensationDefinition,

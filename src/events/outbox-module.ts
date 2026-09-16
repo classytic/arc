@@ -36,6 +36,7 @@ import { randomBytes } from "node:crypto";
 import { hostname } from "node:os";
 import type { OutboxFailurePolicy, OutboxStore } from "@classytic/primitives/outbox";
 import type { FastifyInstance } from "fastify";
+import { requestContext } from "../context/requestContext.js";
 import { transactionContext } from "../context/transactionContext.js";
 /**
  * TYPE-only import of `ArcModule`, deliberately — `defineModule()` is pure identity
@@ -198,6 +199,10 @@ export interface OutboxModuleExports {
    * just wrote is delivered in milliseconds rather than up to `relayEveryMs`
    * later. Safe under concurrency: the store's lease and fence token make an
    * extra pass a no-op, not a double publish.
+   *
+   * Calling from inside a request does NOT put the pass in that request's
+   * scope: a pass drains whatever is pending, which is other requests' rows.
+   * The pass runs scope-free, so each event opens its own (see `runWorkScope`).
    */
   requestDrain: () => void;
 }
@@ -321,8 +326,20 @@ export function createOutboxModule(options: OutboxModuleOptions): ArcModule<Outb
         drainQueued = true;
         setImmediate(() => {
           drainQueued = false;
-          relay.relayBatch().catch((err: unknown) => {
-            fastify.log.error({ err }, `outbox relay "${name}" requested drain failed`);
+          // `exit` — NOT merely cosmetic. `setImmediate` preserves the caller's
+          // AsyncLocalStorage store, and the caller is a REQUEST (that is the
+          // documented use: drain the row I just committed). A pass drains
+          // whatever is pending, so without this every event in the batch —
+          // including rows written by other requests, for other tenants —
+          // dispatches inside the triggering request's scope: `runWorkScope`
+          // inherits it rather than opening the event's own, handlers read that
+          // request's `user`/`organizationId`/`requestScopedCache`, and a child
+          // event published from one is stamped with its `requestId` as
+          // `correlationId`. A relay pass belongs to no request; say so.
+          requestContext.storage.exit(() => {
+            relay.relayBatch().catch((err: unknown) => {
+              fastify.log.error({ err }, `outbox relay "${name}" requested drain failed`);
+            });
           });
         });
       };
