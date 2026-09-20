@@ -307,7 +307,12 @@ export class QueryResolver {
     // marketplace, not one tenant's shelf. Without this branch the preset's decision was undone
     // here, one layer down and out of sight: the route stopped filtering and the resolver put the
     // filter straight back, so a signed-in seller still saw only their own rows.
-    if (this.tenantField && orgId && !arcContext?._crossTenantRead && !policyFilters?.[this.tenantField]) {
+    if (
+      this.tenantField &&
+      orgId &&
+      !arcContext?._crossTenantRead &&
+      !policyFilters?.[this.tenantField]
+    ) {
       // Only set if not already set by multiTenant preset — conjoined, so it
       // can't clobber (or be clobbered by) an existing constraint on the key.
       filters = conjoinPolicyFilters(filters, { [this.tenantField]: orgId });
