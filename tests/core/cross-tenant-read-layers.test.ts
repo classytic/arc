@@ -1,18 +1,25 @@
 /**
  * A cross-tenant read has to be honoured by every layer that scopes a read, not just the route.
  *
- * Tenancy is applied in four places, and three of them derive the organization from the request
+ * Tenancy is applied in five places, and four of them derive the organization from the request
  * scope independently of the preset that owns the decision:
  *
  *   1. the preset's route middleware   → `_policyFilters`      (tested in tests/presets)
  *   2. `QueryResolver.resolve`         → the outgoing `list` filter
  *   3. `buildTenantRepoOptions`        → the repository's tenant context
  *   4. `AccessControl.checkOrgScope`   → post-fetch re-check on `get`
+ *   5. `AccessControl.buildIdFilter`   → the compound DB filter for a single-row `get`
  *
  * That redundancy is deliberate defence in depth, and it is also why removing the filter at (1)
  * changed nothing observable: (2) put it straight back one layer down, where nothing in the route
- * configuration showed it. These tests pin the other three, each with the scoped case alongside so
+ * configuration showed it. These tests pin the other four, each with the scoped case alongside so
  * a change that simply stopped filtering everything fails here rather than passing quietly.
+ *
+ * (5) was missing when this file was written, and the omission was invisible precisely BECAUSE
+ * (4) looked like it covered `get`. It does not: `checkOrgScope` judges a row that has already
+ * been fetched, and `buildIdFilter` decides whether it is fetched at all. With the caller's own
+ * tenant conjoined into the lookup, another tenant's row never came back for (4) to allow, so
+ * `crossTenant: ['get']` worked for anonymous callers and silently did nothing for members.
  */
 
 import { describe, expect, it } from "vitest";
@@ -102,5 +109,63 @@ describe("cross-tenant reads — layer 4: post-fetch org check", () => {
 
   it("a cross-tenant read allows it, which is the point of the option", () => {
     expect(control.checkOrgScope(otherTenantRow, meta({ _crossTenantRead: true }))).toBe(true);
+  });
+});
+
+/**
+ * Layer 5 is the one a `get` actually runs into first. Layer 4 above can only judge a row that
+ * came back; this decides whether it comes back at all, so an exemption at (4) with none here is
+ * an exemption that never fires.
+ */
+describe("cross-tenant reads — layer 5: the compound get filter", () => {
+  const control = new AccessControl({ tenantField: "organizationId", idField: "_id" });
+  /** `buildIdFilter` reads its context off `req.metadata` (see `AccessControl._meta`). */
+  const reqWithMeta = (m: ArcInternalMetadata): IRequestContext =>
+    createReq({ metadata: m } as Partial<IRequestContext>);
+
+  /** `buildIdFilter` returns portable Filter IR; read the tenant out of either shape. */
+  const tenantIn = (filter: unknown): unknown => {
+    const seen: unknown[] = [];
+    const walk = (node: unknown): void => {
+      if (!node || typeof node !== "object") return;
+      for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+        if (key === "organizationId") seen.push(value);
+        else if (Array.isArray(value)) value.forEach(walk);
+        else walk(value);
+      }
+    };
+    walk(filter);
+    return seen.length === 0 ? undefined : seen.length === 1 ? seen[0] : seen;
+  };
+
+  it("SANITY: the probe finds nothing when there is no tenant to find", () => {
+    // Without this, "toBeUndefined" below could pass because `tenantIn` is broken.
+    expect(tenantIn(control.buildIdFilter("p1", createReq()) as unknown)).toBeUndefined();
+  });
+
+  it("CONTROL: with a member scope the tenant IS conjoined", () => {
+    const filter = control.buildIdFilter("p1", reqWithMeta(meta())) as unknown;
+    expect(tenantIn(filter)).toBe("org-acme");
+  });
+
+  it("a cross-tenant read does NOT pin the tenant, so another tenant's row can be fetched", () => {
+    const filter = control.buildIdFilter("p1", reqWithMeta(meta({ _crossTenantRead: true }))) as unknown;
+    expect(tenantIn(filter)).toBeUndefined();
+  });
+
+  it("the row policy still applies — unscoped is not unfiltered", () => {
+    const filter = control.buildIdFilter(
+      "p1",
+      reqWithMeta(
+        meta({
+          _crossTenantRead: true,
+          _policyFilters: { $or: [{ organizationId: "org-acme" }, { _id: { $in: ["p1"] } }] },
+        }),
+      ),
+    ) as unknown;
+    // The policy's OWN mention of the tenant survives; what is gone is the
+    // unconditional conjunction that used to sit beside it and defeat the `$or`.
+    expect(JSON.stringify(filter)).toContain("org-acme");
+    expect(JSON.stringify(filter)).toContain("p1");
   });
 });

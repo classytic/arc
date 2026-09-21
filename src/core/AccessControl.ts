@@ -138,9 +138,30 @@ export class AccessControl {
     // Org/tenant scope — derived from request.scope; skip for platform-universal
     // resources (tenantField: false). Conjoined too (same-value dedupes; a policy
     // that already pinned the tenant is idempotent, a different one fail-closes).
+    //
+    // A cross-tenant read (`multiTenantPreset({ crossTenant: ['get'] })`) is exempt, and this
+    // was the layer that missed the memo. The other four honour it — the preset's own middleware
+    // never adds the filter, `QueryResolver` skips it for `list`, `buildTenantRepoOptions` sends
+    // `bypassTenant`, and `checkOrgScope` waves the row through post-fetch — but a single-row
+    // `get` is served by the COMPOUND filter built here, and this conjunction pinned the caller's
+    // own organization into the query before the row was ever fetched. So `checkOrgScope`'s
+    // exemption could never fire: the document it was ready to allow had already been excluded by
+    // the lookup, and the route answered 404.
+    //
+    // The visible consequence: `crossTenant: ['get']` worked only for callers who HAVE no
+    // organization. Anonymous readers got the cross-tenant behaviour the option promises, while
+    // any signed-in member silently kept single-tenant `get` — so a resource's own row policy
+    // (say, "plus anything this person bought") could not reach another tenant's row for exactly
+    // the users who had bought something.
+    //
+    // Tenancy is not being dropped here: the route opted in, and the resource's row policy is
+    // still conjoined above, which is what states who may see what once the tenant stops being
+    // the answer.
+    const crossTenantRead =
+      (arcContext as ArcInternalMetadata | undefined)?._crossTenantRead === true;
     const scope = arcContext?._scope;
     const orgId = scope ? getOrgIdFromScope(scope) : undefined;
-    if (this.tenantField && orgId) {
+    if (this.tenantField && orgId && !crossTenantRead) {
       filter = conjoinPolicyFilters(filter, { [this.tenantField]: orgId }) as AnyRecord;
     }
 
